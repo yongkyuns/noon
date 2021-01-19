@@ -26,56 +26,60 @@ impl Add for Point {
 #[derive(Debug)]
 pub struct Square {
     position: Point,
+    pub parent: Option<Index>,
+    pub child: Option<Index>,
 }
 
 impl Square {
     pub fn new() -> Self {
         Self {
             position: Point::new(),
+            parent: None,
+            child: None,
         }
     }
     pub fn move_by(&mut self, x: f32, y: f32) {
         self.position.x += x;
         self.position.y += y;
     }
+    pub fn set_child(&mut self, idx: Index) {
+        self.child = Some(idx);
+    }
+    pub fn set_parent(&mut self, idx: Index) {
+        self.parent = Some(idx);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SquareIndex {
-    pub inner: Index,
-    pub parent: Option<Index>,
-    pub child: Option<Index>,
-}
+pub struct SquareIndex(Index);
 
 impl SquareIndex {
     pub fn new(idx: Index) -> Self {
-        Self {
-            inner: idx,
-            parent: None,
-            child: None,
-        }
+        Self(idx)
     }
     pub fn move_by(&self, scene: &mut Scene, x: f32, y: f32) {
-        if let Some(square) = scene.get_mut(self.inner) {
+        if let Some(square) = scene.get_mut(&self) {
             square.move_by(x, y);
         }
     }
-    pub fn set_child(&mut self, child: &mut SquareIndex) {
-        self.child = Some(child.inner);
-        child.parent = Some(self.inner);
+    pub fn set_child(&mut self, scene: &mut Scene, child: &mut SquareIndex) {
+        if let Some(sq) = scene.get_mut(&self) {
+            sq.set_child(child.0);
+        }
+        if let Some(sq) = scene.get_mut(&child) {
+            sq.set_parent(self.0);
+        }
     }
     pub fn position(&self, scene: &Scene) -> Point {
         let pos = scene
-            .get(self.inner)
+            .get(&self)
             .map_or(Point::new(), |sq| sq.position.clone());
-        if let Some(parent) = self.parent {
-            println!("Has parent");
-            pos + scene
-                .get(parent)
-                .map_or(Point::new(), |sq| sq.position.clone())
-        } else {
-            pos
-        }
+
+        let origin = scene
+            .get_parent(&self)
+            .map_or(Point::new(), |sq| sq.position.clone());
+
+        pos + origin
     }
 }
 
@@ -92,21 +96,22 @@ impl Scene {
             objects: vec![],
         }
     }
-
     pub fn add(&mut self, object: Square) -> SquareIndex {
         let sq = SquareIndex::new(self.store.insert(object));
         self.objects.push(sq);
         sq
     }
-
-    pub fn get_mut(&mut self, idx: Index) -> Option<&mut Square> {
-        self.store.get_mut(idx)
+    pub fn get_mut(&mut self, sq: &SquareIndex) -> Option<&mut Square> {
+        self.store.get_mut(sq.0)
     }
-
-    pub fn get(&self, idx: Index) -> Option<&Square> {
-        self.store.get(idx)
+    pub fn get(&self, sq: &SquareIndex) -> Option<&Square> {
+        self.store.get(sq.0)
     }
-
+    pub fn get_parent(&self, sq: &SquareIndex) -> Option<&Square> {
+        self.store
+            .get(sq.0)
+            .and_then(|sq| sq.parent.and_then(|parent| self.store.get(parent)))
+    }
     pub fn draw(&mut self) {
         for obj in self.objects.iter() {
             println!("{:?}", obj.position(&self));
@@ -120,11 +125,15 @@ fn main() {
     let mut parent = scene.add(Square::new());
     let mut child = scene.add(Square::new());
 
-    parent.set_child(&mut child);
+    parent.set_child(&mut scene, &mut child);
 
     parent.move_by(&mut scene, 3.0, 3.0);
     child.move_by(&mut scene, 5.0, 5.0);
 
+    dbg!(scene.get_parent(&child));
+
     scene.draw();
-    println!("{:?}", child.position(&scene));
+
+    // println!("{:?}", parent.position(&scene));
+    // println!("{:?}", child.position(&scene));
 }
