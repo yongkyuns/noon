@@ -1,6 +1,9 @@
 use bevy_ecs::prelude::*;
 
-use crate::{circle, Animation, Animations, CircleBuilder, Interpolate, Position, Time};
+use crate::{
+    circle, rectangle, Animation, Animations, CircleBuilder, Interpolate, Position,
+    RectangleBuilder, Time,
+};
 
 pub struct Size {
     width: f32,
@@ -35,6 +38,9 @@ impl Scene {
     }
     pub fn circle(&mut self) -> CircleBuilder {
         circle(self)
+    }
+    pub fn rectangle(&mut self) -> RectangleBuilder {
+        rectangle(self)
     }
     pub fn play<C>(&mut self, animation: (impl Into<Entity>, Animation<C>))
     where

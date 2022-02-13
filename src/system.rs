@@ -39,11 +39,38 @@ impl Time {
     }
 }
 
+pub fn animate_from_target<Attribute: Interpolate + Component + Copy>(
+    time: Res<Time>,
+    mut animation_query: Query<&mut Animations<Attribute>>,
+    mut attribute_query: Query<&mut Attribute>,
+) {
+    for (mut animations) in animation_query.iter_mut() {
+        for animation in animations.0.iter_mut() {
+            let t = time.seconds;
+            let begin = animation.start_time;
+            let duration = animation.duration;
+            let end = animation.start_time + animation.duration + Time::dt;
+
+            if begin < t && t <= end {
+                // If animation end state points to another entity, we need to query from that entity
+                if let Some(target) = animation.has_target() {
+                    // Check if target entity has said attribute
+                    for src_attribute in attribute_query.iter() {
+                        if let Ok(attribute) = attribute_query.get(target) {
+                            animation.init_from_target(attribute);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn animate<Attribute: Interpolate + Component + Copy>(
     time: Res<Time>,
-    mut query: Query<(&mut Attribute, &mut Animations<Attribute>)>,
+    mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
 ) {
-    for (mut att, mut animations) in query.iter_mut() {
+    for (entity, mut att, mut animations) in query.iter_mut() {
         for animation in animations.0.iter_mut() {
             let t = time.seconds;
             let begin = animation.start_time;
@@ -86,7 +113,7 @@ pub fn update_time(mut time: ResMut<Time>) {
 pub fn print(res: Res<Time>, query: Query<(Entity, &Position, &FillColor), With<Circle>>) {
     for (entity, position, color) in query.iter() {
         println!(
-            "Time = {} sec, Position = {}, FillColor = {}",
+            "Time = {:2.1} sec, Position = {:2.1}, FillColor = {:1.1}",
             res.seconds, &position, &color
         );
     }

@@ -10,12 +10,10 @@ mod rectangle;
 mod triangle;
 
 pub use circle::{circle, Circle, CircleBuilder};
+pub use rectangle::{rectangle, Rectangle, RectangleBuilder};
 
 #[derive(Component)]
 pub struct Triangle;
-
-#[derive(Component)]
-pub struct Rectangle;
 
 #[derive(Component)]
 pub struct Line;

@@ -46,7 +46,7 @@ impl<'a> CircleBuilder<'a> {
             .insert(Size::from_radius(self.radius))
             .insert(self.position)
             .insert(StrokeColor(self.stroke_color))
-            .insert(FillColor(self.stroke_color))
+            .insert(FillColor(self.fill_color))
             .id();
 
         id.into()
@@ -75,6 +75,16 @@ impl CircleId {
         start_time: f32,
     ) -> (impl Into<Entity>, Animation<FillColor>) {
         (self.0, Animation::change_to(FillColor(color), start_time))
+    }
+    pub fn set_fill_color_from(
+        &self,
+        entity: impl Into<Entity>,
+        start_time: f32,
+    ) -> (impl Into<Entity>, Animation<FillColor>) {
+        (
+            self.0,
+            Animation::change_to_target(entity.into(), start_time),
+        )
     }
 }
 

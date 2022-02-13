@@ -38,6 +38,16 @@ where
             start_time,
         }
     }
+
+    pub fn change_to_target(target: Entity, start_time: f32) -> Self {
+        Self {
+            begin: None,
+            end: Value::From(target),
+            duration: 1.0,
+            start_time,
+        }
+    }
+
     pub fn change_by(by: T, start_time: f32) -> Self {
         Self {
             begin: None,
@@ -46,6 +56,23 @@ where
             start_time,
         }
     }
+
+    pub fn has_target(&self) -> Option<Entity> {
+        match self.end {
+            Value::From(entity) => Some(entity),
+            _ => None,
+        }
+    }
+
+    pub fn init_from_target(&mut self, end: &T) {
+        match &self.end {
+            Value::From(entity) => {
+                self.end = Value::Absolute(*end);
+            }
+            _ => (),
+        }
+    }
+
     pub fn update(&mut self, property: &mut T, progress: f32) {
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
@@ -112,8 +139,8 @@ pub struct Orientation(f32);
 
 #[derive(Debug, Component, Clone, Copy)]
 pub struct Size {
-    width: f32,
-    height: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 impl Size {
@@ -194,7 +221,7 @@ impl std::fmt::Display for FillColor {
 pub enum Value<C> {
     Relative(C),
     Absolute(C),
-    Target(Entity),
+    From(Entity),
 }
 
 // impl<C: Interpolate> Interpolate for Value<C> {
