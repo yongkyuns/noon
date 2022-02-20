@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 bevy_ecs="0.6"
+nannou = { path = "../nannou/nannou", version = "0.18"}
 # nannou="0.18"
-# cgmath = { version = "0.17", features = ["serde"] }
-# pennereq = "0.3"
+cgmath = { version = "0.17", features = ["serde"] }
+pennereq = "0.3"

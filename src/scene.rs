@@ -1,40 +1,79 @@
-use bevy_ecs::prelude::*;
+use std::array::IntoIter;
 
+use bevy_ecs::prelude::*;
+use nannou::geom::Rect;
+
+use crate::component::FillColor;
+use crate::system::{
+    animate, animate_from_target, animate_position, draw_circle, draw_rectangle, print,
+    update_time, Time,
+};
 use crate::{
-    circle, rectangle, Animation, Animations, CircleBuilder, Interpolate, Position,
-    RectangleBuilder, Time,
+    circle, rectangle, Angle, Animation, Animations, CircleBuilder, Interpolate, Position,
+    RectangleBuilder, Size, StrokeColor,
 };
 
-pub struct Size {
-    width: f32,
-    height: f32,
-}
-
 pub struct Bounds {
-    size: Size,
+    rect: Rect,
 }
 
-impl Default for Bounds {
-    fn default() -> Self {
-        Self {
-            size: Size {
-                width: 100.0,
-                height: 50.0,
-            },
-        }
+impl Bounds {
+    pub fn new(rect: Rect) -> Self {
+        Self { rect }
+    }
+    pub fn edge_upper(&self) -> f32 {
+        self.rect.y.end
+    }
+    pub fn edge_lower(&self) -> f32 {
+        self.rect.y.start
+    }
+    pub fn edge_left(&self) -> f32 {
+        self.rect.x.start
+    }
+    pub fn edge_right(&self) -> f32 {
+        self.rect.x.end
     }
 }
 
 pub struct Scene {
     pub(crate) world: World,
+    pub(crate) updater: Schedule,
+    pub(crate) drawer: Schedule,
 }
 
 impl Scene {
-    pub fn new() -> Self {
+    pub fn new(window: Rect) -> Self {
         let mut world = World::new();
         world.insert_resource(Time::default());
-        world.insert_resource(Bounds::default());
-        Self { world }
+        world.insert_resource(Bounds::new(window));
+
+        let mut updater = Schedule::default();
+        updater.add_stage(
+            "update",
+            SystemStage::parallel()
+                .with_system(animate_position)
+                .with_system(animate_from_target::<FillColor>)
+                .with_system(animate::<FillColor>)
+                .with_system(animate_from_target::<StrokeColor>)
+                .with_system(animate::<StrokeColor>)
+                .with_system(animate_from_target::<Size>)
+                .with_system(animate::<Size>)
+                .with_system(animate_from_target::<Angle>)
+                .with_system(animate::<Angle>)
+                .with_system(print),
+        );
+        let mut drawer = Schedule::default();
+        drawer.add_stage(
+            "draw",
+            SystemStage::single_threaded()
+                .with_system(draw_circle)
+                .with_system(draw_rectangle),
+        );
+        Self {
+            world,
+            updater,
+            drawer,
+        }
     }
     pub fn circle(&mut self) -> CircleBuilder {
         circle(self)
@@ -42,22 +81,54 @@ impl Scene {
     pub fn rectangle(&mut self) -> RectangleBuilder {
         rectangle(self)
     }
-    pub fn play<C>(&mut self, animation: (impl Into<Entity>, Animation<C>))
+    pub fn update(&mut self, now: f32) {
+        self.world
+            .get_resource_mut::<Time>()
+            .map(|mut t| t.seconds = now);
+
+        self.updater.run(&mut self.world);
+    }
+    pub fn draw(&mut self, nannou_draw: nannou::Draw) {
+        self.world.remove_non_send::<nannou::Draw>();
+        self.world.insert_non_send(nannou_draw.clone());
+        self.drawer.run(&mut self.world);
+    }
+    pub fn play<A, E, C>(&mut self, animations: A)
     where
+        A: IntoIterator<Item = (E, Animation<C>)>,
+        E: Into<Entity>,
         C: Component + Interpolate,
     {
-        let id: Entity = animation.0.into();
-        if let Some(mut animations) = self.world.get_mut::<Animations<C>>(id) {
-            animations.0.push(animation.1);
-        } else {
-            self.world
-                .entity_mut(id)
-                .insert(Animations(vec![animation.1]));
+        for animation in animations.into_iter() {
+            let id: Entity = animation.0.into();
+            if let Some(mut animations) = self.world.get_mut::<Animations<C>>(id) {
+                animations.0.push(animation.1);
+            } else {
+                self.world
+                    .entity_mut(id)
+                    .insert(Animations(vec![animation.1]));
+            }
         }
-
-        // if let Some(mut p) = self.world.get_mut::<Position>(id) {
-        //     p.x += position.x;
-        //     p.y += position.y;
-        // }
     }
+    // pub fn play<C>(&mut self, animation: (impl Into<Entity>, Animation<C>))
+    // where
+    //     C: Component + Interpolate,
+    // {
+    //     let id: Entity = animation.0.into();
+    //     if let Some(mut animations) = self.world.get_mut::<Animations<C>>(id) {
+    //         animations.0.push(animation.1);
+    //     } else {
+    //         self.world
+    //             .entity_mut(id)
+    //             .insert(Animations(vec![animation.1]));
+    //     }
+    // }
 }
+
+pub trait Construct {
+    fn construct(&mut self);
+}
+
+// pub fn scene(window: Rect) -> Scene {
+//     Scene::new(window)
+// }

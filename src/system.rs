@@ -2,7 +2,10 @@ use std::{ops::Add, time::Instant};
 
 use bevy_ecs::prelude::*;
 
-use crate::{Animations, Bounds, Circle, Color, FillColor, Interpolate, Position, Value};
+use crate::{
+    Angle, Animations, Bounds, Circle, Color, FillColor, Interpolate, Position, Rectangle, Size,
+    StrokeColor, Value,
+};
 
 pub struct Time {
     pub seconds: f32,
@@ -21,16 +24,16 @@ impl Default for Time {
 }
 
 impl Time {
-    #[allow(non_upper_case_globals)]
-    pub const dt: f32 = 0.1;
+    // #[allow(non_upper_case_globals)]
+    // pub const dt: f32 = 0.1;
 
-    pub fn step(&mut self) {
-        self.seconds += Time::dt;
-        self.count += 1;
-        if self.begin.is_none() {
-            self.begin = Some(Instant::now());
-        }
-    }
+    // pub fn step(&mut self) {
+    //     self.seconds += Time::dt;
+    //     self.count += 1;
+    //     if self.begin.is_none() {
+    //         self.begin = Some(Instant::now());
+    //     }
+    // }
     pub fn sample_time(&self) -> f64 {
         self.begin.unwrap().elapsed().as_secs_f64() / self.count as f64
     }
@@ -49,7 +52,7 @@ pub fn animate_from_target<Attribute: Interpolate + Component + Copy>(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + Time::dt;
+            let end = animation.start_time + animation.duration + 0.1;
 
             if begin < t && t <= end {
                 // If animation end state points to another entity, we need to query from that entity
@@ -75,10 +78,10 @@ pub fn animate<Attribute: Interpolate + Component + Copy>(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + Time::dt;
+            let end = animation.start_time + animation.duration + 0.1;
 
             if begin < t && t <= end {
-                let progress = ((t - begin) / duration).max(0.0).min(1.0);
+                let progress = animation.ease.calculate((t - begin) / duration);
                 animation.update(&mut att, progress);
             }
         }
@@ -95,10 +98,10 @@ pub fn animate_position(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + Time::dt;
+            let end = animation.start_time + animation.duration + 0.1;
 
             if begin < t && t <= end {
-                let progress = ((t - begin) / duration).max(0.0).min(1.0);
+                let progress = animation.ease.calculate((t - begin) / duration);
                 animation.update_position(&mut att, progress);
             }
         }
@@ -106,20 +109,45 @@ pub fn animate_position(
 }
 
 pub fn update_time(mut time: ResMut<Time>) {
-    time.step();
-    // println!("t = {:2.2} sec", time.seconds);
+    // time.step();
+    println!("t = {:2.2} sec", time.seconds);
 }
 
 pub fn print(res: Res<Time>, query: Query<(Entity, &Position, &FillColor), With<Circle>>) {
     for (entity, position, color) in query.iter() {
-        println!(
-            "Time = {:2.1} sec, Position = {:2.1}, FillColor = {:1.1}",
-            res.seconds, &position, &color
-        );
+        // println!(
+        //     "Time = {:2.1} sec, Position = {:2.1}, FillColor = {:1.1}",
+        //     res.seconds, &position, &color
+        // );
     }
 }
 
-// MoveTo(position)
-// MoveTo(target)
-// MoveBy(offset)
-// ToEdge(direction)
+pub fn draw_circle(
+    draw: NonSend<nannou::Draw>,
+    query: Query<(&Position, &StrokeColor, &FillColor, &Size), With<Circle>>,
+) {
+    for (position, stroke_color, fill_color, size) in query.iter() {
+        draw.ellipse()
+            .x_y(position.x, position.y)
+            .radius(size.width)
+            .color(*fill_color)
+            .stroke_color(*stroke_color)
+            .stroke_weight(size.width / 15.0);
+    }
+}
+
+pub fn draw_rectangle(
+    draw: NonSend<nannou::Draw>,
+    query: Query<(&Position, &Angle, &StrokeColor, &FillColor, &Size), With<Rectangle>>,
+) {
+    for (position, angle, stroke_color, fill_color, size) in query.iter() {
+        draw.rect()
+            .x_y(position.x, position.y)
+            .w(size.width)
+            .h(size.height)
+            .z_radians(angle.0)
+            .color(*fill_color)
+            .stroke_color(*stroke_color)
+            .stroke_weight(size.width / 15.0);
+    }
+}

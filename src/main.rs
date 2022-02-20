@@ -1,68 +1,104 @@
 #![allow(unused)]
 
-use std::marker::PhantomData;
-
 use bevy_ecs::prelude::*;
 
+mod app;
 mod component;
+mod consts;
+mod ease;
 mod object;
 mod scene;
 mod system;
 
 pub use crate::component::{
-    Animation, Animations, Color, FillColor, Interpolate, Name, Orientation, Position, Size,
-    StrokeColor, Value,
+    Angle, Animation, Animations, Color, FillColor, Interpolate, Name, Position, Size, StrokeColor,
+    Value,
+};
+pub use consts::*;
+pub use ease::EaseType;
+use nannou::{
+    color::{rgb_u32, rgba, Rgb},
+    rand::{prelude::SliceRandom, random_range, thread_rng},
 };
 pub use object::*;
-pub use scene::{Bounds, Scene};
+pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
 
+impl Construct for Scene {
+    fn construct(&mut self) {
+        for _ in (0..1000) {
+            let (x, y, w, h, ang, color) = gen_random_values();
+
+            if nannou::rand::random::<bool>() {
+                let circle = self
+                    .circle()
+                    .at(x, y)
+                    .with_fill_color(color)
+                    .with_stroke_color(color)
+                    .with_radius(w / 2.0)
+                    .make();
+
+                let (x, y, w, h, ang, color) = gen_random_values();
+
+                self.play(circle.set_fill_color(color, 1.0));
+                self.play(circle.set_stroke_color(color, 1.0));
+                self.play(circle.move_to(x, y, 1.0));
+                self.play(circle.set_radius(w / 2.0, 1.0));
+            } else {
+                let rect = self
+                    .rectangle()
+                    .at(x, y)
+                    .with_fill_color(color)
+                    .with_stroke_color(color)
+                    .with_size(w, h)
+                    .make();
+
+                let (x, y, w, h, ang, color) = gen_random_values();
+
+                self.play(rect.set_fill_color(color, 1.0));
+                self.play(rect.set_stroke_color(color, 1.0));
+                self.play(rect.move_to(x, y, 1.0));
+                self.play(rect.set_size(w, h, 1.0));
+                self.play(rect.set_angle(ang, 1.0));
+            }
+        }
+    }
+}
+
 fn main() {
-    let mut scene = Scene::new();
+    app::run();
+}
 
-    // for _ in (0..1) {
-    //     let circle = scene
-    //         .circle()
-    //         .at(3.0, 2.0)
-    //         .with_fill_color(Color::BLACK)
-    //         .with_radius(2.3)
-    //         .make();
-    //     }
+fn gen_random_values() -> (f32, f32, f32, f32, f32, Color) {
+    let colors = [
+        rgb_from_hex(0x264653),
+        rgb_from_hex(0x2a9d8f),
+        rgb_from_hex(0xe9c46a),
+        rgb_from_hex(0xf4a261),
+        rgb_from_hex(0xe76f51),
+    ];
+    let mut rng = thread_rng();
 
-    let circle = scene
-        .circle()
-        .at(3.0, 2.0)
-        .with_fill_color(Color::WHITE)
-        .with_radius(2.3)
-        .make();
+    let x_lim = 1920.0 / 2.0;
+    let y_lim = 1080.0 / 2.0;
 
-    let rect = scene.rectangle().with_fill_color(Color::RED).make();
+    let x = random_range::<f32>(-x_lim, x_lim);
+    let y = random_range::<f32>(-y_lim, y_lim);
+    let w = random_range::<f32>(2.0, 30.0);
+    let h = random_range::<f32>(2.0, 30.0);
+    let ang = random_range::<f32>(2.0, 30.0);
+    let color = *colors.choose(&mut rng).unwrap();
 
-    // scene.play(circle.move_to(10.0, 15.0, 1.0));
-    scene.play(circle.set_fill_color(Color::BLACK, 1.0));
-    // scene.play(circle.set_fill_color_from(rect, 2.0));
-    // scene.play(circle.move_to(0.0, 0.0, 3.0));
+    (x, y, w, h, ang, color)
+}
 
-    let mut update = Schedule::default();
-    update.add_stage(
-        "update",
-        SystemStage::parallel()
-            .with_system(update_time)
-            .with_system(animate_position)
-            .with_system(animate_from_target::<FillColor>)
-            .with_system(animate::<FillColor>)
-            .with_system(print),
-    );
-
-    for _ in (0..35) {
-        update.run(&mut scene.world);
-    }
-
-    if let Some(t) = scene.world.get_resource::<Time>() {
-        println!(
-            "time elapsed = {} us, sample time = {} sec",
-            t.elapsed_micros(),
-            t.sample_time()
-        );
-    }
+fn rgb_from_hex(color: u32) -> Rgb {
+    let color = rgb_u32(color);
+    rgba(
+        color.red as f32 / 255.0,
+        color.green as f32 / 255.0,
+        color.blue as f32 / 255.0,
+        1.0,
+    )
+    .into()
 }

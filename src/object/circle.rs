@@ -66,25 +66,79 @@ impl CircleId {
         x: f32,
         y: f32,
         start_time: f32,
-    ) -> (impl Into<Entity>, Animation<Position>) {
-        (self.0, Animation::change_to(Position { x, y }, start_time))
+    ) -> Vec<(impl Into<Entity>, Animation<Position>)> {
+        vec![(self.0, Animation::change_to(Position { x, y }, start_time))]
     }
+    // pub fn set_color(
+    //     &self,
+    //     color: Color,
+    //     start_time: f32,
+    // ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
+    //     vec![(self.0, Animation::change_to(FillColor(color), start_time))]
+    // }
+    // pub fn set_color_from(
+    //     &self,
+    //     entity: impl Into<Entity>,
+    //     start_time: f32,
+    // ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
+    //     vec![(
+    //         self.0,
+    //         Animation::change_to_target(entity.into(), start_time),
+    //     )]
+    // }
     pub fn set_fill_color(
         &self,
         color: Color,
         start_time: f32,
-    ) -> (impl Into<Entity>, Animation<FillColor>) {
-        (self.0, Animation::change_to(FillColor(color), start_time))
+    ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
+        vec![(self.0, Animation::change_to(FillColor(color), start_time))]
     }
     pub fn set_fill_color_from(
         &self,
         entity: impl Into<Entity>,
         start_time: f32,
-    ) -> (impl Into<Entity>, Animation<FillColor>) {
-        (
+    ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
+        vec![(
             self.0,
             Animation::change_to_target(entity.into(), start_time),
-        )
+        )]
+    }
+    pub fn set_stroke_color(
+        &self,
+        color: Color,
+        start_time: f32,
+    ) -> Vec<(impl Into<Entity>, Animation<StrokeColor>)> {
+        vec![(self.0, Animation::change_to(StrokeColor(color), start_time))]
+    }
+    pub fn set_stroke_color_from(
+        &self,
+        entity: impl Into<Entity>,
+        start_time: f32,
+    ) -> Vec<(impl Into<Entity>, Animation<StrokeColor>)> {
+        vec![(
+            self.0,
+            Animation::change_to_target(entity.into(), start_time),
+        )]
+    }
+    pub fn set_radius(
+        &self,
+        radius: f32,
+        start_time: f32,
+    ) -> Vec<(impl Into<Entity>, Animation<Size>)> {
+        vec![(
+            self.0,
+            Animation::change_to(Size::from_radius(radius), start_time),
+        )]
+    }
+    pub fn set_radius_from(
+        &self,
+        entity: impl Into<Entity>,
+        start_time: f32,
+    ) -> Vec<(impl Into<Entity>, Animation<Size>)> {
+        vec![(
+            self.0,
+            Animation::change_to_target(entity.into(), start_time),
+        )]
     }
 }
 
