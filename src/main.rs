@@ -2,6 +2,7 @@
 
 use bevy_ecs::prelude::*;
 
+mod animation;
 mod app;
 mod component;
 mod consts;
@@ -10,9 +11,9 @@ mod object;
 mod scene;
 mod system;
 
+pub use crate::animation::{Animation, AnimationType, Animations, EntityAnimation};
 pub use crate::component::{
-    Angle, Animation, Animations, Color, FillColor, Interpolate, Name, Position, Size, StrokeColor,
-    Value,
+    Angle, Color, FillColor, Interpolate, Name, Position, Size, StrokeColor, Value,
 };
 pub use consts::*;
 pub use ease::EaseType;
@@ -29,6 +30,7 @@ impl Construct for Scene {
         for _ in (0..1000) {
             let (x, y, w, h, ang, color) = gen_random_values();
 
+            let mut animations = Vec::new();
             if nannou::rand::random::<bool>() {
                 let circle = self
                     .circle()
@@ -40,10 +42,12 @@ impl Construct for Scene {
 
                 let (x, y, w, h, ang, color) = gen_random_values();
 
-                self.play(circle.set_fill_color(color, 1.0));
-                self.play(circle.set_stroke_color(color, 1.0));
-                self.play(circle.move_to(x, y, 1.0));
-                self.play(circle.set_radius(w / 2.0, 1.0));
+                animations.extend(vec![
+                    circle.set_fill_color(color, 1.0),
+                    circle.set_stroke_color(color, 1.0),
+                    circle.move_to(x, y, 1.0),
+                    circle.set_radius(w / 2.0, 1.0),
+                ]);
             } else {
                 let rect = self
                     .rectangle()
@@ -55,12 +59,15 @@ impl Construct for Scene {
 
                 let (x, y, w, h, ang, color) = gen_random_values();
 
-                self.play(rect.set_fill_color(color, 1.0));
-                self.play(rect.set_stroke_color(color, 1.0));
-                self.play(rect.move_to(x, y, 1.0));
-                self.play(rect.set_size(w, h, 1.0));
-                self.play(rect.set_angle(ang, 1.0));
+                animations.extend(vec![
+                    rect.set_fill_color(color, 1.0),
+                    rect.set_stroke_color(color, 1.0),
+                    rect.move_to(x, y, 1.0),
+                    rect.set_size(w, h, 1.0),
+                    rect.set_angle(ang, 1.0),
+                ]);
             }
+            self.play(animations);
         }
     }
 }

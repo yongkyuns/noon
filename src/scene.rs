@@ -9,8 +9,8 @@ use crate::system::{
     update_time, Time,
 };
 use crate::{
-    circle, rectangle, Angle, Animation, Animations, CircleBuilder, Interpolate, Position,
-    RectangleBuilder, Size, StrokeColor,
+    circle, rectangle, Angle, Animation, AnimationType, Animations, CircleBuilder, EntityAnimation,
+    Interpolate, Position, RectangleBuilder, Size, StrokeColor, Value,
 };
 
 pub struct Bounds {
@@ -93,42 +93,15 @@ impl Scene {
         self.world.insert_non_send(nannou_draw.clone());
         self.drawer.run(&mut self.world);
     }
-    pub fn play<A, E, C>(&mut self, animations: A)
-    where
-        A: IntoIterator<Item = (E, Animation<C>)>,
-        E: Into<Entity>,
-        C: Component + Interpolate,
-    {
+
+    pub fn play(&mut self, animations: impl Into<Vec<EntityAnimation>>) {
+        let animations: Vec<EntityAnimation> = animations.into();
         for animation in animations.into_iter() {
-            let id: Entity = animation.0.into();
-            if let Some(mut animations) = self.world.get_mut::<Animations<C>>(id) {
-                animations.0.push(animation.1);
-            } else {
-                self.world
-                    .entity_mut(id)
-                    .insert(Animations(vec![animation.1]));
-            }
+            animation.insert_animation(&mut self.world);
         }
     }
-    // pub fn play<C>(&mut self, animation: (impl Into<Entity>, Animation<C>))
-    // where
-    //     C: Component + Interpolate,
-    // {
-    //     let id: Entity = animation.0.into();
-    //     if let Some(mut animations) = self.world.get_mut::<Animations<C>>(id) {
-    //         animations.0.push(animation.1);
-    //     } else {
-    //         self.world
-    //             .entity_mut(id)
-    //             .insert(Animations(vec![animation.1]));
-    //     }
-    // }
 }
 
 pub trait Construct {
     fn construct(&mut self);
 }
-
-// pub fn scene(window: Rect) -> Scene {
-//     Scene::new(window)
-// }
