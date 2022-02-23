@@ -81,7 +81,7 @@ pub fn animate<Attribute: Interpolate + Component + Copy>(
             let end = animation.start_time + animation.duration + 0.1;
 
             if begin < t && t <= end {
-                let progress = animation.ease.calculate((t - begin) / duration);
+                let progress = animation.rate_func.calculate((t - begin) / duration);
                 animation.update(&mut att, progress);
             }
         }
@@ -101,7 +101,7 @@ pub fn animate_position(
             let end = animation.start_time + animation.duration + 0.1;
 
             if begin < t && t <= end {
-                let progress = animation.ease.calculate((t - begin) / duration);
+                let progress = animation.rate_func.calculate((t - begin) / duration);
                 animation.update_position(&mut att, progress);
             }
         }

@@ -9,8 +9,8 @@ use crate::system::{
     update_time, Time,
 };
 use crate::{
-    circle, rectangle, Angle, Animation, AnimationType, Animations, CircleBuilder, EntityAnimation,
-    Interpolate, Position, RectangleBuilder, Size, StrokeColor, Value,
+    circle, rectangle, Angle, AnimBuilder, Animation, AnimationType, Animations, CircleBuilder,
+    EntityAnimation, Interpolate, Position, RectangleBuilder, Size, StrokeColor, Value,
 };
 
 pub struct Bounds {
@@ -39,6 +39,7 @@ pub struct Scene {
     pub(crate) world: World,
     pub(crate) updater: Schedule,
     pub(crate) drawer: Schedule,
+    pub(crate) event_time: f32,
 }
 
 impl Scene {
@@ -73,6 +74,7 @@ impl Scene {
             world,
             updater,
             drawer,
+            event_time: 0.0,
         }
     }
     pub fn circle(&mut self) -> CircleBuilder {
@@ -94,11 +96,20 @@ impl Scene {
         self.drawer.run(&mut self.world);
     }
 
-    pub fn play(&mut self, animations: impl Into<Vec<EntityAnimation>>) {
-        let animations: Vec<EntityAnimation> = animations.into();
-        for animation in animations.into_iter() {
-            animation.insert_animation(&mut self.world);
-        }
+    pub fn wait(&mut self) {
+        self.event_time += 1.0;
+    }
+
+    pub fn wait_for(&mut self, time: f32) {
+        self.event_time += time;
+    }
+
+    pub fn play(&mut self, animations: impl Into<Vec<EntityAnimation>>) -> AnimBuilder {
+        // let animations: Vec<EntityAnimation> = animations.into();
+        // for animation in animations.into_iter() {
+        //     animation.insert_animation(&mut self.world);
+        // }
+        AnimBuilder::new(self, animations.into())
     }
 }
 

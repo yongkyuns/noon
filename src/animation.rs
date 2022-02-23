@@ -8,46 +8,46 @@ use crate::{Angle, EaseType, FillColor, Interpolate, Position, Scene, Size, Stro
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
 
-#[derive(Component)]
+#[derive(Component, Debug, Clone, Copy)]
 pub struct Animation<T> {
     pub(crate) begin: Option<T>,
     pub(crate) end: Value<T>,
     pub(crate) duration: f32,
     pub(crate) start_time: f32,
-    pub(crate) ease: EaseType,
+    pub(crate) rate_func: EaseType,
 }
 
 impl<T> Animation<T>
 where
     T: Interpolate + Component + Copy,
 {
-    pub fn change_to(to: T, start_time: f32) -> Self {
+    pub fn change_to(to: T) -> Self {
         Self {
             begin: None,
             end: Value::Absolute(to),
             duration: 3.0,
-            start_time,
-            ease: EaseType::Quint,
+            start_time: 0.0,
+            rate_func: EaseType::Quint,
         }
     }
 
-    pub fn change_to_target(target: Entity, start_time: f32) -> Self {
+    pub fn change_to_target(target: Entity) -> Self {
         Self {
             begin: None,
             end: Value::From(target),
             duration: 1.0,
-            start_time,
-            ease: EaseType::Linear,
+            start_time: 0.0,
+            rate_func: EaseType::Linear,
         }
     }
 
-    pub fn change_by(by: T, start_time: f32) -> Self {
+    pub fn change_by(by: T) -> Self {
         Self {
             begin: None,
             end: Value::Relative(by),
             duration: 1.0,
-            start_time,
-            ease: EaseType::Linear,
+            start_time: 0.0,
+            rate_func: EaseType::Linear,
         }
     }
 
@@ -93,6 +93,7 @@ impl Animation<Position> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
     FillColor(Animation<FillColor>),
@@ -143,6 +144,18 @@ fn insert_animation<C: Component + Interpolate>(
     }
 }
 
+fn set_properties<T: Component + Interpolate>(
+    animation: &mut Animation<T>,
+    start_time: f32,
+    duration: f32,
+    rate_func: EaseType,
+) {
+    animation.start_time = start_time;
+    animation.duration = duration;
+    animation.rate_func = rate_func;
+}
+
+#[derive(Debug, Copy, Clone)]
 pub struct EntityAnimation {
     pub(crate) entity: Entity,
     pub(crate) animation: AnimationType,
@@ -150,8 +163,7 @@ pub struct EntityAnimation {
 
 impl EntityAnimation {
     pub fn insert_animation(self, world: &mut World) {
-        let animation = self.animation;
-        match animation {
+        match self.animation {
             AnimationType::StrokeColor(animation) => {
                 insert_animation(animation, world, self.entity);
             }
@@ -168,6 +180,34 @@ impl EntityAnimation {
                 insert_animation(animation, world, self.entity);
             }
         };
+    }
+    pub fn start_time(&self) -> f32 {
+        match &self.animation {
+            AnimationType::StrokeColor(animation) => animation.start_time,
+            AnimationType::FillColor(animation) => animation.start_time,
+            AnimationType::Position(animation) => animation.start_time,
+            AnimationType::Angle(animation) => animation.start_time,
+            AnimationType::Size(animation) => animation.start_time,
+        }
+    }
+    pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
+        match self.animation {
+            AnimationType::StrokeColor(ref mut animation) => {
+                set_properties(animation, start_time, duration, rate_func);
+            }
+            AnimationType::FillColor(ref mut animation) => {
+                set_properties(animation, start_time, duration, rate_func);
+            }
+            AnimationType::Position(ref mut animation) => {
+                set_properties(animation, start_time, duration, rate_func);
+            }
+            AnimationType::Angle(ref mut animation) => {
+                set_properties(animation, start_time, duration, rate_func);
+            }
+            AnimationType::Size(ref mut animation) => {
+                set_properties(animation, start_time, duration, rate_func);
+            }
+        }
     }
 }
 
@@ -188,7 +228,7 @@ pub struct AnimBuilder<'a> {
 
 impl<'a> AnimBuilder<'a> {
     pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimation>) -> Self {
-        let mut rate_func = EaseType::Linear;
+        let mut rate_func = EaseType::Quad;
         // for ta in animations.iter() {
         //     if ta.action == Action::ShowCreation {
         //         rate_func = EaseType::Quad;
@@ -218,30 +258,38 @@ impl<'a> AnimBuilder<'a> {
     }
 }
 
-// impl<'a> Drop for AnimBuilder<'a> {
-//     fn drop(&mut self) {
-//         let Self {
-//             run_time,
-//             animations,
-//             rate_func,
-//             scene,
-//             lag,
-//             repeat,
-//         } = self;
+impl<'a> Drop for AnimBuilder<'a> {
+    fn drop(&mut self) {
+        let Self {
+            run_time,
+            animations,
+            rate_func,
+            scene,
+            lag,
+            repeat,
+        } = self;
 
-//         scene.commands.play(
-//             animations.iter().fold(Vec::new(), |mut animations, ta| {
-//                 animations.push(Animation {
-//                     object: ta.target,
-//                     action: ta.action,
-//                     run_time: *run_time,
-//                     rate_func: *rate_func,
-//                     status: Status::NotStarted,
-//                 });
-//                 animations
-//             }),
-//             *lag,
-//             *repeat,
-//         );
-//     }
-// }
+        let mut t = self.scene.event_time;
+        for animation in animations.into_iter() {
+            animation.set_properties(t, *run_time, *rate_func);
+            animation.insert_animation(&mut self.scene.world);
+            t += *lag;
+        }
+        self.scene.event_time = t - *lag + *run_time;
+
+        // scene.commands.play(
+        //     animations.iter().fold(Vec::new(), |mut animations, ta| {
+        //         animations.push(Animation {
+        //             object: ta.target,
+        //             action: ta.action,
+        //             run_time: *run_time,
+        //             rate_func: *rate_func,
+        //             status: Status::NotStarted,
+        //         });
+        //         animations
+        //     }),
+        //     *lag,
+        //     *repeat,
+        // );
+    }
+}

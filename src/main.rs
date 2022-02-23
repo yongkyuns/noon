@@ -11,7 +11,7 @@ mod object;
 mod scene;
 mod system;
 
-pub use crate::animation::{Animation, AnimationType, Animations, EntityAnimation};
+pub use crate::animation::{AnimBuilder, Animation, AnimationType, Animations, EntityAnimation};
 pub use crate::component::{
     Angle, Color, FillColor, Interpolate, Name, Position, Size, StrokeColor, Value,
 };
@@ -27,10 +27,10 @@ pub use system::{animate, animate_from_target, animate_position, print, update_t
 
 impl Construct for Scene {
     fn construct(&mut self) {
-        for _ in (0..1000) {
+        let mut animations = Vec::new();
+        for _ in (0..2000) {
             let (x, y, w, h, ang, color) = gen_random_values();
 
-            let mut animations = Vec::new();
             if nannou::rand::random::<bool>() {
                 let circle = self
                     .circle()
@@ -43,10 +43,10 @@ impl Construct for Scene {
                 let (x, y, w, h, ang, color) = gen_random_values();
 
                 animations.extend(vec![
-                    circle.set_fill_color(color, 1.0),
-                    circle.set_stroke_color(color, 1.0),
-                    circle.move_to(x, y, 1.0),
-                    circle.set_radius(w / 2.0, 1.0),
+                    circle.set_fill_color(color),
+                    circle.set_stroke_color(color),
+                    circle.move_to(x, y),
+                    circle.set_radius(w / 2.0),
                 ]);
             } else {
                 let rect = self
@@ -60,15 +60,19 @@ impl Construct for Scene {
                 let (x, y, w, h, ang, color) = gen_random_values();
 
                 animations.extend(vec![
-                    rect.set_fill_color(color, 1.0),
-                    rect.set_stroke_color(color, 1.0),
-                    rect.move_to(x, y, 1.0),
-                    rect.set_size(w, h, 1.0),
-                    rect.set_angle(ang, 1.0),
+                    rect.set_fill_color(color),
+                    rect.set_stroke_color(color),
+                    rect.move_to(x, y),
+                    rect.set_size(w, h),
+                    rect.set_angle(ang),
                 ]);
             }
-            self.play(animations);
         }
+        self.wait();
+        self.play(animations)
+            .run_time(5.0)
+            .lag(0.001)
+            .rate_func(EaseType::Quint);
     }
 }
 

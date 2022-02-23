@@ -144,7 +144,7 @@ impl IntoLinSrgba<f32> for StrokeColor {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Debug)]
 pub enum Value<C> {
     Relative(C),
     Absolute(C),
