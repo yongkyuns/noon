@@ -61,6 +61,22 @@ impl<'a> RectangleBuilder<'a> {
     }
 }
 
+pub fn draw_rectangle(
+    draw: NonSend<nannou::Draw>,
+    query: Query<(&Position, &Angle, &StrokeColor, &FillColor, &Size), With<Rectangle>>,
+) {
+    for (position, angle, stroke_color, fill_color, size) in query.iter() {
+        draw.rect()
+            .x_y(position.x, position.y)
+            .w(size.width)
+            .h(size.height)
+            .z_radians(angle.0)
+            .color(*fill_color)
+            .stroke_color(*stroke_color)
+            .stroke_weight(size.width / 15.0);
+    }
+}
+
 pub fn rectangle(scene: &mut Scene) -> RectangleBuilder {
     RectangleBuilder::new(scene)
 }

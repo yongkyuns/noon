@@ -121,33 +121,3 @@ pub fn print(res: Res<Time>, query: Query<(Entity, &Position, &FillColor), With<
         // );
     }
 }
-
-pub fn draw_circle(
-    draw: NonSend<nannou::Draw>,
-    query: Query<(&Position, &StrokeColor, &FillColor, &Size), With<Circle>>,
-) {
-    for (position, stroke_color, fill_color, size) in query.iter() {
-        draw.ellipse()
-            .x_y(position.x, position.y)
-            .radius(size.width)
-            .color(*fill_color)
-            .stroke_color(*stroke_color)
-            .stroke_weight(size.width / 15.0);
-    }
-}
-
-pub fn draw_rectangle(
-    draw: NonSend<nannou::Draw>,
-    query: Query<(&Position, &Angle, &StrokeColor, &FillColor, &Size), With<Rectangle>>,
-) {
-    for (position, angle, stroke_color, fill_color, size) in query.iter() {
-        draw.rect()
-            .x_y(position.x, position.y)
-            .w(size.width)
-            .h(size.height)
-            .z_radians(angle.0)
-            .color(*fill_color)
-            .stroke_color(*stroke_color)
-            .stroke_weight(size.width / 15.0);
-    }
-}

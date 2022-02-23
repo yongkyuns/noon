@@ -9,8 +9,8 @@ mod line;
 mod rectangle;
 mod triangle;
 
-pub use circle::{circle, Circle, CircleBuilder};
-pub use rectangle::{rectangle, Rectangle, RectangleBuilder};
+pub use circle::{circle, draw_circle, Circle, CircleBuilder};
+pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder};
 
 #[derive(Component)]
 pub struct Triangle;

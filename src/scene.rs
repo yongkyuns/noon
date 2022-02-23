@@ -4,13 +4,11 @@ use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{
-    animate, animate_from_target, animate_position, draw_circle, draw_rectangle, print,
-    update_time, Time,
-};
+use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
 use crate::{
-    circle, rectangle, Angle, AnimBuilder, Animation, AnimationType, Animations, CircleBuilder,
-    EntityAnimation, Interpolate, Position, RectangleBuilder, Size, StrokeColor, Value,
+    circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
+    Animations, CircleBuilder, EntityAnimation, Interpolate, Opacity, Position, RectangleBuilder,
+    Size, StrokeColor, Value,
 };
 
 pub struct Bounds {
@@ -61,6 +59,8 @@ impl Scene {
                 .with_system(animate::<Size>)
                 .with_system(animate_from_target::<Angle>)
                 .with_system(animate::<Angle>)
+                .with_system(animate_from_target::<Opacity>)
+                .with_system(animate::<Opacity>)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();
@@ -105,10 +105,6 @@ impl Scene {
     }
 
     pub fn play(&mut self, animations: impl Into<Vec<EntityAnimation>>) -> AnimBuilder {
-        // let animations: Vec<EntityAnimation> = animations.into();
-        // for animation in animations.into_iter() {
-        //     animation.insert_animation(&mut self.world);
-        // }
         AnimBuilder::new(self, animations.into())
     }
 }

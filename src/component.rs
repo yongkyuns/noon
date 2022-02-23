@@ -32,7 +32,6 @@ pub struct Position {
 
 impl Interpolate for Position {
     fn interp(&self, other: &Self, progress: f32) -> Self {
-        let progress = progress.min(1.0).max(0.0);
         Self {
             x: self.x.interp(&other.x, progress),
             y: self.y.interp(&other.y, progress),
@@ -95,6 +94,22 @@ impl Interpolate for Size {
             width: self.width.interp(&other.width, progress),
             height: self.height.interp(&other.height, progress),
         }
+    }
+}
+
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct Opacity(pub(crate) f32);
+
+impl Opacity {
+    pub fn is_visible(&self) -> bool {
+        self.0 > 0.0
+    }
+}
+
+impl Interpolate for Opacity {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        let progress = progress.min(1.0).max(0.0);
+        Self(self.0.interp(&other.0, progress))
     }
 }
 

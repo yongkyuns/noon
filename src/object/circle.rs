@@ -1,8 +1,9 @@
 use crate::{
-    Animation, AnimationType, Color, EntityAnimation, FillColor, Position, Scene, Size,
+    Animation, AnimationType, Color, EntityAnimation, FillColor, Opacity, Position, Scene, Size,
     StrokeColor, Value,
 };
 use bevy_ecs::prelude::*;
+use nannou::color::Rgba;
 
 #[derive(Component)]
 pub struct Circle;
@@ -50,9 +51,49 @@ impl<'a> CircleBuilder<'a> {
             .insert(self.position)
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
+            .insert(Opacity(0.0))
             .id();
 
         id.into()
+    }
+    pub fn show(&mut self) -> CircleId {
+        let id = self.make();
+        id
+        // let world = &mut self.scene.world;
+        // let id = world
+        //     .spawn()
+        //     .insert(Circle)
+        //     .insert(Size::from_radius(self.radius))
+        //     .insert(self.position)
+        //     .insert(StrokeColor(self.stroke_color))
+        //     .insert(FillColor(self.fill_color))
+        //     .id();
+
+        // id.into()
+    }
+}
+
+pub fn draw_circle(
+    draw: NonSend<nannou::Draw>,
+    query: Query<(&Position, &StrokeColor, &FillColor, &Opacity, &Size), With<Circle>>,
+) {
+    for (position, stroke_color, fill_color, alpha, size) in query.iter() {
+        if alpha.is_visible() {
+            let stroke = Rgba {
+                color: stroke_color.0,
+                alpha: alpha.0,
+            };
+            let fill = Rgba {
+                color: fill_color.0,
+                alpha: alpha.0,
+            };
+            draw.ellipse()
+                .x_y(position.x, position.y)
+                .radius(size.width)
+                .color(fill)
+                .stroke_color(stroke)
+                .stroke_weight(size.width / 15.0);
+        }
     }
 }
 

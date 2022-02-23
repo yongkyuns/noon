@@ -13,7 +13,7 @@ mod system;
 
 pub use crate::animation::{AnimBuilder, Animation, AnimationType, Animations, EntityAnimation};
 pub use crate::component::{
-    Angle, Color, FillColor, Interpolate, Name, Position, Size, StrokeColor, Value,
+    Angle, Color, FillColor, Interpolate, Name, Opacity, Position, Size, StrokeColor, Value,
 };
 pub use consts::*;
 pub use ease::EaseType;
@@ -25,54 +25,76 @@ pub use object::*;
 pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
 
+// impl Construct for Scene {
+//     fn construct(&mut self) {
+//         let mut animations = Vec::new();
+//         for _ in (0..2000) {
+//             let (x, y, w, h, ang, color) = gen_random_values();
+
+//             if nannou::rand::random::<bool>() {
+//                 let circle = self
+//                     .circle()
+//                     .at(x, y)
+//                     .with_fill_color(color)
+//                     .with_stroke_color(color)
+//                     .with_radius(w / 2.0)
+//                     .make();
+
+//                 let (x, y, w, h, ang, color) = gen_random_values();
+
+//                 animations.extend(vec![
+//                     circle.set_fill_color(color),
+//                     circle.set_stroke_color(color),
+//                     circle.move_to(x, y),
+//                     circle.set_radius(w / 2.0),
+//                 ]);
+//             } else {
+//                 let rect = self
+//                     .rectangle()
+//                     .at(x, y)
+//                     .with_fill_color(color)
+//                     .with_stroke_color(color)
+//                     .with_size(w, h)
+//                     .make();
+
+//                 let (x, y, w, h, ang, color) = gen_random_values();
+
+//                 animations.extend(vec![
+//                     rect.set_fill_color(color),
+//                     rect.set_stroke_color(color),
+//                     rect.move_to(x, y),
+//                     rect.set_size(w, h),
+//                     rect.set_angle(ang),
+//                 ]);
+//             }
+//         }
+//         self.wait();
+//         self.play(animations)
+//             .run_time(3.0)
+//             .lag(0.0001)
+//             .rate_func(EaseType::Quint);
+//     }
+// }
+
 impl Construct for Scene {
     fn construct(&mut self) {
-        let mut animations = Vec::new();
-        for _ in (0..2000) {
-            let (x, y, w, h, ang, color) = gen_random_values();
+        let (x, y, w, h, ang, color) = gen_random_values();
 
-            if nannou::rand::random::<bool>() {
-                let circle = self
-                    .circle()
-                    .at(x, y)
-                    .with_fill_color(color)
-                    .with_stroke_color(color)
-                    .with_radius(w / 2.0)
-                    .make();
+        let circle = self
+            .circle()
+            .at(0.0, 0.0)
+            .with_fill_color(color)
+            .with_stroke_color(color)
+            .with_radius(100.0 / 2.0)
+            .make();
 
-                let (x, y, w, h, ang, color) = gen_random_values();
-
-                animations.extend(vec![
-                    circle.set_fill_color(color),
-                    circle.set_stroke_color(color),
-                    circle.move_to(x, y),
-                    circle.set_radius(w / 2.0),
-                ]);
-            } else {
-                let rect = self
-                    .rectangle()
-                    .at(x, y)
-                    .with_fill_color(color)
-                    .with_stroke_color(color)
-                    .with_size(w, h)
-                    .make();
-
-                let (x, y, w, h, ang, color) = gen_random_values();
-
-                animations.extend(vec![
-                    rect.set_fill_color(color),
-                    rect.set_stroke_color(color),
-                    rect.move_to(x, y),
-                    rect.set_size(w, h),
-                    rect.set_angle(ang),
-                ]);
-            }
-        }
         self.wait();
-        self.play(animations)
-            .run_time(5.0)
-            .lag(0.001)
-            .rate_func(EaseType::Quint);
+        self.play(circle.move_to(400.0, 400.0))
+            .rate_func(EaseType::Elastic);
+        // self.play(circle.move_to(400.0, 400.0))
+        //     .run_time(1.0)
+        //     .lag(0.0001)
+        //     .rate_func(EaseType::Quad);
     }
 }
 
