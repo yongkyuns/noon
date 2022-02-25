@@ -3,7 +3,9 @@ use bevy_ecs::{
     prelude::{Component, World},
 };
 
-use crate::{Angle, EaseType, FillColor, Interpolate, Position, Scene, Size, StrokeColor, Value};
+use crate::{
+    Angle, EaseType, FillColor, Interpolate, Opacity, Position, Scene, Size, StrokeColor, Value,
+};
 
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
@@ -100,6 +102,7 @@ pub enum AnimationType {
     Position(Animation<Position>),
     Angle(Animation<Angle>),
     Size(Animation<Size>),
+    Opacity(Animation<Opacity>),
 }
 
 impl Into<AnimationType> for Animation<StrokeColor> {
@@ -132,6 +135,12 @@ impl Into<AnimationType> for Animation<Size> {
     }
 }
 
+impl Into<AnimationType> for Animation<Opacity> {
+    fn into(self) -> AnimationType {
+        AnimationType::Opacity(self)
+    }
+}
+
 fn insert_animation<C: Component + Interpolate>(
     animation: Animation<C>,
     world: &mut World,
@@ -155,71 +164,82 @@ fn set_properties<T: Component + Interpolate>(
     animation.rate_func = rate_func;
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct EntityAnimation {
+#[derive(Debug, Clone)]
+pub struct EntityAnimations {
     pub(crate) entity: Entity,
-    pub(crate) animation: AnimationType,
+    pub(crate) animations: Vec<AnimationType>,
 }
 
-impl EntityAnimation {
+impl EntityAnimations {
     pub fn insert_animation(self, world: &mut World) {
-        match self.animation {
-            AnimationType::StrokeColor(animation) => {
-                insert_animation(animation, world, self.entity);
-            }
-            AnimationType::FillColor(animation) => {
-                insert_animation(animation, world, self.entity);
-            }
-            AnimationType::Position(animation) => {
-                insert_animation(animation, world, self.entity);
-            }
-            AnimationType::Angle(animation) => {
-                insert_animation(animation, world, self.entity);
-            }
-            AnimationType::Size(animation) => {
-                insert_animation(animation, world, self.entity);
-            }
-        };
+        for animation in self.animations.into_iter() {
+            match animation {
+                AnimationType::StrokeColor(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+                AnimationType::FillColor(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+                AnimationType::Position(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+                AnimationType::Angle(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+                AnimationType::Size(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+                AnimationType::Opacity(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
+            };
+        }
     }
     pub fn start_time(&self) -> f32 {
-        match &self.animation {
+        match self.animations.get(0).unwrap() {
             AnimationType::StrokeColor(animation) => animation.start_time,
             AnimationType::FillColor(animation) => animation.start_time,
             AnimationType::Position(animation) => animation.start_time,
             AnimationType::Angle(animation) => animation.start_time,
             AnimationType::Size(animation) => animation.start_time,
+            AnimationType::Opacity(animation) => animation.start_time,
         }
     }
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
-        match self.animation {
-            AnimationType::StrokeColor(ref mut animation) => {
-                set_properties(animation, start_time, duration, rate_func);
-            }
-            AnimationType::FillColor(ref mut animation) => {
-                set_properties(animation, start_time, duration, rate_func);
-            }
-            AnimationType::Position(ref mut animation) => {
-                set_properties(animation, start_time, duration, rate_func);
-            }
-            AnimationType::Angle(ref mut animation) => {
-                set_properties(animation, start_time, duration, rate_func);
-            }
-            AnimationType::Size(ref mut animation) => {
-                set_properties(animation, start_time, duration, rate_func);
+        for animation in self.animations.iter_mut() {
+            match animation {
+                AnimationType::StrokeColor(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::FillColor(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Position(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Angle(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Size(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Opacity(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
             }
         }
     }
 }
 
-impl Into<Vec<EntityAnimation>> for EntityAnimation {
-    fn into(self) -> Vec<EntityAnimation> {
+impl Into<Vec<EntityAnimations>> for EntityAnimations {
+    fn into(self) -> Vec<EntityAnimations> {
         vec![self]
     }
 }
 
 pub struct AnimBuilder<'a> {
     scene: &'a mut Scene,
-    animations: Vec<EntityAnimation>,
+    animations: Vec<EntityAnimations>,
     run_time: f32,
     rate_func: EaseType,
     lag: f32,
@@ -227,7 +247,7 @@ pub struct AnimBuilder<'a> {
 }
 
 impl<'a> AnimBuilder<'a> {
-    pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimation>) -> Self {
+    pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimations>) -> Self {
         let mut rate_func = EaseType::Quad;
         // for ta in animations.iter() {
         //     if ta.action == Action::ShowCreation {
@@ -272,24 +292,9 @@ impl<'a> Drop for AnimBuilder<'a> {
         let mut t = self.scene.event_time;
         for animation in animations.into_iter() {
             animation.set_properties(t, *run_time, *rate_func);
-            animation.insert_animation(&mut self.scene.world);
+            animation.clone().insert_animation(&mut self.scene.world);
             t += *lag;
         }
         self.scene.event_time = t - *lag + *run_time;
-
-        // scene.commands.play(
-        //     animations.iter().fold(Vec::new(), |mut animations, ta| {
-        //         animations.push(Animation {
-        //             object: ta.target,
-        //             action: ta.action,
-        //             run_time: *run_time,
-        //             rate_func: *rate_func,
-        //             status: Status::NotStarted,
-        //         });
-        //         animations
-        //     }),
-        //     *lag,
-        //     *repeat,
-        // );
     }
 }

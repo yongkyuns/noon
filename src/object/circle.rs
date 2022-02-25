@@ -1,6 +1,6 @@
 use crate::{
-    Animation, AnimationType, Color, EntityAnimation, FillColor, Opacity, Position, Scene, Size,
-    StrokeColor, Value,
+    AnimBuilder, Animation, AnimationType, Color, EaseType, EntityAnimations, FillColor, Opacity,
+    Position, Scene, Size, StrokeColor, Value,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
@@ -38,7 +38,7 @@ impl<'a> CircleBuilder<'a> {
         self.fill_color = color;
         self
     }
-    pub fn at(mut self, x: f32, y: f32) -> Self {
+    pub fn with_position(mut self, x: f32, y: f32) -> Self {
         self.position = Position { x, y };
         self
     }
@@ -49,8 +49,8 @@ impl<'a> CircleBuilder<'a> {
             .insert(Circle)
             .insert(Size::from_radius(self.radius))
             .insert(self.position)
-            .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
+            .insert(StrokeColor(self.stroke_color))
             .insert(Opacity(0.0))
             .id();
 
@@ -58,18 +58,14 @@ impl<'a> CircleBuilder<'a> {
     }
     pub fn show(&mut self) -> CircleId {
         let id = self.make();
-        id
-        // let world = &mut self.scene.world;
-        // let id = world
-        //     .spawn()
-        //     .insert(Circle)
-        //     .insert(Size::from_radius(self.radius))
-        //     .insert(self.position)
-        //     .insert(StrokeColor(self.stroke_color))
-        //     .insert(FillColor(self.fill_color))
-        //     .id();
+        let animation = EntityAnimations {
+            entity: id.into(),
+            animations: vec![Animation::change_to(Opacity(1.0)).into()],
+        };
 
-        // id.into()
+        AnimBuilder::new(self.scene, animation.into()).run_time(0.0);
+
+        id
     }
 }
 
@@ -90,9 +86,9 @@ pub fn draw_circle(
             draw.ellipse()
                 .x_y(position.x, position.y)
                 .radius(size.width)
-                .color(fill)
                 .stroke_color(stroke)
-                .stroke_weight(size.width / 15.0);
+                .stroke_weight(size.width / 15.0)
+                .color(fill);
         }
     }
 }
@@ -105,64 +101,82 @@ pub fn circle(scene: &mut Scene) -> CircleBuilder {
 pub struct CircleId(pub(crate) Entity);
 
 impl CircleId {
-    pub fn move_to(&self, x: f32, y: f32) -> EntityAnimation {
-        EntityAnimation {
+    pub fn move_to(&self, x: f32, y: f32) -> EntityAnimations {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::change_to(Position { x, y }).into(),
+            animations: vec![Animation::change_to(Position { x, y }).into()],
         }
     }
-    // pub fn set_color(
-    //     &self,
-    //     color: Color,
-    //     start_time: f32,
-    // ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
-    //     vec![(self.0, Animation::change_to(FillColor(color), start_time))]
-    // }
-    // pub fn set_color_from(
-    //     &self,
-    //     entity: impl Into<Entity>,
-    //     start_time: f32,
-    // ) -> Vec<(impl Into<Entity>, Animation<FillColor>)> {
-    //     vec![(
-    //         self.0,
-    //         Animation::change_to_target(entity.into(), start_time),
-    //     )]
-    // }
+    pub fn set_color(&self, color: Color) -> EntityAnimations {
+        let mut hsv: nannou::color::Hsv = color.into_linear().into();
+        hsv.saturation -= 0.1;
+        hsv.value += 0.2;
+        self.set_stroke_color(hsv.into());
 
-    pub fn set_fill_color(&self, color: Color) -> EntityAnimation {
-        EntityAnimation {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::change_to(FillColor(color)).into(),
+            animations: vec![
+                Animation::change_to(StrokeColor(hsv.into())).into(),
+                Animation::change_to(FillColor(color)).into(),
+            ],
         }
     }
-    pub fn set_fill_color_from(&self, entity: impl Into<Entity>) -> EntityAnimation {
-        EntityAnimation {
+    pub fn set_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        let entity: Entity = entity.into();
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::<FillColor>::change_to_target(entity.into()).into(),
+            animations: vec![
+                Animation::<StrokeColor>::change_to_target(entity.into()).into(),
+                Animation::<FillColor>::change_to_target(entity.into()).into(),
+            ],
         }
     }
-    pub fn set_stroke_color(&self, color: Color) -> EntityAnimation {
-        EntityAnimation {
+    pub fn fade_in(&self) -> EntityAnimations {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::change_to(StrokeColor(color)).into(),
+            animations: vec![Animation::change_to(Opacity(1.0)).into()],
         }
     }
-    pub fn set_stroke_color_from(&self, entity: impl Into<Entity>) -> EntityAnimation {
-        EntityAnimation {
+    pub fn fade_out(&self) -> EntityAnimations {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::<StrokeColor>::change_to_target(entity.into()).into(),
+            animations: vec![Animation::change_to(Opacity(0.0)).into()],
         }
     }
-    pub fn set_radius(&self, radius: f32) -> EntityAnimation {
-        EntityAnimation {
+    pub fn set_fill_color(&self, color: Color) -> EntityAnimations {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::change_to(Size::from_radius(radius)).into(),
+            animations: vec![Animation::change_to(FillColor(color)).into()],
         }
     }
-    pub fn set_radius_from(&self, entity: impl Into<Entity>) -> EntityAnimation {
-        EntityAnimation {
+    pub fn set_fill_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        EntityAnimations {
             entity: self.0,
-            animation: Animation::<Size>::change_to_target(entity.into()).into(),
+            animations: vec![Animation::<FillColor>::change_to_target(entity.into()).into()],
+        }
+    }
+    pub fn set_stroke_color(&self, color: Color) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.0,
+            animations: vec![Animation::change_to(StrokeColor(color)).into()],
+        }
+    }
+    pub fn set_stroke_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.0,
+            animations: vec![Animation::<StrokeColor>::change_to_target(entity.into()).into()],
+        }
+    }
+    pub fn set_radius(&self, radius: f32) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.0,
+            animations: vec![Animation::change_to(Size::from_radius(radius)).into()],
+        }
+    }
+    pub fn set_radius_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.0,
+            animations: vec![Animation::<Size>::change_to_target(entity.into()).into()],
         }
     }
 }

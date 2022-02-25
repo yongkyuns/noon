@@ -52,7 +52,7 @@ pub fn animate_from_target<Attribute: Interpolate + Component + Copy>(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.1;
+            let end = animation.start_time + animation.duration + 0.0;
 
             if begin < t && t <= end {
                 // If animation end state points to another entity, we need to query from that entity
@@ -78,11 +78,19 @@ pub fn animate<Attribute: Interpolate + Component + Copy>(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.1;
+            let end = animation.start_time + animation.duration + 0.0;
 
             if begin < t && t <= end {
-                let progress = animation.rate_func.calculate((t - begin) / duration);
+                let progress = {
+                    if duration > 0.0 {
+                        animation.rate_func.calculate((t - begin) / duration)
+                    } else {
+                        1.0
+                    }
+                };
                 animation.update(&mut att, progress);
+            } else if end < t && t <= end + 0.1 {
+                animation.update(&mut att, 1.0);
             }
         }
     }
@@ -98,11 +106,19 @@ pub fn animate_position(
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.1;
+            let end = animation.start_time + animation.duration + 0.0;
 
             if begin < t && t <= end {
-                let progress = animation.rate_func.calculate((t - begin) / duration);
+                let progress = {
+                    if duration > 0.0 {
+                        animation.rate_func.calculate((t - begin) / duration)
+                    } else {
+                        1.0
+                    }
+                };
                 animation.update_position(&mut att, progress);
+            } else if end < t && t <= end + 0.1 {
+                animation.update(&mut att, 1.0);
             }
         }
     }

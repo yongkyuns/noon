@@ -7,7 +7,7 @@ use crate::component::FillColor;
 use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
 use crate::{
     circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, CircleBuilder, EntityAnimation, Interpolate, Opacity, Position, RectangleBuilder,
+    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, Position, RectangleBuilder,
     Size, StrokeColor, Value,
 };
 
@@ -74,7 +74,7 @@ impl Scene {
             world,
             updater,
             drawer,
-            event_time: 0.0,
+            event_time: 0.1,
         }
     }
     pub fn circle(&mut self) -> CircleBuilder {
@@ -104,7 +104,7 @@ impl Scene {
         self.event_time += time;
     }
 
-    pub fn play(&mut self, animations: impl Into<Vec<EntityAnimation>>) -> AnimBuilder {
+    pub fn play(&mut self, animations: impl Into<Vec<EntityAnimations>>) -> AnimBuilder {
         AnimBuilder::new(self, animations.into())
     }
 }
