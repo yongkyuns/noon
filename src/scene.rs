@@ -7,8 +7,8 @@ use crate::component::FillColor;
 use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
 use crate::{
     circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, Position, RectangleBuilder,
-    Size, StrokeColor, Value,
+    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, Partial, Position,
+    RectangleBuilder, Size, StrokeColor, Value,
 };
 
 pub struct Bounds {
@@ -52,15 +52,16 @@ impl Scene {
             SystemStage::parallel()
                 .with_system(animate_position)
                 .with_system(animate_from_target::<FillColor>)
-                .with_system(animate::<FillColor>)
                 .with_system(animate_from_target::<StrokeColor>)
-                .with_system(animate::<StrokeColor>)
                 .with_system(animate_from_target::<Size>)
-                .with_system(animate::<Size>)
                 .with_system(animate_from_target::<Angle>)
-                .with_system(animate::<Angle>)
                 .with_system(animate_from_target::<Opacity>)
+                .with_system(animate::<FillColor>)
+                .with_system(animate::<StrokeColor>)
+                .with_system(animate::<Size>)
+                .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
+                .with_system(animate::<Partial>)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();

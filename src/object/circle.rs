@@ -1,9 +1,11 @@
 use crate::{
-    AnimBuilder, Animation, AnimationType, Color, EaseType, EntityAnimations, FillColor, Opacity,
-    Position, Scene, Size, StrokeColor, Value,
+    AnimBuilder, Animation, AnimationType, Color, ColorExtension, EaseType, EntityAnimations,
+    FillColor, Opacity, Position, Scene, Size, StrokeColor, Value,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
+use nannou::lyon::math::{point, Angle, Vector};
+use nannou::lyon::path::Path;
 
 #[derive(Component)]
 pub struct Circle;
@@ -36,6 +38,11 @@ impl<'a> CircleBuilder<'a> {
     }
     pub fn with_fill_color(mut self, color: Color) -> Self {
         self.fill_color = color;
+        self
+    }
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.fill_color = color;
+        self.stroke_color = color.brighten();
         self
     }
     pub fn with_position(mut self, x: f32, y: f32) -> Self {
@@ -75,6 +82,20 @@ pub fn draw_circle(
 ) {
     for (position, stroke_color, fill_color, alpha, size) in query.iter() {
         if alpha.is_visible() {
+            // let mut builder = Path::svg_builder();
+            // let sweep_angle = Angle::radians(PI * 2.0);
+            // let x_rotation = Angle::radians(0.0);
+            // let center: nannou::lyon::math::Point = point(0.0, 0.0);
+            // let start = point(self.radius(), 0.0);
+            // let radii = Vector::new(self.radius(), self.radius());
+
+            // builder.move_to(start);
+            // builder.arc(center, radii, sweep_angle, x_rotation);
+            // builder.close();
+
+            // let path = builder.build();
+            // let path = path.upto(self.completion(), 0.01);
+
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,
@@ -108,15 +129,12 @@ impl CircleId {
         }
     }
     pub fn set_color(&self, color: Color) -> EntityAnimations {
-        let mut hsv: nannou::color::Hsv = color.into_linear().into();
-        hsv.saturation -= 0.1;
-        hsv.value += 0.2;
-        self.set_stroke_color(hsv.into());
-
+        // self.set_fill_color(color.brighten());
+        // self.set_stroke_color(color.brighten());
         EntityAnimations {
             entity: self.0,
             animations: vec![
-                Animation::change_to(StrokeColor(hsv.into())).into(),
+                Animation::change_to(StrokeColor(color.brighten())).into(),
                 Animation::change_to(FillColor(color)).into(),
             ],
         }

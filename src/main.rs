@@ -13,7 +13,8 @@ mod system;
 
 pub use crate::animation::{AnimBuilder, Animation, AnimationType, Animations, EntityAnimations};
 pub use crate::component::{
-    Angle, Color, FillColor, Interpolate, Name, Opacity, Position, Size, StrokeColor, Value,
+    Angle, Color, ColorExtension, FillColor, Interpolate, Name, Opacity, Partial, Position, Size,
+    StrokeColor, Value,
 };
 pub use consts::*;
 pub use ease::EaseType;
@@ -36,8 +37,7 @@ impl Construct for Scene {
                 let circle = self
                     .circle()
                     .with_position(x, y)
-                    .with_fill_color(color)
-                    .with_stroke_color(color)
+                    .with_color(color)
                     .with_radius(w / 2.0)
                     .make();
 
@@ -54,8 +54,7 @@ impl Construct for Scene {
                 let rect = self
                     .rectangle()
                     .with_position(x, y)
-                    .with_fill_color(color)
-                    .with_stroke_color(color)
+                    .with_color(color)
                     .with_size(w, h)
                     .make();
 

@@ -1,6 +1,6 @@
 use crate::{
-    Angle, AnimBuilder, Animation, Color, EaseType, EntityAnimations, FillColor, Opacity, Position,
-    Scene, Size, StrokeColor, Value,
+    Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
+    Opacity, Position, Scene, Size, StrokeColor, Value,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
@@ -37,6 +37,11 @@ impl<'a> RectangleBuilder<'a> {
     }
     pub fn with_fill_color(mut self, color: Color) -> Self {
         self.fill_color = color;
+        self
+    }
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.fill_color = color;
+        self.stroke_color = color.brighten();
         self
     }
     pub fn with_size(mut self, width: f32, height: f32) -> Self {
@@ -165,15 +170,10 @@ impl RectangleId {
         }
     }
     pub fn set_color(&self, color: Color) -> EntityAnimations {
-        let mut hsv: nannou::color::Hsv = color.into_linear().into();
-        hsv.saturation -= 0.1;
-        hsv.value += 0.2;
-        self.set_stroke_color(hsv.into());
-
         EntityAnimations {
             entity: self.0,
             animations: vec![
-                Animation::change_to(StrokeColor(hsv.into())).into(),
+                Animation::change_to(StrokeColor(color.brighten())).into(),
                 Animation::change_to(FillColor(color)).into(),
             ],
         }

@@ -113,6 +113,16 @@ impl Interpolate for Opacity {
     }
 }
 
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct Partial(pub(crate) f32);
+
+impl Interpolate for Partial {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        let progress = progress.min(1.0).max(0.0);
+        Self(self.0.interp(&other.0, progress))
+    }
+}
+
 pub type Color = nannou::color::Rgb;
 
 impl Interpolate for Color {
@@ -124,6 +134,23 @@ impl Interpolate for Color {
             blue: self.blue.interp(&other.blue, progress),
             standard: PhantomData,
         }
+    }
+}
+
+impl ColorExtension for Color {
+    fn get_color(&self) -> Color {
+        *self
+    }
+}
+
+pub trait ColorExtension {
+    fn get_color(&self) -> Color;
+    fn brighten(&self) -> Color {
+        use nannou::color::Rgba;
+        let mut hsv: nannou::color::Hsv = self.get_color().into_linear().into();
+        hsv.saturation -= 0.1;
+        hsv.value += 0.2;
+        hsv.into()
     }
 }
 
