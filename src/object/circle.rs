@@ -126,8 +126,8 @@ impl CircleId {
         EntityAnimations {
             entity: self.0,
             animations: vec![
-                Animation::<StrokeColor>::change_to_target(entity.into()).into(),
-                Animation::<FillColor>::change_to_target(entity.into()).into(),
+                Animation::<StrokeColor>::change_to_target(entity).into(),
+                Animation::<FillColor>::change_to_target(entity).into(),
             ],
         }
     }
