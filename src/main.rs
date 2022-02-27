@@ -97,6 +97,7 @@ impl Construct for Scene {
             .make();
 
         let (x, y, w, h, ang, color) = gen_random_values();
+
         let rect = self
             .rectangle()
             .with_position(600.0, 400.0)
@@ -111,7 +112,9 @@ impl Construct for Scene {
         self.play(vec![
             circle.move_to_object(rect),
             circle.set_color_from(rect),
-        ]);
+        ])
+        .rate_func(EaseType::Quint)
+        .run_time(2.0);
 
         // self.wait();
         // self.play(circle.move_to(400.0, 400.0))

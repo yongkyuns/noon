@@ -1,6 +1,7 @@
 use nannou::lyon::path::iterator::PathIterator;
 use nannou::lyon::path::Path;
 use nannou::lyon::path::PathEvent;
+
 pub trait MeasureLength {
     fn approximate_length(&self, tolerance: f32) -> f32;
 }
@@ -88,6 +89,7 @@ impl GetPartial for Path {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
