@@ -12,7 +12,10 @@ mod path;
 mod scene;
 mod system;
 
-pub use crate::animation::{AnimBuilder, Animation, AnimationType, Animations, EntityAnimations};
+pub use crate::animation::{
+    AnimBuilder, Animation, AnimationType, Animations, EntityAnimations, WithAngle, WithColor,
+    WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
+};
 pub use crate::component::{
     Angle, Color, ColorExtension, FillColor, Interpolate, Name, Opacity, PathCompletion, Position,
     Size, StrokeColor, Value,

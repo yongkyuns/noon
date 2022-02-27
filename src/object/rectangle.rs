@@ -1,7 +1,8 @@
 use crate::path::GetPartial;
 use crate::{
     Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value,
+    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor, WithFill,
+    WithId, WithPath, WithPosition, WithStroke, WithAngle, WithSize,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
@@ -150,100 +151,17 @@ pub fn rectangle(scene: &mut Scene) -> RectangleBuilder {
 #[derive(Debug, Copy, Clone)]
 pub struct RectangleId(pub(crate) Entity);
 
-impl RectangleId {
-    pub fn set_angle(&self, angle: f32) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::to(Angle(angle)).into()],
-        }
-    }
-    pub fn set_size(&self, width: f32, height: f32) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::to(Size::from(width, height)).into()],
-        }
-    }
-    pub fn show_creation(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<Opacity>::to(Opacity::FULL)
-                    .with_duration(0.0)
-                    .into(),
-                Animation::<PathCompletion>::to(PathCompletion(1.0)).into(),
-            ],
-        }
-    }
-    pub fn fade_in(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<PathCompletion>::to(PathCompletion(1.0))
-                    .with_duration(0.0)
-                    .into(),
-                Animation::to(Opacity(1.0)).into(),
-            ],
-        }
-    }
-    pub fn fade_out(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<PathCompletion>::to(PathCompletion(1.0))
-                    .with_duration(0.0)
-                    .into(),
-                Animation::to(Opacity(0.0)).into(),
-            ],
-        }
-    }
-    pub fn move_to(&self, x: f32, y: f32) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::to(Position { x, y }).into()],
-        }
-    }
-    pub fn set_fill_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::to(FillColor(color)).into()],
-        }
-    }
-    pub fn set_fill_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::<FillColor>::to_target(entity.into()).into()],
-        }
-    }
-    pub fn set_stroke_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::to(StrokeColor(color)).into()],
-        }
-    }
-    pub fn set_stroke_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![Animation::<StrokeColor>::to_target(entity.into()).into()],
-        }
-    }
-    pub fn set_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::to(StrokeColor(color.brighten())).into(),
-                Animation::to(FillColor(color)).into(),
-            ],
-        }
-    }
-    pub fn set_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        let entity: Entity = entity.into();
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<StrokeColor>::to_target(entity).into(),
-                Animation::<FillColor>::to_target(entity).into(),
-            ],
-        }
+impl WithStroke for RectangleId {}
+impl WithFill for RectangleId {}
+impl WithColor for RectangleId {}
+impl WithPath for RectangleId {}
+impl WithPosition for RectangleId {}
+impl WithAngle for RectangleId {}
+impl WithSize for RectangleId {}
+
+impl WithId for RectangleId {
+    fn id(&self) -> Entity {
+        self.0
     }
 }
 

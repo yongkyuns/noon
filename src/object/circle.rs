@@ -1,7 +1,8 @@
 use crate::path::GetPartial;
 use crate::{
     AnimBuilder, Animation, AnimationType, Color, ColorExtension, EaseType, EntityAnimations,
-    FillColor, Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value,
+    FillColor, Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor,
+    WithFill, WithId, WithPath, WithPosition, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use core::f32::consts::TAU;
@@ -129,13 +130,6 @@ pub fn draw_circle(
                 .color(stroke)
                 .stroke_weight(radius / 15.0)
                 .events(&path);
-
-            // draw.ellipse()
-            //     .x_y(position.x, position.y)
-            //     .radius(size.width)
-            //     .stroke_color(stroke)
-            //     .stroke_weight(size.width / 15.0)
-            //     .color(fill);
         }
     }
 }
@@ -147,79 +141,13 @@ pub fn circle(scene: &mut Scene) -> CircleBuilder {
 #[derive(Debug, Copy, Clone)]
 pub struct CircleId(pub(crate) Entity);
 
+impl WithStroke for CircleId {}
+impl WithFill for CircleId {}
+impl WithColor for CircleId {}
+impl WithPath for CircleId {}
+impl WithPosition for CircleId {}
+
 impl CircleId {
-    pub fn move_to(&self, x: f32, y: f32) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::to(Position { x, y }).into(),
-        }
-    }
-    pub fn set_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::to(StrokeColor(color.brighten())).into(),
-                Animation::to(FillColor(color)).into(),
-            ],
-        }
-    }
-    pub fn set_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        let entity: Entity = entity.into();
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<StrokeColor>::to_target(entity).into(),
-                Animation::<FillColor>::to_target(entity).into(),
-            ],
-        }
-    }
-    pub fn show_creation(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: vec![
-                Animation::<Opacity>::to(Opacity::FULL)
-                    .with_duration(0.0)
-                    .into(),
-                Animation::<PathCompletion>::to(PathCompletion(1.0)).into(),
-            ],
-        }
-    }
-    pub fn fade_in(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::to(Opacity(1.0)).into(),
-        }
-    }
-    pub fn fade_out(&self) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::to(Opacity(0.0)).into(),
-        }
-    }
-    pub fn set_fill_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::to(FillColor(color)).into(),
-        }
-    }
-    pub fn set_fill_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::<FillColor>::to_target(entity.into()).into(),
-        }
-    }
-    pub fn set_stroke_color(&self, color: Color) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::to(StrokeColor(color)).into(),
-        }
-    }
-    pub fn set_stroke_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
-        EntityAnimations {
-            entity: self.0,
-            animations: Animation::<StrokeColor>::to_target(entity.into()).into(),
-        }
-    }
     pub fn set_radius(&self, radius: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
@@ -234,9 +162,15 @@ impl CircleId {
     }
 }
 
-impl From<CircleId> for Entity {
-    fn from(id: CircleId) -> Self {
-        id.0
+impl WithId for CircleId {
+    fn id(&self) -> Entity {
+        self.0
+    }
+}
+
+impl Into<Entity> for CircleId {
+    fn into(self) -> Entity {
+        self.0
     }
 }
 

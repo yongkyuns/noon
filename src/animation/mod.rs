@@ -9,8 +9,16 @@ use crate::{
 };
 
 mod builder;
+mod color;
+mod spatial;
 
 pub use builder::AnimBuilder;
+pub use color::*;
+pub use spatial::*;
+
+pub trait WithId {
+    fn id(&self) -> Entity;
+}
 
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
