@@ -31,7 +31,7 @@ impl Construct for Scene {
     fn construct(&mut self) {
         let mut animations = Vec::new();
         let mut show = Vec::new();
-        for _ in (0..1000) {
+        for _ in (0..2000) {
             let (x, y, w, h, ang, color) = gen_random_values();
 
             if nannou::rand::random::<bool>() {

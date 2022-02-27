@@ -177,13 +177,23 @@ impl RectangleId {
     pub fn fade_in(&self) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::to(Opacity(1.0)).into()],
+            animations: vec![
+                Animation::<PathCompletion>::to(PathCompletion(1.0))
+                    .with_duration(0.0)
+                    .into(),
+                Animation::to(Opacity(1.0)).into(),
+            ],
         }
     }
     pub fn fade_out(&self) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::to(Opacity(0.0)).into()],
+            animations: vec![
+                Animation::<PathCompletion>::to(PathCompletion(1.0))
+                    .with_duration(0.0)
+                    .into(),
+                Animation::to(Opacity(0.0)).into(),
+            ],
         }
     }
     pub fn move_to(&self, x: f32, y: f32) -> EntityAnimations {

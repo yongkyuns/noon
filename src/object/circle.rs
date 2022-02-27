@@ -97,7 +97,7 @@ pub fn draw_circle(
         if alpha.is_visible() {
             let radius = size.width / 2.0;
             let mut builder = Path::svg_builder();
-            let sweep_angle = Angle::radians(TAU);
+            let sweep_angle = Angle::radians(-TAU);
             let x_rotation = Angle::radians(0.0);
             let center = point(0.0, 0.0);
             let start = point(radius, 0.0);
