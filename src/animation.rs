@@ -4,7 +4,8 @@ use bevy_ecs::{
 };
 
 use crate::{
-    Angle, EaseType, FillColor, Interpolate, Opacity, Position, Scene, Size, StrokeColor, Value,
+    Angle, EaseType, FillColor, Interpolate, Opacity, PathCompletion, Position, Scene, Size,
+    StrokeColor, Value,
 };
 
 #[derive(Component)]
@@ -17,40 +18,70 @@ pub struct Animation<T> {
     pub(crate) duration: f32,
     pub(crate) start_time: f32,
     pub(crate) rate_func: EaseType,
+    pub(crate) init_duration: bool,
+    pub(crate) init_start_time: bool,
+    pub(crate) init_rate_func: bool,
 }
 
 impl<T> Animation<T>
 where
     T: Interpolate + Component + Copy,
 {
-    pub fn change_to(to: T) -> Self {
+    pub fn to(to: T) -> Self {
         Self {
             begin: None,
             end: Value::Absolute(to),
             duration: 3.0,
             start_time: 0.0,
             rate_func: EaseType::Quint,
+            init_duration: true,
+            init_start_time: true,
+            init_rate_func: true,
         }
     }
 
-    pub fn change_to_target(target: Entity) -> Self {
+    pub fn to_target(target: Entity) -> Self {
         Self {
             begin: None,
             end: Value::From(target),
             duration: 1.0,
             start_time: 0.0,
             rate_func: EaseType::Linear,
+            init_duration: true,
+            init_start_time: true,
+            init_rate_func: true,
         }
     }
 
-    pub fn change_by(by: T) -> Self {
+    pub fn by(by: T) -> Self {
         Self {
             begin: None,
             end: Value::Relative(by),
             duration: 1.0,
             start_time: 0.0,
             rate_func: EaseType::Linear,
+            init_duration: true,
+            init_start_time: true,
+            init_rate_func: true,
         }
+    }
+
+    pub fn with_duration(mut self, duration: f32) -> Self {
+        self.duration = duration;
+        self.init_duration = false;
+        self
+    }
+
+    pub fn with_start_time(mut self, start_time: f32) -> Self {
+        self.start_time = start_time;
+        self.init_start_time = false;
+        self
+    }
+
+    pub fn with_rate_func(mut self, rate_func: EaseType) -> Self {
+        self.rate_func = rate_func;
+        self.init_rate_func = false;
+        self
     }
 
     pub fn has_target(&self) -> Option<Entity> {
@@ -95,6 +126,15 @@ impl Animation<Position> {
     }
 }
 
+impl<T> Into<Vec<AnimationType>> for Animation<T>
+where
+    Animation<T>: Into<AnimationType>,
+{
+    fn into(self) -> Vec<AnimationType> {
+        vec![self.into()]
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
@@ -103,6 +143,7 @@ pub enum AnimationType {
     Angle(Animation<Angle>),
     Size(Animation<Size>),
     Opacity(Animation<Opacity>),
+    PathCompletion(Animation<PathCompletion>),
 }
 
 impl Into<AnimationType> for Animation<StrokeColor> {
@@ -141,6 +182,12 @@ impl Into<AnimationType> for Animation<Opacity> {
     }
 }
 
+impl Into<AnimationType> for Animation<PathCompletion> {
+    fn into(self) -> AnimationType {
+        AnimationType::PathCompletion(self)
+    }
+}
+
 fn insert_animation<C: Component + Interpolate>(
     animation: Animation<C>,
     world: &mut World,
@@ -159,9 +206,15 @@ fn set_properties<T: Component + Interpolate>(
     duration: f32,
     rate_func: EaseType,
 ) {
-    animation.start_time = start_time;
-    animation.duration = duration;
-    animation.rate_func = rate_func;
+    if animation.init_start_time {
+        animation.start_time = start_time;
+    }
+    if animation.init_duration {
+        animation.duration = duration;
+    }
+    if animation.init_rate_func {
+        animation.rate_func = rate_func;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +245,9 @@ impl EntityAnimations {
                 AnimationType::Opacity(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::PathCompletion(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
             };
         }
     }
@@ -203,6 +259,7 @@ impl EntityAnimations {
             AnimationType::Angle(animation) => animation.start_time,
             AnimationType::Size(animation) => animation.start_time,
             AnimationType::Opacity(animation) => animation.start_time,
+            AnimationType::PathCompletion(animation) => animation.start_time,
         }
     }
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
@@ -224,6 +281,9 @@ impl EntityAnimations {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Opacity(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::PathCompletion(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
             }

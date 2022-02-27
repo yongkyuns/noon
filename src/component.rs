@@ -101,6 +101,9 @@ impl Interpolate for Size {
 pub struct Opacity(pub(crate) f32);
 
 impl Opacity {
+    pub const FULL: Self = Self(1.0);
+    pub const HALF: Self = Self(0.5);
+    pub const CLEAR: Self = Self(0.0);
     pub fn is_visible(&self) -> bool {
         self.0 > 0.0
     }
@@ -114,9 +117,9 @@ impl Interpolate for Opacity {
 }
 
 #[derive(Debug, Component, Default, Clone, Copy)]
-pub struct Partial(pub(crate) f32);
+pub struct PathCompletion(pub(crate) f32);
 
-impl Interpolate for Partial {
+impl Interpolate for PathCompletion {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         let progress = progress.min(1.0).max(0.0);
         Self(self.0.interp(&other.0, progress))

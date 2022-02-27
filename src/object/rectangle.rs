@@ -1,9 +1,12 @@
+use crate::path::GetPartial;
 use crate::{
     Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, Position, Scene, Size, StrokeColor, Value,
+    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
+use nannou::lyon::math::point;
+use nannou::lyon::path::Path;
 
 #[derive(Component)]
 pub struct Rectangle;
@@ -63,6 +66,7 @@ impl<'a> RectangleBuilder<'a> {
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
+            .insert(PathCompletion(0.0))
             .id();
 
         id.into()
@@ -71,7 +75,7 @@ impl<'a> RectangleBuilder<'a> {
         let id = self.make();
         let animations = EntityAnimations {
             entity: id.into(),
-            animations: vec![Animation::change_to(Opacity(1.0)).into()],
+            animations: vec![Animation::to(Opacity(1.0)).into()],
         };
 
         AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
@@ -82,10 +86,34 @@ impl<'a> RectangleBuilder<'a> {
 
 pub fn draw_rectangle(
     draw: NonSend<nannou::Draw>,
-    query: Query<(&Position, &Angle, &StrokeColor, &FillColor, &Opacity, &Size), With<Rectangle>>,
+    query: Query<
+        (
+            &Position,
+            &Angle,
+            &StrokeColor,
+            &FillColor,
+            &Opacity,
+            &Size,
+            &PathCompletion,
+        ),
+        With<Rectangle>,
+    >,
 ) {
-    for (position, angle, stroke_color, fill_color, alpha, size) in query.iter() {
+    for (position, angle, stroke_color, fill_color, alpha, size, completion) in query.iter() {
         if alpha.is_visible() {
+            let mut builder = Path::svg_builder();
+            let start = point(-size.width / 2.0, size.height / 2.0);
+
+            builder.move_to(start);
+            builder.line_to(point(start.x + size.width, start.y));
+            builder.line_to(point(start.x + size.width, start.y - size.height));
+            builder.line_to(point(start.x, start.y - size.height));
+            builder.line_to(point(start.x, start.y));
+            builder.close();
+
+            let path = builder.build();
+            let path = path.upto(completion.0, 0.01);
+
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,
@@ -94,14 +122,23 @@ pub fn draw_rectangle(
                 color: fill_color.0,
                 alpha: alpha.0,
             };
-            draw.rect()
+
+            // Draw fill first
+            draw.path()
+                .fill()
                 .x_y(position.x, position.y)
-                .w(size.width)
-                .h(size.height)
-                .z_radians(angle.0)
+                .z_degrees(angle.0)
                 .color(fill)
-                .stroke_color(stroke)
-                .stroke_weight(size.width / 15.0);
+                .events(&path);
+
+            // Draw stroke on top
+            draw.path()
+                .stroke()
+                .x_y(position.x, position.y)
+                .z_degrees(angle.0)
+                .color(stroke)
+                .stroke_weight(size.width.min(size.height) / 25.0)
+                .events(&path);
         }
     }
 }
@@ -117,64 +154,74 @@ impl RectangleId {
     pub fn set_angle(&self, angle: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(Angle(angle)).into()],
+            animations: vec![Animation::to(Angle(angle)).into()],
         }
     }
     pub fn set_size(&self, width: f32, height: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(Size::from(width, height)).into()],
+            animations: vec![Animation::to(Size::from(width, height)).into()],
         }
     }
-
+    pub fn show_creation(&self) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.0,
+            animations: vec![
+                Animation::<Opacity>::to(Opacity::FULL)
+                    .with_duration(0.0)
+                    .into(),
+                Animation::<PathCompletion>::to(PathCompletion(1.0)).into(),
+            ],
+        }
+    }
     pub fn fade_in(&self) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(Opacity(1.0)).into()],
+            animations: vec![Animation::to(Opacity(1.0)).into()],
         }
     }
     pub fn fade_out(&self) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(Opacity(0.0)).into()],
+            animations: vec![Animation::to(Opacity(0.0)).into()],
         }
     }
     pub fn move_to(&self, x: f32, y: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(Position { x, y }).into()],
+            animations: vec![Animation::to(Position { x, y }).into()],
         }
     }
     pub fn set_fill_color(&self, color: Color) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(FillColor(color)).into()],
+            animations: vec![Animation::to(FillColor(color)).into()],
         }
     }
     pub fn set_fill_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::<FillColor>::change_to_target(entity.into()).into()],
+            animations: vec![Animation::<FillColor>::to_target(entity.into()).into()],
         }
     }
     pub fn set_stroke_color(&self, color: Color) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::change_to(StrokeColor(color)).into()],
+            animations: vec![Animation::to(StrokeColor(color)).into()],
         }
     }
     pub fn set_stroke_color_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
-            animations: vec![Animation::<StrokeColor>::change_to_target(entity.into()).into()],
+            animations: vec![Animation::<StrokeColor>::to_target(entity.into()).into()],
         }
     }
     pub fn set_color(&self, color: Color) -> EntityAnimations {
         EntityAnimations {
             entity: self.0,
             animations: vec![
-                Animation::change_to(StrokeColor(color.brighten())).into(),
-                Animation::change_to(FillColor(color)).into(),
+                Animation::to(StrokeColor(color.brighten())).into(),
+                Animation::to(FillColor(color)).into(),
             ],
         }
     }
@@ -183,8 +230,8 @@ impl RectangleId {
         EntityAnimations {
             entity: self.0,
             animations: vec![
-                Animation::<StrokeColor>::change_to_target(entity).into(),
-                Animation::<FillColor>::change_to_target(entity).into(),
+                Animation::<StrokeColor>::to_target(entity).into(),
+                Animation::<FillColor>::to_target(entity).into(),
             ],
         }
     }

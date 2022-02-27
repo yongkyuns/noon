@@ -22,6 +22,7 @@ fn scene<'a>(app: &App) -> Scene {
 
 fn update(app: &App, scene: &mut Scene, _update: Update) {
     scene.update(app.time);
+    println!("FPS = {}", app.fps());
 }
 
 fn view(app: &App, scene: &mut Scene, frame: Frame) {

@@ -7,7 +7,7 @@ use crate::component::FillColor;
 use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
 use crate::{
     circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, Partial, Position,
+    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, PathCompletion, Position,
     RectangleBuilder, Size, StrokeColor, Value,
 };
 
@@ -61,7 +61,7 @@ impl Scene {
                 .with_system(animate::<Size>)
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
-                .with_system(animate::<Partial>)
+                .with_system(animate::<PathCompletion>)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();
