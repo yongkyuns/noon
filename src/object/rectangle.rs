@@ -1,8 +1,8 @@
 use crate::path::GetPartial;
 use crate::{
     Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor, WithFill,
-    WithId, WithPath, WithPosition, WithStroke, WithAngle, WithSize,
+    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithAngle, WithColor,
+    WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
@@ -112,8 +112,10 @@ pub fn draw_rectangle(
             builder.line_to(point(start.x, start.y));
             builder.close();
 
-            let path = builder.build();
-            let path = path.upto(completion.0, 0.01);
+            let mut path = builder.build();
+            if completion.0 < 1.0 {
+                path = path.upto(completion.0, 0.01);
+            }
 
             let stroke = Rgba {
                 color: stroke_color.0,
@@ -140,6 +142,14 @@ pub fn draw_rectangle(
                 .color(stroke)
                 .stroke_weight(size.width.min(size.height) / 25.0)
                 .events(&path);
+
+            // draw.rect()
+            //     .x_y(position.x, position.y)
+            //     .w_h(size.width, size.height)
+            //     .z_degrees(angle.0)
+            //     .color(fill)
+            //     .stroke_color(stroke)
+            //     .stroke_weight(size.width.min(size.height) / 35.0);
         }
     }
 }

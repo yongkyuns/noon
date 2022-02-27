@@ -108,8 +108,10 @@ pub fn draw_circle(
             builder.arc(center, radii, sweep_angle, x_rotation);
             builder.close();
 
-            let path = builder.build();
-            let path = path.upto(completion.0, 0.01);
+            let mut path = builder.build();
+            if completion.0 < 1.0 {
+                path = path.upto(completion.0, 0.01);
+            }
 
             let stroke = Rgba {
                 color: stroke_color.0,
@@ -130,6 +132,13 @@ pub fn draw_circle(
                 .color(stroke)
                 .stroke_weight(radius / 15.0)
                 .events(&path);
+
+            // draw.ellipse()
+            //     .x_y(position.x, position.y)
+            //     .color(fill)
+            //     .radius(size.width / 2.0)
+            //     .stroke_color(stroke)
+            //     .stroke_weight(radius / 25.0);
         }
     }
 }

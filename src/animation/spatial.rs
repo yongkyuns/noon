@@ -7,6 +7,12 @@ pub trait WithPosition: WithId {
             animations: Animation::to(Position { x, y }).into(),
         }
     }
+    fn move_to_object(&self, object: impl Into<Entity>) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.id(),
+            animations: Animation::<Position>::to_target(object.into()).into(),
+        }
+    }
 }
 
 pub trait WithAngle: WithId {

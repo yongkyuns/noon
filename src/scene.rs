@@ -51,6 +51,7 @@ impl Scene {
             "update",
             SystemStage::parallel()
                 .with_system(animate_position)
+                .with_system(animate_from_target::<Position>)
                 .with_system(animate_from_target::<FillColor>)
                 .with_system(animate_from_target::<StrokeColor>)
                 .with_system(animate_from_target::<Size>)
