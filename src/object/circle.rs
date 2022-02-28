@@ -1,8 +1,8 @@
 use crate::path::GetPartial;
 use crate::{
     AnimBuilder, Animation, AnimationType, Color, ColorExtension, EaseType, EntityAnimations,
-    FillColor, Opacity, Path, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor,
-    WithFill, WithId, WithPath, WithPosition, WithStroke,
+    FillColor, Opacity, Path, PathCompletion, Position, Scene, Size, StrokeColor, Time, Value,
+    WithColor, WithFill, WithId, WithPath, WithPosition, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use core::f32::consts::TAU;
@@ -62,6 +62,10 @@ impl<'a> CircleBuilder<'a> {
             .insert(StrokeColor(self.stroke_color))
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
+            .insert(circle_path(
+                &Size::from_radius(self.radius),
+                &PathCompletion(0.0),
+            ))
             .id();
 
         id.into()
@@ -79,38 +83,44 @@ impl<'a> CircleBuilder<'a> {
     }
 }
 
+pub fn update_circle_path(
+    mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<Circle>>,
+) {
+    for (completion, alpha, size, mut path) in query.iter_mut() {
+        if alpha.is_visible() {
+            *path = circle_path(size, completion);
+        }
+    }
+}
+
+pub fn circle_path(size: &Size, completion: &PathCompletion) -> Path {
+    let radius = size.width / 2.0;
+    let mut builder = Path::svg_builder();
+    let sweep_angle = Angle::radians(-TAU);
+    let x_rotation = Angle::radians(0.0);
+    let center = point(0.0, 0.0);
+    let start = point(radius, 0.0);
+    let radii = Vector::new(radius, radius);
+
+    builder.move_to(start);
+    builder.arc(center, radii, sweep_angle, x_rotation);
+    builder.close();
+
+    let mut path = Path(builder.build());
+    if completion.0 < 1.0 {
+        path = path.upto(completion.0, 0.01);
+    }
+    path
+}
+
 pub fn draw_circle(
     draw: NonSend<nannou::Draw>,
-    query: Query<
-        (
-            &Position,
-            &StrokeColor,
-            &FillColor,
-            &Opacity,
-            &Size,
-            &PathCompletion,
-        ),
-        With<Circle>,
-    >,
+    query: Query<(&Position, &StrokeColor, &FillColor, &Opacity, &Size, &Path), With<Circle>>,
 ) {
-    for (position, stroke_color, fill_color, alpha, size, completion) in query.iter() {
+    for (position, stroke_color, fill_color, alpha, size, path) in query.iter() {
         if alpha.is_visible() {
             let radius = size.width / 2.0;
-            let mut builder = Path::svg_builder();
-            let sweep_angle = Angle::radians(-TAU);
-            let x_rotation = Angle::radians(0.0);
-            let center = point(0.0, 0.0);
-            let start = point(radius, 0.0);
-            let radii = Vector::new(radius, radius);
-
-            builder.move_to(start);
-            builder.arc(center, radii, sweep_angle, x_rotation);
-            builder.close();
-
-            let mut path = Path(builder.build());
-            if completion.0 < 1.0 {
-                path = path.upto(completion.0, 0.01);
-            }
+            // let path = circle_path(size, completion);
 
             let stroke = Rgba {
                 color: stroke_color.0,

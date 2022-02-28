@@ -11,6 +11,9 @@ use crate::{
     RectangleBuilder, Size, StrokeColor, Value,
 };
 
+use crate::object::circle::update_circle_path;
+use crate::object::rectangle::update_rectangle_path;
+
 pub struct Bounds {
     rect: Rect,
 }
@@ -63,6 +66,8 @@ impl Scene {
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
                 .with_system(animate::<PathCompletion>)
+                .with_system(update_circle_path)
+                .with_system(update_rectangle_path)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();

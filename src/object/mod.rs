@@ -3,10 +3,10 @@
 use bevy_ecs::prelude::*;
 
 mod arrow;
-mod circle;
+pub mod circle;
 mod dot;
 mod line;
-mod rectangle;
+pub mod rectangle;
 mod triangle;
 
 pub use circle::{circle, draw_circle, Circle, CircleBuilder};
