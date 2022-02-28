@@ -1,14 +1,13 @@
 use crate::path::GetPartial;
 use crate::{
     AnimBuilder, Animation, AnimationType, Color, ColorExtension, EaseType, EntityAnimations,
-    FillColor, Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor,
+    FillColor, Opacity, Path, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithColor,
     WithFill, WithId, WithPath, WithPosition, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use core::f32::consts::TAU;
 use nannou::color::Rgba;
 use nannou::lyon::math::{point, Angle, Vector};
-use nannou::lyon::path::Path;
 
 #[derive(Component)]
 pub struct Circle;
@@ -108,7 +107,7 @@ pub fn draw_circle(
             builder.arc(center, radii, sweep_angle, x_rotation);
             builder.close();
 
-            let mut path = builder.build();
+            let mut path = Path(builder.build());
             if completion.0 < 1.0 {
                 path = path.upto(completion.0, 0.01);
             }
@@ -125,13 +124,13 @@ pub fn draw_circle(
                 .fill()
                 .x_y(position.x, position.y)
                 .color(fill)
-                .events(&path);
+                .events(&path.0);
             draw.path()
                 .stroke()
                 .x_y(position.x, position.y)
                 .color(stroke)
                 .stroke_weight(radius / 15.0)
-                .events(&path);
+                .events(&path.0);
 
             // draw.ellipse()
             //     .x_y(position.x, position.y)

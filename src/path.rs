@@ -1,6 +1,22 @@
-use nannou::lyon::path::iterator::PathIterator;
-use nannou::lyon::path::Path;
-use nannou::lyon::path::PathEvent;
+use bevy_ecs::prelude::*;
+use lyon::{
+    builder::{Build, WithSvg},
+    iterator::PathIterator,
+    PathEvent,
+};
+use nannou::lyon::path as lyon;
+
+#[derive(Clone, Component)]
+pub struct Path(pub(crate) lyon::Path);
+
+impl Path {
+    pub fn svg_builder() -> WithSvg<lyon::path::Builder> {
+        lyon::Path::svg_builder()
+    }
+    pub fn builder() -> lyon::path::Builder {
+        lyon::path::Builder::new()
+    }
+}
 
 pub trait MeasureLength {
     fn approximate_length(&self, tolerance: f32) -> f32;
@@ -9,7 +25,7 @@ pub trait MeasureLength {
 impl MeasureLength for Path {
     fn approximate_length(&self, tolerance: f32) -> f32 {
         let mut length = 0.0;
-        for e in self.iter().flattened(tolerance) {
+        for e in self.0.iter().flattened(tolerance) {
             match e {
                 PathEvent::Line { from, to } => {
                     length += (to - from).length();
@@ -35,7 +51,7 @@ pub trait GetPartial: MeasureLength {
 impl GetPartial for Path {
     fn upto(&self, ratio: f32, tolerance: f32) -> Path {
         if ratio >= 1.0 {
-            self.clone()
+            (*self).clone()
         } else {
             let ratio = ratio.max(0.0);
             let full_length = self.approximate_length(tolerance);
@@ -48,7 +64,7 @@ impl GetPartial for Path {
 
             // let c = [1.0, 1.0, 1.0, 1.0];
 
-            for e in self.iter().flattened(tolerance) {
+            for e in self.0.iter().flattened(tolerance) {
                 if length > stop_at {
                     break;
                 }
@@ -85,7 +101,7 @@ impl GetPartial for Path {
                     _ => (),
                 }
             }
-            builder.build()
+            Self(builder.build())
         }
     }
 }
@@ -93,7 +109,7 @@ impl GetPartial for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nannou::geom::rect::Rect;
+    // use nannou::geom::rect::Rect;
     // use nannou::lyon::path::builder::PathBuilder;
     use nannou::prelude::*;
     #[test]
@@ -105,7 +121,7 @@ mod tests {
             builder.path_event(e);
         }
         builder.close();
-        let path = builder.build();
+        let path = Path(builder.build());
         let partial_path = path.upto(0.5, 0.01);
 
         println!("length = {}", partial_path.approximate_length(0.01));

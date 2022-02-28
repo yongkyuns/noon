@@ -1,13 +1,12 @@
 use crate::path::GetPartial;
 use crate::{
     Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithAngle, WithColor,
+    Opacity, Path, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithAngle, WithColor,
     WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
 use nannou::lyon::math::point;
-use nannou::lyon::path::Path;
 
 #[derive(Component)]
 pub struct Rectangle;
@@ -112,7 +111,7 @@ pub fn draw_rectangle(
             builder.line_to(point(start.x, start.y));
             builder.close();
 
-            let mut path = builder.build();
+            let mut path = Path(builder.build());
             if completion.0 < 1.0 {
                 path = path.upto(completion.0, 0.01);
             }
@@ -132,7 +131,7 @@ pub fn draw_rectangle(
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(fill)
-                .events(&path);
+                .events(&path.0);
 
             // Draw stroke on top
             draw.path()
@@ -141,7 +140,7 @@ pub fn draw_rectangle(
                 .z_degrees(angle.0)
                 .color(stroke)
                 .stroke_weight(size.width.min(size.height) / 25.0)
-                .events(&path);
+                .events(&path.0);
 
             // draw.rect()
             //     .x_y(position.x, position.y)
