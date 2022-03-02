@@ -1,8 +1,8 @@
 use crate::path::GetPartial;
 use crate::{
     Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, Path, PathCompletion, Position, Scene, Size, StrokeColor, Value, WithAngle, WithColor,
-    WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
+    Opacity, Path, PathCompletion, PathComponent, Position, Scene, Size, StrokeColor, Value,
+    WithAngle, WithColor, WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
@@ -10,6 +10,26 @@ use nannou::lyon::math::point;
 
 #[derive(Component)]
 pub struct Rectangle;
+
+impl PathComponent for Rectangle {
+    fn path(size: &Size, progress: &PathCompletion) -> Path {
+        let mut builder = Path::svg_builder();
+        let start = point(-size.width / 2.0, size.height / 2.0);
+
+        builder.move_to(start);
+        builder.line_to(point(start.x + size.width, start.y));
+        builder.line_to(point(start.x + size.width, start.y - size.height));
+        builder.line_to(point(start.x, start.y - size.height));
+        builder.line_to(point(start.x, start.y));
+        builder.close();
+
+        let mut path = Path(builder.build());
+        if progress.0 < 1.0 {
+            path = path.upto(progress.0, 0.01);
+        }
+        path
+    }
+}
 
 pub struct RectangleBuilder<'a> {
     size: Size,
@@ -67,7 +87,7 @@ impl<'a> RectangleBuilder<'a> {
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
-            .insert(rectangle_path(&self.size, &PathCompletion(0.0)))
+            .insert(Rectangle::path(&self.size, &PathCompletion(0.0)))
             .id();
 
         id.into()
@@ -85,33 +105,33 @@ impl<'a> RectangleBuilder<'a> {
     }
 }
 
-pub fn update_rectangle_path(
-    mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<Rectangle>>,
-) {
-    for (completion, alpha, size, mut path) in query.iter_mut() {
-        if alpha.is_visible() {
-            *path = rectangle_path(size, completion);
-        }
-    }
-}
+// pub fn update_rectangle_path(
+//     mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<Rectangle>>,
+// ) {
+//     for (completion, alpha, size, mut path) in query.iter_mut() {
+//         if alpha.is_visible() {
+//             *path = rectangle_path(size, completion);
+//         }
+//     }
+// }
 
-pub fn rectangle_path(size: &Size, completion: &PathCompletion) -> Path {
-    let mut builder = Path::svg_builder();
-    let start = point(-size.width / 2.0, size.height / 2.0);
+// pub fn rectangle_path(size: &Size, completion: &PathCompletion) -> Path {
+//     let mut builder = Path::svg_builder();
+//     let start = point(-size.width / 2.0, size.height / 2.0);
 
-    builder.move_to(start);
-    builder.line_to(point(start.x + size.width, start.y));
-    builder.line_to(point(start.x + size.width, start.y - size.height));
-    builder.line_to(point(start.x, start.y - size.height));
-    builder.line_to(point(start.x, start.y));
-    builder.close();
+//     builder.move_to(start);
+//     builder.line_to(point(start.x + size.width, start.y));
+//     builder.line_to(point(start.x + size.width, start.y - size.height));
+//     builder.line_to(point(start.x, start.y - size.height));
+//     builder.line_to(point(start.x, start.y));
+//     builder.close();
 
-    let mut path = Path(builder.build());
-    if completion.0 < 1.0 {
-        path = path.upto(completion.0, 0.01);
-    }
-    path
-}
+//     let mut path = Path(builder.build());
+//     if completion.0 < 1.0 {
+//         path = path.upto(completion.0, 0.01);
+//     }
+//     path
+// }
 
 pub fn draw_rectangle(
     draw: NonSend<nannou::Draw>,
@@ -123,14 +143,14 @@ pub fn draw_rectangle(
             &FillColor,
             &Opacity,
             &Size,
-            &PathCompletion,
+            &Path,
         ),
         With<Rectangle>,
     >,
 ) {
-    for (position, angle, stroke_color, fill_color, alpha, size, completion) in query.iter() {
+    for (position, angle, stroke_color, fill_color, alpha, size, path) in query.iter() {
         if alpha.is_visible() {
-            let path = rectangle_path(size, completion);
+            // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,

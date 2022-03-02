@@ -3,8 +3,8 @@ use std::{ops::Add, time::Instant};
 use bevy_ecs::prelude::*;
 
 use crate::{
-    Angle, Animations, Bounds, Circle, Color, FillColor, Interpolate, Position, Rectangle, Size,
-    StrokeColor, Value,
+    Angle, Animations, Bounds, Circle, Color, FillColor, Interpolate, Opacity, Path,
+    PathCompletion, PathComponent, Position, Rectangle, Size, StrokeColor, Value,
 };
 
 pub struct Time {
@@ -39,6 +39,18 @@ impl Time {
     }
     pub fn elapsed_micros(&self) -> u128 {
         self.begin.unwrap().elapsed().as_micros()
+    }
+}
+
+// pub fn update_path<E>(mut query: Query<(&E, &mut Path), ChangeTrackers<PathCompletion>>)
+pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
+where
+    E: Component + PathComponent,
+{
+    for (completion, alpha, size, mut path) in query.iter_mut() {
+        if alpha.is_visible() {
+            *path = E::path(size, completion);
+        }
     }
 }
 

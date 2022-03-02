@@ -4,15 +4,14 @@ use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
+use crate::system::{
+    animate, animate_from_target, animate_position, print, update_path, update_time, Time,
+};
 use crate::{
     circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, CircleBuilder, EntityAnimations, Interpolate, Opacity, PathCompletion, Position,
-    RectangleBuilder, Size, StrokeColor, Value,
+    Animations, Circle, CircleBuilder, EntityAnimations, Interpolate, Opacity, PathCompletion,
+    Position, Rectangle, RectangleBuilder, Size, StrokeColor, Value,
 };
-
-use crate::object::circle::update_circle_path;
-use crate::object::rectangle::update_rectangle_path;
 
 pub struct Bounds {
     rect: Rect,
@@ -66,8 +65,8 @@ impl Scene {
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
                 .with_system(animate::<PathCompletion>)
-                .with_system(update_circle_path)
-                .with_system(update_rectangle_path)
+                .with_system(update_path::<Circle>)
+                .with_system(update_path::<Rectangle>)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();

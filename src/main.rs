@@ -20,7 +20,7 @@ pub use crate::component::{
     Angle, Color, ColorExtension, FillColor, Interpolate, Name, Opacity, PathCompletion, Position,
     Size, StrokeColor, Value,
 };
-pub use crate::path::{GetPartial, Path};
+pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
 use nannou::{

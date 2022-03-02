@@ -6,6 +6,8 @@ use lyon::{
 };
 use nannou::lyon::path as lyon;
 
+use crate::{PathCompletion, Size};
+
 #[derive(Clone, Component)]
 pub struct Path(pub(crate) lyon::Path);
 
@@ -16,6 +18,10 @@ impl Path {
     pub fn builder() -> lyon::path::Builder {
         lyon::path::Builder::new()
     }
+}
+
+pub trait PathComponent {
+    fn path(size: &Size, progress: &PathCompletion) -> Path;
 }
 
 pub trait MeasureLength {
