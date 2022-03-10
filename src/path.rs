@@ -37,74 +37,23 @@ impl Interpolate for Path {
         } else if progress >= 0.999 {
             other.clone()
         } else {
-            // 1. Calculate the length of path1 and path2
-            // 2. Iterate through path2, to construct length ratio vector
-            // 3. Walk through path1, and insert line segments that map to path2
-            // 4. Do step 2 for path 1
-            // 5. Do step 3 for path 2
-            // 6. Now we should have same number of lines (Assuming continuous shape)
-            // 7. Interpolate line points from path 1 to path 2
+            // 1. Calculate the length of initial and final paths (1 and 2)
+            // 2. Iterate through each path and construct normalized distance array
+            // 3. Combine normalized distances from both paths into a single array
+            // 4. Walk through each path and fill-in missing points to make sizes equal
+            // 5. Interpolate each point between initial and final path
+            // 6. Construct Path with above points as line segments
 
-            let get_line_lengths = |path: &Path| {
-                path.0
-                    .iter()
-                    .flattened(tol)
-                    .filter(|e| matches!(e, PathEvent::Line { .. }))
-                    .scan(0.0, |d, event| {
-                        match event {
-                            PathEvent::Line { from, to } => {
-                                *d += (to - from).length();
-                            }
-                            _ => (),
-                        };
-                        Some(*d)
-                    })
-                    .collect::<Vec<f32>>()
-            };
+            let path1_lengths = get_lengths_flattened(self, tol);
+            let path2_lengths = get_lengths_flattened(other, tol);
 
-            let path1_lengths = get_line_lengths(self);
-            let path2_lengths = get_line_lengths(other);
+            let normalized = normalized_distances(&path1_lengths, &path2_lengths);
 
-            let len_1 = path1_lengths.last().unwrap();
-            let len_2 = path2_lengths.last().unwrap();
+            let len_1 = *path1_lengths.last().unwrap();
+            let len_2 = *path2_lengths.last().unwrap();
 
-            let ratios = combine_vectors_with_ordering(&path1_lengths, &path2_lengths);
-
-            let lengths_1: Vec<f32> = ratios
-                .iter()
-                .zip(ratios.iter().skip(1))
-                .map(|(a, b)| b - a)
-                .map(|val| val * len_1)
-                .collect();
-            let lengths_2: Vec<f32> = ratios
-                .iter()
-                .zip(ratios.iter().skip(1))
-                .map(|(a, b)| b - a)
-                .map(|val| val * len_2)
-                .collect();
-
-            let mut p1 = Vec::new();
-            let mut p2 = Vec::new();
-
-            let mut pattern_1 = RepeatedPattern {
-                callback: &mut |position, _t, d| {
-                    p1.push(position);
-                    true
-                },
-                intervals: &lengths_1,
-                index: 0,
-            };
-            let mut pattern_2 = RepeatedPattern {
-                callback: &mut |position, _t, d| {
-                    p2.push(position);
-                    true
-                },
-                intervals: &lengths_2,
-                index: 0,
-            };
-
-            walk_along_path(self.0.iter().flattened(tol), 0.0, &mut pattern_1);
-            walk_along_path(other.0.iter().flattened(tol), 0.0, &mut pattern_2);
+            let p1 = points_from_path(self, &normalized, len_1, tol);
+            let p2 = points_from_path(other, &normalized, len_2, tol);
 
             let mut builder = Path::svg_builder();
             p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
@@ -117,8 +66,53 @@ impl Interpolate for Path {
     }
 }
 
+fn points_from_path(
+    path: &Path,
+    normalized_len: &[f32],
+    total_length: f32,
+    tolerance: f32,
+) -> Vec<Point> {
+    let lengths: Vec<f32> = normalized_len
+        .iter()
+        .zip(normalized_len.iter().skip(1))
+        .map(|(a, b)| b - a)
+        .map(|val| val * total_length)
+        .collect();
+
+    let mut points = Vec::new();
+
+    let mut pattern = RepeatedPattern {
+        callback: &mut |position, _t, d| {
+            points.push(position);
+            true
+        },
+        intervals: &lengths,
+        index: 0,
+    };
+
+    walk_along_path(path.0.iter().flattened(tolerance), 0.0, &mut pattern);
+    points
+}
+
+fn get_lengths_flattened(path: &Path, tolerance: f32) -> Vec<f32> {
+    path.0
+        .iter()
+        .flattened(tolerance)
+        .filter(|e| matches!(e, PathEvent::Line { .. }))
+        .scan(0.0, |d, event| {
+            match event {
+                PathEvent::Line { from, to } => {
+                    *d += (to - from).length();
+                }
+                _ => (),
+            };
+            Some(*d)
+        })
+        .collect::<Vec<f32>>()
+}
+
 // Combine two vectors which are both monotonically increasing by normalized ordering
-fn combine_vectors_with_ordering(v1: &[f32], v2: &[f32]) -> Vec<f32> {
+fn normalized_distances(v1: &[f32], v2: &[f32]) -> Vec<f32> {
     let mut combined = Vec::new();
 
     let s1 = *v1.last().unwrap();
@@ -290,7 +284,7 @@ mod tests {
         let v1 = vec![0.0, 0.3, 0.6, 0.8, 1.0];
         let v2 = vec![0.2, 0.5, 0.55, 0.8, 2.0];
 
-        let out = combine_vectors_with_ordering(&v1, &v2);
+        let out = normalized_distances(&v1, &v2);
         assert_eq!(*out, vec![0.0, 0.1, 0.25, 0.275, 0.3, 0.4, 0.6, 0.8, 1.0]);
     }
 

@@ -113,7 +113,8 @@ impl Construct for Scene {
 
             show.push(rect.show_creation());
 
-            animations.push(circle.morph(rect));
+            // animations.push(circle.morph(rect));
+            animations.push(rect.morph(circle));
         }
 
         self.wait();
