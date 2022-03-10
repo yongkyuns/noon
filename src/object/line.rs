@@ -25,7 +25,10 @@ impl Line {
         builder.end(false);
         // builder.line_to(to);
         // builder.close();
-        Path(builder.build())
+        Path {
+            raw: builder.build(),
+            closed: false,
+        }
     }
 }
 
@@ -135,7 +138,7 @@ pub fn draw_line(
                 .color(stroke)
                 .caps_round()
                 .stroke_weight((size.width.max(size.height) / 100.0).min(3.0))
-                .events(&path.clone().upto(completion.0, 0.01).0);
+                .events(&path.clone().upto(completion.0, 0.01).raw);
 
             // draw.rect()
             //     .x_y(position.x, position.y)

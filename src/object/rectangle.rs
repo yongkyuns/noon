@@ -23,7 +23,7 @@ impl Rectangle {
         builder.line_to(point(start.x, start.y));
         builder.close();
 
-        Path(builder.build())
+        Path::new(builder.build())
     }
 }
 
@@ -135,7 +135,7 @@ pub fn draw_rectangle(
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, 0.01).0);
+                .events(&path.clone().upto(completion.0, 0.01).raw);
 
             // Draw stroke on top
             draw.path()
@@ -145,7 +145,7 @@ pub fn draw_rectangle(
                 .join_round()
                 .color(stroke)
                 .stroke_weight(size.width.max(size.height) / 100.0)
-                .events(&path.clone().upto(completion.0, 0.01).0);
+                .events(&path.clone().upto(completion.0, 0.01).raw);
 
             // draw.rect()
             //     .x_y(position.x, position.y)

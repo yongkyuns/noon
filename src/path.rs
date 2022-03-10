@@ -9,9 +9,18 @@ use nannou::lyon::{lyon_algorithms::walk::walk_along_path, path as lyon};
 use crate::{Interpolate, Point, Size};
 
 #[derive(Debug, Clone, Component)]
-pub struct Path(pub(crate) lyon::Path);
+pub struct Path {
+    pub(crate) raw: lyon::Path,
+    pub(crate) closed: bool,
+}
 
 impl Path {
+    pub fn new(path: lyon::Path) -> Self {
+        Self {
+            raw: path,
+            closed: true,
+        }
+    }
     pub fn svg_builder() -> WithSvg<lyon::path::Builder> {
         lyon::Path::svg_builder()
     }
@@ -52,9 +61,12 @@ impl Interpolate for Path {
             p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
                 builder.line_to(p1.interp(p2, progress));
             });
-            // builder.close();
 
-            Path(builder.build())
+            if self.closed {
+                builder.close();
+            }
+
+            Path::new(builder.build())
         }
     }
 }
@@ -83,12 +95,12 @@ fn points_from_path(
         index: 0,
     };
 
-    walk_along_path(path.0.iter().flattened(tolerance), 0.0, &mut pattern);
+    walk_along_path(path.raw.iter().flattened(tolerance), 0.0, &mut pattern);
     points
 }
 
 fn get_lengths_flattened(path: &Path, tolerance: f32) -> Vec<f32> {
-    path.0
+    path.raw
         .iter()
         .flattened(tolerance)
         .filter(|e| matches!(e, PathEvent::Line { .. }))
@@ -137,7 +149,7 @@ pub trait MeasureLength {
 
 impl MeasureLength for Path {
     fn approximate_length(&self, tolerance: f32) -> f32 {
-        approximate_length(self.0.iter(), tolerance)
+        approximate_length(self.raw.iter(), tolerance)
     }
 }
 
@@ -157,7 +169,7 @@ impl GetPartial for Path {
             let mut builder = Path::svg_builder();
             let mut length = 0.0;
 
-            for e in self.0.iter().flattened(tolerance) {
+            for e in self.raw.iter().flattened(tolerance) {
                 if length > stop_at {
                     break;
                 }
@@ -183,7 +195,7 @@ impl GetPartial for Path {
                     _ => (),
                 }
             }
-            Self(builder.build())
+            Self::new(builder.build())
         }
     }
 }
@@ -205,7 +217,7 @@ mod tests {
             builder.path_event(e);
         }
         builder.close();
-        let path = Path(builder.build());
+        let path = Path::new(builder.build());
         let partial_path = path.upto(0.5, 0.01);
 
         println!("length = {}", partial_path.approximate_length(0.01));
@@ -217,8 +229,8 @@ mod tests {
         builder.move_to(point(0.0, 0.0));
         builder.line_to(point(10.0, 0.0));
         builder.close();
-        let path = Path(builder.build()).upto(0.5, 0.01);
-        for e in path.0.iter().flattened(0.01) {
+        let path = Path::new(builder.build()).upto(0.5, 0.01);
+        for e in path.raw.iter().flattened(0.01) {
             match e {
                 PathEvent::Begin { .. } => {}
                 PathEvent::Line { from, to } => {
@@ -255,8 +267,8 @@ mod tests {
         builder.quadratic_bezier_to(point(15.0, 5.0), point(20.0, 0.0));
         builder.close();
 
-        let path = Path(builder.build());
-        let l = approximate_length(path.0.iter(), 0.01);
+        let path = Path::new(builder.build());
+        let l = approximate_length(path.raw.iter(), 0.01);
         let l2 = path.approximate_length(0.01);
 
         println!("{}, {}", l, l2);
@@ -315,7 +327,7 @@ mod tests {
         builder.arc(center, radii, sweep_angle, x_rotation);
         builder.close();
 
-        // let mut path = Path(builder.build()).upto(0.5, 0.01);
+        // let mut path = Path::new(builder.build()).upto(0.5, 0.01);
         for e in builder.build().iter() {
             match e {
                 PathEvent::Begin { at } => {

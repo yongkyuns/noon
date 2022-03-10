@@ -26,7 +26,7 @@ impl Circle {
         builder.arc(center, radii, sweep_angle, x_rotation);
         builder.close();
 
-        Path(builder.build())
+        Path::new(builder.build())
     }
 }
 
@@ -130,13 +130,13 @@ pub fn draw_circle(
                 .fill()
                 .x_y(position.x, position.y)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, 0.01).0);
+                .events(&path.clone().upto(completion.0, 0.01).raw);
             draw.path()
                 .stroke()
                 .x_y(position.x, position.y)
                 .color(stroke)
                 .stroke_weight(radius / 30.0)
-                .events(&path.clone().upto(completion.0, 0.01).0);
+                .events(&path.clone().upto(completion.0, 0.01).raw);
         }
 
         // draw.ellipse()
