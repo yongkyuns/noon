@@ -4,7 +4,7 @@ use bevy_ecs::{
 };
 
 use crate::{
-    Angle, EaseType, FillColor, Interpolate, Opacity, PathCompletion, Position, Scene, Size,
+    Angle, EaseType, FillColor, Interpolate, Opacity, Path, PathCompletion, Position, Scene, Size,
     StrokeColor, Value,
 };
 
@@ -23,7 +23,7 @@ pub trait WithId {
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone)]
 pub struct Animation<T> {
     pub(crate) begin: Option<T>,
     pub(crate) end: Value<T>,
@@ -37,7 +37,7 @@ pub struct Animation<T> {
 
 impl<T> Animation<T>
 where
-    T: Interpolate + Component + Copy,
+    T: Interpolate + Component + Clone,
 {
     pub fn to(to: T) -> Self {
         Self {
@@ -106,7 +106,7 @@ where
     pub fn init_from_target(&mut self, end: &T) {
         match &self.end {
             Value::From(entity) => {
-                self.end = Value::Absolute(*end);
+                self.end = Value::Absolute(end.clone());
             }
             _ => (),
         }
@@ -116,7 +116,7 @@ where
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
             (None, Value::Absolute(to)) => {
-                self.begin = Some(*property);
+                self.begin = Some(property.clone());
             }
             _ => (),
         }
@@ -147,7 +147,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
     FillColor(Animation<FillColor>),
@@ -156,6 +156,7 @@ pub enum AnimationType {
     Size(Animation<Size>),
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
+    Path(Animation<Path>),
 }
 
 impl Into<AnimationType> for Animation<StrokeColor> {
@@ -197,6 +198,12 @@ impl Into<AnimationType> for Animation<Opacity> {
 impl Into<AnimationType> for Animation<PathCompletion> {
     fn into(self) -> AnimationType {
         AnimationType::PathCompletion(self)
+    }
+}
+
+impl Into<AnimationType> for Animation<Path> {
+    fn into(self) -> AnimationType {
+        AnimationType::Path(self)
     }
 }
 
@@ -260,6 +267,9 @@ impl EntityAnimations {
                 AnimationType::PathCompletion(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::Path(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
             };
         }
     }
@@ -272,6 +282,7 @@ impl EntityAnimations {
             AnimationType::Size(animation) => animation.start_time,
             AnimationType::Opacity(animation) => animation.start_time,
             AnimationType::PathCompletion(animation) => animation.start_time,
+            AnimationType::Path(animation) => animation.start_time,
         }
     }
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
@@ -296,6 +307,9 @@ impl EntityAnimations {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::PathCompletion(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Path(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
             }

@@ -4,13 +4,11 @@ use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{
-    animate, animate_from_target, animate_position, print, update_path, update_time, Time,
-};
+use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
 use crate::{
     circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, Circle, CircleBuilder, EntityAnimations, Interpolate, Opacity, PathCompletion,
-    Position, Rectangle, RectangleBuilder, Size, StrokeColor, Value,
+    Animations, Circle, CircleBuilder, EntityAnimations, Interpolate, Opacity, Path,
+    PathCompletion, Position, Rectangle, RectangleBuilder, Size, StrokeColor, Value,
 };
 
 pub struct Bounds {
@@ -52,21 +50,24 @@ impl Scene {
         updater.add_stage(
             "update",
             SystemStage::parallel()
-                .with_system(animate_position)
                 .with_system(animate_from_target::<Position>)
                 .with_system(animate_from_target::<FillColor>)
                 .with_system(animate_from_target::<StrokeColor>)
                 .with_system(animate_from_target::<Size>)
                 .with_system(animate_from_target::<Angle>)
                 .with_system(animate_from_target::<Opacity>)
+                .with_system(animate_from_target::<Path>)
+                .with_system(animate_from_target::<PathCompletion>)
+                .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
                 .with_system(animate::<Size>)
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
+                .with_system(animate::<Path>)
                 .with_system(animate::<PathCompletion>)
-                .with_system(update_path::<Circle>)
-                .with_system(update_path::<Rectangle>)
+                // .with_system(update_path::<Circle>)
+                // .with_system(update_path::<Rectangle>)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();
@@ -96,6 +97,7 @@ impl Scene {
 
         self.updater.run(&mut self.world);
     }
+
     pub fn draw(&mut self, nannou_draw: nannou::Draw) {
         self.world.remove_non_send::<nannou::Draw>();
         self.world.insert_non_send(nannou_draw.clone());

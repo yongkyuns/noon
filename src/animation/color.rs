@@ -1,4 +1,4 @@
-use crate::{Color, ColorExtension};
+use crate::{Color, ColorExtension, Path};
 
 use super::*;
 
@@ -76,6 +76,18 @@ pub trait WithPath: WithColor {
         EntityAnimations {
             entity: self.id(),
             animations: Animation::to(Opacity(0.0)).into(),
+        }
+    }
+    fn morph(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        let entity: Entity = entity.into();
+        EntityAnimations {
+            entity: self.id(),
+            animations: vec![
+                Animation::<Path>::to_target(entity).into(),
+                Animation::<StrokeColor>::to_target(entity).into(),
+                Animation::<FillColor>::to_target(entity).into(),
+                Animation::<Position>::to_target(entity).into(),
+            ],
         }
     }
 }

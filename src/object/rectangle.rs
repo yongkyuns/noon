@@ -12,7 +12,7 @@ use nannou::lyon::math::point;
 pub struct Rectangle;
 
 impl PathComponent for Rectangle {
-    fn path(size: &Size, progress: &PathCompletion) -> Path {
+    fn path(size: &Size) -> Path {
         let mut builder = Path::svg_builder();
         let start = point(-size.width / 2.0, size.height / 2.0);
 
@@ -23,11 +23,7 @@ impl PathComponent for Rectangle {
         builder.line_to(point(start.x, start.y));
         builder.close();
 
-        let mut path = Path(builder.build());
-        if progress.0 < 1.0 {
-            path = path.upto(progress.0, 0.01);
-        }
-        path
+        Path(builder.build())
     }
 }
 
@@ -87,7 +83,7 @@ impl<'a> RectangleBuilder<'a> {
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
-            .insert(Rectangle::path(&self.size, &PathCompletion(0.0)))
+            .insert(Rectangle::path(&self.size))
             .id();
 
         id.into()
@@ -105,38 +101,11 @@ impl<'a> RectangleBuilder<'a> {
     }
 }
 
-// pub fn update_rectangle_path(
-//     mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<Rectangle>>,
-// ) {
-//     for (completion, alpha, size, mut path) in query.iter_mut() {
-//         if alpha.is_visible() {
-//             *path = rectangle_path(size, completion);
-//         }
-//     }
-// }
-
-// pub fn rectangle_path(size: &Size, completion: &PathCompletion) -> Path {
-//     let mut builder = Path::svg_builder();
-//     let start = point(-size.width / 2.0, size.height / 2.0);
-
-//     builder.move_to(start);
-//     builder.line_to(point(start.x + size.width, start.y));
-//     builder.line_to(point(start.x + size.width, start.y - size.height));
-//     builder.line_to(point(start.x, start.y - size.height));
-//     builder.line_to(point(start.x, start.y));
-//     builder.close();
-
-//     let mut path = Path(builder.build());
-//     if completion.0 < 1.0 {
-//         path = path.upto(completion.0, 0.01);
-//     }
-//     path
-// }
-
 pub fn draw_rectangle(
     draw: NonSend<nannou::Draw>,
     query: Query<
         (
+            &PathCompletion,
             &Position,
             &Angle,
             &StrokeColor,
@@ -148,7 +117,7 @@ pub fn draw_rectangle(
         With<Rectangle>,
     >,
 ) {
-    for (position, angle, stroke_color, fill_color, alpha, size, path) in query.iter() {
+    for (completion, position, angle, stroke_color, fill_color, alpha, size, path) in query.iter() {
         if alpha.is_visible() {
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
@@ -166,7 +135,7 @@ pub fn draw_rectangle(
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(fill)
-                .events(&path.0);
+                .events(&path.clone().upto(completion.0, 0.01).0);
 
             // Draw stroke on top
             draw.path()
@@ -175,7 +144,7 @@ pub fn draw_rectangle(
                 .z_degrees(angle.0)
                 .color(stroke)
                 .stroke_weight(size.width.min(size.height) / 25.0)
-                .events(&path.0);
+                .events(&path.clone().upto(completion.0, 0.01).0);
 
             // draw.rect()
             //     .x_y(position.x, position.y)

@@ -3,7 +3,7 @@ use std::{ops::Add, time::Instant};
 use bevy_ecs::prelude::*;
 
 use crate::{
-    Angle, Animations, Bounds, Circle, Color, FillColor, Interpolate, Opacity, Path,
+    Angle, Animations, Bounds, Circle, Color, FillColor, GetPartial, Interpolate, Opacity, Path,
     PathCompletion, PathComponent, Position, Rectangle, Size, StrokeColor, Value,
 };
 
@@ -43,18 +43,33 @@ impl Time {
 }
 
 // pub fn update_path<E>(mut query: Query<(&E, &mut Path), ChangeTrackers<PathCompletion>>)
-pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
-where
-    E: Component + PathComponent,
-{
-    for (completion, alpha, size, mut path) in query.iter_mut() {
-        if alpha.is_visible() {
-            *path = E::path(size, completion);
-        }
-    }
-}
+// pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
+// where
+//     E: Component + PathComponent,
+// {
+//     for (completion, alpha, size, mut path) in query.iter_mut() {
+//         if alpha.is_visible() {
+//             *path = E::path(size, completion);
+//         }
+//     }
+// }
 
-pub fn animate_from_target<Attribute: Interpolate + Component + Copy>(
+// pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
+// where
+//     E: Component,
+// {
+//     for (completion, alpha, size, mut path) in query.iter_mut() {
+//         println!("alpha = {}, completion = {}", alpha.0, completion.0);
+//         *path = path.clone().upto(completion.0, 0.01);
+
+//         // *path = path.clone().upto(completion.0, 0.01);
+//         // if alpha.is_visible() {
+//         //     // println!("completion = {}", completion.0);
+//         // }
+//     }
+// }
+
+pub fn animate_from_target<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut animation_query: Query<&mut Animations<Attribute>>,
     mut attribute_query: Query<&mut Attribute>,
@@ -81,7 +96,7 @@ pub fn animate_from_target<Attribute: Interpolate + Component + Copy>(
     }
 }
 
-pub fn animate<Attribute: Interpolate + Component + Copy>(
+pub fn animate<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
 ) {

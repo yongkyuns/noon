@@ -4,6 +4,7 @@ use bevy_ecs::prelude::*;
 use nannou::{
     color::{IntoLinSrgba, LinSrgba},
     draw::IntermediaryState,
+    lyon::math::point,
 };
 
 use crate::EaseType;
@@ -52,6 +53,26 @@ impl Add for Position {
 impl std::fmt::Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "(x:{:3.2}, y:{:3.2})", self.x, self.y)
+    }
+}
+
+pub type Point = nannou::lyon::math::Point;
+
+impl Into<Position> for Point {
+    fn into(self) -> Position {
+        Position {
+            x: self.x,
+            y: self.y,
+        }
+    }
+}
+
+impl Interpolate for Point {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        point(
+            self.x.interp(&other.x, progress),
+            self.y.interp(&other.y, progress),
+        )
     }
 }
 

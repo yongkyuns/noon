@@ -13,7 +13,7 @@ use nannou::lyon::math::{point, Angle, Vector};
 pub struct Circle;
 
 impl PathComponent for Circle {
-    fn path(size: &Size, progress: &PathCompletion) -> Path {
+    fn path(size: &Size) -> Path {
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();
         let sweep_angle = Angle::radians(-TAU);
@@ -26,11 +26,7 @@ impl PathComponent for Circle {
         builder.arc(center, radii, sweep_angle, x_rotation);
         builder.close();
 
-        let mut path = Path(builder.build());
-        if progress.0 < 1.0 {
-            path = path.upto(progress.0, 0.01);
-        }
-        path
+        Path(builder.build())
     }
 }
 
@@ -84,10 +80,7 @@ impl<'a> CircleBuilder<'a> {
             .insert(StrokeColor(self.stroke_color))
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
-            .insert(Circle::path(
-                &Size::from_radius(self.radius),
-                &PathCompletion(0.0),
-            ))
+            .insert(Circle::path(&Size::from_radius(self.radius)))
             .id();
 
         id.into()
@@ -105,41 +98,22 @@ impl<'a> CircleBuilder<'a> {
     }
 }
 
-// pub fn update_circle_path(
-//     mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<Circle>>,
-// ) {
-//     for (completion, alpha, size, mut path) in query.iter_mut() {
-//         if alpha.is_visible() {
-//             *path = circle_path(size, completion);
-//         }
-//     }
-// }
-
-// pub fn circle_path(size: &Size, completion: &PathCompletion) -> Path {
-//     let radius = size.width / 2.0;
-//     let mut builder = Path::svg_builder();
-//     let sweep_angle = Angle::radians(-TAU);
-//     let x_rotation = Angle::radians(0.0);
-//     let center = point(0.0, 0.0);
-//     let start = point(radius, 0.0);
-//     let radii = Vector::new(radius, radius);
-
-//     builder.move_to(start);
-//     builder.arc(center, radii, sweep_angle, x_rotation);
-//     builder.close();
-
-//     let mut path = Path(builder.build());
-//     if completion.0 < 1.0 {
-//         path = path.upto(completion.0, 0.01);
-//     }
-//     path
-// }
-
 pub fn draw_circle(
     draw: NonSend<nannou::Draw>,
-    query: Query<(&Position, &StrokeColor, &FillColor, &Opacity, &Size, &Path), With<Circle>>,
+    query: Query<
+        (
+            &PathCompletion,
+            &Position,
+            &StrokeColor,
+            &FillColor,
+            &Opacity,
+            &Size,
+            &Path,
+        ),
+        With<Circle>,
+    >,
 ) {
-    for (position, stroke_color, fill_color, alpha, size, path) in query.iter() {
+    for (completion, position, stroke_color, fill_color, alpha, size, path) in query.iter() {
         if alpha.is_visible() {
             let radius = size.width / 2.0;
             // let path = circle_path(size, completion);
@@ -156,21 +130,22 @@ pub fn draw_circle(
                 .fill()
                 .x_y(position.x, position.y)
                 .color(fill)
-                .events(&path.0);
+                .events(&path.clone().upto(completion.0, 0.01).0);
             draw.path()
                 .stroke()
                 .x_y(position.x, position.y)
                 .color(stroke)
                 .stroke_weight(radius / 15.0)
-                .events(&path.0);
-
-            // draw.ellipse()
-            //     .x_y(position.x, position.y)
-            //     .color(fill)
-            //     .radius(size.width / 2.0)
-            //     .stroke_color(stroke)
-            //     .stroke_weight(radius / 25.0);
+                .events(&path.clone().upto(completion.0, 0.01).0);
         }
+
+        // draw.ellipse()
+        //     .x_y(position.x, position.y)
+        //     .color(fill)
+        //     .radius(size.width / 2.0)
+        //     .stroke_color(stroke)
+        //     .stroke_weight(radius / 25.0);
+        // }
     }
 }
 
