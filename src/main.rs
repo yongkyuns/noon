@@ -1,6 +1,4 @@
-#![allow(unused)]
-
-use bevy_ecs::prelude::*;
+// #![allow(unused)]
 
 mod animation;
 mod app;
@@ -16,10 +14,12 @@ pub use crate::animation::{
     AnimBuilder, Animation, AnimationType, Animations, EntityAnimations, WithAngle, WithColor,
     WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
+
 pub use crate::component::{
     Angle, Color, ColorExtension, FillColor, Interpolate, Name, Opacity, PathCompletion, Point,
     Position, Size, StrokeColor, Value,
 };
+
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
@@ -86,89 +86,101 @@ pub use system::{animate, animate_from_target, animate_position, print, update_t
 //     }
 // }
 
-impl Construct for Scene {
-    fn construct(&mut self) {
-        let mut animations = Vec::new();
-        let mut show = Vec::new();
-        for _ in (0..200) {
-            let (x, y, w, h, ang, color) = gen_random_values();
-
-            let circle = self
-                .circle()
-                .with_position(x, y)
-                .with_color(color)
-                .with_radius(2.0 * w / 2.0)
-                .make();
-
-            show.push(circle.show_creation());
-
-            let (x, y, w, h, ang, color) = gen_random_values();
-
-            let rect = self
-                .rectangle()
-                .with_position(x, y)
-                .with_color(color)
-                .with_size(2.0 * w, 2.0 * h)
-                .make();
-
-            show.push(rect.show_creation());
-
-            // animations.push(circle.morph(rect));
-            animations.push(rect.morph(circle));
-        }
-
-        self.wait();
-        self.play(show).run_time(1.0).lag(0.001);
-
-        self.play(animations)
-            .run_time(10.0)
-            .lag(0.0001)
-            .rate_func(EaseType::Quint);
-    }
-}
-
 // impl Construct for Scene {
 //     fn construct(&mut self) {
-//         let (x, y, w, h, ang, color) = gen_random_values();
+//         let mut animations = Vec::new();
+//         let mut show = Vec::new();
+//         for _ in 0..200 {
+//             let (x, y, w, _, _, color) = gen_random_values();
 
-//         let circle = self
-//             .circle()
-//             .with_position(0.0, 0.0)
-//             .with_color(color)
-//             .with_radius(100.0 / 2.0)
-//             .make();
+//             let circle = self
+//                 .circle()
+//                 .with_position(x, y)
+//                 .with_color(color)
+//                 .with_radius(2.0 * w / 2.0)
+//                 .make();
 
-//         let (x, y, w, h, ang, color) = gen_random_values();
+//             show.push(circle.show_creation());
 
-//         let rect = self
-//             .rectangle()
-//             .with_position(600.0, 400.0)
-//             .with_color(color)
-//             .with_size(50.0, 50.0)
-//             .make();
+//             let (x, y, w, h, _, color) = gen_random_values();
+
+//             let rect = self
+//                 .rectangle()
+//                 .with_position(x, y)
+//                 .with_color(color)
+//                 .with_size(2.0 * w, 2.0 * h)
+//                 .make();
+
+//             show.push(rect.show_creation());
+
+//             // animations.push(circle.morph(rect));
+//             animations.push(rect.morph(circle));
+
+//             let (x, y, _, _, _, color) = gen_random_values();
+//             let line = self.line().from(0.0, 0.0).to(x, y).with_color(color).make();
+//             show.push(line.show_creation());
+//         }
 
 //         self.wait();
-//         // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
-//         self.play(vec![circle.show_creation(), rect.show_creation()]);
+//         self.play(show).run_time(1.0).lag(0.001);
 
-//         self.play(circle.morph(rect));
-
-//         // self.play(vec![
-//         //     circle.move_to_object(rect),
-//         //     circle.set_color_from(rect),
-//         // ])
-//         // .rate_func(EaseType::Quint)
-//         // .run_time(2.0);
-
-//         // self.wait();
-//         // self.play(circle.move_to(400.0, 400.0))
-//         //     .rate_func(EaseType::Elastic);
-//         // self.play(circle.move_to(400.0, 400.0))
-//         //     .run_time(1.0)
-//         //     .lag(0.0001)
-//         //     .rate_func(EaseType::Quad);
+//         self.play(animations)
+//             .run_time(10.0)
+//             .lag(0.0001)
+//             .rate_func(EaseType::Quint);
 //     }
 // }
+
+impl Construct for Scene {
+    fn construct(&mut self) {
+        let (x, y, _w, _h, _ang, color) = gen_random_values();
+
+        let circle = self
+            .circle()
+            .with_position(x, y)
+            .with_color(color)
+            .with_radius(200.0 / 2.0)
+            .make();
+
+        let (x, y, _w, _h, _ang, color) = gen_random_values();
+
+        let rect = self
+            .rectangle()
+            .with_position(x, y)
+            .with_color(color)
+            .with_size(150.0, 150.0)
+            .make();
+
+        let line = self
+            .line()
+            .with_color(color)
+            .from(-400.0, -400.0)
+            .to(400.0, 400.0)
+            .make();
+
+        self.wait();
+        // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
+        self.play(vec![circle.show_creation(), line.show_creation()]);
+
+        self.play(line.morph(circle)).run_time(3.0);
+        self.play(circle.morph(rect)).run_time(3.0);
+
+        // self.play(vec![
+        //     circle.move_to_object(rect),
+        //     circle.set_color_from(rect),
+        // ])
+        // .rate_func(EaseType::Quint)
+        // .run_time(2.0);
+
+        // self.wait();
+        // self.play(circle.move_to(400.0, 400.0))
+        //     .rate_func(EaseType::Elastic);
+        // self.play(circle.move_to(400.0, 400.0))
+        //     .run_time(1.0)
+        //     .lag(0.0001)
+        //     .rate_func(EaseType::Quad);
+    }
+}
 
 fn main() {
     app::run();

@@ -1,11 +1,8 @@
-use std::{ops::Add, time::Instant};
+use std::time::Instant;
 
 use bevy_ecs::prelude::*;
 
-use crate::{
-    Angle, Animations, Bounds, Circle, Color, FillColor, GetPartial, Interpolate, Opacity, Path,
-    PathCompletion, PathComponent, Position, Rectangle, Size, StrokeColor, Value,
-};
+use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Position};
 
 pub struct Time {
     pub seconds: f32,
@@ -72,20 +69,20 @@ impl Time {
 pub fn animate_from_target<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut animation_query: Query<&mut Animations<Attribute>>,
-    mut attribute_query: Query<&mut Attribute>,
+    attribute_query: Query<&mut Attribute>,
 ) {
-    for (mut animations) in animation_query.iter_mut() {
+    for mut animations in animation_query.iter_mut() {
         for animation in animations.0.iter_mut() {
             let t = time.seconds;
             let begin = animation.start_time;
-            let duration = animation.duration;
+            let _duration = animation.duration;
             let end = animation.start_time + animation.duration + 0.0;
 
             if begin < t && t <= end {
                 // If animation end state points to another entity, we need to query from that entity
                 if let Some(target) = animation.has_target() {
                     // Check if target entity has said attribute
-                    for src_attribute in attribute_query.iter() {
+                    for _ in attribute_query.iter() {
                         if let Ok(attribute) = attribute_query.get(target) {
                             animation.init_from_target(attribute);
                         }
@@ -100,7 +97,7 @@ pub fn animate<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
 ) {
-    for (entity, mut att, mut animations) in query.iter_mut() {
+    for (_entity, mut att, mut animations) in query.iter_mut() {
         for animation in animations.0.iter_mut() {
             let t = time.seconds;
             let begin = animation.start_time;
@@ -125,7 +122,7 @@ pub fn animate<Attribute: Interpolate + Component + Clone>(
 
 pub fn animate_position(
     time: Res<Time>,
-    bounds: Res<Bounds>,
+    _bounds: Res<Bounds>,
     mut query: Query<(&mut Position, &mut Animations<Position>)>,
 ) {
     for (mut att, mut animations) in query.iter_mut() {
@@ -151,16 +148,16 @@ pub fn animate_position(
     }
 }
 
-pub fn update_time(mut time: ResMut<Time>) {
+pub fn update_time(time: ResMut<Time>) {
     // time.step();
     println!("t = {:2.2} sec", time.seconds);
 }
 
-pub fn print(res: Res<Time>, query: Query<(Entity, &Position, &FillColor), With<Circle>>) {
-    for (entity, position, color) in query.iter() {
-        // println!(
-        //     "Time = {:2.1} sec, Position = {:2.1}, FillColor = {:1.1}",
-        //     res.seconds, &position, &color
-        // );
-    }
+pub fn print(_res: Res<Time>, _query: Query<(Entity, &Position, &FillColor), With<Circle>>) {
+    // for (entity, position, color) in query.iter() {
+    //     // println!(
+    //     //     "Time = {:2.1} sec, Position = {:2.1}, FillColor = {:1.1}",
+    //     //     res.seconds, &position, &color
+    //     // );
+    // }
 }

@@ -1,14 +1,12 @@
-use std::array::IntoIter;
-
 use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{animate, animate_from_target, animate_position, print, update_time, Time};
+use crate::system::{animate, animate_from_target, animate_position, print, Time};
 use crate::{
-    circle, draw_circle, draw_rectangle, rectangle, Angle, AnimBuilder, Animation, AnimationType,
-    Animations, Circle, CircleBuilder, EntityAnimations, Interpolate, Opacity, Path,
-    PathCompletion, Position, Rectangle, RectangleBuilder, Size, StrokeColor, Value,
+    circle, draw_circle, draw_line, draw_rectangle, line, rectangle, Angle, AnimBuilder,
+    CircleBuilder, EntityAnimations, LineBuilder, Opacity, Path, PathCompletion, Position,
+    RectangleBuilder, Size, StrokeColor,
 };
 
 pub struct Bounds {
@@ -75,7 +73,8 @@ impl Scene {
             "draw",
             SystemStage::single_threaded()
                 .with_system(draw_circle)
-                .with_system(draw_rectangle),
+                .with_system(draw_rectangle)
+                .with_system(draw_line),
         );
         Self {
             world,
@@ -89,6 +88,9 @@ impl Scene {
     }
     pub fn rectangle(&mut self) -> RectangleBuilder {
         rectangle(self)
+    }
+    pub fn line(&mut self) -> LineBuilder {
+        line(self)
     }
     pub fn update(&mut self, now: f32) {
         self.world

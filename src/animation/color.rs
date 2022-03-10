@@ -32,7 +32,7 @@ pub trait WithFill: WithId {
     }
 }
 
-pub trait WithColor: WithStroke + WithFill {
+pub trait WithColor: WithId {
     fn set_color(&self, color: Color) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
@@ -54,7 +54,7 @@ pub trait WithColor: WithStroke + WithFill {
     }
 }
 
-pub trait WithPath: WithColor {
+pub trait WithPath: WithId {
     fn show_creation(&self) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),

@@ -1,19 +1,12 @@
 use bevy_ecs::prelude::*;
-use lyon::{
-    builder::{Build, WithSvg},
-    iterator::PathIterator,
-    PathEvent,
-};
+use lyon::{builder::WithSvg, iterator::PathIterator, PathEvent};
 use nannou::lyon::{
-    algorithms::length::approximate_length,
-    geom::{point, LineSegment},
-    lyon_algorithms::walk::RepeatedPattern,
-    path::traits::{PathBuilder, SvgPathBuilder},
+    algorithms::length::approximate_length, lyon_algorithms::walk::RepeatedPattern,
 };
 
 use nannou::lyon::{lyon_algorithms::walk::walk_along_path, path as lyon};
 
-use crate::{Interpolate, PathCompletion, Point, Position, Size};
+use crate::{Interpolate, Point, Size};
 
 #[derive(Debug, Clone, Component)]
 pub struct Path(pub(crate) lyon::Path);
@@ -59,7 +52,7 @@ impl Interpolate for Path {
             p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
                 builder.line_to(p1.interp(p2, progress));
             });
-            builder.close();
+            // builder.close();
 
             Path(builder.build())
         }
@@ -82,7 +75,7 @@ fn points_from_path(
     let mut points = Vec::new();
 
     let mut pattern = RepeatedPattern {
-        callback: &mut |position, _t, d| {
+        callback: &mut |position, _t, _d| {
             points.push(position);
             true
         },
@@ -145,16 +138,6 @@ pub trait MeasureLength {
 impl MeasureLength for Path {
     fn approximate_length(&self, tolerance: f32) -> f32 {
         approximate_length(self.0.iter(), tolerance)
-        // let mut length = 0.0;
-        // for e in self.0.iter().flattened(tolerance) {
-        //     match e {
-        //         PathEvent::Line { from, to } => {
-        //             length += (to - from).length();
-        //         }
-        //         _ => {}
-        //     }
-        // }
-        // length
     }
 }
 
@@ -234,10 +217,10 @@ mod tests {
         builder.move_to(point(0.0, 0.0));
         builder.line_to(point(10.0, 0.0));
         builder.close();
-        let mut path = Path(builder.build()).upto(0.5, 0.01);
+        let path = Path(builder.build()).upto(0.5, 0.01);
         for e in path.0.iter().flattened(0.01) {
             match e {
-                PathEvent::Begin { at } => {}
+                PathEvent::Begin { .. } => {}
                 PathEvent::Line { from, to } => {
                     println!("from:({},{}), to:({},{})", from.x, from.y, to.x, to.y);
                 }
@@ -344,18 +327,13 @@ mod tests {
                         from.x, from.y, to.x, to.y
                     );
                 }
-                PathEvent::Quadratic { from, ctrl, to } => {
+                PathEvent::Quadratic { from, to, .. } => {
                     println!(
                         "Quadratic -> from:({},{}), to:({},{})",
                         from.x, from.y, to.x, to.y
                     );
                 }
-                PathEvent::Cubic {
-                    from,
-                    ctrl1,
-                    ctrl2,
-                    to,
-                } => {
+                PathEvent::Cubic { from, to, .. } => {
                     println!(
                         "Cubic -> from:({},{}), to:({},{})",
                         from.x, from.y, to.x, to.y
@@ -364,7 +342,6 @@ mod tests {
                 PathEvent::End { .. } => {
                     println!("End");
                 }
-                _ => (),
             }
         }
     }

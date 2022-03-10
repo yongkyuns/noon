@@ -1,13 +1,10 @@
-use std::{any::TypeId, marker::PhantomData, ops::Add};
+use std::{marker::PhantomData, ops::Add};
 
 use bevy_ecs::prelude::*;
 use nannou::{
     color::{IntoLinSrgba, LinSrgba},
-    draw::IntermediaryState,
     lyon::math::point,
 };
-
-use crate::EaseType;
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -29,6 +26,18 @@ pub struct Name(String);
 pub struct Position {
     pub x: f32,
     pub y: f32,
+}
+
+impl Position {
+    pub fn from_points(points: &[Point]) -> Self {
+        let sum = points
+            .iter()
+            .fold(point(0.0, 0.0), |sum, &p| point(sum.x + p.x, sum.y + p.y));
+        Position {
+            x: sum.x / points.len() as f32,
+            y: sum.y / points.len() as f32,
+        }
+    }
 }
 
 impl Interpolate for Position {
@@ -98,8 +107,33 @@ impl Size {
             height: radius * 2.0,
         }
     }
+
     pub fn from(width: f32, height: f32) -> Self {
         Self { width, height }
+    }
+
+    pub fn from_points(points: &[Point]) -> Self {
+        let mut min = *points.first().unwrap();
+        let mut max = *points.first().unwrap();
+
+        for &p in points.iter() {
+            if p.x < min.x {
+                min.x = p.x;
+            }
+            if p.y < min.y {
+                min.y = p.y;
+            }
+            if p.x > max.x {
+                max.x = p.x;
+            }
+            if p.y > max.y {
+                max.y = p.y;
+            }
+        }
+        Size {
+            width: (max.x - min.x).abs(),
+            height: (max.y - min.y).abs(),
+        }
     }
 }
 
@@ -170,7 +204,6 @@ impl ColorExtension for Color {
 pub trait ColorExtension {
     fn get_color(&self) -> Color;
     fn brighten(&self) -> Color {
-        use nannou::color::Rgba;
         let mut hsv: nannou::color::Hsv = self.get_color().into_linear().into();
         hsv.saturation -= 0.1;
         hsv.value += 0.2;

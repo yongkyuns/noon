@@ -12,7 +12,7 @@ use nannou::lyon::math::{point, Angle, Vector};
 #[derive(Component)]
 pub struct Circle;
 
-impl PathComponent for Circle {
+impl Circle {
     fn path(size: &Size) -> Path {
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();

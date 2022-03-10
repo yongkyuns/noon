@@ -105,7 +105,7 @@ where
 
     pub fn init_from_target(&mut self, end: &T) {
         match &self.end {
-            Value::From(entity) => {
+            Value::From(_entity) => {
                 self.end = Value::Absolute(end.clone());
             }
             _ => (),
@@ -115,7 +115,7 @@ where
     pub fn update(&mut self, property: &mut T, progress: f32) {
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-            (None, Value::Absolute(to)) => {
+            (None, Value::Absolute(_to)) => {
                 self.begin = Some(property.clone());
             }
             _ => (),
@@ -130,7 +130,7 @@ impl Animation<Position> {
             (Some(begin), Value::Relative(by)) => {
                 self.end = Value::Absolute(*begin + *by);
             }
-            (None, Value::Absolute(to)) => {
+            (None, Value::Absolute(_to)) => {
                 self.begin = Some(*property);
             }
             _ => (),

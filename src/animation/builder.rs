@@ -6,12 +6,13 @@ pub struct AnimBuilder<'a> {
     run_time: f32,
     rate_func: EaseType,
     lag: f32,
+    #[allow(dead_code)]
     repeat: usize,
 }
 
 impl<'a> AnimBuilder<'a> {
     pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimations>) -> Self {
-        let mut rate_func = EaseType::Quad;
+        let rate_func = EaseType::Quad;
         // for ta in animations.iter() {
         //     if ta.action == Action::ShowCreation {
         //         rate_func = EaseType::Quad;
@@ -47,9 +48,8 @@ impl<'a> Drop for AnimBuilder<'a> {
             run_time,
             animations,
             rate_func,
-            scene,
             lag,
-            repeat,
+            ..
         } = self;
 
         let mut t = self.scene.event_time;

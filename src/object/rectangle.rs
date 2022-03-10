@@ -11,7 +11,7 @@ use nannou::lyon::math::point;
 #[derive(Component)]
 pub struct Rectangle;
 
-impl PathComponent for Rectangle {
+impl Rectangle {
     fn path(size: &Size) -> Path {
         let mut builder = Path::svg_builder();
         let start = point(-size.width / 2.0, size.height / 2.0);
@@ -142,6 +142,7 @@ pub fn draw_rectangle(
                 .stroke()
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
+                .join_round()
                 .color(stroke)
                 .stroke_weight(size.width.max(size.height) / 100.0)
                 .events(&path.clone().upto(completion.0, 0.01).0);

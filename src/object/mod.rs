@@ -2,14 +2,15 @@
 
 use bevy_ecs::prelude::*;
 
-mod arrow;
+pub mod arrow;
 pub mod circle;
-mod dot;
-mod line;
+pub mod dot;
+pub mod line;
 pub mod rectangle;
-mod triangle;
+pub mod triangle;
 
 pub use circle::{circle, draw_circle, Circle, CircleBuilder};
+pub use line::{draw_line, line, Line, LineBuilder};
 pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder};
 
 use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Size, StrokeColor};
@@ -62,9 +63,6 @@ use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Si
 
 #[derive(Component)]
 pub struct Triangle;
-
-#[derive(Component)]
-pub struct Line;
 
 #[derive(Component)]
 pub struct Arrow;
