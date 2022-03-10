@@ -135,7 +135,7 @@ pub fn draw_circle(
                 .stroke()
                 .x_y(position.x, position.y)
                 .color(stroke)
-                .stroke_weight(radius / 15.0)
+                .stroke_weight(radius / 30.0)
                 .events(&path.clone().upto(completion.0, 0.01).0);
         }
 

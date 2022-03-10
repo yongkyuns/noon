@@ -90,7 +90,7 @@ impl Construct for Scene {
     fn construct(&mut self) {
         let mut animations = Vec::new();
         let mut show = Vec::new();
-        for _ in (0..100) {
+        for _ in (0..200) {
             let (x, y, w, h, ang, color) = gen_random_values();
 
             let circle = self

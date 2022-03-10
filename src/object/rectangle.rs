@@ -143,7 +143,7 @@ pub fn draw_rectangle(
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(stroke)
-                .stroke_weight(size.width.min(size.height) / 25.0)
+                .stroke_weight(size.width.max(size.height) / 100.0)
                 .events(&path.clone().upto(completion.0, 0.01).0);
 
             // draw.rect()

@@ -29,7 +29,7 @@ impl Path {
 
 impl Interpolate for Path {
     fn interp(&self, other: &Self, progress: f32) -> Self {
-        let tol = 0.5;
+        let tol = 0.1;
         let progress = progress.min(1.0).max(0.0);
 
         if progress <= 0.001 {
