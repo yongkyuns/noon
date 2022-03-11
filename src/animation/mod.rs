@@ -4,8 +4,8 @@ use bevy_ecs::{
 };
 
 use crate::{
-    Angle, EaseType, FillColor, Interpolate, Opacity, Path, PathCompletion, Position, Scene, Size,
-    StrokeColor, Value,
+    Angle, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion, Position,
+    Scene, Size, StrokeColor, Value,
 };
 
 mod builder;
@@ -154,6 +154,7 @@ pub enum AnimationType {
     Position(Animation<Position>),
     Angle(Animation<Angle>),
     Size(Animation<Size>),
+    FontSize(Animation<FontSize>),
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
     Path(Animation<Path>),
@@ -186,6 +187,12 @@ impl Into<AnimationType> for Animation<Angle> {
 impl Into<AnimationType> for Animation<Size> {
     fn into(self) -> AnimationType {
         AnimationType::Size(self)
+    }
+}
+
+impl Into<AnimationType> for Animation<FontSize> {
+    fn into(self) -> AnimationType {
+        AnimationType::FontSize(self)
     }
 }
 
@@ -261,6 +268,9 @@ impl EntityAnimations {
                 AnimationType::Size(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::FontSize(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
                 AnimationType::Opacity(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
@@ -280,6 +290,7 @@ impl EntityAnimations {
             AnimationType::Position(animation) => animation.start_time,
             AnimationType::Angle(animation) => animation.start_time,
             AnimationType::Size(animation) => animation.start_time,
+            AnimationType::FontSize(animation) => animation.start_time,
             AnimationType::Opacity(animation) => animation.start_time,
             AnimationType::PathCompletion(animation) => animation.start_time,
             AnimationType::Path(animation) => animation.start_time,
@@ -301,6 +312,9 @@ impl EntityAnimations {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Size(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::FontSize(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Opacity(ref mut animation) => {

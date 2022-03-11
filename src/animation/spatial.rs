@@ -31,3 +31,12 @@ pub trait WithSize: WithId {
         }
     }
 }
+
+pub trait WithFontSize: WithId {
+    fn set_font_size(&self, size: u32) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.id(),
+            animations: vec![Animation::to(FontSize(size)).into()],
+        }
+    }
+}

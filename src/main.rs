@@ -12,12 +12,12 @@ mod system;
 
 pub use crate::animation::{
     AnimBuilder, Animation, AnimationType, Animations, EntityAnimations, WithAngle, WithColor,
-    WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
+    WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
 
 pub use crate::component::{
-    Angle, Color, ColorExtension, FillColor, Interpolate, Name, Opacity, PathCompletion, Point,
-    Position, Size, StrokeColor, Value,
+    Angle, Color, ColorExtension, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion,
+    Point, Position, Size, StrokeColor, Value,
 };
 
 pub use crate::path::{GetPartial, Path, PathComponent};
@@ -142,6 +142,15 @@ impl Construct for Scene {
             .with_radius(200.0 / 2.0)
             .make();
 
+        let (_x, _y, _w, _h, _ang, color) = gen_random_values();
+
+        let text = self
+            .text()
+            .with_text("Hello World!")
+            .with_color(color)
+            .with_position(-300.0, 100.0)
+            .make();
+
         let (x, y, _w, _h, _ang, color) = gen_random_values();
 
         let rect = self
@@ -160,10 +169,15 @@ impl Construct for Scene {
 
         self.wait();
         // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
-        self.play(vec![circle.show_creation(), line.show_creation()]);
+        self.play(vec![
+            circle.show_creation(),
+            line.show_creation(),
+            text.show_creation(),
+        ]);
 
         self.play(line.morph(circle)).run_time(3.0);
         self.play(circle.morph(rect)).run_time(3.0);
+        self.play(text.morph(rect)).run_time(3.0);
 
         // self.play(vec![
         //     circle.move_to_object(rect),

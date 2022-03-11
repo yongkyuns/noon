@@ -19,6 +19,12 @@ impl Interpolate for f32 {
     }
 }
 
+impl Interpolate for u32 {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        self + ((other - self) as f32 * progress) as u32
+    }
+}
+
 #[derive(Component)]
 pub struct Name(String);
 
@@ -89,6 +95,15 @@ impl Interpolate for Point {
 pub struct Angle(pub(crate) f32);
 
 impl Interpolate for Angle {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        Self(self.0.interp(&other.0, progress))
+    }
+}
+
+#[derive(Debug, Component, Clone, Copy)]
+pub struct FontSize(pub(crate) u32);
+
+impl Interpolate for FontSize {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         Self(self.0.interp(&other.0, progress))
     }

@@ -1,12 +1,5 @@
-use crate::path::GetPartial;
-use crate::{
-    Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, Path, PathCompletion, PathComponent, Point, Position, Scene, Size, StrokeColor, Value,
-    WithAngle, WithColor, WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
-};
-use bevy_ecs::prelude::*;
-use nannou::color::Rgba;
-use nannou::lyon::math::point;
+use super::common::*;
+use nannou::lyon::path::traits::PathBuilder;
 
 #[derive(Component)]
 pub struct Line;
@@ -15,16 +8,11 @@ impl Line {
     fn path(points: &[Point]) -> Path {
         let mut builder = Path::builder();
 
-        if !points.is_empty() {
-            // builder.move_to(*points.get(0).unwrap());
-            builder.begin(*points.get(0).unwrap());
-            for &p in points.iter() {
-                builder.line_to(p);
-            }
+        builder.begin(*points.get(0).unwrap());
+        for &p in points.iter() {
+            builder.line_to(p);
         }
         builder.end(false);
-        // builder.line_to(to);
-        // builder.close();
         Path {
             raw: builder.build(),
             closed: false,

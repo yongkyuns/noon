@@ -4,9 +4,9 @@ use nannou::geom::Rect;
 use crate::component::FillColor;
 use crate::system::{animate, animate_from_target, animate_position, print, Time};
 use crate::{
-    circle, draw_circle, draw_line, draw_rectangle, line, rectangle, Angle, AnimBuilder,
-    CircleBuilder, EntityAnimations, LineBuilder, Opacity, Path, PathCompletion, Position,
-    RectangleBuilder, Size, StrokeColor,
+    circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
+    AnimBuilder, CircleBuilder, EntityAnimations, FontSize, LineBuilder, Opacity, Path,
+    PathCompletion, Position, RectangleBuilder, Size, StrokeColor, TextBuilder,
 };
 
 pub struct Bounds {
@@ -56,6 +56,7 @@ impl Scene {
                 .with_system(animate_from_target::<Opacity>)
                 .with_system(animate_from_target::<Path>)
                 .with_system(animate_from_target::<PathCompletion>)
+                .with_system(animate_from_target::<FontSize>)
                 .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
@@ -64,6 +65,7 @@ impl Scene {
                 .with_system(animate::<Opacity>)
                 .with_system(animate::<Path>)
                 .with_system(animate::<PathCompletion>)
+                .with_system(animate::<FontSize>)
                 // .with_system(update_path::<Circle>)
                 // .with_system(update_path::<Rectangle>)
                 .with_system(print),
@@ -74,7 +76,8 @@ impl Scene {
             SystemStage::single_threaded()
                 .with_system(draw_circle)
                 .with_system(draw_rectangle)
-                .with_system(draw_line),
+                .with_system(draw_line)
+                .with_system(draw_text),
         );
         Self {
             world,
@@ -91,6 +94,9 @@ impl Scene {
     }
     pub fn line(&mut self) -> LineBuilder {
         line(self)
+    }
+    pub fn text(&mut self) -> TextBuilder {
+        text(self)
     }
     pub fn update(&mut self, now: f32) {
         self.world

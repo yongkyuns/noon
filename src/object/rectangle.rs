@@ -1,12 +1,4 @@
-use crate::path::GetPartial;
-use crate::{
-    Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations, FillColor,
-    Opacity, Path, PathCompletion, PathComponent, Position, Scene, Size, StrokeColor, Value,
-    WithAngle, WithColor, WithFill, WithId, WithPath, WithPosition, WithSize, WithStroke,
-};
-use bevy_ecs::prelude::*;
-use nannou::color::Rgba;
-use nannou::lyon::math::point;
+use super::common::*;
 
 #[derive(Component)]
 pub struct Rectangle;

@@ -1,13 +1,6 @@
-use crate::path::GetPartial;
-use crate::{
-    AnimBuilder, Animation, AnimationType, Color, ColorExtension, EaseType, EntityAnimations,
-    FillColor, Opacity, Path, PathCompletion, PathComponent, Position, Scene, Size, StrokeColor,
-    Time, Value, WithColor, WithFill, WithId, WithPath, WithPosition, WithStroke,
-};
-use bevy_ecs::prelude::*;
+use super::common::*;
 use core::f32::consts::TAU;
-use nannou::color::Rgba;
-use nannou::lyon::math::{point, Angle, Vector};
+use nannou::lyon::math::{Angle, Vector};
 
 #[derive(Component)]
 pub struct Circle;

@@ -7,13 +7,29 @@ pub mod circle;
 pub mod dot;
 pub mod line;
 pub mod rectangle;
+pub mod text;
 pub mod triangle;
 
 pub use circle::{circle, draw_circle, Circle, CircleBuilder};
 pub use line::{draw_line, line, Line, LineBuilder};
 pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder};
+pub use text::{draw_text, text, Text, TextBuilder};
 
 use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Size, StrokeColor};
+
+mod common {
+    pub use crate::path::GetPartial;
+    pub use crate::{
+        Angle, AnimBuilder, Animation, Color, ColorExtension, EaseType, EntityAnimations,
+        FillColor, FontSize, Opacity, Path, PathCompletion, PathComponent, Point, Position, Scene,
+        Size, StrokeColor, Value, WithAngle, WithColor, WithFill, WithFontSize, WithId, WithPath,
+        WithPosition, WithSize, WithStroke,
+    };
+    pub use bevy_ecs::prelude::*;
+    pub use nannou::color::Rgba;
+    pub use nannou::lyon::math::point;
+    // pub use nannou::lyon::math::{point, Angle, Vector};
+}
 
 // pub trait BaseObject {
 //     fn id(&self) -> Entity;
