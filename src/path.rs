@@ -34,9 +34,9 @@ impl Interpolate for Path {
         let tol = 0.1;
         let progress = progress.min(1.0).max(0.0);
 
-        if progress <= 0.001 {
+        if progress <= 0.00001 {
             self.clone()
-        } else if progress >= 0.999 {
+        } else if progress >= 0.99999 {
             other.clone()
         } else {
             // 1. Calculate the length of initial and final paths (1 and 2)
@@ -49,23 +49,25 @@ impl Interpolate for Path {
             let path1_lengths = get_lengths_flattened(self, tol);
             let path2_lengths = get_lengths_flattened(other, tol);
 
-            let normalized = normalized_distances(&path1_lengths, &path2_lengths);
-
-            let len_1 = *path1_lengths.last().unwrap();
-            let len_2 = *path2_lengths.last().unwrap();
-
-            let p1 = points_from_path(self, &normalized, len_1, tol);
-            let p2 = points_from_path(other, &normalized, len_2, tol);
-
             let mut builder = Path::svg_builder();
-            p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
-                builder.line_to(p1.interp(p2, progress));
-            });
 
-            if self.closed {
-                builder.close();
+            if path1_lengths.len() > 1 && path2_lengths.len() > 1 {
+                let normalized = normalized_distances(&path1_lengths, &path2_lengths);
+
+                let len_1 = *path1_lengths.last().unwrap();
+                let len_2 = *path2_lengths.last().unwrap();
+
+                let p1 = points_from_path(self, &normalized, len_1, tol);
+                let p2 = points_from_path(other, &normalized, len_2, tol);
+
+                p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
+                    builder.line_to(p1.interp(p2, progress));
+                });
+
+                if self.closed {
+                    builder.close();
+                }
             }
-
             Path::new(builder.build())
         }
     }
@@ -100,7 +102,8 @@ fn points_from_path(
 }
 
 fn get_lengths_flattened(path: &Path, tolerance: f32) -> Vec<f32> {
-    path.raw
+    let mut p = path
+        .raw
         .iter()
         .flattened(tolerance)
         .filter(|e| matches!(e, PathEvent::Line { .. }))
@@ -113,7 +116,9 @@ fn get_lengths_flattened(path: &Path, tolerance: f32) -> Vec<f32> {
             };
             Some(*d)
         })
-        .collect::<Vec<f32>>()
+        .collect::<Vec<f32>>();
+    p.insert(0, 0.0); // This is needed to correct the initial point being shifted by 1 index
+    p
 }
 
 // Combine two vectors which are both monotonically increasing by normalized ordering

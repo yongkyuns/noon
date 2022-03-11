@@ -170,14 +170,15 @@ impl Construct for Scene {
         self.wait();
         // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
         self.play(vec![
-            circle.show_creation(),
+            rect.show_creation(),
             line.show_creation(),
             text.show_creation(),
         ]);
 
-        self.play(line.morph(circle)).run_time(3.0);
-        self.play(circle.morph(rect)).run_time(3.0);
-        self.play(text.morph(rect)).run_time(3.0);
+        // self.play(line.morph(circle)).run_time(3.0);
+        // self.play(circle.morph(rect)).run_time(3.0);
+        // self.play(text.morph(rect)).run_time(10.0);
+        self.play(rect.morph(text)).run_time(20.0);
 
         // self.play(vec![
         //     circle.move_to_object(rect),
