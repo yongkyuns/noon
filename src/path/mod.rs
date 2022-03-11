@@ -1,5 +1,7 @@
 use bevy_ecs::prelude::*;
 use lyon::{builder::WithSvg, iterator::PathIterator, PathEvent};
+use nannou::lyon::path::iterator::Flattened;
+use nannou::lyon::path::path::Iter;
 use nannou::lyon::{
     algorithms::length::approximate_length, lyon_algorithms::walk::RepeatedPattern,
 };
@@ -7,6 +9,9 @@ use nannou::lyon::{
 use nannou::lyon::{lyon_algorithms::walk::walk_along_path, path as lyon};
 
 use crate::{Interpolate, Point, Size};
+use resample::{resample_along_path, ResamplePattern};
+
+pub mod resample;
 
 #[derive(Debug, Clone, Component)]
 pub struct Path {
@@ -27,6 +32,9 @@ impl Path {
     pub fn builder() -> lyon::path::Builder {
         lyon::path::Builder::new()
     }
+    pub fn flattened(&self, tolerance: f32) -> Flattened<Iter> {
+        self.raw.iter().flattened(tolerance)
+    }
 }
 
 impl Interpolate for Path {
@@ -46,8 +54,8 @@ impl Interpolate for Path {
             // 5. Interpolate each point between initial and final path
             // 6. Construct Path with above points as line segments
 
-            let path1_lengths = get_lengths_flattened(self, tol);
-            let path2_lengths = get_lengths_flattened(other, tol);
+            let path1_lengths = get_line_lengths(self.flattened(tol));
+            let path2_lengths = get_line_lengths(other.flattened(tol));
 
             let mut builder = Path::svg_builder();
 
@@ -57,12 +65,25 @@ impl Interpolate for Path {
                 let len_1 = *path1_lengths.last().unwrap();
                 let len_2 = *path2_lengths.last().unwrap();
 
-                let p1 = points_from_path(self, &normalized, len_1, tol);
-                let p2 = points_from_path(other, &normalized, len_2, tol);
+                let p1 = points_from_path(self.flattened(tol), &normalized, len_1);
+                let p2 = points_from_path(other.flattened(tol), &normalized, len_2);
 
                 p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
                     builder.line_to(p1.interp(p2, progress));
                 });
+
+                // let p1 = resampled_path(self.flattened(tol), &normalized, len_1);
+                // let p2 = resampled_path(other.flattened(tol), &normalized, len_2);
+
+                // p1.iter().filter(|e| matches!(e, PathEvent::Line { .. }));
+
+                // for e in p1.iter() {
+                //     builder.path_event(e);
+                // }
+
+                // p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
+                //     builder.line_to(p1.interp(p2, progress));
+                // });
 
                 if self.closed {
                     builder.close();
@@ -73,12 +94,36 @@ impl Interpolate for Path {
     }
 }
 
+fn resampled_path(path: Flattened<Iter>, normalized_len: &[f32], total_length: f32) -> lyon::Path {
+    // Compute the delta distance between each point
+    let lengths: Vec<f32> = normalized_len
+        .iter()
+        .zip(normalized_len.iter().skip(1))
+        .map(|(a, b)| b - a)
+        .map(|val| val * total_length)
+        .collect();
+
+    // let mut builder = Path::builder();
+
+    let mut pattern = ResamplePattern {
+        callback: &mut |_position, _t, _d| {
+            // builder.line_to(position);
+            true
+        },
+        intervals: &lengths,
+        index: 0,
+    };
+
+    resample_along_path(path.into_iter(), 0.0, &mut pattern)
+    // builder.build()
+}
+
 fn points_from_path(
-    path: &Path,
+    path: Flattened<Iter>,
     normalized_len: &[f32],
     total_length: f32,
-    tolerance: f32,
 ) -> Vec<Point> {
+    // Compute the delta distance between each point
     let lengths: Vec<f32> = normalized_len
         .iter()
         .zip(normalized_len.iter().skip(1))
@@ -87,7 +132,6 @@ fn points_from_path(
         .collect();
 
     let mut points = Vec::new();
-
     let mut pattern = RepeatedPattern {
         callback: &mut |position, _t, _d| {
             points.push(position);
@@ -97,15 +141,12 @@ fn points_from_path(
         index: 0,
     };
 
-    walk_along_path(path.raw.iter().flattened(tolerance), 0.0, &mut pattern);
+    walk_along_path(path.into_iter(), 0.0, &mut pattern);
     points
 }
 
-fn get_lengths_flattened(path: &Path, tolerance: f32) -> Vec<f32> {
-    let mut p = path
-        .raw
-        .iter()
-        .flattened(tolerance)
+fn get_line_lengths(flattened: Flattened<Iter>) -> Vec<f32> {
+    let mut p = flattened
         .filter(|e| matches!(e, PathEvent::Line { .. }))
         .scan(0.0, |d, event| {
             match event {
@@ -316,6 +357,46 @@ mod tests {
 
         walk_along_path(path.iter(), 0.0, &mut pattern);
     }
+
+    #[test]
+    fn path_evaluation() {
+        let mut builder = Path::svg_builder();
+        builder.move_to(point(-100.0, 0.0));
+        builder.line_to(point(-100.0, 100.0));
+        builder.line_to(point(0.0, 100.0));
+        builder.line_to(point(0.0, 0.0));
+        builder.close();
+        builder.move_to(point(100.0, 0.0));
+        builder.line_to(point(100.0, 100.0));
+        builder.line_to(point(200.0, 100.0));
+        builder.move_to(point(200.0, 0.0));
+        builder.line_to(point(200.0, 200.0));
+        builder.line_to(point(300.0, 200.0));
+        builder.close();
+        let p = builder.build();
+
+        // let mut builder = Path::builder();
+        // builder.begin(point(-100.0, 0.0));
+        // builder.line_to(point(-100.0, 100.0));
+        // builder.line_to(point(0.0, 100.0));
+        // builder.line_to(point(0.0, 0.0));
+        // builder.close();
+        // builder.begin(point(100.0, 0.0));
+        // builder.line_to(point(100.0, 100.0));
+        // builder.line_to(point(200.0, 100.0));
+        // builder.close();
+        // builder.begin(point(200.0, 0.0));
+        // builder.line_to(point(200.0, 200.0));
+        // builder.line_to(point(300.0, 200.0));
+        // builder.close();
+        // let p = builder.build();
+
+        // dbg!(&p);
+        for e in p.iter() {
+            dbg!(&e);
+        }
+    }
+
     #[test]
     fn circle() {
         use nannou::lyon::math::{Angle, Vector};

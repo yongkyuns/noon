@@ -20,6 +20,27 @@ impl Circle {
         builder.close();
 
         Path::new(builder.build())
+
+        // let mut builder = Path::svg_builder();
+        // builder.move_to(point(-100.0, 0.0));
+        // builder.line_to(point(-100.0, 100.0));
+        // builder.line_to(point(0.0, 100.0));
+        // builder.line_to(point(0.0, 0.0));
+
+        // // builder.close();
+        // // builder.move_to(point(100.0, 0.0));
+        // // builder.line_to(point(100.0, 100.0));
+        // // builder.line_to(point(200.0, 100.0));
+        // // builder.move_to(point(200.0, 0.0));
+        // // builder.line_to(point(200.0, 200.0));
+        // // builder.line_to(point(300.0, 200.0));
+        // // builder.close();
+        // let p = builder.build();
+
+        // for e in p.iter() {
+        //     dbg!(&e);
+        // }
+        // Path::new(p)
     }
 }
 
@@ -62,7 +83,13 @@ impl<'a> CircleBuilder<'a> {
         self.position = Position { x, y };
         self
     }
-    pub fn make(&mut self) -> CircleId {
+}
+
+impl Create<CircleId> for CircleBuilder<'_> {
+    fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+    fn make(&mut self) -> CircleId {
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -77,17 +104,6 @@ impl<'a> CircleBuilder<'a> {
             .id();
 
         id.into()
-    }
-    pub fn show(&mut self) -> CircleId {
-        let id = self.make();
-        let animation = EntityAnimations {
-            entity: id.into(),
-            animations: vec![Animation::to(Opacity(1.0)).into()],
-        };
-
-        AnimBuilder::new(self.scene, animation.into()).run_time(0.0);
-
-        id
     }
 }
 
@@ -131,14 +147,6 @@ pub fn draw_circle(
                 .stroke_weight(radius / 30.0)
                 .events(&path.clone().upto(completion.0, 0.01).raw);
         }
-
-        // draw.ellipse()
-        //     .x_y(position.x, position.y)
-        //     .color(fill)
-        //     .radius(size.width / 2.0)
-        //     .stroke_color(stroke)
-        //     .stroke_weight(radius / 25.0);
-        // }
     }
 }
 

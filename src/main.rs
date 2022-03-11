@@ -5,21 +5,22 @@ mod app;
 mod component;
 mod consts;
 mod ease;
+mod geom;
 mod object;
 mod path;
 mod scene;
 mod system;
 
 pub use crate::animation::{
-    AnimBuilder, Animation, AnimationType, Animations, EntityAnimations, WithAngle, WithColor,
-    WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke,
+    AnimBuilder, Animation, AnimationType, Animations, Create, EntityAnimations, WithAngle,
+    WithColor, WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke,
 };
 
 pub use crate::component::{
     Angle, Color, ColorExtension, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion,
-    Point, Position, Size, StrokeColor, Value,
+    Position, Size, StrokeColor, Value,
 };
-
+pub use crate::geom::{point, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
@@ -168,17 +169,40 @@ impl Construct for Scene {
             .make();
 
         self.wait();
-        // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
+
+        self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
         self.play(vec![
             rect.show_creation(),
             line.show_creation(),
             text.show_creation(),
         ]);
 
-        // self.play(line.morph(circle)).run_time(3.0);
-        // self.play(circle.morph(rect)).run_time(3.0);
-        // self.play(text.morph(rect)).run_time(10.0);
-        self.play(rect.morph(text)).run_time(20.0);
+        // let (x, y, _w, _h, _ang, color) = gen_random_values();
+        // let circle = self
+        //     .circle()
+        //     .with_position(0.0, 0.0)
+        //     .with_color(color)
+        //     .with_radius(200.0 / 2.0)
+        //     .show();
+
+        // self.wait();
+        // let (x, y, _w, _h, _ang, color) = gen_random_values();
+        // let rect = self
+        //     .rectangle()
+        //     .with_position(0.0, 0.0)
+        //     .with_color(color)
+        //     .with_size(150.0, 150.0)
+        //     .show();
+
+        // self.play(rect.show_creation()).run_time(3.0);
+
+        self.play(line.morph(circle)).run_time(3.0);
+        self.play(circle.morph(rect)).run_time(3.0);
+        self.play(text.morph(rect)).run_time(10.0);
+
+        // self.play(rect.morph(text)).run_time(5.0);
+        // self.play(rect.morph(text)).run_time(15.0);
+        // self.play(text.morph(circle)).run_time(15.0);
 
         // self.play(vec![
         //     circle.move_to_object(rect),

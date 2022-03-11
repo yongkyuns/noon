@@ -1,10 +1,8 @@
 use std::{marker::PhantomData, ops::Add};
 
+use crate::{point, Point};
 use bevy_ecs::prelude::*;
-use nannou::{
-    color::{IntoLinSrgba, LinSrgba},
-    lyon::math::point,
-};
+use nannou::color::{IntoLinSrgba, LinSrgba};
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -70,8 +68,6 @@ impl std::fmt::Display for Position {
         write!(f, "(x:{:3.2}, y:{:3.2})", self.x, self.y)
     }
 }
-
-pub type Point = nannou::lyon::math::Point;
 
 impl Into<Position> for Point {
     fn into(self) -> Position {

@@ -10,10 +10,12 @@ use crate::{
 
 mod builder;
 mod color;
+mod path;
 mod spatial;
 
 pub use builder::AnimBuilder;
 pub use color::*;
+pub use path::*;
 pub use spatial::*;
 
 pub trait WithId {

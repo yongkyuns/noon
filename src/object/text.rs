@@ -93,7 +93,44 @@ impl<'a> TextBuilder<'a> {
         self.position = Position { x, y };
         self
     }
-    pub fn make(&mut self) -> TextId {
+    // pub fn make(&mut self) -> TextId {
+    //     let world = &mut self.scene.world;
+    //     let id = world
+    //         .spawn()
+    //         .insert(Text)
+    //         .insert(self.font_size)
+    //         .insert(self.position)
+    //         .insert(self.angle)
+    //         .insert(StrokeColor(self.stroke_color))
+    //         .insert(FillColor(self.fill_color))
+    //         .insert(Opacity(0.0))
+    //         .insert(PathCompletion(0.0))
+    //         .insert(Text::path(&self.text, self.font_size))
+    //         .id();
+
+    //     id.into()
+    // }
+    // pub fn show(&mut self) -> TextId {
+    //     let id = self.make();
+    //     let animations = EntityAnimations {
+    //         entity: id.into(),
+    //         animations: vec![
+    //             Animation::to(Opacity(1.0)).into(),
+    //             Animation::to(PathCompletion(1.0)).into(),
+    //         ],
+    //     };
+
+    //     AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
+
+    //     id
+    // }
+}
+
+impl Create<TextId> for TextBuilder<'_> {
+    fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+    fn make(&mut self) -> TextId {
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -109,17 +146,6 @@ impl<'a> TextBuilder<'a> {
             .id();
 
         id.into()
-    }
-    pub fn show(&mut self) -> TextId {
-        let id = self.make();
-        let animations = EntityAnimations {
-            entity: id.into(),
-            animations: vec![Animation::to(Opacity(1.0)).into()],
-        };
-
-        AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
-
-        id
     }
 }
 
@@ -189,6 +215,12 @@ pub fn draw_text(
             //     .rotate(self.orientation)
             //     .x_y(self.position.x, self.position.y);
 
+            draw.path()
+                .fill()
+                .x_y(position.x, position.y)
+                .z_degrees(angle.0)
+                .color(fill)
+                .events(&path.clone().upto(completion.0, 0.01).raw);
             draw.path()
                 .stroke()
                 .x_y(position.x, position.y)

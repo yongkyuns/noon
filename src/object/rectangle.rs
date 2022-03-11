@@ -63,7 +63,44 @@ impl<'a> RectangleBuilder<'a> {
         self.position = Position { x, y };
         self
     }
-    pub fn make(&mut self) -> RectangleId {
+    // pub fn make(&mut self) -> RectangleId {
+    //     let world = &mut self.scene.world;
+    //     let id = world
+    //         .spawn()
+    //         .insert(Rectangle)
+    //         .insert(self.size)
+    //         .insert(self.position)
+    //         .insert(self.angle)
+    //         .insert(StrokeColor(self.stroke_color))
+    //         .insert(FillColor(self.fill_color))
+    //         .insert(Opacity(0.0))
+    //         .insert(PathCompletion(0.0))
+    //         .insert(Rectangle::path(&self.size))
+    //         .id();
+
+    //     id.into()
+    // }
+    // pub fn show(&mut self) -> RectangleId {
+    //     let id = self.make();
+    //     let animations = EntityAnimations {
+    //         entity: id.into(),
+    //         animations: vec![
+    //             Animation::to(Opacity(1.0)).into(),
+    //             Animation::to(PathCompletion(1.0)).into(),
+    //         ],
+    //     };
+
+    //     AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
+
+    //     id
+    // }
+}
+
+impl Create<RectangleId> for RectangleBuilder<'_> {
+    fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+    fn make(&mut self) -> RectangleId {
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -79,17 +116,6 @@ impl<'a> RectangleBuilder<'a> {
             .id();
 
         id.into()
-    }
-    pub fn show(&mut self) -> RectangleId {
-        let id = self.make();
-        let animations = EntityAnimations {
-            entity: id.into(),
-            animations: vec![Animation::to(Opacity(1.0)).into()],
-        };
-
-        AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
-
-        id
     }
 }
 
