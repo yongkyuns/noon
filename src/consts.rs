@@ -7,7 +7,7 @@ pub const EPS: f32 = 0.01;
 
 /// Path flattenening tolerance for interpolation and other
 /// tasks where computation may be higher than usual.
-pub const EPS_LOW: f32 = 0.1;
+pub const EPS_LOW: f32 = 0.3;
 
 pub const WHITE: Color = Color {
     red: 255.0 / 255.0,

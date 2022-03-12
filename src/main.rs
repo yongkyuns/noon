@@ -135,72 +135,70 @@ pub use system::{animate, animate_from_target, animate_position, print, update_t
 
 impl Construct for Scene {
     fn construct(&mut self) {
-        let (x, y, _w, _h, _ang, color) = gen_random_values();
+        let mut morph = Vec::new();
+        let mut show = Vec::new();
 
-        let circle = self
-            .circle()
-            .with_position(x, y)
-            .with_color(color)
-            .with_radius(200.0 / 2.0)
-            .make();
+        for _ in 0..10 {
+            let (x, y, w, h, _ang, color) = gen_random_values();
 
-        let (_x, _y, _w, _h, _ang, color) = gen_random_values();
+            // let circle = self
+            //     .circle()
+            //     .with_position(x, y)
+            //     .with_color(color)
+            //     .with_radius(200.0 / 2.0)
+            //     .make();
+            // show.push(circle.show_creation());
 
-        let text = self
-            .text()
-            // .with_text("Hello World!")
-            .with_text("oijaweijfowiefowijfejwofeji")
-            .with_font_size(50)
-            .with_color(color)
-            .with_position(-500.0, 100.0)
-            .make();
+            let circle = self
+                .rectangle()
+                .with_position(x, y)
+                .with_color(color)
+                .with_size(2.0 * w, 2.0 * h)
+                .make();
+            show.push(circle.show_creation());
 
-        let (x, y, _w, _h, _ang, color) = gen_random_values();
+            let (x, y, _w, _h, _ang, color) = gen_random_values();
 
-        let rect = self
-            .rectangle()
-            .with_position(x, y)
-            .with_color(color)
-            .with_size(150.0, 150.0)
-            .make();
+            let text = self
+                .text()
+                .with_text("oijaweijfowiefowijfejwofeji")
+                .with_font_size(50)
+                .with_color(color)
+                .with_position(x, y)
+                .make();
+            show.push(text.show_creation());
 
-        let line = self
-            .line()
-            .with_color(color)
-            .from(-600.0, -200.0)
-            .to(0.0, -200.0)
-            .make();
+            morph.push(circle.morph(text));
 
-        self.wait();
+            // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
+            // self.play(vec![line.show_creation(), text.show_creation()]);
 
-        // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
-        // self.play(vec![line.show_creation(), text.show_creation()]);
-        self.play(line.show_creation());
-        self.play(line.set_stroke_weight(10.0));
+            // let (x, y, _w, _h, _ang, color) = gen_random_values();
+            // let circle = self
+            //     .circle()
+            //     .with_position(0.0, 0.0)
+            //     .with_color(color)
+            //     .with_radius(200.0 / 2.0)
+            //     .show();
 
-        // let (x, y, _w, _h, _ang, color) = gen_random_values();
-        // let circle = self
-        //     .circle()
-        //     .with_position(0.0, 0.0)
-        //     .with_color(color)
-        //     .with_radius(200.0 / 2.0)
-        //     .show();
+            // self.wait();
+            // let (x, y, _w, _h, _ang, color) = gen_random_values();
+            // let rect = self
+            //     .rectangle()
+            //     .with_position(0.0, 0.0)
+            //     .with_color(color)
+            //     .with_size(150.0, 150.0)
+            //     .show();
 
-        // self.wait();
-        // let (x, y, _w, _h, _ang, color) = gen_random_values();
-        // let rect = self
-        //     .rectangle()
-        //     .with_position(0.0, 0.0)
-        //     .with_color(color)
-        //     .with_size(150.0, 150.0)
-        //     .show();
+            // self.play(rect.show_creation()).run_time(3.0);
 
-        // self.play(rect.show_creation()).run_time(3.0);
+            // self.play(line.morph(circle)).run_time(3.0);
+            // self.play(circle.morph(rect)).run_time(3.0);
+            // self.play(rect.morph(text)).run_time(10.0);
+        }
 
-        // self.play(line.morph(circle)).run_time(3.0);
-        // self.play(circle.morph(rect)).run_time(3.0);
-        // self.play(rect.morph(text)).run_time(10.0);
-        self.play(line.morph(text)).run_time(2.0);
+        self.play(show).run_time(2.0).lag(0.01);
+        self.play(morph).run_time(5.0).lag(0.01);
 
         // self.play(rect.morph(text)).run_time(5.0);
         // self.play(rect.morph(text)).run_time(15.0);
@@ -222,6 +220,96 @@ impl Construct for Scene {
         //     .rate_func(EaseType::Quad);
     }
 }
+
+// impl Construct for Scene {
+//     fn construct(&mut self) {
+//         let (x, y, _w, _h, _ang, color) = gen_random_values();
+
+//         let circle = self
+//             .circle()
+//             .with_position(x, y)
+//             .with_color(color)
+//             .with_radius(200.0 / 2.0)
+//             .make();
+
+//         let (_x, _y, _w, _h, _ang, color) = gen_random_values();
+
+//         let text = self
+//             .text()
+//             // .with_text("Hello World!")
+//             .with_text("oijaweijfowiefowijfejwofeji")
+//             .with_font_size(50)
+//             .with_color(color)
+//             .with_position(-500.0, 100.0)
+//             .make();
+
+//         let (x, y, _w, _h, _ang, color) = gen_random_values();
+
+//         let rect = self
+//             .rectangle()
+//             .with_position(x, y)
+//             .with_color(color)
+//             .with_size(150.0, 150.0)
+//             .make();
+
+//         let line = self
+//             .line()
+//             .with_color(color)
+//             .from(-600.0, -200.0)
+//             .to(0.0, -200.0)
+//             .make();
+
+//         self.wait();
+
+//         // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
+//         // self.play(vec![line.show_creation(), text.show_creation()]);
+//         self.play(line.show_creation());
+//         self.play(line.set_stroke_weight(10.0));
+
+//         // let (x, y, _w, _h, _ang, color) = gen_random_values();
+//         // let circle = self
+//         //     .circle()
+//         //     .with_position(0.0, 0.0)
+//         //     .with_color(color)
+//         //     .with_radius(200.0 / 2.0)
+//         //     .show();
+
+//         // self.wait();
+//         // let (x, y, _w, _h, _ang, color) = gen_random_values();
+//         // let rect = self
+//         //     .rectangle()
+//         //     .with_position(0.0, 0.0)
+//         //     .with_color(color)
+//         //     .with_size(150.0, 150.0)
+//         //     .show();
+
+//         // self.play(rect.show_creation()).run_time(3.0);
+
+//         // self.play(line.morph(circle)).run_time(3.0);
+//         // self.play(circle.morph(rect)).run_time(3.0);
+//         // self.play(rect.morph(text)).run_time(10.0);
+//         self.play(line.morph(text)).run_time(2.0);
+
+//         // self.play(rect.morph(text)).run_time(5.0);
+//         // self.play(rect.morph(text)).run_time(15.0);
+//         // self.play(text.morph(circle)).run_time(15.0);
+
+//         // self.play(vec![
+//         //     circle.move_to_object(rect),
+//         //     circle.set_color_from(rect),
+//         // ])
+//         // .rate_func(EaseType::Quint)
+//         // .run_time(2.0);
+
+//         // self.wait();
+//         // self.play(circle.move_to(400.0, 400.0))
+//         //     .rate_func(EaseType::Elastic);
+//         // self.play(circle.move_to(400.0, 400.0))
+//         //     .run_time(1.0)
+//         //     .lag(0.0001)
+//         //     .rate_func(EaseType::Quad);
+//     }
+// }
 
 fn main() {
     app::run();

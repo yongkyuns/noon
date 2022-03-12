@@ -23,7 +23,7 @@ mod common {
         Angle, AnimBuilder, Animation, Color, ColorExtension, Create, EaseType, EntityAnimations,
         FillColor, FontSize, Opacity, Path, PathCompletion, PathComponent, Point, Position, Scene,
         Size, StrokeColor, StrokeWeight, Value, WithAngle, WithColor, WithFill, WithFontSize,
-        WithId, WithPath, WithPosition, WithSize, WithStroke, EPS,
+        WithId, WithPath, WithPosition, WithSize, WithStroke, WithStrokeWeight, EPS,
     };
     pub use bevy_ecs::prelude::*;
     pub use nannou::color::Rgba;

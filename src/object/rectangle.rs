@@ -185,6 +185,7 @@ impl WithPath for RectangleId {}
 impl WithPosition for RectangleId {}
 impl WithAngle for RectangleId {}
 impl WithSize for RectangleId {}
+impl WithStrokeWeight for RectangleId {}
 
 impl WithId for RectangleId {
     fn id(&self) -> Entity {

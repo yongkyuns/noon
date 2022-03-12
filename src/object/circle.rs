@@ -159,6 +159,7 @@ impl WithFill for CircleId {}
 impl WithColor for CircleId {}
 impl WithPath for CircleId {}
 impl WithPosition for CircleId {}
+impl WithStrokeWeight for CircleId {}
 
 impl CircleId {
     pub fn set_radius(&self, radius: f32) -> EntityAnimations {
