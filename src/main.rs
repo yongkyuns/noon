@@ -153,14 +153,6 @@ impl Construct for Scene {
             .with_position(-500.0, 100.0)
             .make();
 
-        let text2 = self
-            .text()
-            // .with_text("Hello World!")
-            .with_text("woijgoiwjeogijwoiejfoaijwoef")
-            .with_color(color)
-            .with_position(-500.0, -100.0)
-            .make();
-
         let (x, y, _w, _h, _ang, color) = gen_random_values();
 
         let rect = self
@@ -180,7 +172,7 @@ impl Construct for Scene {
         self.wait();
 
         self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
-        self.play(vec![line.show_creation(), text.show_creation()]);
+        // self.play(vec![line.show_creation(), text.show_creation()]);
 
         // let (x, y, _w, _h, _ang, color) = gen_random_values();
         // let circle = self
@@ -204,7 +196,7 @@ impl Construct for Scene {
         // self.play(line.morph(circle)).run_time(3.0);
         // self.play(circle.morph(rect)).run_time(3.0);
         // self.play(rect.morph(text)).run_time(10.0);
-        self.play(text.morph(text2)).run_time(2.0);
+        self.play(circle.morph(text)).run_time(2.0);
 
         // self.play(rect.morph(text)).run_time(5.0);
         // self.play(rect.morph(text)).run_time(15.0);

@@ -9,9 +9,6 @@ use nannou::lyon::{
 };
 
 use crate::{Interpolate, Point, Size};
-use resample::{resample_along_path, ResamplePattern};
-
-pub mod resample;
 
 #[derive(Debug, Clone, Component)]
 pub struct Path {
@@ -150,30 +147,6 @@ fn get_segment(path_iter: &mut Iter) -> Option<Path> {
     } else {
         None
     }
-}
-
-fn resampled_path(path: Flattened<Iter>, normalized_len: &[f32], total_length: f32) -> lyon::Path {
-    // Compute the delta distance between each point
-    let lengths: Vec<f32> = normalized_len
-        .iter()
-        .zip(normalized_len.iter().skip(1))
-        .map(|(a, b)| b - a)
-        .map(|val| val * total_length)
-        .collect();
-
-    // let mut builder = Path::builder();
-
-    let mut pattern = ResamplePattern {
-        callback: &mut |_position, _t, _d| {
-            // builder.line_to(position);
-            true
-        },
-        intervals: &lengths,
-        index: 0,
-    };
-
-    resample_along_path(path.into_iter(), 0.0, &mut pattern)
-    // builder.build()
 }
 
 fn points_from_path(
