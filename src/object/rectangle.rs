@@ -21,6 +21,7 @@ impl Rectangle {
 
 pub struct RectangleBuilder<'a> {
     size: Size,
+    stroke_weight: StrokeWeight,
     stroke_color: Color,
     fill_color: Color,
     position: Position,
@@ -35,12 +36,17 @@ impl<'a> RectangleBuilder<'a> {
                 width: 1.0,
                 height: 1.0,
             },
+            stroke_weight: StrokeWeight::AUTO,
             stroke_color: Default::default(),
             fill_color: Default::default(),
             position: Default::default(),
             angle: Default::default(),
             scene,
         }
+    }
+    pub fn with_stroke_weight(mut self, weight: f32) -> Self {
+        self.stroke_weight = StrokeWeight(weight);
+        self
     }
     pub fn with_stroke_color(mut self, color: Color) -> Self {
         self.stroke_color = color;
@@ -63,37 +69,6 @@ impl<'a> RectangleBuilder<'a> {
         self.position = Position { x, y };
         self
     }
-    // pub fn make(&mut self) -> RectangleId {
-    //     let world = &mut self.scene.world;
-    //     let id = world
-    //         .spawn()
-    //         .insert(Rectangle)
-    //         .insert(self.size)
-    //         .insert(self.position)
-    //         .insert(self.angle)
-    //         .insert(StrokeColor(self.stroke_color))
-    //         .insert(FillColor(self.fill_color))
-    //         .insert(Opacity(0.0))
-    //         .insert(PathCompletion(0.0))
-    //         .insert(Rectangle::path(&self.size))
-    //         .id();
-
-    //     id.into()
-    // }
-    // pub fn show(&mut self) -> RectangleId {
-    //     let id = self.make();
-    //     let animations = EntityAnimations {
-    //         entity: id.into(),
-    //         animations: vec![
-    //             Animation::to(Opacity(1.0)).into(),
-    //             Animation::to(PathCompletion(1.0)).into(),
-    //         ],
-    //     };
-
-    //     AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
-
-    //     id
-    // }
 }
 
 impl Create<RectangleId> for RectangleBuilder<'_> {
@@ -108,6 +83,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(self.size)
             .insert(self.position)
             .insert(self.angle)
+            .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
@@ -127,6 +103,7 @@ pub fn draw_rectangle(
             &Position,
             &Angle,
             &StrokeColor,
+            &StrokeWeight,
             &FillColor,
             &Opacity,
             &Size,
@@ -135,7 +112,9 @@ pub fn draw_rectangle(
         With<Rectangle>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, fill_color, alpha, size, path) in query.iter() {
+    for (completion, position, angle, stroke_color, stroke_width, fill_color, alpha, size, path) in
+        query.iter()
+    {
         if alpha.is_visible() {
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
@@ -153,17 +132,33 @@ pub fn draw_rectangle(
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
+                .events(&path.clone().upto(completion.0, EPS).raw);
 
             // Draw stroke on top
-            draw.path()
-                .stroke()
-                .x_y(position.x, position.y)
-                .z_degrees(angle.0)
-                .join_round()
-                .color(stroke)
-                .stroke_weight(size.width.max(size.height) / 100.0)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
+            // draw.path()
+            //     .stroke()
+            //     .x_y(position.x, position.y)
+            //     .z_degrees(angle.0)
+            //     .join_round()
+            //     .color(stroke)
+            //     .stroke_weight(size.width.max(size.height) / 100.0)
+            //     .events(&path.clone().upto(completion.0, 0.01).raw);
+
+            if !stroke_width.is_none() {
+                let thickness = if stroke_width.is_auto() {
+                    size.width.max(size.height) / 100.0
+                } else {
+                    stroke_width.0
+                };
+                draw.path()
+                    .stroke()
+                    .x_y(position.x, position.y)
+                    .z_degrees(angle.0)
+                    .join_round()
+                    .color(stroke)
+                    .stroke_weight(thickness)
+                    .events(&path.clone().upto(completion.0, EPS).raw);
+            }
 
             // draw.rect()
             //     .x_y(position.x, position.y)

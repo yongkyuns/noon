@@ -6,7 +6,7 @@ use crate::system::{animate, animate_from_target, animate_position, print, Time}
 use crate::{
     circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
     AnimBuilder, CircleBuilder, EntityAnimations, FontSize, LineBuilder, Opacity, Path,
-    PathCompletion, Position, RectangleBuilder, Size, StrokeColor, TextBuilder,
+    PathCompletion, Position, RectangleBuilder, Size, StrokeColor, StrokeWeight, TextBuilder,
 };
 
 pub struct Bounds {
@@ -51,6 +51,7 @@ impl Scene {
                 .with_system(animate_from_target::<Position>)
                 .with_system(animate_from_target::<FillColor>)
                 .with_system(animate_from_target::<StrokeColor>)
+                .with_system(animate_from_target::<StrokeWeight>)
                 .with_system(animate_from_target::<Size>)
                 .with_system(animate_from_target::<Angle>)
                 .with_system(animate_from_target::<Opacity>)
@@ -60,6 +61,7 @@ impl Scene {
                 .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
+                .with_system(animate::<StrokeWeight>)
                 .with_system(animate::<Size>)
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)

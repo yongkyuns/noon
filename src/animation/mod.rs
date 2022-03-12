@@ -5,7 +5,7 @@ use bevy_ecs::{
 
 use crate::{
     Angle, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion, Position,
-    Scene, Size, StrokeColor, Value,
+    Scene, Size, StrokeColor, StrokeWeight, Value,
 };
 
 mod builder;
@@ -152,6 +152,7 @@ where
 #[derive(Debug, Clone)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
+    StrokeWeight(Animation<StrokeWeight>),
     FillColor(Animation<FillColor>),
     Position(Animation<Position>),
     Angle(Animation<Angle>),
@@ -165,6 +166,12 @@ pub enum AnimationType {
 impl Into<AnimationType> for Animation<StrokeColor> {
     fn into(self) -> AnimationType {
         AnimationType::StrokeColor(self)
+    }
+}
+
+impl Into<AnimationType> for Animation<StrokeWeight> {
+    fn into(self) -> AnimationType {
+        AnimationType::StrokeWeight(self)
     }
 }
 
@@ -258,6 +265,9 @@ impl EntityAnimations {
                 AnimationType::StrokeColor(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::StrokeWeight(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
                 AnimationType::FillColor(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
@@ -288,6 +298,7 @@ impl EntityAnimations {
     pub fn start_time(&self) -> f32 {
         match self.animations.get(0).unwrap() {
             AnimationType::StrokeColor(animation) => animation.start_time,
+            AnimationType::StrokeWeight(animation) => animation.start_time,
             AnimationType::FillColor(animation) => animation.start_time,
             AnimationType::Position(animation) => animation.start_time,
             AnimationType::Angle(animation) => animation.start_time,
@@ -302,6 +313,9 @@ impl EntityAnimations {
         for animation in self.animations.iter_mut() {
             match animation {
                 AnimationType::StrokeColor(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::StrokeWeight(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::FillColor(ref mut animation) => {

@@ -22,8 +22,8 @@ mod common {
     pub use crate::{
         Angle, AnimBuilder, Animation, Color, ColorExtension, Create, EaseType, EntityAnimations,
         FillColor, FontSize, Opacity, Path, PathCompletion, PathComponent, Point, Position, Scene,
-        Size, StrokeColor, Value, WithAngle, WithColor, WithFill, WithFontSize, WithId, WithPath,
-        WithPosition, WithSize, WithStroke,
+        Size, StrokeColor, StrokeWeight, Value, WithAngle, WithColor, WithFill, WithFontSize,
+        WithId, WithPath, WithPosition, WithSize, WithStroke, EPS,
     };
     pub use bevy_ecs::prelude::*;
     pub use nannou::color::Rgba;

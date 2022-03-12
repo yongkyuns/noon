@@ -1,8 +1,7 @@
-use std::{marker::PhantomData, ops::Add};
-
 use crate::{point, Point};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
+use std::{marker::PhantomData, ops::Add};
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -159,6 +158,39 @@ impl Interpolate for Size {
         Self {
             width: self.width.interp(&other.width, progress),
             height: self.height.interp(&other.height, progress),
+        }
+    }
+}
+
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct StrokeWeight(pub(crate) f32);
+
+impl StrokeWeight {
+    /// Think stroke. Normal default for shapes.
+    pub const THICK: Self = Self(3.0);
+    /// Thin stroke. Use it for very thin shape outline.
+    pub const THIN: Self = Self(1.0);
+    /// No stroke
+    pub const NONE: Self = Self(0.0);
+    /// Let the shape determine it's stroke width based on its size.
+    pub const AUTO: Self = Self(-1.0);
+    /// Determines if stroke should be drawn
+    pub fn is_none(&self) -> bool {
+        self.0.abs() < std::f32::EPSILON
+    }
+    /// Determines the stroke mode between auto or manual.
+    pub fn is_auto(&self) -> bool {
+        self.0 < 0.0
+    }
+}
+
+impl Interpolate for StrokeWeight {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        if self.is_auto() {
+            Self::AUTO
+        } else {
+            let progress = progress.min(1.0).max(0.0);
+            Self(self.0.interp(&other.0, progress))
         }
     }
 }

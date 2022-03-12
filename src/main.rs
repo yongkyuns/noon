@@ -18,7 +18,7 @@ pub use crate::animation::{
 
 pub use crate::component::{
     Angle, Color, ColorExtension, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion,
-    Position, Size, StrokeColor, Value,
+    Position, Size, StrokeColor, StrokeWeight, Value,
 };
 pub use crate::geom::{point, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};

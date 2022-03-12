@@ -20,32 +20,12 @@ impl Circle {
         builder.close();
 
         Path::new(builder.build())
-
-        // let mut builder = Path::svg_builder();
-        // builder.move_to(point(-100.0, 0.0));
-        // builder.line_to(point(-100.0, 100.0));
-        // builder.line_to(point(0.0, 100.0));
-        // builder.line_to(point(0.0, 0.0));
-
-        // // builder.close();
-        // // builder.move_to(point(100.0, 0.0));
-        // // builder.line_to(point(100.0, 100.0));
-        // // builder.line_to(point(200.0, 100.0));
-        // // builder.move_to(point(200.0, 0.0));
-        // // builder.line_to(point(200.0, 200.0));
-        // // builder.line_to(point(300.0, 200.0));
-        // // builder.close();
-        // let p = builder.build();
-
-        // for e in p.iter() {
-        //     dbg!(&e);
-        // }
-        // Path::new(p)
     }
 }
 
 pub struct CircleBuilder<'a> {
     radius: f32,
+    stroke_weight: StrokeWeight,
     stroke_color: Color,
     fill_color: Color,
     position: Position,
@@ -56,6 +36,7 @@ impl<'a> CircleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         Self {
             radius: 1.0,
+            stroke_weight: StrokeWeight::AUTO,
             stroke_color: Default::default(),
             fill_color: Default::default(),
             position: Default::default(),
@@ -64,6 +45,10 @@ impl<'a> CircleBuilder<'a> {
     }
     pub fn with_radius(mut self, radius: f32) -> Self {
         self.radius = radius;
+        self
+    }
+    pub fn with_stroke_weight(mut self, weight: f32) -> Self {
+        self.stroke_weight = StrokeWeight(weight);
         self
     }
     pub fn with_stroke_color(mut self, color: Color) -> Self {
@@ -98,6 +83,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .insert(self.position)
             .insert(FillColor(self.fill_color))
             .insert(StrokeColor(self.stroke_color))
+            .insert(self.stroke_weight)
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
             .insert(Circle::path(&Size::from_radius(self.radius)))
@@ -114,6 +100,7 @@ pub fn draw_circle(
             &PathCompletion,
             &Position,
             &StrokeColor,
+            &StrokeWeight,
             &FillColor,
             &Opacity,
             &Size,
@@ -122,7 +109,9 @@ pub fn draw_circle(
         With<Circle>,
     >,
 ) {
-    for (completion, position, stroke_color, fill_color, alpha, size, path) in query.iter() {
+    for (completion, position, stroke_color, stroke_weight, fill_color, alpha, size, path) in
+        query.iter()
+    {
         if alpha.is_visible() {
             let radius = size.width / 2.0;
             // let path = circle_path(size, completion);
@@ -139,13 +128,21 @@ pub fn draw_circle(
                 .fill()
                 .x_y(position.x, position.y)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
-            draw.path()
-                .stroke()
-                .x_y(position.x, position.y)
-                .color(stroke)
-                .stroke_weight(radius / 30.0)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
+                .events(&path.clone().upto(completion.0, EPS).raw);
+
+            if !stroke_weight.is_none() {
+                let thickness = if stroke_weight.is_auto() {
+                    radius / 30.0
+                } else {
+                    stroke_weight.0
+                };
+                draw.path()
+                    .stroke()
+                    .x_y(position.x, position.y)
+                    .color(stroke)
+                    .stroke_weight(thickness)
+                    .events(&path.clone().upto(completion.0, EPS).raw);
+            }
         }
     }
 }

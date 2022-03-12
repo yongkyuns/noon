@@ -49,6 +49,7 @@ impl Text {
 pub struct TextBuilder<'a> {
     text: String,
     font_size: FontSize,
+    stroke_weight: StrokeWeight,
     stroke_color: Color,
     fill_color: Color,
     position: Position,
@@ -61,6 +62,7 @@ impl<'a> TextBuilder<'a> {
         Self {
             text: String::new(),
             font_size: FontSize(90),
+            stroke_weight: StrokeWeight::THIN,
             stroke_color: Default::default(),
             fill_color: Default::default(),
             position: Default::default(),
@@ -70,6 +72,10 @@ impl<'a> TextBuilder<'a> {
     }
     pub fn with_text(mut self, text: &str) -> Self {
         self.text = text.to_owned();
+        self
+    }
+    pub fn with_stroke_weight(mut self, weight: f32) -> Self {
+        self.stroke_weight = StrokeWeight(weight);
         self
     }
     pub fn with_stroke_color(mut self, color: Color) -> Self {
@@ -93,37 +99,6 @@ impl<'a> TextBuilder<'a> {
         self.position = Position { x, y };
         self
     }
-    // pub fn make(&mut self) -> TextId {
-    //     let world = &mut self.scene.world;
-    //     let id = world
-    //         .spawn()
-    //         .insert(Text)
-    //         .insert(self.font_size)
-    //         .insert(self.position)
-    //         .insert(self.angle)
-    //         .insert(StrokeColor(self.stroke_color))
-    //         .insert(FillColor(self.fill_color))
-    //         .insert(Opacity(0.0))
-    //         .insert(PathCompletion(0.0))
-    //         .insert(Text::path(&self.text, self.font_size))
-    //         .id();
-
-    //     id.into()
-    // }
-    // pub fn show(&mut self) -> TextId {
-    //     let id = self.make();
-    //     let animations = EntityAnimations {
-    //         entity: id.into(),
-    //         animations: vec![
-    //             Animation::to(Opacity(1.0)).into(),
-    //             Animation::to(PathCompletion(1.0)).into(),
-    //         ],
-    //     };
-
-    //     AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
-
-    //     id
-    // }
 }
 
 impl Create<TextId> for TextBuilder<'_> {
@@ -138,6 +113,7 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(self.font_size)
             .insert(self.position)
             .insert(self.angle)
+            .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
@@ -172,6 +148,7 @@ pub fn draw_text(
             &Position,
             &Angle,
             &StrokeColor,
+            &StrokeWeight,
             &FillColor,
             &Opacity,
             &Path,
@@ -179,8 +156,17 @@ pub fn draw_text(
         With<Text>,
     >,
 ) {
-    for (font_size, completion, position, angle, stroke_color, fill_color, alpha, path) in
-        query.iter()
+    for (
+        font_size,
+        completion,
+        position,
+        angle,
+        stroke_color,
+        stroke_weight,
+        fill_color,
+        alpha,
+        path,
+    ) in query.iter()
     {
         if alpha.is_visible() {
             // let path = rectangle_path(size, completion);
@@ -193,41 +179,27 @@ pub fn draw_text(
                 alpha: alpha.0,
             };
 
-            // // Draw fill first
-            // draw.path()
-            //     .fill()
-            //     .x_y(position.x, position.y)
-            //     .z_degrees(angle.0)
-            //     .color(fill)
-            //     .events(&path.clone().upto(completion.0, 0.01).raw);
-
-            // // Draw stroke on top
-            // draw.path()
-            //     .stroke()
-            //     .x_y(position.x, position.y)
-            //     .z_degrees(angle.0)
-            //     .join_round()
-            //     .color(stroke)
-            //     .stroke_weight(size.width.max(size.height) / 100.0)
-            //     .events(&path.clone().upto(completion.0, 0.01).raw);
-
-            // let draw = draw
-            //     .rotate(self.orientation)
-            //     .x_y(self.position.x, self.position.y);
-
             draw.path()
                 .fill()
                 .x_y(position.x, position.y)
                 .z_degrees(angle.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
-            draw.path()
-                .stroke()
-                .x_y(position.x, position.y)
-                .z_degrees(angle.0)
-                .color(stroke)
-                .stroke_weight(1.0)
-                .events(&path.clone().upto(completion.0, 0.01).raw);
+                .events(&path.clone().upto(completion.0, EPS).raw);
+
+            if !stroke_weight.is_none() {
+                let thickness = if stroke_weight.is_auto() {
+                    font_size.0 as f32 / 80.0
+                } else {
+                    stroke_weight.0
+                };
+                draw.path()
+                    .stroke()
+                    .x_y(position.x, position.y)
+                    .z_degrees(angle.0)
+                    .color(stroke)
+                    .stroke_weight(thickness)
+                    .events(&path.clone().upto(completion.0, EPS).raw);
+            }
         }
     }
 }
