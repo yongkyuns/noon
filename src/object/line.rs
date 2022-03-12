@@ -1,3 +1,5 @@
+use crate::WithStrokeWeight;
+
 use super::common::*;
 use nannou::lyon::path::traits::PathBuilder;
 
@@ -23,6 +25,7 @@ impl Line {
 pub struct LineBuilder<'a> {
     points: Vec<Point>,
     stroke_color: Color,
+    stroke_weight: StrokeWeight,
     angle: Angle,
     scene: &'a mut Scene,
 }
@@ -31,6 +34,7 @@ impl<'a> LineBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         Self {
             points: Vec::new(),
+            stroke_weight: StrokeWeight::THICK,
             stroke_color: Default::default(),
             angle: Default::default(),
             scene,
@@ -58,7 +62,13 @@ impl<'a> LineBuilder<'a> {
         self.stroke_color = color;
         self
     }
-    pub fn make(&mut self) -> LineId {
+}
+
+impl Create<LineId> for LineBuilder<'_> {
+    fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+    fn make(&mut self) -> LineId {
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -66,6 +76,7 @@ impl<'a> LineBuilder<'a> {
             .insert(Position::from_points(&self.points))
             .insert(Size::from_points(&self.points))
             .insert(self.angle)
+            .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
             .insert(Opacity(0.0))
             .insert(PathCompletion(0.0))
@@ -73,17 +84,6 @@ impl<'a> LineBuilder<'a> {
             .id();
 
         id.into()
-    }
-    pub fn show(&mut self) -> LineId {
-        let id = self.make();
-        let animations = EntityAnimations {
-            entity: id.into(),
-            animations: vec![Animation::to(Opacity(1.0)).into()],
-        };
-
-        AnimBuilder::new(self.scene, animations.into()).run_time(0.0);
-
-        id
     }
 }
 
@@ -95,6 +95,7 @@ pub fn draw_line(
             &Position,
             &Angle,
             &StrokeColor,
+            &StrokeWeight,
             &Opacity,
             &Size,
             &Path,
@@ -102,7 +103,9 @@ pub fn draw_line(
         With<Line>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, alpha, size, path) in query.iter() {
+    for (completion, position, angle, stroke_color, stroke_weight, alpha, size, path) in
+        query.iter()
+    {
         if alpha.is_visible() {
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
@@ -110,23 +113,31 @@ pub fn draw_line(
                 alpha: alpha.0,
             };
 
-            // Draw fill first
+            // Draw stroke
             // draw.path()
-            //     .fill()
+            //     .stroke()
             //     .x_y(position.x, position.y)
             //     .z_degrees(angle.0)
-            //     .color(fill)
-            //     .events(&path.clone().upto(completion.0, 0.01).0);
+            //     .color(stroke)
+            //     .caps_round()
+            //     .stroke_weight((size.width.max(size.height) / 100.0).min(3.0))
+            //     .events(&path.clone().upto(completion.0, 0.01).raw);
 
-            // Draw stroke on top
-            draw.path()
-                .stroke()
-                .x_y(position.x, position.y)
-                .z_degrees(angle.0)
-                .color(stroke)
-                .caps_round()
-                .stroke_weight((size.width.max(size.height) / 100.0).min(3.0))
-                .events(&path.clone().upto(completion.0, 0.01).raw);
+            if !stroke_weight.is_none() {
+                let thickness = if stroke_weight.is_auto() {
+                    (size.width.max(size.height) / 100.0).min(3.0)
+                } else {
+                    stroke_weight.0
+                };
+                draw.path()
+                    .stroke()
+                    .x_y(position.x, position.y)
+                    .z_degrees(angle.0)
+                    .color(stroke)
+                    .caps_round()
+                    .stroke_weight(thickness)
+                    .events(&path.clone().upto(completion.0, 0.01).raw);
+            }
 
             // draw.rect()
             //     .x_y(position.x, position.y)
@@ -150,6 +161,7 @@ impl WithColor for LineId {}
 impl WithPath for LineId {}
 impl WithPosition for LineId {}
 impl WithAngle for LineId {}
+impl WithStrokeWeight for LineId {}
 
 impl WithId for LineId {
     fn id(&self) -> Entity {

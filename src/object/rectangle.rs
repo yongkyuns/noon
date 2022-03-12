@@ -36,7 +36,7 @@ impl<'a> RectangleBuilder<'a> {
                 width: 1.0,
                 height: 1.0,
             },
-            stroke_weight: StrokeWeight::AUTO,
+            stroke_weight: StrokeWeight::THIN,
             stroke_color: Default::default(),
             fill_color: Default::default(),
             position: Default::default(),
@@ -112,7 +112,7 @@ pub fn draw_rectangle(
         With<Rectangle>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, stroke_width, fill_color, alpha, size, path) in
+    for (completion, position, angle, stroke_color, stroke_weight, fill_color, alpha, size, path) in
         query.iter()
     {
         if alpha.is_visible() {
@@ -144,11 +144,11 @@ pub fn draw_rectangle(
             //     .stroke_weight(size.width.max(size.height) / 100.0)
             //     .events(&path.clone().upto(completion.0, 0.01).raw);
 
-            if !stroke_width.is_none() {
-                let thickness = if stroke_width.is_auto() {
+            if !stroke_weight.is_none() {
+                let thickness = if stroke_weight.is_auto() {
                     size.width.max(size.height) / 100.0
                 } else {
-                    stroke_width.0
+                    stroke_weight.0
                 };
                 draw.path()
                     .stroke()

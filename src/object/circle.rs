@@ -36,7 +36,7 @@ impl<'a> CircleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         Self {
             radius: 1.0,
-            stroke_weight: StrokeWeight::AUTO,
+            stroke_weight: StrokeWeight::THIN,
             stroke_color: Default::default(),
             fill_color: Default::default(),
             position: Default::default(),

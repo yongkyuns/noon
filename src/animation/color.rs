@@ -1,6 +1,21 @@
-use crate::{Color, ColorExtension, Path};
+use crate::{Color, ColorExtension};
 
 use super::*;
+
+pub trait WithStrokeWeight: WithId {
+    fn set_stroke_weight(&self, weight: f32) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.id(),
+            animations: Animation::to(StrokeWeight(weight)).into(),
+        }
+    }
+    fn set_stroke_weight_from(&self, entity: impl Into<Entity>) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.id(),
+            animations: Animation::<StrokeWeight>::to_target(entity.into()).into(),
+        }
+    }
+}
 
 pub trait WithStroke: WithId {
     fn set_stroke_color(&self, color: Color) -> EntityAnimations {
