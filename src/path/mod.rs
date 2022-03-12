@@ -1,12 +1,12 @@
 use bevy_ecs::prelude::*;
 use lyon::{builder::WithSvg, iterator::PathIterator, PathEvent};
-use nannou::lyon::path::iterator::Flattened;
-use nannou::lyon::path::path::Iter;
+use nannou::lyon::path as lyon;
 use nannou::lyon::{
-    algorithms::length::approximate_length, lyon_algorithms::walk::RepeatedPattern,
+    algorithms::length::approximate_length,
+    lyon_algorithms::walk::walk_along_path,
+    lyon_algorithms::walk::RepeatedPattern,
+    path::{iterator::Flattened, path::Iter},
 };
-
-use nannou::lyon::{lyon_algorithms::walk::walk_along_path, path as lyon};
 
 use crate::{Interpolate, Point, Size};
 use resample::{resample_along_path, ResamplePattern};
@@ -53,44 +53,102 @@ impl Interpolate for Path {
             // 4. Walk through each path and fill-in missing points to make sizes equal
             // 5. Interpolate each point between initial and final path
             // 6. Construct Path with above points as line segments
+            let segments_src = get_segments(&self);
+            let segments_dst = get_segments(&other);
 
-            let path1_lengths = get_line_lengths(self.flattened(tol));
-            let path2_lengths = get_line_lengths(other.flattened(tol));
-
-            let mut builder = Path::svg_builder();
-
-            if path1_lengths.len() > 1 && path2_lengths.len() > 1 {
-                let normalized = normalized_distances(&path1_lengths, &path2_lengths);
-
-                let len_1 = *path1_lengths.last().unwrap();
-                let len_2 = *path2_lengths.last().unwrap();
-
-                let p1 = points_from_path(self.flattened(tol), &normalized, len_1);
-                let p2 = points_from_path(other.flattened(tol), &normalized, len_2);
-
-                p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
-                    builder.line_to(p1.interp(p2, progress));
-                });
-
-                // let p1 = resampled_path(self.flattened(tol), &normalized, len_1);
-                // let p2 = resampled_path(other.flattened(tol), &normalized, len_2);
-
-                // p1.iter().filter(|e| matches!(e, PathEvent::Line { .. }));
-
-                // for e in p1.iter() {
-                //     builder.path_event(e);
-                // }
-
-                // p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
-                //     builder.line_to(p1.interp(p2, progress));
-                // });
-
-                if self.closed {
-                    builder.close();
+            let mut interpolated = Vec::new();
+            for (src, dst) in segments_src.iter().zip(segments_dst.iter()) {
+                interpolated.push(interp_segment(src, dst, progress, tol, self.closed));
+            }
+            if segments_src.len() > segments_dst.len() {
+                for src in segments_src.iter().skip(segments_dst.len()) {
+                    interpolated.push(interp_segment(
+                        src,
+                        segments_dst.last().unwrap(),
+                        progress,
+                        tol,
+                        self.closed,
+                    ));
+                }
+            } else if segments_src.len() < segments_dst.len() {
+                for dst in segments_dst.iter().skip(segments_src.len()) {
+                    interpolated.push(interp_segment(
+                        segments_src.last().unwrap(),
+                        dst,
+                        progress,
+                        tol,
+                        self.closed,
+                    ));
                 }
             }
-            Path::new(builder.build())
+
+            merge_segments(&interpolated)
         }
+    }
+}
+
+fn interp_segment(
+    source: &Path,
+    destination: &Path,
+    progress: f32,
+    tolerance: f32,
+    closed: bool,
+) -> Path {
+    let src_len = get_line_lengths(source.flattened(tolerance));
+    let dst_len = get_line_lengths(destination.flattened(tolerance));
+
+    let mut builder = Path::svg_builder();
+    if src_len.len() > 1 && dst_len.len() > 1 {
+        let normalized = normalized_distances(&src_len, &dst_len);
+
+        let src_max_len = *src_len.last().unwrap();
+        let dst_max_len = *dst_len.last().unwrap();
+
+        let p1 = points_from_path(source.flattened(tolerance), &normalized, src_max_len);
+        let p2 = points_from_path(destination.flattened(tolerance), &normalized, dst_max_len);
+
+        p1.iter().zip(p2.iter()).for_each(|(&p1, p2)| {
+            builder.line_to(p1.interp(p2, progress));
+        });
+
+        if closed {
+            builder.close();
+        }
+    }
+    Path::new(builder.build())
+}
+
+fn merge_segments(paths: &[Path]) -> Path {
+    let mut builder = Path::builder();
+    for path in paths {
+        builder.concatenate(&vec![path.raw.as_slice()]);
+    }
+    Path::new(builder.build())
+}
+
+fn get_segments(path: &Path) -> Vec<Path> {
+    let mut segments = Vec::new();
+    let mut path_iter = path.raw.iter();
+    while let Some(segment) = get_segment(&mut path_iter) {
+        segments.push(segment);
+    }
+    segments
+}
+
+fn get_segment(path_iter: &mut Iter) -> Option<Path> {
+    let mut builder = Path::builder();
+    let mut count = 0;
+    while let Some(event) = path_iter.next() {
+        builder.path_event(event);
+        count += 1;
+        if let PathEvent::End { .. } = event {
+            break;
+        }
+    }
+    if count > 0 {
+        Some(Path::new(builder.build()))
+    } else {
+        None
     }
 }
 
