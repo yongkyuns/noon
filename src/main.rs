@@ -2,6 +2,7 @@
 
 mod animation;
 mod app;
+mod color;
 mod component;
 mod consts;
 mod ease;
@@ -17,18 +18,16 @@ pub use crate::animation::{
     WithStrokeWeight,
 };
 
+pub use crate::color::{Color, ColorExtension};
 pub use crate::component::{
-    Angle, Color, ColorExtension, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion,
-    Position, Size, StrokeColor, StrokeWeight, Value,
+    Angle, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position, Size,
+    StrokeColor, StrokeWeight, Value,
 };
 pub use crate::geom::{point, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
-use nannou::{
-    color::{rgb_u32, rgba, Rgb},
-    rand::{prelude::SliceRandom, random_range, thread_rng},
-};
+use nannou::rand::{random_range, thread_rng};
 pub use object::*;
 pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
@@ -138,22 +137,14 @@ impl Construct for Scene {
         let mut morph = Vec::new();
         let mut show = Vec::new();
 
-        for _ in 0..10 {
-            let (x, y, w, h, _ang, color) = gen_random_values();
-
-            // let circle = self
-            //     .circle()
-            //     .with_position(x, y)
-            //     .with_color(color)
-            //     .with_radius(200.0 / 2.0)
-            //     .make();
-            // show.push(circle.show_creation());
+        for _ in 0..5 {
+            let (x, y, _w, _h, _ang, color) = gen_random_values();
 
             let circle = self
-                .rectangle()
+                .circle()
                 .with_position(x, y)
                 .with_color(color)
-                .with_size(2.0 * w, 2.0 * h)
+                .with_radius(200.0 / 2.0)
                 .make();
             show.push(circle.show_creation());
 
@@ -316,15 +307,6 @@ fn main() {
 }
 
 fn gen_random_values() -> (f32, f32, f32, f32, f32, Color) {
-    let colors = [
-        rgb_from_hex(0x264653),
-        rgb_from_hex(0x2a9d8f),
-        rgb_from_hex(0xe9c46a),
-        rgb_from_hex(0xf4a261),
-        rgb_from_hex(0xe76f51),
-    ];
-    let mut rng = thread_rng();
-
     let x_lim = 1920.0 / 2.0;
     let y_lim = 1080.0 / 2.0;
 
@@ -333,18 +315,7 @@ fn gen_random_values() -> (f32, f32, f32, f32, f32, Color) {
     let w = random_range::<f32>(4.0, 60.0);
     let h = random_range::<f32>(4.0, 60.0);
     let ang = random_range::<f32>(0.0, 360.0);
-    let color = *colors.choose(&mut rng).unwrap();
+    let color = Color::random();
 
     (x, y, w, h, ang, color)
-}
-
-fn rgb_from_hex(color: u32) -> Rgb {
-    let color = rgb_u32(color);
-    rgba(
-        color.red as f32 / 255.0,
-        color.green as f32 / 255.0,
-        color.blue as f32 / 255.0,
-        1.0,
-    )
-    .into()
 }

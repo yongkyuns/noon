@@ -1,7 +1,8 @@
+use crate::Color;
 use crate::{point, Point};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
-use std::{marker::PhantomData, ops::Add};
+use std::ops::Add;
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -221,36 +222,6 @@ impl Interpolate for PathCompletion {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         let progress = progress.min(1.0).max(0.0);
         Self(self.0.interp(&other.0, progress))
-    }
-}
-
-pub type Color = nannou::color::Rgb;
-
-impl Interpolate for Color {
-    fn interp(&self, other: &Self, progress: f32) -> Self {
-        let progress = progress.min(1.0).max(0.0);
-        Self {
-            red: self.red.interp(&other.red, progress),
-            green: self.green.interp(&other.green, progress),
-            blue: self.blue.interp(&other.blue, progress),
-            standard: PhantomData,
-        }
-    }
-}
-
-impl ColorExtension for Color {
-    fn get_color(&self) -> Color {
-        *self
-    }
-}
-
-pub trait ColorExtension {
-    fn get_color(&self) -> Color;
-    fn brighten(&self) -> Color {
-        let mut hsv: nannou::color::Hsv = self.get_color().into_linear().into();
-        hsv.saturation -= 0.1;
-        hsv.value += 0.2;
-        hsv.into()
     }
 }
 

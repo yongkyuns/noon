@@ -5,8 +5,9 @@ use crate::component::FillColor;
 use crate::system::{animate, animate_from_target, animate_position, print, Time};
 use crate::{
     circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
-    AnimBuilder, CircleBuilder, EntityAnimations, FontSize, LineBuilder, Opacity, Path,
-    PathCompletion, Position, RectangleBuilder, Size, StrokeColor, StrokeWeight, TextBuilder,
+    AnimBuilder, CircleBuilder, Color, ColorExtension, Create, EntityAnimations, FontSize,
+    LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder, Size, StrokeColor,
+    StrokeWeight, TextBuilder, WithPath,
 };
 
 pub struct Bounds {
@@ -36,6 +37,7 @@ pub struct Scene {
     pub(crate) updater: Schedule,
     pub(crate) drawer: Schedule,
     pub(crate) event_time: f32,
+    pub(crate) clock_time: f32,
 }
 
 impl Scene {
@@ -86,6 +88,7 @@ impl Scene {
             updater,
             drawer,
             event_time: 0.1,
+            clock_time: 0.0,
         }
     }
     pub fn circle(&mut self) -> CircleBuilder {
@@ -100,12 +103,22 @@ impl Scene {
     pub fn text(&mut self) -> TextBuilder {
         text(self)
     }
+    pub fn add_circle(&mut self, x: f32, y: f32) {
+        let c = circle(self)
+            .with_position(x, y)
+            .with_radius(20.0)
+            .with_color(Color::random())
+            .make();
+        let t = self.clock_time;
+        self.play(c.show_creation()).start_time(t).run_time(0.3);
+    }
     pub fn update(&mut self, now: f32) {
         self.world
             .get_resource_mut::<Time>()
             .map(|mut t| t.seconds = now);
 
         self.updater.run(&mut self.world);
+        self.clock_time = now;
     }
 
     pub fn draw(&mut self, nannou_draw: nannou::Draw) {
