@@ -10,10 +10,10 @@ pub mod rectangle;
 pub mod text;
 pub mod triangle;
 
-pub use circle::{circle, draw_circle, Circle, CircleBuilder};
-pub use line::{draw_line, line, Line, LineBuilder};
-pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder};
-pub use text::{draw_text, text, Text, TextBuilder};
+pub use circle::{circle, draw_circle, Circle, CircleBuilder, CircleId};
+pub use line::{draw_line, line, Line, LineBuilder, LineId};
+pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder, RectangleId};
+pub use text::{draw_text, text, Text, TextBuilder, TextId};
 
 use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Size, StrokeColor};
 

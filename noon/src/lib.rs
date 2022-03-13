@@ -1,7 +1,5 @@
-// #![allow(unused)]
-
 mod animation;
-mod app;
+// mod app;
 mod color;
 mod component;
 mod consts;
@@ -27,10 +25,27 @@ pub use crate::geom::{point, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
-use nannou::rand::random_range;
 pub use object::*;
 pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
+
+pub use nannou;
+pub mod prelude {
+    pub use crate::animation::{
+        AnimBuilder, Animation, AnimationType, Animations, Create, EntityAnimations, WithAngle,
+        WithColor, WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke,
+        WithStrokeWeight,
+    };
+    pub use crate::{
+        object::{CircleId, TextId},
+        CircleBuilder, Color, ColorExtension, Construct, Scene, TextBuilder,
+    };
+    pub use nannou::app;
+    pub use nannou::app::ModelFn;
+    pub use nannou::geom::Rect;
+    pub use nannou::prelude::*;
+}
+pub use nannou::app;
 
 // impl Construct for Scene {
 //     fn construct(&mut self) {
@@ -132,86 +147,6 @@ pub use system::{animate, animate_from_target, animate_position, print, update_t
 //     }
 // }
 
-impl Construct for Scene {
-    fn construct(&mut self) {
-        let mut morph = Vec::new();
-        let mut show = Vec::new();
-
-        for _ in 0..5 {
-            let (x, y, _w, _h, _ang, color) = gen_random_values();
-
-            let circle = self
-                .circle()
-                .with_position(x, y)
-                .with_color(color)
-                .with_radius(200.0 / 2.0)
-                .make();
-            show.push(circle.show_creation());
-
-            let (x, y, _w, _h, _ang, color) = gen_random_values();
-
-            let text = self
-                .text()
-                .with_text("oijaweijfowiefowijfejwofeji")
-                .with_font_size(50)
-                .with_color(color)
-                .with_position(x, y)
-                .make();
-            show.push(text.show_creation());
-
-            morph.push(circle.morph(text));
-
-            // self.play(vec![circle.move_to(400.0, 400.0), circle.fade_in()]);
-            // self.play(vec![line.show_creation(), text.show_creation()]);
-
-            // let (x, y, _w, _h, _ang, color) = gen_random_values();
-            // let circle = self
-            //     .circle()
-            //     .with_position(0.0, 0.0)
-            //     .with_color(color)
-            //     .with_radius(200.0 / 2.0)
-            //     .show();
-
-            // self.wait();
-            // let (x, y, _w, _h, _ang, color) = gen_random_values();
-            // let rect = self
-            //     .rectangle()
-            //     .with_position(0.0, 0.0)
-            //     .with_color(color)
-            //     .with_size(150.0, 150.0)
-            //     .show();
-
-            // self.play(rect.show_creation()).run_time(3.0);
-
-            // self.play(line.morph(circle)).run_time(3.0);
-            // self.play(circle.morph(rect)).run_time(3.0);
-            // self.play(rect.morph(text)).run_time(10.0);
-        }
-
-        self.play(show).run_time(2.0).lag(0.01);
-        self.play(morph).run_time(5.0).lag(0.01);
-
-        // self.play(rect.morph(text)).run_time(5.0);
-        // self.play(rect.morph(text)).run_time(15.0);
-        // self.play(text.morph(circle)).run_time(15.0);
-
-        // self.play(vec![
-        //     circle.move_to_object(rect),
-        //     circle.set_color_from(rect),
-        // ])
-        // .rate_func(EaseType::Quint)
-        // .run_time(2.0);
-
-        // self.wait();
-        // self.play(circle.move_to(400.0, 400.0))
-        //     .rate_func(EaseType::Elastic);
-        // self.play(circle.move_to(400.0, 400.0))
-        //     .run_time(1.0)
-        //     .lag(0.0001)
-        //     .rate_func(EaseType::Quad);
-    }
-}
-
 // impl Construct for Scene {
 //     fn construct(&mut self) {
 //         let (x, y, _w, _h, _ang, color) = gen_random_values();
@@ -302,20 +237,6 @@ impl Construct for Scene {
 //     }
 // }
 
-fn main() {
-    app::run();
-}
-
-fn gen_random_values() -> (f32, f32, f32, f32, f32, Color) {
-    let x_lim = 1920.0 / 2.0;
-    let y_lim = 1080.0 / 2.0;
-
-    let x = random_range::<f32>(-x_lim, x_lim);
-    let y = random_range::<f32>(-y_lim, y_lim);
-    let w = random_range::<f32>(4.0, 60.0);
-    let h = random_range::<f32>(4.0, 60.0);
-    let ang = random_range::<f32>(0.0, 360.0);
-    let color = Color::random();
-
-    (x, y, w, h, ang, color)
-}
+// fn main() {
+//     app::run();
+// }

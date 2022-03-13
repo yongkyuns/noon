@@ -1,0 +1,15 @@
+[package]
+name = "examples"
+version = "0.1.0"
+authors = ["Yongkyun Shin <yongkyuns@gmail.com>"]
+edition = "2021"
+description = "A set examples for Noon"
+license = "MIT"
+
+
+[dependencies]
+noon = {version="0.1", path="../noon"}
+
+[[example]]
+name = "hello_world"
+path = "hello_world.rs"
