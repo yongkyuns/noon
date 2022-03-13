@@ -135,6 +135,10 @@ impl Animation<Position> {
             (None, Value::Absolute(_to)) => {
                 self.begin = Some(*property);
             }
+            (None, Value::Relative(by)) => {
+                self.begin = Some(*property);
+                self.end = Value::Absolute(*property + *by);
+            }
             _ => (),
         }
     }

@@ -106,11 +106,11 @@ impl Scene {
     pub fn add_circle(&mut self, x: f32, y: f32) {
         let c = circle(self)
             .with_position(x, y)
-            .with_radius(20.0)
+            .with_radius(0.2)
             .with_color(Color::random())
             .make();
         let t = self.clock_time;
-        self.play(c.show_creation()).start_time(t).run_time(0.3);
+        self.play(c.show_creation()).start_time(t).run_time(0.1);
     }
     pub fn update(&mut self, now: f32) {
         self.world

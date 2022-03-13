@@ -19,5 +19,9 @@ name = "text_transform"
 path = "text_transform.rs"
 
 [[example]]
-name = "shape"
-path = "shape.rs"
+name = "shapes"
+path = "shapes.rs"
+
+[[example]]
+name = "easing"
+path = "easing.rs"
