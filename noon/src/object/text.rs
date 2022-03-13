@@ -74,18 +74,6 @@ impl<'a> TextBuilder<'a> {
         self.text = text.to_owned();
         self
     }
-    pub fn with_stroke_weight(mut self, weight: f32) -> Self {
-        self.stroke_weight = StrokeWeight(weight);
-        self
-    }
-    pub fn with_stroke_color(mut self, color: Color) -> Self {
-        self.stroke_color = color;
-        self
-    }
-    pub fn with_fill_color(mut self, color: Color) -> Self {
-        self.fill_color = color;
-        self
-    }
     pub fn with_color(mut self, color: Color) -> Self {
         self.fill_color = color;
         self.stroke_color = color.brighten();
@@ -95,11 +83,11 @@ impl<'a> TextBuilder<'a> {
         self.font_size = FontSize(size);
         self
     }
-    pub fn with_position(mut self, x: f32, y: f32) -> Self {
-        self.position = Position { x, y };
-        self
-    }
 }
+
+crate::stroke_builder!(TextBuilder);
+crate::position_builder!(TextBuilder);
+crate::fill_builder!(TextBuilder);
 
 impl Create<TextId> for TextBuilder<'_> {
     fn scene_mut(&mut self) -> &mut Scene {

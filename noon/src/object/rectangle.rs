@@ -46,40 +46,17 @@ impl<'a> RectangleBuilder<'a> {
             scene,
         }
     }
-    pub fn with_stroke_weight(mut self, weight: f32) -> Self {
-        self.stroke_weight = StrokeWeight(weight);
-        self
-    }
-    pub fn with_thin_stroke(mut self) -> Self {
-        self.stroke_weight = StrokeWeight::THIN;
-        self
-    }
-    pub fn with_thick_stroke(mut self) -> Self {
-        self.stroke_weight = StrokeWeight::THICK;
-        self
-    }
-    pub fn with_stroke_color(mut self, color: Color) -> Self {
-        self.stroke_color = color;
-        self
-    }
-    pub fn with_fill_color(mut self, color: Color) -> Self {
-        self.fill_color = color;
-        self
-    }
     pub fn with_color(mut self, color: Color) -> Self {
         self.fill_color = color;
         self.stroke_color = color.brighten();
         self
     }
-    pub fn with_size(mut self, width: f32, height: f32) -> Self {
-        self.size = Size::from(width, height);
-        self
-    }
-    pub fn with_position(mut self, x: f32, y: f32) -> Self {
-        self.position = Position { x, y };
-        self
-    }
 }
+
+crate::stroke_builder!(RectangleBuilder);
+crate::position_builder!(RectangleBuilder);
+crate::fill_builder!(RectangleBuilder);
+crate::size_builder!(RectangleBuilder);
 
 impl Create<RectangleId> for RectangleBuilder<'_> {
     fn scene_mut(&mut self) -> &mut Scene {

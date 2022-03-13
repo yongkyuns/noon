@@ -86,3 +86,63 @@ pub struct Arrow;
 
 #[derive(Component)]
 pub struct Dot;
+
+#[macro_export]
+macro_rules! stroke_builder {
+    ($name:ident) => {
+        impl<'a> $name<'a> {
+            pub fn with_stroke_weight(mut self, weight: f32) -> Self {
+                self.stroke_weight = StrokeWeight(weight);
+                self
+            }
+            pub fn with_thin_stroke(mut self) -> Self {
+                self.stroke_weight = StrokeWeight::THIN;
+                self
+            }
+            pub fn with_thick_stroke(mut self) -> Self {
+                self.stroke_weight = StrokeWeight::THICK;
+                self
+            }
+            pub fn with_stroke_color(mut self, color: Color) -> Self {
+                self.stroke_color = color;
+                self
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! position_builder {
+    ($name:ident) => {
+        impl<'a> $name<'a> {
+            pub fn with_position(mut self, x: f32, y: f32) -> Self {
+                self.position = Position { x, y };
+                self
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! size_builder {
+    ($name:ident) => {
+        impl<'a> $name<'a> {
+            pub fn with_size(mut self, width: f32, height: f32) -> Self {
+                self.size = Size::from(width, height);
+                self
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! fill_builder {
+    ($name:ident) => {
+        impl<'a> $name<'a> {
+            pub fn with_fill_color(mut self, color: Color) -> Self {
+                self.fill_color = color;
+                self
+            }
+        }
+    };
+}

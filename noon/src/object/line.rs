@@ -52,15 +52,13 @@ impl<'a> LineBuilder<'a> {
         self.points.push(point);
         self
     }
-    pub fn with_stroke_color(mut self, color: Color) -> Self {
-        self.stroke_color = color;
-        self
-    }
     pub fn with_color(mut self, color: Color) -> Self {
         self.stroke_color = color;
         self
     }
 }
+
+crate::stroke_builder!(LineBuilder);
 
 impl Create<LineId> for LineBuilder<'_> {
     fn scene_mut(&mut self) -> &mut Scene {
