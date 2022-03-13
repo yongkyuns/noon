@@ -27,7 +27,7 @@ pub use crate::geom::{point, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
-use nannou::rand::{random_range, thread_rng};
+use nannou::rand::random_range;
 pub use object::*;
 pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};

@@ -1,7 +1,3 @@
-use std::marker::PhantomData;
-
-use crate::Color;
-
 /// Path flattenening tolerance for normal shapes under normal condition.
 pub const EPS: f32 = 0.01;
 
