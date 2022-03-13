@@ -37,7 +37,7 @@ impl Path {
 impl Interpolate for Path {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         let tol = EPS_LOW;
-        let progress = progress.min(1.0).max(0.0);
+        // let progress = progress.min(1.0).max(0.0);
 
         if progress <= 0.00001 {
             self.clone()

@@ -125,19 +125,19 @@ impl Create<TextId> for TextBuilder<'_> {
     }
 }
 
-fn size_from_text(text: &str, font_size: FontSize) -> Size {
-    let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
-    let text = nannou::text::text(text)
-        .font_size(font_size.0)
-        .left_justify()
-        .no_line_wrap()
-        .build(rect);
-    let bbox = text.bounding_rect();
-    Size {
-        width: bbox.w(),
-        height: bbox.h(),
-    }
-}
+// fn size_from_text(text: &str, font_size: FontSize) -> Size {
+//     let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
+//     let text = nannou::text::text(text)
+//         .font_size(font_size.0)
+//         .left_justify()
+//         .no_line_wrap()
+//         .build(rect);
+//     let bbox = text.bounding_rect();
+//     Size {
+//         width: bbox.w(),
+//         height: bbox.h(),
+//     }
+// }
 
 pub fn draw_text(
     draw: NonSend<nannou::Draw>,
@@ -169,6 +169,7 @@ pub fn draw_text(
     ) in query.iter()
     {
         if alpha.is_visible() {
+            let position = position.into_pxl_scale();
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,

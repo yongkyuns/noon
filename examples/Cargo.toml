@@ -13,3 +13,11 @@ noon = {version="0.1", path="../noon"}
 [[example]]
 name = "hello_world"
 path = "hello_world.rs"
+
+[[example]]
+name = "text_transform"
+path = "text_transform.rs"
+
+[[example]]
+name = "shape"
+path = "shape.rs"

@@ -21,9 +21,10 @@ mod common {
     pub use crate::path::GetPartial;
     pub use crate::{
         Angle, AnimBuilder, Animation, Color, ColorExtension, Create, EaseType, EntityAnimations,
-        FillColor, FontSize, Opacity, Path, PathCompletion, PathComponent, Point, Position, Scene,
-        Size, StrokeColor, StrokeWeight, Value, WithAngle, WithColor, WithFill, WithFontSize,
-        WithId, WithPath, WithPosition, WithSize, WithStroke, WithStrokeWeight, EPS,
+        FillColor, FontSize, IntoPixelFrame, Opacity, Path, PathCompletion, PathComponent, Point,
+        Position, Scene, Size, StrokeColor, StrokeWeight, Value, WithAngle, WithColor, WithFill,
+        WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke, WithStrokeWeight, EPS,
+        TO_PXL,
     };
     pub use bevy_ecs::prelude::*;
     pub use nannou::color::Rgba;

@@ -122,8 +122,13 @@ impl Scene {
     }
 
     pub fn draw(&mut self, nannou_draw: nannou::Draw) {
+        // use nannou::glam::{Mat4, Vec3};
         self.world.remove_non_send::<nannou::Draw>();
-        self.world.insert_non_send(nannou_draw.clone());
+        self.world.insert_non_send(
+            nannou_draw
+                // .transform(Mat4::from_scale(Vec3::new(TO_PXL, TO_PXL, 1.0)))
+                .clone(),
+        );
         self.drawer.run(&mut self.world);
     }
 

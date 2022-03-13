@@ -5,6 +5,7 @@ pub struct Rectangle;
 
 impl Rectangle {
     fn path(size: &Size) -> Path {
+        let size = size.into_pxl_scale();
         let mut builder = Path::svg_builder();
         let start = point(-size.width / 2.0, size.height / 2.0);
 
@@ -36,9 +37,10 @@ impl<'a> RectangleBuilder<'a> {
                 width: 1.0,
                 height: 1.0,
             },
-            stroke_weight: StrokeWeight::THIN,
+            stroke_weight: StrokeWeight::THICK,
             stroke_color: Default::default(),
-            fill_color: Default::default(),
+            // fill_color: Default::default(),
+            fill_color: Color::random(),
             position: Default::default(),
             angle: Default::default(),
             scene,
@@ -46,6 +48,14 @@ impl<'a> RectangleBuilder<'a> {
     }
     pub fn with_stroke_weight(mut self, weight: f32) -> Self {
         self.stroke_weight = StrokeWeight(weight);
+        self
+    }
+    pub fn with_thin_stroke(mut self) -> Self {
+        self.stroke_weight = StrokeWeight::THIN;
+        self
+    }
+    pub fn with_thick_stroke(mut self) -> Self {
+        self.stroke_weight = StrokeWeight::THICK;
         self
     }
     pub fn with_stroke_color(mut self, color: Color) -> Self {
@@ -116,6 +126,9 @@ pub fn draw_rectangle(
         query.iter()
     {
         if alpha.is_visible() {
+            let position = position.into_pxl_scale();
+            let size = size.into_pxl_scale();
+
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,

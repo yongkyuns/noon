@@ -1,14 +1,14 @@
 mod animation;
 // mod app;
-mod color;
-mod component;
-mod consts;
-mod ease;
-mod geom;
-mod object;
-mod path;
-mod scene;
-mod system;
+pub mod color;
+pub mod component;
+pub mod consts;
+pub mod ease;
+pub mod geom;
+pub mod object;
+pub mod path;
+pub mod scene;
+pub mod system;
 
 pub use crate::animation::{
     AnimBuilder, Animation, AnimationType, Animations, Create, EntityAnimations, WithAngle,
@@ -21,7 +21,7 @@ pub use crate::component::{
     Angle, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position, Size,
     StrokeColor, StrokeWeight, Value,
 };
-pub use crate::geom::{point, Point};
+pub use crate::geom::{point, IntoPixelFrame, Point};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
@@ -30,6 +30,8 @@ pub use scene::{Bounds, Construct, Scene};
 pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
 
 pub use nannou;
+pub use nannou::{app, rand};
+
 pub mod prelude {
     pub use crate::animation::{
         AnimBuilder, Animation, AnimationType, Animations, Create, EntityAnimations, WithAngle,
@@ -38,14 +40,14 @@ pub mod prelude {
     };
     pub use crate::{
         object::{CircleId, TextId},
-        CircleBuilder, Color, ColorExtension, Construct, Scene, TextBuilder,
+        CircleBuilder, Color, ColorExtension, Construct, EaseType, Scene, StrokeWeight,
+        TextBuilder,
     };
     pub use nannou::app;
     pub use nannou::app::ModelFn;
     pub use nannou::geom::Rect;
     pub use nannou::prelude::*;
 }
-pub use nannou::app;
 
 // impl Construct for Scene {
 //     fn construct(&mut self) {

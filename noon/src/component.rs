@@ -1,8 +1,7 @@
-use crate::Color;
-use crate::{point, Point};
+use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
-use std::ops::Add;
+use std::ops::{Add, Mul};
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -69,21 +68,12 @@ impl std::fmt::Display for Position {
     }
 }
 
-impl Into<Position> for Point {
-    fn into(self) -> Position {
-        Position {
-            x: self.x,
-            y: self.y,
+impl IntoPixelFrame for Position {
+    fn into_pxl_scale(&self) -> Self {
+        Self {
+            x: self.x * TO_PXL,
+            y: self.y * TO_PXL,
         }
-    }
-}
-
-impl Interpolate for Point {
-    fn interp(&self, other: &Self, progress: f32) -> Self {
-        point(
-            self.x.interp(&other.x, progress),
-            self.y.interp(&other.y, progress),
-        )
     }
 }
 
@@ -144,6 +134,25 @@ impl Size {
         Size {
             width: (max.x - min.x).abs(),
             height: (max.y - min.y).abs(),
+        }
+    }
+}
+
+impl IntoPixelFrame for Size {
+    fn into_pxl_scale(&self) -> Self {
+        Self {
+            width: self.width * TO_PXL,
+            height: self.height * TO_PXL,
+        }
+    }
+}
+
+impl Mul<f32> for Size {
+    type Output = Self;
+    fn mul(self, value: f32) -> Self::Output {
+        Self {
+            width: self.width * value,
+            height: self.height * value,
         }
     }
 }

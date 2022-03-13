@@ -8,9 +8,9 @@ impl Line {
     fn path(points: &[Point]) -> Path {
         let mut builder = Path::builder();
 
-        builder.begin(*points.get(0).unwrap());
+        builder.begin(points.get(0).unwrap().into_pxl_scale());
         for &p in points.iter() {
-            builder.line_to(p);
+            builder.line_to(p.into_pxl_scale());
         }
         builder.end(false);
         Path {
@@ -105,6 +105,9 @@ pub fn draw_line(
         query.iter()
     {
         if alpha.is_visible() {
+            let position = position.into_pxl_scale();
+            let size = size.into_pxl_scale();
+
             // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,

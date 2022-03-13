@@ -7,6 +7,7 @@ pub struct Circle;
 
 impl Circle {
     fn path(size: &Size) -> Path {
+        let size = size.into_pxl_scale();
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();
         let sweep_angle = Angle::radians(-TAU);
@@ -35,10 +36,11 @@ pub struct CircleBuilder<'a> {
 impl<'a> CircleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         Self {
-            radius: 1.0,
-            stroke_weight: StrokeWeight::THIN,
+            radius: 0.5,
+            stroke_weight: StrokeWeight::THICK,
             stroke_color: Default::default(),
-            fill_color: Default::default(),
+            // fill_color: Default::default(),
+            fill_color: Color::random(),
             position: Default::default(),
             scene,
         }
@@ -49,6 +51,14 @@ impl<'a> CircleBuilder<'a> {
     }
     pub fn with_stroke_weight(mut self, weight: f32) -> Self {
         self.stroke_weight = StrokeWeight(weight);
+        self
+    }
+    pub fn with_thin_stroke(mut self) -> Self {
+        self.stroke_weight = StrokeWeight::THIN;
+        self
+    }
+    pub fn with_thick_stroke(mut self) -> Self {
+        self.stroke_weight = StrokeWeight::THICK;
         self
     }
     pub fn with_stroke_color(mut self, color: Color) -> Self {
@@ -113,6 +123,9 @@ pub fn draw_circle(
         query.iter()
     {
         if alpha.is_visible() {
+            let size = size.into_pxl_scale();
+            let position = position.into_pxl_scale();
+
             let radius = size.width / 2.0;
             // let path = circle_path(size, completion);
 
