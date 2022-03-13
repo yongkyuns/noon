@@ -125,15 +125,6 @@ pub fn draw_rectangle(
                 .events(&path.clone().upto(completion.0, EPS).raw);
 
             // Draw stroke on top
-            // draw.path()
-            //     .stroke()
-            //     .x_y(position.x, position.y)
-            //     .z_degrees(angle.0)
-            //     .join_round()
-            //     .color(stroke)
-            //     .stroke_weight(size.width.max(size.height) / 100.0)
-            //     .events(&path.clone().upto(completion.0, 0.01).raw);
-
             if !stroke_weight.is_none() {
                 let thickness = if stroke_weight.is_auto() {
                     size.width.max(size.height) / 100.0
@@ -149,14 +140,6 @@ pub fn draw_rectangle(
                     .stroke_weight(thickness)
                     .events(&path.clone().upto(completion.0, EPS).raw);
             }
-
-            // draw.rect()
-            //     .x_y(position.x, position.y)
-            //     .w_h(size.width, size.height)
-            //     .z_degrees(angle.0)
-            //     .color(fill)
-            //     .stroke_color(stroke)
-            //     .stroke_weight(size.width.min(size.height) / 35.0);
         }
     }
 }

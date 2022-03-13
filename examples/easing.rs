@@ -13,7 +13,6 @@ fn scene(win_rect: Rect) -> Scene {
             .with_position(-4.0, 2.0 - i as f32 * 0.5)
             .with_radius(0.2)
             .with_color(Color::random())
-            .with_stroke_weight(5.0)
             .make();
 
         circles.push(c);
