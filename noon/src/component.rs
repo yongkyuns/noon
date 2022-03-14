@@ -1,7 +1,7 @@
 use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
-use std::ops::{Add, Mul};
+use std::ops::Add;
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -92,83 +92,6 @@ pub struct FontSize(pub(crate) u32);
 impl Interpolate for FontSize {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         Self(self.0.interp(&other.0, progress))
-    }
-}
-
-#[derive(Debug, Component, Clone, Copy)]
-pub struct Size {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Size {
-    pub fn from_radius(radius: f32) -> Self {
-        Self {
-            width: radius * 2.0,
-            height: radius * 2.0,
-        }
-    }
-
-    pub fn from(width: f32, height: f32) -> Self {
-        Self { width, height }
-    }
-
-    pub fn from_points(points: &[Point]) -> Self {
-        let mut min = *points.first().unwrap();
-        let mut max = *points.first().unwrap();
-
-        for &p in points.iter() {
-            if p.x < min.x {
-                min.x = p.x;
-            }
-            if p.y < min.y {
-                min.y = p.y;
-            }
-            if p.x > max.x {
-                max.x = p.x;
-            }
-            if p.y > max.y {
-                max.y = p.y;
-            }
-        }
-        Size {
-            width: (max.x - min.x).abs(),
-            height: (max.y - min.y).abs(),
-        }
-    }
-}
-
-impl IntoPixelFrame for Size {
-    fn into_pxl_scale(&self) -> Self {
-        Self {
-            width: self.width * TO_PXL,
-            height: self.height * TO_PXL,
-        }
-    }
-}
-
-impl Mul<f32> for Size {
-    type Output = Self;
-    fn mul(self, value: f32) -> Self::Output {
-        Self {
-            width: self.width * value,
-            height: self.height * value,
-        }
-    }
-}
-
-impl std::fmt::Display for Size {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(width:{:3.2}, height:{:3.2})", self.width, self.height)
-    }
-}
-
-impl Interpolate for Size {
-    fn interp(&self, other: &Self, progress: f32) -> Self {
-        Self {
-            width: self.width.interp(&other.width, progress),
-            height: self.height.interp(&other.height, progress),
-        }
     }
 }
 

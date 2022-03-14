@@ -18,16 +18,17 @@ pub use crate::animation::{
 
 pub use crate::color::{Color, ColorExtension};
 pub use crate::component::{
-    Angle, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position, Size,
-    StrokeColor, StrokeWeight, Value,
+    Angle, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position, StrokeColor,
+    StrokeWeight, Value,
 };
-pub use crate::geom::{point, IntoPixelFrame, Point};
+
+pub use crate::geom::{point, IntoPixelFrame, Point, Size};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
 pub use object::*;
-pub use scene::{Bounds, Construct, Scene};
-pub use system::{animate, animate_from_target, animate_position, print, update_time, Time};
+pub use scene::{Bounds, Scene};
+pub use system::{animate, animate_position, init_from_target, print, update_time, Time};
 
 pub use nannou;
 pub use nannou::{app, rand};
@@ -40,8 +41,7 @@ pub mod prelude {
     };
     pub use crate::{
         object::{CircleId, TextId},
-        CircleBuilder, Color, ColorExtension, Construct, EaseType, Scene, StrokeWeight,
-        TextBuilder,
+        CircleBuilder, Color, ColorExtension, EaseType, Scene, StrokeWeight, TextBuilder,
     };
     pub use nannou::app;
     pub use nannou::app::ModelFn;

@@ -18,22 +18,42 @@ pub use color::*;
 pub use path::*;
 pub use spatial::*;
 
+/// Trait to indicate whether an object contains [Entity]. If it does,
+/// the said object qualifies as a valid object to be inserted to the
+/// [bevy_ecs].
 pub trait WithId {
     fn id(&self) -> Entity;
 }
 
+/// Convenience struct to contain more than one [Animation] and implement
+/// any related functionalities.
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
 
+/// Basic structure to describe an animation.
 #[derive(Component, Debug, Clone)]
 pub struct Animation<T> {
+    /// Initial state of the animation. If `None`, will be initialized
+    /// with current state when the time reaches `start_time`.
     pub(crate) begin: Option<T>,
+    /// Final state of the animation. The final state may contain an
+    /// absolute value, or a relative value with respect to the
+    /// initialized `begin` state
     pub(crate) end: Value<T>,
+    /// Duration of animation in seconds.
     pub(crate) duration: f32,
+    /// Time at which animation should begin.
     pub(crate) start_time: f32,
+    /// Easing function to be used for animation.
     pub(crate) rate_func: EaseType,
+    /// If set to `false`, `duration` will be assigned by user
+    /// through [Scene](crate::Scene)'s `play` function
     pub(crate) init_duration: bool,
+    /// If set to `false`, `start_time` will be assigned by user
+    /// through [Scene](crate::Scene)'s `play` function
     pub(crate) init_start_time: bool,
+    /// If set to `false`, `rate_func` will be assigned by user
+    /// through [Scene](crate::Scene)'s `play` function
     pub(crate) init_rate_func: bool,
 }
 
@@ -45,7 +65,7 @@ where
         Self {
             begin: None,
             end: Value::Absolute(to),
-            duration: 3.0,
+            duration: 1.0,
             start_time: 0.0,
             rate_func: EaseType::Quint,
             init_duration: true,

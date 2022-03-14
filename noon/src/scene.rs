@@ -2,7 +2,7 @@ use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{animate, animate_from_target, animate_position, print, Time};
+use crate::system::{animate, animate_position, init_from_target, print, Time};
 use crate::{
     circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
     AnimBuilder, CircleBuilder, Color, ColorExtension, Create, EntityAnimations, FontSize,
@@ -50,16 +50,16 @@ impl Scene {
         updater.add_stage(
             "update",
             SystemStage::parallel()
-                .with_system(animate_from_target::<Position>)
-                .with_system(animate_from_target::<FillColor>)
-                .with_system(animate_from_target::<StrokeColor>)
-                .with_system(animate_from_target::<StrokeWeight>)
-                .with_system(animate_from_target::<Size>)
-                .with_system(animate_from_target::<Angle>)
-                .with_system(animate_from_target::<Opacity>)
-                .with_system(animate_from_target::<Path>)
-                .with_system(animate_from_target::<PathCompletion>)
-                .with_system(animate_from_target::<FontSize>)
+                .with_system(init_from_target::<Position>)
+                .with_system(init_from_target::<FillColor>)
+                .with_system(init_from_target::<StrokeColor>)
+                .with_system(init_from_target::<StrokeWeight>)
+                .with_system(init_from_target::<Size>)
+                .with_system(init_from_target::<Angle>)
+                .with_system(init_from_target::<Opacity>)
+                .with_system(init_from_target::<Path>)
+                .with_system(init_from_target::<PathCompletion>)
+                .with_system(init_from_target::<FontSize>)
                 .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
@@ -143,8 +143,4 @@ impl Scene {
     pub fn play(&mut self, animations: impl Into<Vec<EntityAnimations>>) -> AnimBuilder {
         AnimBuilder::new(self, animations.into())
     }
-}
-
-pub trait Construct {
-    fn construct(&mut self);
 }

@@ -25,3 +25,7 @@ path = "shapes.rs"
 [[example]]
 name = "easing"
 path = "easing.rs"
+
+[[example]]
+name = "temp"
+path = "temp.rs"

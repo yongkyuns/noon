@@ -66,7 +66,14 @@ impl Time {
 //     }
 // }
 
-pub fn animate_from_target<Attribute: Interpolate + Component + Clone>(
+/// Initialize animation from another target's current state.
+///
+/// When animation commands are specified with respect to another
+/// object instead of a specific value, this system takes care of
+/// querying the attribute of the target object and initializing the
+/// animation. Once initialized, [animate] executes the animation
+/// for subsequent durations.
+pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut animation_query: Query<&mut Animations<Attribute>>,
     attribute_query: Query<&mut Attribute>,
@@ -93,6 +100,13 @@ pub fn animate_from_target<Attribute: Interpolate + Component + Clone>(
     }
 }
 
+/// Generic system for animation of all contained attributes in `Bevy` ECS.
+///
+/// The way this works is by using [Interpolate] trait on [Component]s.
+/// Attributes such as [Position] and [Size](crate::Size) that implements
+/// [Interpolate] can be updated here, based on the corresponding [Animations]
+/// for that attribute. [Time] is used as a trigger for each
+/// [Animation](crate::Animation) contained within [Animations].
 pub fn animate<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
@@ -120,6 +134,14 @@ pub fn animate<Attribute: Interpolate + Component + Clone>(
     }
 }
 
+/// A one-off implementation of [Position] animation system from [animate] system.
+/// There are two reasons for not using the generic [animate] system:
+///
+/// 1. [Position] needs additional [Bounds] information for certain commands such
+/// as moving to the edges of a window frame.
+/// 2. [Position] supports relative movement commands, i.e. shift for specified
+/// amount from the current position.
+///
 pub fn animate_position(
     time: Res<Time>,
     _bounds: Res<Bounds>,
