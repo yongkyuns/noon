@@ -5,14 +5,23 @@ use nannou::lyon::{
     algorithms::length::approximate_length,
     lyon_algorithms::walk::walk_along_path,
     lyon_algorithms::walk::RepeatedPattern,
+    math::Transform,
     path::{iterator::Flattened, path::Iter},
 };
 
-use crate::{Interpolate, Point, Size, EPS_LOW};
+use crate::{point, Interpolate, Point, Size, EPS_LOW};
 
+/// Data type for representing a vectorized 2D path.
+///
+/// [Path] is a thin wrapper around [lyon::Path] and mainly adds [Interpolate]
+/// and exposes a few convenience methods. By allowing any arbitrary path to
+/// be interpolated, [animate](crate::animate) can transform from one shape
+/// to another shape through [Animation](crate::Animation).
 #[derive(Debug, Clone, Component)]
 pub struct Path {
+    /// Lyon path
     pub(crate) raw: lyon::Path,
+    /// Boolean to indicate whether the path is closed shape or not.
     pub(crate) closed: bool,
 }
 
@@ -23,14 +32,45 @@ impl Path {
             closed: true,
         }
     }
+    /// Expose `Lyon`'s [SVG path builder](WithSvg)
     pub fn svg_builder() -> WithSvg<lyon::path::Builder> {
         lyon::Path::svg_builder()
     }
+    /// Expose `Lyon`'s [path builder](lyon::path::Builder)
     pub fn builder() -> lyon::path::Builder {
         lyon::path::Builder::new()
     }
+    /// Flatten the current path into series of linear line segments
+    /// with given tolerance.
+    ///
+    /// Note that the returned path is an iterator.
     pub fn flattened(&self, tolerance: f32) -> Flattened<Iter> {
         self.raw.iter().flattened(tolerance)
+    }
+
+    /// Provides rough size of the path
+    pub fn size(&self) -> Size {
+        let mut max = point(-1.0e5, -1.0e5);
+        let mut min = point(1.0e5, 1.0e5);
+        for e in self.flattened(EPS_LOW) {
+            match e {
+                PathEvent::Line { from, to } => {
+                    // Probably only need to compare with destination, i.e. `to`
+                    // Remove later
+                    min = min.min(from);
+                    max = max.max(from);
+                    min = min.min(to);
+                    max = max.max(to);
+                }
+                _ => (),
+            }
+        }
+        Size::from_points(&vec![min, max])
+    }
+
+    /// Apply given scale to the path.
+    pub fn scale(&self, x: f32, y: f32) -> Self {
+        Self::new(self.raw.clone().transformed(&Transform::scale(x, y)))
     }
 }
 
@@ -387,6 +427,17 @@ mod tests {
         };
 
         walk_along_path(path.iter(), 0.0, &mut pattern);
+    }
+    #[test]
+    fn path_size() {
+        let mut builder = Path::svg_builder();
+        builder.move_to(point(-100.0, 200.0));
+        builder.line_to(point(100.0, 300.0));
+        builder.line_to(point(-300.0, 300.0));
+        builder.close();
+        let size = Path::new(builder.build()).size();
+        assert_eq!(400.0, size.width);
+        assert_eq!(100.0, size.height);
     }
 
     #[test]

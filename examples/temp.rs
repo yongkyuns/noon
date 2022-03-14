@@ -17,9 +17,7 @@ fn scene(win_rect: Rect) -> Scene {
 
     scene.wait();
     scene.play(vec![circle.fade_in(), rect.fade_in()]);
-    scene
-        .play(vec![circle.set_radius(2.0), rect.set_size(0.5, 2.0)])
-        .rate_func(EaseType::Bounce);
+    scene.play(vec![circle.set_radius(1.0), rect.set_size(0.5, 2.0)]);
 
     scene
 }

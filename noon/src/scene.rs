@@ -2,12 +2,12 @@ use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
 
 use crate::component::FillColor;
-use crate::system::{animate, animate_position, init_from_target, print, Time};
+use crate::prelude::*;
+use crate::system::*;
 use crate::{
     circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
-    AnimBuilder, CircleBuilder, Color, ColorExtension, Create, EntityAnimations, FontSize,
-    LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder, Size, StrokeColor,
-    StrokeWeight, TextBuilder, WithPath,
+    FontSize, LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder, Size,
+    StrokeColor,
 };
 
 pub struct Bounds {
@@ -72,6 +72,7 @@ impl Scene {
                 .with_system(animate::<FontSize>)
                 // .with_system(update_path::<Circle>)
                 // .with_system(update_path::<Rectangle>)
+                .with_system(update_path_from_size_change)
                 .with_system(print),
         );
         let mut drawer = Schedule::default();

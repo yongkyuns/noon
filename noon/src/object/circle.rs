@@ -83,6 +83,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
     }
 }
 
+/// [System] for rendering circles.
 pub fn draw_circle(
     draw: NonSend<nannou::Draw>,
     query: Query<
@@ -103,6 +104,7 @@ pub fn draw_circle(
         query.iter()
     {
         if alpha.is_visible() {
+            // println!("Circle size = {}, {}", size.width, size.height);
             let size = size.into_pxl_scale();
             let position = position.into_pxl_scale();
 
@@ -117,12 +119,15 @@ pub fn draw_circle(
                 color: fill_color.0,
                 alpha: alpha.0,
             };
+
+            // Draw fill first
             draw.path()
                 .fill()
                 .x_y(position.x, position.y)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
 
+            // Draw stroke on top
             if !stroke_weight.is_none() {
                 let thickness = if stroke_weight.is_auto() {
                     radius / 30.0

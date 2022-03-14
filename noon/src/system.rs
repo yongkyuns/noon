@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use bevy_ecs::prelude::*;
 
-use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Position};
+use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Size, TO_PXL};
 
 pub struct Time {
     pub seconds: f32,
@@ -51,6 +51,13 @@ impl Time {
 //     }
 // }
 
+pub fn update_path_from_size_change(mut query: Query<(&mut Path, &Size), Changed<Size>>) {
+    for (mut path, size) in query.iter_mut() {
+        let scale = path.size().scale_factor(&(*size * TO_PXL));
+        *path = path.scale(scale.0, scale.1);
+    }
+}
+
 // pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
 // where
 //     E: Component,
@@ -66,12 +73,13 @@ impl Time {
 //     }
 // }
 
-/// Initialize animation from another target's current state.
+/// [System] for initializing the animation of the current object from
+/// another target's current state.
 ///
-/// When animation commands are specified with respect to another
-/// object instead of a specific value, this system takes care of
+/// When animation commands are specified with respect to another object
+/// (i.e. target) instead of a specific value, this system takes care of
 /// querying the attribute of the target object and initializing the
-/// animation. Once initialized, [animate] executes the animation
+/// animation. Once initialized, [animate] executes the actual animation
 /// for subsequent durations.
 pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
@@ -100,13 +108,14 @@ pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
     }
 }
 
-/// Generic system for animation of all contained attributes in `Bevy` ECS.
+/// Generic [System] for animation of all [Component]s in ECS.
 ///
 /// The way this works is by using [Interpolate] trait on [Component]s.
 /// Attributes such as [Position] and [Size](crate::Size) that implements
 /// [Interpolate] can be updated here, based on the corresponding [Animations]
 /// for that attribute. [Time] is used as a trigger for each
 /// [Animation](crate::Animation) contained within [Animations].
+///
 pub fn animate<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
