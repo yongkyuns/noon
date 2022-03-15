@@ -2,10 +2,13 @@ use super::common::*;
 use core::f32::consts::TAU;
 use nannou::lyon::math::{Angle, Vector};
 
+/// Component indicating a circle. Other [Component]s belonging to a circle
+/// is implemented in [CircleBuilder].
 #[derive(Component)]
 pub struct Circle;
 
 impl Circle {
+    /// Returns path for a circle.
     fn path(size: &Size) -> Path {
         let size = size.into_pxl_scale();
         let radius = size.width / 2.0;
@@ -71,6 +74,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .spawn()
             .insert(Circle)
             .insert(Size::from_radius(self.radius))
+            .insert(Previous(Size::from_radius(self.radius)))
             .insert(self.position)
             .insert(FillColor(self.fill_color))
             .insert(StrokeColor(self.stroke_color))

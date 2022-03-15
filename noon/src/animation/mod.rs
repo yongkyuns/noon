@@ -4,8 +4,8 @@ use bevy_ecs::{
 };
 
 use crate::{
-    Angle, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion, Position,
-    Scene, Size, StrokeColor, StrokeWeight, Value,
+    Angle, Cached, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion,
+    Position, Scene, Size, StrokeColor, StrokeWeight, Value,
 };
 
 mod builder;
@@ -173,7 +173,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
     StrokeWeight(Animation<StrokeWeight>),
@@ -181,6 +181,7 @@ pub enum AnimationType {
     Position(Animation<Position>),
     Angle(Animation<Angle>),
     Size(Animation<Size>),
+    CachedSize(Animation<Cached<Size>>),
     FontSize(Animation<FontSize>),
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
@@ -220,6 +221,12 @@ impl Into<AnimationType> for Animation<Angle> {
 impl Into<AnimationType> for Animation<Size> {
     fn into(self) -> AnimationType {
         AnimationType::Size(self)
+    }
+}
+
+impl Into<AnimationType> for Animation<Cached<Size>> {
+    fn into(self) -> AnimationType {
+        AnimationType::CachedSize(self)
     }
 }
 
@@ -276,7 +283,7 @@ fn set_properties<T: Component + Interpolate>(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EntityAnimations {
     pub(crate) entity: Entity,
     pub(crate) animations: Vec<AnimationType>,
@@ -304,6 +311,9 @@ impl EntityAnimations {
                 AnimationType::Size(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::CachedSize(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
                 AnimationType::FontSize(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
@@ -327,6 +337,7 @@ impl EntityAnimations {
             AnimationType::Position(animation) => animation.start_time,
             AnimationType::Angle(animation) => animation.start_time,
             AnimationType::Size(animation) => animation.start_time,
+            AnimationType::CachedSize(animation) => animation.start_time,
             AnimationType::FontSize(animation) => animation.start_time,
             AnimationType::Opacity(animation) => animation.start_time,
             AnimationType::PathCompletion(animation) => animation.start_time,
@@ -352,6 +363,9 @@ impl EntityAnimations {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Size(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::CachedSize(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::FontSize(ref mut animation) => {

@@ -51,30 +51,80 @@ impl Scene {
         let mut updater = Schedule::default();
         updater.add_stage(
             "update",
+            // SystemStage::parallel()
+            //     .with_system(init_from_target::<Position>)
+            //     .with_system(init_from_target::<FillColor>)
+            //     .with_system(init_from_target::<StrokeColor>)
+            //     .with_system(init_from_target::<StrokeWeight>)
+            //     .with_system(init_from_target::<Size>)
+            //     .with_system(init_from_target::<Angle>)
+            //     .with_system(init_from_target::<Opacity>)
+            //     .with_system(init_from_target::<Path>)
+            //     .with_system(init_from_target::<PathCompletion>)
+            //     .with_system(init_from_target::<FontSize>)
+            //     .with_system(animate_position)
+            //     .with_system(animate::<FillColor>)
+            //     .with_system(animate::<StrokeColor>)
+            //     .with_system(animate::<StrokeWeight>)
+            //     .with_system(animate::<Size>)
+            //     .with_system(animate::<Angle>)
+            //     .with_system(animate::<Opacity>)
+            //     .with_system(animate::<Path>)
+            //     .with_system(animate::<PathCompletion>)
+            //     .with_system(animate::<FontSize>)
+            //     // .with_system(update_previous::<Size>)
+            //     .with_system(update_path_from_size_change)
+            //     .with_system(print),
+
+            // SystemStage::parallel()
+            //     .with_system(update_previous::<Size>.before(Label::Second))
+            //     .with_system(init_from_target::<Position>)
+            //     .with_system(init_from_target::<FillColor>)
+            //     .with_system(init_from_target::<StrokeColor>)
+            //     .with_system(init_from_target::<StrokeWeight>)
+            //     .with_system(init_from_target::<Size>.label(Label::Second))
+            //     .with_system(animate::<Size>.label(Label::Second))
+            //     .with_system(init_from_target::<Angle>)
+            //     .with_system(init_from_target::<Opacity>)
+            //     .with_system(init_from_target::<Path>.after(Label::Second))
+            //     .with_system(animate::<Path>.after(Label::Second))
+            //     .with_system(init_from_target::<PathCompletion>)
+            //     .with_system(init_from_target::<FontSize>)
+            //     .with_system(animate_position)
+            //     .with_system(animate::<FillColor>)
+            //     .with_system(animate::<StrokeColor>)
+            //     .with_system(animate::<StrokeWeight>)
+            //     .with_system(animate::<Angle>)
+            //     .with_system(animate::<Opacity>)
+            //     .with_system(animate::<PathCompletion>)
+            //     .with_system(animate::<FontSize>)
+            //     .with_system(update_path_from_size_change)
+            //     .with_system(print),
             SystemStage::parallel()
+                .with_system(update_previous::<Size>.before(Label::Regular))
+                // Beginnning of Regular systems
                 .with_system(init_from_target::<Position>)
                 .with_system(init_from_target::<FillColor>)
                 .with_system(init_from_target::<StrokeColor>)
                 .with_system(init_from_target::<StrokeWeight>)
-                .with_system(init_from_target::<Size>)
+                .with_system(init_from_target::<Size>.label(Label::Regular))
                 .with_system(init_from_target::<Angle>)
                 .with_system(init_from_target::<Opacity>)
-                .with_system(init_from_target::<Path>)
                 .with_system(init_from_target::<PathCompletion>)
                 .with_system(init_from_target::<FontSize>)
                 .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
                 .with_system(animate::<StrokeWeight>)
-                .with_system(animate::<Size>)
+                .with_system(animate::<Size>.label(Label::Regular))
                 .with_system(animate::<Angle>)
                 .with_system(animate::<Opacity>)
-                .with_system(animate::<Path>)
                 .with_system(animate::<PathCompletion>)
                 .with_system(animate::<FontSize>)
-                // .with_system(update_path::<Circle>)
-                // .with_system(update_path::<Rectangle>)
-                .with_system(update_path_from_size_change)
+                // These need to run after all the other ones (i.e. Regular)
+                .with_system(init_from_target::<Path>.after(Label::Regular))
+                .with_system(animate::<Path>.after(Label::Regular))
+                .with_system(update_path_from_size_change.after(Label::Regular))
                 .with_system(print),
         );
         let mut drawer = Schedule::default();
@@ -90,7 +140,7 @@ impl Scene {
             world,
             updater,
             drawer,
-            event_time: 0.1,
+            event_time: 0.5,
             clock_time: 0.0,
             creation_count: 0,
         }

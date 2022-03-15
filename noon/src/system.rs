@@ -2,7 +2,12 @@ use std::time::Instant;
 
 use bevy_ecs::prelude::*;
 
-use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Size, TO_PXL};
+use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Previous, Size};
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
+pub enum Label {
+    Regular,
+}
 
 pub struct Time {
     pub seconds: f32,
@@ -51,10 +56,33 @@ impl Time {
 //     }
 // }
 
-pub fn update_path_from_size_change(mut query: Query<(&mut Path, &Size), Changed<Size>>) {
-    for (mut path, size) in query.iter_mut() {
-        let scale = path.size().scale_factor(&(*size * TO_PXL));
+// pub fn update_path_from_size_change(mut query: Query<(&mut Path, &Size), Changed<Size>>) {
+//     for (mut path, size) in query.iter_mut() {
+//         // let scale = size.before.scale_factor(&size.now);
+//         let scale = path.size().scale_factor(&(*size * TO_PXL));
+//         // println!(
+//         //     "path = {},{}",
+//         //     path.size().width / TO_PXL,
+//         //     path.size().height / TO_PXL
+//         // );
+//         // println!("size = {},{}", size.before.width, size.before.height);
+//         *path = path.scale(scale.0, scale.1);
+//     }
+// }
+
+pub fn update_path_from_size_change(
+    mut query: Query<(Entity, &mut Path, &Size, &Previous<Size>), Changed<Previous<Size>>>,
+) {
+    for (_entity, mut path, size_now, size_prev) in query.iter_mut() {
+        let scale = size_prev.0.scale_factor(size_now);
+        // println!("{:?},{},{}", entity, scale.0, scale.1);
         *path = path.scale(scale.0, scale.1);
+    }
+}
+
+pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous<T>), Changed<T>>) {
+    for (current, mut prev) in query.iter_mut() {
+        prev.0 = current.clone();
     }
 }
 

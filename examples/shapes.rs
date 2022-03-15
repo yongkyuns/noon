@@ -5,6 +5,7 @@ fn scene(win_rect: Rect) -> Scene {
 
     let mut animations = Vec::new();
     let mut show = Vec::new();
+
     for _ in 0..1000 {
         if noon::rand::random::<bool>() {
             let (x, y, w, _h, _ang, color) = gen_random_values();

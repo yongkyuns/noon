@@ -15,9 +15,19 @@ fn scene(win_rect: Rect) -> Scene {
         .with_color(Color::random())
         .make();
 
-    scene.wait();
+    // scene.wait();
     scene.play(vec![circle.fade_in(), rect.fade_in()]);
-    scene.play(vec![circle.set_radius(1.0), rect.set_size(0.5, 2.0)]);
+
+    let mut animation = Vec::new();
+
+    for i in 0..1000 {
+        let change = (i % 2) as f32;
+        animation.extend(vec![
+            circle.set_radius(0.5 + change / 2.0),
+            rect.set_size(1.0 - change / 2.0, 1.0 + change),
+        ]);
+    }
+    scene.play(animation).run_time(0.1).lag(0.1);
 
     scene
 }
@@ -39,7 +49,7 @@ fn model<'a>(app: &App) -> Scene {
 
 fn update(app: &App, scene: &mut Scene, _update: Update) {
     scene.update(app.time);
-    println!("FPS = {}", app.fps());
+    // println!("FPS = {}", app.fps());
 }
 
 fn view(app: &App, scene: &mut Scene, frame: Frame) {
