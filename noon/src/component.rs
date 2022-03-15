@@ -86,6 +86,15 @@ impl Interpolate for Angle {
     }
 }
 
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct Depth(pub(crate) f32);
+
+impl Interpolate for Depth {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        Self(self.0.interp(&other.0, progress))
+    }
+}
+
 #[derive(Debug, Component, Clone, Copy)]
 pub struct FontSize(pub(crate) u32);
 

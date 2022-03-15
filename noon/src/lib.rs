@@ -18,8 +18,8 @@ pub use crate::animation::{
 
 pub use crate::color::{Color, ColorExtension};
 pub use crate::component::{
-    Angle, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position, StrokeColor,
-    StrokeWeight, Value,
+    Angle, Depth, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position,
+    StrokeColor, StrokeWeight, Value,
 };
 
 pub use crate::geom::{point, IntoPixelFrame, Point, Size};

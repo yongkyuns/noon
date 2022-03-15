@@ -3,17 +3,17 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    let line = scene.line().from(-2.0, -2.0).to(2.0, 2.0).make();
-
-    let circle = scene.circle().with_position(-2.0, 0.0).make();
-
-    let rectangle = scene.rectangle().with_position(2.0, 0.0).make();
-
     let text = scene
         .text()
         .with_text("Hello!")
         .with_position(-0.5, 0.0)
         .make();
+
+    let rectangle = scene.rectangle().with_position(2.0, 0.0).make();
+
+    let circle = scene.circle().with_position(-2.0, 0.0).make();
+
+    let line = scene.line().from(-2.0, -2.0).to(2.0, 2.0).make();
 
     scene
         .play(vec![

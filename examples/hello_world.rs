@@ -3,21 +3,21 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    let circle = scene
-        .circle()
-        .with_position(-2.0, 0.0)
-        .with_color(Color::random())
-        .make();
-
     let rect = scene
         .rectangle()
         .with_position(2.0, 0.0)
         .with_color(Color::random())
         .make();
 
+    let circle = scene
+        .circle()
+        .with_position(-2.0, 0.0)
+        .with_color(Color::random())
+        .make();
+
     scene.wait();
-    scene.play(circle.show_creation()).run_time(1.5);
     scene.play(rect.show_creation()).run_time(1.5);
+    scene.play(circle.show_creation()).run_time(1.5);
     scene.play(circle.morph(rect)).run_time(1.5);
 
     scene

@@ -10,7 +10,7 @@ impl Circle {
         let size = size.into_pxl_scale();
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();
-        let sweep_angle = Angle::radians(-TAU);
+        let sweep_angle = Angle::radians(TAU);
         let x_rotation = Angle::radians(0.0);
         let center = point(0.0, 0.0);
         let start = point(radius, 0.0);
@@ -65,6 +65,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
         &mut self.scene
     }
     fn make(&mut self) -> CircleId {
+        let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -75,6 +76,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .insert(StrokeColor(self.stroke_color))
             .insert(self.stroke_weight)
             .insert(Opacity(0.0))
+            .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(Circle::path(&Size::from_radius(self.radius)))
             .id();
@@ -96,11 +98,12 @@ pub fn draw_circle(
             &Opacity,
             &Size,
             &Path,
+            &Depth,
         ),
         With<Circle>,
     >,
 ) {
-    for (completion, position, stroke_color, stroke_weight, fill_color, alpha, size, path) in
+    for (completion, position, stroke_color, stroke_weight, fill_color, alpha, size, path, depth) in
         query.iter()
     {
         if alpha.is_visible() {
@@ -124,6 +127,7 @@ pub fn draw_circle(
             draw.path()
                 .fill()
                 .x_y(position.x, position.y)
+                .z(depth.0)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
 
@@ -137,6 +141,7 @@ pub fn draw_circle(
                 draw.path()
                     .stroke()
                     .x_y(position.x, position.y)
+                    .z(depth.0)
                     .color(stroke)
                     .stroke_weight(thickness)
                     .events(&path.clone().upto(completion.0, EPS).raw);

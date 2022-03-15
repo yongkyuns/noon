@@ -6,7 +6,6 @@ pub struct Text;
 impl Text {
     fn path(text: &str, font_size: FontSize) -> Path {
         let mut builder = Path::svg_builder();
-        // let start = point(-size.width / 2.0, size.height / 2.0);
 
         let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
         let text = nannou::text::text(text)
@@ -34,13 +33,6 @@ impl Text {
         //         .wh(rect.wh())
         //         .hsla(0.5, 1.0, 0.5, 0.5);
         // }
-
-        // builder.move_to(start);
-        // builder.line_to(point(start.x + size.width, start.y));
-        // builder.line_to(point(start.x + size.width, start.y - size.height));
-        // builder.line_to(point(start.x, start.y - size.height));
-        // builder.line_to(point(start.x, start.y));
-        // builder.close();
 
         Path::new(builder.build(), true)
     }
@@ -95,6 +87,7 @@ impl Create<TextId> for TextBuilder<'_> {
         &mut self.scene
     }
     fn make(&mut self) -> TextId {
+        let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -106,6 +99,7 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
+            .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(Text::path(&self.text, self.font_size))
             .id();
@@ -141,6 +135,7 @@ pub fn draw_text(
             &FillColor,
             &Opacity,
             &Path,
+            &Depth,
         ),
         With<Text>,
     >,
@@ -155,6 +150,7 @@ pub fn draw_text(
         fill_color,
         alpha,
         path,
+        depth,
     ) in query.iter()
     {
         if alpha.is_visible() {
@@ -172,6 +168,7 @@ pub fn draw_text(
             draw.path()
                 .fill()
                 .x_y(position.x, position.y)
+                .z(depth.0)
                 .z_degrees(angle.0)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
@@ -185,6 +182,7 @@ pub fn draw_text(
                 draw.path()
                     .stroke()
                     .x_y(position.x, position.y)
+                    .z(depth.0)
                     .z_degrees(angle.0)
                     .color(stroke)
                     .stroke_weight(thickness)

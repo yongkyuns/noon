@@ -65,6 +65,7 @@ impl Create<LineId> for LineBuilder<'_> {
         &mut self.scene
     }
     fn make(&mut self) -> LineId {
+        let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -75,6 +76,7 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
             .insert(Opacity(0.0))
+            .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(Line::path(&self.points))
             .id();
@@ -95,11 +97,12 @@ pub fn draw_line(
             &Opacity,
             &Size,
             &Path,
+            &Depth,
         ),
         With<Line>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, stroke_weight, alpha, size, path) in
+    for (completion, position, angle, stroke_color, stroke_weight, alpha, size, path, depth) in
         query.iter()
     {
         if alpha.is_visible() {
@@ -122,6 +125,7 @@ pub fn draw_line(
                 draw.path()
                     .stroke()
                     .x_y(position.x, position.y)
+                    .z(depth.0)
                     .z_degrees(angle.0)
                     .color(stroke)
                     .caps_round()

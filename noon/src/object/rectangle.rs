@@ -7,13 +7,23 @@ impl Rectangle {
     fn path(size: &Size) -> Path {
         let size = size.into_pxl_scale();
         let mut builder = Path::svg_builder();
-        let start = point(-size.width / 2.0, size.height / 2.0);
+        // let start = point(-size.width / 2.0, size.height / 2.0);
+
+        // builder.move_to(start);
+        // builder.line_to(point(start.x + size.width, start.y));
+        // builder.line_to(point(start.x + size.width, start.y - size.height));
+        // builder.line_to(point(start.x, start.y - size.height));
+        // builder.line_to(point(start.x, start.y));
+        // builder.close();
+
+        let start = point(size.width / 2.0, 0.0);
 
         builder.move_to(start);
-        builder.line_to(point(start.x + size.width, start.y));
-        builder.line_to(point(start.x + size.width, start.y - size.height));
-        builder.line_to(point(start.x, start.y - size.height));
-        builder.line_to(point(start.x, start.y));
+        builder.line_to(point(start.x, start.y + size.height / 2.0));
+        builder.line_to(point(start.x - size.width, start.y + size.height / 2.0));
+        builder.line_to(point(start.x - size.width, start.y - size.height / 2.0));
+        builder.line_to(point(start.x, start.y - size.height / 2.0));
+        builder.line_to(point(start.x, 0.0));
         builder.close();
 
         Path::new(builder.build(), true)
@@ -63,6 +73,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
         &mut self.scene
     }
     fn make(&mut self) -> RectangleId {
+        let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
         let id = world
             .spawn()
@@ -74,6 +85,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(StrokeColor(self.stroke_color))
             .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
+            .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(Rectangle::path(&self.size))
             .id();
@@ -95,12 +107,23 @@ pub fn draw_rectangle(
             &Opacity,
             &Size,
             &Path,
+            &Depth,
         ),
         With<Rectangle>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, stroke_weight, fill_color, alpha, size, path) in
-        query.iter()
+    for (
+        completion,
+        position,
+        angle,
+        stroke_color,
+        stroke_weight,
+        fill_color,
+        alpha,
+        size,
+        path,
+        depth,
+    ) in query.iter()
     {
         if alpha.is_visible() {
             let position = position.into_pxl_scale();
@@ -120,6 +143,7 @@ pub fn draw_rectangle(
             draw.path()
                 .fill()
                 .x_y(position.x, position.y)
+                .z(depth.0)
                 .z_degrees(angle.0)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
@@ -134,6 +158,7 @@ pub fn draw_rectangle(
                 draw.path()
                     .stroke()
                     .x_y(position.x, position.y)
+                    .z(depth.0)
                     .z_degrees(angle.0)
                     .join_round()
                     .color(stroke)

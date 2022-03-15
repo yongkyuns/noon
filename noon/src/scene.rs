@@ -4,6 +4,7 @@ use nannou::geom::Rect;
 use crate::component::FillColor;
 use crate::prelude::*;
 use crate::system::*;
+use crate::Depth;
 use crate::{
     circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
     FontSize, LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder, Size,
@@ -38,6 +39,7 @@ pub struct Scene {
     pub(crate) drawer: Schedule,
     pub(crate) event_time: f32,
     pub(crate) clock_time: f32,
+    pub(crate) creation_count: u32,
 }
 
 impl Scene {
@@ -90,7 +92,16 @@ impl Scene {
             drawer,
             event_time: 0.1,
             clock_time: 0.0,
+            creation_count: 0,
         }
+    }
+    /// All objects added to [Scene] has a depth value (i.e. z value)
+    /// associated with it in order to identify the order of occlusion.
+    /// Therefore, we keep a running counter of objects added and derive
+    /// depth value from it at creation.
+    pub fn increment_counter(&mut self) -> Depth {
+        self.creation_count += 1;
+        Depth(self.creation_count as f32 / 10.0)
     }
     pub fn circle(&mut self) -> CircleBuilder {
         circle(self)
