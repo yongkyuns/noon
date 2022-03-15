@@ -20,7 +20,7 @@ impl Circle {
         builder.arc(center, radii, sweep_angle, x_rotation);
         builder.close();
 
-        Path::new(builder.build())
+        Path::new(builder.build(), true)
     }
 }
 
@@ -35,12 +35,12 @@ pub struct CircleBuilder<'a> {
 
 impl<'a> CircleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
+        let fill_color = Color::random();
         Self {
             radius: 0.5,
             stroke_weight: StrokeWeight::THICK,
-            stroke_color: Default::default(),
-            // fill_color: Default::default(),
-            fill_color: Color::random(),
+            fill_color,
+            stroke_color: fill_color.brighten(),
             position: Default::default(),
             scene,
         }

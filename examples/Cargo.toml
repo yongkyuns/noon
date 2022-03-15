@@ -15,8 +15,12 @@ name = "hello_world"
 path = "hello_world.rs"
 
 [[example]]
-name = "text_transform"
-path = "text_transform.rs"
+name = "morph"
+path = "morph.rs"
+
+[[example]]
+name = "morph_text"
+path = "morph_text.rs"
 
 [[example]]
 name = "shapes"

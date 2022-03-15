@@ -26,11 +26,8 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn new(path: lyon::Path) -> Self {
-        Self {
-            raw: path,
-            closed: true,
-        }
+    pub fn new(path: lyon::Path, closed: bool) -> Self {
+        Self { raw: path, closed }
     }
     /// Expose `Lyon`'s [SVG path builder](WithSvg)
     pub fn svg_builder() -> WithSvg<lyon::path::Builder> {
@@ -70,7 +67,10 @@ impl Path {
 
     /// Apply given scale to the path.
     pub fn scale(&self, x: f32, y: f32) -> Self {
-        Self::new(self.raw.clone().transformed(&Transform::scale(x, y)))
+        Self::new(
+            self.raw.clone().transformed(&Transform::scale(x, y)),
+            self.closed,
+        )
     }
 }
 
@@ -97,6 +97,7 @@ impl Interpolate for Path {
             for (src, dst) in segments_src.iter().zip(segments_dst.iter()) {
                 interpolated.push(interp_segment(src, dst, progress, tol, self.closed));
             }
+            // Path::new(interpolated.get(0).unwrap().raw.clone(), self.closed)
             if segments_src.len() > segments_dst.len() {
                 for src in segments_src.iter().skip(segments_dst.len()) {
                     interpolated.push(interp_segment(
@@ -152,15 +153,17 @@ fn interp_segment(
             builder.close();
         }
     }
-    Path::new(builder.build())
+    Path::new(builder.build(), closed)
 }
 
 fn merge_segments(paths: &[Path]) -> Path {
     let mut builder = Path::builder();
+    let mut closed = true;
     for path in paths {
+        closed = path.closed;
         builder.concatenate(&vec![path.raw.as_slice()]);
     }
-    Path::new(builder.build())
+    Path::new(builder.build(), closed)
 }
 
 fn get_segments(path: &Path) -> Vec<Path> {
@@ -183,7 +186,7 @@ fn get_segment(path_iter: &mut Iter) -> Option<Path> {
         }
     }
     if count > 0 {
-        Some(Path::new(builder.build()))
+        Some(Path::new(builder.build(), true))
     } else {
         None
     }
@@ -312,7 +315,7 @@ impl GetPartial for Path {
                     _ => (),
                 }
             }
-            Self::new(builder.build())
+            Self::new(builder.build(), self.closed)
         }
     }
 }
@@ -334,7 +337,7 @@ mod tests {
             builder.path_event(e);
         }
         builder.close();
-        let path = Path::new(builder.build());
+        let path = Path::new(builder.build(), true);
         let partial_path = path.upto(0.5, 0.01);
 
         println!("length = {}", partial_path.approximate_length(0.01));
@@ -346,7 +349,7 @@ mod tests {
         builder.move_to(point(0.0, 0.0));
         builder.line_to(point(10.0, 0.0));
         builder.close();
-        let path = Path::new(builder.build()).upto(0.5, 0.01);
+        let path = Path::new(builder.build(), true).upto(0.5, 0.01);
         for e in path.raw.iter().flattened(0.01) {
             match e {
                 PathEvent::Begin { .. } => {}
@@ -384,7 +387,7 @@ mod tests {
         builder.quadratic_bezier_to(point(15.0, 5.0), point(20.0, 0.0));
         builder.close();
 
-        let path = Path::new(builder.build());
+        let path = Path::new(builder.build(), true);
         let l = approximate_length(path.raw.iter(), 0.01);
         let l2 = path.approximate_length(0.01);
 
@@ -435,7 +438,7 @@ mod tests {
         builder.line_to(point(100.0, 300.0));
         builder.line_to(point(-300.0, 300.0));
         builder.close();
-        let size = Path::new(builder.build()).size();
+        let size = Path::new(builder.build(), true).size();
         assert_eq!(400.0, size.width);
         assert_eq!(100.0, size.height);
     }

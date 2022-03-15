@@ -33,7 +33,7 @@ impl<'a> LineBuilder<'a> {
         Self {
             points: Vec::new(),
             stroke_weight: StrokeWeight::THICK,
-            stroke_color: Default::default(),
+            stroke_color: Color::random(),
             angle: Default::default(),
             scene,
         }

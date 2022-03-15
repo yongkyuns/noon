@@ -42,7 +42,7 @@ impl Text {
         // builder.line_to(point(start.x, start.y));
         // builder.close();
 
-        Path::new(builder.build())
+        Path::new(builder.build(), true)
     }
 }
 
@@ -59,12 +59,13 @@ pub struct TextBuilder<'a> {
 
 impl<'a> TextBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
+        let fill_color = Color::random();
         Self {
             text: String::new(),
             font_size: FontSize(90),
             stroke_weight: StrokeWeight::THIN,
-            stroke_color: Default::default(),
-            fill_color: Default::default(),
+            fill_color,
+            stroke_color: fill_color.brighten(),
             position: Default::default(),
             angle: Default::default(),
             scene,

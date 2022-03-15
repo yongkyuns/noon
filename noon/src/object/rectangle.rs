@@ -16,7 +16,7 @@ impl Rectangle {
         builder.line_to(point(start.x, start.y));
         builder.close();
 
-        Path::new(builder.build())
+        Path::new(builder.build(), true)
     }
 }
 
@@ -32,15 +32,15 @@ pub struct RectangleBuilder<'a> {
 
 impl<'a> RectangleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
+        let fill_color = Color::random();
         Self {
             size: Size {
                 width: 1.0,
                 height: 1.0,
             },
             stroke_weight: StrokeWeight::THICK,
-            stroke_color: Default::default(),
-            // fill_color: Default::default(),
-            fill_color: Color::random(),
+            fill_color,
+            stroke_color: fill_color.brighten(),
             position: Default::default(),
             angle: Default::default(),
             scene,
