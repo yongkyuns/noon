@@ -20,7 +20,7 @@ use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Si
 mod common {
     pub use crate::path::GetPartial;
     pub use crate::{
-        Angle, AnimBuilder, Animation, Cached, Color, ColorExtension, Create, Depth, EaseType,
+        Angle, AnimBuilder, Animation, Color, ColorExtension, Create, Depth, EaseType,
         EntityAnimations, FillColor, FontSize, IntoPixelFrame, Opacity, Path, PathCompletion,
         PathComponent, Point, Position, Previous, Scene, Size, StrokeColor, StrokeWeight, Value,
         WithAngle, WithColor, WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize,

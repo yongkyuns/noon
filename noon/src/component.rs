@@ -1,4 +1,4 @@
-use crate::{point, Color, IntoPixelFrame, Point, Size, TO_PXL};
+use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
 use std::ops::Add;
@@ -216,81 +216,37 @@ pub enum Value<C> {
     From(Entity),
 }
 
-/// Cache is used to wrap around any [Component] and keep track of
-/// it's changes.
-///
-/// Since `Bevy`'s ECS system does not specifically provide mechanisms
-/// for querying the amount of change that occured, we need to handle
-/// it via this data type. It means we need to add [Cache] for any
-/// component which we intend to keep track of it's change amount,
-/// but it gets the job done without too much work for now.
-///
-/// Where is this actually used? Since [Path](crate::Path) and
-/// [Size](crate::Size) are both [Component]s of ECS and go through
-/// different animations (e.g. path changes when morphing, and size
-/// changes when scaling), we need to sync them when change occurs in
-/// one of them. Therefore, when size changes, scale is computed by
-/// observing their delta, and applies respective changes to the path.
-#[derive(Component, Clone, Copy)]
-pub struct Cached<T> {
-    pub(crate) before: T,
-    pub(crate) now: T,
-}
+// /// Cache is used to wrap around any [Component] and keep track of
+// /// it's changes.
+// ///
+// /// Since `Bevy`'s ECS system does not specifically provide mechanisms
+// /// for querying the amount of change that occured, we need to handle
+// /// it via this data type. It means we need to add [Cache] for any
+// /// component which we intend to keep track of it's change amount,
+// /// but it gets the job done without too much work for now.
+// ///
+// /// Where is this actually used? Since [Path](crate::Path) and
+// /// [Size](crate::Size) are both [Component]s of ECS and go through
+// /// different animations (e.g. path changes when morphing, and size
+// /// changes when scaling), we need to sync them when change occurs in
+// /// one of them. Therefore, when size changes, scale is computed by
+// /// observing their delta, and applies respective changes to the path.
+// #[derive(Component, Clone, Copy)]
+// pub struct Cached<T> {
+//     pub(crate) before: T,
+//     pub(crate) now: T,
+// }
 
-// use nannou::math::num_traits::Float;
-impl<T> Cached<T>
-where
-    T: Component + Clone + Copy,
-{
-    pub fn new(value: T) -> Self {
-        Self {
-            before: value,
-            now: value,
-        }
-    }
-    pub fn update(&mut self, value: T) {
-        self.before = self.now;
-        self.now = value;
-    }
-    // pub fn has_changed(&self) {
-    //     self.before Float::epsilon();
-    // }
-}
-
-impl Cached<Size> {
-    pub fn has_changed(&self) -> bool {
-        if ((self.before.width - self.now.width).abs() > 1.0e-4)
-            || ((self.before.height - self.now.height).abs() > 1.0e-4)
-        {
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl<T> Interpolate for Cached<T>
-where
-    T: Interpolate + Component + Clone + Copy,
-{
-    fn interp(&self, other: &Self, progress: f32) -> Self {
-        let before = self.now;
-        Self {
-            before,
-            now: Interpolate::interp(&self.now, &other.now, progress),
-        }
-    }
-}
-
-#[derive(Component, Clone, Copy)]
-pub struct Previous<T>(pub(crate) T);
-
-// impl<T> Previous<T>
+// // use nannou::math::num_traits::Float;
+// impl<T> Cached<T>
 // where
 //     T: Component + Clone + Copy,
 // {
 //     pub fn new(value: T) -> Self {
-//         Self(value)
+//         Self {
+//             before: value,
+//             now: value,
+//         }
 //     }
 //     pub fn update(&mut self, value: T) {
 //         self.before = self.now;
@@ -312,3 +268,19 @@ pub struct Previous<T>(pub(crate) T);
 //         }
 //     }
 // }
+
+// impl<T> Interpolate for Cached<T>
+// where
+//     T: Interpolate + Component + Clone + Copy,
+// {
+//     fn interp(&self, other: &Self, progress: f32) -> Self {
+//         let before = self.now;
+//         Self {
+//             before,
+//             now: Interpolate::interp(&self.now, &other.now, progress),
+//         }
+//     }
+// }
+
+#[derive(Component, Clone, Copy)]
+pub struct Previous<T>(pub(crate) T);
