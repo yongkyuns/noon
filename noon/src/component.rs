@@ -248,10 +248,12 @@ impl IntoLinSrgba<f32> for StrokeColor {
 /// 3. Use another object's current state as the final value
 #[derive(Component, Clone, Copy, Debug)]
 pub enum Value<C> {
-    /// Indicates a relative change to apply in animation
-    Relative(C),
     /// Indicates an absolute final state for animation
     Absolute(C),
+    /// Indicates a relative change to apply in animation
+    Relative(C),
+    /// Indicates a multiplicative change to apply in animation
+    Multiply(C),
     /// Contains another object's ID to query for it's information
     From(Entity),
 }

@@ -143,7 +143,6 @@ pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
 /// [Interpolate] can be updated here, based on the corresponding [Animations]
 /// for that attribute. [Time] is used as a trigger for each
 /// [Animation](crate::Animation) contained within [Animations].
-///
 pub fn animate<Attribute: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
@@ -164,6 +163,32 @@ pub fn animate<Attribute: Interpolate + Component + Clone>(
                     }
                 };
                 animation.update(&mut att, progress);
+            } else if end < t && t <= end + 0.1 {
+                animation.update(&mut att, 1.0);
+            }
+        }
+    }
+}
+
+/// A one-off implementation of [Size] animation system from [animate] system.
+/// There are two reasons for not using the generic [animate] system:
+pub fn animate_size(time: Res<Time>, mut query: Query<(&mut Size, &mut Animations<Size>)>) {
+    for (mut att, mut animations) in query.iter_mut() {
+        for animation in animations.0.iter_mut() {
+            let t = time.seconds;
+            let begin = animation.start_time;
+            let duration = animation.duration;
+            let end = animation.start_time + animation.duration + 0.0;
+
+            if begin < t && t <= end {
+                let progress = {
+                    if duration > 0.0 {
+                        animation.rate_func.calculate((t - begin) / duration)
+                    } else {
+                        1.0
+                    }
+                };
+                animation.update_size(&mut att, progress);
             } else if end < t && t <= end + 0.1 {
                 animation.update(&mut att, 1.0);
             }

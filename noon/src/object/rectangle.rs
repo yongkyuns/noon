@@ -146,7 +146,7 @@ pub fn draw_rectangle(
                 .fill()
                 .x_y(position.x, position.y)
                 .z(depth.0)
-                .z_degrees(angle.0)
+                .z_radians(angle.0)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
 
@@ -161,7 +161,7 @@ pub fn draw_rectangle(
                     .stroke()
                     .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_degrees(angle.0)
+                    .z_radians(angle.0)
                     .join_round()
                     .color(stroke)
                     .stroke_weight(thickness)

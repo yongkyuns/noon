@@ -22,7 +22,7 @@ pub use crate::component::{
     Previous, StrokeColor, StrokeWeight, Transform, Value,
 };
 
-pub use crate::geom::{point, IntoPixelFrame, Point, Size};
+pub use crate::geom::{point, IntoPixelFrame, Point, Size, Vector};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;
@@ -39,6 +39,7 @@ pub mod prelude {
         WithColor, WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize, WithStroke,
         WithStrokeWeight,
     };
+    pub use crate::consts::*;
     pub use crate::{
         object::{CircleId, TextId},
         CircleBuilder, Color, ColorExtension, EaseType, Scene, StrokeWeight, TextBuilder,

@@ -1,11 +1,14 @@
+use std::ops::{Add, Mul};
+
 use bevy_ecs::{
     entity::Entity,
     prelude::{Component, World},
 };
 
+// use crate::prelude::*;
 use crate::{
     Angle, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion, Position,
-    Scene, Size, StrokeColor, StrokeWeight, Value,
+    Scene, Size, StrokeColor, StrokeWeight, Value, Vector,
 };
 
 mod builder;
@@ -57,10 +60,7 @@ pub struct Animation<T> {
     pub(crate) init_rate_func: bool,
 }
 
-impl<T> Animation<T>
-where
-    T: Interpolate + Component + Clone,
-{
+impl<T> Animation<T> {
     pub fn to(to: T) -> Self {
         Self {
             begin: None,
@@ -100,6 +100,19 @@ where
         }
     }
 
+    pub fn times(by: T) -> Self {
+        Self {
+            begin: None,
+            end: Value::Multiply(by),
+            duration: 1.0,
+            start_time: 0.0,
+            rate_func: EaseType::Linear,
+            init_duration: true,
+            init_start_time: true,
+            init_rate_func: true,
+        }
+    }
+
     pub fn with_duration(mut self, duration: f32) -> Self {
         self.duration = duration;
         self.init_duration = false;
@@ -125,7 +138,10 @@ where
         }
     }
 
-    pub fn init_from_target(&mut self, end: &T) {
+    pub fn init_from_target(&mut self, end: &T)
+    where
+        T: Clone,
+    {
         match &self.end {
             Value::From(_entity) => {
                 self.end = Value::Absolute(end.clone());
@@ -134,11 +150,68 @@ where
         }
     }
 
-    pub fn update(&mut self, property: &mut T, progress: f32) {
+    pub fn update(&mut self, property: &mut T, progress: f32)
+    where
+        T: Interpolate + Component + Clone,
+    {
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
             (None, Value::Absolute(_to)) => {
                 self.begin = Some(property.clone());
+            }
+            // (None, Value::Relative(by)) => {
+            //     println!("Struct");
+            // }
+            _ => (),
+        }
+    }
+
+    // pub fn update(&mut self, property: &mut T, progress: f32)
+    // where
+    //     T: Interpolate + Component + Clone + Add<T>,
+    // {
+    //     match (&mut self.begin, &mut self.end) {
+    //         (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+    //         (None, Value::Absolute(_to)) => {
+    //             self.begin = Some(property.clone());
+    //         }
+    //         _ => (),
+    //     }
+    // }
+}
+
+// impl<T> Update<T> for Animation<T>
+// where
+//     T: Interpolate + Component + Clone + Add<T>,
+// {
+//     fn update(&mut self, property: &mut T, progress: f32) {
+//         match (&mut self.begin, &mut self.end) {
+//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+//             (None, Value::Absolute(_to)) => {
+//                 self.begin = Some(property.clone());
+//             }
+//             (None, Value::Relative(by)) => {
+//                 println!("Trait");
+//             }
+//             _ => (),
+//         }
+//     }
+// }
+
+pub trait Update<T> {
+    fn update(&mut self, property: &mut T, progress: f32);
+}
+
+impl Animation<Size> {
+    pub fn update_size(&mut self, property: &mut Size, progress: f32) {
+        match (&mut self.begin, &mut self.end) {
+            (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+            (None, Value::Absolute(_to)) => {
+                self.begin = Some(*property);
+            }
+            (None, Value::Multiply(by)) => {
+                self.begin = Some(*property);
+                self.end = Value::Absolute(*property * *by);
             }
             _ => (),
         }
@@ -149,9 +222,9 @@ impl Animation<Position> {
     pub fn update_position(&mut self, property: &mut Position, progress: f32) {
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-            (Some(begin), Value::Relative(by)) => {
-                self.end = Value::Absolute(*begin + *by);
-            }
+            // (Some(begin), Value::Relative(by)) => {
+            //     self.end = Value::Absolute(*begin + *by);
+            // }
             (None, Value::Absolute(_to)) => {
                 self.begin = Some(*property);
             }
