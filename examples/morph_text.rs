@@ -7,11 +7,11 @@ fn scene(win_rect: Rect) -> Scene {
     let mut show = Vec::new();
 
     for _ in 0..3 {
-        let text = random_text(&mut scene, "Hello World! This is some text");
-        show.push(text.show_creation());
-
         let text2 = random_text(&mut scene, "This example shows shape transfrom");
         show.push(text2.show_creation());
+
+        let text = random_text(&mut scene, "Hello World! This is some text");
+        show.push(text.show_creation());
 
         morph.push(text.morph(text2));
         morph.push(text2.fade_out());

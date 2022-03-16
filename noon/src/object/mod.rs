@@ -22,9 +22,9 @@ mod common {
     pub use crate::{
         Angle, AnimBuilder, Animation, Color, ColorExtension, Create, Depth, EaseType,
         EntityAnimations, FillColor, FontSize, IntoPixelFrame, Opacity, Path, PathCompletion,
-        PathComponent, Point, Position, Previous, Scene, Size, StrokeColor, StrokeWeight, Value,
-        WithAngle, WithColor, WithFill, WithFontSize, WithId, WithPath, WithPosition, WithSize,
-        WithStroke, WithStrokeWeight, EPS, TO_PXL,
+        PathComponent, Point, Position, Previous, Scene, Size, StrokeColor, StrokeWeight,
+        Transform, Value, WithAngle, WithColor, WithFill, WithFontSize, WithId, WithPath,
+        WithPosition, WithSize, WithStroke, WithStrokeWeight, EPS, TO_PXL,
     };
     pub use bevy_ecs::prelude::*;
     pub use nannou::color::Rgba;

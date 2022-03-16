@@ -1,6 +1,7 @@
 use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
+use nannou::lyon::math as euclid;
 use std::ops::Add;
 
 pub trait Interpolate<T = Self> {
@@ -24,6 +25,45 @@ impl Interpolate for u32 {
 
 #[derive(Component)]
 pub struct Name(String);
+
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct Transform(pub(crate) euclid::Transform);
+
+impl Transform {
+    pub fn new() -> Self {
+        Self(euclid::Transform::identity())
+    }
+    pub fn identity() -> Self {
+        Self(euclid::Transform::identity())
+    }
+    /// Translation. Untested
+    pub fn translate(mut self, x: f32, y: f32) -> Self {
+        self.translate_mut(x, y);
+        self
+    }
+    /// Translation. Untested
+    pub fn translate_mut(&mut self, x: f32, y: f32) {
+        *self = Self(self.0.then_translate(euclid::Vector::new(x, y)));
+    }
+    /// Rotation. Untested
+    pub fn rotate(mut self, radians: f32) -> Self {
+        self.rotate_mut(radians);
+        self
+    }
+    /// Rotation. Untested
+    pub fn rotate_mut(&mut self, radians: f32) {
+        *self = Self(self.0.then_rotate(euclid::Angle::radians(radians)));
+    }
+    /// Scale. Untested
+    pub fn scale(mut self, x: f32, y: f32) -> Self {
+        self.scale_mut(x, y);
+        self
+    }
+    /// Scale. Untested
+    pub fn scale_mut(&mut self, x: f32, y: f32) {
+        *self = Self(self.0.then_scale(x, y));
+    }
+}
 
 #[derive(Debug, Component, Default, Clone, Copy)]
 pub struct Position {
@@ -216,6 +256,9 @@ pub enum Value<C> {
     From(Entity),
 }
 
+#[derive(Component, Clone, Copy)]
+pub struct Previous<T>(pub(crate) T);
+
 // /// Cache is used to wrap around any [Component] and keep track of
 // /// it's changes.
 // ///
@@ -281,6 +324,3 @@ pub enum Value<C> {
 //         }
 //     }
 // }
-
-#[derive(Component, Clone, Copy)]
-pub struct Previous<T>(pub(crate) T);

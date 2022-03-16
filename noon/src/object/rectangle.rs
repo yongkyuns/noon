@@ -89,6 +89,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(Rectangle::path(&self.size))
+            .insert(Transform::identity())
             .id();
 
         id.into()

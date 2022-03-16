@@ -27,7 +27,11 @@ fn scene(win_rect: Rect) -> Scene {
             rect.set_size(1.0 - change / 2.0, 1.0 + change),
         ]);
     }
-    scene.play(animation).run_time(0.1).lag(0.1);
+    scene
+        .play(animation)
+        .run_time(0.3)
+        .lag(0.3)
+        .rate_func(EaseType::BackOut);
 
     scene
 }
