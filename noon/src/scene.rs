@@ -89,13 +89,13 @@ impl Scene {
         updater.add_stage(
             "update",
             SystemStage::parallel()
-                .with_system(update_previous::<Size>.before(Label::Regular))
-                // Beginnning of Regular systems
+                .with_system(update_previous::<Size>.before(Label::Init))
+                // Beginnning of Main systems
                 .with_system(init_from_target::<Position>)
                 .with_system(init_from_target::<FillColor>)
                 .with_system(init_from_target::<StrokeColor>)
                 .with_system(init_from_target::<StrokeWeight>)
-                .with_system(init_from_target::<Size>.label(Label::Regular))
+                .with_system(init_from_target::<Size>.label(Label::Init))
                 .with_system(init_from_target::<Angle>)
                 .with_system(init_from_target::<Opacity>)
                 .with_system(init_from_target::<PathCompletion>)
@@ -104,15 +104,15 @@ impl Scene {
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
                 .with_system(animate::<StrokeWeight>)
-                .with_system(animate_with_multiply::<Size>.label(Label::Regular))
+                .with_system(animate_with_multiply::<Size>.label(Label::Main))
                 .with_system(animate_with_relative::<Angle>)
                 .with_system(animate_with_relative::<Opacity>)
                 .with_system(animate_with_relative::<PathCompletion>)
                 .with_system(animate_with_relative::<FontSize>)
-                // These need to run after all the other ones (i.e. Regular)
-                .with_system(init_from_target::<Path>.after(Label::Regular))
-                .with_system(animate::<Path>.after(Label::Regular))
-                .with_system(update_path_from_size_change.after(Label::Regular))
+                // These need to run after all the other ones (i.e. Main)
+                .with_system(init_from_target::<Path>.after(Label::Main))
+                .with_system(animate::<Path>.after(Label::Main))
+                .with_system(update_path_from_size_change.after(Label::Main))
                 .with_system(print),
         );
         let mut drawer = Schedule::default();

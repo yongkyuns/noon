@@ -11,7 +11,9 @@ use crate::{
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
 pub enum Label {
-    Regular,
+    Init,
+    Main,
+    Post,
 }
 
 pub struct Time {
@@ -180,6 +182,7 @@ fn common_update<C, F>(
 /// [Interpolate] can be updated here, based on the corresponding [Animations]
 /// for that attribute. [Time] is used as a trigger for each
 /// [Animation](crate::Animation) contained within [Animations].
+///
 pub fn animate<C: Interpolate + Component + Clone>(
     time: Res<Time>,
     query: Query<(&mut C, &mut Animations<C>)>,

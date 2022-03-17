@@ -16,11 +16,17 @@ fn scene(win_rect: Rect) -> Scene {
         .make();
 
     scene.play(vec![circle.show_creation(), rect.fade_in()]);
-    scene.play(circle.scale(0.5));
-    scene.play(circle.to_edge(Direction::Up));
+    // scene.play(circle.scale(0.5));
+    // scene.play(circle.to_edge(Direction::Up));
+    // // scene.play(circle.move_to(-2.0, 4.5));
+    // scene.play(circle.scale(2.0));
+    // scene.play(circle.to_edge(Direction::Right));
+
+    scene.play(rect.rotate(noon::PI / 4.0));
+    scene.play(rect.to_edge(Direction::Up));
     // scene.play(circle.move_to(-2.0, 4.5));
-    scene.play(circle.scale(2.0));
-    scene.play(circle.to_edge(Direction::Right));
+    // scene.play(circle.scale(2.0));
+    // scene.play(circle.to_edge(Direction::Right));
 
     // for i in 0..1000 {
     //     let change = (i % 2) as f32;
