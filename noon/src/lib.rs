@@ -41,6 +41,7 @@ pub mod prelude {
     };
     pub use crate::consts::*;
     pub use crate::{
+        geom::Direction,
         object::{CircleId, TextId},
         CircleBuilder, Color, ColorExtension, EaseType, Scene, StrokeWeight, TextBuilder,
     };

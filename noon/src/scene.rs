@@ -11,30 +11,46 @@ use crate::{
     StrokeColor,
 };
 
-pub struct Bounds {
-    rect: Rect,
-}
+pub struct Bounds(pub(crate) Rect);
 
 impl Bounds {
     pub fn new(rect: Rect) -> Self {
-        Self { rect }
+        Self(rect)
     }
     pub fn none() -> Self {
-        Self {
-            rect: Rect::from_w_h(0.0, 0.0),
-        }
+        Self(Rect::from_w_h(0.0, 0.0))
     }
     pub fn edge_upper(&self) -> f32 {
-        self.rect.y.end
+        self.0.y.end / TO_PXL
     }
     pub fn edge_lower(&self) -> f32 {
-        self.rect.y.start
+        self.0.y.start / TO_PXL
     }
     pub fn edge_left(&self) -> f32 {
-        self.rect.x.start
+        self.0.x.start / TO_PXL
     }
     pub fn edge_right(&self) -> f32 {
-        self.rect.x.end
+        self.0.x.end / TO_PXL
+    }
+    pub fn get_edge(&self, now: Position, direction: Direction) -> Position {
+        match direction {
+            Direction::Up => Position {
+                x: now.x,
+                y: self.edge_upper(),
+            },
+            Direction::Down => Position {
+                x: now.x,
+                y: self.edge_lower(),
+            },
+            Direction::Left => Position {
+                x: self.edge_left(),
+                y: now.y,
+            },
+            Direction::Right => Position {
+                x: self.edge_right(),
+                y: now.y,
+            },
+        }
     }
 }
 
@@ -68,7 +84,7 @@ impl Scene {
                 .with_system(init_from_target::<Opacity>)
                 .with_system(init_from_target::<PathCompletion>)
                 .with_system(init_from_target::<FontSize>)
-                .with_system(animate_with_relative::<Position>)
+                .with_system(animate_position)
                 .with_system(animate::<FillColor>)
                 .with_system(animate::<StrokeColor>)
                 .with_system(animate::<StrokeWeight>)
@@ -130,10 +146,13 @@ impl Scene {
         let t = self.clock_time;
         self.play(c.show_creation()).start_time(t).run_time(0.1);
     }
-    pub fn update(&mut self, now: f32) {
+    pub fn update(&mut self, now: f32, win_rect: Rect) {
         self.world
             .get_resource_mut::<Time>()
             .map(|mut t| t.seconds = now);
+        self.world
+            .get_resource_mut::<Bounds>()
+            .map(|mut bounds| *bounds = Bounds(win_rect));
 
         self.updater.run(&mut self.world);
         self.clock_time = now;

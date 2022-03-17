@@ -75,6 +75,12 @@ impl EaseType {
         ease_func(t, 0.0, 1.0, 1.0)
     }
 }
+
+impl Default for EaseType {
+    fn default() -> Self {
+        Self::Quad
+    }
+}
 // Linear takes normalized time and returns unmodified value.
 // This is the default ease function in addition to pennereq crate.
 pub mod linear {

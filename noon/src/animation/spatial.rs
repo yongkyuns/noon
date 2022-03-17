@@ -23,6 +23,12 @@ pub trait WithPosition: WithId {
             .into(),
         }
     }
+    fn to_edge(&self, direction: Direction) -> EntityAnimations {
+        EntityAnimations {
+            entity: self.id(),
+            animations: Animation::<Position>::to_edge(direction).into(),
+        }
+    }
     fn move_to_object(&self, object: impl Into<Entity>) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),

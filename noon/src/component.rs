@@ -1,3 +1,4 @@
+use crate::prelude::Direction;
 use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
@@ -282,6 +283,8 @@ pub enum Value<C> {
     Relative(C),
     /// Indicates a multiplicative change to apply in animation
     Multiply(C),
+    /// Used for moving object to edges
+    Edge(Direction),
     /// Contains another object's ID to query for it's information
     From(Entity),
 }

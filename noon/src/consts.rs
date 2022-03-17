@@ -1,5 +1,8 @@
 use crate::Vector;
 
+pub const PXL_WIDTH: u32 = 1920;
+pub const PXL_HEIGHT: u32 = 1080;
+
 /// Path flattenening tolerance for normal shapes under normal condition.
 pub const EPS: f32 = 0.01;
 

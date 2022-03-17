@@ -3,6 +3,14 @@ use bevy_ecs::prelude::Component;
 pub use nannou::lyon::math::{point, Point, Vector};
 use std::{marker::PhantomData, ops::Mul};
 
+#[derive(Component, Clone, Copy, Debug)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 /// Trait for converting from native Noon scale into pixel scale
 pub trait IntoPixelFrame {
     fn into_pxl_scale(&self) -> Self;

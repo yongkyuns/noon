@@ -2,13 +2,13 @@ use std::ops::{Add, Mul};
 
 use bevy_ecs::{
     entity::Entity,
-    prelude::{Component, World},
+    prelude::{Component, Res, World},
 };
 
 // use crate::prelude::*;
 use crate::{
-    Angle, EaseType, FillColor, FontSize, Interpolate, Opacity, Path, PathCompletion, Position,
-    Scene, Size, StrokeColor, StrokeWeight, Value, Vector,
+    prelude::Direction, Angle, Bounds, EaseType, FillColor, FontSize, Interpolate, Opacity, Path,
+    PathCompletion, Position, Scene, Size, StrokeColor, StrokeWeight, Value, Vector,
 };
 
 mod builder;
@@ -67,7 +67,7 @@ impl<T> Animation<T> {
             end: Value::Absolute(to),
             duration: 1.0,
             start_time: 0.0,
-            rate_func: EaseType::Quint,
+            rate_func: EaseType::Quad,
             init_duration: true,
             init_start_time: true,
             init_rate_func: true,
@@ -80,7 +80,7 @@ impl<T> Animation<T> {
             end: Value::From(target),
             duration: 1.0,
             start_time: 0.0,
-            rate_func: EaseType::Linear,
+            rate_func: Default::default(),
             init_duration: true,
             init_start_time: true,
             init_rate_func: true,
@@ -93,7 +93,7 @@ impl<T> Animation<T> {
             end: Value::Relative(by),
             duration: 1.0,
             start_time: 0.0,
-            rate_func: EaseType::Linear,
+            rate_func: Default::default(),
             init_duration: true,
             init_start_time: true,
             init_rate_func: true,
@@ -106,7 +106,7 @@ impl<T> Animation<T> {
             end: Value::Multiply(by),
             duration: 1.0,
             start_time: 0.0,
-            rate_func: EaseType::Linear,
+            rate_func: Default::default(),
             init_duration: true,
             init_start_time: true,
             init_rate_func: true,
@@ -194,6 +194,12 @@ impl<T> Animation<T> {
         }
     }
 
+    /// This function is similar to `Self::update()`, but also
+    /// allows multiplicative changes to be animated, e.g. scaling
+    /// [scale()](crate::WithSize::scale()).
+    ///
+    /// If regular update is used, these multiplicative changes will not
+    /// perform any animation.
     pub fn update_with_multiply(&mut self, property: &mut T, progress: f32)
     where
         T: Interpolate + Component + Clone + Mul<Output = T>,
@@ -212,46 +218,49 @@ impl<T> Animation<T> {
     }
 }
 
-// pub trait Update<T> {
-//     fn update(&mut self, property: &mut T, progress: f32);
-// }
+impl Animation<Position> {
+    /// Update function for [Position] to be called by [System](bevy_ecs::prelude::System).
+    ///
+    /// This function expects current position of the object and normalized progress
+    /// status of animation. In addition to the regular update function, this function
+    /// also expects the edges of window frame in order to animate moving to edges.
+    pub fn update_position(
+        &mut self,
+        position: &mut Position,
+        progress: f32,
+        bounds: &Res<Bounds>,
+    ) {
+        match (&mut self.begin, &mut self.end) {
+            (Some(begin), Value::Absolute(to)) => *position = begin.interp(&to, progress),
+            (None, Value::Absolute(_to)) => {
+                self.begin = Some(*position);
+            }
+            (None, Value::Relative(by)) => {
+                self.begin = Some(*position);
+                self.end = Value::Absolute(*position + *by);
+            }
+            (None, Value::Edge(direction)) => {
+                self.begin = Some(*position);
+                self.end = Value::Absolute(bounds.get_edge(*position, *direction));
+            }
+            _ => (),
+        }
+    }
 
-// impl Animation<Size> {
-//     pub fn update_size(&mut self, property: &mut Size, progress: f32) {
-//         match (&mut self.begin, &mut self.end) {
-//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-//             (None, Value::Absolute(_to)) => {
-//                 self.begin = Some(*property);
-//             }
-//             (None, Value::Multiply(by)) => {
-//                 self.begin = Some(*property);
-//                 self.end = Value::Absolute(*property * *by);
-//             }
-//             _ => (),
-//         }
-//     }
-// }
-
-// impl Animation<Position> {
-//     pub fn update_position(
-//         &mut self,
-//         property: &mut Position,
-//         progress: f32,
-//         bounds: &Res<Bounds>,
-//     ) {
-//         match (&mut self.begin, &mut self.end) {
-//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-//             (None, Value::Absolute(_to)) => {
-//                 self.begin = Some(*property);
-//             }
-//             (None, Value::Relative(by)) => {
-//                 self.begin = Some(*property);
-//                 self.end = Value::Absolute(*property + *by);
-//             }
-//             _ => (),
-//         }
-//     }
-// }
+    /// Animation constructor command called by [WithPosition::to_edge].
+    pub fn to_edge(direction: Direction) -> Self {
+        Self {
+            begin: None,
+            end: Value::Edge(direction),
+            duration: 1.0,
+            start_time: 0.0,
+            rate_func: Default::default(),
+            init_duration: true,
+            init_start_time: true,
+            init_rate_func: true,
+        }
+    }
+}
 
 impl<T> Into<Vec<AnimationType>> for Animation<T>
 where

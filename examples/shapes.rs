@@ -87,7 +87,7 @@ fn model<'a>(app: &App) -> Scene {
 }
 
 fn update(app: &App, scene: &mut Scene, _update: Update) {
-    scene.update(app.time);
+    scene.update(app.time, app.window_rect());
     println!("FPS = {}", app.fps());
 }
 

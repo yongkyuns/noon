@@ -17,6 +17,8 @@ fn scene(win_rect: Rect) -> Scene {
 
     scene.play(vec![circle.fade_in(), rect.fade_in()]);
 
+    scene.play(circle.to_edge(Direction::Right));
+
     for i in 0..1000 {
         let change = (i % 2) as f32;
 
@@ -50,7 +52,7 @@ fn model<'a>(app: &App) -> Scene {
 }
 
 fn update(app: &App, scene: &mut Scene, _update: Update) {
-    scene.update(app.time);
+    scene.update(app.time, app.window_rect());
     // println!("FPS = {}", app.fps());
 }
 
