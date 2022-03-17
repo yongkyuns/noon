@@ -22,7 +22,7 @@ pub use crate::component::{
     Previous, StrokeColor, StrokeWeight, Transform, Value,
 };
 
-pub use crate::geom::{point, IntoPixelFrame, Point, Size, Vector};
+pub use crate::geom::{point, BoundingSize, IntoPixelFrame, Point, Size, Vector};
 pub use crate::path::{GetPartial, Path, PathComponent};
 pub use consts::*;
 pub use ease::EaseType;

@@ -6,7 +6,8 @@ use std::{
 use bevy_ecs::prelude::*;
 
 use crate::{
-    Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Previous, Size,
+    Angle, Animation, Animations, BoundingSize, Bounds, Circle, FillColor, Interpolate, Path,
+    Position, Previous, Size,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
@@ -77,21 +78,38 @@ impl Time {
 //     }
 // }
 
-pub fn update_path_from_size_change(
-    mut query: Query<(Entity, &mut Path, &Size, &Previous<Size>), Changed<Previous<Size>>>,
-) {
-    for (_entity, mut path, size_now, size_prev) in query.iter_mut() {
-        let scale = size_prev.0.scale_factor(size_now);
-        // println!("{:?},{},{}", entity, scale.0, scale.1);
-        *path = path.scale(scale.0, scale.1);
+pub fn bbox_angle_update(mut query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
+    for (mut bbox, path, angle) in query.iter_mut() {
+        *bbox = BoundingSize::from(path, angle.0);
     }
 }
 
-pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous<T>), Changed<T>>) {
-    for (current, mut prev) in query.iter_mut() {
-        prev.0 = current.clone();
+pub fn update_path_from_size_change(
+    mut query: Query<
+        (
+            &mut Path,
+            &Size,
+            &mut Previous<Size>,
+            &mut BoundingSize,
+            &Angle,
+        ),
+        Changed<Size>,
+    >,
+) {
+    for (mut path, size_now, mut size_prev, mut bbox, angle) in query.iter_mut() {
+        let scale = size_prev.0.scale_factor(size_now);
+        *path = path.scale(scale.0, scale.1);
+        *size_prev = Previous(*size_now);
+        *bbox = BoundingSize::from(&path, angle.0);
     }
 }
+
+// pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous<T>), Changed<T>>) {
+//     // println!("previous changed");
+//     // for (current, mut prev) in query.iter_mut() {
+//     //     prev.0 = current.clone();
+//     // }
+// }
 
 // pub fn update_path<E>(mut query: Query<(&PathCompletion, &Opacity, &Size, &mut Path), With<E>>)
 // where
@@ -119,7 +137,7 @@ pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous
 pub fn init_from_target<C: Interpolate + Component + Clone>(
     time: Res<Time>,
     mut animation_query: Query<&mut Animations<C>>,
-    attribute_query: Query<&mut C>,
+    attribute_query: Query<&C>,
 ) {
     for mut animations in animation_query.iter_mut() {
         for animation in animations.0.iter_mut() {
@@ -144,11 +162,8 @@ pub fn init_from_target<C: Interpolate + Component + Clone>(
 }
 
 #[inline]
-fn common_update<C, F>(
-    time: Res<Time>,
-    mut query: Query<(&mut C, &mut Animations<C>)>,
-    update_func: F,
-) where
+fn common_update<C, F>(time: Res<Time>, mut query: Query<(&mut C, &mut Animations<C>)>, updater: F)
+where
     C: Interpolate + Component + Clone,
     F: Fn(&mut Animation<C>, &mut Mut<C>, f32),
 {
@@ -167,9 +182,9 @@ fn common_update<C, F>(
                         1.0
                     }
                 };
-                update_func(animation, &mut att, progress);
+                updater(animation, &mut att, progress);
             } else if end < t && t <= end + 0.1 {
-                update_func(animation, &mut att, 1.0);
+                updater(animation, &mut att, 1.0);
             }
         }
     }
@@ -215,7 +230,7 @@ pub fn animate_with_multiply<C: Interpolate + Component + Clone + Mul<Output = C
 pub fn animate_position(
     time: Res<Time>,
     bounds: Res<Bounds>,
-    mut query: Query<(&mut Position, &Size, &mut Animations<Position>)>,
+    mut query: Query<(&mut Position, &BoundingSize, &mut Animations<Position>)>,
 ) {
     for (mut position, size, mut animations) in query.iter_mut() {
         for animation in animations.0.iter_mut() {
@@ -232,9 +247,9 @@ pub fn animate_position(
                         1.0
                     }
                 };
-                animation.update_position(&mut position, progress, &bounds, &size);
+                animation.update_position(&mut position, progress, &bounds, &size.0);
             } else if end < t && t <= end + 0.1 {
-                animation.update_position(&mut position, 1.0, &bounds, &size);
+                animation.update_position(&mut position, 1.0, &bounds, &size.0);
             }
         }
     }

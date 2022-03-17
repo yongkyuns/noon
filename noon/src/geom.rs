@@ -1,4 +1,4 @@
-use crate::{Interpolate, Position, TO_PXL};
+use crate::{Interpolate, Path, Position, TO_PXL};
 use bevy_ecs::prelude::Component;
 pub use nannou::lyon::math::{point, Point, Vector};
 use std::{marker::PhantomData, ops::Mul};
@@ -41,6 +41,26 @@ impl IntoPixelFrame for Point {
             y: self.y * TO_PXL,
             _unit: PhantomData,
         }
+    }
+}
+
+/// Data type to represent physical size of any 2D object.
+#[derive(Debug, Component, Clone, Copy)]
+pub struct BoundingSize(pub(crate) Size);
+
+impl BoundingSize {
+    /// Update the bounding size of the [Path], when rotated by [Angle].
+    ///
+    ///
+    pub fn from(path: &Path, angle: f32) -> BoundingSize {
+        use nannou::lyon::algorithms::aabb::bounding_rect;
+        let rotated = path
+            .raw
+            .clone()
+            .transformed(&nannou::lyon::geom::Rotation::radians(angle));
+
+        let rect = bounding_rect(rotated.iter());
+        BoundingSize(Size::from(rect.width() / TO_PXL, rect.height() / TO_PXL))
     }
 }
 

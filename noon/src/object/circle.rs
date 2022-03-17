@@ -73,6 +73,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
         let id = world
             .spawn()
             .insert(Circle)
+            .insert(BoundingSize(Size::from_radius(self.radius)))
             .insert(Size::from_radius(self.radius))
             .insert(Previous(Size::from_radius(self.radius)))
             .insert(self.position)

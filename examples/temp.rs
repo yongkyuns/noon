@@ -24,6 +24,9 @@ fn scene(win_rect: Rect) -> Scene {
 
     scene.play(rect.rotate(noon::PI / 4.0));
     scene.play(rect.to_edge(Direction::Up));
+
+    scene.play(rect.scale(2.0));
+    scene.play(rect.to_edge(Direction::Left));
     // scene.play(circle.move_to(-2.0, 4.5));
     // scene.play(circle.scale(2.0));
     // scene.play(circle.to_edge(Direction::Right));

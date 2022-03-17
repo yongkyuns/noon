@@ -79,6 +79,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .spawn()
             .insert(Rectangle)
             .insert(self.size)
+            .insert(BoundingSize(self.size))
             .insert(Previous(self.size))
             .insert(self.position)
             .insert(self.angle)

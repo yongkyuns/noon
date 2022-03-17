@@ -9,7 +9,7 @@ use nannou::lyon::{
     path::{iterator::Flattened, path::Iter},
 };
 
-use crate::{point, Interpolate, Point, Size, EPS_LOW};
+use crate::{point, Interpolate, Point, Size, EPS_LOW, TO_PXL};
 
 /// Data type for representing a vectorized 2D path.
 ///
@@ -62,7 +62,7 @@ impl Path {
                 _ => (),
             }
         }
-        Size::from_points(&vec![min, max])
+        Size::from_points(&vec![min / TO_PXL, max / TO_PXL])
     }
 
     /// Apply given scale to the path.

@@ -72,6 +72,8 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(Line)
             .insert(Position::from_points(&self.points))
             .insert(Size::from_points(&self.points))
+            .insert(Previous(Size::from_points(&self.points)))
+            .insert(BoundingSize(Size::from_points(&self.points)))
             .insert(self.angle)
             .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
