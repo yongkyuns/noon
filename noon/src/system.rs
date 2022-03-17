@@ -1,9 +1,12 @@
-use std::{ops::Add, time::Instant};
+use std::{
+    ops::{Add, Mul},
+    time::Instant,
+};
 
 use bevy_ecs::prelude::*;
 
 use crate::{
-    Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Previous, Size,
+    Animation, Animations, Circle, FillColor, Interpolate, Path, Position, Previous, Size,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
@@ -196,27 +199,54 @@ pub fn animate_with_relative<C: Interpolate + Component + Clone + Add<Output = C
     common_update(time, query, updater);
 }
 
-/// A one-off implementation of [Size] animation system from [animate] system.
-/// There are two reasons for not using the generic [animate] system:
-pub fn animate_size(time: Res<Time>, query: Query<(&mut Size, &mut Animations<Size>)>) {
-    let updater = |animation: &mut Animation<Size>, att: &mut Mut<Size>, progress| {
-        animation.update_size(att, progress)
+pub fn animate_with_multiply<C: Interpolate + Component + Clone + Mul<Output = C>>(
+    time: Res<Time>,
+    query: Query<(&mut C, &mut Animations<C>)>,
+) {
+    let updater = |animation: &mut Animation<C>, att: &mut Mut<C>, progress| {
+        animation.update_with_multiply(att, progress)
     };
     common_update(time, query, updater);
 }
 
-/// A one-off implementation of [Size] animation system from [animate] system.
-/// There are two reasons for not using the generic [animate] system:
-pub fn animate_position(
-    time: Res<Time>,
-    _bounds: Res<Bounds>,
-    query: Query<(&mut Position, &mut Animations<Position>)>,
-) {
-    let updater = |animation: &mut Animation<Position>, att: &mut Mut<Position>, progress| {
-        animation.update_position(att, progress)
-    };
-    common_update(time, query, updater);
-}
+// /// A one-off implementation of [Size] animation system from [animate] system.
+// /// There are two reasons for not using the generic [animate] system:
+// pub fn animate_size(time: Res<Time>, query: Query<(&mut Size, &mut Animations<Size>)>) {
+//     let updater = |animation: &mut Animation<Size>, att: &mut Mut<Size>, progress| {
+//         animation.update_with_multiply(att, progress)
+//     };
+//     common_update(time, query, updater);
+// }
+
+// /// A one-off implementation of [Size] animation system from [animate] system.
+// /// There are two reasons for not using the generic [animate] system:
+// pub fn animate_position(
+//     time: Res<Time>,
+//     bounds: Res<Bounds>,
+//     mut query: Query<(&mut Position, &mut Animations<Position>)>,
+// ) {
+//     for (mut att, mut animations) in query.iter_mut() {
+//         for animation in animations.0.iter_mut() {
+//             let t = time.seconds;
+//             let begin = animation.start_time;
+//             let duration = animation.duration;
+//             let end = animation.start_time + animation.duration + 0.0;
+
+//             if begin < t && t <= end {
+//                 let progress = {
+//                     if duration > 0.0 {
+//                         animation.rate_func.calculate((t - begin) / duration)
+//                     } else {
+//                         1.0
+//                     }
+//                 };
+//                 animation.update_position(&mut att, progress, &bounds);
+//             } else if end < t && t <= end + 0.1 {
+//                 animation.update_position(&mut att, 1.0, &bounds);
+//             }
+//         }
+//     }
+// }
 
 // /// Generic [System] for animation of all [Component]s in ECS.
 // ///

@@ -28,7 +28,7 @@ pub use consts::*;
 pub use ease::EaseType;
 pub use object::*;
 pub use scene::{Bounds, Scene};
-pub use system::{animate, animate_position, init_from_target, print, update_time, Time};
+pub use system::{animate, init_from_target, print, update_time, Time};
 
 pub use nannou;
 pub use nannou::{app, rand};

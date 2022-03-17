@@ -66,7 +66,7 @@ fn gen_random_values() -> (f32, f32, f32, f32, f32, Color) {
     let y = random_range::<f32>(-y_lim, y_lim);
     let w = random_range::<f32>(0.1, 0.3);
     let h = random_range::<f32>(0.1, 0.3);
-    let ang = random_range::<f32>(0.0, 360.0);
+    let ang = random_range::<f32>(0.0, noon::TAU);
     let color = Color::random();
 
     (x, y, w, h, ang, color)

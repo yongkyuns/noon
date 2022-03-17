@@ -193,46 +193,65 @@ impl<T> Animation<T> {
             _ => (),
         }
     }
+
+    pub fn update_with_multiply(&mut self, property: &mut T, progress: f32)
+    where
+        T: Interpolate + Component + Clone + Mul<Output = T>,
+    {
+        match (&mut self.begin, &mut self.end) {
+            (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+            (None, Value::Absolute(_to)) => {
+                self.begin = Some(property.clone());
+            }
+            (None, Value::Multiply(by)) => {
+                self.begin = Some(property.clone());
+                self.end = Value::Absolute(property.clone() * by.clone());
+            }
+            _ => (),
+        }
+    }
 }
 
 // pub trait Update<T> {
 //     fn update(&mut self, property: &mut T, progress: f32);
 // }
 
-impl Animation<Size> {
-    pub fn update_size(&mut self, property: &mut Size, progress: f32) {
-        match (&mut self.begin, &mut self.end) {
-            (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-            (None, Value::Absolute(_to)) => {
-                self.begin = Some(*property);
-            }
-            (None, Value::Multiply(by)) => {
-                self.begin = Some(*property);
-                self.end = Value::Absolute(*property * *by);
-            }
-            _ => (),
-        }
-    }
-}
+// impl Animation<Size> {
+//     pub fn update_size(&mut self, property: &mut Size, progress: f32) {
+//         match (&mut self.begin, &mut self.end) {
+//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+//             (None, Value::Absolute(_to)) => {
+//                 self.begin = Some(*property);
+//             }
+//             (None, Value::Multiply(by)) => {
+//                 self.begin = Some(*property);
+//                 self.end = Value::Absolute(*property * *by);
+//             }
+//             _ => (),
+//         }
+//     }
+// }
 
-impl Animation<Position> {
-    pub fn update_position(&mut self, property: &mut Position, progress: f32) {
-        match (&mut self.begin, &mut self.end) {
-            (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-            // (Some(begin), Value::Relative(by)) => {
-            //     self.end = Value::Absolute(*begin + *by);
-            // }
-            (None, Value::Absolute(_to)) => {
-                self.begin = Some(*property);
-            }
-            (None, Value::Relative(by)) => {
-                self.begin = Some(*property);
-                self.end = Value::Absolute(*property + *by);
-            }
-            _ => (),
-        }
-    }
-}
+// impl Animation<Position> {
+//     pub fn update_position(
+//         &mut self,
+//         property: &mut Position,
+//         progress: f32,
+//         bounds: &Res<Bounds>,
+//     ) {
+//         match (&mut self.begin, &mut self.end) {
+//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+//             (None, Value::Absolute(_to)) => {
+//                 self.begin = Some(*property);
+//             }
+//             (None, Value::Relative(by)) => {
+//                 self.begin = Some(*property);
+//                 self.end = Value::Absolute(*property + *by);
+//             }
+//             _ => (),
+//         }
+//     }
+// }
 
 impl<T> Into<Vec<AnimationType>> for Animation<T>
 where
