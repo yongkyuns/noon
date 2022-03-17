@@ -162,6 +162,7 @@ pub fn circle(scene: &mut Scene) -> CircleBuilder {
 pub struct CircleId(pub(crate) Entity);
 
 impl WithStroke for CircleId {}
+impl WithSize for CircleId {}
 impl WithFill for CircleId {}
 impl WithColor for CircleId {}
 impl WithPath for CircleId {}

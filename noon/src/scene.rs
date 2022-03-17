@@ -33,22 +33,25 @@ impl Bounds {
         self.0.x.end / TO_PXL
     }
     pub fn get_edge(&self, now: Position, direction: Direction) -> Position {
+        let y = now.y.min(self.edge_upper()).max(self.edge_lower());
+        let x = now.x.min(self.edge_right()).max(self.edge_left());
+
         match direction {
             Direction::Up => Position {
-                x: now.x,
+                x,
                 y: self.edge_upper(),
             },
             Direction::Down => Position {
-                x: now.x,
+                x,
                 y: self.edge_lower(),
             },
             Direction::Left => Position {
                 x: self.edge_left(),
-                y: now.y,
+                y,
             },
             Direction::Right => Position {
                 x: self.edge_right(),
-                y: now.y,
+                y,
             },
         }
     }

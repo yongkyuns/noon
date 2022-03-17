@@ -15,23 +15,26 @@ fn scene(win_rect: Rect) -> Scene {
         .with_color(Color::random())
         .make();
 
-    scene.play(vec![circle.fade_in(), rect.fade_in()]);
-
+    scene.play(vec![circle.show_creation(), rect.fade_in()]);
+    scene.play(circle.scale(0.5));
     scene.play(circle.to_edge(Direction::Up));
+    // scene.play(circle.move_to(-2.0, 4.5));
+    scene.play(circle.scale(2.0));
+    scene.play(circle.to_edge(Direction::Right));
 
-    for i in 0..1000 {
-        let change = (i % 2) as f32;
+    // for i in 0..1000 {
+    //     let change = (i % 2) as f32;
 
-        scene
-            .play(vec![
-                circle.set_radius(0.5 + change / 2.0),
-                rect.scale_x(0.5 + 1.5 * change),
-                rect.shift(LEFT),
-                rect.rotate(noon::PI / 4.0),
-            ])
-            .run_time(1.0)
-            .rate_func(EaseType::BackOut);
-    }
+    //     scene
+    //         .play(vec![
+    //             circle.set_radius(0.5 + change / 2.0),
+    //             rect.scale_x(0.5 + 1.5 * change),
+    //             rect.shift(LEFT),
+    //             rect.rotate(noon::PI / 4.0),
+    //         ])
+    //         .run_time(1.0)
+    //         .rate_func(EaseType::BackOut);
+    // }
 
     scene
 }
