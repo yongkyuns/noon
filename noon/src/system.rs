@@ -1,8 +1,10 @@
-use std::time::Instant;
+use std::{ops::Add, time::Instant};
 
 use bevy_ecs::prelude::*;
 
-use crate::{Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Previous, Size};
+use crate::{
+    Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, Position, Previous, Size,
+};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
 pub enum Label {
@@ -109,10 +111,10 @@ pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous
 /// querying the attribute of the target object and initializing the
 /// animation. Once initialized, [animate] executes the actual animation
 /// for subsequent durations.
-pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
+pub fn init_from_target<C: Interpolate + Component + Clone>(
     time: Res<Time>,
-    mut animation_query: Query<&mut Animations<Attribute>>,
-    attribute_query: Query<&mut Attribute>,
+    mut animation_query: Query<&mut Animations<C>>,
+    attribute_query: Query<&mut C>,
 ) {
     for mut animations in animation_query.iter_mut() {
         for animation in animations.0.iter_mut() {
@@ -136,6 +138,38 @@ pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
     }
 }
 
+#[inline]
+fn common_update<C, F>(
+    time: Res<Time>,
+    mut query: Query<(&mut C, &mut Animations<C>)>,
+    update_func: F,
+) where
+    C: Interpolate + Component + Clone,
+    F: Fn(&mut Animation<C>, &mut Mut<C>, f32),
+{
+    for (mut att, mut animations) in query.iter_mut() {
+        for animation in animations.0.iter_mut() {
+            let t = time.seconds;
+            let begin = animation.start_time;
+            let duration = animation.duration;
+            let end = animation.start_time + animation.duration + 0.0;
+
+            if begin < t && t <= end {
+                let progress = {
+                    if duration > 0.0 {
+                        animation.rate_func.calculate((t - begin) / duration)
+                    } else {
+                        1.0
+                    }
+                };
+                update_func(animation, &mut att, progress);
+            } else if end < t && t <= end + 0.1 {
+                update_func(animation, &mut att, 1.0);
+            }
+        }
+    }
+}
+
 /// Generic [System] for animation of all [Component]s in ECS.
 ///
 /// The way this works is by using [Interpolate] trait on [Component]s.
@@ -143,94 +177,142 @@ pub fn init_from_target<Attribute: Interpolate + Component + Clone>(
 /// [Interpolate] can be updated here, based on the corresponding [Animations]
 /// for that attribute. [Time] is used as a trigger for each
 /// [Animation](crate::Animation) contained within [Animations].
-pub fn animate<Attribute: Interpolate + Component + Clone>(
+pub fn animate<C: Interpolate + Component + Clone>(
     time: Res<Time>,
-    mut query: Query<(Entity, &mut Attribute, &mut Animations<Attribute>)>,
+    query: Query<(&mut C, &mut Animations<C>)>,
 ) {
-    for (_entity, mut att, mut animations) in query.iter_mut() {
-        for animation in animations.0.iter_mut() {
-            let t = time.seconds;
-            let begin = animation.start_time;
-            let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.0;
+    let updater =
+        |animation: &mut Animation<C>, att: &mut Mut<C>, progress| animation.update(att, progress);
+    common_update(time, query, updater);
+}
 
-            if begin < t && t <= end {
-                let progress = {
-                    if duration > 0.0 {
-                        animation.rate_func.calculate((t - begin) / duration)
-                    } else {
-                        1.0
-                    }
-                };
-                animation.update(&mut att, progress);
-            } else if end < t && t <= end + 0.1 {
-                animation.update(&mut att, 1.0);
-            }
-        }
-    }
+pub fn animate_with_relative<C: Interpolate + Component + Clone + Add<Output = C>>(
+    time: Res<Time>,
+    query: Query<(&mut C, &mut Animations<C>)>,
+) {
+    let updater = |animation: &mut Animation<C>, att: &mut Mut<C>, progress| {
+        animation.update_with_relative(att, progress)
+    };
+    common_update(time, query, updater);
 }
 
 /// A one-off implementation of [Size] animation system from [animate] system.
 /// There are two reasons for not using the generic [animate] system:
-pub fn animate_size(time: Res<Time>, mut query: Query<(&mut Size, &mut Animations<Size>)>) {
-    for (mut att, mut animations) in query.iter_mut() {
-        for animation in animations.0.iter_mut() {
-            let t = time.seconds;
-            let begin = animation.start_time;
-            let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.0;
-
-            if begin < t && t <= end {
-                let progress = {
-                    if duration > 0.0 {
-                        animation.rate_func.calculate((t - begin) / duration)
-                    } else {
-                        1.0
-                    }
-                };
-                animation.update_size(&mut att, progress);
-            } else if end < t && t <= end + 0.1 {
-                animation.update(&mut att, 1.0);
-            }
-        }
-    }
+pub fn animate_size(time: Res<Time>, query: Query<(&mut Size, &mut Animations<Size>)>) {
+    let updater = |animation: &mut Animation<Size>, att: &mut Mut<Size>, progress| {
+        animation.update_size(att, progress)
+    };
+    common_update(time, query, updater);
 }
 
-/// A one-off implementation of [Position] animation system from [animate] system.
+/// A one-off implementation of [Size] animation system from [animate] system.
 /// There are two reasons for not using the generic [animate] system:
-///
-/// 1. [Position] needs additional [Bounds] information for certain commands such
-/// as moving to the edges of a window frame.
-/// 2. [Position] supports relative movement commands, i.e. shift for specified
-/// amount from the current position.
-///
 pub fn animate_position(
     time: Res<Time>,
     _bounds: Res<Bounds>,
-    mut query: Query<(&mut Position, &mut Animations<Position>)>,
+    query: Query<(&mut Position, &mut Animations<Position>)>,
 ) {
-    for (mut att, mut animations) in query.iter_mut() {
-        for animation in animations.0.iter_mut() {
-            let t = time.seconds;
-            let begin = animation.start_time;
-            let duration = animation.duration;
-            let end = animation.start_time + animation.duration + 0.0;
-
-            if begin < t && t <= end {
-                let progress = {
-                    if duration > 0.0 {
-                        animation.rate_func.calculate((t - begin) / duration)
-                    } else {
-                        1.0
-                    }
-                };
-                animation.update_position(&mut att, progress);
-            } else if end < t && t <= end + 0.1 {
-                animation.update(&mut att, 1.0);
-            }
-        }
-    }
+    let updater = |animation: &mut Animation<Position>, att: &mut Mut<Position>, progress| {
+        animation.update_position(att, progress)
+    };
+    common_update(time, query, updater);
 }
+
+// /// Generic [System] for animation of all [Component]s in ECS.
+// ///
+// /// The way this works is by using [Interpolate] trait on [Component]s.
+// /// Attributes such as [Position] and [Size](crate::Size) that implements
+// /// [Interpolate] can be updated here, based on the corresponding [Animations]
+// /// for that attribute. [Time] is used as a trigger for each
+// /// [Animation](crate::Animation) contained within [Animations].
+// pub fn animate_<C: Interpolate + Component + Clone>(
+//     time: Res<Time>,
+//     mut query: Query<(Entity, &mut C, &mut Animations<C>)>,
+// ) {
+//     for (_entity, mut att, mut animations) in query.iter_mut() {
+//         for animation in animations.0.iter_mut() {
+//             let t = time.seconds;
+//             let begin = animation.start_time;
+//             let duration = animation.duration;
+//             let end = animation.start_time + animation.duration + 0.0;
+
+//             if begin < t && t <= end {
+//                 let progress = {
+//                     if duration > 0.0 {
+//                         animation.rate_func.calculate((t - begin) / duration)
+//                     } else {
+//                         1.0
+//                     }
+//                 };
+//                 animation.update(&mut att, progress);
+//             } else if end < t && t <= end + 0.1 {
+//                 animation.update(&mut att, 1.0);
+//             }
+//         }
+//     }
+// }
+
+// /// A one-off implementation of [Size] animation system from [animate] system.
+// /// There are two reasons for not using the generic [animate] system:
+// pub fn animate_size(time: Res<Time>, mut query: Query<(&mut Size, &mut Animations<Size>)>) {
+//     for (mut att, mut animations) in query.iter_mut() {
+//         for animation in animations.0.iter_mut() {
+//             let t = time.seconds;
+//             let begin = animation.start_time;
+//             let duration = animation.duration;
+//             let end = animation.start_time + animation.duration + 0.0;
+
+//             if begin < t && t <= end {
+//                 let progress = {
+//                     if duration > 0.0 {
+//                         animation.rate_func.calculate((t - begin) / duration)
+//                     } else {
+//                         1.0
+//                     }
+//                 };
+//                 animation.update_size(&mut att, progress);
+//             } else if end < t && t <= end + 0.1 {
+//                 animation.update_size(&mut att, 1.0);
+//             }
+//         }
+//     }
+// }
+
+// /// A one-off implementation of [Position] animation system from [animate] system.
+// /// There are two reasons for not using the generic [animate] system:
+// ///
+// /// 1. [Position] needs additional [Bounds] information for certain commands such
+// /// as moving to the edges of a window frame.
+// /// 2. [Position] supports relative movement commands, i.e. shift for specified
+// /// amount from the current position.
+// ///
+// pub fn animate_position(
+//     time: Res<Time>,
+//     _bounds: Res<Bounds>,
+//     mut query: Query<(&mut Position, &mut Animations<Position>)>,
+// ) {
+//     for (mut att, mut animations) in query.iter_mut() {
+//         for animation in animations.0.iter_mut() {
+//             let t = time.seconds;
+//             let begin = animation.start_time;
+//             let duration = animation.duration;
+//             let end = animation.start_time + animation.duration + 0.0;
+
+//             if begin < t && t <= end {
+//                 let progress = {
+//                     if duration > 0.0 {
+//                         animation.rate_func.calculate((t - begin) / duration)
+//                     } else {
+//                         1.0
+//                     }
+//                 };
+//                 animation.update_position(&mut att, progress);
+//             } else if end < t && t <= end + 0.1 {
+//                 animation.update_position(&mut att, 1.0);
+//             }
+//         }
+//     }
+// }
 
 pub fn update_time(time: ResMut<Time>) {
     // time.step();

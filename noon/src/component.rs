@@ -126,6 +126,13 @@ impl Interpolate for Angle {
     }
 }
 
+impl Add for Angle {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0)
+    }
+}
+
 #[derive(Debug, Component, Default, Clone, Copy)]
 pub struct Depth(pub(crate) f32);
 
@@ -141,6 +148,13 @@ pub struct FontSize(pub(crate) u32);
 impl Interpolate for FontSize {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         Self(self.0.interp(&other.0, progress))
+    }
+}
+
+impl Add for FontSize {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0)
     }
 }
 
@@ -196,6 +210,13 @@ impl Interpolate for Opacity {
     }
 }
 
+impl Add for Opacity {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0)
+    }
+}
+
 #[derive(Debug, Component, Default, Clone, Copy)]
 pub struct PathCompletion(pub(crate) f32);
 
@@ -203,6 +224,13 @@ impl Interpolate for PathCompletion {
     fn interp(&self, other: &Self, progress: f32) -> Self {
         let progress = progress.min(1.0).max(0.0);
         Self(self.0.interp(&other.0, progress))
+    }
+}
+
+impl Add for PathCompletion {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0)
     }
 }
 

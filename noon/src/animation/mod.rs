@@ -150,6 +150,14 @@ impl<T> Animation<T> {
         }
     }
 
+    /// Update function for generic [Component].
+    ///
+    /// This function does two things:
+    /// 1. If animation hasn't started but needs to, this function
+    /// will write to the initial status of animation from the
+    /// current component state.
+    /// 2. For every animation loop, this function will perform
+    /// the interpolation between initial and final state
     pub fn update(&mut self, property: &mut T, progress: f32)
     where
         T: Interpolate + Component + Clone,
@@ -159,48 +167,37 @@ impl<T> Animation<T> {
             (None, Value::Absolute(_to)) => {
                 self.begin = Some(property.clone());
             }
-            // (None, Value::Relative(by)) => {
-            //     println!("Struct");
-            // }
             _ => (),
         }
     }
 
-    // pub fn update(&mut self, property: &mut T, progress: f32)
-    // where
-    //     T: Interpolate + Component + Clone + Add<T>,
-    // {
-    //     match (&mut self.begin, &mut self.end) {
-    //         (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-    //         (None, Value::Absolute(_to)) => {
-    //             self.begin = Some(property.clone());
-    //         }
-    //         _ => (),
-    //     }
-    // }
+    /// This function is similar to `Self::update()`, but also
+    /// allows relative changes to be animated, e.g. rotating by
+    /// the specified angle [rotate()](crate::WithAngle::rotate()).
+    ///
+    /// If regular update is used, these relative changes will not
+    /// perform any animation.
+    pub fn update_with_relative(&mut self, property: &mut T, progress: f32)
+    where
+        T: Interpolate + Component + Clone + Add<Output = T>,
+    {
+        match (&mut self.begin, &mut self.end) {
+            (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
+            (None, Value::Absolute(_to)) => {
+                self.begin = Some(property.clone());
+            }
+            (None, Value::Relative(by)) => {
+                self.begin = Some(property.clone());
+                self.end = Value::Absolute(property.clone() + by.clone());
+            }
+            _ => (),
+        }
+    }
 }
 
-// impl<T> Update<T> for Animation<T>
-// where
-//     T: Interpolate + Component + Clone + Add<T>,
-// {
-//     fn update(&mut self, property: &mut T, progress: f32) {
-//         match (&mut self.begin, &mut self.end) {
-//             (Some(begin), Value::Absolute(to)) => *property = begin.interp(&to, progress),
-//             (None, Value::Absolute(_to)) => {
-//                 self.begin = Some(property.clone());
-//             }
-//             (None, Value::Relative(by)) => {
-//                 println!("Trait");
-//             }
-//             _ => (),
-//         }
-//     }
+// pub trait Update<T> {
+//     fn update(&mut self, property: &mut T, progress: f32);
 // }
-
-pub trait Update<T> {
-    fn update(&mut self, property: &mut T, progress: f32);
-}
 
 impl Animation<Size> {
     pub fn update_size(&mut self, property: &mut Size, progress: f32) {
