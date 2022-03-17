@@ -212,9 +212,9 @@ pub fn animate_with_multiply<C: Interpolate + Component + Clone + Mul<Output = C
 pub fn animate_position(
     time: Res<Time>,
     bounds: Res<Bounds>,
-    mut query: Query<(&mut Position, &mut Animations<Position>)>,
+    mut query: Query<(&mut Position, &Size, &mut Animations<Position>)>,
 ) {
-    for (mut att, mut animations) in query.iter_mut() {
+    for (mut position, size, mut animations) in query.iter_mut() {
         for animation in animations.0.iter_mut() {
             let t = time.seconds;
             let begin = animation.start_time;
@@ -229,9 +229,9 @@ pub fn animate_position(
                         1.0
                     }
                 };
-                animation.update_position(&mut att, progress, &bounds);
+                animation.update_position(&mut position, progress, &bounds, &size);
             } else if end < t && t <= end + 0.1 {
-                animation.update_position(&mut att, 1.0, &bounds);
+                animation.update_position(&mut position, 1.0, &bounds, &size);
             }
         }
     }

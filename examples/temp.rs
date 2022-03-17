@@ -17,7 +17,7 @@ fn scene(win_rect: Rect) -> Scene {
 
     scene.play(vec![circle.fade_in(), rect.fade_in()]);
 
-    scene.play(circle.to_edge(Direction::Right));
+    scene.play(circle.to_edge(Direction::Up));
 
     for i in 0..1000 {
         let change = (i % 2) as f32;

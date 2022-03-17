@@ -229,6 +229,7 @@ impl Animation<Position> {
         position: &mut Position,
         progress: f32,
         bounds: &Res<Bounds>,
+        size: &Size,
     ) {
         match (&mut self.begin, &mut self.end) {
             (Some(begin), Value::Absolute(to)) => *position = begin.interp(&to, progress),
@@ -241,7 +242,7 @@ impl Animation<Position> {
             }
             (None, Value::Edge(direction)) => {
                 self.begin = Some(*position);
-                self.end = Value::Absolute(bounds.get_edge(*position, *direction));
+                self.end = Value::Absolute(bounds.reduced_by(size).get_edge(*position, *direction));
             }
             _ => (),
         }
