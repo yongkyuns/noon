@@ -1,6 +1,7 @@
 use super::common::*;
+use crate::Angle;
 use core::f32::consts::TAU;
-use nannou::lyon::math::{Angle, Vector};
+use nannou::lyon::math::Vector;
 
 /// Component indicating a circle. Other [Component]s belonging to a circle
 /// is implemented in [CircleBuilder].
@@ -13,8 +14,8 @@ impl Circle {
         let size = size.into_pxl_scale();
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();
-        let sweep_angle = Angle::radians(TAU);
-        let x_rotation = Angle::radians(0.0);
+        let sweep_angle = nannou::lyon::math::Angle::radians(TAU);
+        let x_rotation = nannou::lyon::math::Angle::radians(0.0);
         let center = point(0.0, 0.0);
         let start = point(radius, 0.0);
         let radii = Vector::new(radius, radius);
@@ -29,6 +30,7 @@ impl Circle {
 
 pub struct CircleBuilder<'a> {
     radius: f32,
+    angle: Angle,
     stroke_weight: StrokeWeight,
     stroke_color: Color,
     fill_color: Color,
@@ -45,6 +47,7 @@ impl<'a> CircleBuilder<'a> {
             fill_color,
             stroke_color: fill_color.brighten(),
             position: Default::default(),
+            angle: Default::default(),
             scene,
         }
     }
@@ -59,6 +62,7 @@ impl<'a> CircleBuilder<'a> {
     }
 }
 
+crate::angle_builder!(CircleBuilder);
 crate::stroke_builder!(CircleBuilder);
 crate::position_builder!(CircleBuilder);
 crate::fill_builder!(CircleBuilder);
@@ -77,6 +81,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .insert(Size::from_radius(self.radius))
             .insert(Previous(Size::from_radius(self.radius)))
             .insert(self.position)
+            .insert(self.angle)
             .insert(FillColor(self.fill_color))
             .insert(StrokeColor(self.stroke_color))
             .insert(self.stroke_weight)

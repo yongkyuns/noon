@@ -22,6 +22,7 @@ impl Line {
         }
         builder.end(false);
 
+        // Translate the points so that they are centered around point (0,0)
         let path = builder
             .build()
             .transformed(&nannou::lyon::geom::Translation::new(

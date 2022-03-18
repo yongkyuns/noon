@@ -63,6 +63,7 @@ impl<'a> RectangleBuilder<'a> {
     }
 }
 
+crate::angle_builder!(RectangleBuilder);
 crate::stroke_builder!(RectangleBuilder);
 crate::position_builder!(RectangleBuilder);
 crate::fill_builder!(RectangleBuilder);

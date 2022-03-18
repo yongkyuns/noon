@@ -90,6 +90,18 @@ macro_rules! size_builder {
 }
 
 #[macro_export]
+macro_rules! angle_builder {
+    ($name:ident) => {
+        impl<'a> $name<'a> {
+            pub fn with_angle(mut self, radians: f32) -> Self {
+                self.angle = Angle(radians);
+                self
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! fill_builder {
     ($name:ident) => {
         impl<'a> $name<'a> {
