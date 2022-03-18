@@ -1,5 +1,5 @@
 use crate::prelude::Direction;
-use crate::{point, Color, IntoPixelFrame, Point, TO_PXL};
+use crate::{point, Color, PixelFrame, Point, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
 use nannou::lyon::math as euclid;
@@ -109,11 +109,17 @@ impl std::fmt::Display for Position {
     }
 }
 
-impl IntoPixelFrame for Position {
+impl PixelFrame for Position {
     fn into_pxl_scale(&self) -> Self {
         Self {
             x: self.x * TO_PXL,
             y: self.y * TO_PXL,
+        }
+    }
+    fn into_natural_scale(&self) -> Self {
+        Self {
+            x: self.x / TO_PXL,
+            y: self.y / TO_PXL,
         }
     }
 }

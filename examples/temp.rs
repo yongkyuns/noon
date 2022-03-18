@@ -3,30 +3,61 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    let circle = scene
-        .circle()
-        .with_position(-2.0, 0.0)
-        .with_color(Color::random())
-        .make();
+    // let circle = scene
+    //     .circle()
+    //     .with_position(-2.0, 0.0)
+    //     .with_color(Color::random())
+    //     .make();
 
-    let rect = scene
-        .rectangle()
-        .with_position(2.0, 0.0)
-        .with_color(Color::random())
-        .make();
+    // let rect = scene
+    //     .rectangle()
+    //     .with_position(2.0, 0.0)
+    //     .with_color(Color::random())
+    //     .make();
 
-    scene.play(vec![circle.show_creation(), rect.fade_in()]);
+    let text = scene.text().with_text("Hello!").make();
+    // let line = scene.line().from(0.0, 0.0).to(1.0, 0.0).make();
+    // let line = scene.line().from(-0.0, 0.0000000).to(1.0, 0.0).make();
+    let line = scene.line().from(-0.0, 0.0).to(1.0, 1.0).make();
+    // let line = scene.line().from(1.0, 0.0).to(2.0, 1.0).make();
+
+    // scene.play(vec![circle.show_creation(), rect.fade_in()]);
     // scene.play(circle.scale(0.5));
     // scene.play(circle.to_edge(Direction::Up));
     // // scene.play(circle.move_to(-2.0, 4.5));
     // scene.play(circle.scale(2.0));
     // scene.play(circle.to_edge(Direction::Right));
 
-    scene.play(rect.rotate(noon::PI / 4.0));
-    scene.play(rect.to_edge(Direction::Up));
+    // scene.play(rect.rotate(noon::PI / 4.0));
+    // scene.play(rect.to_edge(Direction::Up));
 
-    scene.play(rect.scale(2.0));
-    scene.play(rect.to_edge(Direction::Left));
+    // scene.play(rect.scale(2.0));
+    // scene.play(rect.to_edge(Direction::Left));
+
+    // scene.play(vec![text.show_creation(), line.show_creation()]);
+
+    scene.play(vec![line.show_creation(), text.show_creation()]);
+
+    // scene.play(text.scale(2.0));
+    // scene.play(text.rotate(noon::TAU / 8.0));
+    scene.play(vec![text.scale(2.0), text.rotate(noon::TAU / 8.0)]);
+
+    scene.play(text.to_edge(Direction::Up));
+
+    // scene.play(vec![text.scale(2.0), text.rotate(noon::PI / 4.0)]);
+    // scene.play(line.show_creation());
+
+    // scene.play(vec![
+    //     text.rotate(noon::PI / 4.0),
+    //     line.rotate(noon::PI / 4.0),
+    //     rect.rotate(noon::PI / 4.0),
+    // ]);
+    // scene.play(vec![
+    //     text.to_edge(Direction::Up),
+    //     line.to_edge(Direction::Up),
+    //     rect.to_edge(Direction::Up),
+    // ]);
+
     // scene.play(circle.move_to(-2.0, 4.5));
     // scene.play(circle.scale(2.0));
     // scene.play(circle.to_edge(Direction::Right));

@@ -247,6 +247,7 @@ pub fn animate_position(
                         1.0
                     }
                 };
+                // println!("{:?}", size);
                 animation.update_position(&mut position, progress, &bounds, &size.0);
             } else if end < t && t <= end + 0.1 {
                 animation.update_position(&mut position, 1.0, &bounds, &size.0);

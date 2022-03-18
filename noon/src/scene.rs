@@ -57,8 +57,8 @@ impl Bounds {
     }
     /// Provide a reduced [Bounds] from given [Size]
     pub fn reduced_by(&self, size: &Size) -> Self {
-        let x_pad = size.height / 2.0 * TO_PXL;
-        let y_pad = size.width / 2.0 * TO_PXL;
+        let x_pad = size.width / 2.0 * TO_PXL;
+        let y_pad = size.height / 2.0 * TO_PXL;
         Self(
             self.0
                 .clone()

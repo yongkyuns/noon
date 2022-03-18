@@ -3,11 +3,7 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    let text = scene
-        .text()
-        .with_text("Hello!")
-        .with_position(-0.5, 0.0)
-        .make();
+    let text = scene.text().with_text("Hello!").make();
 
     let rectangle = scene.rectangle().with_position(2.0, 0.0).make();
 

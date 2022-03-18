@@ -5,18 +5,37 @@ use nannou::lyon::path::traits::PathBuilder;
 pub struct Line;
 
 impl Line {
-    fn path(points: &[Point]) -> Path {
+    fn path(points: &[Point]) -> (Path, Position) {
+        let centroid = Position::from_points(&points).into_pxl_scale();
+
         let mut builder = Path::builder();
 
-        builder.begin(points.get(0).unwrap().into_pxl_scale());
-        for &p in points.iter() {
+        builder.begin(
+            points
+                .get(0)
+                .expect("Attempted to create a line with 0 points")
+                .into_pxl_scale(),
+        );
+
+        for &p in points.iter().skip(1) {
             builder.line_to(p.into_pxl_scale());
         }
         builder.end(false);
-        Path {
-            raw: builder.build(),
-            closed: false,
-        }
+
+        let path = builder
+            .build()
+            .transformed(&nannou::lyon::geom::Translation::new(
+                -centroid.x,
+                -centroid.y,
+            ));
+
+        (
+            Path {
+                raw: path,
+                closed: false,
+            },
+            centroid.into_natural_scale(),
+        )
     }
 }
 
@@ -67,10 +86,17 @@ impl Create<LineId> for LineBuilder<'_> {
     fn make(&mut self) -> LineId {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
+
+        let (path, position) = Line::path(&self.points);
+
+        // for e in path.raw.iter() {
+        //     println!("{:?}", &e);
+        // }
+
         let id = world
             .spawn()
             .insert(Line)
-            .insert(Position::from_points(&self.points))
+            .insert(position)
             .insert(Size::from_points(&self.points))
             .insert(Previous(Size::from_points(&self.points)))
             .insert(BoundingSize(Size::from_points(&self.points)))
@@ -80,7 +106,7 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(Opacity(0.0))
             .insert(depth)
             .insert(PathCompletion(0.0))
-            .insert(Line::path(&self.points))
+            .insert(path)
             .id();
 
         id.into()
@@ -108,6 +134,8 @@ pub fn draw_line(
         query.iter()
     {
         if alpha.is_visible() {
+            // println!("{:?}", size);
+
             let position = position.into_pxl_scale();
             let size = size.into_pxl_scale();
 
@@ -116,6 +144,11 @@ pub fn draw_line(
                 color: stroke_color.0,
                 alpha: alpha.0,
             };
+
+            // for e in path.raw.iter() {
+            //     println!("{:?}", &e);
+            // }
+            // println!("\n");
 
             // Draw stroke
             if !stroke_weight.is_none() {
@@ -128,11 +161,12 @@ pub fn draw_line(
                     .stroke()
                     .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_degrees(angle.0)
+                    .z_radians(angle.0)
                     .color(stroke)
                     .caps_round()
                     .stroke_weight(thickness)
                     .events(&path.clone().upto(completion.0, 0.01).raw);
+                // .events(&path.raw);
             }
         }
     }

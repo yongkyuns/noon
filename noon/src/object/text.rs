@@ -4,7 +4,7 @@ use super::common::*;
 pub struct Text;
 
 impl Text {
-    fn path(text: &str, font_size: FontSize) -> Path {
+    fn path(text: &str, font_size: FontSize) -> (Path, Size) {
         let mut builder = Path::svg_builder();
 
         let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
@@ -14,11 +14,26 @@ impl Text {
             .left_justify()
             .build(rect);
 
+        let rect = text.bounding_rect();
+        let (w, h) = rect.w_h();
+        let (x, y) = (w / 2.0, 0.0 / 2.0);
+
         let mut builder = Path::builder();
         for e in text.path_events() {
             builder.path_event(e);
         }
+
+        // let path = Path::new(builder.build(), true);
+        // let size = path.size();
+        // let (x, y) = (size.width / 2.0, size.height / 2.0);
+
+        let path = builder
+            .build()
+            .transformed(&nannou::lyon::geom::Translation::new(-x, -y));
         // builder.close();
+
+        // let path = Path::new(builder.build(), true);
+        // let size = path.size();
 
         // let bbox = text.bounding_rect();
         // draw.rect()
@@ -34,7 +49,7 @@ impl Text {
         //         .hsla(0.5, 1.0, 0.5, 0.5);
         // }
 
-        Path::new(builder.build(), true)
+        (Path::new(path, true), Size::from(w, h).into_natural_scale())
     }
 }
 
@@ -89,10 +104,17 @@ impl Create<TextId> for TextBuilder<'_> {
     fn make(&mut self) -> TextId {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
+        let (path, size) = Text::path(&self.text, self.font_size);
+        // let bounding_size = BoundingSize::from(&path, 0.0);
+        let bounding_size = BoundingSize(size);
+        // let size = bounding_size.0;
         let id = world
             .spawn()
             .insert(Text)
             .insert(self.font_size)
+            .insert(size)
+            .insert(Previous(size))
+            .insert(bounding_size)
             .insert(self.position)
             .insert(self.angle)
             .insert(self.stroke_weight)
@@ -101,7 +123,7 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(Opacity(0.0))
             .insert(depth)
             .insert(PathCompletion(0.0))
-            .insert(Text::path(&self.text, self.font_size))
+            .insert(path)
             .id();
 
         id.into()
@@ -169,7 +191,7 @@ pub fn draw_text(
                 .fill()
                 .x_y(position.x, position.y)
                 .z(depth.0)
-                .z_degrees(angle.0)
+                .z_radians(angle.0)
                 .color(fill)
                 .events(&path.clone().upto(completion.0, EPS).raw);
 
@@ -183,7 +205,7 @@ pub fn draw_text(
                     .stroke()
                     .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_degrees(angle.0)
+                    .z_radians(angle.0)
                     .color(stroke)
                     .stroke_weight(thickness)
                     .events(&path.clone().upto(completion.0, EPS).raw);
@@ -206,6 +228,7 @@ impl WithColor for TextId {}
 impl WithPath for TextId {}
 impl WithPosition for TextId {}
 impl WithAngle for TextId {}
+impl WithSize for TextId {}
 
 impl WithId for TextId {
     fn id(&self) -> Entity {

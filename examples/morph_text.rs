@@ -30,7 +30,7 @@ fn random_text(scene: &mut Scene, text: &str) -> TextId {
         .with_text(text)
         .with_font_size(50)
         .with_color(color)
-        .with_position(x - 2.0, y)
+        .with_position(x, y)
         .make()
 }
 

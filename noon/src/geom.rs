@@ -12,8 +12,9 @@ pub enum Direction {
 }
 
 /// Trait for converting from native Noon scale into pixel scale
-pub trait IntoPixelFrame {
+pub trait PixelFrame {
     fn into_pxl_scale(&self) -> Self;
+    fn into_natural_scale(&self) -> Self;
 }
 
 impl Interpolate for Point {
@@ -34,11 +35,18 @@ impl Into<Position> for Point {
     }
 }
 
-impl IntoPixelFrame for Point {
+impl PixelFrame for Point {
     fn into_pxl_scale(&self) -> Self {
         Self {
             x: self.x * TO_PXL,
             y: self.y * TO_PXL,
+            _unit: PhantomData,
+        }
+    }
+    fn into_natural_scale(&self) -> Self {
+        Self {
+            x: self.x / TO_PXL,
+            y: self.y / TO_PXL,
             _unit: PhantomData,
         }
     }
@@ -50,8 +58,6 @@ pub struct BoundingSize(pub(crate) Size);
 
 impl BoundingSize {
     /// Update the bounding size of the [Path], when rotated by [Angle].
-    ///
-    ///
     pub fn from(path: &Path, angle: f32) -> BoundingSize {
         use nannou::lyon::algorithms::aabb::bounding_rect;
         let rotated = path
@@ -94,7 +100,13 @@ impl Size {
     /// Returns scale factor to the given input size. If the given
     /// input size is greater, scale factor will be greater than 1.
     pub fn scale_factor(&self, other: &Self) -> (f32, f32) {
-        (other.width / self.width, other.height / self.height)
+        if self.width < std::f32::EPSILON {
+            (1.0, other.height / self.height)
+        } else if self.height < std::f32::EPSILON {
+            (other.width / self.width, 1.0)
+        } else {
+            (other.width / self.width, other.height / self.height)
+        }
     }
 
     /// Compute the size of the 2D bounding box for a given set
@@ -128,11 +140,17 @@ impl Size {
     }
 }
 
-impl IntoPixelFrame for Size {
+impl PixelFrame for Size {
     fn into_pxl_scale(&self) -> Self {
         Self {
             width: self.width * TO_PXL,
             height: self.height * TO_PXL,
+        }
+    }
+    fn into_natural_scale(&self) -> Self {
+        Self {
+            width: self.width / TO_PXL,
+            height: self.height / TO_PXL,
         }
     }
 }
