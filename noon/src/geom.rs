@@ -83,6 +83,10 @@ impl Size {
         width: 0.0,
         height: 0.0,
     };
+    pub const UNIT: Self = Self {
+        width: 1.0,
+        height: 1.0,
+    };
 
     /// Create size from radius, assuming circular shape
     pub fn from_radius(radius: f32) -> Self {

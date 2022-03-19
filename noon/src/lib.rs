@@ -19,11 +19,11 @@ pub use crate::animation::{
 pub use crate::color::{Color, ColorExtension};
 pub use crate::component::{
     Angle, Depth, FillColor, FontSize, Interpolate, Name, Opacity, PathCompletion, Position,
-    Previous, StrokeColor, StrokeWeight, Transform, Value,
+    Previous, Scale, StrokeColor, StrokeWeight, Transform, Value,
 };
 
 pub use crate::geom::{point, BoundingSize, PixelFrame, Point, Size, Vector};
-pub use crate::path::{GetPartial, Path, PathComponent};
+pub use crate::path::{GetPartial, Path, PathComponent, PixelPath};
 pub use consts::*;
 pub use ease::EaseType;
 pub use object::*;

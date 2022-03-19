@@ -4,58 +4,44 @@ use super::common::*;
 pub struct Text;
 
 impl Text {
-    fn path(text: &str, font_size: FontSize) -> (Path, Size) {
-        let mut builder = Path::svg_builder();
+    fn path(text: &str, font_size: u32) -> (Path, Size) {
+        use nannou::text;
+        use nannou::{geom::Rect, lyon::geom};
 
-        let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
-        let text = nannou::text::text(text)
-            .font_size(font_size.0)
+        let mut builder = Path::builder();
+
+        let rect = nannou::geom::Rect::from_w_h(1.0, 1.0);
+        let text = text::text(text)
+            .font_size(font_size)
             .no_line_wrap()
             .left_justify()
             .build(rect);
 
-        let rect = text.bounding_rect();
-        let (w, h) = rect.w_h();
-        let (x, y) = (w / 2.0, 0.0 / 2.0);
-
-        let mut builder = Path::builder();
         for e in text.path_events() {
             builder.path_event(e);
         }
 
-        // let path = Path::new(builder.build(), true);
-        // let size = path.size();
-        // let (x, y) = (size.width / 2.0, size.height / 2.0);
+        let rect = text.bounding_rect();
+        let x = -rect.x();
+        let y = -rect.y();
+        // let scale = 1.0 / rect.w().max(rect.h()) * width;
+        let scale = 0.01;
 
-        let path = builder
-            .build()
-            .transformed(&nannou::lyon::geom::Translation::new(-x, -y));
-        // builder.close();
-
-        // let path = Path::new(builder.build(), true);
-        // let size = path.size();
-
-        // let bbox = text.bounding_rect();
-        // draw.rect()
-        //     .x_y(bbox.x() + self.position().x, bbox.y() + self.position().y)
-        //     .z_degrees(self.orientation)
-        //     .w_h(self.width(), self.height())
-        //     .color(RED_D);
-
-        // for (_glyph, rect) in text.glyphs() {
-        //     draw.rect()
-        //         .x_y(rect.x() + self.position.x, rect.y() + self.position.y)
-        //         .wh(rect.wh())
-        //         .hsla(0.5, 1.0, 0.5, 0.5);
-        // }
-
-        (Path::new(path, true), Size::from(w, h).into_natural_scale())
+        (
+            Path::new(
+                builder
+                    .build()
+                    .transformed(&geom::Transform::translation(x, y).then_scale(scale, scale)),
+                true,
+            ),
+            Size::from(rect.w(), rect.h()),
+        )
     }
 }
 
 pub struct TextBuilder<'a> {
     text: String,
-    font_size: FontSize,
+    font_size: u32,
     stroke_weight: StrokeWeight,
     stroke_color: Color,
     fill_color: Color,
@@ -69,7 +55,7 @@ impl<'a> TextBuilder<'a> {
         let fill_color = Color::random();
         Self {
             text: String::new(),
-            font_size: FontSize(90),
+            font_size: 30,
             stroke_weight: StrokeWeight::THIN,
             fill_color,
             stroke_color: fill_color.brighten(),
@@ -88,7 +74,7 @@ impl<'a> TextBuilder<'a> {
         self
     }
     pub fn with_font_size(mut self, size: u32) -> Self {
-        self.font_size = FontSize(size);
+        self.font_size = size;
         self
     }
 }
@@ -104,17 +90,25 @@ impl Create<TextId> for TextBuilder<'_> {
     fn make(&mut self) -> TextId {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
+        let position = self.position;
+        let scale = Scale::ONE;
         let (path, size) = Text::path(&self.text, self.font_size);
-        // let bounding_size = BoundingSize::from(&path, 0.0);
-        let bounding_size = BoundingSize(size);
-        // let size = bounding_size.0;
+        let transform = Transform::identity()
+            .scale(scale)
+            .rotate(self.angle)
+            .translate(position.into());
+        let screen_transform = self.scene.transform;
+
+        let global_path = PixelPath(
+            path.clone()
+                .transform(&transform.transform(screen_transform)),
+        );
         let id = world
             .spawn()
             .insert(Text)
-            .insert(self.font_size)
+            .insert(FontSize(self.font_size))
             .insert(size)
-            .insert(Previous(size))
-            .insert(bounding_size)
+            .insert(scale)
             .insert(self.position)
             .insert(self.angle)
             .insert(self.stroke_weight)
@@ -124,60 +118,31 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(path)
+            .insert(global_path)
+            .insert(transform)
             .id();
 
         id.into()
     }
 }
 
-// fn size_from_text(text: &str, font_size: FontSize) -> Size {
-//     let rect = nannou::geom::Rect::from_w_h(10.0, 10.0);
-//     let text = nannou::text::text(text)
-//         .font_size(font_size.0)
-//         .left_justify()
-//         .no_line_wrap()
-//         .build(rect);
-//     let bbox = text.bounding_rect();
-//     Size {
-//         width: bbox.w(),
-//         height: bbox.h(),
-//     }
-// }
-
 pub fn draw_text(
     draw: NonSend<nannou::Draw>,
     query: Query<
         (
-            &FontSize,
-            &PathCompletion,
-            &Position,
-            &Angle,
             &StrokeColor,
             &StrokeWeight,
             &FillColor,
             &Opacity,
-            &Path,
+            &PixelPath,
             &Depth,
+            &FontSize,
         ),
         With<Text>,
     >,
 ) {
-    for (
-        font_size,
-        completion,
-        position,
-        angle,
-        stroke_color,
-        stroke_weight,
-        fill_color,
-        alpha,
-        path,
-        depth,
-    ) in query.iter()
-    {
+    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, font_size) in query.iter() {
         if alpha.is_visible() {
-            let position = position.into_pxl_scale();
-            // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,
@@ -189,11 +154,9 @@ pub fn draw_text(
 
             draw.path()
                 .fill()
-                .x_y(position.x, position.y)
                 .z(depth.0)
-                .z_radians(angle.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, EPS).raw);
+                .events(&path.0.raw);
 
             if !stroke_weight.is_none() {
                 let thickness = if stroke_weight.is_auto() {
@@ -203,12 +166,10 @@ pub fn draw_text(
                 };
                 draw.path()
                     .stroke()
-                    .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_radians(angle.0)
                     .color(stroke)
                     .stroke_weight(thickness)
-                    .events(&path.clone().upto(completion.0, EPS).raw);
+                    .events(&path.0.raw);
             }
         }
     }

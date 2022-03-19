@@ -5,19 +5,8 @@ pub struct Rectangle;
 
 impl Rectangle {
     fn path(size: &Size) -> Path {
-        let size = size.into_pxl_scale();
         let mut builder = Path::svg_builder();
-        // let start = point(-size.width / 2.0, size.height / 2.0);
-
-        // builder.move_to(start);
-        // builder.line_to(point(start.x + size.width, start.y));
-        // builder.line_to(point(start.x + size.width, start.y - size.height));
-        // builder.line_to(point(start.x, start.y - size.height));
-        // builder.line_to(point(start.x, start.y));
-        // builder.close();
-
         let start = point(size.width / 2.0, 0.0);
-
         builder.move_to(start);
         builder.line_to(point(start.x, start.y + size.height / 2.0));
         builder.line_to(point(start.x - size.width, start.y + size.height / 2.0));
@@ -44,10 +33,7 @@ impl<'a> RectangleBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         let fill_color = Color::random();
         Self {
-            size: Size {
-                width: 1.0,
-                height: 1.0,
-            },
+            size: Size::UNIT,
             stroke_weight: StrokeWeight::THICK,
             fill_color,
             stroke_color: fill_color.brighten(),
@@ -76,12 +62,24 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
     fn make(&mut self) -> RectangleId {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
+        let scale = Scale::ONE;
+        let path = Rectangle::path(&self.size);
+        let transform = Transform::identity()
+            .scale(scale)
+            .rotate(self.angle)
+            .translate(self.position.into());
+        let screen_transform = self.scene.transform;
+
+        let global_path = PixelPath(
+            path.clone()
+                .transform(&transform.transform(screen_transform)),
+        );
+
         let id = world
             .spawn()
             .insert(Rectangle)
             .insert(self.size)
-            .insert(BoundingSize(self.size))
-            .insert(Previous(self.size))
+            .insert(scale)
             .insert(self.position)
             .insert(self.angle)
             .insert(self.stroke_weight)
@@ -90,8 +88,9 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(Opacity(0.0))
             .insert(depth)
             .insert(PathCompletion(0.0))
-            .insert(Rectangle::path(&self.size))
-            .insert(Transform::identity())
+            .insert(path)
+            .insert(global_path)
+            .insert(transform)
             .id();
 
         id.into()
@@ -102,38 +101,19 @@ pub fn draw_rectangle(
     draw: NonSend<nannou::Draw>,
     query: Query<
         (
-            &PathCompletion,
-            &Position,
-            &Angle,
             &StrokeColor,
             &StrokeWeight,
             &FillColor,
             &Opacity,
-            &Size,
-            &Path,
+            &PixelPath,
             &Depth,
+            &Size,
         ),
         With<Rectangle>,
     >,
 ) {
-    for (
-        completion,
-        position,
-        angle,
-        stroke_color,
-        stroke_weight,
-        fill_color,
-        alpha,
-        size,
-        path,
-        depth,
-    ) in query.iter()
-    {
+    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, size) in query.iter() {
         if alpha.is_visible() {
-            let position = position.into_pxl_scale();
-            let size = size.into_pxl_scale();
-
-            // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,
@@ -146,11 +126,9 @@ pub fn draw_rectangle(
             // Draw fill first
             draw.path()
                 .fill()
-                .x_y(position.x, position.y)
                 .z(depth.0)
-                .z_radians(angle.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, EPS).raw);
+                .events(&path.0.raw);
 
             // Draw stroke on top
             if !stroke_weight.is_none() {
@@ -161,13 +139,11 @@ pub fn draw_rectangle(
                 };
                 draw.path()
                     .stroke()
-                    .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_radians(angle.0)
                     .join_round()
                     .color(stroke)
                     .stroke_weight(thickness)
-                    .events(&path.clone().upto(completion.0, EPS).raw);
+                    .events(&path.0.raw);
             }
         }
     }

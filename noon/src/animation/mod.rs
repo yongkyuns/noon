@@ -8,7 +8,7 @@ use bevy_ecs::{
 // use crate::prelude::*;
 use crate::{
     prelude::Direction, Angle, Bounds, EaseType, FillColor, FontSize, Interpolate, Opacity, Path,
-    PathCompletion, Position, Scene, Size, StrokeColor, StrokeWeight, Value, Vector,
+    PathCompletion, Position, Scale, Scene, Size, StrokeColor, StrokeWeight, Value, Vector,
 };
 
 mod builder;
@@ -242,11 +242,12 @@ impl Animation<Position> {
             }
             (None, Value::Edge(direction)) => {
                 // println!("{:?}", position);
-                // println!("{:?}", size);
+                // println!("size = {:?}", size);
                 // println!(
                 //     "{:?}",
                 //     bounds.reduced_by(size).get_edge(*position, *direction)
                 // );
+                // println!("{:?}", &*bounds);
                 self.begin = Some(*position);
                 self.end = Value::Absolute(bounds.reduced_by(size).get_edge(*position, *direction));
             }
@@ -286,6 +287,7 @@ pub enum AnimationType {
     Position(Animation<Position>),
     Angle(Animation<Angle>),
     Size(Animation<Size>),
+    Scale(Animation<Scale>),
     FontSize(Animation<FontSize>),
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
@@ -319,6 +321,12 @@ impl Into<AnimationType> for Animation<Position> {
 impl Into<AnimationType> for Animation<Angle> {
     fn into(self) -> AnimationType {
         AnimationType::Angle(self)
+    }
+}
+
+impl Into<AnimationType> for Animation<Scale> {
+    fn into(self) -> AnimationType {
+        AnimationType::Scale(self)
     }
 }
 
@@ -406,6 +414,9 @@ impl EntityAnimations {
                 AnimationType::Angle(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
+                AnimationType::Scale(animation) => {
+                    insert_animation(animation, world, self.entity);
+                }
                 AnimationType::Size(animation) => {
                     insert_animation(animation, world, self.entity);
                 }
@@ -431,6 +442,7 @@ impl EntityAnimations {
             AnimationType::FillColor(animation) => animation.start_time,
             AnimationType::Position(animation) => animation.start_time,
             AnimationType::Angle(animation) => animation.start_time,
+            AnimationType::Scale(animation) => animation.start_time,
             AnimationType::Size(animation) => animation.start_time,
             AnimationType::FontSize(animation) => animation.start_time,
             AnimationType::Opacity(animation) => animation.start_time,
@@ -454,6 +466,9 @@ impl EntityAnimations {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Angle(ref mut animation) => {
+                    set_properties(animation, start_time, duration, rate_func);
+                }
+                AnimationType::Scale(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
                 AnimationType::Size(ref mut animation) => {

@@ -5,9 +5,10 @@ use std::{
 
 use bevy_ecs::prelude::*;
 
+use crate::{path::GetPartial, Scale};
 use crate::{
-    Angle, Animation, Animations, BoundingSize, Bounds, Circle, FillColor, Interpolate, Path,
-    Position, Previous, Size,
+    Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
+    PixelPath, Position, Size, Transform, Vector, EPS,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
@@ -90,31 +91,58 @@ impl Time {
 //     }
 // }
 
-pub fn bbox_angle_update(mut query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
-    for (mut bbox, path, angle) in query.iter_mut() {
-        *bbox = BoundingSize::from(path, angle.0);
+pub fn update_screen_paths(
+    to_pixel: Res<Transform>,
+    mut query: Query<
+        (
+            &mut PixelPath,
+            &mut Size,
+            &Path,
+            &PathCompletion,
+            &Position,
+            &Angle,
+            &Scale,
+        ),
+        With<PixelPath>,
+    >,
+) {
+    for (mut global, mut size, local, completion, position, angle, scale) in query.iter_mut() {
+        let object = Transform::identity()
+            .scale(*scale)
+            .rotate(*angle)
+            .translate(Vector::new(position.x, position.y));
+        let pixel = object.transform(*to_pixel);
+        let path = local.upto(completion.0, EPS);
+        *size = path.transform(&object).size();
+        *global = PixelPath(path.transform(&pixel));
     }
 }
 
-pub fn update_path_from_size_change(
-    mut query: Query<
-        (
-            &mut Path,
-            &Size,
-            &mut Previous<Size>,
-            &mut BoundingSize,
-            &Angle,
-        ),
-        Changed<Size>,
-    >,
-) {
-    for (mut path, size_now, mut size_prev, mut bbox, angle) in query.iter_mut() {
-        let scale = size_prev.0.scale_factor(size_now);
-        *path = path.scale(scale.0, scale.1);
-        *size_prev = Previous(*size_now);
-        *bbox = BoundingSize::from(&path, angle.0);
-    }
-}
+// pub fn bbox_angle_update(mut _query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
+//     // for (mut bbox, path, angle) in query.iter_mut() {
+//     //     *bbox = BoundingSize::from(path, angle.0);
+//     // }
+// }
+
+// pub fn update_path_from_size_change(
+//     mut _query: Query<
+//         (
+//             &mut Path,
+//             &Size,
+//             &mut Previous<Size>,
+//             &mut BoundingSize,
+//             &Angle,
+//         ),
+//         Changed<Size>,
+//     >,
+// ) {
+//     // for (mut path, size_now, mut size_prev, mut bbox, angle) in query.iter_mut() {
+//     //     let scale = size_prev.0.scale_factor(size_now);
+//     //     *path = path.scale(scale.0, scale.1);
+//     //     *size_prev = Previous(*size_now);
+//     //     *bbox = BoundingSize::from(&path, angle.0);
+//     // }
+// }
 
 // pub fn update_previous<T: Component + Clone>(mut query: Query<(&T, &mut Previous<T>), Changed<T>>) {
 //     // println!("previous changed");
@@ -242,10 +270,11 @@ pub fn animate_with_multiply<C: Interpolate + Component + Clone + Mul<Output = C
 pub fn animate_position(
     time: Res<Time>,
     bounds: Res<Bounds>,
-    mut query: Query<(&mut Position, &BoundingSize, &mut Animations<Position>)>,
+    mut query: Query<(&mut Position, &Size, &mut Animations<Position>)>,
 ) {
     for (mut position, size, mut animations) in query.iter_mut() {
         for animation in animations.0.iter_mut() {
+            // let size = path.0.transform().size();
             let t = time.seconds;
             let begin = animation.start_time;
             let duration = animation.duration;
@@ -260,9 +289,9 @@ pub fn animate_position(
                     }
                 };
                 // println!("{:?}", size);
-                animation.update_position(&mut position, progress, &bounds, &size.0);
+                animation.update_position(&mut position, progress, &bounds, &size);
             } else if end < t && t <= end + 0.1 {
-                animation.update_position(&mut position, 1.0, &bounds, &size.0);
+                animation.update_position(&mut position, 1.0, &bounds, &size);
             }
         }
     }

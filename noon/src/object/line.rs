@@ -6,19 +6,16 @@ pub struct Line;
 
 impl Line {
     fn path(points: &[Point]) -> (Path, Position) {
-        let centroid = Position::from_points(&points).into_pxl_scale();
+        let centroid = Position::from_points(&points);
 
         let mut builder = Path::builder();
-
         builder.begin(
-            points
+            *points
                 .get(0)
-                .expect("Attempted to create a line with 0 points")
-                .into_pxl_scale(),
+                .expect("Attempted to create a line with 0 points"),
         );
-
         for &p in points.iter().skip(1) {
-            builder.line_to(p.into_pxl_scale());
+            builder.line_to(p);
         }
         builder.end(false);
 
@@ -35,7 +32,7 @@ impl Line {
                 raw: path,
                 closed: false,
             },
-            centroid.into_natural_scale(),
+            centroid,
         )
     }
 }
@@ -88,19 +85,26 @@ impl Create<LineId> for LineBuilder<'_> {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
 
+        let scale = Scale::ONE;
         let (path, position) = Line::path(&self.points);
+        let transform = Transform::identity()
+            .scale(scale)
+            .rotate(self.angle)
+            .translate(position.into());
+        let screen_transform = self.scene.transform;
+        let size = Size::from_points(&self.points);
 
-        // for e in path.raw.iter() {
-        //     println!("{:?}", &e);
-        // }
+        let global_path = PixelPath(
+            path.clone()
+                .transform(&transform.transform(screen_transform)),
+        );
 
         let id = world
             .spawn()
             .insert(Line)
+            .insert(size)
+            .insert(scale)
             .insert(position)
-            .insert(Size::from_points(&self.points))
-            .insert(Previous(Size::from_points(&self.points)))
-            .insert(BoundingSize(Size::from_points(&self.points)))
             .insert(self.angle)
             .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))
@@ -108,6 +112,8 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(depth)
             .insert(PathCompletion(0.0))
             .insert(path)
+            .insert(global_path)
+            .insert(transform)
             .id();
 
         id.into()
@@ -118,38 +124,22 @@ pub fn draw_line(
     draw: NonSend<nannou::Draw>,
     query: Query<
         (
-            &PathCompletion,
-            &Position,
-            &Angle,
             &StrokeColor,
             &StrokeWeight,
             &Opacity,
-            &Size,
-            &Path,
+            &PixelPath,
             &Depth,
+            &Size,
         ),
         With<Line>,
     >,
 ) {
-    for (completion, position, angle, stroke_color, stroke_weight, alpha, size, path, depth) in
-        query.iter()
-    {
+    for (stroke_color, stroke_weight, alpha, path, depth, size) in query.iter() {
         if alpha.is_visible() {
-            // println!("{:?}", size);
-
-            let position = position.into_pxl_scale();
-            let size = size.into_pxl_scale();
-
-            // let path = rectangle_path(size, completion);
             let stroke = Rgba {
                 color: stroke_color.0,
                 alpha: alpha.0,
             };
-
-            // for e in path.raw.iter() {
-            //     println!("{:?}", &e);
-            // }
-            // println!("\n");
 
             // Draw stroke
             if !stroke_weight.is_none() {
@@ -160,14 +150,11 @@ pub fn draw_line(
                 };
                 draw.path()
                     .stroke()
-                    .x_y(position.x, position.y)
                     .z(depth.0)
-                    .z_radians(angle.0)
                     .color(stroke)
                     .caps_round()
                     .stroke_weight(thickness)
-                    .events(&path.clone().upto(completion.0, 0.01).raw);
-                // .events(&path.raw);
+                    .events(&path.0.raw);
             }
         }
     }

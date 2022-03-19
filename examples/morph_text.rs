@@ -17,8 +17,9 @@ fn scene(win_rect: Rect) -> Scene {
         morph.push(text2.fade_out());
     }
 
-    scene.play(show).run_time(2.0);
-    scene.play(morph).run_time(2.0);
+    scene.play(show).run_time(3.0);
+    scene.wait_for(0.5);
+    scene.play(morph).run_time(3.0);
 
     scene
 }
@@ -28,7 +29,7 @@ fn random_text(scene: &mut Scene, text: &str) -> TextId {
     scene
         .text()
         .with_text(text)
-        .with_font_size(50)
+        .with_font_size(20)
         .with_color(color)
         .with_position(x, y)
         .make()

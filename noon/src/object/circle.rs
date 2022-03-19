@@ -11,7 +11,6 @@ pub struct Circle;
 impl Circle {
     /// Returns path for a circle.
     fn path(size: &Size) -> Path {
-        let size = size.into_pxl_scale();
         let radius = size.width / 2.0;
         let mut builder = Path::svg_builder();
         let sweep_angle = nannou::lyon::math::Angle::radians(TAU);
@@ -74,21 +73,36 @@ impl Create<CircleId> for CircleBuilder<'_> {
     fn make(&mut self) -> CircleId {
         let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
+        let position = self.position;
+        let scale = Scale::ONE;
+        let path = Circle::path(&Size::from_radius(self.radius));
+        let transform = Transform::identity()
+            .scale(scale)
+            .rotate(self.angle)
+            .translate(position.into());
+        let screen_transform = self.scene.transform;
+
+        let pixel_path = PixelPath(
+            path.clone()
+                .transform(&transform.transform(screen_transform)),
+        );
+
         let id = world
             .spawn()
             .insert(Circle)
-            .insert(BoundingSize(Size::from_radius(self.radius)))
             .insert(Size::from_radius(self.radius))
-            .insert(Previous(Size::from_radius(self.radius)))
+            .insert(scale)
             .insert(self.position)
             .insert(self.angle)
-            .insert(FillColor(self.fill_color))
-            .insert(StrokeColor(self.stroke_color))
             .insert(self.stroke_weight)
+            .insert(StrokeColor(self.stroke_color))
+            .insert(FillColor(self.fill_color))
             .insert(Opacity(0.0))
             .insert(depth)
             .insert(PathCompletion(0.0))
-            .insert(Circle::path(&Size::from_radius(self.radius)))
+            .insert(path)
+            .insert(pixel_path)
+            .insert(transform)
             .id();
 
         id.into()
@@ -100,29 +114,20 @@ pub fn draw_circle(
     draw: NonSend<nannou::Draw>,
     query: Query<
         (
-            &PathCompletion,
-            &Position,
             &StrokeColor,
             &StrokeWeight,
             &FillColor,
             &Opacity,
-            &Size,
-            &Path,
+            &PixelPath,
             &Depth,
+            &Size,
         ),
         With<Circle>,
     >,
 ) {
-    for (completion, position, stroke_color, stroke_weight, fill_color, alpha, size, path, depth) in
-        query.iter()
-    {
+    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, size) in query.iter() {
         if alpha.is_visible() {
-            // println!("Circle size = {}, {}", size.width, size.height);
-            let size = size.into_pxl_scale();
-            let position = position.into_pxl_scale();
-
             let radius = size.width / 2.0;
-            // let path = circle_path(size, completion);
 
             let stroke = Rgba {
                 color: stroke_color.0,
@@ -136,10 +141,9 @@ pub fn draw_circle(
             // Draw fill first
             draw.path()
                 .fill()
-                .x_y(position.x, position.y)
                 .z(depth.0)
                 .color(fill)
-                .events(&path.clone().upto(completion.0, EPS).raw);
+                .events(&path.0.raw);
 
             // Draw stroke on top
             if !stroke_weight.is_none() {
@@ -150,11 +154,10 @@ pub fn draw_circle(
                 };
                 draw.path()
                     .stroke()
-                    .x_y(position.x, position.y)
                     .z(depth.0)
                     .color(stroke)
                     .stroke_weight(thickness)
-                    .events(&path.clone().upto(completion.0, EPS).raw);
+                    .events(&path.0.raw);
             }
         }
     }

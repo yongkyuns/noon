@@ -36,6 +36,8 @@ pub trait WithPath: WithId {
             entity: self.id(),
             animations: vec![
                 Animation::<Path>::to_target(entity).into(),
+                Animation::<Angle>::to_target(entity).into(),
+                Animation::<Scale>::to_target(entity).into(),
                 Animation::<StrokeWeight>::to_target(entity).into(),
                 Animation::<StrokeColor>::to_target(entity).into(),
                 Animation::<FillColor>::to_target(entity).into(),

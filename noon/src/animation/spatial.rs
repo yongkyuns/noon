@@ -1,3 +1,5 @@
+use crate::Scale;
+
 use super::*;
 
 pub trait WithPosition: WithId {
@@ -61,25 +63,25 @@ pub trait WithSize: WithId {
     fn scale(&self, by: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
-            animations: vec![Animation::times(Size::from(by, by)).into()],
+            animations: vec![Animation::times(Scale::new(by, by)).into()],
         }
     }
     fn scale_x(&self, x: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
-            animations: vec![Animation::times(Size::from(x, 1.0)).into()],
+            animations: vec![Animation::times(Scale::new(x, 1.0)).into()],
         }
     }
     fn scale_y(&self, y: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
-            animations: vec![Animation::times(Size::from(1.0, y)).into()],
+            animations: vec![Animation::times(Scale::new(1.0, y)).into()],
         }
     }
     fn scale_xy(&self, x: f32, y: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
-            animations: vec![Animation::times(Size::from(x, y)).into()],
+            animations: vec![Animation::times(Scale::new(x, y)).into()],
         }
     }
 }

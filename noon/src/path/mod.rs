@@ -5,11 +5,17 @@ use nannou::lyon::{
     algorithms::length::approximate_length,
     lyon_algorithms::walk::walk_along_path,
     lyon_algorithms::walk::RepeatedPattern,
-    math::Transform,
     path::{iterator::Flattened, path::Iter},
 };
 
-use crate::{point, Interpolate, Point, Size, EPS_LOW, TO_PXL};
+// use nannou::lyon::math::Transform;
+use crate::Transform;
+
+use crate::{point, Interpolate, Point, Size, EPS_LOW};
+
+/// Global path component that can be rendered to screen without any transformation
+#[derive(Debug, Clone, Component)]
+pub struct PixelPath(pub(crate) Path);
 
 /// Data type for representing a vectorized 2D path.
 ///
@@ -62,15 +68,21 @@ impl Path {
                 _ => (),
             }
         }
-        Size::from_points(&vec![min / TO_PXL, max / TO_PXL])
+        Size::from_points(&vec![min, max])
     }
 
     /// Apply given scale to the path.
     pub fn scale(&self, x: f32, y: f32) -> Self {
         Self::new(
-            self.raw.clone().transformed(&Transform::scale(x, y)),
+            self.raw
+                .clone()
+                .transformed(&nannou::lyon::math::Transform::scale(x, y)),
             self.closed,
         )
+    }
+
+    pub fn transform(&self, transform: &Transform) -> Self {
+        Self::new(self.raw.clone().transformed(&transform.0), self.closed)
     }
 }
 
@@ -274,13 +286,13 @@ impl MeasureLength for Path {
 }
 
 pub trait GetPartial: MeasureLength {
-    fn upto(self, ratio: f32, tolerance: f32) -> Path;
+    fn upto(&self, ratio: f32, tolerance: f32) -> Path;
 }
 
 impl GetPartial for Path {
-    fn upto(self, ratio: f32, tolerance: f32) -> Path {
+    fn upto(&self, ratio: f32, tolerance: f32) -> Path {
         if ratio >= 1.0 {
-            self
+            self.clone()
         } else {
             let ratio = ratio.max(0.0);
             let full_length = self.approximate_length(tolerance);

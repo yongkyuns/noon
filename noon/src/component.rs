@@ -1,9 +1,9 @@
 use crate::prelude::Direction;
-use crate::{point, Color, PixelFrame, Point, TO_PXL};
+use crate::{point, Color, PixelFrame, Point, Vector, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
 use nannou::lyon::math as euclid;
-use std::ops::Add;
+use std::ops::{Add, Mul};
 
 pub trait Interpolate<T = Self> {
     fn interp(&self, other: &T, progress: f32) -> Self
@@ -38,31 +38,34 @@ impl Transform {
         Self(euclid::Transform::identity())
     }
     /// Translation. Untested
-    pub fn translate(mut self, x: f32, y: f32) -> Self {
-        self.translate_mut(x, y);
+    pub fn translate(mut self, vector: Vector) -> Self {
+        self.translate_mut(vector);
         self
     }
     /// Translation. Untested
-    pub fn translate_mut(&mut self, x: f32, y: f32) {
-        *self = Self(self.0.then_translate(euclid::Vector::new(x, y)));
+    pub fn translate_mut(&mut self, vector: Vector) {
+        *self = Self(self.0.then_translate(vector));
     }
     /// Rotation. Untested
-    pub fn rotate(mut self, radians: f32) -> Self {
-        self.rotate_mut(radians);
+    pub fn rotate(mut self, angle: Angle) -> Self {
+        self.rotate_mut(angle);
         self
     }
     /// Rotation. Untested
-    pub fn rotate_mut(&mut self, radians: f32) {
-        *self = Self(self.0.then_rotate(euclid::Angle::radians(radians)));
+    pub fn rotate_mut(&mut self, angle: Angle) {
+        *self = Self(self.0.then_rotate(euclid::Angle::radians(angle.0)));
     }
     /// Scale. Untested
-    pub fn scale(mut self, x: f32, y: f32) -> Self {
-        self.scale_mut(x, y);
+    pub fn scale(mut self, scale: Scale) -> Self {
+        self.scale_mut(scale);
         self
     }
     /// Scale. Untested
-    pub fn scale_mut(&mut self, x: f32, y: f32) {
-        *self = Self(self.0.then_scale(x, y));
+    pub fn scale_mut(&mut self, scale: Scale) {
+        *self = Self(self.0.then_scale(scale.x, scale.y));
+    }
+    pub fn transform(self, transform: Transform) -> Self {
+        Self(self.0.then(&transform.0))
     }
 }
 
@@ -72,6 +75,39 @@ pub struct Children(pub(crate) Vec<Entity>);
 impl Children {
     pub fn add(&mut self, entity: impl Into<Entity>) {
         self.0.push(entity.into());
+    }
+}
+
+#[derive(Debug, Component, Default, Clone, Copy)]
+pub struct Scale {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Scale {
+    pub const ONE: Self = Self { x: 1.0, y: 1.0 };
+
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl Mul<Scale> for Scale {
+    type Output = Self;
+    fn mul(self, other: Scale) -> Self::Output {
+        Self {
+            x: self.x * other.x,
+            y: self.y * other.y,
+        }
+    }
+}
+
+impl Interpolate for Scale {
+    fn interp(&self, other: &Self, progress: f32) -> Self {
+        Self {
+            x: self.x.interp(&other.x, progress),
+            y: self.y.interp(&other.y, progress),
+        }
     }
 }
 
@@ -109,6 +145,12 @@ impl Add for Position {
             x: self.x + other.x,
             y: self.y + other.y,
         }
+    }
+}
+
+impl Into<Vector> for Position {
+    fn into(self) -> Vector {
+        Vector::new(self.x, self.y)
     }
 }
 
