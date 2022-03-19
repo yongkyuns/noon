@@ -5,15 +5,17 @@ use bevy_ecs::prelude::*;
 pub mod arrow;
 pub mod circle;
 pub mod dot;
+pub mod empty;
 pub mod line;
 pub mod rectangle;
 pub mod text;
 pub mod triangle;
 
-pub use circle::{circle, draw_circle, Circle, CircleBuilder, CircleId};
-pub use line::{draw_line, line, Line, LineBuilder, LineId};
-pub use rectangle::{draw_rectangle, rectangle, Rectangle, RectangleBuilder, RectangleId};
-pub use text::{draw_text, text, Text, TextBuilder, TextId};
+pub use circle::*;
+pub use empty::*;
+pub use line::*;
+pub use rectangle::*;
+pub use text::*;
 
 use crate::{Animation, Color, EntityAnimations, FillColor, Opacity, Position, Size, StrokeColor};
 

@@ -18,8 +18,10 @@ fn scene(win_rect: Rect) -> Scene {
     let text = scene.text().with_text("Hello!").make();
     // let line = scene.line().from(0.0, 0.0).to(1.0, 0.0).make();
     // let line = scene.line().from(-0.0, 0.0000000).to(1.0, 0.0).make();
-    let line = scene.line().from(-0.0, 0.0).to(1.0, 1.0).make();
+    let line = scene.line().from(2.0, 0.0).to(3.0, 1.0).make();
     // let line = scene.line().from(1.0, 0.0).to(2.0, 1.0).make();
+
+    let group = scene.group().add(line).add(text).make();
 
     // scene.play(vec![circle.show_creation(), rect.fade_in()]);
     // scene.play(circle.scale(0.5));
@@ -38,11 +40,20 @@ fn scene(win_rect: Rect) -> Scene {
 
     scene.play(vec![line.show_creation(), text.show_creation()]);
 
+    scene.play(group.rotate(noon::PI / 4.0));
+
+    // let group = scene.group(vec![line,text]).make();
+    // let group = scene.group().add(line).add(text).make();
+
+    // scene.arrange(group).vertical();
+    // scene.arrange(group).horizontal();
+    // scene.play(group.rotate(noon::PI/4.0));
+
     // scene.play(text.scale(2.0));
     // scene.play(text.rotate(noon::TAU / 8.0));
-    scene.play(vec![text.scale(2.0), text.rotate(noon::TAU / 8.0)]);
+    // scene.play(vec![text.scale(2.0), text.rotate(noon::TAU / 8.0)]);
 
-    scene.play(text.to_edge(Direction::Up));
+    // scene.play(text.to_edge(Direction::Up));
 
     // scene.play(vec![text.scale(2.0), text.rotate(noon::PI / 4.0)]);
     // scene.play(line.show_creation());

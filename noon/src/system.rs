@@ -78,6 +78,18 @@ impl Time {
 //     }
 // }
 
+// pub fn update_children(
+//     // time: Res<Time>,
+//     mut parents_query: Query<(Entity, &Position, &Angle, &Children), With<Empty>>,
+//     mut attributes_query: Query<(&mut Position, &mut Angle)>,
+// ) {
+//     for (parent, position, angle, children) in parents_query.iter_mut() {
+//         if let Ok((position, angle)) = attributes_query.get_mut(parent) {
+//             // transform.rotate(Quat::from_rotation_z(-angle * time.delta_seconds()));
+//         }
+//     }
+// }
+
 pub fn bbox_angle_update(mut query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
     for (mut bbox, path, angle) in query.iter_mut() {
         *bbox = BoundingSize::from(path, angle.0);
@@ -190,7 +202,7 @@ where
     }
 }
 
-/// Generic [System] for animation of all [Component]s in ECS.
+/// Generic [System] for animation of all regular [Component]s in ECS.
 ///
 /// The way this works is by using [Interpolate] trait on [Component]s.
 /// Attributes such as [Position] and [Size](crate::Size) that implements
@@ -365,3 +377,9 @@ pub fn print(_res: Res<Time>, _query: Query<(Entity, &Position, &FillColor), Wit
     //     // );
     // }
 }
+
+// 정은, 은정 가족에게,
+
+// 새로운 가족 태희의 탄생을 진심으로 축하합니다! 태희와 모두의 건강과 행복을 항상 기원합니다.
+
+// 용균,혜림 가족 드림

@@ -66,6 +66,15 @@ impl Transform {
     }
 }
 
+#[derive(Debug, Component, Default, Clone)]
+pub struct Children(pub(crate) Vec<Entity>);
+
+impl Children {
+    pub fn add(&mut self, entity: impl Into<Entity>) {
+        self.0.push(entity.into());
+    }
+}
+
 #[derive(Debug, Component, Default, Clone, Copy)]
 pub struct Position {
     pub x: f32,

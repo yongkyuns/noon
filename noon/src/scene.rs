@@ -6,9 +6,9 @@ use crate::prelude::*;
 use crate::system::*;
 use crate::Depth;
 use crate::{
-    circle, draw_circle, draw_line, draw_rectangle, draw_text, line, rectangle, text, Angle,
-    FontSize, LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder, Size,
-    StrokeColor,
+    circle, draw_circle, draw_line, draw_rectangle, draw_text, empty, line, rectangle, text, Angle,
+    EmptyBuilder, FontSize, LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder,
+    Size, StrokeColor,
 };
 
 pub struct Bounds(pub(crate) Rect);
@@ -154,6 +154,18 @@ impl Scene {
     pub fn text(&mut self) -> TextBuilder {
         text(self)
     }
+    pub fn group(&mut self) -> EmptyBuilder {
+        empty(self)
+    }
+    // pub fn group(&mut self, objects: impl Into<Vec<Entity>>) -> EmptyBuilder {
+    //     let objects: Vec<Entity> = objects.into();
+    //     let mut builder = empty(self);
+
+    //     for object in objects.iter() {
+    //         builder = builder.add(*object);
+    //     }
+    //     builder
+    // }
     pub fn add_circle(&mut self, x: f32, y: f32) {
         let c = circle(self)
             .with_position(x, y)
