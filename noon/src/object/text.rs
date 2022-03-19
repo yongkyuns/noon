@@ -120,58 +120,10 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(path)
             .insert(global_path)
             .insert(transform)
+            .insert(HasFill(true))
             .id();
 
         id.into()
-    }
-}
-
-pub fn draw_text(
-    draw: NonSend<nannou::Draw>,
-    query: Query<
-        (
-            &StrokeColor,
-            &StrokeWeight,
-            &FillColor,
-            &Opacity,
-            &PixelPath,
-            &Depth,
-            &FontSize,
-        ),
-        With<Text>,
-    >,
-) {
-    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, font_size) in query.iter() {
-        if alpha.is_visible() {
-            let stroke = Rgba {
-                color: stroke_color.0,
-                alpha: alpha.0,
-            };
-            let fill = Rgba {
-                color: fill_color.0,
-                alpha: alpha.0,
-            };
-
-            draw.path()
-                .fill()
-                .z(depth.0)
-                .color(fill)
-                .events(&path.0.raw);
-
-            if !stroke_weight.is_none() {
-                let thickness = if stroke_weight.is_auto() {
-                    font_size.0 as f32 / 80.0
-                } else {
-                    stroke_weight.0
-                };
-                draw.path()
-                    .stroke()
-                    .z(depth.0)
-                    .color(stroke)
-                    .stroke_weight(thickness)
-                    .events(&path.0.raw);
-            }
-        }
     }
 }
 
@@ -181,6 +133,7 @@ pub fn text(scene: &mut Scene) -> TextBuilder {
 
 #[derive(Debug, Copy, Clone)]
 pub struct TextId(pub(crate) Entity);
+crate::into_entity!(TextId);
 
 impl WithFontSize for TextId {}
 impl WithStroke for TextId {}
@@ -190,21 +143,3 @@ impl WithPath for TextId {}
 impl WithPosition for TextId {}
 impl WithAngle for TextId {}
 impl WithSize for TextId {}
-
-impl WithId for TextId {
-    fn id(&self) -> Entity {
-        self.0
-    }
-}
-
-impl From<TextId> for Entity {
-    fn from(id: TextId) -> Self {
-        id.0
-    }
-}
-
-impl From<Entity> for TextId {
-    fn from(id: Entity) -> Self {
-        TextId(id)
-    }
-}

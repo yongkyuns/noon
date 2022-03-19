@@ -103,63 +103,10 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .insert(path)
             .insert(pixel_path)
             .insert(transform)
+            .insert(HasFill(true))
             .id();
 
         id.into()
-    }
-}
-
-/// [System] for rendering circles.
-pub fn draw_circle(
-    draw: NonSend<nannou::Draw>,
-    query: Query<
-        (
-            &StrokeColor,
-            &StrokeWeight,
-            &FillColor,
-            &Opacity,
-            &PixelPath,
-            &Depth,
-            &Size,
-        ),
-        With<Circle>,
-    >,
-) {
-    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, size) in query.iter() {
-        if alpha.is_visible() {
-            let radius = size.width / 2.0;
-
-            let stroke = Rgba {
-                color: stroke_color.0,
-                alpha: alpha.0,
-            };
-            let fill = Rgba {
-                color: fill_color.0,
-                alpha: alpha.0,
-            };
-
-            // Draw fill first
-            draw.path()
-                .fill()
-                .z(depth.0)
-                .color(fill)
-                .events(&path.0.raw);
-
-            // Draw stroke on top
-            if !stroke_weight.is_none() {
-                let thickness = if stroke_weight.is_auto() {
-                    radius / 30.0
-                } else {
-                    stroke_weight.0
-                };
-                draw.path()
-                    .stroke()
-                    .z(depth.0)
-                    .color(stroke)
-                    .stroke_weight(thickness)
-                    .events(&path.0.raw);
-            }
-        }
     }
 }
 
@@ -169,6 +116,7 @@ pub fn circle(scene: &mut Scene) -> CircleBuilder {
 
 #[derive(Debug, Copy, Clone)]
 pub struct CircleId(pub(crate) Entity);
+crate::into_entity!(CircleId);
 
 impl WithStroke for CircleId {}
 impl WithSize for CircleId {}
@@ -190,23 +138,5 @@ impl CircleId {
             entity: self.0,
             animations: Animation::<Size>::to_target(entity.into()).into(),
         }
-    }
-}
-
-impl WithId for CircleId {
-    fn id(&self) -> Entity {
-        self.0
-    }
-}
-
-impl Into<Entity> for CircleId {
-    fn into(self) -> Entity {
-        self.0
-    }
-}
-
-impl From<Entity> for CircleId {
-    fn from(id: Entity) -> Self {
-        CircleId(id)
     }
 }

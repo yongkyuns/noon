@@ -91,61 +91,10 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(path)
             .insert(global_path)
             .insert(transform)
+            .insert(HasFill(true))
             .id();
 
         id.into()
-    }
-}
-
-pub fn draw_rectangle(
-    draw: NonSend<nannou::Draw>,
-    query: Query<
-        (
-            &StrokeColor,
-            &StrokeWeight,
-            &FillColor,
-            &Opacity,
-            &PixelPath,
-            &Depth,
-            &Size,
-        ),
-        With<Rectangle>,
-    >,
-) {
-    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, size) in query.iter() {
-        if alpha.is_visible() {
-            let stroke = Rgba {
-                color: stroke_color.0,
-                alpha: alpha.0,
-            };
-            let fill = Rgba {
-                color: fill_color.0,
-                alpha: alpha.0,
-            };
-
-            // Draw fill first
-            draw.path()
-                .fill()
-                .z(depth.0)
-                .color(fill)
-                .events(&path.0.raw);
-
-            // Draw stroke on top
-            if !stroke_weight.is_none() {
-                let thickness = if stroke_weight.is_auto() {
-                    size.width.max(size.height) / 100.0
-                } else {
-                    stroke_weight.0
-                };
-                draw.path()
-                    .stroke()
-                    .z(depth.0)
-                    .join_round()
-                    .color(stroke)
-                    .stroke_weight(thickness)
-                    .events(&path.0.raw);
-            }
-        }
     }
 }
 
@@ -155,6 +104,7 @@ pub fn rectangle(scene: &mut Scene) -> RectangleBuilder {
 
 #[derive(Debug, Copy, Clone)]
 pub struct RectangleId(pub(crate) Entity);
+crate::into_entity!(RectangleId);
 
 impl WithStroke for RectangleId {}
 impl WithFill for RectangleId {}
@@ -164,21 +114,3 @@ impl WithPosition for RectangleId {}
 impl WithAngle for RectangleId {}
 impl WithSize for RectangleId {}
 impl WithStrokeWeight for RectangleId {}
-
-impl WithId for RectangleId {
-    fn id(&self) -> Entity {
-        self.0
-    }
-}
-
-impl From<RectangleId> for Entity {
-    fn from(id: RectangleId) -> Self {
-        id.0
-    }
-}
-
-impl From<Entity> for RectangleId {
-    fn from(id: Entity) -> Self {
-        RectangleId(id)
-    }
-}

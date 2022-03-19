@@ -4,8 +4,9 @@ use std::{
 };
 
 use bevy_ecs::prelude::*;
+use nannou::color::Rgba;
 
-use crate::{path::GetPartial, Scale};
+use crate::{path::GetPartial, Depth, HasFill, Opacity, Scale, StrokeColor, StrokeWeight};
 use crate::{
     Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
     PixelPath, Position, Size, Transform, Vector, EPS,
@@ -292,6 +293,59 @@ pub fn animate_position(
                 animation.update_position(&mut position, progress, &bounds, &size);
             } else if end < t && t <= end + 0.1 {
                 animation.update_position(&mut position, 1.0, &bounds, &size);
+            }
+        }
+    }
+}
+
+pub fn draw(
+    draw: NonSend<nannou::Draw>,
+    query: Query<(
+        &StrokeColor,
+        &StrokeWeight,
+        &FillColor,
+        &Opacity,
+        &PixelPath,
+        &Depth,
+        &Size,
+        &HasFill,
+    )>,
+) {
+    for (stroke_color, stroke_weight, fill_color, alpha, path, depth, size, has_fill) in
+        query.iter()
+    {
+        if alpha.is_visible() {
+            if has_fill.0 {
+                let fill = Rgba {
+                    color: fill_color.0,
+                    alpha: alpha.0,
+                };
+                // Draw fill first
+                draw.path()
+                    .fill()
+                    .z(depth.0)
+                    .color(fill)
+                    .events(&path.0.raw);
+            }
+
+            let stroke = Rgba {
+                color: stroke_color.0,
+                alpha: alpha.0,
+            };
+            // Draw stroke on top
+            if !stroke_weight.is_none() {
+                let thickness = if stroke_weight.is_auto() {
+                    size.width.min(size.height) / 5.0
+                } else {
+                    stroke_weight.0
+                };
+                draw.path()
+                    .stroke()
+                    .z(depth.0)
+                    .join_round()
+                    .color(stroke)
+                    .stroke_weight(thickness)
+                    .events(&path.0.raw);
             }
         }
     }

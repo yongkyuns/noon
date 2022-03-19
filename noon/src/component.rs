@@ -250,6 +250,9 @@ impl Interpolate for StrokeWeight {
 }
 
 #[derive(Debug, Component, Default, Clone, Copy)]
+pub struct HasFill(pub(crate) bool);
+
+#[derive(Debug, Component, Default, Clone, Copy)]
 pub struct Opacity(pub(crate) f32);
 
 impl Opacity {

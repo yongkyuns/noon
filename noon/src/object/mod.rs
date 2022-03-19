@@ -24,7 +24,7 @@ mod common {
     pub use crate::PixelFrame;
     pub use crate::{
         Angle, AnimBuilder, Animation, BoundingSize, Color, ColorExtension, Create, Depth,
-        EaseType, EntityAnimations, FillColor, FontSize, Opacity, Path, PathCompletion,
+        EaseType, EntityAnimations, FillColor, FontSize, HasFill, Opacity, Path, PathCompletion,
         PathComponent, PixelPath, Point, Position, Previous, Scale, Scene, Size, StrokeColor,
         StrokeWeight, Transform, Value, WithAngle, WithColor, WithFill, WithFontSize, WithId,
         WithPath, WithPosition, WithSize, WithStroke, WithStrokeWeight, EPS, TO_PXL,
@@ -110,6 +110,29 @@ macro_rules! fill_builder {
             pub fn with_fill_color(mut self, color: Color) -> Self {
                 self.fill_color = color;
                 self
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! into_entity {
+    ($name:ident) => {
+        impl WithId for $name {
+            fn id(&self) -> Entity {
+                self.0
+            }
+        }
+
+        impl Into<Entity> for $name {
+            fn into(self) -> Entity {
+                self.0
+            }
+        }
+
+        impl From<Entity> for $name {
+            fn from(id: Entity) -> Self {
+                $name(id)
             }
         }
     };

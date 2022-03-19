@@ -114,49 +114,11 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(path)
             .insert(global_path)
             .insert(transform)
+            .insert(FillColor(Color::BLACK))
+            .insert(HasFill(false))
             .id();
 
         id.into()
-    }
-}
-
-pub fn draw_line(
-    draw: NonSend<nannou::Draw>,
-    query: Query<
-        (
-            &StrokeColor,
-            &StrokeWeight,
-            &Opacity,
-            &PixelPath,
-            &Depth,
-            &Size,
-        ),
-        With<Line>,
-    >,
-) {
-    for (stroke_color, stroke_weight, alpha, path, depth, size) in query.iter() {
-        if alpha.is_visible() {
-            let stroke = Rgba {
-                color: stroke_color.0,
-                alpha: alpha.0,
-            };
-
-            // Draw stroke
-            if !stroke_weight.is_none() {
-                let thickness = if stroke_weight.is_auto() {
-                    (size.width.max(size.height) / 100.0).min(3.0)
-                } else {
-                    stroke_weight.0
-                };
-                draw.path()
-                    .stroke()
-                    .z(depth.0)
-                    .color(stroke)
-                    .caps_round()
-                    .stroke_weight(thickness)
-                    .events(&path.0.raw);
-            }
-        }
     }
 }
 
@@ -166,27 +128,10 @@ pub fn line(scene: &mut Scene) -> LineBuilder {
 
 #[derive(Debug, Copy, Clone)]
 pub struct LineId(pub(crate) Entity);
+crate::into_entity!(LineId);
 
 impl WithColor for LineId {}
 impl WithPath for LineId {}
 impl WithPosition for LineId {}
 impl WithAngle for LineId {}
 impl WithStrokeWeight for LineId {}
-
-impl WithId for LineId {
-    fn id(&self) -> Entity {
-        self.0
-    }
-}
-
-impl From<LineId> for Entity {
-    fn from(id: LineId) -> Self {
-        id.0
-    }
-}
-
-impl From<Entity> for LineId {
-    fn from(id: Entity) -> Self {
-        LineId(id)
-    }
-}

@@ -8,9 +8,8 @@ use crate::Depth;
 use crate::Scale;
 use crate::Transform;
 use crate::{
-    circle, draw_circle, draw_line, draw_rectangle, draw_text, empty, line, rectangle, text, Angle,
-    EmptyBuilder, FontSize, LineBuilder, Opacity, Path, PathCompletion, Position, RectangleBuilder,
-    Size, StrokeColor,
+    circle, empty, line, rectangle, text, Angle, EmptyBuilder, FontSize, LineBuilder, Opacity,
+    Path, PathCompletion, Position, RectangleBuilder, Size, StrokeColor,
 };
 
 #[derive(Debug)]
@@ -158,14 +157,7 @@ impl Scene {
                 .with_system(print),
         );
         let mut drawer = Schedule::default();
-        drawer.add_stage(
-            "draw",
-            SystemStage::single_threaded()
-                .with_system(draw_circle)
-                .with_system(draw_rectangle)
-                .with_system(draw_line)
-                .with_system(draw_text),
-        );
+        drawer.add_stage("draw", SystemStage::single_threaded().with_system(draw));
 
         Self {
             world,
