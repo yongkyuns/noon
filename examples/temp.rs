@@ -3,25 +3,35 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    // let circle = scene
-    //     .circle()
-    //     .with_position(-2.0, 0.0)
-    //     .with_color(Color::random())
-    //     .make();
-
     let rect = scene
         .rectangle()
-        .with_position(1.0, -1.0)
+        .with_position(2.0, 0.0)
+        .with_size(0.5, 0.5)
         .with_color(Color::random())
-        .make();
+        .show();
 
     let rect2 = scene
         .rectangle()
         .with_size(0.5, 0.5)
-        .with_angle(noon::PI / 4.0)
-        .with_position(-2.0, 2.0)
+        .with_position(2.0, 2.0)
         .with_color(Color::random())
-        .make();
+        .show();
+
+    let group = scene.group().add(rect).add(rect2).make();
+
+    scene
+        .play(vec![
+            group.rotate(noon::PI),
+            // group.scale(0.01),
+            // group.move_to(2.0, 2.0),
+        ])
+        .run_time(2.0);
+
+    // scene.play(vec![
+    //     group.rotate(-noon::PI),
+    //     group.scale(100.0),
+    //     group.move_to(0.0, 0.0),
+    // ]);
 
     // let text = scene.text().with_text("Hello!").make();
     // let line = scene.line().from(0.0, 0.0).to(1.0, 0.0).make();
@@ -49,15 +59,15 @@ fn scene(win_rect: Rect) -> Scene {
     // scene.play(vec![line.show_creation(), text.show_creation()]);
 
     // scene.play(group.rotate(noon::PI / 4.0));
-    scene.play(vec![rect.show_creation(), rect2.show_creation()]);
+    // scene.play(vec![rect.show_creation(), rect2.show_creation()]);
     // scene.play(rect.move_to(2.0, 2.0));
-    scene.play(rect.rotate(noon::PI / 4.0));
-    scene.play(rect.scale(0.1));
+    // scene.play(rect.rotate(noon::PI / 4.0));
+    // scene.play(rect.scale(0.1));
     // scene.play(rect.scale_x(0.1));
     // scene.play(rect.set_size(0.5, 1.0));
     // scene.play(rect.move_by(-2.0, -2.0));
     // scene.wait();
-    scene.play(rect.to_edge(Direction::Right));
+    // scene.play(rect.to_edge(Direction::Right));
     // scene.play(rect.morph(rect2));
 
     // let group = scene.group(vec![line,text]).make();

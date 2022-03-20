@@ -6,7 +6,10 @@ use std::{
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
 
-use crate::{path::GetPartial, Depth, HasFill, Opacity, Scale, StrokeColor, StrokeWeight};
+use crate::{
+    component::Children, path::GetPartial, Depth, HasFill, Opacity, Origin, Scale, StrokeColor,
+    StrokeWeight,
+};
 use crate::{
     Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
     PixelPath, Position, Size, Transform, Vector, EPS,
@@ -92,6 +95,35 @@ impl Time {
 //     }
 // }
 
+/// Update the origin of any children objects to define their pose w.r.t. the parent
+pub fn update_origin(
+    mut origin_query: Query<&mut Origin>,
+    parent_query: Query<(Entity, &Children, &Transform)>,
+) {
+    for (_parent, children, transform) in parent_query.iter() {
+        for child in children.0.iter() {
+            if let Ok(mut origin) = origin_query.get_mut(*child) {
+                *origin = Origin(*transform);
+            }
+        }
+    }
+}
+
+/// Update the transform of all objects based on position, angle and scale
+pub fn update_transform(mut query: Query<(&mut Transform, &Position, &Angle, &Scale, &Origin)>) {
+    for (mut transform, position, angle, scale, origin) in query.iter_mut() {
+        *transform = Transform::identity()
+            .scale(*scale)
+            .rotate(*angle)
+            .translate(Vector::new(position.x, position.y))
+            .transform(origin.0);
+    }
+}
+
+/// Update vectorized path to draw onto screen in screen coordinate frame.
+///
+/// [PixelPath] contains path ready-to-draw onto screen, whereas [Path]
+/// is defined with respect to the local coordinate used.
 pub fn update_screen_paths(
     to_pixel: Res<Transform>,
     mut query: Query<
@@ -100,24 +132,49 @@ pub fn update_screen_paths(
             &mut Size,
             &Path,
             &PathCompletion,
-            &Position,
-            &Angle,
-            &Scale,
+            &Transform,
         ),
         With<PixelPath>,
     >,
 ) {
-    for (mut global, mut size, local, completion, position, angle, scale) in query.iter_mut() {
-        let object = Transform::identity()
-            .scale(*scale)
-            .rotate(*angle)
-            .translate(Vector::new(position.x, position.y));
+    for (mut global, mut size, local, completion, object) in query.iter_mut() {
         let pixel = object.transform(*to_pixel);
         let path = local.upto(completion.0, EPS);
         *size = path.transform(&object).size();
         *global = PixelPath(path.transform(&pixel));
     }
 }
+
+// /// Update vectorized path to draw onto screen in screen coordinate frame.
+// ///
+// /// [PixelPath] contains path ready-to-draw onto screen, whereas [Path]
+// /// is defined with respect to the local coordinate used.
+// pub fn update_screen_paths(
+//     to_pixel: Res<Transform>,
+//     mut query: Query<
+//         (
+//             &mut PixelPath,
+//             &mut Size,
+//             &Path,
+//             &PathCompletion,
+//             &Position,
+//             &Angle,
+//             &Scale,
+//         ),
+//         With<PixelPath>,
+//     >,
+// ) {
+//     for (mut global, mut size, local, completion, position, angle, scale) in query.iter_mut() {
+//         let object = Transform::identity()
+//             .scale(*scale)
+//             .rotate(*angle)
+//             .translate(Vector::new(position.x, position.y));
+//         let pixel = object.transform(*to_pixel);
+//         let path = local.upto(completion.0, EPS);
+//         *size = path.transform(&object).size();
+//         *global = PixelPath(path.transform(&pixel));
+//     }
+// }
 
 // pub fn bbox_angle_update(mut _query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
 //     // for (mut bbox, path, angle) in query.iter_mut() {

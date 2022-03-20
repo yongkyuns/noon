@@ -37,6 +37,9 @@ impl Transform {
     pub fn identity() -> Self {
         Self(euclid::Transform::identity())
     }
+    pub fn translation(x: f32, y: f32) -> Self {
+        Self(euclid::Transform::identity()).translate(Vector::new(x, y))
+    }
     /// Translation. Untested
     pub fn translate(mut self, vector: Vector) -> Self {
         self.translate_mut(vector);
@@ -68,6 +71,18 @@ impl Transform {
         Self(self.0.then(&transform.0))
     }
 }
+
+#[derive(Debug, Component, Default, Clone)]
+pub struct Origin(pub(crate) Transform);
+
+impl Origin {
+    pub fn none() -> Self {
+        Self(Transform::identity())
+    }
+}
+
+#[derive(Debug, Component, Clone)]
+pub struct Parent(pub(crate) Entity);
 
 #[derive(Debug, Component, Default, Clone)]
 pub struct Children(pub(crate) Vec<Entity>);
@@ -118,6 +133,9 @@ pub struct Position {
 }
 
 impl Position {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
     pub fn from_points(points: &[Point]) -> Self {
         let sum = points
             .iter()
@@ -145,6 +163,12 @@ impl Add for Position {
             x: self.x + other.x,
             y: self.y + other.y,
         }
+    }
+}
+
+impl Into<Point> for Position {
+    fn into(self) -> Point {
+        Point::new(self.x, self.y)
     }
 }
 

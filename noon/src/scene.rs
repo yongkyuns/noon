@@ -153,9 +153,12 @@ impl Scene {
                         .label(Label::Post),
                 )
                 .with_system(animate::<Path>.after(Label::Main).label(Label::Post))
+                .with_system(update_origin.after(Label::Post))
+                .with_system(update_transform.after(Label::Post))
                 .with_system(update_screen_paths.after(Label::Post))
                 .with_system(print),
         );
+
         let mut drawer = Schedule::default();
         drawer.add_stage("draw", SystemStage::single_threaded().with_system(draw));
 

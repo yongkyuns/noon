@@ -241,13 +241,6 @@ impl Animation<Position> {
                 self.end = Value::Absolute(*position + *by);
             }
             (None, Value::Edge(direction)) => {
-                // println!("{:?}", position);
-                // println!("size = {:?}", size);
-                // println!(
-                //     "{:?}",
-                //     bounds.reduced_by(size).get_edge(*position, *direction)
-                // );
-                // println!("{:?}", &*bounds);
                 self.begin = Some(*position);
                 self.end = Value::Absolute(bounds.reduced_by(size).get_edge(*position, *direction));
             }

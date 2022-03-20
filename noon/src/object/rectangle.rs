@@ -92,6 +92,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(global_path)
             .insert(transform)
             .insert(HasFill(true))
+            .insert(Origin::none())
             .id();
 
         id.into()
