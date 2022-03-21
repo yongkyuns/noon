@@ -1,6 +1,7 @@
 use crate::{
     component::{Children, Parent},
     prelude::Direction,
+    WithArrange,
 };
 
 use super::common::*;
@@ -103,9 +104,7 @@ pub struct EmptyId(pub(crate) Entity);
 //     fn arrange(&self, direction: Direction) -> EntityAnimations {
 //         EntityAnimations {
 //             entity: self.0,
-//             animations: Animation::<Position>::to()
-//                 .with_duration(0.0)
-//                 .into(),
+//             animations: Animation::<Arrange>::to().into(),
 //         }
 //     }
 // }
@@ -115,6 +114,7 @@ crate::into_entity!(EmptyId);
 impl WithPosition for EmptyId {}
 impl WithAngle for EmptyId {}
 impl WithSize for EmptyId {}
+impl WithArrange for EmptyId {}
 
 // impl WithId for EmptyId {
 //     fn id(&self) -> Entity {

@@ -1,5 +1,5 @@
 use crate::prelude::Direction;
-use crate::{point, Color, PixelFrame, Point, Vector, TO_PXL};
+use crate::{point, Color, EaseType, PixelFrame, Point, Vector, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
 use nannou::lyon::math as euclid;
@@ -156,7 +156,17 @@ impl Interpolate for Position {
     }
 }
 
-impl Add for Position {
+impl Add<Vector> for Position {
+    type Output = Self;
+    fn add(self, other: Vector) -> Self::Output {
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl Add<Self> for Position {
     type Output = Self;
     fn add(self, other: Self) -> Self::Output {
         Self {

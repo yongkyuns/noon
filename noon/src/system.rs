@@ -7,8 +7,8 @@ use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
 
 use crate::{
-    component::Children, path::GetPartial, Depth, HasFill, Opacity, Origin, Scale, StrokeColor,
-    StrokeWeight,
+    animation::Arrange, component::Children, path::GetPartial, Depth, HasFill, Opacity, Origin,
+    Scale, StrokeColor, StrokeWeight,
 };
 use crate::{
     Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
@@ -94,6 +94,25 @@ impl Time {
 //         }
 //     }
 // }
+
+pub fn trigger_arrange(
+    mut arrange_query: Query<(&mut Arrange, &Children)>,
+    mut attribute_query: Query<(&mut Position, &Size)>,
+) {
+    for (arrange, children) in arrange_query.iter() {
+        let mut prev_position = Position::new(0.0, 0.0);
+
+        for child in children.0.iter() {
+            let gap = arrange.gap;
+            let align = arrange.alignment;
+
+            if let Ok((mut position, size)) = attribute_query.get_mut(*child) {
+                *position = prev_position + align.into_vector(size, gap);
+                prev_position = *position;
+            }
+        }
+    }
+}
 
 /// Update the origin of any children objects to define their pose w.r.t. the parent
 pub fn update_origin(

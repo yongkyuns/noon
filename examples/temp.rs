@@ -3,29 +3,29 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    let rect = scene
-        .rectangle()
-        .with_position(2.0, 0.0)
-        .with_size(0.5, 0.5)
-        .with_color(Color::random())
-        .show();
+    // let mut builder = scene.group();
+    // for _ in 0..5 {
+    //     let rect = scene
+    //         .rectangle()
+    //         .with_position(2.0, 0.0)
+    //         .with_size(0.5, 0.5)
+    //         .with_color(Color::random())
+    //         .show();
 
-    let rect2 = scene
-        .rectangle()
-        .with_size(0.5, 0.5)
-        .with_position(2.0, 2.0)
-        .with_color(Color::random())
-        .show();
+    //     builder.add(rect);
+    // }
 
-    let group = scene.group().add(rect).add(rect2).make();
+    // let group = builder.make();
 
-    scene
-        .play(vec![
-            group.rotate(noon::PI),
-            // group.scale(0.01),
-            // group.move_to(2.0, 2.0),
-        ])
-        .run_time(2.0);
+    // scene.play(group.arrange(Alignment::Vertical, 0.0));
+
+    // scene
+    //     .play(vec![
+    //         group.(noon::PI),
+    //         // group.scale(0.01),
+    //         // group.move_to(2.0, 2.0),
+    //     ])
+    //     .run_time(2.0);
 
     // scene.play(vec![
     //     group.rotate(-noon::PI),
