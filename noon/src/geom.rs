@@ -1,7 +1,10 @@
 use crate::{Interpolate, Path, Position, TO_PXL};
 use bevy_ecs::prelude::Component;
 pub use nannou::lyon::math::{point, Point, Vector};
-use std::{marker::PhantomData, ops::Mul};
+use std::{
+    marker::PhantomData,
+    ops::{Add, Mul},
+};
 
 #[derive(Component, Clone, Copy, Debug)]
 pub enum Direction {
@@ -101,6 +104,13 @@ impl Size {
         Self { width, height }
     }
 
+    pub fn reduced_by(&self, other: &Size) -> Self {
+        Self {
+            width: (self.width - other.width).max(0.0),
+            height: (self.height - other.height).max(0.0),
+        }
+    }
+
     /// Returns scale factor to the given input size. If the given
     /// input size is greater, scale factor will be greater than 1.
     pub fn scale_factor(&self, other: &Self) -> (f32, f32) {
@@ -165,6 +175,16 @@ impl Mul<Size> for Size {
         Self {
             width: self.width * other.width,
             height: self.height * other.height,
+        }
+    }
+}
+
+impl Add<Size> for Size {
+    type Output = Self;
+    fn add(self, other: Size) -> Self::Output {
+        Self {
+            width: self.width + other.width,
+            height: self.height + other.height,
         }
     }
 }

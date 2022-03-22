@@ -20,10 +20,7 @@ pub struct EmptyBuilder<'a> {
 impl<'a> EmptyBuilder<'a> {
     fn new(scene: &'a mut Scene) -> Self {
         Self {
-            size: Size {
-                width: 1.0,
-                height: 1.0,
-            },
+            size: Size::UNIT,
             position: Default::default(),
             angle: Default::default(),
             children: Default::default(),
@@ -33,6 +30,16 @@ impl<'a> EmptyBuilder<'a> {
 
     pub fn add(mut self, entity: impl Into<Entity>) -> Self {
         self.children.add(entity);
+        self
+    }
+    pub fn add_multiple<T>(mut self, entities: &[T]) -> Self
+    where
+        T: Into<Entity> + Clone + Copy,
+    {
+        for e in entities.iter() {
+            let e: Entity = (*e).into();
+            self.children.add(e);
+        }
         self
     }
 }
@@ -50,7 +57,7 @@ impl Create<EmptyId> for EmptyBuilder<'_> {
 
         // Compute the centroid to place the group origin
         let mut points = Vec::new();
-        for id in self.children.0.iter() {
+        for id in self.children.id.iter() {
             let entity = self.scene.world.entity(*id);
             if let Some(position) = entity.get::<Position>() {
                 points.push(Point::new(position.x, position.y));
@@ -75,9 +82,10 @@ impl Create<EmptyId> for EmptyBuilder<'_> {
             .id();
 
         // Change the position of previous
-        for id in self.children.0.iter() {
+        for id in self.children.id.iter() {
             let mut entity = self.scene.world.entity_mut(*id);
             entity.insert(Parent(*id));
+
             if let Some(mut child_position) = entity.get_mut::<Position>() {
                 let child_point: Point = (*child_position).into();
                 let parent_point: Point = (self.position).into();

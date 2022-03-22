@@ -85,11 +85,20 @@ impl Origin {
 pub struct Parent(pub(crate) Entity);
 
 #[derive(Debug, Component, Default, Clone)]
-pub struct Children(pub(crate) Vec<Entity>);
+pub struct Children {
+    /// Marker for indicating each child's priority in a group.
+    ///
+    /// This is just the order in which the child was added to a group.
+    pub(crate) order: Vec<u32>,
+    pub(crate) id: Vec<Entity>,
+    pub(crate) count: u32,
+}
 
 impl Children {
     pub fn add(&mut self, entity: impl Into<Entity>) {
-        self.0.push(entity.into());
+        self.id.push(entity.into());
+        self.order.push(self.count);
+        self.count += 1;
     }
 }
 
@@ -312,8 +321,14 @@ impl Add for Opacity {
     }
 }
 
-#[derive(Debug, Component, Default, Clone, Copy)]
+#[derive(Debug, Component, Clone, Copy)]
 pub struct PathCompletion(pub(crate) f32);
+
+impl Default for PathCompletion {
+    fn default() -> Self {
+        Self(0.0)
+    }
+}
 
 impl Interpolate for PathCompletion {
     fn interp(&self, other: &Self, progress: f32) -> Self {

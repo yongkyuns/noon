@@ -100,6 +100,7 @@ impl Scene {
             "update",
             SystemStage::parallel()
                 // .with_system(update_previous::<Size>.before(Label::Init))
+                .with_system(trigger_arrange.before(Label::Init))
                 // Beginnning of Main systems
                 .with_system(init_from_target::<Position>.label(Label::Init))
                 .with_system(init_from_target::<FillColor>.label(Label::Init))
@@ -192,6 +193,11 @@ impl Scene {
     pub fn text(&mut self) -> TextBuilder {
         text(self)
     }
+    // pub fn group(&mut self, entities: impl Into<Vec<EntityAnimations>>) -> EmptyBuilder {
+    //     let builder = empty(self);
+    //     let entities:Vec<EntityAnimations>
+    //     for entity in entities.into().iter() {}
+    // }
     pub fn group(&mut self) -> EmptyBuilder {
         empty(self)
     }

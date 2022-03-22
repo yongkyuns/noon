@@ -284,6 +284,10 @@ where
     }
 }
 
+/// This data type is used to capture all animation commands into a single type.
+///
+/// This is internally used to collect animation commands in to an array, which
+/// can then be inserted as individual [Component] for each [Animation].
 #[derive(Clone)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
