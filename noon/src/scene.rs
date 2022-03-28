@@ -214,6 +214,7 @@ impl Scene {
     }
 
     pub fn update(&mut self, now: f32, win_rect: Rect) {
+        // let now = self.clock_time;
         self.world
             .get_resource_mut::<Time>()
             .map(|mut t| t.seconds = now);
@@ -222,6 +223,7 @@ impl Scene {
             .map(|mut bounds| *bounds = Bounds::new(win_rect));
 
         self.updater.run(&mut self.world);
+        // self.clock_time += 1. / 60.;
         self.clock_time = now;
     }
 
