@@ -20,6 +20,7 @@ The following are some examples to demonstrate the current status of this projec
 ![Alt Text](./assets/hello_world.gif)
 ```rust
 // cargo run --release --example hello_world
+
 fn scene(win_rect: Rect) -> Scene {
 	// Make a blank scene
     let mut scene = Scene::new(win_rect);
@@ -53,6 +54,7 @@ fn scene(win_rect: Rect) -> Scene {
 ![Alt Text](./assets/morph.gif)
 ```rust
 // cargo run --release --example morph
+
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
@@ -90,6 +92,7 @@ fn scene(win_rect: Rect) -> Scene {
 ![Alt Text](./assets/morph_text.gif)
 ```rust
 // cargo run --release --example morph_text
+
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
@@ -120,6 +123,7 @@ fn scene(win_rect: Rect) -> Scene {
 ![Alt Text](./assets/easing.gif)
 ```rust
 // cargo run --release --example easing
+
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
@@ -169,6 +173,7 @@ fn scene(win_rect: Rect) -> Scene {
 ![Alt Text](./assets/shapes.gif)
 ```rust
 // cargo run --release --example shapes
+
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
