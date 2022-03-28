@@ -1,10 +1,11 @@
 # noon
 Experimental animation library with high-level APIs for vector graphics animation.
+  
 ![Alt Text](./assets/shapes.gif)
 
 ## Motivation
 noon is an animation library that allows you to draw 2D objects and animate them with high-level commands. This project draws inspiration from [manim](https://github.com/3b1b/manim), which is used to create [educational videos about math](https://www.youtube.com/c/3blue1brown). While Python is a great language for end-users, it would be
-interesting to explore a similar implementation in a compiled language and the possibilities that it would enable, such as real-time interactions and deploying to the web. Along the way, I became interested in Rust and tried to apply it for my learning in this project.
+interesting to explore similar implementation in a compiled language and the possibilities that it would enable, such as real-time interactions and deploying to the web. Along the way, I became interested in Rust and tried to apply it for my learning in this project.
 
 ## Architecture
 Noon is designed as a thin animation-wrapper on top of an awesome existing library called
