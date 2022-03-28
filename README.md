@@ -14,7 +14,7 @@ Noon is designed as a thin animation-wrapper on top of an awesome existing libra
 To use nannou's per-frame drawing API with noon's animation commands, we cache the user commands in order to interpolate them during animation run-time. Since each animation attributes (e.g. position, size, etc.) are usually independent from one another and we can have many shapes in a scene, noon uses [Bevy ECS](https://github.com/bevyengine/bevy) to keep track of independent animation attributes. This also allows us bypass some tricky ownership-related issues that could arise when dealing with multiple references.
 
 ## Examples
-The following are some examples to demonstrate the current status of this project.
+The following examples demonstrate the current status of this project.
   
 ![Alt Text](./assets/hello_world.gif)
 ```rust
