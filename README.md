@@ -3,9 +3,8 @@ Experimental animation library with high-level APIs for vector graphics animatio
 ![Alt Text](./assets/shapes.gif)
 
 ## Motivation
-noon is an animation library that allows you to draw 2D objects and animate them with high-
-level commands. This project draws inspiration from [manim](https://github.com/3b1b/manim), which is used to create [educational videos about math](https://www.youtube.com/c/3blue1brown). While Python is a great language for end-users, it would be
-interesting to explore similar implementations in a compiled language and the possibilities that it would enable, such as real-time interaction and deployments to the web. Along the way, I became interested in Rust and tried to apply it for my learning in this project.
+noon is an animation library that allows you to draw 2D objects and animate them with high-level commands. This project draws inspiration from [manim](https://github.com/3b1b/manim), which is used to create [educational videos about math](https://www.youtube.com/c/3blue1brown). While Python is a great language for end-users, it would be
+interesting to explore similar implementations in a compiled language and the possibilities that it would enable, such as real-time interactions and deploying to the web. Along the way, I became interested in Rust and tried to apply it for my learning in this project.
 
 ## Architecture
 Noon is designed as a thin animation-wrapper on top of an awesome existing library called
@@ -167,7 +166,7 @@ fn scene(win_rect: Rect) -> Scene {
 }
 ```
   
-![Alt Text](./assets/easing.gif)
+![Alt Text](./assets/shapes.gif)
 ```rust
 // cargo run --release --example shapes
 fn scene(win_rect: Rect) -> Scene {
