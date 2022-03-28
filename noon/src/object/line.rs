@@ -116,6 +116,7 @@ impl Create<LineId> for LineBuilder<'_> {
             .insert(transform)
             .insert(FillColor(Color::BLACK))
             .insert(HasFill(false))
+            .insert(Animations::<Position>::init())
             .id();
 
         id.into()

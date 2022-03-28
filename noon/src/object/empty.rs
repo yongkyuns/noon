@@ -1,7 +1,8 @@
 use crate::{
+    animation::{Group, GroupAction},
     component::{Children, Parent},
     prelude::Direction,
-    WithArrange,
+    Animations, WithArrange,
 };
 
 use super::common::*;
@@ -55,17 +56,17 @@ impl Create<EmptyId> for EmptyBuilder<'_> {
     fn make(&mut self) -> EmptyId {
         // let depth = self.scene.increment_counter();
 
-        // Compute the centroid to place the group origin
-        let mut points = Vec::new();
-        for id in self.children.id.iter() {
-            let entity = self.scene.world.entity(*id);
-            if let Some(position) = entity.get::<Position>() {
-                points.push(Point::new(position.x, position.y));
-            }
-        }
-        self.position = Position::from_points(&points);
+        // // Compute the centroid to place the group origin
+        // let mut points = Vec::new();
+        // for id in self.children.id.iter() {
+        //     let entity = self.scene.world.entity(*id);
+        //     if let Some(position) = entity.get::<Position>() {
+        //         points.push(Point::new(position.x, position.y));
+        //     }
+        // }
+        // self.position = Position::from_points(&points);
 
-        let transform = Transform::translation(self.position.x, self.position.y);
+        // let transform = Transform::translation(self.position.x, self.position.y);
 
         // Create the empty object
         let world = &mut self.scene.world;
@@ -77,25 +78,31 @@ impl Create<EmptyId> for EmptyBuilder<'_> {
             .insert(Scale::ONE)
             .insert(self.position)
             .insert(self.angle)
-            .insert(transform)
+            .insert(Transform::identity())
             .insert(Origin::none())
             .id();
 
-        // Change the position of previous
-        for id in self.children.id.iter() {
-            let mut entity = self.scene.world.entity_mut(*id);
-            entity.insert(Parent(*id));
+        // // Change the position of previous
+        // for id in self.children.id.iter() {
+        //     let mut entity = self.scene.world.entity_mut(*id);
+        //     entity.insert(Parent(*id));
 
-            if let Some(mut child_position) = entity.get_mut::<Position>() {
-                let child_point: Point = (*child_position).into();
-                let parent_point: Point = (self.position).into();
-                let v = child_point - parent_point;
-                *child_position = Position::new(v.x, v.y);
-                // if let Some(mut child_angle) = entity.get_mut::<Angle>() {
-                //     *child_angle = Angle(child_angle.0 - self.angle.0);
-                // }
-            }
-        }
+        //     if let Some(mut child_position) = entity.get_mut::<Position>() {
+        //         let child_point: Point = (*child_position).into();
+        //         let parent_point: Point = (self.position).into();
+        //         let v = child_point - parent_point;
+        //         *child_position = Position::new(v.x, v.y);
+        //         // if let Some(mut child_angle) = entity.get_mut::<Angle>() {
+        //         //     *child_angle = Angle(child_angle.0 - self.angle.0);
+        //         // }
+        //     }
+        // }
+
+        let animations = EntityAnimations {
+            entity: id.into(),
+            animations: vec![GroupAction::new(Group {}).into()],
+        };
+        AnimBuilder::new(self.scene_mut(), animations.into()).run_time(0.0);
 
         id.into()
     }

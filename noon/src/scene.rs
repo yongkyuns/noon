@@ -95,12 +95,15 @@ impl Scene {
         world.insert_resource(bounds);
         world.insert_resource(transform);
 
+        // world.init_component::<Animation<Position>>();
+
         let mut updater = Schedule::default();
         updater.add_stage(
             "update",
             SystemStage::parallel()
                 // .with_system(update_previous::<Size>.before(Label::Init))
-                .with_system(trigger_arrange.before(Label::Init))
+                .with_system(group.before(Label::Init))
+                .with_system(arrange.label(Label::Init))
                 // Beginnning of Main systems
                 .with_system(init_from_target::<Position>.label(Label::Init))
                 .with_system(init_from_target::<FillColor>.label(Label::Init))

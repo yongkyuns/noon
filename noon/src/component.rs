@@ -154,6 +154,12 @@ impl Position {
             y: sum.y / points.len() as f32,
         }
     }
+    pub fn into_point(&self) -> Point {
+        Point::new(self.x, self.y)
+    }
+    pub fn into_vector(&self) -> Vector {
+        Vector::new(self.x, self.y)
+    }
 }
 
 impl Interpolate for Position {

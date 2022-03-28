@@ -1,3 +1,5 @@
+use crate::Animations;
+
 use super::common::*;
 
 #[derive(Component)]
@@ -93,6 +95,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
             .insert(transform)
             .insert(HasFill(true))
             .insert(Origin::none())
+            .insert(Animations::<Position>::init())
             .id();
 
         id.into()

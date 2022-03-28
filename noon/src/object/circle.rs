@@ -104,6 +104,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
             .insert(pixel_path)
             .insert(transform)
             .insert(HasFill(true))
+            .insert(Animations::<Position>::init())
             .id();
 
         id.into()

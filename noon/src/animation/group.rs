@@ -1,61 +1,37 @@
 use super::*;
 // use bevy_ecs::prelude::*;
 
-// pub struct GroupAnimations<T>(pub(crate) Vec<GroupAnimation<T>>);
-
-// #[derive(Debug, Component, Clone)]
-// pub struct GroupAnimation<T> {
-//     pub(crate) animation: T,
-//     /// Duration of animation in seconds.
-//     pub(crate) duration: f32,
-//     /// Time at which animation should begin.
-//     pub(crate) start_time: f32,
-//     /// Easing function to be used for animation.
-//     pub(crate) rate_func: EaseType,
-// }
-
-// impl<T: Component> GroupAnimation<T> {
-//     pub fn insert(self, world: &mut World, id: Entity) {
-//         world.entity_mut(id).insert(self);
-//     }
-
-//     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
-//         self.start_time = start_time;
-//         self.duration = duration;
-//         self.rate_func = rate_func;
-//     }
-// }
-
-// impl Into<Vec<AnimationType>> for GroupAnimation {
-//     fn into(self) -> Vec<AnimationType> {
-//         vec![self.into()]
-//     }
-// }
+#[derive(Component)]
+pub struct GroupActions<T>(pub(crate) Vec<GroupAction<T>>);
 
 #[derive(Debug, Component, Clone)]
-pub struct Arrange {
-    pub(crate) align: Align,
-    pub(crate) gap: f32,
+pub struct GroupAction<T> {
+    pub(crate) action: T,
     /// Duration of animation in seconds.
     pub(crate) duration: f32,
     /// Time at which animation should begin.
     pub(crate) start_time: f32,
     /// Easing function to be used for animation.
     pub(crate) rate_func: EaseType,
+    pub(crate) done: bool,
 }
 
-impl Arrange {
-    pub fn new(align: Align, gap: f32) -> Self {
+impl<T: Component> GroupAction<T> {
+    pub fn new(action: T) -> Self {
         Self {
-            align,
-            gap,
-            duration: 0.0,
+            action,
+            duration: 1.0,
             start_time: 0.0,
-            rate_func: EaseType::Quad,
+            rate_func: Default::default(),
+            done: false,
         }
     }
     pub fn insert(self, world: &mut World, id: Entity) {
-        world.entity_mut(id).insert(self);
+        if let Some(mut actions) = world.get_mut::<GroupActions<T>>(id) {
+            actions.0.push(self);
+        } else {
+            world.entity_mut(id).insert(GroupActions(vec![self]));
+        }
     }
 
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
@@ -65,9 +41,33 @@ impl Arrange {
     }
 }
 
-impl Into<Vec<AnimationType>> for Arrange {
+impl GroupAction<Arrange> {
+    pub fn gap(&self) -> f32 {
+        self.action.gap
+    }
+    pub fn align(&self) -> Align {
+        self.action.align
+    }
+}
+
+impl<T> Into<Vec<AnimationType>> for GroupAction<T>
+where
+    GroupAction<T>: Into<AnimationType>,
+{
     fn into(self) -> Vec<AnimationType> {
         vec![self.into()]
+    }
+}
+
+#[derive(Debug, Component, Clone)]
+pub struct Arrange {
+    pub(crate) align: Align,
+    pub(crate) gap: f32,
+}
+
+impl Arrange {
+    pub fn new(align: Align, gap: f32) -> Self {
+        Self { align, gap }
     }
 }
 
@@ -75,7 +75,7 @@ pub trait WithArrange: WithId {
     fn arrange(&self, align: Align, gap: f32) -> EntityAnimations {
         EntityAnimations {
             entity: self.id(),
-            animations: Arrange::new(align, gap).into(),
+            animations: GroupAction::new(Arrange::new(align, gap)).into(),
         }
     }
 }
@@ -103,3 +103,9 @@ impl Align {
         }
     }
 }
+
+#[derive(Debug, Component, Clone)]
+pub struct Group;
+
+#[derive(Debug, Component, Clone)]
+pub struct Ungroup;

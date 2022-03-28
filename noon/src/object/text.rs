@@ -121,6 +121,7 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(global_path)
             .insert(transform)
             .insert(HasFill(true))
+            .insert(Animations::<Position>::init())
             .id();
 
         id.into()

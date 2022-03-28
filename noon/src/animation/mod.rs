@@ -35,6 +35,12 @@ pub trait WithId {
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
 
+impl<C: Interpolate + Component> Animations<C> {
+    pub fn init() -> Animations<C> {
+        Self(Vec::new())
+    }
+}
+
 /// Basic structure to describe an animation.
 #[derive(Component, Debug, Clone)]
 pub struct Animation<T> {
@@ -301,7 +307,9 @@ pub enum AnimationType {
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
     Path(Animation<Path>),
-    Arrange(Arrange),
+    Arrange(GroupAction<Arrange>),
+    Group(GroupAction<Group>),
+    Ungroup(GroupAction<Ungroup>),
 }
 
 impl Into<AnimationType> for Animation<StrokeColor> {
@@ -370,9 +378,21 @@ impl Into<AnimationType> for Animation<Path> {
     }
 }
 
-impl Into<AnimationType> for Arrange {
+impl Into<AnimationType> for GroupAction<Arrange> {
     fn into(self) -> AnimationType {
         AnimationType::Arrange(self)
+    }
+}
+
+impl Into<AnimationType> for GroupAction<Group> {
+    fn into(self) -> AnimationType {
+        AnimationType::Group(self)
+    }
+}
+
+impl Into<AnimationType> for GroupAction<Ungroup> {
+    fn into(self) -> AnimationType {
+        AnimationType::Ungroup(self)
     }
 }
 
@@ -448,8 +468,14 @@ impl EntityAnimations {
                 AnimationType::Path(animation) => {
                     animation.insert(world, self.entity);
                 }
-                AnimationType::Arrange(arrange) => {
-                    arrange.insert(world, self.entity);
+                AnimationType::Arrange(action) => {
+                    action.insert(world, self.entity);
+                }
+                AnimationType::Group(action) => {
+                    action.insert(world, self.entity);
+                }
+                AnimationType::Ungroup(action) => {
+                    action.insert(world, self.entity);
                 }
             };
         }
@@ -467,7 +493,9 @@ impl EntityAnimations {
             AnimationType::Opacity(animation) => animation.start_time,
             AnimationType::PathCompletion(animation) => animation.start_time,
             AnimationType::Path(animation) => animation.start_time,
-            AnimationType::Arrange(arrange) => arrange.start_time,
+            AnimationType::Arrange(action) => action.start_time,
+            AnimationType::Group(action) => action.start_time,
+            AnimationType::Ungroup(action) => action.start_time,
         }
     }
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
@@ -506,8 +534,14 @@ impl EntityAnimations {
                 AnimationType::Path(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
-                AnimationType::Arrange(ref mut arrange) => {
-                    arrange.set_properties(start_time, duration, rate_func);
+                AnimationType::Arrange(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
+                }
+                AnimationType::Group(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
+                }
+                AnimationType::Ungroup(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
                 }
             }
         }

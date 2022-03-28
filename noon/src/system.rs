@@ -7,8 +7,10 @@ use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
 
 use crate::{
-    animation::Arrange, component::Children, path::GetPartial, Depth, EaseType, EntityAnimations,
-    HasFill, Opacity, Origin, Scale, StrokeColor, StrokeWeight,
+    animation::{Arrange, Group, GroupActions},
+    component::Children,
+    path::GetPartial,
+    Depth, HasFill, Opacity, Origin, Scale, StrokeColor, StrokeWeight,
 };
 use crate::{
     Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
@@ -95,51 +97,78 @@ impl Time {
 //     }
 // }
 
-// pub fn group(time: Res<Time>, group_query: Query<(&mut Group, &Children)>) {}
-
-pub fn trigger_arrange(
+pub fn group(
     time: Res<Time>,
-    mut commands: Commands,
-    arrange_query: Query<(Entity, &mut Arrange, &Children)>,
+    mut group_query: Query<(Entity, &mut GroupActions<Group>, &Children)>,
+    mut attribute_query: Query<(&mut Position, &mut Origin)>,
+) {
+    for (parent, mut actions, children) in group_query.iter_mut() {
+        for action in actions.0.iter_mut() {
+            let start_time = action.start_time;
+
+            if !action.done && start_time <= time.seconds {
+                let mut points = Vec::new();
+                // Compute the centroid of children
+                for child in children.id.iter() {
+                    if let Ok((position, _)) = attribute_query.get_mut(*child) {
+                        points.push(position.into_point());
+                    }
+                }
+                let centroid = Position::from_points(&points);
+
+                // Move the parent to the centroid
+                if let Ok((mut position, _)) = attribute_query.get_mut(parent) {
+                    *position = centroid;
+                    // println!("parent {:?}", origin);
+                }
+
+                // // Update child position w.r.t. group centroid
+                // for child in children.id.iter() {
+                //     if let Ok((mut position, mut origin)) = attribute_query.get_mut(*child) {
+                //         let v = position.into_point() - centroid.into_point();
+                //         *position = Position::new(v.x, v.y);
+                //         *origin = Origin(Transform::translation(centroid.x, centroid.y));
+                //         // println!("child {:?}", origin);
+                //     }
+                // }
+
+                action.done = true;
+            }
+        }
+    }
+}
+
+pub fn arrange(
+    time: Res<Time>,
+    // mut commands: Commands,
+    mut arrange_query: Query<(Entity, &mut GroupActions<Arrange>, &Children)>,
     mut attribute_query: Query<(&Size, &mut Animations<Position>)>,
 ) {
-    for (parent, arrange, children) in arrange_query.iter() {
-        let gap = arrange.gap;
-        let align = arrange.align;
-        let duration = arrange.duration;
-        let start_time = arrange.start_time;
-        let rate_func = arrange.rate_func;
-        let end = start_time + duration;
+    for (_, mut actions, children) in arrange_query.iter_mut() {
+        for action in actions.0.iter_mut() {
+            let gap = action.gap();
+            let align = action.align();
+            let duration = action.duration;
+            let start_time = action.start_time;
+            let rate_func = action.rate_func;
+            let done = action.done;
 
-        if start_time < time.seconds && time.seconds <= end {
-            // Negative size doesn't make sense, but this is to offset for the last gap added
-            // Compute total size in order to calculate the initial starting edge
-            let mut total_size = Size::from(-gap, -gap);
-            for child in children.id.iter() {
-                if let Ok((size, _)) = attribute_query.get_mut(*child) {
-                    total_size = total_size + *size + Size::from(gap, gap);
+            if !done && (start_time <= time.seconds) {
+                // Negative size doesn't make sense, but this is to offset for the last gap added
+                // Compute total size in order to calculate the initial starting edge
+                let mut total_size = Size::from(-gap, -gap);
+                for child in children.id.iter() {
+                    if let Ok((size, _)) = attribute_query.get_mut(*child) {
+                        total_size = total_size + *size + Size::from(gap, gap);
+                    }
                 }
-            }
 
-            // Place the first object in the starting point
-            let mut prev_position = Position::new(0.0, 0.0);
-            let child = *children.id.get(0).unwrap();
-            if let Ok((child_size, mut anim)) = attribute_query.get_mut(child) {
-                let target = align.starting_vector(&total_size.reduced_by(child_size));
-                prev_position = Position::new(target.x, target.y);
-                anim.0.push(
-                    Animation::<Position>::to(prev_position)
-                        .with_duration(duration)
-                        .with_rate_func(rate_func)
-                        .with_start_time(start_time),
-                );
-            }
-
-            // Successively layout the rest according to align rule
-            for child in children.id.iter().skip(1) {
-                if let Ok((size, mut anim)) = attribute_query.get_mut(*child) {
-                    prev_position = prev_position + align.into_vector(size, gap);
-
+                // Place the first object in the starting point
+                let mut prev_position = Position::new(0.0, 0.0);
+                let child = *children.id.get(0).unwrap();
+                if let Ok((child_size, mut anim)) = attribute_query.get_mut(child) {
+                    let target = align.starting_vector(&total_size.reduced_by(child_size));
+                    prev_position = Position::new(target.x, target.y);
                     anim.0.push(
                         Animation::<Position>::to(prev_position)
                             .with_duration(duration)
@@ -147,10 +176,26 @@ pub fn trigger_arrange(
                             .with_start_time(start_time),
                     );
                 }
-            }
 
-            // Remove after arrange is converted to individual animations
-            commands.entity(parent).remove::<Arrange>();
+                // Successively layout the rest according to align rule
+                for child in children.id.iter().skip(1) {
+                    if let Ok((size, mut anim)) = attribute_query.get_mut(*child) {
+                        prev_position = prev_position + align.into_vector(size, gap);
+
+                        anim.0.push(
+                            Animation::<Position>::to(prev_position)
+                                .with_duration(duration)
+                                .with_rate_func(rate_func)
+                                .with_start_time(start_time),
+                        );
+                    }
+                }
+
+                // Only execute each action once
+                action.done = true;
+                // Remove after arrange is converted to individual animations
+                // commands.entity(parent).remove::<GroupAction<Arrange>>();
+            }
         }
     }
 }

@@ -19,10 +19,21 @@ fn scene(win_rect: Rect) -> Scene {
         motion.push(rect.move_to(-2.0, 0.0));
     }
 
-    scene.play(motion).run_time(0.1);
     let group = scene.group().add_multiple(&rects).make();
-    // let group = scene.group(&rects).make();
-    scene.play(group.arrange(Align::Vertical, 0.1));
+
+    // scene.play(motion).run_time(0.2);
+    // scene.play(group.move_by(-2.0, 0.0)).run_time(0.2);
+    scene
+        .play(group.arrange(Align::Vertical, 0.1))
+        .run_time(1.0);
+    // scene.play(motion).run_time(1.0);
+    // // scene.play(motion).run_time(1.0);
+    // // let group = scene.group(&rects).make();
+    // scene.play(group.arrange(Align::Vertical, 0.1));
+    // // scene.play(group.move_to(-2.0, 2.0));
+    // scene.play(group.arrange(Align::Horizontal, 0.1));
+    // scene.play(group.rotate(noon::TAU));
+    // scene.play(group.to_edge(Direction::Right));
 
     // scene.play(group.arrange(Alignment::Vertical, 0.0));
 
