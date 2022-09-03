@@ -1,0 +1,6 @@
+error: The argument '--version <VERSION>' requires a value but none was supplied
+
+USAGE:
+    cargo install <crate>... --locked --version <VERSION>
+
+For more information try --help

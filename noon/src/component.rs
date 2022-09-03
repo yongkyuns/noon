@@ -1,5 +1,5 @@
 use crate::prelude::Direction;
-use crate::{point, Color, PixelFrame, Point, Vector, TO_PXL};
+use crate::{point, Color, EaseType, PixelFrame, Point, Vector, TO_PXL};
 use bevy_ecs::prelude::*;
 use nannou::color::{IntoLinSrgba, LinSrgba};
 use nannou::lyon::math as euclid;
@@ -37,6 +37,9 @@ impl Transform {
     pub fn identity() -> Self {
         Self(euclid::Transform::identity())
     }
+    pub fn translation(x: f32, y: f32) -> Self {
+        Self(euclid::Transform::identity()).translate(Vector::new(x, y))
+    }
     /// Translation. Untested
     pub fn translate(mut self, vector: Vector) -> Self {
         self.translate_mut(vector);
@@ -70,11 +73,32 @@ impl Transform {
 }
 
 #[derive(Debug, Component, Default, Clone)]
-pub struct Children(pub(crate) Vec<Entity>);
+pub struct Origin(pub(crate) Transform);
+
+impl Origin {
+    pub fn none() -> Self {
+        Self(Transform::identity())
+    }
+}
+
+#[derive(Debug, Component, Clone)]
+pub struct Parent(pub(crate) Entity);
+
+#[derive(Debug, Component, Default, Clone)]
+pub struct Children {
+    /// Marker for indicating each child's priority in a group.
+    ///
+    /// This is just the order in which the child was added to a group.
+    pub(crate) order: Vec<u32>,
+    pub(crate) id: Vec<Entity>,
+    pub(crate) count: u32,
+}
 
 impl Children {
     pub fn add(&mut self, entity: impl Into<Entity>) {
-        self.0.push(entity.into());
+        self.id.push(entity.into());
+        self.order.push(self.count);
+        self.count += 1;
     }
 }
 
@@ -118,6 +142,9 @@ pub struct Position {
 }
 
 impl Position {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
     pub fn from_points(points: &[Point]) -> Self {
         let sum = points
             .iter()
@@ -126,6 +153,12 @@ impl Position {
             x: sum.x / points.len() as f32,
             y: sum.y / points.len() as f32,
         }
+    }
+    pub fn into_point(&self) -> Point {
+        Point::new(self.x, self.y)
+    }
+    pub fn into_vector(&self) -> Vector {
+        Vector::new(self.x, self.y)
     }
 }
 
@@ -138,13 +171,29 @@ impl Interpolate for Position {
     }
 }
 
-impl Add for Position {
+impl Add<Vector> for Position {
+    type Output = Self;
+    fn add(self, other: Vector) -> Self::Output {
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl Add<Self> for Position {
     type Output = Self;
     fn add(self, other: Self) -> Self::Output {
         Self {
             x: self.x + other.x,
             y: self.y + other.y,
         }
+    }
+}
+
+impl Into<Point> for Position {
+    fn into(self) -> Point {
+        Point::new(self.x, self.y)
     }
 }
 
@@ -278,8 +327,14 @@ impl Add for Opacity {
     }
 }
 
-#[derive(Debug, Component, Default, Clone, Copy)]
+#[derive(Debug, Component, Clone, Copy)]
 pub struct PathCompletion(pub(crate) f32);
+
+impl Default for PathCompletion {
+    fn default() -> Self {
+        Self(0.0)
+    }
+}
 
 impl Interpolate for PathCompletion {
     fn interp(&self, other: &Self, progress: f32) -> Self {

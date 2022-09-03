@@ -13,11 +13,13 @@ use crate::{
 
 mod builder;
 mod color;
+mod group;
 mod path;
 mod spatial;
 
 pub use builder::AnimBuilder;
 pub use color::*;
+pub use group::*;
 pub use path::*;
 pub use spatial::*;
 
@@ -32,6 +34,12 @@ pub trait WithId {
 /// any related functionalities.
 #[derive(Component)]
 pub struct Animations<C: Interpolate + Component>(pub Vec<Animation<C>>);
+
+impl<C: Interpolate + Component> Animations<C> {
+    pub fn init() -> Animations<C> {
+        Self(Vec::new())
+    }
+}
 
 /// Basic structure to describe an animation.
 #[derive(Component, Debug, Clone)]
@@ -135,6 +143,16 @@ impl<T> Animation<T> {
         match self.end {
             Value::From(entity) => Some(entity),
             _ => None,
+        }
+    }
+    pub fn insert(self, world: &mut World, id: Entity)
+    where
+        T: Component + Interpolate,
+    {
+        if let Some(mut animations) = world.get_mut::<Animations<T>>(id) {
+            animations.0.push(self);
+        } else {
+            world.entity_mut(id).insert(Animations(vec![self]));
         }
     }
 
@@ -241,13 +259,6 @@ impl Animation<Position> {
                 self.end = Value::Absolute(*position + *by);
             }
             (None, Value::Edge(direction)) => {
-                // println!("{:?}", position);
-                // println!("size = {:?}", size);
-                // println!(
-                //     "{:?}",
-                //     bounds.reduced_by(size).get_edge(*position, *direction)
-                // );
-                // println!("{:?}", &*bounds);
                 self.begin = Some(*position);
                 self.end = Value::Absolute(bounds.reduced_by(size).get_edge(*position, *direction));
             }
@@ -279,6 +290,10 @@ where
     }
 }
 
+/// This data type is used to capture all animation commands into a single type.
+///
+/// This is internally used to collect animation commands in to an array, which
+/// can then be inserted as individual [Component] for each [Animation].
 #[derive(Clone)]
 pub enum AnimationType {
     StrokeColor(Animation<StrokeColor>),
@@ -292,6 +307,9 @@ pub enum AnimationType {
     Opacity(Animation<Opacity>),
     PathCompletion(Animation<PathCompletion>),
     Path(Animation<Path>),
+    Arrange(GroupAction<Arrange>),
+    Group(GroupAction<Group>),
+    Ungroup(GroupAction<Ungroup>),
 }
 
 impl Into<AnimationType> for Animation<StrokeColor> {
@@ -360,17 +378,35 @@ impl Into<AnimationType> for Animation<Path> {
     }
 }
 
-fn insert_animation<C: Component + Interpolate>(
-    animation: Animation<C>,
-    world: &mut World,
-    id: Entity,
-) {
-    if let Some(mut animations) = world.get_mut::<Animations<C>>(id) {
-        animations.0.push(animation);
-    } else {
-        world.entity_mut(id).insert(Animations(vec![animation]));
+impl Into<AnimationType> for GroupAction<Arrange> {
+    fn into(self) -> AnimationType {
+        AnimationType::Arrange(self)
     }
 }
+
+impl Into<AnimationType> for GroupAction<Group> {
+    fn into(self) -> AnimationType {
+        AnimationType::Group(self)
+    }
+}
+
+impl Into<AnimationType> for GroupAction<Ungroup> {
+    fn into(self) -> AnimationType {
+        AnimationType::Ungroup(self)
+    }
+}
+
+// fn insert_animation<C: Component + Interpolate>(
+//     animation: Animation<C>,
+//     world: &mut World,
+//     id: Entity,
+// ) {
+//     if let Some(mut animations) = world.get_mut::<Animations<C>>(id) {
+//         animations.0.push(animation);
+//     } else {
+//         world.entity_mut(id).insert(Animations(vec![animation]));
+//     }
+// }
 
 fn set_properties<T: Component + Interpolate>(
     animation: &mut Animation<T>,
@@ -400,37 +436,46 @@ impl EntityAnimations {
         for animation in self.animations.into_iter() {
             match animation {
                 AnimationType::StrokeColor(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::StrokeWeight(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::FillColor(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Position(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Angle(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Scale(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Size(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::FontSize(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Opacity(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::PathCompletion(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
                 }
                 AnimationType::Path(animation) => {
-                    insert_animation(animation, world, self.entity);
+                    animation.insert(world, self.entity);
+                }
+                AnimationType::Arrange(action) => {
+                    action.insert(world, self.entity);
+                }
+                AnimationType::Group(action) => {
+                    action.insert(world, self.entity);
+                }
+                AnimationType::Ungroup(action) => {
+                    action.insert(world, self.entity);
                 }
             };
         }
@@ -448,6 +493,9 @@ impl EntityAnimations {
             AnimationType::Opacity(animation) => animation.start_time,
             AnimationType::PathCompletion(animation) => animation.start_time,
             AnimationType::Path(animation) => animation.start_time,
+            AnimationType::Arrange(action) => action.start_time,
+            AnimationType::Group(action) => action.start_time,
+            AnimationType::Ungroup(action) => action.start_time,
         }
     }
     pub fn set_properties(&mut self, start_time: f32, duration: f32, rate_func: EaseType) {
@@ -486,6 +534,15 @@ impl EntityAnimations {
                 AnimationType::Path(ref mut animation) => {
                     set_properties(animation, start_time, duration, rate_func);
                 }
+                AnimationType::Arrange(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
+                }
+                AnimationType::Group(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
+                }
+                AnimationType::Ungroup(ref mut action) => {
+                    action.set_properties(start_time, duration, rate_func);
+                }
             }
         }
     }
@@ -496,3 +553,22 @@ impl Into<Vec<EntityAnimations>> for EntityAnimations {
         vec![self]
     }
 }
+
+// #[derive(Clone)]
+// pub struct GroupAnimation {
+//     pub(crate) parent: Entity,
+//     pub(crate) animation: Orchestrate,
+//     /// Duration of animation in seconds.
+//     pub(crate) duration: f32,
+//     /// Time at which animation should begin.
+//     pub(crate) start_time: f32,
+//     /// Easing function to be used for animation.
+//     pub(crate) rate_func: EaseType,
+// }
+
+// #[derive(Clone)]
+// pub enum Orchestrate {
+//     Arrange(Arrange),
+// }
+
+// impl Orchestrate {}

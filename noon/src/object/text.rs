@@ -10,10 +10,10 @@ impl Text {
 
         let mut builder = Path::builder();
 
-        let rect = nannou::geom::Rect::from_w_h(1.0, 1.0);
+        let rect = nannou::geom::Rect::from_w_h(500.0, 500.0);
         let text = text::text(text)
             .font_size(font_size)
-            .no_line_wrap()
+            // .no_line_wrap()
             .left_justify()
             .build(rect);
 
@@ -121,6 +121,7 @@ impl Create<TextId> for TextBuilder<'_> {
             .insert(global_path)
             .insert(transform)
             .insert(HasFill(true))
+            .insert(Animations::<Position>::init())
             .id();
 
         id.into()

@@ -33,3 +33,7 @@ path = "easing.rs"
 [[example]]
 name = "temp"
 path = "temp.rs"
+
+[[example]]
+name = "large_text"
+path = "large_text.rs"

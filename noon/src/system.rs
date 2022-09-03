@@ -6,7 +6,12 @@ use std::{
 use bevy_ecs::prelude::*;
 use nannou::color::Rgba;
 
-use crate::{path::GetPartial, Depth, HasFill, Opacity, Scale, StrokeColor, StrokeWeight};
+use crate::{
+    animation::{Arrange, Group, GroupActions},
+    component::Children,
+    path::GetPartial,
+    Depth, HasFill, Opacity, Origin, Scale, StrokeColor, StrokeWeight,
+};
 use crate::{
     Angle, Animation, Animations, Bounds, Circle, FillColor, Interpolate, Path, PathCompletion,
     PixelPath, Position, Size, Transform, Vector, EPS,
@@ -92,32 +97,191 @@ impl Time {
 //     }
 // }
 
+pub fn group(
+    time: Res<Time>,
+    mut group_query: Query<(Entity, &mut GroupActions<Group>, &Children)>,
+    mut attribute_query: Query<(&mut Position, &mut Origin)>,
+) {
+    for (parent, mut actions, children) in group_query.iter_mut() {
+        for action in actions.0.iter_mut() {
+            let start_time = action.start_time;
+
+            if !action.done && start_time <= time.seconds {
+                let mut points = Vec::new();
+                // Compute the centroid of children
+                for child in children.id.iter() {
+                    if let Ok((position, _)) = attribute_query.get_mut(*child) {
+                        points.push(position.into_point());
+                    }
+                }
+                let centroid = Position::from_points(&points);
+
+                // Move the parent to the centroid
+                if let Ok((mut position, _)) = attribute_query.get_mut(parent) {
+                    *position = centroid;
+                    // println!("parent {:?}", origin);
+                }
+
+                // // Update child position w.r.t. group centroid
+                // for child in children.id.iter() {
+                //     if let Ok((mut position, mut origin)) = attribute_query.get_mut(*child) {
+                //         let v = position.into_point() - centroid.into_point();
+                //         *position = Position::new(v.x, v.y);
+                //         *origin = Origin(Transform::translation(centroid.x, centroid.y));
+                //         // println!("child {:?}", origin);
+                //     }
+                // }
+
+                action.done = true;
+            }
+        }
+    }
+}
+
+pub fn arrange(
+    time: Res<Time>,
+    // mut commands: Commands,
+    mut arrange_query: Query<(Entity, &mut GroupActions<Arrange>, &Children)>,
+    mut attribute_query: Query<(&Size, &mut Animations<Position>)>,
+) {
+    for (_, mut actions, children) in arrange_query.iter_mut() {
+        for action in actions.0.iter_mut() {
+            let gap = action.gap();
+            let align = action.align();
+            let duration = action.duration;
+            let start_time = action.start_time;
+            let rate_func = action.rate_func;
+            let done = action.done;
+
+            if !done && (start_time <= time.seconds) {
+                // Negative size doesn't make sense, but this is to offset for the last gap added
+                // Compute total size in order to calculate the initial starting edge
+                let mut total_size = Size::from(-gap, -gap);
+                for child in children.id.iter() {
+                    if let Ok((size, _)) = attribute_query.get_mut(*child) {
+                        total_size = total_size + *size + Size::from(gap, gap);
+                    }
+                }
+
+                // Place the first object in the starting point
+                let mut prev_position = Position::new(0.0, 0.0);
+                let child = *children.id.get(0).unwrap();
+                if let Ok((child_size, mut anim)) = attribute_query.get_mut(child) {
+                    let target = align.starting_vector(&total_size.reduced_by(child_size));
+                    prev_position = Position::new(target.x, target.y);
+                    anim.0.push(
+                        Animation::<Position>::to(prev_position)
+                            .with_duration(duration)
+                            .with_rate_func(rate_func)
+                            .with_start_time(start_time),
+                    );
+                }
+
+                // Successively layout the rest according to align rule
+                for child in children.id.iter().skip(1) {
+                    if let Ok((size, mut anim)) = attribute_query.get_mut(*child) {
+                        prev_position = prev_position + align.into_vector(size, gap);
+
+                        anim.0.push(
+                            Animation::<Position>::to(prev_position)
+                                .with_duration(duration)
+                                .with_rate_func(rate_func)
+                                .with_start_time(start_time),
+                        );
+                    }
+                }
+
+                // Only execute each action once
+                action.done = true;
+                // Remove after arrange is converted to individual animations
+                // commands.entity(parent).remove::<GroupAction<Arrange>>();
+            }
+        }
+    }
+}
+
+/// Update the origin of any children objects to define their pose w.r.t. the parent
+pub fn update_origin(
+    mut origin_query: Query<&mut Origin>,
+    parent_query: Query<(Entity, &Children, &Transform)>,
+) {
+    for (_parent, children, transform) in parent_query.iter() {
+        for child in children.id.iter() {
+            if let Ok(mut origin) = origin_query.get_mut(*child) {
+                *origin = Origin(*transform);
+            }
+        }
+    }
+}
+
+/// Update the transform of all objects based on position, angle and scale
+pub fn update_transform(mut query: Query<(&mut Transform, &Position, &Angle, &Scale, &Origin)>) {
+    for (mut transform, position, angle, scale, origin) in query.iter_mut() {
+        *transform = Transform::identity()
+            .scale(*scale)
+            .rotate(*angle)
+            .translate(Vector::new(position.x, position.y))
+            .transform(origin.0);
+    }
+}
+
+/// Update vectorized path to draw onto screen in screen coordinate frame.
+///
+/// [PixelPath] contains path ready-to-draw onto screen, whereas [Path]
+/// is defined with respect to the local coordinate used.
 pub fn update_screen_paths(
     to_pixel: Res<Transform>,
     mut query: Query<
         (
             &mut PixelPath,
             &mut Size,
-            &Path,
             &PathCompletion,
-            &Position,
-            &Angle,
-            &Scale,
+            &Path,
+            &Transform,
         ),
         With<PixelPath>,
     >,
 ) {
-    for (mut global, mut size, local, completion, position, angle, scale) in query.iter_mut() {
-        let object = Transform::identity()
-            .scale(*scale)
-            .rotate(*angle)
-            .translate(Vector::new(position.x, position.y));
+    for (mut global, mut size, completion, local, object) in query.iter_mut() {
+        // Calculate transform for final screen pixel coordinate
         let pixel = object.transform(*to_pixel);
+        // Compute partial path to show
         let path = local.upto(completion.0, EPS);
-        *size = path.transform(&object).size();
+        *size = local.transform(&object).size();
         *global = PixelPath(path.transform(&pixel));
     }
 }
+
+// /// Update vectorized path to draw onto screen in screen coordinate frame.
+// ///
+// /// [PixelPath] contains path ready-to-draw onto screen, whereas [Path]
+// /// is defined with respect to the local coordinate used.
+// pub fn update_screen_paths(
+//     to_pixel: Res<Transform>,
+//     mut query: Query<
+//         (
+//             &mut PixelPath,
+//             &mut Size,
+//             &Path,
+//             &PathCompletion,
+//             &Position,
+//             &Angle,
+//             &Scale,
+//         ),
+//         With<PixelPath>,
+//     >,
+// ) {
+//     for (mut global, mut size, local, completion, position, angle, scale) in query.iter_mut() {
+//         let object = Transform::identity()
+//             .scale(*scale)
+//             .rotate(*angle)
+//             .translate(Vector::new(position.x, position.y));
+//         let pixel = object.transform(*to_pixel);
+//         let path = local.upto(completion.0, EPS);
+//         *size = path.transform(&object).size();
+//         *global = PixelPath(path.transform(&pixel));
+//     }
+// }
 
 // pub fn bbox_angle_update(mut _query: Query<(&mut BoundingSize, &Path, &Angle), Changed<Angle>>) {
 //     // for (mut bbox, path, angle) in query.iter_mut() {
@@ -225,6 +389,7 @@ where
                 };
                 updater(animation, &mut att, progress);
             } else if end < t && t <= end + 0.1 {
+                // println!("time = {}, begin = {}, end = {}", time.seconds, begin, end);
                 updater(animation, &mut att, 1.0);
             }
         }

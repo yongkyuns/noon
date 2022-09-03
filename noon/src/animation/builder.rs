@@ -7,24 +7,17 @@ pub struct AnimBuilder<'a> {
     rate_func: EaseType,
     lag: f32,
     #[allow(dead_code)]
-    repeat: usize,
+    repeat: usize, // Not implemented yet
     start_time: Option<f32>,
 }
 
 impl<'a> AnimBuilder<'a> {
     pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimations>) -> Self {
-        let rate_func = EaseType::Quad;
-        // for ta in animations.iter() {
-        //     if ta.action == Action::ShowCreation {
-        //         rate_func = EaseType::Quad;
-        //         break;
-        //     }
-        // }
         AnimBuilder {
             scene,
             animations,
             run_time: 1.0,
-            rate_func,
+            rate_func: EaseType::Quad,
             lag: 0.0,
             repeat: 0,
             start_time: None,
@@ -72,3 +65,44 @@ impl<'a> Drop for AnimBuilder<'a> {
         self.scene.event_time = t - *lag + *run_time;
     }
 }
+
+// pub struct GroupBuilder<'a> {
+//     scene: &'a mut Scene,
+//     animations: Vec<EntityAnimations>,
+//     run_time: f32,
+//     rate_func: EaseType,
+//     lag: f32,
+//     #[allow(dead_code)]
+//     repeat: usize, // Not implemented yet
+//     start_time: Option<f32>,
+// }
+
+// impl<'a> GroupBuilder<'a> {
+//     pub fn new(scene: &'a mut Scene, animations: Vec<EntityAnimations>) -> Self {
+//         GroupBuilder {
+//             scene,
+//             animations,
+//             run_time: 1.0,
+//             rate_func: EaseType::Quad,
+//             lag: 0.0,
+//             repeat: 0,
+//             start_time: None,
+//         }
+//     }
+//     pub fn start_time(mut self, time: f32) -> Self {
+//         self.start_time = Some(time);
+//         self
+//     }
+//     pub fn run_time(mut self, duration: f32) -> Self {
+//         self.run_time = duration;
+//         self
+//     }
+//     pub fn rate_func(mut self, rate_func: EaseType) -> Self {
+//         self.rate_func = rate_func;
+//         self
+//     }
+//     pub fn lag(mut self, lag: f32) -> Self {
+//         self.lag = lag;
+//         self
+//     }
+// }

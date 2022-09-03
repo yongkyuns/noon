@@ -3,25 +3,53 @@ use noon::prelude::*;
 fn scene(win_rect: Rect) -> Scene {
     let mut scene = Scene::new(win_rect);
 
-    // let circle = scene
-    //     .circle()
-    //     .with_position(-2.0, 0.0)
-    //     .with_color(Color::random())
-    //     .make();
+    let mut motion = Vec::new();
+    let mut rects = Vec::new();
 
-    let rect = scene
-        .rectangle()
-        .with_position(1.0, -1.0)
-        .with_color(Color::random())
-        .make();
+    for _ in 0..5 {
+        let rect = scene
+            .rectangle()
+            .with_position(2.0, 0.0)
+            .with_size(0.1, 0.1)
+            .with_thin_stroke()
+            .with_color(Color::random())
+            .show();
 
-    let rect2 = scene
-        .rectangle()
-        .with_size(0.5, 0.5)
-        .with_angle(noon::PI / 4.0)
-        .with_position(-2.0, 2.0)
-        .with_color(Color::random())
-        .make();
+        rects.push(rect);
+        motion.push(rect.move_to(-2.0, 0.0));
+    }
+
+    let group = scene.group().add_multiple(&rects).make();
+
+    // scene.play(motion).run_time(0.2);
+    // scene.play(group.move_by(-2.0, 0.0)).run_time(0.2);
+    scene
+        .play(group.arrange(Align::Vertical, 0.1))
+        .run_time(1.0);
+    // scene.play(motion).run_time(1.0);
+    // // scene.play(motion).run_time(1.0);
+    // // let group = scene.group(&rects).make();
+    // scene.play(group.arrange(Align::Vertical, 0.1));
+    // // scene.play(group.move_to(-2.0, 2.0));
+    // scene.play(group.arrange(Align::Horizontal, 0.1));
+    // scene.play(group.rotate(noon::TAU));
+    // scene.play(group.to_edge(Direction::Right));
+
+    // scene.play(group.arrange(Alignment::Vertical, 0.0));
+
+    // scene
+    //     .play(vec![
+    //         group.(noon::PI),
+    //         // group.scale(0.01),
+    //         // group.move_to(2.0, 2.0),
+    //     ])
+    //     .run_time(2.0);
+
+    // scene.play(vec![
+    //     group.rotate(-noon::PI),
+    //     group.scale(100.0),
+    //     group.move_to(0.0, 0.0),
+    // ]);
 
     // let text = scene.text().with_text("Hello!").make();
     // let line = scene.line().from(0.0, 0.0).to(1.0, 0.0).make();
@@ -49,15 +77,15 @@ fn scene(win_rect: Rect) -> Scene {
     // scene.play(vec![line.show_creation(), text.show_creation()]);
 
     // scene.play(group.rotate(noon::PI / 4.0));
-    scene.play(vec![rect.show_creation(), rect2.show_creation()]);
+    // scene.play(vec![rect.show_creation(), rect2.show_creation()]);
     // scene.play(rect.move_to(2.0, 2.0));
-    scene.play(rect.rotate(noon::PI / 4.0));
-    scene.play(rect.scale(0.1));
+    // scene.play(rect.rotate(noon::PI / 4.0));
+    // scene.play(rect.scale(0.1));
     // scene.play(rect.scale_x(0.1));
     // scene.play(rect.set_size(0.5, 1.0));
     // scene.play(rect.move_by(-2.0, -2.0));
     // scene.wait();
-    scene.play(rect.to_edge(Direction::Right));
+    // scene.play(rect.to_edge(Direction::Right));
     // scene.play(rect.morph(rect2));
 
     // let group = scene.group(vec![line,text]).make();
