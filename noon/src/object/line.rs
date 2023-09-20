@@ -100,7 +100,7 @@ impl Create<LineId> for LineBuilder<'_> {
         );
 
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Line)
             .insert(size)
             .insert(scale)

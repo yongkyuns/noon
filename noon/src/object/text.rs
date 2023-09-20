@@ -104,7 +104,7 @@ impl Create<TextId> for TextBuilder<'_> {
                 .transform(&transform.transform(screen_transform)),
         );
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Text)
             .insert(FontSize(self.font_size))
             .insert(size)

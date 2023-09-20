@@ -12,13 +12,7 @@ use crate::{
     PixelPath, Position, Size, Transform, Vector, EPS,
 };
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
-pub enum Label {
-    Init,
-    Main,
-    Post,
-}
-
+#[derive(Resource)]
 pub struct Time {
     pub seconds: f32,
     pub count: u64,
