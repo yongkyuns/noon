@@ -88,7 +88,7 @@ impl Create<CircleId> for CircleBuilder<'_> {
         );
 
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Circle)
             .insert(Size::from_radius(self.radius))
             .insert(scale)

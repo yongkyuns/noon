@@ -45,7 +45,7 @@ impl Create<EmptyId> for EmptyBuilder<'_> {
         // let depth = self.scene.increment_counter();
         let world = &mut self.scene.world;
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Empty)
             .insert(self.children.clone())
             .insert(self.size)

@@ -76,7 +76,7 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
         );
 
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Rectangle)
             .insert(self.size)
             .insert(scale)

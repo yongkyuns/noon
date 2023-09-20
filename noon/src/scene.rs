@@ -12,7 +12,7 @@ use crate::{
     Path, PathCompletion, Position, RectangleBuilder, Size, StrokeColor,
 };
 
-#[derive(Debug)]
+#[derive(Resource, Debug)]
 pub struct Bounds(pub(crate) Rect);
 
 impl Bounds {
@@ -96,68 +96,103 @@ impl Scene {
         world.insert_resource(transform);
 
         let mut updater = Schedule::default();
-        updater.add_stage(
-            "update",
-            SystemStage::parallel()
-                // .with_system(update_previous::<Size>.before(Label::Init))
+        updater.add_systems(
+            (
                 // Beginnning of Main systems
-                .with_system(init_from_target::<Position>.label(Label::Init))
-                .with_system(init_from_target::<FillColor>.label(Label::Init))
-                .with_system(init_from_target::<StrokeColor>.label(Label::Init))
-                .with_system(init_from_target::<StrokeWeight>.label(Label::Init))
-                .with_system(init_from_target::<Size>.label(Label::Init))
-                .with_system(init_from_target::<Scale>.label(Label::Init))
-                .with_system(init_from_target::<Angle>.label(Label::Init))
-                .with_system(init_from_target::<Opacity>.label(Label::Init))
-                .with_system(init_from_target::<PathCompletion>.label(Label::Init))
-                .with_system(init_from_target::<FontSize>.label(Label::Init))
+                (
+                    init_from_target::<Position>,
+                    init_from_target::<FillColor>,
+                    init_from_target::<StrokeColor>,
+                    init_from_target::<StrokeWeight>,
+                    init_from_target::<Size>,
+                    init_from_target::<Scale>,
+                    init_from_target::<Angle>,
+                    init_from_target::<Opacity>,
+                    init_from_target::<PathCompletion>,
+                    init_from_target::<FontSize>,
+                ),
                 // Begin main animation updates
-                .with_system(animate_position.after(Label::Init).label(Label::Main))
-                .with_system(animate::<FillColor>.after(Label::Init).label(Label::Main))
-                .with_system(animate::<StrokeColor>.after(Label::Init).label(Label::Main))
-                .with_system(
-                    animate::<StrokeWeight>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_multiply::<Size>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_multiply::<Scale>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<Angle>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<Opacity>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<PathCompletion>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(animate_with_relative::<FontSize>)
+                (
+                    animate_position,
+                    animate::<FillColor>,
+                    animate::<StrokeColor>,
+                    animate::<StrokeWeight>,
+                    animate_with_multiply::<Size>,
+                    animate_with_multiply::<Scale>,
+                    animate_with_relative::<Angle>,
+                    animate_with_relative::<Opacity>,
+                    animate_with_relative::<PathCompletion>,
+                    animate_with_relative::<FontSize>,
+                ),
                 // Post-processing
-                .with_system(
-                    init_from_target::<Path>
-                        .after(Label::Main)
-                        .label(Label::Post),
-                )
-                .with_system(animate::<Path>.after(Label::Main).label(Label::Post))
-                .with_system(update_screen_paths.after(Label::Post))
-                .with_system(print),
+                (init_from_target::<Path>, print),
+                update_screen_paths,
+            )
+                .chain(),
         );
+        // updater.add_stage(
+        //     "update",
+        //     SystemStage::parallel()
+        //         // .with_system(update_previous::<Size>.before(Label::Init))
+        //         // Beginnning of Main systems
+        //         .with_system(init_from_target::<Position>.label(Label::Init))
+        //         .with_system(init_from_target::<FillColor>.label(Label::Init))
+        //         .with_system(init_from_target::<StrokeColor>.label(Label::Init))
+        //         .with_system(init_from_target::<StrokeWeight>.label(Label::Init))
+        //         .with_system(init_from_target::<Size>.label(Label::Init))
+        //         .with_system(init_from_target::<Scale>.label(Label::Init))
+        //         .with_system(init_from_target::<Angle>.label(Label::Init))
+        //         .with_system(init_from_target::<Opacity>.label(Label::Init))
+        //         .with_system(init_from_target::<PathCompletion>.label(Label::Init))
+        //         .with_system(init_from_target::<FontSize>.label(Label::Init))
+        //         // Begin main animation updates
+        //         .with_system(animate_position.after(Label::Init).label(Label::Main))
+        //         .with_system(animate::<FillColor>.after(Label::Init).label(Label::Main))
+        //         .with_system(animate::<StrokeColor>.after(Label::Init).label(Label::Main))
+        //         .with_system(
+        //             animate::<StrokeWeight>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(
+        //             animate_with_multiply::<Size>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(
+        //             animate_with_multiply::<Scale>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(
+        //             animate_with_relative::<Angle>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(
+        //             animate_with_relative::<Opacity>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(
+        //             animate_with_relative::<PathCompletion>
+        //                 .after(Label::Init)
+        //                 .label(Label::Main),
+        //         )
+        //         .with_system(animate_with_relative::<FontSize>)
+        //         // Post-processing
+        //         .with_system(
+        //             init_from_target::<Path>
+        //                 .after(Label::Main)
+        //                 .label(Label::Post),
+        //         )
+        //         .with_system(animate::<Path>.after(Label::Main).label(Label::Post))
+        //         .with_system(update_screen_paths.after(Label::Post))
+        //         .with_system(print),
+        // );
         let mut drawer = Schedule::default();
-        drawer.add_stage("draw", SystemStage::single_threaded().with_system(draw));
+        // drawer.add_stage("draw", SystemStage::single_threaded().with_system(draw));
+        drawer.add_systems(draw);
 
         Self {
             world,
@@ -229,8 +264,8 @@ impl Scene {
 
     pub fn draw(&mut self, nannou_draw: nannou::Draw) {
         // use nannou::glam::{Mat4, Vec3};
-        self.world.remove_non_send::<nannou::Draw>();
-        self.world.insert_non_send(
+        self.world.remove_non_send_resource::<nannou::Draw>();
+        self.world.insert_non_send_resource(
             nannou_draw
                 // .transform(Mat4::from_scale(Vec3::new(TO_PXL, TO_PXL, 1.0)))
                 .clone(),
