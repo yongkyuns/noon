@@ -89,7 +89,8 @@ impl Create<TextId> for TextBuilder<'_> {
     }
     fn make(&mut self) -> TextId {
         let depth = self.scene.increment_counter();
-        let world = &mut self.scene.world;
+        let world_cell = &self.scene.world;
+        let mut world = world_cell.borrow_mut();
         let position = self.position;
         let scale = Scale::ONE;
         let (path, size) = Text::path(&self.text, self.font_size);
@@ -104,7 +105,7 @@ impl Create<TextId> for TextBuilder<'_> {
                 .transform(&transform.transform(screen_transform)),
         );
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Text)
             .insert(FontSize(self.font_size))
             .insert(size)

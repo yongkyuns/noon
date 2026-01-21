@@ -83,7 +83,8 @@ impl Create<LineId> for LineBuilder<'_> {
     }
     fn make(&mut self) -> LineId {
         let depth = self.scene.increment_counter();
-        let world = &mut self.scene.world;
+        let world_cell = &self.scene.world;
+        let mut world = world_cell.borrow_mut();
 
         let scale = Scale::ONE;
         let (path, position) = Line::path(&self.points);
@@ -100,7 +101,7 @@ impl Create<LineId> for LineBuilder<'_> {
         );
 
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Line)
             .insert(size)
             .insert(scale)

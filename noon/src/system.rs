@@ -12,13 +12,14 @@ use crate::{
     PixelPath, Position, Size, Transform, Vector, EPS,
 };
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemLabel)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub enum Label {
     Init,
     Main,
     Post,
 }
 
+#[derive(Resource)]
 pub struct Time {
     pub seconds: f32,
     pub count: u64,
@@ -316,9 +317,11 @@ pub fn draw(
     {
         if alpha.is_visible() {
             if has_fill.0 {
-                let fill = Rgba {
-                    color: fill_color.0,
+                let fill: nannou::color::LinSrgba =
+                    nannou::color::IntoLinSrgba::into_lin_srgba(fill_color.0);
+                let fill = nannou::color::LinSrgba {
                     alpha: alpha.0,
+                    ..fill
                 };
                 // Draw fill first
                 draw.path()
@@ -328,9 +331,11 @@ pub fn draw(
                     .events(&path.0.raw);
             }
 
-            let stroke = Rgba {
-                color: stroke_color.0,
+            let stroke: nannou::color::LinSrgba =
+                nannou::color::IntoLinSrgba::into_lin_srgba(stroke_color.0);
+            let stroke = nannou::color::LinSrgba {
                 alpha: alpha.0,
+                ..stroke
             };
             // Draw stroke on top
             if !stroke_weight.is_none() {

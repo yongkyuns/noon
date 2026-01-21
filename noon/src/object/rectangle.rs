@@ -61,13 +61,15 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
     }
     fn make(&mut self) -> RectangleId {
         let depth = self.scene.increment_counter();
-        let world = &mut self.scene.world;
+        let world_cell = &self.scene.world;
+        let mut world = world_cell.borrow_mut();
+        let position = self.position;
         let scale = Scale::ONE;
         let path = Rectangle::path(&self.size);
         let transform = Transform::identity()
             .scale(scale)
             .rotate(self.angle)
-            .translate(self.position.into());
+            .translate(position.into());
         let screen_transform = self.scene.transform;
 
         let global_path = PixelPath(
@@ -76,11 +78,11 @@ impl Create<RectangleId> for RectangleBuilder<'_> {
         );
 
         let id = world
-            .spawn()
+            .spawn_empty()
             .insert(Rectangle)
             .insert(self.size)
             .insert(scale)
-            .insert(self.position)
+            .insert(position)
             .insert(self.angle)
             .insert(self.stroke_weight)
             .insert(StrokeColor(self.stroke_color))

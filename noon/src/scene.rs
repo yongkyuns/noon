@@ -1,5 +1,6 @@
 use bevy_ecs::prelude::*;
 use nannou::geom::Rect;
+use std::cell::RefCell;
 
 use crate::component::FillColor;
 use crate::prelude::*;
@@ -12,7 +13,7 @@ use crate::{
     Path, PathCompletion, Position, RectangleBuilder, Size, StrokeColor,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Resource)]
 pub struct Bounds(pub(crate) Rect);
 
 impl Bounds {
@@ -77,9 +78,9 @@ impl Bounds {
 }
 
 pub struct Scene {
-    pub(crate) world: World,
-    pub(crate) updater: Schedule,
-    pub(crate) drawer: Schedule,
+    pub(crate) world: RefCell<World>,
+    pub(crate) updater: RefCell<Schedule>,
+    pub(crate) drawer: RefCell<Schedule>,
     pub(crate) event_time: f32,
     pub(crate) clock_time: f32,
     pub(crate) creation_count: u32,
@@ -96,73 +97,56 @@ impl Scene {
         world.insert_resource(transform);
 
         let mut updater = Schedule::default();
-        updater.add_stage(
-            "update",
-            SystemStage::parallel()
-                // .with_system(update_previous::<Size>.before(Label::Init))
-                // Beginnning of Main systems
-                .with_system(init_from_target::<Position>.label(Label::Init))
-                .with_system(init_from_target::<FillColor>.label(Label::Init))
-                .with_system(init_from_target::<StrokeColor>.label(Label::Init))
-                .with_system(init_from_target::<StrokeWeight>.label(Label::Init))
-                .with_system(init_from_target::<Size>.label(Label::Init))
-                .with_system(init_from_target::<Scale>.label(Label::Init))
-                .with_system(init_from_target::<Angle>.label(Label::Init))
-                .with_system(init_from_target::<Opacity>.label(Label::Init))
-                .with_system(init_from_target::<PathCompletion>.label(Label::Init))
-                .with_system(init_from_target::<FontSize>.label(Label::Init))
-                // Begin main animation updates
-                .with_system(animate_position.after(Label::Init).label(Label::Main))
-                .with_system(animate::<FillColor>.after(Label::Init).label(Label::Main))
-                .with_system(animate::<StrokeColor>.after(Label::Init).label(Label::Main))
-                .with_system(
-                    animate::<StrokeWeight>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_multiply::<Size>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_multiply::<Scale>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<Angle>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<Opacity>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(
-                    animate_with_relative::<PathCompletion>
-                        .after(Label::Init)
-                        .label(Label::Main),
-                )
-                .with_system(animate_with_relative::<FontSize>)
-                // Post-processing
-                .with_system(
-                    init_from_target::<Path>
-                        .after(Label::Main)
-                        .label(Label::Post),
-                )
-                .with_system(animate::<Path>.after(Label::Main).label(Label::Post))
-                .with_system(update_screen_paths.after(Label::Post))
-                .with_system(print),
-        );
+        
+        updater.configure_sets((
+            Label::Init,
+            Label::Main.after(Label::Init),
+            Label::Post.after(Label::Main),
+        ));
+
+        updater.add_systems((
+            (
+                init_from_target::<Position>,
+                init_from_target::<FillColor>,
+                init_from_target::<StrokeColor>,
+                init_from_target::<StrokeWeight>,
+                init_from_target::<Size>,
+                init_from_target::<Scale>,
+                init_from_target::<Angle>,
+                init_from_target::<Opacity>,
+                init_from_target::<PathCompletion>,
+                init_from_target::<FontSize>,
+            ).in_set(Label::Init),
+            
+            (
+                animate_position,
+                animate::<FillColor>,
+                animate::<StrokeColor>,
+                animate::<StrokeWeight>,
+                animate_with_multiply::<Size>,
+                animate_with_multiply::<Scale>,
+                animate_with_relative::<Angle>,
+                animate_with_relative::<Opacity>,
+                animate_with_relative::<PathCompletion>,
+                animate_with_relative::<FontSize>,
+            ).in_set(Label::Main),
+
+            (
+                init_from_target::<Path>,
+                animate::<Path>,
+            ).in_set(Label::Post),
+
+            update_screen_paths.after(Label::Post),
+            print
+        ));
+
         let mut drawer = Schedule::default();
-        drawer.add_stage("draw", SystemStage::single_threaded().with_system(draw));
+        drawer.add_systems(draw);
 
         Self {
-            world,
-            updater,
-            drawer,
+            world: RefCell::new(world),
+            updater: RefCell::new(updater),
+            drawer: RefCell::new(drawer),
             event_time: 0.5,
             clock_time: 0.0,
             creation_count: 0,
@@ -215,27 +199,28 @@ impl Scene {
 
     pub fn update(&mut self, now: f32, win_rect: Rect) {
         // let now = self.clock_time;
-        self.world
+        let mut world = self.world.borrow_mut();
+        world
             .get_resource_mut::<Time>()
             .map(|mut t| t.seconds = now);
-        self.world
+        world
             .get_resource_mut::<Bounds>()
             .map(|mut bounds| *bounds = Bounds::new(win_rect));
 
-        self.updater.run(&mut self.world);
+        self.updater.borrow_mut().run(&mut world);
         // self.clock_time += 1. / 60.;
         self.clock_time = now;
     }
 
-    pub fn draw(&mut self, nannou_draw: nannou::Draw) {
+    pub fn draw(&self, nannou_draw: nannou::Draw) {
         // use nannou::glam::{Mat4, Vec3};
-        self.world.remove_non_send::<nannou::Draw>();
-        self.world.insert_non_send(
+        let mut world = self.world.borrow_mut();
+        world.insert_non_send_resource(
             nannou_draw
                 // .transform(Mat4::from_scale(Vec3::new(TO_PXL, TO_PXL, 1.0)))
                 .clone(),
         );
-        self.drawer.run(&mut self.world);
+        self.drawer.borrow_mut().run(&mut world);
     }
 
     pub fn wait(&mut self) {

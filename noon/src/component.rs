@@ -27,7 +27,7 @@ impl Interpolate for u32 {
 #[derive(Component)]
 pub struct Name(String);
 
-#[derive(Debug, Component, Default, Clone, Copy)]
+#[derive(Debug, Component, Resource, Default, Clone, Copy)]
 pub struct Transform(pub(crate) euclid::Transform);
 
 impl Transform {
