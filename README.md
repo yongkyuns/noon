@@ -1,5 +1,8 @@
 # noon
 Experimental animation library with high-level APIs for vector graphics animation.
+
+> [!NOTE]
+> This project was developed for experimental purposes and is no longer actively maintained.
   
 ![Alt Text](./assets/shapes.gif)
 
