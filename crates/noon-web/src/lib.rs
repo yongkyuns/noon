@@ -150,6 +150,29 @@ impl ScenePlayer {
     }
 
     fn apply_patches_transactionally(&mut self, patches: &[ScenePatch]) -> Result<(), PlayerError> {
+        if patches.iter().all(is_value_patch) {
+            for patch in patches {
+                let object = value_patch_object(patch);
+                if self.definition.object(object).is_none() {
+                    return Err(PlayerError::Patch(PatchError::UnknownObject(object)));
+                }
+                if !self.instance.contains_object(object) {
+                    return Err(PlayerError::CompilePatch(CompilePatchError::UnknownObject(
+                        object,
+                    )));
+                }
+            }
+            for patch in patches {
+                self.definition
+                    .apply_patch(patch.clone())
+                    .expect("value patch was preflighted against the scene definition");
+                self.instance
+                    .apply_patch(patch)
+                    .expect("value patch was preflighted against the compiled scene");
+            }
+            return Ok(());
+        }
+
         let mut definition = self.definition.clone();
         let mut instance = self.instance.clone();
         for patch in patches {
@@ -175,6 +198,20 @@ impl ScenePlayer {
 
     pub fn object_count(&self) -> usize {
         self.instance.frame().objects.len()
+    }
+}
+
+fn is_value_patch(patch: &ScenePatch) -> bool {
+    matches!(
+        patch,
+        ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. }
+    )
+}
+
+fn value_patch_object(patch: &ScenePatch) -> ObjectId {
+    match patch {
+        ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => *object,
+        _ => unreachable!("value patch helper only accepts transform or style patches"),
     }
 }
 

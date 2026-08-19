@@ -57,3 +57,15 @@ Current interpretation:
 - these figures cover CPU-side native scene operations only and make no claim about Pyodide turnaround, renderer preparation, GPU upload, or presentation.
 
 The stable-authoring follow-up also measured Rust-side full-document reconciliation. It was slower than replacement because it pays for full JSON decode, diffing, and transactional cloning together: 1.159 ms at 1k, 13.922 ms at 10k, and 130.763 ms at 100k. Therefore the browser's normal compatible-rerun path diffs the already-parsed worker result on the main thread and sends the small semantic `PatchBatch` measured above. Rust full-document reconciliation remains the correctness fallback for the first keyed run and unsafe changes.
+
+## Value-patch fast path
+
+After adding preflighted in-place transactions for style and transform patches, the same baseline machine produced:
+
+| Objects | Style patch median | Transform patch median |
+|---:|---:|---:|
+| 1,000 | 0.001 ms | 0.001 ms |
+| 10,000 | 0.013 ms | 0.014 ms |
+| 100,000 | 0.127 ms | 0.116 ms |
+
+At 100k objects this is roughly 150x faster than the original cloning path and more than 130x below a 16.7 ms frame budget. The fast path preflights every referenced object before mutation and then updates only the affected compiled/base/frame fields, reapplying active position, rotation, or opacity tracks for that object. Structural create/remove/track batches still use the conservative whole-state clone fallback.

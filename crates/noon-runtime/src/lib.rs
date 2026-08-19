@@ -82,6 +82,10 @@ impl SceneInstance {
         self.last_stats
     }
 
+    pub fn contains_object(&self, id: ObjectId) -> bool {
+        self.compiled.object_index(id).is_some()
+    }
+
     pub fn evaluate(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
@@ -115,11 +119,60 @@ impl SceneInstance {
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
+        if matches!(
+            patch,
+            ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. }
+        ) {
+            self.apply_value_patch(patch)?;
+            return Ok(&self.frame);
+        }
         let current_time = self.frame.time;
         self.compiled.apply_patch(patch)?;
         self.groups = build_groups(self.compiled.tracks());
         self.seek_unchecked(current_time);
         Ok(&self.frame)
+    }
+
+    fn apply_value_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+        let object = match patch {
+            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
+                *object
+            }
+            _ => unreachable!("value patch helper only accepts transform or style patches"),
+        };
+        let index = self
+            .compiled
+            .object_index(object)
+            .ok_or(CompilePatchError::UnknownObject(object))? as usize;
+        self.compiled.apply_patch(patch)?;
+
+        match patch {
+            ScenePatch::SetTransform { transform, .. } => {
+                self.frame.objects[index].transform = *transform;
+                self.reapply_properties(index, &[Property::Position, Property::Rotation]);
+            }
+            ScenePatch::SetStyle { style, .. } => {
+                self.frame.objects[index].style = *style;
+                self.reapply_properties(index, &[Property::Opacity]);
+            }
+            _ => unreachable!("value patch helper only accepts transform or style patches"),
+        }
+        Ok(())
+    }
+
+    fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
+        let time = self.frame.time;
+        let tracks = self.compiled.tracks();
+        let mut stats = EvaluationStats::default();
+        for group in &mut self.groups {
+            if group.object_index == object_index && properties.contains(&group.property) {
+                let slice = &tracks[group.start..group.end];
+                group.cursor = upper_bound_start(slice, time, &mut stats.binary_search_steps);
+                apply_group(&mut self.frame, slice, group, time);
+                stats.groups_evaluated += 1;
+            }
+        }
+        self.last_stats = stats;
     }
 
     fn seek_unchecked(&mut self, time: f64) {
@@ -275,7 +328,7 @@ fn apply_easing(easing: Easing, progress: f32) -> f32 {
 mod tests {
     use noon_compile::CompiledScene;
     use noon_core::{
-        Easing, GeometryRef, Property, SceneDefinition, Style, TrackDefinition, TrackTiming,
+        Color, Easing, GeometryRef, Property, SceneDefinition, Style, TrackDefinition, TrackTiming,
     };
 
     use super::*;
@@ -485,5 +538,41 @@ mod tests {
             .apply_patch(&ScenePatch::RemoveTrack(track_id))
             .expect("valid patch");
         assert_eq!(instance.frame().objects[0].style.opacity, 1.0);
+    }
+
+    #[test]
+    fn value_patch_updates_base_fields_without_overwriting_animated_values() {
+        let mut definition = SceneDefinition::new();
+        let object = definition.add(GeometryRef::circle(1.0));
+        definition
+            .animate_scalar(
+                object,
+                Property::Opacity,
+                1.0,
+                0.0,
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("valid track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
+        instance.seek(1.0).expect("valid time");
+
+        instance
+            .apply_patch(&ScenePatch::SetStyle {
+                object,
+                style: Style {
+                    fill: Some(Color::rgb(0.2, 0.4, 0.8)),
+                    opacity: 0.9,
+                    ..Style::default()
+                },
+            })
+            .expect("style patch must apply");
+
+        assert_eq!(
+            instance.frame().objects[0].style.fill,
+            Some(Color::rgb(0.2, 0.4, 0.8))
+        );
+        assert_eq!(instance.frame().objects[0].style.opacity, 0.5);
+        assert_eq!(instance.frame().time, 1.0);
     }
 }

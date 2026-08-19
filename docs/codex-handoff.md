@@ -47,10 +47,12 @@ The first no-Python browser playback path is now implemented:
 - explicit Python object/track keys are remapped to persistent numeric runtime IDs across reruns, even when Python insertion order changes;
 - compatible rerun documents are diffed after worker parsing into minimal `ScenePatch` batches; geometry and draw-order changes use Rust's transactional full-document reconciliation/replacement fallback;
 - measuring the initial Rust-only diff path showed it was slower than replacement because it repeated full JSON decoding, so compatible browser reruns now avoid that cost before entering wasm;
+- successful style/transform batches now use a preflighted in-place transaction and update only affected runtime fields while reapplying active tracks for that object;
+- the value-patch fast path retains all-or-nothing validation and reduced measured 100k style/transform latency from 17-19 ms to 0.12-0.13 ms; structural batches retain the clone fallback;
 - the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should address whole-state transactional patch cloning if 100k interactive editing is a target, then measure browser-side document diff and worker-transfer costs separately from native runtime application. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
+The next coherent slice should measure browser-side document diff and worker-transfer costs separately from the now-sub-millisecond native value-patch application. Structural patch transactions can then be specialized based on evidence rather than assuming they share the same bottleneck. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -330,6 +332,7 @@ Implemented in this order:
 12. Added complete Python scene authoring and a tagged worker protocol, then wired transactional playhead-preserving scene replacement into the persistent browser runtime without recreating WebGPU resources.
 13. Added repeatable scene-operation timing baselines and replaced quadratic IR import validation with order-preserving bulk construction, cutting measured 100k replacement latency by 72.3x.
 14. Added explicit stable Python authoring keys and compatible scene-to-patch reconciliation, retaining a measured transactional fallback for unsafe geometry or ordering edits.
+15. Added preflighted in-place style/transform transactions with targeted active-track reevaluation, reducing measured 100k one-object patch latency by roughly 150x without weakening atomic rejection.
 
 Remaining order:
 
