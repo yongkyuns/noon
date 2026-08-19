@@ -38,7 +38,7 @@ The first no-Python browser playback path is now implemented:
 - an optional module worker lazily loads pinned Pyodide, executes editable Python authoring code away from the main thread, and returns correlated versioned `PatchBatch` messages;
 - the dependency-free browser `noon` Python module builds semantic style/transform patches and is tested under normal CPython as well as exercised under Pyodide;
 - the browser `noon.Scene` API builds complete versioned scene documents with analytic primitives, styles, transforms, stable insertion-order IDs, and declarative position/rotation/opacity tracks;
-- the version-3 worker protocol returns tagged `SceneDocument` or `PatchBatch` results plus validated authoring identities for complete scenes;
+- the version-4 worker protocol returns one encoded tagged result containing a `SceneDocument` or `PatchBatch`, plus validated authoring identities for complete scenes;
 - `ScenePlayer::replace_scene_json` compiles and evaluates replacement state before committing it, preserving the playhead and resetting the new scene's patch sequence only after a successful swap;
 - browser scene replacement retains the existing canvas, WebGPU device, renderer, playback clock, and requestAnimationFrame loop, after which ordered live patches continue at sequence zero;
 - `scene_player_perf` now measures release-mode initial load, full replacement, and one-object style/transform patches at 1k/10k/100k objects, with a dated local baseline in `docs/performance.md`;
@@ -51,10 +51,12 @@ The first no-Python browser playback path is now implemented:
 - the value-patch fast path retains all-or-nothing validation and reduced measured 100k style/transform latency from 17-19 ms to 0.12-0.13 ms; structural batches retain the clone fallback;
 - renderer-facing changes accumulate until consumed, so static frames repack and upload nothing while animation/value patches update only their affected packed ranges; seeks, loop wraps, and structural edits conservatively invalidate the full frame;
 - the 100k renderer benchmark reduced unchanged preparation from a 1.54 ms full rebuild to about 0.000061 ms and exact instance-buffer payload from 8.8 MB/frame to zero; one changed object repacks and uploads one 88-byte record;
+- the worker-transfer benchmark identified parsed object-graph cloning and stringify-based equality as the browser rerun bottlenecks; encoded-result transport reduced measured 100k cloning from about 930 ms to 26 ms, while semantic comparisons reduced one-style diffing from 375 ms to 80 ms;
+- measured 100k clone-plus-main-thread rerun processing is now about 0.421 seconds instead of 1.38 seconds; the remaining dominant stage is parsing the 25 MiB result JSON, which points to future binary transport or worker-produced deltas;
 - the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should measure browser-side document diff and worker-transfer costs separately from the now-sub-millisecond native value-patch application. Structural patch transactions can then be specialized based on evidence rather than assuming they share the same bottleneck. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane. Renderer preparation and upload volume are now dirty-aware; GPU rasterization/presentation timing still needs real-browser profiling rather than noop-backend inference.
+The next coherent slice should profile real WebGPU command encoding, rasterization, and presentation in a browser. For 100k complete-scene reruns, JSON parsing is now the measured browser-side ceiling; address it later with compact/binary transport or worker-produced deltas rather than more Rust patch tuning. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -339,10 +341,11 @@ Implemented in this order:
 14. Added explicit stable Python authoring keys and compatible scene-to-patch reconciliation, retaining a measured transactional fallback for unsafe geometry or ordering edits.
 15. Added preflighted in-place style/transform transactions with targeted active-track reevaluation, reducing measured 100k one-object patch latency by roughly 150x without weakening atomic rejection.
 16. Added consumable runtime dirty tracking, cached incremental frame preparation, and partial GPU buffer writes; unchanged 100k scenes now repack zero instances and upload zero bytes after their initial frame.
+17. Benchmarked browser rerun stages, moved the worker protocol to encoded JSON results, and replaced serialization-based diff equality; 100k clone-plus-main processing improved by roughly 3.3x.
 
 Remaining order:
 
-1. Measure browser-side worker transfer/document diff and real WebGPU rasterization/presentation separately from the quantified native runtime/preparation costs.
+1. Profile real WebGPU command encoding, rasterization, and presentation separately from the quantified runtime/preparation/upload costs.
 2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve

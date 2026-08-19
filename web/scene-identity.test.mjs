@@ -101,3 +101,63 @@ test("uses replacement fallback for geometry and order changes", () => {
     null,
   );
 });
+
+test("preserves append-compatible removals and additions", () => {
+  const first = { id: 0, geometry: { circle: { radius: 1 } }, transform: {}, style: {} };
+  const second = { id: 1, geometry: { circle: { radius: 1 } }, transform: {}, style: {} };
+  const appended = { id: 2, geometry: { circle: { radius: 1 } }, transform: {}, style: {} };
+
+  assert.deepEqual(
+    diffSceneDocuments(
+      { objects: [first, second], tracks: [] },
+      { objects: [second, appended], tracks: [] },
+    ),
+    [{ remove_object: 0 }, { create_object: appended }],
+  );
+  assert.equal(
+    diffSceneDocuments(
+      { objects: [first, second], tracks: [] },
+      { objects: [first, appended, second], tracks: [] },
+    ),
+    null,
+  );
+});
+
+test("compares semantic transforms and tracks without serialization", () => {
+  const object = {
+    id: 0,
+    geometry: { rectangle: { size: { x: 2, y: 3 } } },
+    transform: {
+      translation: { x: 1, y: 2 },
+      rotation: 0,
+      scale: { x: 1, y: 1 },
+    },
+    style: { fill: null, stroke: null, stroke_width: 0, opacity: 1 },
+  };
+  const track = {
+    id: 0,
+    object: 0,
+    property: "position",
+    values: { vec2: { from: { x: 0, y: 0 }, to: { x: 1, y: 1 } } },
+    timing: { start_time: 0, duration: 1, easing: "linear" },
+  };
+  const desiredObject = {
+    ...structuredClone(object),
+    transform: { ...object.transform, rotation: 0.5 },
+  };
+  const desiredTrack = {
+    ...structuredClone(track),
+    timing: { ...track.timing, duration: 2 },
+  };
+
+  assert.deepEqual(
+    diffSceneDocuments(
+      { objects: [object], tracks: [track] },
+      { objects: [desiredObject], tracks: [desiredTrack] },
+    ),
+    [
+      { set_transform: { object: 0, transform: desiredObject.transform } },
+      { replace_track: desiredTrack },
+    ],
+  );
+});

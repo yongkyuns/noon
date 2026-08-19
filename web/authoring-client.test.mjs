@@ -5,6 +5,7 @@ import {
   AUTHORING_CHANNEL,
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
+  parseAuthoringResult,
   validatePatchBatch,
   validateSceneDocument,
   validateSceneIdentities,
@@ -65,7 +66,10 @@ test("correlates a Python request with a validated PatchBatch response", async (
   const batch = { version: 1, sequence: 4, patches: [] };
   worker.emit(
     "message",
-    workerMessage("patch_batch", { requestId: 0, document: batch }),
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    }),
   );
   assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
 });
@@ -82,10 +86,13 @@ test("correlates a Python request with a validated Scene response", async () => 
   const identities = { objects: [], tracks: [] };
   worker.emit(
     "message",
-    workerMessage("scene_document", {
+    workerMessage("result", {
       requestId: 0,
-      document: scene,
-      identities,
+      resultJson: JSON.stringify({
+        kind: "scene_document",
+        document: scene,
+        identities,
+      }),
     }),
   );
 
@@ -127,6 +134,15 @@ test("rejects malformed PatchBatch documents before they reach Rust", () => {
   assert.throws(
     () => validatePatchBatch({ version: 1, sequence: 0, patches: {} }),
     /must be an array/,
+  );
+});
+
+test("rejects malformed encoded worker results", () => {
+  assert.throws(() => parseAuthoringResult({}), /must be encoded JSON/);
+  assert.throws(() => parseAuthoringResult("{"), /returned invalid JSON/);
+  assert.throws(
+    () => parseAuthoringResult(JSON.stringify({ kind: "unknown" })),
+    /Unknown Python authoring result kind/,
   );
 });
 

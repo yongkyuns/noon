@@ -1,5 +1,5 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 3;
+export const AUTHORING_PROTOCOL_VERSION = 4;
 export const NOON_IR_VERSION = 1;
 
 export class PythonAuthoringClient {
@@ -89,20 +89,9 @@ export class PythonAuthoringClient {
         return;
       }
 
-      if (message.type === "patch_batch") {
-        const document = validatePatchBatch(message.document);
-        this.#settle(message.requestId, ({ resolve }) =>
-          resolve({ kind: "patch_batch", document }),
-        );
-        return;
-      }
-
-      if (message.type === "scene_document") {
-        const document = validateSceneDocument(message.document);
-        const identities = validateSceneIdentities(message.identities, document);
-        this.#settle(message.requestId, ({ resolve }) =>
-          resolve({ kind: "scene_document", document, identities }),
-        );
+      if (message.type === "result") {
+        const result = parseAuthoringResult(message.resultJson);
+        this.#settle(message.requestId, ({ resolve }) => resolve(result));
         return;
       }
 
@@ -137,6 +126,36 @@ export class PythonAuthoringClient {
     }
     this.#pending.clear();
   }
+}
+
+export function parseAuthoringResult(resultJson) {
+  if (typeof resultJson !== "string") {
+    throw new Error("Python authoring result must be encoded JSON");
+  }
+  let result;
+  try {
+    result = JSON.parse(resultJson);
+  } catch (error) {
+    throw new Error(`Python authoring returned invalid JSON: ${error.message}`);
+  }
+  if (!isRecord(result)) {
+    throw new Error("Python authoring result must be an object");
+  }
+  if (result.kind === "patch_batch") {
+    return {
+      kind: result.kind,
+      document: validatePatchBatch(result.document),
+    };
+  }
+  if (result.kind === "scene_document") {
+    const document = validateSceneDocument(result.document);
+    return {
+      kind: result.kind,
+      document,
+      identities: validateSceneIdentities(result.identities, document),
+    };
+  }
+  throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
 }
 
 export function validatePatchBatch(batch) {

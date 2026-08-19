@@ -1,7 +1,7 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 3;
+const AUTHORING_PROTOCOL_VERSION = 4;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 
 const pyodidePromise = initializePyodide();
@@ -36,15 +36,14 @@ async function handleRequest(request) {
     validateRequest(request);
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
-    const result = await runAuthoringSource(
+    const resultJson = await runAuthoringSource(
       pyodide,
       request.source,
       request.context,
     );
-    post(result.kind, {
+    post("result", {
       requestId,
-      document: result.document,
-      identities: result.identities,
+      resultJson,
     });
   } catch (error) {
     postError(requestId, error);
@@ -89,7 +88,7 @@ json.dumps(
 `,
       { globals },
     );
-    return JSON.parse(resultJson);
+    return resultJson;
   } finally {
     globals.destroy();
   }

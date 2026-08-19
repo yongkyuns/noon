@@ -95,3 +95,25 @@ On the same 2026-08-19 baseline machine (10 warmups, 100 samples):
 | 100,000 | one changed | 0.000079 ms | 0.000080 ms | 1 | 88 |
 
 For a static 100k-object scene, frame preparation is now constant-time after the initial build and the per-frame instance upload falls from 8.8 MB to zero. A single transform/style change repacks and uploads one 88-byte instance record. At 60 Hz, that removes the previous static-scene upload pressure of roughly 528 MB/s. These measurements isolate CPU instance preparation; they do not include runtime evaluation, browser/Pyodide work, command encoding, rasterization, or presentation.
+
+## Browser worker transfer and scene diff
+
+Run the JavaScript scene-pipeline benchmark from the repository root:
+
+```bash
+node web/scene-pipeline-perf.mjs
+```
+
+The benchmark uses a Node `MessageChannel` to isolate structured-clone delivery from JSON parsing and the remaining main-thread stages. It is a repeatable V8/host baseline, not a substitute for browser flame charts. The default workload uses two warmups and 10 samples.
+
+The first baseline showed that a 100k-object, 25.13 MiB scene spent 926.711 ms cloning the parsed object graph across the worker boundary and 375.385 ms diffing one style change. The protocol now sends the JSON string Pyodide already produced, avoiding a worker-side parse followed by object-graph cloning. Semantic field comparisons and a linear append-compatibility check replace repeated `JSON.stringify` equality calls.
+
+On the same 2026-08-19 baseline machine after those changes:
+
+| Objects | Payload | Encoded message clone | Parse result | Validate | Stabilize | Diff one style | Main rerun pipeline |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 0.24 MiB | 0.255 ms | 2.513 ms | 0.262 ms | 0.148 ms | 0.589 ms | 3.139 ms |
+| 10,000 | 2.48 MiB | 1.831 ms | 23.392 ms | 3.061 ms | 1.579 ms | 4.646 ms | 35.348 ms |
+| 100,000 | 25.13 MiB | 25.975 ms | 220.244 ms | 44.030 ms | 29.724 ms | 79.639 ms | 394.628 ms |
+
+At 100k, encoded transport is about 36x faster than object-graph cloning and semantic diff is about 4.7x faster. Clone plus main-thread processing falls from roughly 1.38 seconds to 0.421 seconds, about a 3.3x improvement. JSON parsing is now the dominant measured stage; getting substantially below this ceiling requires a compact/binary scene transport or worker-produced incremental deltas rather than more tuning of the Rust patch fast path.
