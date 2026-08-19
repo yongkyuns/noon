@@ -1,3 +1,11 @@
+struct Camera {
+    center: vec2<f32>,
+    clip_scale: vec2<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: Camera;
+
 struct VertexInput {
     @location(0) unit: vec2<f32>,
     @location(1) translation: vec2<f32>,
@@ -39,7 +47,8 @@ fn transform_point(
 fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
     var output: VertexOutput;
     let world = transform_point(local, input.translation, input.scale, input.rotation);
-    output.position = vec4<f32>(world, 0.0, 1.0);
+    let clip = (world - camera.center) * camera.clip_scale;
+    output.position = vec4<f32>(clip, 0.0, 1.0);
     output.unit = input.unit;
     output.geometry = input.geometry;
     output.fill = input.fill;

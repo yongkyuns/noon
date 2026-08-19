@@ -1,5 +1,7 @@
 use std::mem::size_of;
 
+use bytemuck::{Pod, Zeroable};
+use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
 use crate::{CircleInstance, PreparedFrame, RectangleInstance};
@@ -58,6 +60,67 @@ const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     },
 ];
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct CameraUniform {
+    center: [f32; 2],
+    clip_scale: [f32; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Camera2D {
+    pub center: Vec2,
+    pub world_size: Vec2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraError {
+    InvalidWorldSize,
+}
+
+impl std::fmt::Display for CameraError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidWorldSize => formatter.write_str("camera world size must be finite and positive"),
+        }
+    }
+}
+
+impl std::error::Error for CameraError {}
+
+impl Camera2D {
+    pub const DEFAULT: Self = Self {
+        center: Vec2::ZERO,
+        world_size: Vec2::new(2.0, 2.0),
+    };
+
+    pub fn new(center: Vec2, world_size: Vec2) -> Result<Self, CameraError> {
+        if !center.x.is_finite()
+            || !center.y.is_finite()
+            || !world_size.x.is_finite()
+            || !world_size.y.is_finite()
+            || world_size.x <= 0.0
+            || world_size.y <= 0.0
+        {
+            return Err(CameraError::InvalidWorldSize);
+        }
+        Ok(Self { center, world_size })
+    }
+
+    fn uniform(self) -> CameraUniform {
+        CameraUniform {
+            center: [self.center.x, self.center.y],
+            clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
+        }
+    }
+}
+
+impl Default for Camera2D {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UploadStats {
     pub bytes_uploaded: usize,
@@ -75,6 +138,9 @@ pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    camera: Camera2D,
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
     circle_capacity_bytes: usize,
@@ -89,10 +155,39 @@ impl GpuRenderer {
             "analytic instance layouts must stay identical"
         );
 
+        let camera = Camera2D::DEFAULT;
+        let camera_uniform = camera.uniform();
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Noon camera uniform"),
+            contents: bytemuck::bytes_of(&camera_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Noon camera bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<CameraUniform>() as _),
+                },
+                count: None,
+            }],
+        });
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon camera bind group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("analytic.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
         let circle_pipeline = create_pipeline(
@@ -125,11 +220,23 @@ impl GpuRenderer {
             circle_pipeline,
             rectangle_pipeline,
             quad_buffer,
+            camera_buffer,
+            camera_bind_group,
+            camera,
             circle_buffer,
             rectangle_buffer,
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
         }
+    }
+
+    pub fn set_camera(&mut self, queue: &wgpu::Queue, camera: Camera2D) {
+        self.camera = camera;
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera.uniform()));
+    }
+
+    pub const fn camera(&self) -> Camera2D {
+        self.camera
     }
 
     pub fn upload(
@@ -207,6 +314,7 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
     ) -> DrawStats {
         let mut stats = DrawStats::default();
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
 
         if !prepared.circles.is_empty() {
@@ -359,6 +467,27 @@ mod tests {
     }
 
     #[test]
+    fn camera_rejects_invalid_world_size() {
+        assert_eq!(
+            Camera2D::new(Vec2::ZERO, Vec2::new(0.0, 2.0)),
+            Err(CameraError::InvalidWorldSize)
+        );
+        assert_eq!(
+            Camera2D::new(Vec2::ZERO, Vec2::new(f32::NAN, 2.0)),
+            Err(CameraError::InvalidWorldSize)
+        );
+    }
+
+    #[test]
+    fn camera_maps_world_size_to_clip_scale() {
+        let camera = Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0))
+            .expect("valid camera");
+        let uniform = camera.uniform();
+        assert_eq!(uniform.center, [3.0, -2.0]);
+        assert_eq!(uniform.clip_scale, [0.125, 2.0 / 9.0]);
+    }
+
+    #[test]
     fn instance_vertex_layout_matches_packed_struct() {
         let layout = analytic_instance_layout();
         assert_eq!(layout.array_stride, 88);
@@ -370,9 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn noop_device_validates_pipelines_upload_and_draw_encoding() {
+    fn noop_device_validates_pipelines_camera_upload_and_draw_encoding() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let camera = Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0))
+            .expect("valid camera");
+        renderer.set_camera(&queue, camera);
+        assert_eq!(renderer.camera(), camera);
+
         let frame = test_frame();
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
