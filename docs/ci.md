@@ -13,3 +13,5 @@ For each implementation step:
 The initial Rust quality gate checks formatting, Clippy with warnings denied, and all workspace tests/all features. Browser target checks, structural renderer checks, differential CPU/GPU checks, and visual regression tests will be added when those subsystems enter the workspace.
 
 Timing benchmarks are kept separate from required correctness CI because shared GitHub runners are noisy. Required CI will prefer deterministic structural performance invariants such as batching counts, cache behavior, active-track work, and buffer-upload counts.
+
+The baseline workflow is installed on `master`, so implementation-branch pull-request commits are validated by a trusted base workflow before the next architectural step begins.
