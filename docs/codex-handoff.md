@@ -19,6 +19,21 @@ The architecture/design context is in:
 
 This file is the concise implementation-status and continuation guide.
 
+## Continuation update: visible browser playback
+
+The first no-Python browser playback path is now implemented:
+
+- `NoonCanvasPlayer` asynchronously creates a WebGPU adapter/device and canvas surface;
+- `requestAnimationFrame` timestamps pass through a tested deterministic `PlaybackClock`;
+- each frame seeks the persistent `ScenePlayer`, prepares analytic batches, uploads them, and presents through `GpuRenderer`;
+- canvas backing-store resize preserves world-space aspect ratio and safely skips zero-sized canvases;
+- outdated, lost, occluded, timeout, and suboptimal surface states are handled explicitly;
+- renderer counters are exposed to JavaScript for structural/performance smoke checks;
+- `web/` contains a serialized-scene demo that loops without Python;
+- the release wasm package was built with `wasm-pack` and exercised in a real browser, where two objects rendered as two analytic draw batches with a clean console.
+
+The next coherent slice should add the analytic line primitive, then demonstrate ordered live `PatchBatch` mutation against the running browser player. Browser build automation/headless smoke coverage should be added when the CI cost and WebGPU runner support are acceptable.
+
 ## Product/architecture goal
 
 Noon is being redesigned as a realtime mathematical animation system with ergonomic Python authoring and a high-performance Rust/WebGPU runtime.
@@ -243,7 +258,7 @@ For edits, run narrower package tests/checks continuously, then run the full loc
 
 Do **not** use GitHub Actions as the interactive compiler anymore. Local Mac validation should catch formatting/type/Clippy/test failures first. CI should validate the pushed coherent batch.
 
-## Immediate next implementation slice
+## Completed implementation slice: first visible browser playback
 
 The next priority is the first genuinely visible browser playback path **without Python**:
 
@@ -265,17 +280,20 @@ HTML canvas / WebGPU surface
 requestAnimationFrame
 ```
 
-Recommended order:
+Implemented in this order:
 
-1. Connect `noon-web` to `noon-render-wgpu` under the wasm WebGPU feature.
-2. Add browser canvas/surface initialization and resize handling.
-3. Add a playback clock / `requestAnimationFrame` loop whose time feeds `ScenePlayer` deterministically.
-4. Prepare current `FrameState`, upload analytic instance batches, render to the canvas.
-5. Add a tiny browser demo loading a serialized scene and playing it without Python.
-6. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
-7. Add analytic line primitives as another instanced batch (semantic endpoints, no tessellation/per-object draw calls).
-8. Add browser-side patch demo showing a running animation changing through ordered `PatchBatch` messages.
-9. Then integrate a Pyodide worker as the live Python authoring/control plane.
+1. Connected `noon-web` to `noon-render-wgpu` under the wasm WebGPU feature.
+2. Added browser canvas/surface initialization and resize handling.
+3. Added a playback clock whose time is supplied by `requestAnimationFrame`.
+4. Prepared each `FrameState`, uploaded analytic instance batches, and rendered to the canvas.
+5. Added a tiny browser demo loading a serialized scene and playing it without Python.
+
+Remaining order:
+
+1. Add analytic line primitives as another instanced batch (semantic endpoints, no tessellation/per-object draw calls).
+2. Add browser-side patch demo showing a running animation changing through ordered `PatchBatch` messages.
+3. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
+4. Then integrate a Pyodide worker as the live Python authoring/control plane.
 
 ## Browser/Python architecture to preserve
 

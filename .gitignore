@@ -1,3 +1,6 @@
 /target
 Cargo.lock
 .DS_Store
+/web/pkg
+/output/playwright
+/.playwright-cli
