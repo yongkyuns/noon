@@ -1,16 +1,21 @@
 //! CPU-side preparation for Noon's wgpu renderer.
 //!
-//! This first renderer slice deliberately stops before device/pipeline setup. It
-//! defines deterministic packed instance records and batches analytic primitives
-//! so the runtime/renderer boundary can be validated without a GPU.
+//! This layer defines deterministic packed instance records and batches analytic
+//! primitives before they are uploaded to wgpu. The same preparation path is
+//! used by native and browser backends.
 
 #![forbid(unsafe_code)]
 
+mod gpu;
+
+pub use gpu::*;
+
+use bytemuck::{Pod, Zeroable};
 use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D};
 use noon_runtime::FrameState;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedTransform {
     pub translation: [f32; 2],
     pub scale: [f32; 2],
@@ -30,7 +35,7 @@ impl From<Transform2D> for PackedTransform {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedStyle {
     pub fill: [f32; 4],
     pub stroke: [f32; 4],
@@ -56,7 +61,7 @@ impl From<Style> for PackedStyle {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct CircleInstance {
     pub transform: PackedTransform,
     pub style: PackedStyle,
@@ -65,7 +70,7 @@ pub struct CircleInstance {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct RectangleInstance {
     pub transform: PackedTransform,
     pub style: PackedStyle,
@@ -209,6 +214,14 @@ mod tests {
             time: 1.25,
             objects,
         }
+    }
+
+    #[test]
+    fn packed_instance_layout_is_stable() {
+        assert_eq!(std::mem::size_of::<PackedTransform>(), 24);
+        assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
+        assert_eq!(std::mem::size_of::<CircleInstance>(), 88);
+        assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
     }
 
     #[test]

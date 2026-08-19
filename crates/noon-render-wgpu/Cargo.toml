@@ -5,5 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
+wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "noop"] }
