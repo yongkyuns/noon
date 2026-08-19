@@ -636,6 +636,22 @@ mod tests {
     }
 
     #[test]
+    fn analytic_shader_uses_derivative_based_edge_coverage() {
+        let shader = include_str!("analytic.wgsl");
+        assert!(shader.contains("fwidth(signed_distance)"));
+        assert!(shader.contains("smoothstep(-half_width, half_width, signed_distance)"));
+        assert!(
+            shader
+                .find("let stroke_coverage =")
+                .expect("stroke coverage")
+                < shader.find("if has_stroke").expect("stroke branch"),
+            "fragment derivatives must run before non-uniform stroke control flow"
+        );
+        assert!(!shader.contains("if distance > 1.0"));
+        assert!(!shader.contains("let stroke_region ="));
+    }
+
+    #[test]
     fn noop_device_validates_pipelines_camera_upload_and_draw_encoding() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, FORMAT);

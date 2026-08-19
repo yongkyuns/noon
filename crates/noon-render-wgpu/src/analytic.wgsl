@@ -106,43 +106,80 @@ fn vs_line(input: LineVertexInput) -> VertexOutput {
     return output;
 }
 
-fn styled_color(
+fn transition_width(signed_distance: f32) -> f32 {
+    return max(fwidth(signed_distance), 0.000001);
+}
+
+fn inside_coverage(signed_distance: f32) -> f32 {
+    let half_width = transition_width(signed_distance) * 0.5;
+    return 1.0 - smoothstep(-half_width, half_width, signed_distance);
+}
+
+fn outside_coverage(signed_distance: f32) -> f32 {
+    let half_width = transition_width(signed_distance) * 0.5;
+    return smoothstep(-half_width, half_width, signed_distance);
+}
+
+fn covered_color(color: vec4<f32>, opacity: f32, coverage: f32) -> vec4<f32> {
+    var result = color;
+    result.a = result.a * opacity * coverage;
+    return result;
+}
+
+fn styled_shape_color(
     fill: vec4<f32>,
     stroke: vec4<f32>,
     opacity: f32,
     fill_enabled: bool,
     stroke_enabled: bool,
-    stroke_region: bool,
+    edge_coordinate: f32,
+    stroke_fraction: f32,
 ) -> vec4<f32> {
-    var color: vec4<f32>;
-    if stroke_region && stroke_enabled {
-        color = stroke;
-    } else if fill_enabled {
-        color = fill;
-    } else {
-        discard;
+    let outer_coverage = inside_coverage(edge_coordinate - 1.0);
+    let stroke_start = 1.0 - stroke_fraction;
+    let stroke_coverage = outside_coverage(edge_coordinate - stroke_start);
+    let has_stroke = stroke_enabled && stroke_fraction > 0.0;
+    if has_stroke {
+        if fill_enabled {
+            return covered_color(
+                mix(fill, stroke, stroke_coverage),
+                opacity,
+                outer_coverage,
+            );
+        }
+        return covered_color(stroke, opacity, outer_coverage * stroke_coverage);
     }
-    color.a = color.a * opacity;
-    return color;
+
+    if fill_enabled {
+        return covered_color(fill, opacity, outer_coverage);
+    }
+    return vec4<f32>(0.0);
+}
+
+fn styled_line_color(input: VertexOutput, edge_coordinate: f32) -> vec4<f32> {
+    let coverage = inside_coverage(edge_coordinate - 1.0);
+    if input.flags.y > 0.5 {
+        return covered_color(input.stroke, input.metrics.y, coverage);
+    }
+    if input.flags.x > 0.5 {
+        return covered_color(input.fill, input.metrics.y, coverage);
+    }
+    return vec4<f32>(0.0);
 }
 
 @fragment
 fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let distance = length(input.unit);
-    if distance > 1.0 {
-        discard;
-    }
-
     let radius = max(abs(input.geometry.x), 0.000001);
     let stroke_fraction = clamp(input.metrics.x / radius, 0.0, 1.0);
-    let stroke_region = distance >= 1.0 - stroke_fraction;
-    return styled_color(
+    return styled_shape_color(
         input.fill,
         input.stroke,
         input.metrics.y,
         input.flags.x > 0.5,
         input.flags.y > 0.5,
-        stroke_region,
+        distance,
+        stroke_fraction,
     );
 }
 
@@ -151,25 +188,19 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
     let edge = max(abs(input.unit.x), abs(input.unit.y));
     let min_dimension = max(min(abs(input.geometry.x), abs(input.geometry.y)), 0.000001);
     let stroke_fraction = clamp((2.0 * input.metrics.x) / min_dimension, 0.0, 1.0);
-    let stroke_region = edge >= 1.0 - stroke_fraction;
-    return styled_color(
+    return styled_shape_color(
         input.fill,
         input.stroke,
         input.metrics.y,
         input.flags.x > 0.5,
         input.flags.y > 0.5,
-        stroke_region,
+        edge,
+        stroke_fraction,
     );
 }
 
 @fragment
 fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
-    return styled_color(
-        input.fill,
-        input.stroke,
-        input.metrics.y,
-        input.flags.x > 0.5,
-        input.flags.y > 0.5,
-        true,
-    );
+    let edge = max(abs(input.unit.x), abs(input.unit.y));
+    return styled_line_color(input, edge);
 }

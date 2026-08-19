@@ -31,6 +31,7 @@ The first no-Python browser playback path is now implemented:
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
 - `web/` contains a serialized-scene demo that loops without Python;
 - semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
+- derivative-scaled shader coverage smooths analytic silhouettes and fill/stroke boundaries at the display's native pixel density;
 - the browser demo applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
 - CI builds the release wasm package with a pinned `wasm-pack`, checks the demo JavaScript syntax, verifies the generated JavaScript/TypeScript API surface, and compiles the emitted WebAssembly module;
 - an optional module worker lazily loads pinned Pyodide, executes editable Python authoring code away from the main thread, and returns correlated versioned `PatchBatch` messages;
@@ -139,7 +140,7 @@ Initial renderer boundary and GPU implementation:
 - upload byte/reallocation counters
 - draw-call/instance counters
 - `Camera2D` world-to-clip uniform (world coordinates remain renderer-independent)
-- WGSL shaders
+- WGSL shaders with derivative-based antialiasing for circle, rectangle, line, and stroke edges
 - current wgpu 29 API
 - native backend feature profile
 - WebGPU-only wasm feature profile
@@ -205,6 +206,7 @@ Important invariants already being tested include:
 - live patch result equivalent to rebuilding/recompiling equivalent definition
 - patch batches ordered and transactional
 - GPU instance preparation deterministic
+- analytic shader silhouettes and stroke transitions use derivative-scaled coverage rather than hard fragment thresholds
 - buffers reused rather than reallocated every frame
 - WebGPU and browser runtime cross-compile on CI
 
@@ -305,6 +307,7 @@ Implemented in this order:
 7. Added a release-package build script and CI contract smoke check for the generated JavaScript, TypeScript declarations, and WebAssembly module.
 8. Added a lazy Pyodide module worker and small browser Python API that emit ordered semantic patches without owning the render loop, canvas, GPU, or runtime state.
 9. Added an editable Python demo, correlated worker protocol, pre-Rust envelope validation, and JavaScript/CPython tests.
+10. Replaced hard shader cutoffs with derivative-aware analytic coverage for smooth silhouettes and fill/stroke transitions, validated by shader contracts and a real WebGPU browser.
 
 Remaining order:
 
