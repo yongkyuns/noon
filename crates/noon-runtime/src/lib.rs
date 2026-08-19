@@ -134,9 +134,7 @@ impl SceneInstance {
 
         for group in &mut self.groups {
             let slice = &tracks[group.start..group.end];
-            while group.cursor < slice.len()
-                && slice[group.cursor].timing.start_time <= time
-            {
+            while group.cursor < slice.len() && slice[group.cursor].timing.start_time <= time {
                 group.cursor += 1;
                 stats.tracks_advanced += 1;
             }
@@ -317,18 +315,10 @@ mod tests {
     #[test]
     fn backward_and_forward_seeks_are_deterministic() {
         let mut instance = SceneInstance::new(compile_linear_scene());
-        let first = instance
-            .seek(2.25)
-            .expect("valid time")
-            .objects[0]
-            .clone();
+        let first = instance.seek(2.25).expect("valid time").objects[0].clone();
         instance.seek(3.0).expect("valid time");
         instance.seek(0.5).expect("valid time");
-        let second = instance
-            .seek(2.25)
-            .expect("valid time")
-            .objects[0]
-            .clone();
+        let second = instance.seek(2.25).expect("valid time").objects[0].clone();
 
         assert_eq!(first, second);
     }
