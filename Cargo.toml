@@ -2,6 +2,7 @@
 members = [
 	"noon",
 	"examples",
+	"crates/noon-core",
 ]
 
 # Required for wgpu v0.10 feature resolution.
