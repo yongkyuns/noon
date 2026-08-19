@@ -232,7 +232,7 @@ mod tests {
         scene
             .apply_patch(ScenePatch::AddTrack(track.clone()))
             .expect("valid patch");
-        assert_eq!(scene.tracks(), &[track.clone()]);
+        assert_eq!(scene.tracks(), std::slice::from_ref(&track));
 
         let replacement = TrackDefinition {
             values: TrackValues::Scalar {
