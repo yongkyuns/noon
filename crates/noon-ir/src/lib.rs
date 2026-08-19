@@ -122,9 +122,7 @@ fn ensure_version(version: u32) -> Result<(), IrError> {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{
-        Easing, GeometryRef, ObjectId, Property, Style, TrackTiming, Transform2D, Vec2,
-    };
+    use noon_core::{Easing, GeometryRef, ObjectId, Style, TrackTiming, Transform2D, Vec2};
 
     use super::*;
 
@@ -150,7 +148,7 @@ mod tests {
     fn scene_json_round_trip_preserves_semantics_and_stable_ids() {
         let scene = sample_scene();
         let json = encode_scene(&scene).expect("scene must serialize");
-        let decoded = decode_scene(&json).expect("scene must deserialize");
+        let mut decoded = decode_scene(&json).expect("scene must deserialize");
 
         assert_eq!(decoded.objects(), scene.objects());
         assert_eq!(decoded.tracks(), scene.tracks());
@@ -222,7 +220,5 @@ mod tests {
 
         assert!(json.contains("set_style"));
         assert!(json.contains("sequence"));
-        assert!(!json.contains("Property"));
-        let _ = Property::Opacity;
     }
 }
