@@ -97,7 +97,7 @@ impl Scene {
         world.insert_resource(transform);
 
         let mut updater = Schedule::default();
-        
+
         updater.configure_sets((
             Label::Init,
             Label::Main.after(Label::Init),
@@ -116,8 +116,8 @@ impl Scene {
                 init_from_target::<Opacity>,
                 init_from_target::<PathCompletion>,
                 init_from_target::<FontSize>,
-            ).in_set(Label::Init),
-            
+            )
+                .in_set(Label::Init),
             (
                 animate_position,
                 animate::<FillColor>,
@@ -129,15 +129,11 @@ impl Scene {
                 animate_with_relative::<Opacity>,
                 animate_with_relative::<PathCompletion>,
                 animate_with_relative::<FontSize>,
-            ).in_set(Label::Main),
-
-            (
-                init_from_target::<Path>,
-                animate::<Path>,
-            ).in_set(Label::Post),
-
+            )
+                .in_set(Label::Main),
+            (init_from_target::<Path>, animate::<Path>).in_set(Label::Post),
             update_screen_paths.after(Label::Post),
-            print
+            print,
         ));
 
         let mut drawer = Schedule::default();
