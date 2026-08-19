@@ -64,8 +64,12 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooManyObjects(count) => write!(formatter, "scene contains too many objects: {count}"),
-            Self::UnknownObject(id) => write!(formatter, "track references unknown object {}", id.get()),
+            Self::TooManyObjects(count) => {
+                write!(formatter, "scene contains too many objects: {count}")
+            }
+            Self::UnknownObject(id) => {
+                write!(formatter, "track references unknown object {}", id.get())
+            }
         }
     }
 }
