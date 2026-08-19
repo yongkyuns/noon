@@ -275,8 +275,7 @@ fn apply_easing(easing: Easing, progress: f32) -> f32 {
 mod tests {
     use noon_compile::CompiledScene;
     use noon_core::{
-        Easing, GeometryRef, Property, SceneDefinition, Style, TrackDefinition, TrackId,
-        TrackTiming,
+        Easing, GeometryRef, Property, SceneDefinition, Style, TrackDefinition, TrackTiming,
     };
 
     use super::*;
