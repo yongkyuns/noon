@@ -1,5 +1,5 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 1;
+export const AUTHORING_PROTOCOL_VERSION = 2;
 export const NOON_IR_VERSION = 1;
 
 export class PythonAuthoringClient {
@@ -90,8 +90,18 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "patch_batch") {
-        const batch = validatePatchBatch(message.batch);
-        this.#settle(message.requestId, ({ resolve }) => resolve(batch));
+        const document = validatePatchBatch(message.document);
+        this.#settle(message.requestId, ({ resolve }) =>
+          resolve({ kind: "patch_batch", document }),
+        );
+        return;
+      }
+
+      if (message.type === "scene_document") {
+        const document = validateSceneDocument(message.document);
+        this.#settle(message.requestId, ({ resolve }) =>
+          resolve({ kind: "scene_document", document }),
+        );
         return;
       }
 
@@ -142,6 +152,22 @@ export function validatePatchBatch(batch) {
     throw new Error("Python PatchBatch patches must be an array");
   }
   return batch;
+}
+
+export function validateSceneDocument(scene) {
+  if (!isRecord(scene)) {
+    throw new Error("Python authoring result is not a Scene object");
+  }
+  if (scene.version !== NOON_IR_VERSION) {
+    throw new Error(`Unsupported Noon IR version ${scene.version}`);
+  }
+  if (!Array.isArray(scene.objects)) {
+    throw new Error("Python Scene objects must be an array");
+  }
+  if (!Array.isArray(scene.tracks)) {
+    throw new Error("Python Scene tracks must be an array");
+  }
+  return scene;
 }
 
 function createAuthoringWorker() {

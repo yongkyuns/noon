@@ -6,6 +6,7 @@ import {
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
   validatePatchBatch,
+  validateSceneDocument,
 } from "./authoring-client.js";
 
 class FakeWorker {
@@ -63,9 +64,29 @@ test("correlates a Python request with a validated PatchBatch response", async (
   const batch = { version: 1, sequence: 4, patches: [] };
   worker.emit(
     "message",
-    workerMessage("patch_batch", { requestId: 0, batch }),
+    workerMessage("patch_batch", { requestId: 0, document: batch }),
   );
-  assert.deepEqual(await resultPromise, batch);
+  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+});
+
+test("correlates a Python request with a validated Scene response", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const resultPromise = client.run("result = scene");
+  await Promise.resolve();
+  const scene = { version: 1, objects: [], tracks: [] };
+  worker.emit(
+    "message",
+    workerMessage("scene_document", { requestId: 0, document: scene }),
+  );
+
+  assert.deepEqual(await resultPromise, {
+    kind: "scene_document",
+    document: scene,
+  });
 });
 
 test("rejects only the request associated with a Python execution error", async () => {
@@ -99,6 +120,17 @@ test("rejects malformed PatchBatch documents before they reach Rust", () => {
   assert.throws(
     () => validatePatchBatch({ version: 1, sequence: 0, patches: {} }),
     /must be an array/,
+  );
+});
+
+test("rejects malformed Scene documents before they reach Rust", () => {
+  assert.throws(
+    () => validateSceneDocument({ version: 1, objects: {}, tracks: [] }),
+    /objects must be an array/,
+  );
+  assert.throws(
+    () => validateSceneDocument({ version: 1, objects: [], tracks: {} }),
+    /tracks must be an array/,
   );
 });
 

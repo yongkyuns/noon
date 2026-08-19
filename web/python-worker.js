@@ -1,7 +1,7 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 1;
+const AUTHORING_PROTOCOL_VERSION = 2;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 
 const pyodidePromise = initializePyodide();
@@ -36,12 +36,12 @@ async function handleRequest(request) {
     validateRequest(request);
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
-    const batch = await runAuthoringSource(
+    const result = await runAuthoringSource(
       pyodide,
       request.source,
       request.context,
     );
-    post("patch_batch", { requestId, batch });
+    post(result.kind, { requestId, document: result.document });
   } catch (error) {
     postError(requestId, error);
   }
@@ -55,23 +55,31 @@ async function runAuthoringSource(pyodide, source, context) {
   globals.set("__noon_context_json", JSON.stringify(context));
 
   try {
-    const batchJson = await pyodide.runPythonAsync(
+    const resultJson = await pyodide.runPythonAsync(
       `
 import json
-from noon import PatchBatch
+from noon import PatchBatch, Scene
 
 __noon_namespace = {"context": json.loads(__noon_context_json)}
 exec(__noon_source, __noon_namespace)
 if "result" not in __noon_namespace:
-    raise RuntimeError("Python authoring source must assign a PatchBatch to result")
+    raise RuntimeError("Python authoring source must assign a Scene or PatchBatch to result")
 __noon_result = __noon_namespace["result"]
-if not isinstance(__noon_result, PatchBatch):
-    raise TypeError("Python authoring result must be a noon.PatchBatch")
-__noon_result.to_json()
+if isinstance(__noon_result, Scene):
+    __noon_kind = "scene_document"
+elif isinstance(__noon_result, PatchBatch):
+    __noon_kind = "patch_batch"
+else:
+    raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
+json.dumps(
+    {"kind": __noon_kind, "document": __noon_result.to_document()},
+    separators=(",", ":"),
+    allow_nan=False,
+)
 `,
       { globals },
     );
-    return JSON.parse(batchJson);
+    return JSON.parse(resultJson);
   } finally {
     globals.destroy();
   }

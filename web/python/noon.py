@@ -31,6 +31,22 @@ def _identifier(name: str, value: Any) -> int:
     return value
 
 
+def _vec2(name: str, value: tuple[float, float]) -> dict[str, float]:
+    if not isinstance(value, (tuple, list)) or len(value) != 2:
+        raise ValueError(f"{name} must contain two values")
+    return {
+        "x": _finite_number(f"{name}.x", value[0]),
+        "y": _finite_number(f"{name}.y", value[1]),
+    }
+
+
+def _positive_number(name: str, value: Any) -> float:
+    result = _finite_number(name, value)
+    if result <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class Color:
     red: float
@@ -53,6 +69,254 @@ class Color:
             "blue": self.blue,
             "alpha": self.alpha,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class Object:
+    """Stable reference to an object owned by one Scene."""
+
+    id: int
+    _owner: object
+
+
+class Scene:
+    """Complete, versioned Noon scene document."""
+
+    def __init__(self) -> None:
+        self._owner = object()
+        self._objects: list[dict[str, Any]] = []
+        self._tracks: list[dict[str, Any]] = []
+
+    def circle(
+        self,
+        radius: float,
+        *,
+        position: tuple[float, float] = (0.0, 0.0),
+        rotation: float = 0.0,
+        scale: tuple[float, float] = (1.0, 1.0),
+        fill: Color | None = Color(1.0, 1.0, 1.0),
+        stroke: Color | None = None,
+        stroke_width: float = 1.0,
+        opacity: float = 1.0,
+    ) -> Object:
+        return self._add_object(
+            {"circle": {"radius": _positive_number("radius", radius)}},
+            position=position,
+            rotation=rotation,
+            scale=scale,
+            fill=fill,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            opacity=opacity,
+        )
+
+    def rectangle(
+        self,
+        width: float,
+        height: float,
+        *,
+        position: tuple[float, float] = (0.0, 0.0),
+        rotation: float = 0.0,
+        scale: tuple[float, float] = (1.0, 1.0),
+        fill: Color | None = Color(1.0, 1.0, 1.0),
+        stroke: Color | None = None,
+        stroke_width: float = 1.0,
+        opacity: float = 1.0,
+    ) -> Object:
+        return self._add_object(
+            {
+                "rectangle": {
+                    "size": {
+                        "x": _positive_number("width", width),
+                        "y": _positive_number("height", height),
+                    }
+                }
+            },
+            position=position,
+            rotation=rotation,
+            scale=scale,
+            fill=fill,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            opacity=opacity,
+        )
+
+    def line(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        *,
+        position: tuple[float, float] = (0.0, 0.0),
+        rotation: float = 0.0,
+        scale: tuple[float, float] = (1.0, 1.0),
+        stroke: Color | None = Color(1.0, 1.0, 1.0),
+        stroke_width: float = 0.1,
+        opacity: float = 1.0,
+    ) -> Object:
+        return self._add_object(
+            {"line": {"start": _vec2("start", start), "end": _vec2("end", end)}},
+            position=position,
+            rotation=rotation,
+            scale=scale,
+            fill=None,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            opacity=opacity,
+        )
+
+    def animate_position(
+        self,
+        obj: Object,
+        from_: tuple[float, float],
+        to: tuple[float, float],
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+    ) -> Scene:
+        self._add_track(
+            obj,
+            "position",
+            {"vec2": {"from": _vec2("from", from_), "to": _vec2("to", to)}},
+            start_time,
+            duration,
+            easing,
+        )
+        return self
+
+    def animate_rotation(
+        self,
+        obj: Object,
+        from_: float,
+        to: float,
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+    ) -> Scene:
+        self._add_scalar_track(
+            obj, "rotation", from_, to, start_time, duration, easing
+        )
+        return self
+
+    def animate_opacity(
+        self,
+        obj: Object,
+        from_: float,
+        to: float,
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+    ) -> Scene:
+        self._add_scalar_track(
+            obj, "opacity", from_, to, start_time, duration, easing
+        )
+        return self
+
+    def _add_object(
+        self,
+        geometry: dict[str, Any],
+        *,
+        position: tuple[float, float],
+        rotation: float,
+        scale: tuple[float, float],
+        fill: Color | None,
+        stroke: Color | None,
+        stroke_width: float,
+        opacity: float,
+    ) -> Object:
+        if fill is not None and not isinstance(fill, Color):
+            raise TypeError("fill must be a Color or None")
+        if stroke is not None and not isinstance(stroke, Color):
+            raise TypeError("stroke must be a Color or None")
+        width = _finite_number("stroke_width", stroke_width)
+        if width < 0.0:
+            raise ValueError("stroke_width must be non-negative")
+
+        object_id = len(self._objects)
+        self._objects.append(
+            {
+                "id": object_id,
+                "geometry": geometry,
+                "transform": {
+                    "translation": _vec2("position", position),
+                    "rotation": _finite_number("rotation", rotation),
+                    "scale": _vec2("scale", scale),
+                },
+                "style": {
+                    "fill": None if fill is None else fill.to_ir(),
+                    "stroke": None if stroke is None else stroke.to_ir(),
+                    "stroke_width": width,
+                    "opacity": _finite_number("opacity", opacity),
+                },
+            }
+        )
+        return Object(object_id, self._owner)
+
+    def _add_scalar_track(
+        self,
+        obj: Object,
+        property_name: str,
+        from_: float,
+        to: float,
+        start_time: float,
+        duration: float,
+        easing: str,
+    ) -> None:
+        self._add_track(
+            obj,
+            property_name,
+            {
+                "scalar": {
+                    "from": _finite_number("from", from_),
+                    "to": _finite_number("to", to),
+                }
+            },
+            start_time,
+            duration,
+            easing,
+        )
+
+    def _add_track(
+        self,
+        obj: Object,
+        property_name: str,
+        values: dict[str, Any],
+        start_time: float,
+        duration: float,
+        easing: str,
+    ) -> None:
+        if not isinstance(obj, Object) or obj._owner is not self._owner:
+            raise ValueError("animated object must belong to this Scene")
+        if easing not in {"linear", "ease_in_out_cubic"}:
+            raise ValueError(f"unsupported easing: {easing}")
+        start = _finite_number("start_time", start_time)
+        if start < 0.0:
+            raise ValueError("start_time must be non-negative")
+        self._tracks.append(
+            {
+                "id": len(self._tracks),
+                "object": obj.id,
+                "property": property_name,
+                "values": values,
+                "timing": {
+                    "start_time": start,
+                    "duration": _positive_number("duration", duration),
+                    "easing": easing,
+                },
+            }
+        )
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "version": FORMAT_VERSION,
+            "objects": list(self._objects),
+            "tracks": list(self._tracks),
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_document(), separators=(",", ":"), allow_nan=False)
 
 
 class PatchBatch:

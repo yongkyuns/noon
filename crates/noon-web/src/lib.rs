@@ -125,6 +125,19 @@ impl ScenePlayer {
         Ok(self.instance.frame())
     }
 
+    pub fn replace_scene_json(&mut self, json: &str) -> Result<&FrameState, PlayerError> {
+        let definition = decode_scene(json)?;
+        let compiled = CompiledScene::compile(&definition)?;
+        let playhead = self.instance.frame().time;
+        let mut instance = SceneInstance::new(compiled);
+        instance.seek(playhead)?;
+
+        self.definition = definition;
+        self.instance = instance;
+        self.next_sequence = 0;
+        Ok(self.instance.frame())
+    }
+
     pub fn scene_json(&self) -> Result<String, PlayerError> {
         Ok(encode_scene(&self.definition)?)
     }
@@ -176,6 +189,12 @@ mod wasm {
 
         pub fn apply_patch_batch(&mut self, json: &str) -> Result<(), JsValue> {
             self.inner.apply_patch_batch_json(json).map_err(js_error)?;
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = replaceScene)]
+        pub fn replace_scene(&mut self, json: &str) -> Result<(), JsValue> {
+            self.inner.replace_scene_json(json).map_err(js_error)?;
             Ok(())
         }
 
@@ -331,6 +350,13 @@ mod wasm {
         #[wasm_bindgen(js_name = applyPatchBatch)]
         pub fn apply_patch_batch(&mut self, json: &str) -> Result<(), JsValue> {
             self.player.apply_patch_batch_json(json).map_err(js_error)?;
+            Ok(())
+        }
+
+        /// Atomically replaces semantic scene state while retaining the GPU and playback clock.
+        #[wasm_bindgen(js_name = replaceScene)]
+        pub fn replace_scene(&mut self, json: &str) -> Result<(), JsValue> {
+            self.player.replace_scene_json(json).map_err(js_error)?;
             Ok(())
         }
 
@@ -573,6 +599,52 @@ mod tests {
             player.frame().objects[0].transform.translation,
             Vec2::new(5.0, -2.0)
         );
+        assert_eq!(player.next_sequence(), 1);
+    }
+
+    #[test]
+    fn scene_replacement_preserves_playhead_and_restarts_patch_sequence() {
+        let mut player = player();
+        player.seek(2.5).expect("seek must succeed");
+        let patch =
+            encode_patch_batch(&PatchBatch::new(0, Vec::new())).expect("batch must serialize");
+        player
+            .apply_patch_batch_json(&patch)
+            .expect("patch batch must apply");
+
+        let mut replacement = SceneDefinition::new();
+        replacement.add(GeometryRef::circle(0.5));
+        replacement.add(GeometryRef::rectangle(2.0, 1.0));
+        let json = encode_scene(&replacement).expect("scene must serialize");
+
+        player
+            .replace_scene_json(&json)
+            .expect("replacement must apply");
+
+        assert_eq!(player.frame().time, 2.5);
+        assert_eq!(player.object_count(), 2);
+        assert_eq!(player.next_sequence(), 0);
+    }
+
+    #[test]
+    fn invalid_scene_replacement_is_transactional() {
+        let mut player = player();
+        player.seek(1.25).expect("seek must succeed");
+        let patch =
+            encode_patch_batch(&PatchBatch::new(0, Vec::new())).expect("batch must serialize");
+        player
+            .apply_patch_batch_json(&patch)
+            .expect("patch batch must apply");
+        let before_scene = player.scene_json().expect("scene must serialize");
+        let before_frame = player.frame().clone();
+
+        assert!(player.replace_scene_json(r#"{"version":99}"#).is_err());
+
+        assert_eq!(
+            player.scene_json().expect("scene must serialize"),
+            before_scene
+        );
+        assert_eq!(player.frame(), &before_frame);
         assert_eq!(player.next_sequence(), 1);
     }
 

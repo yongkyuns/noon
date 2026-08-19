@@ -3,8 +3,10 @@ import { PythonAuthoringClient } from "./authoring-client.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
+const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
+const sceneSourceEditor = document.querySelector("#python-scene-source");
 const sourceEditor = document.querySelector("#python-source");
 
 const PALETTES = [
@@ -36,8 +38,8 @@ function showPatchError(error) {
   patchStatus.dataset.state = "error";
 }
 
-async function loadDemoAuthoringSource() {
-  const response = await fetch("./python/demo_patch.py");
+async function loadDemoAuthoringSource(path) {
+  const response = await fetch(path);
   if (!response.ok) {
     throw new Error(`Unable to load demo Python: HTTP ${response.status}`);
   }
@@ -64,16 +66,53 @@ try {
 
   let paletteIndex = 0;
   let authoringClient = null;
-  loadDemoAuthoringSource()
-    .then((source) => {
-      sourceEditor.value = source;
+  Promise.all([
+    loadDemoAuthoringSource("./python/demo_scene.py"),
+    loadDemoAuthoringSource("./python/demo_patch.py"),
+  ])
+    .then(([sceneSource, patchSource]) => {
+      sceneSourceEditor.value = sceneSource;
+      sourceEditor.value = patchSource;
+      sceneButton.disabled = false;
       patchButton.disabled = false;
       patchStatus.value = "Python worker starts on first run";
       patchStatus.dataset.state = "ready";
     })
     .catch(showPatchError);
   patchStatus.dataset.sequence = String(player.nextSequence());
+  sceneButton.addEventListener("click", async () => {
+    sceneButton.disabled = true;
+    patchButton.disabled = true;
+    try {
+      patchStatus.value = "Building a complete scene in Python…";
+      patchStatus.dataset.state = "running";
+      authoringClient ??= new PythonAuthoringClient();
+      const result = await authoringClient.run(sceneSourceEditor.value);
+      if (result.kind !== "scene_document") {
+        throw new Error("Python scene source returned a PatchBatch");
+      }
+
+      const playhead = player.time();
+      player.replaceScene(JSON.stringify(result.document));
+      if (Number(player.nextSequence()) !== 0) {
+        throw new Error("Scene replacement did not restart patch sequencing");
+      }
+      const preservedPlayhead = player.time();
+      if (preservedPlayhead !== playhead) {
+        throw new Error("Scene replacement changed the current playhead");
+      }
+      patchStatus.value = `Scene replaced · ${player.objectCount()} objects · patch sequence 0 · playhead ${preservedPlayhead.toFixed(2)} s preserved`;
+      patchStatus.dataset.state = "applied";
+      patchStatus.dataset.sequence = "0";
+    } catch (error) {
+      showPatchError(error);
+    } finally {
+      sceneButton.disabled = false;
+      patchButton.disabled = false;
+    }
+  });
   patchButton.addEventListener("click", async () => {
+    sceneButton.disabled = true;
     patchButton.disabled = true;
     try {
       const sequence = Number(player.nextSequence());
@@ -85,10 +124,14 @@ try {
       patchStatus.dataset.state = "running";
 
       authoringClient ??= new PythonAuthoringClient();
-      const batch = await authoringClient.run(sourceEditor.value, {
+      const result = await authoringClient.run(sourceEditor.value, {
         sequence,
         palette,
       });
+      if (result.kind !== "patch_batch") {
+        throw new Error("Python patch source returned a complete Scene");
+      }
+      const batch = result.document;
       if (batch.sequence !== sequence) {
         throw new Error(
           `Python returned patch sequence ${batch.sequence}; expected ${sequence}`,
@@ -113,6 +156,7 @@ try {
     } catch (error) {
       showPatchError(error);
     } finally {
+      sceneButton.disabled = false;
       patchButton.disabled = false;
     }
   });

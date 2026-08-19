@@ -82,6 +82,11 @@
         gap: 1rem;
       }
 
+      .button-group {
+        display: flex;
+        gap: 0.6rem;
+      }
+
       button {
         appearance: none;
         border: 1px solid #52658f;
@@ -157,6 +162,10 @@
           flex-direction: column;
         }
 
+        .button-group {
+          flex-wrap: wrap;
+        }
+
         #patch-status {
           text-align: left;
         }
@@ -175,9 +184,26 @@
       <canvas id="scene" aria-label="Animated Noon scene"></canvas>
       <section class="controls" aria-label="Live scene controls">
         <div class="control-row">
-          <button id="apply-patch" type="button" disabled>Run Python patch</button>
+          <div class="button-group">
+            <button id="replace-scene" type="button" disabled>
+              Run Python scene
+            </button>
+            <button id="apply-patch" type="button" disabled>
+              Run Python patch
+            </button>
+          </div>
           <output id="patch-status">Loading the authoring source…</output>
         </div>
+        <details>
+          <summary>Python scene source</summary>
+          <textarea
+            id="python-scene-source"
+            aria-label="Python scene source"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+          ></textarea>
+        </details>
         <details>
           <summary>Python patch source</summary>
           <textarea
