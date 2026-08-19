@@ -39,6 +39,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-noon-arch-
 
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
       - name: Format architecture workspace
         run: cargo fmt --all -- --check
 
@@ -56,6 +62,9 @@ jobs:
 
       - name: Compile browser runtime
         run: cargo check -p noon-web --target wasm32-unknown-unknown
+
+      - name: Build and validate browser package
+        run: bash scripts/build-web-demo.sh
 
   legacy-compat:
     name: Full legacy compatibility

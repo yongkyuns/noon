@@ -5,7 +5,7 @@ This demo proves that a serialized Noon scene can compile, evaluate, and render 
 From the repository root:
 
 ```bash
-wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg
+bash scripts/build-web-demo.sh
 python3 -m http.server --directory web 8080
 ```
 

@@ -32,9 +32,10 @@ The first no-Python browser playback path is now implemented:
 - `web/` contains a serialized-scene demo that loops without Python;
 - semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
 - the browser demo constructs versioned `PatchBatch` JSON in JavaScript, applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
+- CI builds the release wasm package with a pinned `wasm-pack`, checks the demo JavaScript syntax, verifies the generated JavaScript/TypeScript API surface, and compiles the emitted WebAssembly module;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should add browser package build automation and, if the runner's WebGPU support is reliable, a semantic headless smoke check. Do not make screenshot equality the browser correctness oracle.
+The next coherent slice should integrate a Pyodide worker as the live Python authoring/control plane. Keep rendering and normal playback in the main-thread Rust/WebGPU module, and send versioned `SceneDocument`/`PatchBatch` messages from the worker.
 
 ## Product/architecture goal
 
@@ -217,6 +218,7 @@ cargo check -p noon-render-wgpu \
   --target wasm32-unknown-unknown \
   --no-default-features --features web
 cargo check -p noon-web --target wasm32-unknown-unknown
+bash scripts/build-web-demo.sh
 ```
 
 ### Full legacy compatibility
@@ -256,15 +258,16 @@ cargo check -p noon-render-wgpu \
   --target wasm32-unknown-unknown \
   --no-default-features --features web
 cargo check -p noon-web --target wasm32-unknown-unknown
+bash scripts/build-web-demo.sh
 ```
 
 For edits, run narrower package tests/checks continuously, then run the full local gate before pushing a coherent batch.
 
 Do **not** use GitHub Actions as the interactive compiler anymore. Local Mac validation should catch formatting/type/Clippy/test failures first. CI should validate the pushed coherent batch.
 
-## Completed implementation slice: first visible browser playback
+## Completed implementation slice: browser playback and package validation
 
-The next priority is the first genuinely visible browser playback path **without Python**:
+The first genuinely visible browser playback path **without Python** is complete:
 
 ```text
 ScenePlayer
@@ -291,11 +294,13 @@ Implemented in this order:
 3. Added a playback clock whose time is supplied by `requestAnimationFrame`.
 4. Prepared each `FrameState`, uploaded analytic instance batches, and rendered to the canvas.
 5. Added a tiny browser demo loading a serialized scene and playing it without Python.
+6. Added ordered live patch controls that preserve playback and reject invalid sequences transactionally.
+7. Added a release-package build script and CI contract smoke check for the generated JavaScript, TypeScript declarations, and WebAssembly module.
 
 Remaining order:
 
-1. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
-2. Then integrate a Pyodide worker as the live Python authoring/control plane.
+1. Integrate a Pyodide worker as the live Python authoring/control plane.
+2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve
 
@@ -392,4 +397,4 @@ crates/noon-web/
 
 ## Instruction for continuation
 
-Continue on `agent/browser-realtime-architecture`. Use the Mac for all local formatting/build/Clippy/test/wasm validation before pushing. Make coherent implementation batches, keep the PR draft, and let GitHub Actions confirm each pushed batch. The immediate goal is a visible browser WebGPU animation driven by the existing deterministic runtime, with no Python required for playback.
+Continue on `agent/browser-realtime-architecture`. Use the Mac for all local formatting/build/Clippy/test/wasm validation before pushing. Make coherent implementation batches, keep the PR draft, and let GitHub Actions confirm each pushed batch. The immediate goal is the Pyodide worker authoring/control plane; the existing main-thread Rust/WebGPU player must continue to run deployed scenes without Python.
