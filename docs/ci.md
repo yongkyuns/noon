@@ -10,7 +10,21 @@ For each implementation step:
 4. repair the same step until green;
 5. only then begin the next step.
 
-The initial Rust quality gate checks formatting, Clippy with warnings denied, and all workspace tests/all features. Browser target checks, structural renderer checks, differential CPU/GPU checks, and visual regression tests will be added when those subsystems enter the workspace.
+## Baseline and strictness policy
+
+The original `noon` and `examples` crates predate this CI policy and currently contain substantial Clippy lint debt. They remain subject to formatting, compilation, Clippy execution, and workspace tests, but their existing warnings are not promoted to errors.
+
+Every new architecture crate is held to a stricter standard from its first commit:
+
+- `cargo fmt --all -- --check` must pass;
+- the full workspace must compile with all targets/features;
+- legacy crates must complete Clippy without compilation errors;
+- new architecture crates run Clippy with `-D warnings`;
+- all workspace tests/all features must pass.
+
+As additional architecture crates are introduced, they are added to the strict Clippy gate. This prevents legacy lint cleanup from blocking the redesign while ensuring no new lint debt is introduced in the new engine.
+
+Browser target checks, structural renderer checks, differential CPU/GPU checks, and visual regression tests will be added when those subsystems enter the workspace.
 
 Timing benchmarks are kept separate from required correctness CI because shared GitHub runners are noisy. Required CI will prefer deterministic structural performance invariants such as batching counts, cache behavior, active-track work, and buffer-upload counts.
 
