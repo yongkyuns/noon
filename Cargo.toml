@@ -3,6 +3,7 @@ members = [
 	"noon",
 	"examples",
 	"crates/noon-core",
+	"crates/noon-compile",
 ]
 
 # Required for wgpu v0.10 feature resolution.
