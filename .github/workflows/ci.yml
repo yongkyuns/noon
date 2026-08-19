@@ -26,6 +26,7 @@ jobs:
         run: |
           rustup default stable
           rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -49,6 +50,9 @@ jobs:
 
       - name: Test architecture workspace
         run: cargo test --workspace --all-features
+
+      - name: Compile WebGPU renderer for browser
+        run: cargo check -p noon-render-wgpu --target wasm32-unknown-unknown --no-default-features --features web
 
   legacy-compat:
     name: Full legacy compatibility

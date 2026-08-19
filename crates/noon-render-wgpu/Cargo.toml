@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+default = ["native", "ci-noop"]
+native = ["wgpu/dx12", "wgpu/metal", "wgpu/gles", "wgpu/vulkan"]
+web = ["wgpu/webgpu"]
+ci-noop = ["wgpu/noop"]
+
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
 noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
-wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "noop"] }
+wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
