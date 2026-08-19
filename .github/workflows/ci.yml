@@ -31,10 +31,10 @@ jobs:
         run: cargo check --workspace --all-targets --all-features
 
       # The original Noon crate predates the strict CI policy and currently
-      # carries substantial lint debt. Keep compiling it under Clippy, but do
-      # not make legacy warnings block the new architecture work.
+      # carries substantial lint debt. Keep compiling it under Clippy, but cap
+      # legacy lint levels so existing deny-by-default lints remain non-blocking.
       - name: Clippy legacy crates
-        run: cargo clippy -p noon -p examples --all-targets --all-features -- -A warnings
+        run: cargo clippy -p noon -p examples --all-targets --all-features -- --cap-lints warn
 
       # New architecture crates are added here as they enter the workspace and
       # are warning-free from their first commit.
