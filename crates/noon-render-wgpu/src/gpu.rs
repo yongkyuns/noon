@@ -81,7 +81,9 @@ pub enum CameraError {
 impl std::fmt::Display for CameraError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidWorldSize => formatter.write_str("camera world size must be finite and positive"),
+            Self::InvalidWorldSize => {
+                formatter.write_str("camera world size must be finite and positive")
+            }
         }
     }
 }
@@ -232,7 +234,11 @@ impl GpuRenderer {
 
     pub fn set_camera(&mut self, queue: &wgpu::Queue, camera: Camera2D) {
         self.camera = camera;
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera.uniform()));
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::bytes_of(&camera.uniform()),
+        );
     }
 
     pub const fn camera(&self) -> Camera2D {
@@ -480,8 +486,8 @@ mod tests {
 
     #[test]
     fn camera_maps_world_size_to_clip_scale() {
-        let camera = Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0))
-            .expect("valid camera");
+        let camera =
+            Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         let uniform = camera.uniform();
         assert_eq!(uniform.center, [3.0, -2.0]);
         assert_eq!(uniform.clip_scale, [0.125, 2.0 / 9.0]);
@@ -502,8 +508,8 @@ mod tests {
     fn noop_device_validates_pipelines_camera_upload_and_draw_encoding() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, FORMAT);
-        let camera = Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0))
-            .expect("valid camera");
+        let camera =
+            Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         renderer.set_camera(&queue, camera);
         assert_eq!(renderer.camera(), camera);
 
