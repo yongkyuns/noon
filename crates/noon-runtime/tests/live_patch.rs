@@ -58,8 +58,7 @@ fn create_add_track_and_remove_match_full_recompile() {
     assert_live_matches_definition(&mut live, &definition, time);
 
     let remove = ScenePatch::RemoveObject(original);
-    live.apply_patch(&remove)
-        .expect("live remove must succeed");
+    live.apply_patch(&remove).expect("live remove must succeed");
     definition
         .apply_patch(remove)
         .expect("definition remove must succeed");

@@ -183,10 +183,7 @@ impl FramePreparer {
 
 fn pack_optional_color(color: Option<Color>) -> ([f32; 4], u32) {
     match color {
-        Some(color) => (
-            [color.red, color.green, color.blue, color.alpha],
-            1,
-        ),
+        Some(color) => ([color.red, color.green, color.blue, color.alpha], 1),
         None => ([0.0; 4], 0),
     }
 }
@@ -208,7 +205,10 @@ mod tests {
     }
 
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
-        FrameState { time: 1.25, objects }
+        FrameState {
+            time: 1.25,
+            objects,
+        }
     }
 
     #[test]
@@ -295,10 +295,7 @@ mod tests {
 
     #[test]
     fn unsupported_geometry_is_reported_explicitly() {
-        let frame = frame(vec![object(
-            42,
-            GeometryRef::External(GeometryId::new(3)),
-        )]);
+        let frame = frame(vec![object(42, GeometryRef::External(GeometryId::new(3)))]);
         let mut preparer = FramePreparer::new();
 
         let prepared = preparer.prepare(&frame);
