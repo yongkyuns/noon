@@ -6,8 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+mod patch;
 mod timeline;
 
+pub use patch::*;
 pub use timeline::*;
 
 macro_rules! define_id {
@@ -166,8 +168,8 @@ impl ObjectDefinition {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneDefinition {
-    objects: Vec<ObjectDefinition>,
-    next_object_id: u64,
+    pub(crate) objects: Vec<ObjectDefinition>,
+    pub(crate) next_object_id: u64,
     pub(crate) tracks: Vec<TrackDefinition>,
     pub(crate) next_track_id: u64,
 }
