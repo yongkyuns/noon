@@ -21,6 +21,9 @@ const expectedJavascriptSurface = [
   "reconcileScene(",
   "renderFrame(",
   "nextSequence(",
+  "gpuProfilingSupported(",
+  "setGpuProfilingEnabled(",
+  "gpuRenderP95Ms(",
   "export function demoSceneJson(",
 ];
 const expectedTypeSurface = [
@@ -31,6 +34,9 @@ const expectedTypeSurface = [
   "reconcileScene(json: string): boolean",
   "renderFrame(timestamp_ms: number): boolean",
   "nextSequence(): bigint",
+  "gpuProfilingSupported(): boolean",
+  "setGpuProfilingEnabled(enabled: boolean): boolean",
+  "gpuRenderP95Ms(): number",
   "export function demoSceneJson(): string",
 ];
 

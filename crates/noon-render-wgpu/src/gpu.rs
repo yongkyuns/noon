@@ -426,6 +426,29 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
     ) -> DrawStats {
+        self.encode_inner(encoder, view, prepared, clear_color, None)
+    }
+
+    /// Encodes a render pass with beginning/end GPU timestamp writes.
+    pub fn encode_profiled(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedFrame<'_>,
+        clear_color: wgpu::Color,
+        query_set: &wgpu::QuerySet,
+    ) -> DrawStats {
+        self.encode_inner(encoder, view, prepared, clear_color, Some(query_set))
+    }
+
+    fn encode_inner(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedFrame<'_>,
+        clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
+    ) -> DrawStats {
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view,
             depth_slice: None,
@@ -435,11 +458,16 @@ impl GpuRenderer {
                 store: wgpu::StoreOp::Store,
             },
         })];
+        let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(0),
+            end_of_pass_write_index: Some(1),
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Noon analytic render pass"),
             color_attachments: &color_attachments,
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -774,6 +802,63 @@ mod tests {
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+        queue.submit(Some(encoder.finish()));
+
+        assert_eq!(draw.draw_calls, 3);
+        assert_eq!(draw.instances_drawn, 3);
+    }
+
+    #[test]
+    fn noop_device_validates_timestamp_profiled_draw_encoding() {
+        let descriptor = wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        };
+        let (device, queue) = wgpu::Device::noop(&descriptor);
+        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        renderer.set_viewport(&queue, 64, 64);
+
+        let frame = test_frame();
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+        renderer.upload(&device, &queue, &prepared);
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Noon profiled noop render target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("Noon noop timestamp query set"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Noon noop timestamp resolve buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let draw = renderer.encode_profiled(
+            &mut encoder,
+            &view,
+            &prepared,
+            wgpu::Color::BLACK,
+            &query_set,
+        );
+        encoder.resolve_query_set(&query_set, 0..2, &resolve_buffer, 0);
         queue.submit(Some(encoder.finish()));
 
         assert_eq!(draw.draw_calls, 3);

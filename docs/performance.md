@@ -117,3 +117,30 @@ On the same 2026-08-19 baseline machine after those changes:
 | 100,000 | 25.13 MiB | 25.975 ms | 220.244 ms | 44.030 ms | 29.724 ms | 79.639 ms | 394.628 ms |
 
 At 100k, encoded transport is about 36x faster than object-graph cloning and semantic diff is about 4.7x faster. Clone plus main-thread processing falls from roughly 1.38 seconds to 0.421 seconds, about a 3.3x improvement. JSON parsing is now the dominant measured stage; getting substantially below this ceiling requires a compact/binary scene transport or worker-produced incremental deltas rather than more tuning of the Rust patch fast path.
+
+## Real-browser WebGPU profile
+
+Build and serve the browser package, then open the dedicated profiling page in a WebGPU-capable browser:
+
+```bash
+bash scripts/build-web-demo.sh
+python3 -m http.server --directory web 8080
+```
+
+```text
+http://localhost:8080/gpu-profile.html?objects=100000&warmup=30&frames=180
+```
+
+The page keeps CPU submission, GPU render-pass execution, and browser frame cadence as separate measurements. CPU submission wraps the synchronous wasm render call. GPU duration comes from WebGPU timestamp queries around the render pass when `TIMESTAMP_QUERY` is available. Frame cadence is the interval between `requestAnimationFrame` callbacks; it is a presentation-pressure proxy, not direct compositor or display latency.
+
+On the same 2026-08-19 baseline Mac, in Playwright-managed Chromium at a 960 x 540 canvas, after 30 warmup frames and across 180 measured frames:
+
+| Circles | Draw calls | Steady upload | CPU submit p50 | CPU submit p95 | GPU pass p50 | GPU pass p95 | Frame interval p50 | Frame interval p95 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 1 | 0 bytes | 0.20 ms | 0.30 ms | 0.197 ms | 0.197 ms | 16.7 ms | 18.5 ms |
+| 10,000 | 1 | 0 bytes | 0.20 ms | 0.30 ms | 0.459 ms | 0.590 ms | 16.6 ms | 18.4 ms |
+| 100,000 | 1 | 0 bytes | 0.30 ms | 0.40 ms | 1.180 ms | 1.180 ms | 16.6 ms | 18.2 ms |
+
+All three runs captured 180 GPU samples with zero dropped or failed readbacks. The host has Intel UHD Graphics 630 and AMD Radeon Pro 5300M adapters; the browser does not expose enough adapter identity to attribute the run to one of them, so the result is intentionally recorded only at the host level.
+
+This is a controlled instance/draw-scaling workload: static circles are packed into one instanced draw and distributed over a fixed-resolution grid. At high counts they become very small, so the benchmark does not model worst-case overdraw or large overlapping shapes. WebGPU timestamps are visibly quantized on this browser, and the last digits should not be treated as higher-precision evidence. Within those boundaries, 100k analytic instances use about 0.4 ms of p95 main-thread submission and 1.18 ms of p95 GPU render-pass time; the renderer is not the current bottleneck for this workload. Large complete-scene authoring reruns remain dominated by JSON parsing instead.

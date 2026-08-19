@@ -333,6 +333,12 @@ fn append_compatible<Id: Copy + Ord>(
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use std::{
+        cell::{Cell, RefCell},
+        collections::VecDeque,
+        rc::Rc,
+    };
+
     use noon_core::{
         Color, Easing, GeometryRef, Property, SceneDefinition, Style, TrackTiming, Transform2D,
         Vec2,
@@ -343,6 +349,185 @@ mod wasm {
     use web_sys::HtmlCanvasElement;
 
     use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};
+
+    const GPU_QUERY_BYTES: u64 = 16;
+    const GPU_PROFILE_SLOT_COUNT: usize = 4;
+    const GPU_PROFILE_SAMPLE_CAPACITY: usize = 512;
+
+    #[derive(Clone, Copy)]
+    struct GpuSampleToken {
+        slot: usize,
+        generation: u64,
+    }
+
+    struct GpuTimingSlot {
+        query_set: wgpu::QuerySet,
+        resolve_buffer: wgpu::Buffer,
+        readback_buffer: wgpu::Buffer,
+        pending: Rc<Cell<bool>>,
+    }
+
+    #[derive(Default)]
+    struct GpuTimingState {
+        generation: u64,
+        total_samples: usize,
+        dropped_samples: usize,
+        failed_samples: usize,
+        samples_ms: VecDeque<f64>,
+    }
+
+    impl GpuTimingState {
+        fn reset(&mut self) {
+            self.generation = self.generation.wrapping_add(1);
+            self.total_samples = 0;
+            self.dropped_samples = 0;
+            self.failed_samples = 0;
+            self.samples_ms.clear();
+        }
+
+        fn record(&mut self, milliseconds: f64) {
+            self.total_samples += 1;
+            if self.samples_ms.len() == GPU_PROFILE_SAMPLE_CAPACITY {
+                self.samples_ms.pop_front();
+            }
+            self.samples_ms.push_back(milliseconds);
+        }
+
+        fn percentile(&self, percentile: f64) -> Option<f64> {
+            if self.samples_ms.is_empty() {
+                return None;
+            }
+            let mut sorted = self.samples_ms.iter().copied().collect::<Vec<_>>();
+            sorted.sort_by(f64::total_cmp);
+            let rank = (percentile * sorted.len() as f64).ceil() as usize;
+            Some(sorted[rank.saturating_sub(1).min(sorted.len() - 1)])
+        }
+    }
+
+    struct GpuFrameProfiler {
+        enabled: bool,
+        timestamp_period_ns: f64,
+        next_slot: usize,
+        slots: Vec<GpuTimingSlot>,
+        state: Rc<RefCell<GpuTimingState>>,
+    }
+
+    impl GpuFrameProfiler {
+        fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+            let slots = (0..GPU_PROFILE_SLOT_COUNT)
+                .map(|_| GpuTimingSlot {
+                    query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                        label: Some("Noon GPU frame timestamps"),
+                        ty: wgpu::QueryType::Timestamp,
+                        count: 2,
+                    }),
+                    resolve_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Noon GPU timestamp resolve buffer"),
+                        size: GPU_QUERY_BYTES,
+                        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    }),
+                    readback_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Noon GPU timestamp readback buffer"),
+                        size: GPU_QUERY_BYTES,
+                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                        mapped_at_creation: false,
+                    }),
+                    pending: Rc::new(Cell::new(false)),
+                })
+                .collect();
+            Self {
+                enabled: false,
+                timestamp_period_ns: f64::from(queue.get_timestamp_period()),
+                next_slot: 0,
+                slots,
+                state: Rc::new(RefCell::new(GpuTimingState::default())),
+            }
+        }
+
+        fn set_enabled(&mut self, enabled: bool) {
+            if enabled && !self.enabled {
+                self.reset();
+            }
+            self.enabled = enabled;
+        }
+
+        fn reset(&mut self) {
+            self.state.borrow_mut().reset();
+        }
+
+        fn begin_sample(&mut self) -> Option<GpuSampleToken> {
+            if !self.enabled {
+                return None;
+            }
+            let generation = self.state.borrow().generation;
+            for offset in 0..self.slots.len() {
+                let index = (self.next_slot + offset) % self.slots.len();
+                if !self.slots[index].pending.replace(true) {
+                    self.next_slot = (index + 1) % self.slots.len();
+                    return Some(GpuSampleToken {
+                        slot: index,
+                        generation,
+                    });
+                }
+            }
+            self.state.borrow_mut().dropped_samples += 1;
+            None
+        }
+
+        fn query_set(&self, sample: GpuSampleToken) -> &wgpu::QuerySet {
+            &self.slots[sample.slot].query_set
+        }
+
+        fn finish_sample(&mut self, encoder: &mut wgpu::CommandEncoder, sample: GpuSampleToken) {
+            let slot = &self.slots[sample.slot];
+            encoder.resolve_query_set(&slot.query_set, 0..2, &slot.resolve_buffer, 0);
+            encoder.copy_buffer_to_buffer(
+                &slot.resolve_buffer,
+                0,
+                &slot.readback_buffer,
+                0,
+                GPU_QUERY_BYTES,
+            );
+
+            let readback = slot.readback_buffer.clone();
+            let pending = Rc::clone(&slot.pending);
+            let state = Rc::clone(&self.state);
+            let timestamp_period_ns = self.timestamp_period_ns;
+            encoder.map_buffer_on_submit(
+                &slot.readback_buffer,
+                wgpu::MapMode::Read,
+                ..,
+                move |result| {
+                    if result.is_ok() {
+                        let bytes = readback.slice(..).get_mapped_range();
+                        let beginning = u64::from_le_bytes(
+                            bytes[0..8].try_into().expect("timestamp is eight bytes"),
+                        );
+                        let end = u64::from_le_bytes(
+                            bytes[8..16].try_into().expect("timestamp is eight bytes"),
+                        );
+                        drop(bytes);
+                        readback.unmap();
+                        let mut state = state.borrow_mut();
+                        if state.generation == sample.generation {
+                            if let Some(ticks) = end.checked_sub(beginning) {
+                                state.record(ticks as f64 * timestamp_period_ns / 1_000_000.0);
+                            } else {
+                                state.failed_samples += 1;
+                            }
+                        }
+                    } else {
+                        let mut state = state.borrow_mut();
+                        if state.generation == sample.generation {
+                            state.failed_samples += 1;
+                        }
+                    }
+                    pending.set(false);
+                },
+            );
+        }
+    }
 
     #[wasm_bindgen(js_name = ScenePlayer)]
     pub struct WasmScenePlayer {
@@ -419,6 +604,7 @@ mod wasm {
         last_draw_calls: usize,
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
+        gpu_profiler: Option<GpuFrameProfiler>,
     }
 
     #[wasm_bindgen(js_class = NoonCanvasPlayer)]
@@ -445,9 +631,17 @@ mod wasm {
                 })
                 .await
                 .map_err(js_error)?;
+            let timestamp_queries_supported =
+                adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+            let required_features = if timestamp_queries_supported {
+                wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            };
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Noon WebGPU device"),
+                    required_features,
                     ..Default::default()
                 })
                 .await
@@ -460,6 +654,8 @@ mod wasm {
                 .ok_or_else(|| js_message("WebGPU adapter cannot present to this canvas"))?;
             surface.configure(&device, &config);
             let renderer = GpuRenderer::new(&device, config.format);
+            let gpu_profiler =
+                timestamp_queries_supported.then(|| GpuFrameProfiler::new(&device, &queue));
 
             let mut result = Self {
                 instance,
@@ -484,6 +680,7 @@ mod wasm {
                 last_draw_calls: 0,
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
+                gpu_profiler,
             };
             result.update_camera()?;
             Ok(result)
@@ -586,9 +783,77 @@ mod wasm {
         pub fn last_bytes_uploaded(&self) -> usize {
             self.last_bytes_uploaded
         }
+
+        #[wasm_bindgen(js_name = gpuProfilingSupported)]
+        pub fn gpu_profiling_supported(&self) -> bool {
+            self.gpu_profiler.is_some()
+        }
+
+        #[wasm_bindgen(js_name = setGpuProfilingEnabled)]
+        pub fn set_gpu_profiling_enabled(&mut self, enabled: bool) -> bool {
+            if let Some(profiler) = &mut self.gpu_profiler {
+                profiler.set_enabled(enabled);
+                true
+            } else {
+                false
+            }
+        }
+
+        #[wasm_bindgen(js_name = resetGpuProfiling)]
+        pub fn reset_gpu_profiling(&mut self) {
+            if let Some(profiler) = &mut self.gpu_profiler {
+                profiler.reset();
+            }
+        }
+
+        #[wasm_bindgen(js_name = gpuProfiledFrameCount)]
+        pub fn gpu_profiled_frame_count(&self) -> usize {
+            self.gpu_profiler
+                .as_ref()
+                .map_or(0, |profiler| profiler.state.borrow().total_samples)
+        }
+
+        #[wasm_bindgen(js_name = gpuDroppedSampleCount)]
+        pub fn gpu_dropped_sample_count(&self) -> usize {
+            self.gpu_profiler
+                .as_ref()
+                .map_or(0, |profiler| profiler.state.borrow().dropped_samples)
+        }
+
+        #[wasm_bindgen(js_name = gpuFailedSampleCount)]
+        pub fn gpu_failed_sample_count(&self) -> usize {
+            self.gpu_profiler
+                .as_ref()
+                .map_or(0, |profiler| profiler.state.borrow().failed_samples)
+        }
+
+        #[wasm_bindgen(js_name = lastGpuRenderMs)]
+        pub fn last_gpu_render_ms(&self) -> f64 {
+            self.gpu_profiler
+                .as_ref()
+                .and_then(|profiler| profiler.state.borrow().samples_ms.back().copied())
+                .unwrap_or(f64::NAN)
+        }
+
+        #[wasm_bindgen(js_name = gpuRenderP50Ms)]
+        pub fn gpu_render_p50_ms(&self) -> f64 {
+            self.gpu_render_percentile(0.50)
+        }
+
+        #[wasm_bindgen(js_name = gpuRenderP95Ms)]
+        pub fn gpu_render_p95_ms(&self) -> f64 {
+            self.gpu_render_percentile(0.95)
+        }
     }
 
     impl WasmCanvasPlayer {
+        fn gpu_render_percentile(&self, percentile: f64) -> f64 {
+            self.gpu_profiler
+                .as_ref()
+                .and_then(|profiler| profiler.state.borrow().percentile(percentile))
+                .unwrap_or(f64::NAN)
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable {
                 return Ok(());
@@ -644,9 +909,33 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon browser frame"),
                 });
-            let draw = self
-                .renderer
-                .encode(&mut encoder, &view, &prepared, self.clear_color);
+            let gpu_sample = self
+                .gpu_profiler
+                .as_mut()
+                .and_then(GpuFrameProfiler::begin_sample);
+            let draw = if let Some(sample) = gpu_sample {
+                let query_set = self
+                    .gpu_profiler
+                    .as_ref()
+                    .expect("GPU profiler exists for an active sample")
+                    .query_set(sample);
+                self.renderer.encode_profiled(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    self.clear_color,
+                    query_set,
+                )
+            } else {
+                self.renderer
+                    .encode(&mut encoder, &view, &prepared, self.clear_color)
+            };
+            if let Some(sample) = gpu_sample {
+                self.gpu_profiler
+                    .as_mut()
+                    .expect("GPU profiler exists for an active sample")
+                    .finish_sample(&mut encoder, sample);
+            }
             self.queue.submit(Some(encoder.finish()));
             surface_texture.present();
 

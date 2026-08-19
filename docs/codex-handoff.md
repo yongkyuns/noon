@@ -55,8 +55,10 @@ The first no-Python browser playback path is now implemented:
 - measured 100k clone-plus-main-thread rerun processing is now about 0.421 seconds instead of 1.38 seconds; the remaining dominant stage is parsing the 25 MiB result JSON, which points to future binary transport or worker-produced deltas;
 - the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
+- an opt-in browser profiler now measures synchronous CPU submission, timestamp-query GPU render-pass duration, and frame cadence independently without adding query overhead to normal playback;
+- the dated 960 x 540 browser baseline records 100k static analytic circles in one draw with zero steady-state upload, 0.40 ms CPU submission p95, 1.18 ms GPU pass p95, and 18.2 ms frame-interval p95 across 180 samples with no dropped query readbacks.
 
-The next coherent slice should profile real WebGPU command encoding, rasterization, and presentation in a browser. For 100k complete-scene reruns, JSON parsing is now the measured browser-side ceiling; address it later with compact/binary transport or worker-produced deltas rather than more Rust patch tuning. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
+The next coherent product slice is Milestone 4 generic vector-path rendering, while preserving analytic primitives as the fast path. A smaller testing follow-up is a semantic headless-browser smoke test once CI WebGPU support is reliable. For 100k complete-scene reruns, JSON parsing is the measured browser-side authoring ceiling; address it later with compact/binary transport or worker-produced deltas rather than more Rust patch tuning. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -342,10 +344,11 @@ Implemented in this order:
 15. Added preflighted in-place style/transform transactions with targeted active-track reevaluation, reducing measured 100k one-object patch latency by roughly 150x without weakening atomic rejection.
 16. Added consumable runtime dirty tracking, cached incremental frame preparation, and partial GPU buffer writes; unchanged 100k scenes now repack zero instances and upload zero bytes after their initial frame.
 17. Benchmarked browser rerun stages, moved the worker protocol to encoded JSON results, and replaced serialization-based diff equality; 100k clone-plus-main processing improved by roughly 3.3x.
+18. Added opt-in timestamp-query GPU profiling plus separate CPU submission and frame-cadence telemetry; the real-browser 100k baseline measured 0.40 ms CPU p95 and 1.18 ms GPU render-pass p95 in one draw.
 
 Remaining order:
 
-1. Profile real WebGPU command encoding, rasterization, and presentation separately from the quantified runtime/preparation/upload costs.
+1. Begin Milestone 4 generic vector paths while keeping circles, rectangles, and lines on the current analytic fast path.
 2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve
