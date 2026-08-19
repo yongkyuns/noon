@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - agent/browser-realtime-architecture
+      - agent/ci-base
 
 permissions:
   contents: read
