@@ -6,6 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+mod timeline;
+
+pub use timeline::*;
+
 macro_rules! define_id {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -164,6 +168,8 @@ impl ObjectDefinition {
 pub struct SceneDefinition {
     objects: Vec<ObjectDefinition>,
     next_object_id: u64,
+    pub(crate) tracks: Vec<TrackDefinition>,
+    pub(crate) next_track_id: u64,
 }
 
 impl SceneDefinition {
