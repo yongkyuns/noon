@@ -1,0 +1,9 @@
+[package]
+name = "noon-compile"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Compiler from Noon authoring IR to dense runtime data"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
