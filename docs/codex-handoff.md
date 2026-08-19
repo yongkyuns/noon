@@ -30,9 +30,10 @@ The first no-Python browser playback path is now implemented:
 - outdated, lost, occluded, timeout, and suboptimal surface states are handled explicitly;
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
 - `web/` contains a serialized-scene demo that loops without Python;
-- the release wasm package was built with `wasm-pack` and exercised in a real browser, where two objects rendered as two analytic draw batches with a clean console.
+- semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
+- the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should add the analytic line primitive, then demonstrate ordered live `PatchBatch` mutation against the running browser player. Browser build automation/headless smoke coverage should be added when the CI cost and WebGPU runner support are acceptable.
+The next coherent slice should demonstrate ordered live `PatchBatch` mutation against the running browser player. Browser build automation/headless smoke coverage should be added when the CI cost and WebGPU runner support are acceptable.
 
 ## Product/architecture goal
 
@@ -126,6 +127,7 @@ Initial renderer boundary and GPU implementation:
 - frame preparation separated from wgpu ownership
 - analytic instanced circles
 - analytic instanced rectangles
+- analytic instanced lines with semantic endpoints
 - packed reusable instance buffers
 - no per-object draw calls for those primitive classes
 - structural test for 100k instances
@@ -290,10 +292,9 @@ Implemented in this order:
 
 Remaining order:
 
-1. Add analytic line primitives as another instanced batch (semantic endpoints, no tessellation/per-object draw calls).
-2. Add browser-side patch demo showing a running animation changing through ordered `PatchBatch` messages.
-3. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
-4. Then integrate a Pyodide worker as the live Python authoring/control plane.
+1. Add browser-side patch demo showing a running animation changing through ordered `PatchBatch` messages.
+2. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
+3. Then integrate a Pyodide worker as the live Python authoring/control plane.
 
 ## Browser/Python architecture to preserve
 

@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
-use crate::{CircleInstance, PreparedFrame, RectangleInstance};
+use crate::{CircleInstance, LineInstance, PreparedFrame, RectangleInstance};
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
     [-1.0, -1.0],
@@ -59,6 +59,61 @@ const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
         shader_location: 8,
     },
 ];
+
+const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 8,
+        shader_location: 2,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 16,
+        shader_location: 3,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 72,
+        shader_location: 4,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 24,
+        shader_location: 5,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 40,
+        shader_location: 6,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 56,
+        shader_location: 7,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Uint32x2,
+        offset: 64,
+        shader_location: 8,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 80,
+        shader_location: 9,
+    },
+];
+
+struct AnalyticPipelineDescriptor {
+    vertex_entry: &'static str,
+    fragment_entry: &'static str,
+    label: &'static str,
+    instance_layout: wgpu::VertexBufferLayout<'static>,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -139,14 +194,17 @@ pub struct DrawStats {
 pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera: Camera2D,
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
+    line_buffer: wgpu::Buffer,
     circle_capacity_bytes: usize,
     rectangle_capacity_bytes: usize,
+    line_capacity_bytes: usize,
 }
 
 impl GpuRenderer {
@@ -154,6 +212,11 @@ impl GpuRenderer {
         assert_eq!(
             size_of::<CircleInstance>(),
             size_of::<RectangleInstance>(),
+            "analytic instance layouts must stay identical"
+        );
+        assert_eq!(
+            size_of::<CircleInstance>(),
+            size_of::<LineInstance>(),
             "analytic instance layouts must stay identical"
         );
 
@@ -197,18 +260,36 @@ impl GpuRenderer {
             &pipeline_layout,
             &shader,
             target_format,
-            "vs_circle",
-            "fs_circle",
-            "Noon circle pipeline",
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_circle",
+                fragment_entry: "fs_circle",
+                label: "Noon circle pipeline",
+                instance_layout: analytic_instance_layout(),
+            },
         );
         let rectangle_pipeline = create_pipeline(
             device,
             &pipeline_layout,
             &shader,
             target_format,
-            "vs_rectangle",
-            "fs_rectangle",
-            "Noon rectangle pipeline",
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_rectangle",
+                fragment_entry: "fs_rectangle",
+                label: "Noon rectangle pipeline",
+                instance_layout: analytic_instance_layout(),
+            },
+        );
+        let line_pipeline = create_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_line",
+                fragment_entry: "fs_line",
+                label: "Noon line pipeline",
+                instance_layout: line_instance_layout(),
+            },
         );
         let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Noon unit quad"),
@@ -217,18 +298,22 @@ impl GpuRenderer {
         });
         let circle_buffer = empty_instance_buffer(device, "Noon circle instances");
         let rectangle_buffer = empty_instance_buffer(device, "Noon rectangle instances");
+        let line_buffer = empty_instance_buffer(device, "Noon line instances");
 
         Self {
             circle_pipeline,
             rectangle_pipeline,
+            line_pipeline,
             quad_buffer,
             camera_buffer,
             camera_bind_group,
             camera,
             circle_buffer,
             rectangle_buffer,
+            line_buffer,
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
+            line_capacity_bytes: 0,
         }
     }
 
@@ -253,6 +338,7 @@ impl GpuRenderer {
     ) -> UploadStats {
         let circle_bytes = bytemuck::cast_slice(prepared.circles);
         let rectangle_bytes = bytemuck::cast_slice(prepared.rectangles);
+        let line_bytes = bytemuck::cast_slice(prepared.lines);
         let mut buffer_reallocations = 0;
 
         if ensure_capacity(
@@ -273,6 +359,15 @@ impl GpuRenderer {
         ) {
             buffer_reallocations += 1;
         }
+        if ensure_capacity(
+            device,
+            &mut self.line_buffer,
+            &mut self.line_capacity_bytes,
+            line_bytes.len(),
+            "Noon line instances",
+        ) {
+            buffer_reallocations += 1;
+        }
 
         if !circle_bytes.is_empty() {
             queue.write_buffer(&self.circle_buffer, 0, circle_bytes);
@@ -280,9 +375,12 @@ impl GpuRenderer {
         if !rectangle_bytes.is_empty() {
             queue.write_buffer(&self.rectangle_buffer, 0, rectangle_bytes);
         }
+        if !line_bytes.is_empty() {
+            queue.write_buffer(&self.line_buffer, 0, line_bytes);
+        }
 
         UploadStats {
-            bytes_uploaded: circle_bytes.len() + rectangle_bytes.len(),
+            bytes_uploaded: circle_bytes.len() + rectangle_bytes.len() + line_bytes.len(),
             buffer_reallocations,
         }
     }
@@ -343,6 +441,16 @@ impl GpuRenderer {
             stats.instances_drawn += prepared.rectangles.len();
         }
 
+        if !prepared.lines.is_empty() {
+            let count = u32::try_from(prepared.lines.len())
+                .expect("line instance count exceeds wgpu draw limits");
+            pass.set_pipeline(&self.line_pipeline);
+            pass.set_vertex_buffer(1, self.line_buffer.slice(..));
+            pass.draw(0..6, 0..count);
+            stats.draw_calls += 1;
+            stats.instances_drawn += prepared.lines.len();
+        }
+
         stats
     }
 
@@ -352,6 +460,10 @@ impl GpuRenderer {
 
     pub const fn rectangle_capacity_bytes(&self) -> usize {
         self.rectangle_capacity_bytes
+    }
+
+    pub const fn line_capacity_bytes(&self) -> usize {
+        self.line_capacity_bytes
     }
 }
 
@@ -371,27 +483,33 @@ pub fn analytic_instance_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
+pub fn line_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<LineInstance>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &LINE_INSTANCE_ATTRIBUTES,
+    }
+}
+
 fn create_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
-    vertex_entry: &str,
-    fragment_entry: &str,
-    label: &str,
+    descriptor: AnalyticPipelineDescriptor,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
+        label: Some(descriptor.label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(vertex_entry),
+            entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[quad_vertex_layout(), analytic_instance_layout()],
+            buffers: &[quad_vertex_layout(), descriptor.instance_layout],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(fragment_entry),
+            entry_point: Some(descriptor.fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -463,6 +581,12 @@ mod tests {
                     style: Style::default(),
                 },
                 FrameObjectState {
+                    id: ObjectId::new(3),
+                    geometry: GeometryRef::line(Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0)),
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                },
+                FrameObjectState {
                     id: ObjectId::new(2),
                     geometry: GeometryRef::rectangle(0.5, 0.25),
                     transform: Transform2D::IDENTITY,
@@ -502,6 +626,13 @@ mod tests {
         assert_eq!(layout.attributes[0].offset, 0);
         assert_eq!(layout.attributes[3].offset, 72);
         assert_eq!(layout.attributes[7].offset, 64);
+
+        let line_layout = line_instance_layout();
+        assert_eq!(line_layout.array_stride, 88);
+        assert_eq!(line_layout.attributes.len(), 9);
+        assert_eq!(line_layout.attributes[3].offset, 72);
+        assert_eq!(line_layout.attributes[8].offset, 80);
+        assert_eq!(line_layout.attributes[8].shader_location, 9);
     }
 
     #[test]
@@ -518,13 +649,16 @@ mod tests {
         let prepared = preparer.prepare(&frame);
 
         let first_upload = renderer.upload(&device, &queue, &prepared);
-        assert_eq!(first_upload.buffer_reallocations, 2);
+        assert_eq!(first_upload.buffer_reallocations, 3);
         assert_eq!(
             first_upload.bytes_uploaded,
-            size_of::<CircleInstance>() + size_of::<RectangleInstance>()
+            size_of::<CircleInstance>()
+                + size_of::<RectangleInstance>()
+                + size_of::<LineInstance>()
         );
         assert!(renderer.circle_capacity_bytes() >= size_of::<CircleInstance>());
         assert!(renderer.rectangle_capacity_bytes() >= size_of::<RectangleInstance>());
+        assert!(renderer.line_capacity_bytes() >= size_of::<LineInstance>());
 
         let second_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(second_upload.buffer_reallocations, 0);
@@ -549,7 +683,7 @@ mod tests {
         let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
         queue.submit(Some(encoder.finish()));
 
-        assert_eq!(draw.draw_calls, 2);
-        assert_eq!(draw.instances_drawn, 2);
+        assert_eq!(draw.draw_calls, 3);
+        assert_eq!(draw.instances_drawn, 3);
     }
 }

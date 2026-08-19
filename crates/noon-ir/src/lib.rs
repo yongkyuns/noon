@@ -163,6 +163,22 @@ mod tests {
     }
 
     #[test]
+    fn line_geometry_round_trip_preserves_semantic_endpoints() {
+        let mut scene = SceneDefinition::new();
+        let start = Vec2::new(-3.0, 1.25);
+        let end = Vec2::new(4.5, -2.0);
+        scene.add(GeometryRef::line(start, end));
+
+        let json = encode_scene(&scene).expect("line scene must serialize");
+        let decoded = decode_scene(&json).expect("line scene must deserialize");
+
+        assert_eq!(
+            decoded.objects()[0].geometry,
+            GeometryRef::Line { start, end }
+        );
+    }
+
+    #[test]
     fn patch_batch_round_trip_preserves_order_and_sequence() {
         let batch = PatchBatch::new(
             42,

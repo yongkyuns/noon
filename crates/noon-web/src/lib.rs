@@ -440,6 +440,7 @@ mod wasm {
         let mut scene = SceneDefinition::new();
         let circle = scene.add(GeometryRef::circle(0.65));
         let rectangle = scene.add(GeometryRef::rectangle(1.1, 1.1));
+        let line = scene.add(GeometryRef::line(Vec2::new(-1.2, 0.0), Vec2::new(1.2, 0.0)));
 
         scene.object_mut(circle).expect("circle exists").style = Style {
             fill: Some(Color::rgb(0.98, 0.38, 0.36)),
@@ -458,6 +459,17 @@ mod wasm {
             .expect("rectangle exists")
             .transform = Transform2D {
             rotation: -0.7,
+            ..Transform2D::IDENTITY
+        };
+        scene.object_mut(line).expect("line exists").style = Style {
+            fill: None,
+            stroke: Some(Color::rgb(0.30, 0.88, 0.57)),
+            stroke_width: 0.10,
+            opacity: 1.0,
+        };
+        scene.object_mut(line).expect("line exists").transform = Transform2D {
+            translation: Vec2::new(0.0, -1.55),
+            rotation: -0.35,
             ..Transform2D::IDENTITY
         };
 
@@ -479,6 +491,15 @@ mod wasm {
                 Property::Rotation,
                 -0.7,
                 std::f32::consts::TAU - 0.7,
+                timing,
+            )
+            .map_err(js_error)?;
+        scene
+            .animate_scalar(
+                line,
+                Property::Rotation,
+                -0.35,
+                std::f32::consts::TAU - 0.35,
                 timing,
             )
             .map_err(js_error)?;

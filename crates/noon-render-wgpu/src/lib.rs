@@ -78,6 +78,15 @@ pub struct RectangleInstance {
     pub padding: [f32; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct LineInstance {
+    pub transform: PackedTransform,
+    pub style: PackedStyle,
+    pub start: [f32; 2],
+    pub end: [f32; 2],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
@@ -93,6 +102,8 @@ pub struct PreparedFrame<'a> {
     pub circles: &'a [CircleInstance],
     pub rectangle_ids: &'a [ObjectId],
     pub rectangles: &'a [RectangleInstance],
+    pub line_ids: &'a [ObjectId],
+    pub lines: &'a [LineInstance],
     pub unsupported: &'a [ObjectId],
     pub stats: RenderStats,
 }
@@ -103,6 +114,8 @@ pub struct FramePreparer {
     circles: Vec<CircleInstance>,
     rectangle_ids: Vec<ObjectId>,
     rectangles: Vec<RectangleInstance>,
+    line_ids: Vec<ObjectId>,
+    lines: Vec<LineInstance>,
     unsupported: Vec<ObjectId>,
 }
 
@@ -118,6 +131,8 @@ impl FramePreparer {
         self.circles.clear();
         self.rectangle_ids.clear();
         self.rectangles.clear();
+        self.line_ids.clear();
+        self.lines.clear();
         self.unsupported.clear();
 
         for object in &frame.objects {
@@ -140,6 +155,15 @@ impl FramePreparer {
                         padding: [0.0; 2],
                     });
                 }
+                GeometryRef::Line { start, end } => {
+                    self.line_ids.push(object.id);
+                    self.lines.push(LineInstance {
+                        transform: object.transform.into(),
+                        style: object.style.into(),
+                        start: [start.x, start.y],
+                        end: [end.x, end.y],
+                    });
+                }
                 GeometryRef::External(_) => self.unsupported.push(object.id),
             }
         }
@@ -158,6 +182,9 @@ impl FramePreparer {
         if !self.rectangles.is_empty() {
             batch_count += 1;
         }
+        if !self.lines.is_empty() {
+            batch_count += 1;
+        }
 
         PreparedFrame {
             time: frame.time,
@@ -165,22 +192,26 @@ impl FramePreparer {
             circles: &self.circles,
             rectangle_ids: &self.rectangle_ids,
             rectangles: &self.rectangles,
+            line_ids: &self.line_ids,
+            lines: &self.lines,
             unsupported: &self.unsupported,
             stats: RenderStats {
                 batch_count,
-                instance_count: self.circles.len() + self.rectangles.len(),
+                instance_count: self.circles.len() + self.rectangles.len() + self.lines.len(),
                 unsupported_count: self.unsupported.len(),
                 capacity_growths,
             },
         }
     }
 
-    fn capacities(&self) -> [usize; 5] {
+    fn capacities(&self) -> [usize; 7] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
             self.rectangle_ids.capacity(),
             self.rectangles.capacity(),
+            self.line_ids.capacity(),
+            self.lines.capacity(),
             self.unsupported.capacity(),
         ]
     }
@@ -222,6 +253,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
         assert_eq!(std::mem::size_of::<CircleInstance>(), 88);
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
+        assert_eq!(std::mem::size_of::<LineInstance>(), 88);
     }
 
     #[test]
@@ -243,22 +275,29 @@ mod tests {
 
     #[test]
     fn mixed_primitives_batch_by_pipeline_not_object() {
-        let mut objects = Vec::with_capacity(20_000);
+        let mut objects = Vec::with_capacity(30_000);
         for id in 0..10_000_u64 {
             objects.push(object(id, GeometryRef::circle(1.0)));
         }
         for id in 10_000..20_000_u64 {
             objects.push(object(id, GeometryRef::rectangle(2.0, 3.0)));
         }
+        for id in 20_000..30_000_u64 {
+            objects.push(object(
+                id,
+                GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+            ));
+        }
         let frame = frame(objects);
         let mut preparer = FramePreparer::new();
 
         let prepared = preparer.prepare(&frame);
 
-        assert_eq!(prepared.stats.instance_count, 20_000);
-        assert_eq!(prepared.stats.batch_count, 2);
+        assert_eq!(prepared.stats.instance_count, 30_000);
+        assert_eq!(prepared.stats.batch_count, 3);
         assert_eq!(prepared.circles.len(), 10_000);
         assert_eq!(prepared.rectangles.len(), 10_000);
+        assert_eq!(prepared.lines.len(), 10_000);
     }
 
     #[test]
@@ -304,6 +343,33 @@ mod tests {
 
         assert!(preparer.prepare(&frame).stats.capacity_growths > 0);
         assert_eq!(preparer.prepare(&frame).stats.capacity_growths, 0);
+    }
+
+    #[test]
+    fn line_packing_preserves_semantic_endpoints_and_style() {
+        let mut state = object(
+            8,
+            GeometryRef::line(Vec2::new(-2.0, 1.5), Vec2::new(3.0, -0.5)),
+        );
+        state.style = Style {
+            fill: None,
+            stroke: Some(Color::rgb(0.2, 0.8, 0.4)),
+            stroke_width: 0.125,
+            opacity: 0.75,
+        };
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        let instance = prepared.lines[0];
+
+        assert_eq!(prepared.line_ids, &[ObjectId::new(8)]);
+        assert_eq!(instance.start, [-2.0, 1.5]);
+        assert_eq!(instance.end, [3.0, -0.5]);
+        assert_eq!(instance.style.stroke, [0.2, 0.8, 0.4, 1.0]);
+        assert_eq!(instance.style.stroke_enabled, 1);
+        assert_eq!(instance.style.stroke_width, 0.125);
+        assert_eq!(instance.style.opacity, 0.75);
     }
 
     #[test]

@@ -137,6 +137,7 @@ impl Default for Style {
 pub enum GeometryRef {
     Circle { radius: f32 },
     Rectangle { size: Vec2 },
+    Line { start: Vec2, end: Vec2 },
     External(GeometryId),
 }
 
@@ -149,6 +150,10 @@ impl GeometryRef {
         Self::Rectangle {
             size: Vec2::new(width, height),
         }
+    }
+
+    pub const fn line(start: Vec2, end: Vec2) -> Self {
+        Self::Line { start, end }
     }
 }
 
@@ -258,6 +263,17 @@ mod tests {
 
         assert_eq!(object.transform, Transform2D::IDENTITY);
         assert_eq!(object.style, Style::default());
+    }
+
+    #[test]
+    fn line_endpoints_remain_renderer_independent() {
+        let start = Vec2::new(-2.0, 1.0);
+        let end = Vec2::new(3.0, -4.0);
+
+        assert_eq!(
+            GeometryRef::line(start, end),
+            GeometryRef::Line { start, end }
+        );
     }
 
     #[test]
