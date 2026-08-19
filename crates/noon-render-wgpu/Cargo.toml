@@ -1,0 +1,9 @@
+[package]
+name = "noon-render-wgpu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+noon-runtime = { path = "../noon-runtime" }

@@ -22,9 +22,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install stable Rust
+      - name: Use stable Rust
         run: |
-          rustup update stable --no-self-update
           rustup default stable
           rustup component add rustfmt clippy
 
@@ -35,33 +34,32 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-noon-arch-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-noon-arch-${{ hashFiles('crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-noon-arch-
 
-      - name: Format
+      - name: Format architecture workspace
         run: cargo fmt --all -- --check
 
-      - name: Compile architecture crates
-        run: cargo check -p noon-core -p noon-compile -p noon-runtime --all-targets --all-features
+      - name: Compile architecture workspace
+        run: cargo check --workspace --all-targets --all-features
 
-      - name: Clippy architecture crates
-        run: cargo clippy -p noon-core -p noon-compile -p noon-runtime --all-targets --all-features -- -D warnings
+      - name: Clippy architecture workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Test architecture crates
-        run: cargo test -p noon-core -p noon-compile -p noon-runtime --all-features
+      - name: Test architecture workspace
+        run: cargo test --workspace --all-features
 
   legacy-compat:
-    name: Full workspace compatibility
+    name: Full legacy compatibility
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install stable Rust
+      - name: Use stable Rust
         run: |
-          rustup update stable --no-self-update
           rustup default stable
           rustup component add rustfmt clippy
 
@@ -71,20 +69,30 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-noon-full-${{ hashFiles('**/Cargo.toml') }}
+            noon/target
+            examples/target
+          key: ${{ runner.os }}-noon-legacy-${{ hashFiles('noon/Cargo.toml', 'examples/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-noon-full-
+            ${{ runner.os }}-noon-legacy-
 
-      - name: Compile workspace
-        run: cargo check --workspace --all-targets --all-features
+      - name: Format legacy crates
+        run: |
+          cargo fmt --manifest-path noon/Cargo.toml -- --check
+          cargo fmt --manifest-path examples/Cargo.toml -- --check
+
+      - name: Compile legacy crates
+        run: |
+          cargo check --manifest-path noon/Cargo.toml --all-targets --all-features
+          cargo check --manifest-path examples/Cargo.toml --all-targets --all-features
 
       - name: Clippy legacy crates
-        run: cargo clippy -p noon -p examples --all-targets --all-features -- --cap-lints warn
+        run: |
+          cargo clippy --manifest-path noon/Cargo.toml --all-targets --all-features -- --cap-lints warn
+          cargo clippy --manifest-path examples/Cargo.toml --all-targets --all-features -- --cap-lints warn
 
-      - name: Tests
+      - name: Test legacy crate
         # `path::tests::partial_path` is a known legacy test bug: it replays
         # already-closed text glyph path events and then calls `builder.close()`
         # again, which current Lyon correctly rejects. The legacy path subsystem
-        # is being replaced; all other legacy and all new architecture tests run.
-        run: cargo test --workspace --all-features -- --skip path::tests::partial_path
+        # is being replaced; all other legacy tests remain mandatory.
+        run: cargo test --manifest-path noon/Cargo.toml --all-features -- --skip path::tests::partial_path
