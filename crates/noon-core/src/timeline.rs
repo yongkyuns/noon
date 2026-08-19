@@ -170,12 +170,7 @@ impl SceneDefinition {
         to: f32,
         timing: TrackTiming,
     ) -> Result<TrackId, TimelineError> {
-        self.add_track(
-            object,
-            property,
-            TrackValues::Scalar { from, to },
-            timing,
-        )
+        self.add_track(object, property, TrackValues::Scalar { from, to }, timing)
     }
 
     pub fn tracks(&self) -> &[TrackDefinition] {
