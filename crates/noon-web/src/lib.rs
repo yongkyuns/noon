@@ -30,7 +30,10 @@ impl std::fmt::Display for PlayerError {
             Self::CompilePatch(error) => write!(formatter, "runtime patch failed: {error}"),
             Self::Evaluation(error) => write!(formatter, "scene evaluation failed: {error}"),
             Self::Sequence { expected, actual } => {
-                write!(formatter, "expected patch sequence {expected}, got {actual}")
+                write!(
+                    formatter,
+                    "expected patch sequence {expected}, got {actual}"
+                )
             }
             Self::SequenceExhausted => formatter.write_str("patch sequence space exhausted"),
         }
@@ -189,9 +192,7 @@ mod wasm {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{
-        GeometryRef, ObjectId, ScenePatch, Style, Transform2D, Vec2,
-    };
+    use noon_core::{GeometryRef, ObjectId, ScenePatch, Style, Transform2D, Vec2};
     use noon_ir::{encode_patch_batch, encode_scene, PatchBatch};
 
     use super::*;
@@ -232,7 +233,10 @@ mod tests {
             .expect("patch batch must apply");
 
         assert_eq!(player.frame().time, 2.0);
-        assert_eq!(player.frame().objects[0].transform.translation, Vec2::new(5.0, -2.0));
+        assert_eq!(
+            player.frame().objects[0].transform.translation,
+            Vec2::new(5.0, -2.0)
+        );
         assert_eq!(player.next_sequence(), 1);
     }
 
@@ -260,7 +264,10 @@ mod tests {
         let json = encode_patch_batch(&batch).expect("batch must serialize");
 
         assert!(player.apply_patch_batch_json(&json).is_err());
-        assert_eq!(player.scene_json().expect("scene must serialize"), before_scene);
+        assert_eq!(
+            player.scene_json().expect("scene must serialize"),
+            before_scene
+        );
         assert_eq!(player.frame(), &before_frame);
         assert_eq!(player.next_sequence(), 0);
     }
@@ -269,8 +276,8 @@ mod tests {
     fn out_of_order_patch_batch_is_rejected_without_mutation() {
         let mut player = player();
         let before = player.scene_json().expect("scene must serialize");
-        let json = encode_patch_batch(&PatchBatch::new(3, Vec::new()))
-            .expect("batch must serialize");
+        let json =
+            encode_patch_batch(&PatchBatch::new(3, Vec::new())).expect("batch must serialize");
 
         assert!(matches!(
             player.apply_patch_batch_json(&json),
