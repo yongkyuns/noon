@@ -158,9 +158,7 @@ impl SceneDefinition {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        Easing, GeometryRef, Property, TrackTiming, TrackValues, Vec2,
-    };
+    use crate::{Easing, GeometryRef, Property, TrackTiming, TrackValues, Vec2};
 
     use super::*;
 
@@ -237,7 +235,10 @@ mod tests {
         assert_eq!(scene.tracks(), &[track.clone()]);
 
         let replacement = TrackDefinition {
-            values: TrackValues::Scalar { from: 0.5, to: 0.25 },
+            values: TrackValues::Scalar {
+                from: 0.5,
+                to: 0.25,
+            },
             ..track
         };
         scene
