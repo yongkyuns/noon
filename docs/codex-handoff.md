@@ -19,7 +19,7 @@ The architecture/design context is in:
 
 This file is the concise implementation-status and continuation guide.
 
-## Continuation update: visible browser playback
+## Continuation update: browser playback and Python control
 
 The first no-Python browser playback path is now implemented:
 
@@ -31,11 +31,14 @@ The first no-Python browser playback path is now implemented:
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
 - `web/` contains a serialized-scene demo that loops without Python;
 - semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
-- the browser demo constructs versioned `PatchBatch` JSON in JavaScript, applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
+- the browser demo applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
 - CI builds the release wasm package with a pinned `wasm-pack`, checks the demo JavaScript syntax, verifies the generated JavaScript/TypeScript API surface, and compiles the emitted WebAssembly module;
+- an optional module worker lazily loads pinned Pyodide, executes editable Python authoring code away from the main thread, and returns correlated versioned `PatchBatch` messages;
+- the dependency-free browser `noon` Python module builds semantic style/transform patches and is tested under normal CPython as well as exercised under Pyodide;
+- the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should integrate a Pyodide worker as the live Python authoring/control plane. Keep rendering and normal playback in the main-thread Rust/WebGPU module, and send versioned `SceneDocument`/`PatchBatch` messages from the worker.
+The next coherent slice should let the Python authoring module build a complete versioned `SceneDocument` and add an explicit main-thread scene replacement/reconciliation path. Keep rendering and normal playback in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -155,6 +158,10 @@ First browser/runtime control slice:
 - current playhead is preserved across live patches
 - wasm-bindgen wrapper exposing the same runtime semantics to JavaScript
 - browser demo applying ordered raw-JSON patch batches while playback continues
+- lazy Pyodide worker with a correlated, versioned request/response protocol
+- editable Python demo authoring source that emits `PatchBatch` IR
+- main-thread validation of worker protocol and patch envelopes before Rust application
+- JavaScript protocol tests and dependency-free CPython authoring API tests
 - native behavioral tests plus `wasm32-unknown-unknown` compile in CI
 
 This gives the control path:
@@ -265,7 +272,7 @@ For edits, run narrower package tests/checks continuously, then run the full loc
 
 Do **not** use GitHub Actions as the interactive compiler anymore. Local Mac validation should catch formatting/type/Clippy/test failures first. CI should validate the pushed coherent batch.
 
-## Completed implementation slice: browser playback and package validation
+## Completed implementation slice: browser playback and Python worker control
 
 The first genuinely visible browser playback path **without Python** is complete:
 
@@ -296,17 +303,20 @@ Implemented in this order:
 5. Added a tiny browser demo loading a serialized scene and playing it without Python.
 6. Added ordered live patch controls that preserve playback and reject invalid sequences transactionally.
 7. Added a release-package build script and CI contract smoke check for the generated JavaScript, TypeScript declarations, and WebAssembly module.
+8. Added a lazy Pyodide module worker and small browser Python API that emit ordered semantic patches without owning the render loop, canvas, GPU, or runtime state.
+9. Added an editable Python demo, correlated worker protocol, pre-Rust envelope validation, and JavaScript/CPython tests.
 
 Remaining order:
 
-1. Integrate a Pyodide worker as the live Python authoring/control plane.
-2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
+1. Add Python construction of complete `SceneDocument` IR plus an explicit main-thread scene replacement/reconciliation path.
+2. Introduce stable authoring identities and diff a rerun scene into minimal `ScenePatch` batches so compatible runtime state survives edits.
+3. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve
 
 Do not put the WebGPU renderer inside the Pyodide/PyO3 Emscripten module.
 
-Target split should remain:
+The implemented split should remain:
 
 ```text
 Browser main thread
@@ -397,4 +407,4 @@ crates/noon-web/
 
 ## Instruction for continuation
 
-Continue on `agent/browser-realtime-architecture`. Use the Mac for all local formatting/build/Clippy/test/wasm validation before pushing. Make coherent implementation batches, keep the PR draft, and let GitHub Actions confirm each pushed batch. The immediate goal is the Pyodide worker authoring/control plane; the existing main-thread Rust/WebGPU player must continue to run deployed scenes without Python.
+Continue on `agent/browser-realtime-architecture`. Use the Mac for all local formatting/build/Clippy/test/wasm validation before pushing. Make coherent implementation batches, keep the PR draft, and let GitHub Actions confirm each pushed batch. The immediate goal is Python-authored `SceneDocument` construction and explicit main-thread replacement/reconciliation; the existing Rust/WebGPU player must continue to run deployed scenes without Python.

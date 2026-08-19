@@ -1,11 +1,12 @@
 import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
+import { PythonAuthoringClient } from "./authoring-client.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
+const sourceEditor = document.querySelector("#python-source");
 
-const DEMO_IDS = Object.freeze({ circle: 0, rectangle: 1, line: 2 });
 const PALETTES = [
   {
     name: "electric",
@@ -21,42 +22,26 @@ const PALETTES = [
   },
 ];
 
-function color([red, green, blue]) {
-  return { red, green, blue, alpha: 1.0 };
-}
-
-function stylePatch(object, fill, stroke, strokeWidth) {
-  return {
-    set_style: {
-      object,
-      style: {
-        fill: fill === null ? null : color(fill),
-        stroke: stroke === null ? null : color(stroke),
-        stroke_width: strokeWidth,
-        opacity: 1.0,
-      },
-    },
-  };
-}
-
-function palettePatchBatch(sequence, palette) {
-  return {
-    version: 1,
-    sequence,
-    patches: [
-      stylePatch(DEMO_IDS.circle, palette.circle, [1.0, 1.0, 1.0], 0.04),
-      stylePatch(DEMO_IDS.rectangle, palette.rectangle, [1.0, 1.0, 1.0], 0.04),
-      stylePatch(DEMO_IDS.line, null, palette.line, 0.1),
-    ],
-  };
-}
-
 function showError(error) {
   console.error(error);
   status.value = `Error: ${error}`;
   status.dataset.state = "error";
   patchStatus.value = "Patch failed";
   patchStatus.dataset.state = "error";
+}
+
+function showPatchError(error) {
+  console.error(error);
+  patchStatus.value = `Python failed: ${error}`;
+  patchStatus.dataset.state = "error";
+}
+
+async function loadDemoAuthoringSource() {
+  const response = await fetch("./python/demo_patch.py");
+  if (!response.ok) {
+    throw new Error(`Unable to load demo Python: HTTP ${response.status}`);
+  }
+  return response.text();
 }
 
 try {
@@ -78,20 +63,39 @@ try {
   new ResizeObserver(resize).observe(canvas);
 
   let paletteIndex = 0;
-  patchButton.disabled = false;
-  patchStatus.value = "Versioned PatchBatch ready";
-  patchStatus.dataset.state = "ready";
+  let authoringClient = null;
+  loadDemoAuthoringSource()
+    .then((source) => {
+      sourceEditor.value = source;
+      patchButton.disabled = false;
+      patchStatus.value = "Python worker starts on first run";
+      patchStatus.dataset.state = "ready";
+    })
+    .catch(showPatchError);
   patchStatus.dataset.sequence = String(player.nextSequence());
-  patchButton.addEventListener("click", () => {
+  patchButton.addEventListener("click", async () => {
+    patchButton.disabled = true;
     try {
       const sequence = Number(player.nextSequence());
       if (!Number.isSafeInteger(sequence)) {
         throw new Error("Patch sequence exceeds JavaScript's safe integer range");
       }
       const palette = PALETTES[paletteIndex];
-      const playhead = player.time();
+      patchStatus.value = "Running Python in the worker…";
+      patchStatus.dataset.state = "running";
 
-      player.applyPatchBatch(JSON.stringify(palettePatchBatch(sequence, palette)));
+      authoringClient ??= new PythonAuthoringClient();
+      const batch = await authoringClient.run(sourceEditor.value, {
+        sequence,
+        palette,
+      });
+      if (batch.sequence !== sequence) {
+        throw new Error(
+          `Python returned patch sequence ${batch.sequence}; expected ${sequence}`,
+        );
+      }
+      const playhead = player.time();
+      player.applyPatchBatch(JSON.stringify(batch));
 
       const nextSequence = Number(player.nextSequence());
       if (nextSequence !== sequence + 1) {
@@ -107,8 +111,13 @@ try {
       patchStatus.dataset.theme = palette.name;
       paletteIndex = (paletteIndex + 1) % PALETTES.length;
     } catch (error) {
-      showError(error);
+      showPatchError(error);
+    } finally {
+      patchButton.disabled = false;
     }
+  });
+  window.addEventListener("pagehide", () => authoringClient?.terminate(), {
+    once: true,
   });
 
   let lastStatusUpdate = -Infinity;

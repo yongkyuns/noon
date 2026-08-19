@@ -287,6 +287,14 @@ Acceptance:
 - compiled playback runs while Python is idle;
 - live Python mutation emits patches to the persistent runtime.
 
+Current browser slice:
+
+- Pyodide loads lazily in a module worker only when authoring code is run;
+- a dependency-free Python module emits versioned, ordered `PatchBatch` JSON;
+- the main thread correlates responses and validates protocol/IR envelopes before Rust application;
+- normal animation, WebGPU presentation, and deployed-scene playback remain independent of Python;
+- complete Python-authored `SceneDocument` construction and live reconciliation remain follow-up work.
+
 ## Milestone 8 - live code reconciliation
 
 Introduce stable authoring identities and scene diffing:

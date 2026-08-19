@@ -72,11 +72,14 @@
       }
 
       .controls {
+        margin-top: 1rem;
+      }
+
+      .control-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        margin-top: 1rem;
       }
 
       button {
@@ -106,6 +109,35 @@
         text-align: right;
       }
 
+      details {
+        margin-top: 0.75rem;
+        border: 1px solid #29334b;
+        border-radius: 0.7rem;
+        background: rgb(9 12 19 / 60%);
+      }
+
+      summary {
+        padding: 0.65rem 0.8rem;
+        color: #aeb6c9;
+        cursor: pointer;
+        font-size: 0.85rem;
+      }
+
+      textarea {
+        display: block;
+        width: 100%;
+        min-height: 17rem;
+        resize: vertical;
+        border: 0;
+        border-top: 1px solid #29334b;
+        border-radius: 0 0 0.7rem 0.7rem;
+        padding: 0.8rem;
+        background: #080b11;
+        color: #dce6ff;
+        font: 0.78rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        tab-size: 4;
+      }
+
       @media (max-width: 44rem) {
         header {
           display: block;
@@ -120,7 +152,7 @@
           aspect-ratio: 4 / 3;
         }
 
-        .controls {
+        .control-row {
           align-items: start;
           flex-direction: column;
         }
@@ -135,15 +167,27 @@
     <main>
       <header>
         <div>
-          <h1>Noon, running without Python</h1>
-          <p>Deterministic scene runtime → analytic batches → WebGPU canvas</p>
+          <h1>Noon realtime browser runtime</h1>
+          <p>Rust/WebGPU playback · optional Python worker control</p>
         </div>
         <output id="status">Starting WebGPU…</output>
       </header>
       <canvas id="scene" aria-label="Animated Noon scene"></canvas>
       <section class="controls" aria-label="Live scene controls">
-        <button id="apply-patch" type="button" disabled>Apply live patch</button>
-        <output id="patch-status">Waiting for the runtime…</output>
+        <div class="control-row">
+          <button id="apply-patch" type="button" disabled>Run Python patch</button>
+          <output id="patch-status">Loading the authoring source…</output>
+        </div>
+        <details>
+          <summary>Python patch source</summary>
+          <textarea
+            id="python-source"
+            aria-label="Python patch source"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+          ></textarea>
+        </details>
       </section>
     </main>
     <script type="module" src="./main.js"></script>
