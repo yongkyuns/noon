@@ -54,6 +54,9 @@ jobs:
       - name: Compile WebGPU renderer for browser
         run: cargo check -p noon-render-wgpu --target wasm32-unknown-unknown --no-default-features --features web
 
+      - name: Compile browser runtime
+        run: cargo check -p noon-web --target wasm32-unknown-unknown
+
   legacy-compat:
     name: Full legacy compatibility
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
