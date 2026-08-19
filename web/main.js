@@ -199,6 +199,7 @@ try {
         status.dataset.state = "running";
         status.dataset.instances = String(player.lastInstancesDrawn());
         status.dataset.uploadBytes = String(player.lastBytesUploaded());
+        status.dataset.geometryCacheMisses = String(player.lastGeometryCacheMisses());
         lastStatusUpdate = timestamp;
       }
       requestAnimationFrame(frame);

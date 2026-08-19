@@ -111,7 +111,9 @@ fn ensure_version(version: u32) -> Result<(), IrError> {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Easing, GeometryRef, ObjectId, Style, TrackTiming, Transform2D, Vec2};
+    use noon_core::{
+        Easing, GeometryRef, ObjectId, Style, TrackTiming, Transform2D, Vec2, VectorPath,
+    };
 
     use super::*;
 
@@ -165,6 +167,27 @@ mod tests {
             decoded.objects()[0].geometry,
             GeometryRef::Line { start, end }
         );
+    }
+
+    #[test]
+    fn vector_path_round_trip_preserves_semantic_commands() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .quadratic_to(Vec2::new(2.0, 0.0), Vec2::new(1.0, 1.0))
+            .cubic_to(
+                Vec2::new(0.5, 2.0),
+                Vec2::new(-0.5, 2.0),
+                Vec2::new(-1.0, 1.0),
+            )
+            .close();
+        let mut scene = SceneDefinition::new();
+        scene.add(GeometryRef::path(path.clone()));
+
+        let json = encode_scene(&scene).expect("path scene must serialize");
+        let decoded = decode_scene(&json).expect("path scene must deserialize");
+
+        assert_eq!(decoded.objects()[0].geometry, GeometryRef::path(path));
     }
 
     #[test]

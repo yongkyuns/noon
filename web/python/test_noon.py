@@ -2,7 +2,7 @@ import json
 import math
 import unittest
 
-from noon import Color, PatchBatch, Scene
+from noon import Color, PatchBatch, Scene, VectorPath
 
 
 class PatchBatchTests(unittest.TestCase):
@@ -105,6 +105,30 @@ class SceneTests(unittest.TestCase):
             Scene().circle(0.0)
         with self.assertRaises(ValueError):
             Scene().rectangle(1.0, math.nan)
+
+    def test_vector_path_serializes_curves_and_close_commands(self) -> None:
+        path = (
+            VectorPath()
+            .move_to((-1.0, 0.0))
+            .quadratic_to((0.0, 2.0), (1.0, 0.0))
+            .cubic_to((1.0, -1.0), (-1.0, -1.0), (-1.0, 0.0))
+            .close()
+        )
+        scene = Scene()
+        scene.path(
+            path,
+            fill=Color(0.5, 0.2, 0.9),
+            stroke=Color(1.0, 1.0, 1.0),
+            stroke_width=0.08,
+            key="curve",
+        )
+
+        geometry = json.loads(scene.to_json())["objects"][0]["geometry"]
+        self.assertEqual(geometry["vector_path"]["commands"][0]["move_to"]["to"], {"x": -1.0, "y": 0.0})
+        self.assertEqual(geometry["vector_path"]["commands"][-1], "close")
+
+        with self.assertRaises(TypeError):
+            Scene().path(object())  # type: ignore[arg-type]
 
     def test_scene_exports_stable_explicit_authoring_keys(self) -> None:
         scene = Scene()

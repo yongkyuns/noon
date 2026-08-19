@@ -293,7 +293,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
             .iter()
             .map(|object| FrameObjectState {
                 id: object.id,
-                geometry: object.geometry,
+                geometry: object.geometry.clone(),
                 transform: object.base_transform,
                 style: object.base_style,
             })

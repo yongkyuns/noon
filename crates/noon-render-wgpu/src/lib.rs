@@ -11,7 +11,8 @@ mod gpu;
 pub use gpu::*;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D};
+use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, VectorPath};
+use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use std::ops::Range;
 
@@ -88,6 +89,26 @@ pub struct LineInstance {
     pub end: [f32; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct PathInstance {
+    pub transform: PackedTransform,
+    pub style: PackedStyle,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct PathVertex {
+    pub position: [f32; 2],
+    pub surface: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathBatch {
+    pub index_range: Range<u32>,
+    pub instance_range: Range<u32>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
@@ -96,6 +117,7 @@ pub struct RenderStats {
     pub capacity_growths: usize,
     pub instances_repacked: usize,
     pub dirty_instance_count: usize,
+    pub geometry_cache_misses: usize,
 }
 
 #[derive(Debug)]
@@ -107,10 +129,17 @@ pub struct PreparedFrame<'a> {
     pub rectangles: &'a [RectangleInstance],
     pub line_ids: &'a [ObjectId],
     pub lines: &'a [LineInstance],
+    pub path_ids: &'a [ObjectId],
+    pub paths: &'a [PathInstance],
+    pub path_vertices: &'a [PathVertex],
+    pub path_indices: &'a [u32],
+    pub path_batches: &'a [PathBatch],
     pub unsupported: &'a [ObjectId],
     pub circle_dirty_ranges: &'a [Range<usize>],
     pub rectangle_dirty_ranges: &'a [Range<usize>],
     pub line_dirty_ranges: &'a [Range<usize>],
+    pub path_dirty_ranges: &'a [Range<usize>],
+    pub path_geometry_dirty: bool,
     pub stats: RenderStats,
 }
 
@@ -119,7 +148,22 @@ enum PreparedSlot {
     Circle(usize),
     Rectangle(usize),
     Line(usize),
+    Path { index: usize, batch: usize },
     Unsupported(usize),
+}
+
+#[derive(Clone, Debug)]
+struct CachedPathMesh {
+    path: VectorPath,
+    stroke_width_bits: u32,
+    mesh: TessellatedPath,
+}
+
+#[derive(Debug)]
+struct PathGroup {
+    cache_index: usize,
+    ids: Vec<ObjectId>,
+    instances: Vec<PathInstance>,
 }
 
 #[derive(Debug, Default)]
@@ -130,11 +174,20 @@ pub struct FramePreparer {
     rectangles: Vec<RectangleInstance>,
     line_ids: Vec<ObjectId>,
     lines: Vec<LineInstance>,
+    path_ids: Vec<ObjectId>,
+    paths: Vec<PathInstance>,
+    path_vertices: Vec<PathVertex>,
+    path_indices: Vec<u32>,
+    path_batches: Vec<PathBatch>,
+    path_batch_cache_indices: Vec<usize>,
+    path_mesh_cache: Vec<CachedPathMesh>,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
     circle_dirty_ranges: Vec<Range<usize>>,
     rectangle_dirty_ranges: Vec<Range<usize>>,
     line_dirty_ranges: Vec<Range<usize>>,
+    path_dirty_ranges: Vec<Range<usize>>,
+    path_geometry_dirty: bool,
     initialized: bool,
 }
 
@@ -196,11 +249,19 @@ impl FramePreparer {
                         push_dirty_range(&mut self.line_dirty_ranges, index);
                     }
                 }
+                PreparedSlot::Path { index, .. } => {
+                    let packed = pack_path(object);
+                    instances_repacked += 1;
+                    if self.paths[index] != packed {
+                        self.paths[index] = packed;
+                        push_dirty_range(&mut self.path_dirty_ranges, index);
+                    }
+                }
                 PreparedSlot::Unsupported(_) => {}
             }
         }
 
-        self.prepared_frame(frame.time, 0, instances_repacked)
+        self.prepared_frame(frame.time, 0, instances_repacked, 0)
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
@@ -212,12 +273,18 @@ impl FramePreparer {
         self.rectangles.clear();
         self.line_ids.clear();
         self.lines.clear();
+        self.path_ids.clear();
+        self.paths.clear();
+        self.path_batches.clear();
+        self.path_batch_cache_indices.clear();
         self.unsupported.clear();
         self.slots.clear();
         self.clear_dirty_ranges();
 
+        let mut path_groups = Vec::<PathGroup>::new();
+        let mut geometry_cache_misses = 0;
         for object in &frame.objects {
-            match object.geometry {
+            match &object.geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
                     self.circle_ids.push(object.id);
@@ -234,6 +301,35 @@ impl FramePreparer {
                     self.line_ids.push(object.id);
                     self.lines.push(pack_line(object));
                 }
+                GeometryRef::VectorPath(path) => {
+                    let cache_index = match self.cache_path_mesh(path, object.style.stroke_width) {
+                        Ok((index, cache_miss)) => {
+                            geometry_cache_misses += usize::from(cache_miss);
+                            index
+                        }
+                        Err(_) => {
+                            self.slots
+                                .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                            self.unsupported.push(object.id);
+                            continue;
+                        }
+                    };
+                    let batch = path_groups
+                        .iter()
+                        .position(|group| group.cache_index == cache_index)
+                        .unwrap_or_else(|| {
+                            path_groups.push(PathGroup {
+                                cache_index,
+                                ids: Vec::new(),
+                                instances: Vec::new(),
+                            });
+                            path_groups.len() - 1
+                        });
+                    let index = path_groups[batch].instances.len();
+                    path_groups[batch].ids.push(object.id);
+                    path_groups[batch].instances.push(pack_path(object));
+                    self.slots.push(PreparedSlot::Path { index, batch });
+                }
                 GeometryRef::External(_) => {
                     self.slots
                         .push(PreparedSlot::Unsupported(self.unsupported.len()));
@@ -241,6 +337,54 @@ impl FramePreparer {
                 }
             }
         }
+
+        let mut next_vertices = Vec::new();
+        let mut next_indices = Vec::new();
+        let mut group_offsets = Vec::with_capacity(path_groups.len());
+        for group in path_groups {
+            let instance_start = self.paths.len();
+            group_offsets.push(instance_start);
+            self.path_ids.extend(group.ids);
+            self.paths.extend(group.instances);
+
+            let mesh = &self.path_mesh_cache[group.cache_index].mesh;
+            let vertex_start = u32::try_from(next_vertices.len())
+                .expect("path vertex count exceeds renderer limits");
+            let index_start = u32::try_from(next_indices.len())
+                .expect("path index count exceeds renderer limits");
+            next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                surface: match vertex.surface {
+                    PathSurface::Fill => 0,
+                    PathSurface::Stroke => 1,
+                },
+            }));
+            next_indices.extend(mesh.indices.iter().map(|index| {
+                index
+                    .checked_add(vertex_start)
+                    .expect("path index exceeds renderer limits")
+            }));
+            let index_end = u32::try_from(next_indices.len())
+                .expect("path index count exceeds renderer limits");
+            let instance_end = u32::try_from(self.paths.len())
+                .expect("path instance count exceeds renderer limits");
+            self.path_batches.push(PathBatch {
+                index_range: index_start..index_end,
+                instance_range: u32::try_from(instance_start)
+                    .expect("path instance count exceeds renderer limits")
+                    ..instance_end,
+            });
+            self.path_batch_cache_indices.push(group.cache_index);
+        }
+        for slot in &mut self.slots {
+            if let PreparedSlot::Path { index, batch } = slot {
+                *index += group_offsets[*batch];
+            }
+        }
+        self.path_geometry_dirty =
+            self.path_vertices != next_vertices || self.path_indices != next_indices;
+        self.path_vertices = next_vertices;
+        self.path_indices = next_indices;
 
         if !self.circles.is_empty() {
             self.circle_dirty_ranges.push(0..self.circles.len());
@@ -250,6 +394,9 @@ impl FramePreparer {
         }
         if !self.lines.is_empty() {
             self.line_dirty_ranges.push(0..self.lines.len());
+        }
+        if !self.paths.is_empty() {
+            self.path_dirty_ranges.push(0..self.paths.len());
         }
         self.initialized = true;
 
@@ -263,7 +410,8 @@ impl FramePreparer {
         self.prepared_frame(
             frame.time,
             capacity_growths,
-            self.circles.len() + self.rectangles.len() + self.lines.len(),
+            self.circles.len() + self.rectangles.len() + self.lines.len() + self.paths.len(),
+            geometry_cache_misses,
         )
     }
 
@@ -272,13 +420,21 @@ impl FramePreparer {
         time: f64,
         capacity_growths: usize,
         instances_repacked: usize,
+        geometry_cache_misses: usize,
     ) -> PreparedFrame<'_> {
         let batch_count = usize::from(!self.circles.is_empty())
             + usize::from(!self.rectangles.is_empty())
             + usize::from(!self.lines.is_empty());
+        let batch_count = batch_count
+            + self
+                .path_batches
+                .iter()
+                .filter(|batch| !batch.index_range.is_empty())
+                .count();
         let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
             + dirty_len(&self.rectangle_dirty_ranges)
             + dirty_len(&self.line_dirty_ranges);
+        let dirty_instance_count = dirty_instance_count + dirty_len(&self.path_dirty_ranges);
         PreparedFrame {
             time,
             circle_ids: &self.circle_ids,
@@ -287,17 +443,28 @@ impl FramePreparer {
             rectangles: &self.rectangles,
             line_ids: &self.line_ids,
             lines: &self.lines,
+            path_ids: &self.path_ids,
+            paths: &self.paths,
+            path_vertices: &self.path_vertices,
+            path_indices: &self.path_indices,
+            path_batches: &self.path_batches,
             unsupported: &self.unsupported,
             circle_dirty_ranges: &self.circle_dirty_ranges,
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
             line_dirty_ranges: &self.line_dirty_ranges,
+            path_dirty_ranges: &self.path_dirty_ranges,
+            path_geometry_dirty: self.path_geometry_dirty,
             stats: RenderStats {
                 batch_count,
-                instance_count: self.circles.len() + self.rectangles.len() + self.lines.len(),
+                instance_count: self.circles.len()
+                    + self.rectangles.len()
+                    + self.lines.len()
+                    + self.paths.len(),
                 unsupported_count: self.unsupported.len(),
                 capacity_growths,
                 instances_repacked,
                 dirty_instance_count,
+                geometry_cache_misses,
             },
         }
     }
@@ -306,6 +473,8 @@ impl FramePreparer {
         self.circle_dirty_ranges.clear();
         self.rectangle_dirty_ranges.clear();
         self.line_dirty_ranges.clear();
+        self.path_dirty_ranges.clear();
+        self.path_geometry_dirty = false;
     }
 
     fn slot_matches(&self, frame: &FrameState, object_index: usize) -> bool {
@@ -325,6 +494,18 @@ impl FramePreparer {
                 matches!(object.geometry, GeometryRef::Line { .. })
                     && self.line_ids.get(*index) == Some(&object.id)
             }
+            Some(PreparedSlot::Path { index, batch }) => {
+                let GeometryRef::VectorPath(path) = &object.geometry else {
+                    return false;
+                };
+                let Some(cache_index) = self.path_batch_cache_indices.get(*batch) else {
+                    return false;
+                };
+                let cache = &self.path_mesh_cache[*cache_index];
+                self.path_ids.get(*index) == Some(&object.id)
+                    && cache.path == *path
+                    && cache.stroke_width_bits == object.style.stroke_width.to_bits()
+            }
             Some(PreparedSlot::Unsupported(index)) => {
                 matches!(object.geometry, GeometryRef::External(_))
                     && self.unsupported.get(*index) == Some(&object.id)
@@ -333,7 +514,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 11] {
+    fn capacities(&self) -> [usize; 19] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -341,29 +522,63 @@ impl FramePreparer {
             self.rectangles.capacity(),
             self.line_ids.capacity(),
             self.lines.capacity(),
+            self.path_ids.capacity(),
+            self.paths.capacity(),
+            self.path_vertices.capacity(),
+            self.path_indices.capacity(),
+            self.path_batches.capacity(),
+            self.path_batch_cache_indices.capacity(),
+            self.path_mesh_cache.capacity(),
             self.unsupported.capacity(),
             self.slots.capacity(),
             self.circle_dirty_ranges.capacity(),
             self.rectangle_dirty_ranges.capacity(),
             self.line_dirty_ranges.capacity(),
+            self.path_dirty_ranges.capacity(),
         ]
+    }
+
+    fn cache_path_mesh(
+        &mut self,
+        path: &VectorPath,
+        stroke_width: f32,
+    ) -> Result<(usize, bool), noon_geometry::GeometryError> {
+        let stroke_width_bits = stroke_width.to_bits();
+        if let Some(index) = self
+            .path_mesh_cache
+            .iter()
+            .position(|entry| entry.path == *path && entry.stroke_width_bits == stroke_width_bits)
+        {
+            return Ok((index, false));
+        }
+        let mesh = noon_geometry::tessellate(path, stroke_width)?;
+        self.path_mesh_cache.push(CachedPathMesh {
+            path: path.clone(),
+            stroke_width_bits,
+            mesh,
+        });
+        Ok((self.path_mesh_cache.len() - 1, true))
+    }
+
+    pub fn cached_path_mesh_count(&self) -> usize {
+        self.path_mesh_cache.len()
     }
 }
 
 fn pack_circle(object: &FrameObjectState) -> CircleInstance {
-    let GeometryRef::Circle { radius } = object.geometry else {
+    let GeometryRef::Circle { radius } = &object.geometry else {
         unreachable!("circle slot must retain circle geometry")
     };
     CircleInstance {
         transform: object.transform.into(),
         style: object.style.into(),
-        radius,
+        radius: *radius,
         padding: [0.0; 3],
     }
 }
 
 fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
-    let GeometryRef::Rectangle { size } = object.geometry else {
+    let GeometryRef::Rectangle { size } = &object.geometry else {
         unreachable!("rectangle slot must retain rectangle geometry")
     };
     RectangleInstance {
@@ -375,7 +590,7 @@ fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
 }
 
 fn pack_line(object: &FrameObjectState) -> LineInstance {
-    let GeometryRef::Line { start, end } = object.geometry else {
+    let GeometryRef::Line { start, end } = &object.geometry else {
         unreachable!("line slot must retain line geometry")
     };
     LineInstance {
@@ -383,6 +598,14 @@ fn pack_line(object: &FrameObjectState) -> LineInstance {
         style: object.style.into(),
         start: [start.x, start.y],
         end: [end.x, end.y],
+    }
+}
+
+fn pack_path(object: &FrameObjectState) -> PathInstance {
+    debug_assert!(matches!(object.geometry, GeometryRef::VectorPath(_)));
+    PathInstance {
+        transform: object.transform.into(),
+        style: object.style.into(),
     }
 }
 
@@ -409,7 +632,7 @@ fn pack_optional_color(color: Option<Color>) -> ([f32; 4], u32) {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Color, GeometryId, Vec2};
+    use noon_core::{Color, GeometryId, Vec2, VectorPath};
     use noon_runtime::FrameObjectState;
 
     use super::*;
@@ -437,6 +660,73 @@ mod tests {
         assert_eq!(std::mem::size_of::<CircleInstance>(), 88);
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
+        assert_eq!(std::mem::size_of::<PathInstance>(), 72);
+        assert_eq!(std::mem::size_of::<PathVertex>(), 12);
+    }
+
+    fn curved_path() -> VectorPath {
+        VectorPath::new()
+            .move_to(Vec2::new(-1.0, -0.5))
+            .quadratic_to(Vec2::new(0.0, 1.5), Vec2::new(1.0, -0.5))
+            .cubic_to(
+                Vec2::new(0.5, -1.0),
+                Vec2::new(-0.5, -1.0),
+                Vec2::new(-1.0, -0.5),
+            )
+            .close()
+    }
+
+    #[test]
+    fn identical_paths_share_cached_mesh_and_instance_batch() {
+        let geometry = GeometryRef::path(curved_path());
+        let mut first = object(1, geometry.clone());
+        let mut second = object(2, geometry);
+        first.style.stroke = Some(Color::WHITE);
+        first.style.stroke_width = 0.15;
+        second.style = first.style;
+        let frame = frame(vec![first, second]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert_eq!(prepared.stats.instance_count, 2);
+        assert_eq!(prepared.path_batches.len(), 1);
+        assert_eq!(prepared.path_batches[0].instance_range, 0..2);
+        assert!(!prepared.path_vertices.is_empty());
+        assert!(!prepared.path_indices.is_empty());
+        assert!(prepared.path_geometry_dirty);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
+    }
+
+    #[test]
+    fn path_transform_and_color_changes_do_not_retessellate() {
+        let mut state = object(7, GeometryRef::path(curved_path()));
+        state.style.stroke = Some(Color::BLACK);
+        state.style.stroke_width = 0.2;
+        let mut frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
+
+        frame.objects[0].transform.translation = Vec2::new(2.0, -3.0);
+        frame.objects[0].style.fill = Some(Color::rgb(0.2, 0.5, 0.8));
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.path_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_dirty_ranges[0], 0..1);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
+
+        frame.objects[0].style.stroke_width = 0.4;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert!(prepared.path_geometry_dirty);
+        assert_eq!(preparer.cached_path_mesh_count(), 2);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import math
 
-from noon import Color, Scene
+from noon import Color, Scene, VectorPath
 
 scene = Scene()
 circle = scene.circle(
@@ -27,6 +27,21 @@ line = scene.line(
     rotation=-0.35,
     stroke=Color(0.30, 0.88, 0.57),
     stroke_width=0.10,
+)
+curve = scene.path(
+    VectorPath()
+    .move_to((-0.8, -0.2))
+    .cubic_to((-0.8, 0.55), (0.0, 0.85), (0.0, 0.2))
+    .cubic_to((0.0, 0.85), (0.8, 0.55), (0.8, -0.2))
+    .cubic_to((0.65, -0.8), (-0.65, -0.8), (-0.8, -0.2))
+    .close(),
+    key="curve",
+    position=(0.0, 1.45),
+    scale=(0.75, 0.75),
+    fill=Color(0.62, 0.38, 0.96),
+    stroke=Color(1.0, 1.0, 1.0),
+    stroke_width=0.06,
+    opacity=0.95,
 )
 
 timing = {"duration": 4.0, "easing": "ease_in_out_cubic"}

@@ -341,7 +341,7 @@ mod wasm {
 
     use noon_core::{
         Color, Easing, GeometryRef, Property, SceneDefinition, Style, TrackTiming, Transform2D,
-        Vec2,
+        Vec2, VectorPath,
     };
     use noon_ir::encode_scene;
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
@@ -604,6 +604,7 @@ mod wasm {
         last_draw_calls: usize,
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
+        last_geometry_cache_misses: usize,
         gpu_profiler: Option<GpuFrameProfiler>,
     }
 
@@ -680,6 +681,7 @@ mod wasm {
                 last_draw_calls: 0,
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
+                last_geometry_cache_misses: 0,
                 gpu_profiler,
             };
             result.update_camera()?;
@@ -784,6 +786,11 @@ mod wasm {
             self.last_bytes_uploaded
         }
 
+        #[wasm_bindgen(js_name = lastGeometryCacheMisses)]
+        pub fn last_geometry_cache_misses(&self) -> usize {
+            self.last_geometry_cache_misses
+        }
+
         #[wasm_bindgen(js_name = gpuProfilingSupported)]
         pub fn gpu_profiling_supported(&self) -> bool {
             self.gpu_profiler.is_some()
@@ -864,8 +871,12 @@ mod wasm {
                 Vec2::new(self.camera_height * aspect, self.camera_height),
             )
             .map_err(js_error)?;
-            self.renderer
-                .set_viewport(&self.queue, self.config.width, self.config.height);
+            self.renderer.set_viewport(
+                &self.device,
+                &self.queue,
+                self.config.width,
+                self.config.height,
+            );
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
         }
@@ -879,6 +890,7 @@ mod wasm {
             let prepared = self
                 .preparer
                 .prepare_incremental(self.player.frame(), &changes);
+            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
 
@@ -954,6 +966,26 @@ mod wasm {
         let circle = scene.add(GeometryRef::circle(0.65));
         let rectangle = scene.add(GeometryRef::rectangle(1.5, 0.9));
         let line = scene.add(GeometryRef::line(Vec2::new(-1.2, 0.0), Vec2::new(1.2, 0.0)));
+        let path = scene.add(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.8, -0.2))
+                .cubic_to(
+                    Vec2::new(-0.8, 0.55),
+                    Vec2::new(0.0, 0.85),
+                    Vec2::new(0.0, 0.2),
+                )
+                .cubic_to(
+                    Vec2::new(0.0, 0.85),
+                    Vec2::new(0.8, 0.55),
+                    Vec2::new(0.8, -0.2),
+                )
+                .cubic_to(
+                    Vec2::new(0.65, -0.8),
+                    Vec2::new(-0.65, -0.8),
+                    Vec2::new(-0.8, -0.2),
+                )
+                .close(),
+        ));
 
         scene.object_mut(circle).expect("circle exists").style = Style {
             fill: Some(Color::rgb(0.98, 0.38, 0.36)),
@@ -983,6 +1015,17 @@ mod wasm {
         scene.object_mut(line).expect("line exists").transform = Transform2D {
             translation: Vec2::new(0.0, -1.55),
             rotation: -0.35,
+            ..Transform2D::IDENTITY
+        };
+        scene.object_mut(path).expect("path exists").style = Style {
+            fill: Some(Color::rgb(0.62, 0.38, 0.96)),
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.06,
+            opacity: 0.95,
+        };
+        scene.object_mut(path).expect("path exists").transform = Transform2D {
+            translation: Vec2::new(0.0, 1.45),
+            scale: Vec2::new(0.75, 0.75),
             ..Transform2D::IDENTITY
         };
 

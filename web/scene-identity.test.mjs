@@ -102,6 +102,36 @@ test("uses replacement fallback for geometry and order changes", () => {
   );
 });
 
+test("compares vector path commands semantically", () => {
+  const path = {
+    vector_path: {
+      commands: [
+        { move_to: { to: { x: -1, y: 0 } } },
+        { quadratic_to: { control: { x: 0, y: 1 }, to: { x: 1, y: 0 } } },
+        "close",
+      ],
+    },
+  };
+  const object = { id: 0, geometry: path, transform: {}, style: {} };
+  assert.deepEqual(
+    diffSceneDocuments(
+      { objects: [object], tracks: [] },
+      { objects: [structuredClone(object)], tracks: [] },
+    ),
+    [],
+  );
+
+  const changed = structuredClone(object);
+  changed.geometry.vector_path.commands[1].quadratic_to.control.y = 2;
+  assert.equal(
+    diffSceneDocuments(
+      { objects: [object], tracks: [] },
+      { objects: [changed], tracks: [] },
+    ),
+    null,
+  );
+});
+
 test("preserves append-compatible removals and additions", () => {
   const first = { id: 0, geometry: { circle: { radius: 1 } }, transform: {}, style: {} };
   const second = { id: 1, geometry: { circle: { radius: 1 } }, transform: {}, style: {} };

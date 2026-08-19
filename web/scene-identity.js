@@ -173,7 +173,55 @@ function sameGeometry(left, right) {
       sameVec2(left.line.end, right.line.end)
     );
   }
+  if ("vector_path" in left || "vector_path" in right) {
+    return sameVectorPath(left.vector_path, right.vector_path);
+  }
   return "external" in left && "external" in right && left.external === right.external;
+}
+
+function sameVectorPath(left, right) {
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  if (!Array.isArray(left.commands) || !Array.isArray(right.commands)) {
+    return false;
+  }
+  return (
+    left.commands.length === right.commands.length &&
+    left.commands.every((command, index) => samePathCommand(command, right.commands[index]))
+  );
+}
+
+function samePathCommand(left, right) {
+  if (left === right) {
+    return true;
+  }
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  for (const name of ["move_to", "line_to"]) {
+    if (name in left || name in right) {
+      return isRecord(left[name]) && isRecord(right[name]) && sameVec2(left[name].to, right[name].to);
+    }
+  }
+  if ("quadratic_to" in left || "quadratic_to" in right) {
+    return (
+      isRecord(left.quadratic_to) &&
+      isRecord(right.quadratic_to) &&
+      sameVec2(left.quadratic_to.control, right.quadratic_to.control) &&
+      sameVec2(left.quadratic_to.to, right.quadratic_to.to)
+    );
+  }
+  if ("cubic_to" in left || "cubic_to" in right) {
+    return (
+      isRecord(left.cubic_to) &&
+      isRecord(right.cubic_to) &&
+      sameVec2(left.cubic_to.control1, right.cubic_to.control1) &&
+      sameVec2(left.cubic_to.control2, right.cubic_to.control2) &&
+      sameVec2(left.cubic_to.to, right.cubic_to.to)
+    );
+  }
+  return false;
 }
 
 function sameTransform(left, right) {

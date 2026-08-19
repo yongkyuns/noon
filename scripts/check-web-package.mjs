@@ -24,6 +24,7 @@ const expectedJavascriptSurface = [
   "gpuProfilingSupported(",
   "setGpuProfilingEnabled(",
   "gpuRenderP95Ms(",
+  "lastGeometryCacheMisses(",
   "export function demoSceneJson(",
 ];
 const expectedTypeSurface = [
@@ -37,6 +38,7 @@ const expectedTypeSurface = [
   "gpuProfilingSupported(): boolean",
   "setGpuProfilingEnabled(enabled: boolean): boolean",
   "gpuRenderP95Ms(): number",
+  "lastGeometryCacheMisses(): number",
   "export function demoSceneJson(): string",
 ];
 

@@ -132,12 +132,84 @@ impl Default for Style {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VectorPath {
+    commands: Vec<PathCommand>,
+}
+
+impl VectorPath {
+    pub const fn new() -> Self {
+        Self {
+            commands: Vec::new(),
+        }
+    }
+
+    pub fn move_to(mut self, to: Vec2) -> Self {
+        self.commands.push(PathCommand::MoveTo { to });
+        self
+    }
+
+    pub fn line_to(mut self, to: Vec2) -> Self {
+        self.commands.push(PathCommand::LineTo { to });
+        self
+    }
+
+    pub fn quadratic_to(mut self, control: Vec2, to: Vec2) -> Self {
+        self.commands.push(PathCommand::QuadraticTo { control, to });
+        self
+    }
+
+    pub fn cubic_to(mut self, control1: Vec2, control2: Vec2, to: Vec2) -> Self {
+        self.commands.push(PathCommand::CubicTo {
+            control1,
+            control2,
+            to,
+        });
+        self
+    }
+
+    pub fn close(mut self) -> Self {
+        self.commands.push(PathCommand::Close);
+        self
+    }
+
+    pub fn commands(&self) -> &[PathCommand] {
+        &self.commands
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathCommand {
+    MoveTo {
+        to: Vec2,
+    },
+    LineTo {
+        to: Vec2,
+    },
+    QuadraticTo {
+        control: Vec2,
+        to: Vec2,
+    },
+    CubicTo {
+        control1: Vec2,
+        control2: Vec2,
+        to: Vec2,
+    },
+    Close,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryRef {
     Circle { radius: f32 },
     Rectangle { size: Vec2 },
     Line { start: Vec2, end: Vec2 },
+    VectorPath(VectorPath),
     External(GeometryId),
 }
 
@@ -154,6 +226,10 @@ impl GeometryRef {
 
     pub const fn line(start: Vec2, end: Vec2) -> Self {
         Self::Line { start, end }
+    }
+
+    pub fn path(path: VectorPath) -> Self {
+        Self::VectorPath(path)
     }
 }
 
@@ -273,6 +349,26 @@ mod tests {
         assert_eq!(
             GeometryRef::line(start, end),
             GeometryRef::Line { start, end }
+        );
+    }
+
+    #[test]
+    fn vector_path_preserves_semantic_curve_commands() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(1.0, 0.0))
+            .cubic_to(
+                Vec2::new(1.5, -0.5),
+                Vec2::new(-1.5, -0.5),
+                Vec2::new(-1.0, 0.0),
+            )
+            .close();
+
+        assert_eq!(path.commands().len(), 4);
+        assert!(matches!(path.commands()[0], PathCommand::MoveTo { .. }));
+        assert_eq!(
+            GeometryRef::path(path.clone()),
+            GeometryRef::VectorPath(path)
         );
     }
 

@@ -57,8 +57,12 @@ The first no-Python browser playback path is now implemented:
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 - an opt-in browser profiler now measures synchronous CPU submission, timestamp-query GPU render-pass duration, and frame cadence independently without adding query overhead to normal playback;
 - the dated 960 x 540 browser baseline records 100k static analytic circles in one draw with zero steady-state upload, 0.40 ms CPU submission p95, 1.18 ms GPU pass p95, and 18.2 ms frame-interval p95 across 180 samples with no dropped query readbacks.
+- Milestone 4 now has an end-to-end static generic-path slice: semantic move/line/quadratic/cubic/close commands, versioned IR and Python authoring, deterministic direct-Lyon tessellation, exact mesh caching, instanced transform/style data, and WebGPU rendering;
+- equal paths with equal stroke widths share a mesh and draw batch; transform/color/opacity updates do not retessellate or re-upload geometry, while a stroke-width change intentionally selects or creates a distinct cached mesh;
+- generic path strokes use round joins/caps and render through a 4x-MSAA pass; a real-browser visual check caught an overly coarse default curve tolerance, which is now fixed at 0.01 world units and renders smoothly;
+- both the Rust demo scene and the optional Pyodide scene builder render/reconcile the curved path in the persistent runtime with four objects, four draws, preserved playhead, and a clean browser console.
 
-The next coherent product slice is Milestone 4 generic vector-path rendering, while preserving analytic primitives as the fast path. A smaller testing follow-up is a semantic headless-browser smoke test once CI WebGPU support is reliable. For 100k complete-scene reruns, JSON parsing is the measured browser-side authoring ceiling; address it later with compact/binary transport or worker-produced deltas rather than more Rust patch tuning. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
+The next coherent product slice is Milestone 4 path reveal: precompute arc-length metadata in `noon-geometry`, add a renderer/runtime reveal property, and test reveal endpoints and monotonic revealed length numerically. Morph planning follows after reveal. A smaller testing follow-up is a semantic headless-browser smoke test once CI WebGPU support is reliable. For 100k complete-scene reruns, JSON parsing is the measured browser-side authoring ceiling; address it later with compact/binary transport or worker-produced deltas rather than more Rust patch tuning. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -345,11 +349,13 @@ Implemented in this order:
 16. Added consumable runtime dirty tracking, cached incremental frame preparation, and partial GPU buffer writes; unchanged 100k scenes now repack zero instances and upload zero bytes after their initial frame.
 17. Benchmarked browser rerun stages, moved the worker protocol to encoded JSON results, and replaced serialization-based diff equality; 100k clone-plus-main processing improved by roughly 3.3x.
 18. Added opt-in timestamp-query GPU profiling plus separate CPU submission and frame-cadence telemetry; the real-browser 100k baseline measured 0.40 ms CPU p95 and 1.18 ms GPU render-pass p95 in one draw.
+19. Added the static generic-vector-path vertical slice with semantic/Python commands, direct Lyon tessellation, exact mesh caching, instanced WebGPU draws, round strokes, and multisampled edges; browser validation covers both Rust and Pyodide-authored paths.
 
 Remaining order:
 
-1. Begin Milestone 4 generic vector paths while keeping circles, rectangles, and lines on the current analytic fast path.
-2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
+1. Add precomputed arc-length path reveal with numerical endpoint/monotonicity tests, keeping static path meshes cached and analytic primitives on their existing fast paths.
+2. Add precomputed topology-compatible path morph plans with exact endpoint tests.
+3. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve
 

@@ -114,7 +114,7 @@ impl CompiledScene {
             object_indices.insert(object.id, index);
             objects.push(CompiledObject {
                 id: object.id,
-                geometry: object.geometry,
+                geometry: object.geometry.clone(),
                 base_transform: object.transform,
                 base_style: object.style,
                 dynamic: DynamicProperties::default(),
@@ -160,7 +160,7 @@ impl CompiledScene {
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.objects.push(CompiledObject {
                     id: object.id,
-                    geometry: object.geometry,
+                    geometry: object.geometry.clone(),
                     base_transform: object.transform,
                     base_style: object.style,
                     dynamic: DynamicProperties::default(),

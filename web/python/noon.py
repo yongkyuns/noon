@@ -89,6 +89,58 @@ class Object:
     _owner: object
 
 
+class VectorPath:
+    """Renderer-independent vector path command builder."""
+
+    def __init__(self) -> None:
+        self._commands: list[Any] = []
+
+    def move_to(self, to: tuple[float, float]) -> VectorPath:
+        self._commands.append({"move_to": {"to": _vec2("to", to)}})
+        return self
+
+    def line_to(self, to: tuple[float, float]) -> VectorPath:
+        self._commands.append({"line_to": {"to": _vec2("to", to)}})
+        return self
+
+    def quadratic_to(
+        self, control: tuple[float, float], to: tuple[float, float]
+    ) -> VectorPath:
+        self._commands.append(
+            {
+                "quadratic_to": {
+                    "control": _vec2("control", control),
+                    "to": _vec2("to", to),
+                }
+            }
+        )
+        return self
+
+    def cubic_to(
+        self,
+        control1: tuple[float, float],
+        control2: tuple[float, float],
+        to: tuple[float, float],
+    ) -> VectorPath:
+        self._commands.append(
+            {
+                "cubic_to": {
+                    "control1": _vec2("control1", control1),
+                    "control2": _vec2("control2", control2),
+                    "to": _vec2("to", to),
+                }
+            }
+        )
+        return self
+
+    def close(self) -> VectorPath:
+        self._commands.append("close")
+        return self
+
+    def to_ir(self) -> dict[str, Any]:
+        return {"commands": list(self._commands)}
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -176,6 +228,33 @@ class Scene:
             rotation=rotation,
             scale=scale,
             fill=None,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            opacity=opacity,
+            key=key,
+        )
+
+    def path(
+        self,
+        path: VectorPath,
+        *,
+        position: tuple[float, float] = (0.0, 0.0),
+        rotation: float = 0.0,
+        scale: tuple[float, float] = (1.0, 1.0),
+        fill: Color | None = Color(1.0, 1.0, 1.0),
+        stroke: Color | None = None,
+        stroke_width: float = 0.1,
+        opacity: float = 1.0,
+        key: str | None = None,
+    ) -> Object:
+        if not isinstance(path, VectorPath):
+            raise TypeError("path must be a VectorPath")
+        return self._add_object(
+            {"vector_path": path.to_ir()},
+            position=position,
+            rotation=rotation,
+            scale=scale,
+            fill=fill,
             stroke=stroke,
             stroke_width=stroke_width,
             opacity=opacity,

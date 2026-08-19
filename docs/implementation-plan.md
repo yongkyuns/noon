@@ -257,6 +257,22 @@ Critical invariant:
 
 Morph endpoint and path-reveal properties must be numerically testable without image comparison.
 
+Current static-path slice:
+
+- renderer-independent move, line, quadratic, cubic, and close commands in `VectorPath`;
+- versioned JSON and Python authoring round trips;
+- direct deterministic Lyon fill/stroke tessellation in `noon-geometry` with finite-output, bounds, malformed-input, and determinism tests;
+- exact path/stroke-width mesh caching with instanced transform/style records;
+- transform, color, and opacity changes update instance data without tessellation or geometry upload;
+- round joins/caps, a fixed curve tolerance, and a 4x-MSAA WebGPU path pass;
+- real-browser Rust and Pyodide-authored path rendering with clean WebGPU validation.
+
+Remaining Milestone 4 work:
+
+- precomputed arc-length metadata and a numerically testable path-reveal property;
+- precomputed compatible topology and endpoint-exact morph plans;
+- cache lifecycle/eviction for long-lived authoring sessions and larger path performance baselines.
+
 ## Milestone 5 - text architecture
 
 Add separate representations for:

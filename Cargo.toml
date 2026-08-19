@@ -1,6 +1,7 @@
 [workspace]
 members = [
 	"crates/noon-core",
+	"crates/noon-geometry",
 	"crates/noon-ir",
 	"crates/noon-compile",
 	"crates/noon-runtime",
