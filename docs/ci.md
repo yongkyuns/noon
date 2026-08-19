@@ -1,31 +1,46 @@
 # Continuous integration policy
 
-The realtime/browser redesign is developed under a CI-first rule: architectural implementation does not advance while the branch is red.
+Noon's redesign uses CI as a correctness gate, but not as the inner development loop.
 
-For each implementation step:
+## Development cadence
 
-1. make one narrowly scoped implementation commit;
-2. let the draft PR run the repository CI gate;
-3. inspect failures before making any unrelated change;
-4. repair the same step until green;
-5. only then begin the next step.
+During active architecture work:
 
-## Baseline and strictness policy
+1. group several related edits into one coherent batch;
+2. stage connector-based changes as unreferenced Git objects when useful, so intermediate files do not trigger Actions;
+3. update the implementation branch once per batch;
+4. run the fast architecture gate on every draft-PR update;
+5. use the full legacy compatibility gate only at milestone boundaries, before review/merge, or when legacy code is touched intentionally.
 
-The original `noon` and `examples` crates predate this CI policy and currently contain substantial Clippy lint debt. They remain subject to formatting, compilation, Clippy execution, and workspace tests, but their existing warnings are not promoted to errors.
+A batch can contain several implementation steps when they share one architectural seam. A failed fast gate blocks the next batch, but individual formatting or lint repairs should be folded into the next repair batch rather than serialized into separate CI cycles.
 
-Every new architecture crate is held to a stricter standard from its first commit:
+## Fast architecture gate
 
-- `cargo fmt --all -- --check` must pass;
-- the full workspace must compile with all targets/features;
-- legacy crates must complete Clippy without compilation errors;
-- new architecture crates run Clippy with `-D warnings`;
-- all workspace tests/all features must pass.
+Every draft PR update validates the new engine crates only:
 
-As additional architecture crates are introduced, they are added to the strict Clippy gate. This prevents legacy lint cleanup from blocking the redesign while ensuring no new lint debt is introduced in the new engine.
+- `cargo fmt --all -- --check`;
+- compile `noon-core`, `noon-compile`, and `noon-runtime` with all targets/features;
+- strict Clippy with `-D warnings` for those crates;
+- tests for those crates.
 
-Browser target checks, structural renderer checks, differential CPU/GPU checks, and visual regression tests will be added when those subsystems enter the workspace.
+As new architecture crates are introduced, they are added to this fast gate immediately.
 
-Timing benchmarks are kept separate from required correctness CI because shared GitHub runners are noisy. Required CI will prefer deterministic structural performance invariants such as batching counts, cache behavior, active-track work, and buffer-upload counts.
+## Full compatibility gate
 
-The baseline workflow is installed on `master`, so implementation-branch pull-request commits are validated by a trusted base workflow before the next architectural step begins.
+The original `noon` and `examples` crates predate the redesign and carry substantial lint debt and heavy Nannou/wgpu dependencies. Full-workspace validation therefore runs when:
+
+- the pull request is no longer draft;
+- CI is manually dispatched;
+- changes land on `master`.
+
+The full gate compiles the complete workspace, runs legacy Clippy with lint levels capped to warnings, and runs all workspace tests except the explicitly documented broken legacy Lyon partial-path test.
+
+## Why this split exists
+
+The new architecture has no Nannou dependency and should iterate at Rust-library speed. Recompiling hundreds of legacy graphics dependencies after every semantic-core edit adds latency without increasing confidence in the code being changed. The split keeps new code strict while preserving a full compatibility check before integration.
+
+Cargo registry and target caches are enabled in both jobs to reduce repeated dependency work.
+
+Browser target checks, structural renderer checks, differential CPU/GPU checks, and visual regression tests will be added to the fast gate as those subsystems enter the workspace.
+
+Timing benchmarks remain separate from required correctness CI because shared GitHub runners are noisy. Required CI should prefer deterministic structural performance invariants such as batching counts, cache behavior, active-track work, and buffer-upload counts.
