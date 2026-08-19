@@ -1,0 +1,10 @@
+[package]
+name = "noon-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Deterministic renderer-free runtime for compiled Noon scenes"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+noon-compile = { path = "../noon-compile" }
