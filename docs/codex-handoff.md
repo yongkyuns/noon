@@ -38,16 +38,19 @@ The first no-Python browser playback path is now implemented:
 - an optional module worker lazily loads pinned Pyodide, executes editable Python authoring code away from the main thread, and returns correlated versioned `PatchBatch` messages;
 - the dependency-free browser `noon` Python module builds semantic style/transform patches and is tested under normal CPython as well as exercised under Pyodide;
 - the browser `noon.Scene` API builds complete versioned scene documents with analytic primitives, styles, transforms, stable insertion-order IDs, and declarative position/rotation/opacity tracks;
-- the version-2 worker protocol returns tagged `SceneDocument` or `PatchBatch` results, with correlated requests and main-thread envelope validation for both forms;
+- the version-3 worker protocol returns tagged `SceneDocument` or `PatchBatch` results plus validated authoring identities for complete scenes;
 - `ScenePlayer::replace_scene_json` compiles and evaluates replacement state before committing it, preserving the playhead and resetting the new scene's patch sequence only after a successful swap;
 - browser scene replacement retains the existing canvas, WebGPU device, renderer, playback clock, and requestAnimationFrame loop, after which ordered live patches continue at sequence zero;
 - `scene_player_perf` now measures release-mode initial load, full replacement, and one-object style/transform patches at 1k/10k/100k objects, with a dated local baseline in `docs/performance.md`;
 - the first benchmark exposed quadratic `SceneDocument` object validation; bulk scene construction now validates IDs with hash sets while preserving document order, reducing 100k replacement from 7.70 seconds to 106 ms on the baseline machine;
 - current one-object patches are 5.6-13.5x faster than replacement in that CPU-only benchmark, though transactional whole-state cloning still puts 100k patch latency around 18-19 ms;
+- explicit Python object/track keys are remapped to persistent numeric runtime IDs across reruns, even when Python insertion order changes;
+- compatible rerun documents are diffed after worker parsing into minimal `ScenePatch` batches; geometry and draw-order changes use Rust's transactional full-document reconciliation/replacement fallback;
+- measuring the initial Rust-only diff path showed it was slower than replacement because it repeated full JSON decoding, so compatible browser reruns now avoid that cost before entering wasm;
 - the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should introduce stable authoring identities and diff a rerun Python scene into minimal `ScenePatch` batches so compatible runtime state survives edits. Use `scene_player_perf` to measure the resulting reconciliation path, keep full replacement as the transactional fallback when reconciliation is unsafe, and separately address whole-state patch cloning if 100k interactive editing is a target. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
+The next coherent slice should address whole-state transactional patch cloning if 100k interactive editing is a target, then measure browser-side document diff and worker-transfer costs separately from native runtime application. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
 
 ## Product/architecture goal
 
@@ -326,6 +329,7 @@ Implemented in this order:
 11. Added pixel-aware proxy expansion, uniform local-distance rectangle strokes, capsule-based round line caps, and premultiplied-alpha compositing for translucent styles.
 12. Added complete Python scene authoring and a tagged worker protocol, then wired transactional playhead-preserving scene replacement into the persistent browser runtime without recreating WebGPU resources.
 13. Added repeatable scene-operation timing baselines and replaced quadratic IR import validation with order-preserving bulk construction, cutting measured 100k replacement latency by 72.3x.
+14. Added explicit stable Python authoring keys and compatible scene-to-patch reconciliation, retaining a measured transactional fallback for unsafe geometry or ordering edits.
 
 Remaining order:
 

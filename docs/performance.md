@@ -14,6 +14,7 @@ The default workload uses static analytic circles at 1k, 10k, and 100k objects, 
 
 - initial versioned JSON decode and compile;
 - full transactional scene replacement;
+- Rust full-document reconciliation containing one style change;
 - a one-object style patch;
 - a one-object transform patch.
 
@@ -54,3 +55,5 @@ Current interpretation:
 - one-object patches materially outperform replacement, supporting identity-based reconciliation;
 - patches still clone the complete semantic/runtime state transactionally, so their 100k latency is also just above a 16.7 ms frame budget;
 - these figures cover CPU-side native scene operations only and make no claim about Pyodide turnaround, renderer preparation, GPU upload, or presentation.
+
+The stable-authoring follow-up also measured Rust-side full-document reconciliation. It was slower than replacement because it pays for full JSON decode, diffing, and transactional cloning together: 1.159 ms at 1k, 13.922 ms at 10k, and 130.763 ms at 100k. Therefore the browser's normal compatible-rerun path diffs the already-parsed worker result on the main thread and sends the small semantic `PatchBatch` measured above. Rust full-document reconciliation remains the correctness fallback for the first keyed run and unsafe changes.

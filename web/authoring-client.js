@@ -1,5 +1,5 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 2;
+export const AUTHORING_PROTOCOL_VERSION = 3;
 export const NOON_IR_VERSION = 1;
 
 export class PythonAuthoringClient {
@@ -99,8 +99,9 @@ export class PythonAuthoringClient {
 
       if (message.type === "scene_document") {
         const document = validateSceneDocument(message.document);
+        const identities = validateSceneIdentities(message.identities, document);
         this.#settle(message.requestId, ({ resolve }) =>
-          resolve({ kind: "scene_document", document }),
+          resolve({ kind: "scene_document", document, identities }),
         );
         return;
       }
@@ -168,6 +169,42 @@ export function validateSceneDocument(scene) {
     throw new Error("Python Scene tracks must be an array");
   }
   return scene;
+}
+
+export function validateSceneIdentities(identities, scene) {
+  if (!isRecord(identities)) {
+    throw new Error("Python Scene identities must be an object");
+  }
+  validateIdentityEntries("object", identities.objects, scene.objects);
+  validateIdentityEntries("track", identities.tracks, scene.tracks);
+  return identities;
+}
+
+function validateIdentityEntries(kind, entries, definitions) {
+  if (!Array.isArray(entries) || entries.length !== definitions.length) {
+    throw new Error(`Python Scene ${kind} identities must match its definitions`);
+  }
+  const definitionIds = new Set(definitions.map(({ id }) => id));
+  const ids = new Set();
+  const keys = new Set();
+  for (const entry of entries) {
+    if (
+      !isRecord(entry) ||
+      !Number.isSafeInteger(entry.id) ||
+      entry.id < 0 ||
+      !definitionIds.has(entry.id)
+    ) {
+      throw new Error(`Python Scene has an invalid ${kind} identity ID`);
+    }
+    if (typeof entry.key !== "string" || entry.key.trim() === "") {
+      throw new Error(`Python Scene has an invalid ${kind} identity key`);
+    }
+    if (ids.has(entry.id) || keys.has(entry.key)) {
+      throw new Error(`Python Scene has duplicate ${kind} identities`);
+    }
+    ids.add(entry.id);
+    keys.add(entry.key);
+  }
 }
 
 function createAuthoringWorker() {

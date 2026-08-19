@@ -1,7 +1,7 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 2;
+const AUTHORING_PROTOCOL_VERSION = 3;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 
 const pyodidePromise = initializePyodide();
@@ -41,7 +41,11 @@ async function handleRequest(request) {
       request.source,
       request.context,
     );
-    post(result.kind, { requestId, document: result.document });
+    post(result.kind, {
+      requestId,
+      document: result.document,
+      identities: result.identities,
+    });
   } catch (error) {
     postError(requestId, error);
   }
@@ -67,12 +71,18 @@ if "result" not in __noon_namespace:
 __noon_result = __noon_namespace["result"]
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
+    __noon_identities = __noon_result.identity_document()
 elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
+    __noon_identities = None
 else:
     raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
 json.dumps(
-    {"kind": __noon_kind, "document": __noon_result.to_document()},
+    {
+        "kind": __noon_kind,
+        "document": __noon_result.to_document(),
+        "identities": __noon_identities,
+    },
     separators=(",", ":"),
     allow_nan=False,
 )

@@ -10,7 +10,9 @@ mod clock;
 pub use clock::*;
 
 use noon_compile::{CompileError, CompilePatchError, CompiledScene};
-use noon_core::{PatchError, SceneDefinition};
+use std::collections::{BTreeMap, BTreeSet};
+
+use noon_core::{ObjectId, PatchError, SceneDefinition, ScenePatch};
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
 use noon_runtime::{EvaluationError, FrameState, SceneInstance};
 
@@ -83,6 +85,12 @@ pub struct ScenePlayer {
     next_sequence: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconcileOutcome {
+    Incremental { patch_count: usize },
+    Replaced,
+}
+
 impl ScenePlayer {
     pub fn from_scene_json(json: &str) -> Result<Self, PlayerError> {
         let definition = decode_scene(json)?;
@@ -111,16 +119,7 @@ impl ScenePlayer {
             .next_sequence
             .checked_add(1)
             .ok_or(PlayerError::SequenceExhausted)?;
-        let mut definition = self.definition.clone();
-        let mut instance = self.instance.clone();
-
-        for patch in &batch.patches {
-            definition.apply_patch(patch.clone())?;
-            instance.apply_patch(patch)?;
-        }
-
-        self.definition = definition;
-        self.instance = instance;
+        self.apply_patches_transactionally(&batch.patches)?;
         self.next_sequence = next_sequence;
         Ok(self.instance.frame())
     }
@@ -136,6 +135,30 @@ impl ScenePlayer {
         self.instance = instance;
         self.next_sequence = 0;
         Ok(self.instance.frame())
+    }
+
+    pub fn reconcile_scene_json(&mut self, json: &str) -> Result<ReconcileOutcome, PlayerError> {
+        let desired = decode_scene(json)?;
+        let Some(patches) = scene_diff(&self.definition, &desired) else {
+            self.replace_scene_json(json)?;
+            return Ok(ReconcileOutcome::Replaced);
+        };
+        let patch_count = patches.len();
+        self.apply_patches_transactionally(&patches)?;
+        self.next_sequence = 0;
+        Ok(ReconcileOutcome::Incremental { patch_count })
+    }
+
+    fn apply_patches_transactionally(&mut self, patches: &[ScenePatch]) -> Result<(), PlayerError> {
+        let mut definition = self.definition.clone();
+        let mut instance = self.instance.clone();
+        for patch in patches {
+            definition.apply_patch(patch.clone())?;
+            instance.apply_patch(patch)?;
+        }
+        self.definition = definition;
+        self.instance = instance;
+        Ok(())
     }
 
     pub fn scene_json(&self) -> Result<String, PlayerError> {
@@ -155,6 +178,114 @@ impl ScenePlayer {
     }
 }
 
+fn scene_diff(current: &SceneDefinition, desired: &SceneDefinition) -> Option<Vec<ScenePatch>> {
+    let current_objects = current
+        .objects()
+        .iter()
+        .map(|object| (object.id, object))
+        .collect::<BTreeMap<_, _>>();
+    let desired_objects = desired
+        .objects()
+        .iter()
+        .map(|object| (object.id, object))
+        .collect::<BTreeMap<_, _>>();
+    if !append_compatible(
+        current.objects().iter().map(|object| object.id),
+        desired.objects().iter().map(|object| object.id),
+    ) {
+        return None;
+    }
+    for object in desired.objects() {
+        if let Some(existing) = current_objects.get(&object.id) {
+            if existing.geometry != object.geometry {
+                return None;
+            }
+        }
+    }
+
+    let current_tracks = current
+        .tracks()
+        .iter()
+        .map(|track| (track.id, track))
+        .collect::<BTreeMap<_, _>>();
+    let desired_tracks = desired
+        .tracks()
+        .iter()
+        .map(|track| (track.id, track))
+        .collect::<BTreeMap<_, _>>();
+    if !append_compatible(
+        current.tracks().iter().map(|track| track.id),
+        desired.tracks().iter().map(|track| track.id),
+    ) {
+        return None;
+    }
+
+    let removed_objects = current_objects
+        .keys()
+        .filter(|id| !desired_objects.contains_key(id))
+        .copied()
+        .collect::<BTreeSet<ObjectId>>();
+    let mut patches = Vec::new();
+    for (id, track) in &current_tracks {
+        if !desired_tracks.contains_key(id) && !removed_objects.contains(&track.object) {
+            patches.push(ScenePatch::RemoveTrack(*id));
+        }
+    }
+    for id in &removed_objects {
+        patches.push(ScenePatch::RemoveObject(*id));
+    }
+    for object in desired.objects() {
+        let id = object.id;
+        match current_objects.get(&id) {
+            Some(existing) => {
+                if existing.transform != object.transform {
+                    patches.push(ScenePatch::SetTransform {
+                        object: id,
+                        transform: object.transform,
+                    });
+                }
+                if existing.style != object.style {
+                    patches.push(ScenePatch::SetStyle {
+                        object: id,
+                        style: object.style,
+                    });
+                }
+            }
+            None => patches.push(ScenePatch::CreateObject(object.clone())),
+        }
+    }
+    for track in desired.tracks() {
+        match current_tracks.get(&track.id) {
+            Some(existing) if **existing != *track => {
+                patches.push(ScenePatch::ReplaceTrack(track.clone()));
+            }
+            None => patches.push(ScenePatch::AddTrack(track.clone())),
+            _ => {}
+        }
+    }
+    Some(patches)
+}
+
+fn append_compatible<Id: Copy + Ord>(
+    current: impl Iterator<Item = Id>,
+    desired: impl Iterator<Item = Id>,
+) -> bool {
+    let current = current.collect::<Vec<_>>();
+    let desired = desired.collect::<Vec<_>>();
+    let current_set = current.iter().copied().collect::<BTreeSet<_>>();
+    let desired_set = desired.iter().copied().collect::<BTreeSet<_>>();
+    let retained = current
+        .into_iter()
+        .filter(|id| desired_set.contains(id))
+        .collect::<Vec<_>>();
+    let desired_existing = desired
+        .iter()
+        .copied()
+        .filter(|id| current_set.contains(id))
+        .collect::<Vec<_>>();
+    retained == desired_existing && desired.iter().take(retained.len()).copied().eq(retained)
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::{
@@ -166,7 +297,7 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::HtmlCanvasElement;
 
-    use super::{PlaybackClock, ScenePlayer};
+    use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};
 
     #[wasm_bindgen(js_name = ScenePlayer)]
     pub struct WasmScenePlayer {
@@ -196,6 +327,14 @@ mod wasm {
         pub fn replace_scene(&mut self, json: &str) -> Result<(), JsValue> {
             self.inner.replace_scene_json(json).map_err(js_error)?;
             Ok(())
+        }
+
+        #[wasm_bindgen(js_name = reconcileScene)]
+        pub fn reconcile_scene(&mut self, json: &str) -> Result<bool, JsValue> {
+            Ok(matches!(
+                self.inner.reconcile_scene_json(json).map_err(js_error)?,
+                ReconcileOutcome::Incremental { .. }
+            ))
         }
 
         pub fn time(&self) -> f64 {
@@ -358,6 +497,15 @@ mod wasm {
         pub fn replace_scene(&mut self, json: &str) -> Result<(), JsValue> {
             self.player.replace_scene_json(json).map_err(js_error)?;
             Ok(())
+        }
+
+        /// Reconciles compatible semantic state and falls back to atomic replacement.
+        #[wasm_bindgen(js_name = reconcileScene)]
+        pub fn reconcile_scene(&mut self, json: &str) -> Result<bool, JsValue> {
+            Ok(matches!(
+                self.player.reconcile_scene_json(json).map_err(js_error)?,
+                ReconcileOutcome::Incremental { .. }
+            ))
         }
 
         #[wasm_bindgen(js_name = resetClock)]
@@ -646,6 +794,78 @@ mod tests {
         );
         assert_eq!(player.frame(), &before_frame);
         assert_eq!(player.next_sequence(), 1);
+    }
+
+    #[test]
+    fn compatible_scene_reconciliation_applies_minimal_patch() {
+        let mut player = player();
+        player.seek(1.5).expect("seek must succeed");
+        let mut desired = SceneDefinition::new();
+        let object = desired.add(GeometryRef::circle(1.0));
+        desired
+            .object_mut(object)
+            .expect("object must exist")
+            .style
+            .opacity = 0.4;
+        let json = encode_scene(&desired).expect("scene must serialize");
+
+        let outcome = player
+            .reconcile_scene_json(&json)
+            .expect("reconciliation must succeed");
+
+        assert_eq!(outcome, ReconcileOutcome::Incremental { patch_count: 1 });
+        assert_eq!(player.frame().time, 1.5);
+        assert_eq!(player.frame().objects[0].style.opacity, 0.4);
+        assert_eq!(player.next_sequence(), 0);
+    }
+
+    #[test]
+    fn incompatible_geometry_reconciliation_falls_back_to_replacement() {
+        let mut player = player();
+        player.seek(0.75).expect("seek must succeed");
+        let mut desired = SceneDefinition::new();
+        desired.add(GeometryRef::rectangle(2.0, 1.0));
+        let json = encode_scene(&desired).expect("scene must serialize");
+
+        let outcome = player
+            .reconcile_scene_json(&json)
+            .expect("replacement fallback must succeed");
+
+        assert_eq!(outcome, ReconcileOutcome::Replaced);
+        assert_eq!(player.frame().time, 0.75);
+        assert_eq!(
+            player.frame().objects[0].geometry,
+            GeometryRef::rectangle(2.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn reordered_scene_reconciliation_falls_back_to_preserve_draw_order() {
+        let mut current = SceneDefinition::new();
+        current.add(GeometryRef::circle(1.0));
+        current.add(GeometryRef::rectangle(1.0, 1.0));
+        let json = encode_scene(&current).expect("scene must serialize");
+        let mut player = ScenePlayer::from_scene_json(&json).expect("scene must load");
+        let desired = SceneDefinition::from_parts(
+            vec![
+                noon_core::ObjectDefinition::new(
+                    ObjectId::new(1),
+                    GeometryRef::rectangle(1.0, 1.0),
+                ),
+                noon_core::ObjectDefinition::new(ObjectId::new(0), GeometryRef::circle(1.0)),
+            ],
+            Vec::new(),
+        )
+        .expect("scene must be valid");
+        let json = encode_scene(&desired).expect("scene must serialize");
+
+        assert_eq!(
+            player
+                .reconcile_scene_json(&json)
+                .expect("fallback must succeed"),
+            ReconcileOutcome::Replaced
+        );
+        assert_eq!(player.frame().objects[0].id, ObjectId::new(1));
     }
 
     #[test]

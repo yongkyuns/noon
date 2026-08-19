@@ -7,6 +7,7 @@ import {
   PythonAuthoringClient,
   validatePatchBatch,
   validateSceneDocument,
+  validateSceneIdentities,
 } from "./authoring-client.js";
 
 class FakeWorker {
@@ -78,14 +79,20 @@ test("correlates a Python request with a validated Scene response", async () => 
   const resultPromise = client.run("result = scene");
   await Promise.resolve();
   const scene = { version: 1, objects: [], tracks: [] };
+  const identities = { objects: [], tracks: [] };
   worker.emit(
     "message",
-    workerMessage("scene_document", { requestId: 0, document: scene }),
+    workerMessage("scene_document", {
+      requestId: 0,
+      document: scene,
+      identities,
+    }),
   );
 
   assert.deepEqual(await resultPromise, {
     kind: "scene_document",
     document: scene,
+    identities,
   });
 });
 
@@ -131,6 +138,17 @@ test("rejects malformed Scene documents before they reach Rust", () => {
   assert.throws(
     () => validateSceneDocument({ version: 1, objects: [], tracks: {} }),
     /tracks must be an array/,
+  );
+});
+
+test("rejects Scene identities that do not cover the document", () => {
+  assert.throws(
+    () =>
+      validateSceneIdentities(
+        { objects: [], tracks: [] },
+        { version: 1, objects: [{ id: 0 }], tracks: [] },
+      ),
+    /must match its definitions/,
   );
 });
 

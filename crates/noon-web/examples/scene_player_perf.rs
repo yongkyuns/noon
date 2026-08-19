@@ -59,6 +59,18 @@ fn benchmark_size(object_count: usize, config: Config) {
         black_box(replacement_player.object_count());
     });
 
+    let reconciled_scene_json =
+        [0.75, 1.0].map(|opacity| build_scene_json_with_opacity(object_count, opacity));
+    let mut reconcile_player =
+        ScenePlayer::from_scene_json(&scene_json).expect("benchmark reconcile player must load");
+    reconcile_player.seek(2.0).expect("seek must succeed");
+    let reconciliation = measure(config, |iteration| {
+        let outcome = reconcile_player
+            .reconcile_scene_json(black_box(&reconciled_scene_json[iteration % 2]))
+            .expect("scene reconciliation must succeed");
+        black_box(outcome);
+    });
+
     let style_batches = (0..total_iterations)
         .map(|sequence| {
             encode_patch_batch(&PatchBatch::new(
@@ -121,6 +133,13 @@ fn benchmark_size(object_count: usize, config: Config) {
     print_row(
         object_count,
         &scene_size,
+        "one style reconciliation",
+        reconciliation,
+        replacement,
+    );
+    print_row(
+        object_count,
+        &scene_size,
         "one style patch",
         style_patch,
         replacement,
@@ -135,11 +154,21 @@ fn benchmark_size(object_count: usize, config: Config) {
 }
 
 fn build_scene_json(object_count: usize) -> String {
+    build_scene_json_with_opacity(object_count, 1.0)
+}
+
+fn build_scene_json_with_opacity(object_count: usize, opacity: f32) -> String {
     assert!(object_count > 0, "benchmark sizes must be positive");
     let mut scene = SceneDefinition::new();
     for _ in 0..object_count {
         scene.add(GeometryRef::circle(0.5));
     }
+    let target = ObjectId::new((object_count / 2) as u64);
+    scene
+        .object_mut(target)
+        .expect("object must exist")
+        .style
+        .opacity = opacity;
     encode_scene(&scene).expect("benchmark scene must serialize")
 }
 

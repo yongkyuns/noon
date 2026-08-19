@@ -106,6 +106,21 @@ class SceneTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Scene().rectangle(1.0, math.nan)
 
+    def test_scene_exports_stable_explicit_authoring_keys(self) -> None:
+        scene = Scene()
+        hero = scene.circle(1.0, key="hero")
+        scene.animate_opacity(hero, 0.0, 1.0, duration=1.0, key="hero.fade")
+
+        self.assertEqual(
+            scene.identity_document(),
+            {
+                "objects": [{"id": 0, "key": "hero"}],
+                "tracks": [{"id": 0, "key": "hero.fade"}],
+            },
+        )
+        with self.assertRaises(ValueError):
+            scene.rectangle(1.0, 1.0, key="hero")
+
 
 if __name__ == "__main__":
     unittest.main()

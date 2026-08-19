@@ -47,6 +47,16 @@ def _positive_number(name: str, value: Any) -> float:
     return result
 
 
+def _authoring_key(name: str, value: str | None, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    if not value.strip():
+        raise ValueError(f"{name} must not be empty")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Color:
     red: float
@@ -86,6 +96,8 @@ class Scene:
         self._owner = object()
         self._objects: list[dict[str, Any]] = []
         self._tracks: list[dict[str, Any]] = []
+        self._object_keys: dict[int, str] = {}
+        self._track_keys: dict[int, str] = {}
 
     def circle(
         self,
@@ -98,6 +110,7 @@ class Scene:
         stroke: Color | None = None,
         stroke_width: float = 1.0,
         opacity: float = 1.0,
+        key: str | None = None,
     ) -> Object:
         return self._add_object(
             {"circle": {"radius": _positive_number("radius", radius)}},
@@ -108,6 +121,7 @@ class Scene:
             stroke=stroke,
             stroke_width=stroke_width,
             opacity=opacity,
+            key=key,
         )
 
     def rectangle(
@@ -122,6 +136,7 @@ class Scene:
         stroke: Color | None = None,
         stroke_width: float = 1.0,
         opacity: float = 1.0,
+        key: str | None = None,
     ) -> Object:
         return self._add_object(
             {
@@ -139,6 +154,7 @@ class Scene:
             stroke=stroke,
             stroke_width=stroke_width,
             opacity=opacity,
+            key=key,
         )
 
     def line(
@@ -152,6 +168,7 @@ class Scene:
         stroke: Color | None = Color(1.0, 1.0, 1.0),
         stroke_width: float = 0.1,
         opacity: float = 1.0,
+        key: str | None = None,
     ) -> Object:
         return self._add_object(
             {"line": {"start": _vec2("start", start), "end": _vec2("end", end)}},
@@ -162,6 +179,7 @@ class Scene:
             stroke=stroke,
             stroke_width=stroke_width,
             opacity=opacity,
+            key=key,
         )
 
     def animate_position(
@@ -173,6 +191,7 @@ class Scene:
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
+        key: str | None = None,
     ) -> Scene:
         self._add_track(
             obj,
@@ -181,6 +200,7 @@ class Scene:
             start_time,
             duration,
             easing,
+            key,
         )
         return self
 
@@ -193,9 +213,10 @@ class Scene:
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
+        key: str | None = None,
     ) -> Scene:
         self._add_scalar_track(
-            obj, "rotation", from_, to, start_time, duration, easing
+            obj, "rotation", from_, to, start_time, duration, easing, key
         )
         return self
 
@@ -208,9 +229,10 @@ class Scene:
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
+        key: str | None = None,
     ) -> Scene:
         self._add_scalar_track(
-            obj, "opacity", from_, to, start_time, duration, easing
+            obj, "opacity", from_, to, start_time, duration, easing, key
         )
         return self
 
@@ -225,6 +247,7 @@ class Scene:
         stroke: Color | None,
         stroke_width: float,
         opacity: float,
+        key: str | None,
     ) -> Object:
         if fill is not None and not isinstance(fill, Color):
             raise TypeError("fill must be a Color or None")
@@ -235,6 +258,10 @@ class Scene:
             raise ValueError("stroke_width must be non-negative")
 
         object_id = len(self._objects)
+        authoring_key = _authoring_key("key", key, f"@object:{object_id}")
+        if authoring_key in self._object_keys.values():
+            raise ValueError(f"duplicate object key: {authoring_key}")
+        self._object_keys[object_id] = authoring_key
         self._objects.append(
             {
                 "id": object_id,
@@ -263,6 +290,7 @@ class Scene:
         start_time: float,
         duration: float,
         easing: str,
+        key: str | None,
     ) -> None:
         self._add_track(
             obj,
@@ -276,6 +304,7 @@ class Scene:
             start_time,
             duration,
             easing,
+            key,
         )
 
     def _add_track(
@@ -286,6 +315,7 @@ class Scene:
         start_time: float,
         duration: float,
         easing: str,
+        key: str | None,
     ) -> None:
         if not isinstance(obj, Object) or obj._owner is not self._owner:
             raise ValueError("animated object must belong to this Scene")
@@ -294,9 +324,14 @@ class Scene:
         start = _finite_number("start_time", start_time)
         if start < 0.0:
             raise ValueError("start_time must be non-negative")
+        track_id = len(self._tracks)
+        authoring_key = _authoring_key("key", key, f"@track:{track_id}")
+        if authoring_key in self._track_keys.values():
+            raise ValueError(f"duplicate track key: {authoring_key}")
+        self._track_keys[track_id] = authoring_key
         self._tracks.append(
             {
-                "id": len(self._tracks),
+                "id": track_id,
                 "object": obj.id,
                 "property": property_name,
                 "values": values,
@@ -313,6 +348,18 @@ class Scene:
             "version": FORMAT_VERSION,
             "objects": list(self._objects),
             "tracks": list(self._tracks),
+        }
+
+    def identity_document(self) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "objects": [
+                {"id": object_id, "key": key}
+                for object_id, key in self._object_keys.items()
+            ],
+            "tracks": [
+                {"id": track_id, "key": key}
+                for track_id, key in self._track_keys.items()
+            ],
         }
 
     def to_json(self) -> str:
