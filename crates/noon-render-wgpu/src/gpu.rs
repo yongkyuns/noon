@@ -13,8 +13,7 @@ const QUAD_VERTICES: [[f32; 2]; 6] = [
     [-1.0, 1.0],
 ];
 
-const QUAD_ATTRIBUTES: [wgpu::VertexAttribute; 1] =
-    wgpu::vertex_attr_array![0 => Float32x2];
+const QUAD_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
 
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute {
