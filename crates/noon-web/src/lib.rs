@@ -380,6 +380,8 @@ mod wasm {
                 Vec2::new(self.camera_height * aspect, self.camera_height),
             )
             .map_err(js_error)?;
+            self.renderer
+                .set_viewport(&self.queue, self.config.width, self.config.height);
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
         }
@@ -439,7 +441,7 @@ mod wasm {
     pub fn demo_scene_json() -> Result<String, JsValue> {
         let mut scene = SceneDefinition::new();
         let circle = scene.add(GeometryRef::circle(0.65));
-        let rectangle = scene.add(GeometryRef::rectangle(1.1, 1.1));
+        let rectangle = scene.add(GeometryRef::rectangle(1.5, 0.9));
         let line = scene.add(GeometryRef::line(Vec2::new(-1.2, 0.0), Vec2::new(1.2, 0.0)));
 
         scene.object_mut(circle).expect("circle exists").style = Style {

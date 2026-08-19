@@ -16,6 +16,7 @@ const QUAD_VERTICES: [[f32; 2]; 6] = [
 ];
 
 const QUAD_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
+const ANALYTIC_BLEND_STATE: wgpu::BlendState = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
 
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute {
@@ -120,6 +121,8 @@ struct AnalyticPipelineDescriptor {
 struct CameraUniform {
     center: [f32; 2],
     clip_scale: [f32; 2],
+    viewport_size: [f32; 2],
+    padding: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -164,10 +167,12 @@ impl Camera2D {
         Ok(Self { center, world_size })
     }
 
-    fn uniform(self) -> CameraUniform {
+    fn uniform(self, viewport_size: [u32; 2]) -> CameraUniform {
         CameraUniform {
             center: [self.center.x, self.center.y],
             clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
+            viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
+            padding: [0.0; 2],
         }
     }
 }
@@ -199,6 +204,7 @@ pub struct GpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera: Camera2D,
+    viewport_size: [u32; 2],
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
     line_buffer: wgpu::Buffer,
@@ -221,7 +227,8 @@ impl GpuRenderer {
         );
 
         let camera = Camera2D::DEFAULT;
-        let camera_uniform = camera.uniform();
+        let viewport_size = [1, 1];
+        let camera_uniform = camera.uniform(viewport_size);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Noon camera uniform"),
             contents: bytemuck::bytes_of(&camera_uniform),
@@ -308,6 +315,7 @@ impl GpuRenderer {
             camera_buffer,
             camera_bind_group,
             camera,
+            viewport_size,
             circle_buffer,
             rectangle_buffer,
             line_buffer,
@@ -319,15 +327,28 @@ impl GpuRenderer {
 
     pub fn set_camera(&mut self, queue: &wgpu::Queue, camera: Camera2D) {
         self.camera = camera;
+        self.write_camera_uniform(queue);
+    }
+
+    pub fn set_viewport(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
+        self.viewport_size = [width.max(1), height.max(1)];
+        self.write_camera_uniform(queue);
+    }
+
+    fn write_camera_uniform(&self, queue: &wgpu::Queue) {
         queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::bytes_of(&camera.uniform()),
+            bytemuck::bytes_of(&self.camera.uniform(self.viewport_size)),
         );
     }
 
     pub const fn camera(&self) -> Camera2D {
         self.camera
+    }
+
+    pub const fn viewport_size(&self) -> [u32; 2] {
+        self.viewport_size
     }
 
     pub fn upload(
@@ -513,7 +534,7 @@ fn create_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(ANALYTIC_BLEND_STATE),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -610,11 +631,14 @@ mod tests {
 
     #[test]
     fn camera_maps_world_size_to_clip_scale() {
+        assert_eq!(size_of::<CameraUniform>(), 32);
         let camera =
             Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0)).expect("valid camera");
-        let uniform = camera.uniform();
+        let uniform = camera.uniform([1_920, 1_080]);
         assert_eq!(uniform.center, [3.0, -2.0]);
         assert_eq!(uniform.clip_scale, [0.125, 2.0 / 9.0]);
+        assert_eq!(uniform.viewport_size, [1_920.0, 1_080.0]);
+        assert_eq!(uniform.padding, [0.0; 2]);
     }
 
     #[test]
@@ -640,6 +664,10 @@ mod tests {
         let shader = include_str!("analytic.wgsl");
         assert!(shader.contains("fwidth(signed_distance)"));
         assert!(shader.contains("smoothstep(-half_width, half_width, signed_distance)"));
+        assert!(shader.contains("local_units_per_pixel"));
+        assert!(shader.contains("rectangle_signed_distance"));
+        assert!(shader.contains("capsule_signed_distance"));
+        assert!(shader.contains("mix(premultiplied(fill), premultiplied(stroke)"));
         assert!(
             shader
                 .find("let stroke_coverage =")
@@ -657,8 +685,10 @@ mod tests {
         let mut renderer = GpuRenderer::new(&device, FORMAT);
         let camera =
             Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
+        renderer.set_viewport(&queue, 64, 64);
         renderer.set_camera(&queue, camera);
         assert_eq!(renderer.camera(), camera);
+        assert_eq!(renderer.viewport_size(), [64, 64]);
 
         let frame = test_frame();
         let mut preparer = FramePreparer::new();

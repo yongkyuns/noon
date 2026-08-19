@@ -31,7 +31,8 @@ The first no-Python browser playback path is now implemented:
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
 - `web/` contains a serialized-scene demo that loops without Python;
 - semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
-- derivative-scaled shader coverage smooths analytic silhouettes and fill/stroke boundaries at the display's native pixel density;
+- derivative-scaled shader coverage and one-pixel proxy margins smooth analytic silhouettes and fill/stroke boundaries at the display's native pixel density;
+- rectangle strokes use local-distance geometry for uniform thickness, lines use rounded analytic caps, and premultiplied-alpha blending handles translucent style transitions correctly;
 - the browser demo applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
 - CI builds the release wasm package with a pinned `wasm-pack`, checks the demo JavaScript syntax, verifies the generated JavaScript/TypeScript API surface, and compiles the emitted WebAssembly module;
 - an optional module worker lazily loads pinned Pyodide, executes editable Python authoring code away from the main thread, and returns correlated versioned `PatchBatch` messages;
@@ -133,14 +134,16 @@ Initial renderer boundary and GPU implementation:
 - frame preparation separated from wgpu ownership
 - analytic instanced circles
 - analytic instanced rectangles
-- analytic instanced lines with semantic endpoints
+- analytic instanced lines with semantic endpoints and round caps
 - packed reusable instance buffers
 - no per-object draw calls for those primitive classes
 - structural test for 100k instances
 - upload byte/reallocation counters
 - draw-call/instance counters
 - `Camera2D` world-to-clip uniform (world coordinates remain renderer-independent)
-- WGSL shaders with derivative-based antialiasing for circle, rectangle, line, and stroke edges
+- WGSL shaders with pixel-aware proxy expansion and derivative-based antialiasing
+- local-distance rectangle strokes with uniform physical thickness
+- premultiplied-alpha fill/stroke coverage and compositing
 - current wgpu 29 API
 - native backend feature profile
 - WebGPU-only wasm feature profile
@@ -207,6 +210,7 @@ Important invariants already being tested include:
 - patch batches ordered and transactional
 - GPU instance preparation deterministic
 - analytic shader silhouettes and stroke transitions use derivative-scaled coverage rather than hard fragment thresholds
+- analytic proxy geometry includes a one-device-pixel margin, rectangle strokes remain locally uniform, and line endpoints use capsule distance fields
 - buffers reused rather than reallocated every frame
 - WebGPU and browser runtime cross-compile on CI
 
@@ -308,6 +312,7 @@ Implemented in this order:
 8. Added a lazy Pyodide module worker and small browser Python API that emit ordered semantic patches without owning the render loop, canvas, GPU, or runtime state.
 9. Added an editable Python demo, correlated worker protocol, pre-Rust envelope validation, and JavaScript/CPython tests.
 10. Replaced hard shader cutoffs with derivative-aware analytic coverage for smooth silhouettes and fill/stroke transitions, validated by shader contracts and a real WebGPU browser.
+11. Added pixel-aware proxy expansion, uniform local-distance rectangle strokes, capsule-based round line caps, and premultiplied-alpha compositing for translucent styles.
 
 Remaining order:
 
