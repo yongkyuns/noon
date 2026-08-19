@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    GeometryRef, ObjectId, Property, SceneDefinition, Style, TrackDefinition, TrackId, TrackTiming,
-    TrackValues, Transform2D,
+    GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch, Style, TimelineError,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -76,6 +76,33 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompilePatchError {
+    TooManyObjects(usize),
+    DuplicateObject(ObjectId),
+    UnknownObject(ObjectId),
+    DuplicateTrack(TrackId),
+    UnknownTrack(TrackId),
+    InvalidTrack(TimelineError),
+}
+
+impl std::fmt::Display for CompilePatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyObjects(count) => {
+                write!(formatter, "scene contains too many objects: {count}")
+            }
+            Self::DuplicateObject(id) => write!(formatter, "duplicate object id {}", id.get()),
+            Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
+            Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
+            Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
+            Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for CompilePatchError {}
+
 impl CompiledScene {
     pub fn compile(scene: &SceneDefinition) -> Result<Self, CompileError> {
         let mut object_indices = BTreeMap::new();
@@ -102,14 +129,7 @@ impl CompiledScene {
             objects[object_index as usize].dynamic.mark(track.property);
             tracks.push(compile_track(track, object_index));
         }
-
-        tracks.sort_by(|left, right| {
-            left.object_index
-                .cmp(&right.object_index)
-                .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
-                .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        sort_tracks(&mut tracks);
 
         Ok(Self {
             objects,
@@ -129,6 +149,132 @@ impl CompiledScene {
     pub fn object_index(&self, id: ObjectId) -> Option<u32> {
         self.object_indices.get(&id).copied()
     }
+
+    pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+        match patch {
+            ScenePatch::CreateObject(object) => {
+                if self.object_indices.contains_key(&object.id) {
+                    return Err(CompilePatchError::DuplicateObject(object.id));
+                }
+                let index = u32::try_from(self.objects.len())
+                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
+                self.objects.push(CompiledObject {
+                    id: object.id,
+                    geometry: object.geometry,
+                    base_transform: object.transform,
+                    base_style: object.style,
+                    dynamic: DynamicProperties::default(),
+                });
+                self.object_indices.insert(object.id, index);
+            }
+            ScenePatch::RemoveObject(id) => {
+                let index = self
+                    .object_index(*id)
+                    .ok_or(CompilePatchError::UnknownObject(*id))?;
+                self.objects.remove(index as usize);
+                self.tracks.retain(|track| track.object_index != index);
+                for track in &mut self.tracks {
+                    if track.object_index > index {
+                        track.object_index -= 1;
+                    }
+                }
+                self.rebuild_object_indices();
+                self.recompute_dynamic();
+            }
+            ScenePatch::SetTransform { object, transform } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                self.objects[index as usize].base_transform = *transform;
+            }
+            ScenePatch::SetStyle { object, style } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                self.objects[index as usize].base_style = *style;
+            }
+            ScenePatch::AddTrack(track) => {
+                if self.tracks.iter().any(|existing| existing.id == track.id) {
+                    return Err(CompilePatchError::DuplicateTrack(track.id));
+                }
+                let compiled = self.compile_patch_track(track)?;
+                self.tracks.push(compiled);
+                sort_tracks(&mut self.tracks);
+                self.recompute_dynamic();
+            }
+            ScenePatch::ReplaceTrack(track) => {
+                let position = self
+                    .tracks
+                    .iter()
+                    .position(|existing| existing.id == track.id)
+                    .ok_or(CompilePatchError::UnknownTrack(track.id))?;
+                let compiled = self.compile_patch_track(track)?;
+                self.tracks[position] = compiled;
+                sort_tracks(&mut self.tracks);
+                self.recompute_dynamic();
+            }
+            ScenePatch::RemoveTrack(id) => {
+                let position = self
+                    .tracks
+                    .iter()
+                    .position(|track| track.id == *id)
+                    .ok_or(CompilePatchError::UnknownTrack(*id))?;
+                self.tracks.remove(position);
+                self.recompute_dynamic();
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_patch_track(
+        &self,
+        track: &TrackDefinition,
+    ) -> Result<CompiledTrack, CompilePatchError> {
+        let object_index = self
+            .object_index(track.object)
+            .ok_or(CompilePatchError::UnknownObject(track.object))?;
+        if !track.timing.start_time.is_finite() {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::InvalidStartTime(track.timing.start_time),
+            ));
+        }
+        if !track.timing.duration.is_finite() || track.timing.duration <= 0.0 {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::InvalidDuration(track.timing.duration),
+            ));
+        }
+        let expected = track.property.value_kind();
+        let actual = track.values.value_kind();
+        if expected != actual {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::ValueTypeMismatch {
+                    property: track.property,
+                    expected,
+                    actual,
+                },
+            ));
+        }
+        Ok(compile_track(track, object_index))
+    }
+
+    fn rebuild_object_indices(&mut self) {
+        self.object_indices.clear();
+        for (index, object) in self.objects.iter().enumerate() {
+            let index = u32::try_from(index).expect("compiled object count already validated");
+            self.object_indices.insert(object.id, index);
+        }
+    }
+
+    fn recompute_dynamic(&mut self) {
+        for object in &mut self.objects {
+            object.dynamic = DynamicProperties::default();
+        }
+        for track in &self.tracks {
+            self.objects[track.object_index as usize]
+                .dynamic
+                .mark(track.property);
+        }
+    }
 }
 
 fn compile_track(track: &TrackDefinition, object_index: u32) -> CompiledTrack {
@@ -141,6 +287,16 @@ fn compile_track(track: &TrackDefinition, object_index: u32) -> CompiledTrack {
     }
 }
 
+fn sort_tracks(tracks: &mut [CompiledTrack]) {
+    tracks.sort_by(|left, right| {
+        left.object_index
+            .cmp(&right.object_index)
+            .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
+            .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
 const fn property_rank(property: Property) -> u8 {
     match property {
         Property::Position => 0,
@@ -151,7 +307,9 @@ const fn property_rank(property: Property) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Easing, GeometryRef, Property, TrackTiming, Vec2};
+    use noon_core::{
+        Easing, GeometryRef, ObjectDefinition, Property, ScenePatch, TrackTiming, TrackValues, Vec2,
+    };
 
     use super::*;
 
@@ -250,5 +408,35 @@ mod tests {
             CompiledScene::compile(&build()).expect("scene must compile"),
             CompiledScene::compile(&build()).expect("scene must compile")
         );
+    }
+
+    #[test]
+    fn compiled_patches_preserve_dense_identity_and_dynamic_flags() {
+        let mut scene = SceneDefinition::new();
+        let first = scene.add(GeometryRef::circle(1.0));
+        let second = scene.add(GeometryRef::rectangle(2.0, 2.0));
+        let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
+
+        compiled
+            .apply_patch(&ScenePatch::CreateObject(ObjectDefinition::new(
+                ObjectId::new(7),
+                GeometryRef::circle(3.0),
+            )))
+            .expect("valid patch");
+        assert_eq!(compiled.object_index(first), Some(0));
+        assert_eq!(compiled.object_index(second), Some(1));
+        assert_eq!(compiled.object_index(ObjectId::new(7)), Some(2));
+
+        let track = TrackDefinition {
+            id: TrackId::new(9),
+            object: second,
+            property: Property::Opacity,
+            values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        };
+        compiled
+            .apply_patch(&ScenePatch::AddTrack(track))
+            .expect("valid patch");
+        assert!(compiled.objects()[1].dynamic.opacity);
     }
 }
