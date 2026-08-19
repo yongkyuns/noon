@@ -1,9 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{
     ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError, TrackDefinition, TrackId,
     Transform2D,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScenePatch {
     CreateObject(ObjectDefinition),
     RemoveObject(ObjectId),

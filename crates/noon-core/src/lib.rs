@@ -12,9 +12,13 @@ mod timeline;
 pub use patch::*;
 pub use timeline::*;
 
+use serde::{Deserialize, Serialize};
+
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
         pub struct $name(u64);
 
         impl $name {
@@ -34,7 +38,7 @@ define_id!(GeometryId);
 define_id!(TrackId);
 define_id!(SignalId);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -49,7 +53,7 @@ impl Vec2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform2D {
     pub translation: Vec2,
     pub rotation: f32,
@@ -70,7 +74,7 @@ impl Default for Transform2D {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Color {
     pub red: f32,
     pub green: f32,
@@ -97,7 +101,7 @@ impl Color {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub min: Vec2,
     pub max: Vec2,
@@ -109,7 +113,7 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
@@ -128,7 +132,8 @@ impl Default for Style {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GeometryRef {
     Circle { radius: f32 },
     Rectangle { size: Vec2 },
@@ -147,7 +152,7 @@ impl GeometryRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObjectDefinition {
     pub id: ObjectId,
     pub geometry: GeometryRef,

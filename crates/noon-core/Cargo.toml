@@ -6,3 +6,4 @@ license = "MIT"
 description = "Renderer-independent semantic core for Noon"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }

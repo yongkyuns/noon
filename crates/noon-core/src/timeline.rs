@@ -1,13 +1,17 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{ObjectId, SceneDefinition, TrackId, Vec2};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Easing {
     #[default]
     Linear,
     EaseInOutCubic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Property {
     Position,
     Rotation,
@@ -29,7 +33,8 @@ impl Property {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TrackValues {
     Scalar { from: f32, to: f32 },
     Vec2 { from: Vec2, to: Vec2 },
@@ -44,7 +49,7 @@ impl TrackValues {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TrackTiming {
     pub start_time: f64,
     pub duration: f64,
@@ -61,7 +66,7 @@ impl TrackTiming {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TrackDefinition {
     pub id: TrackId,
     pub object: ObjectId,
