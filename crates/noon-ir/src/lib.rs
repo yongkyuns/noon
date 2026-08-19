@@ -29,18 +29,7 @@ impl SceneDocument {
 
     pub fn into_scene(self) -> Result<SceneDefinition, IrError> {
         ensure_version(self.version)?;
-        let mut scene = SceneDefinition::new();
-        for object in self.objects {
-            scene
-                .apply_patch(ScenePatch::CreateObject(object))
-                .map_err(IrError::Patch)?;
-        }
-        for track in self.tracks {
-            scene
-                .apply_patch(ScenePatch::AddTrack(track))
-                .map_err(IrError::Patch)?;
-        }
-        Ok(scene)
+        SceneDefinition::from_parts(self.objects, self.tracks).map_err(IrError::Patch)
     }
 }
 

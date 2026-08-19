@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::{
     ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError, TrackDefinition, TrackId,
@@ -51,6 +52,52 @@ impl std::fmt::Display for PatchError {
 impl std::error::Error for PatchError {}
 
 impl SceneDefinition {
+    /// Builds a scene from transported definitions in linear expected time while
+    /// preserving document order and validating all stable identities.
+    pub fn from_parts(
+        objects: Vec<ObjectDefinition>,
+        tracks: Vec<TrackDefinition>,
+    ) -> Result<Self, PatchError> {
+        let mut object_ids = HashSet::with_capacity(objects.len());
+        let mut next_object_id = 0;
+        for object in &objects {
+            if !object_ids.insert(object.id) {
+                return Err(PatchError::DuplicateObject(object.id));
+            }
+            let next = object
+                .id
+                .get()
+                .checked_add(1)
+                .ok_or(PatchError::ObjectIdExhausted)?;
+            next_object_id = next_object_id.max(next);
+        }
+
+        let mut track_ids = HashSet::with_capacity(tracks.len());
+        let mut next_track_id = 0;
+        for track in &tracks {
+            if !track_ids.insert(track.id) {
+                return Err(PatchError::DuplicateTrack(track.id));
+            }
+            if !object_ids.contains(&track.object) {
+                return Err(PatchError::UnknownObject(track.object));
+            }
+            Self::validate_track_fields(track)?;
+            let next = track
+                .id
+                .get()
+                .checked_add(1)
+                .ok_or(PatchError::TrackIdExhausted)?;
+            next_track_id = next_track_id.max(next);
+        }
+
+        Ok(Self {
+            objects,
+            next_object_id,
+            tracks,
+            next_track_id,
+        })
+    }
+
     pub fn apply_patch(&mut self, patch: ScenePatch) -> Result<(), PatchError> {
         match patch {
             ScenePatch::CreateObject(object) => self.insert_object(object),
@@ -136,6 +183,10 @@ impl SceneDefinition {
         if self.object(track.object).is_none() {
             return Err(PatchError::UnknownObject(track.object));
         }
+        Self::validate_track_fields(track)
+    }
+
+    fn validate_track_fields(track: &TrackDefinition) -> Result<(), PatchError> {
         if !track.timing.start_time.is_finite() {
             return Err(PatchError::InvalidTrack(TimelineError::InvalidStartTime(
                 track.timing.start_time,
@@ -253,5 +304,60 @@ mod tests {
             .apply_patch(ScenePatch::RemoveTrack(id))
             .expect("valid patch");
         assert!(scene.tracks().is_empty());
+    }
+
+    #[test]
+    fn bulk_construction_preserves_order_and_advances_ids() {
+        let objects = vec![
+            ObjectDefinition::new(ObjectId::new(7), GeometryRef::circle(1.0)),
+            ObjectDefinition::new(ObjectId::new(2), GeometryRef::rectangle(2.0, 3.0)),
+        ];
+        let tracks = vec![TrackDefinition {
+            id: TrackId::new(4),
+            object: ObjectId::new(2),
+            property: Property::Opacity,
+            values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        }];
+
+        let mut scene = SceneDefinition::from_parts(objects.clone(), tracks.clone())
+            .expect("bulk scene must be valid");
+
+        assert_eq!(scene.objects(), objects);
+        assert_eq!(scene.tracks(), tracks);
+        assert_eq!(scene.add(GeometryRef::circle(0.5)), ObjectId::new(8));
+        assert_eq!(
+            scene
+                .animate_scalar(
+                    ObjectId::new(7),
+                    Property::Opacity,
+                    1.0,
+                    0.0,
+                    TrackTiming::new(0.0, 1.0, Easing::Linear),
+                )
+                .expect("track must be valid"),
+            TrackId::new(5)
+        );
+    }
+
+    #[test]
+    fn bulk_construction_rejects_duplicate_and_dangling_ids() {
+        let duplicate = ObjectDefinition::new(ObjectId::new(3), GeometryRef::circle(1.0));
+        assert!(matches!(
+            SceneDefinition::from_parts(vec![duplicate.clone(), duplicate], Vec::new()),
+            Err(PatchError::DuplicateObject(ObjectId(3)))
+        ));
+
+        let dangling_track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(99),
+            property: Property::Opacity,
+            values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        };
+        assert!(matches!(
+            SceneDefinition::from_parts(Vec::new(), vec![dangling_track]),
+            Err(PatchError::UnknownObject(ObjectId(99)))
+        ));
     }
 }
