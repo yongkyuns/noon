@@ -71,6 +71,41 @@
         box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 45%);
       }
 
+      .controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid #52658f;
+        border-radius: 0.7rem;
+        padding: 0.65rem 0.9rem;
+        background: #17213c;
+        color: #f6f7fb;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        background: #223055;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.5;
+      }
+
+      #patch-status {
+        color: #8fa0c3;
+        font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: right;
+      }
+
       @media (max-width: 44rem) {
         header {
           display: block;
@@ -83,6 +118,15 @@
 
         canvas {
           aspect-ratio: 4 / 3;
+        }
+
+        .controls {
+          align-items: start;
+          flex-direction: column;
+        }
+
+        #patch-status {
+          text-align: left;
         }
       }
     </style>
@@ -97,6 +141,10 @@
         <output id="status">Starting WebGPU…</output>
       </header>
       <canvas id="scene" aria-label="Animated Noon scene"></canvas>
+      <section class="controls" aria-label="Live scene controls">
+        <button id="apply-patch" type="button" disabled>Apply live patch</button>
+        <output id="patch-status">Waiting for the runtime…</output>
+      </section>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

@@ -31,9 +31,10 @@ The first no-Python browser playback path is now implemented:
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
 - `web/` contains a serialized-scene demo that loops without Python;
 - semantic endpoint-based lines now serialize through the IR and render as packed analytic instances without tessellation;
+- the browser demo constructs versioned `PatchBatch` JSON in JavaScript, applies ordered palette changes transactionally, displays the accepted sequence, and keeps the playhead running;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should demonstrate ordered live `PatchBatch` mutation against the running browser player. Browser build automation/headless smoke coverage should be added when the CI cost and WebGPU runner support are acceptable.
+The next coherent slice should add browser package build automation and, if the runner's WebGPU support is reliable, a semantic headless smoke check. Do not make screenshot equality the browser correctness oracle.
 
 ## Product/architecture goal
 
@@ -152,6 +153,7 @@ First browser/runtime control slice:
 - transactional patch batches: if a later patch fails, the entire batch leaves scene/runtime unchanged
 - current playhead is preserved across live patches
 - wasm-bindgen wrapper exposing the same runtime semantics to JavaScript
+- browser demo applying ordered raw-JSON patch batches while playback continues
 - native behavioral tests plus `wasm32-unknown-unknown` compile in CI
 
 This gives the control path:
@@ -292,9 +294,8 @@ Implemented in this order:
 
 Remaining order:
 
-1. Add browser-side patch demo showing a running animation changing through ordered `PatchBatch` messages.
-2. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
-3. Then integrate a Pyodide worker as the live Python authoring/control plane.
+1. Add browser build/check automation; if practical add a headless browser smoke test, but do not make browser screenshot equality the semantic test oracle.
+2. Then integrate a Pyodide worker as the live Python authoring/control plane.
 
 ## Browser/Python architecture to preserve
 

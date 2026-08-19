@@ -623,4 +623,37 @@ mod tests {
         assert_eq!(player.scene_json().expect("scene must serialize"), before);
         assert_eq!(player.next_sequence(), 0);
     }
+
+    #[test]
+    fn javascript_shaped_style_batch_applies_transactionally() {
+        let mut player = player();
+        player.seek(1.75).expect("seek must succeed");
+        let json = r#"{
+            "version": 1,
+            "sequence": 0,
+            "patches": [{
+                "set_style": {
+                    "object": 0,
+                    "style": {
+                        "fill": {"red": 1.0, "green": 0.75, "blue": 0.2, "alpha": 1.0},
+                        "stroke": null,
+                        "stroke_width": 0.04,
+                        "opacity": 0.8
+                    }
+                }
+            }]
+        }"#;
+
+        player
+            .apply_patch_batch_json(json)
+            .expect("JavaScript-shaped batch must apply");
+
+        assert_eq!(player.frame().time, 1.75);
+        assert_eq!(player.frame().objects[0].style.opacity, 0.8);
+        assert_eq!(
+            player.frame().objects[0].style.fill,
+            Some(noon_core::Color::rgba(1.0, 0.75, 0.2, 1.0))
+        );
+        assert_eq!(player.next_sequence(), 1);
+    }
 }
