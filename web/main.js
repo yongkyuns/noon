@@ -198,6 +198,7 @@ try {
         status.value = `${player.objectCount()} objects · ${player.lastDrawCalls()} draws · ${player.time().toFixed(2)} s`;
         status.dataset.state = "running";
         status.dataset.instances = String(player.lastInstancesDrawn());
+        status.dataset.uploadBytes = String(player.lastBytesUploaded());
         lastStatusUpdate = timestamp;
       }
       requestAnimationFrame(frame);

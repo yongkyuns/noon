@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{ObjectId, PatchError, SceneDefinition, ScenePatch};
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
-use noon_runtime::{EvaluationError, FrameState, SceneInstance};
+use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
 #[derive(Debug)]
 pub enum PlayerError {
@@ -104,6 +104,14 @@ impl ScenePlayer {
 
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, PlayerError> {
         Ok(self.instance.seek(time)?)
+    }
+
+    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PlayerError> {
+        Ok(self.instance.advance_to(time)?)
+    }
+
+    pub fn take_frame_changes(&mut self) -> FrameChanges {
+        self.instance.take_frame_changes()
     }
 
     pub fn apply_patch_batch_json(&mut self, json: &str) -> Result<&FrameState, PlayerError> {
@@ -519,7 +527,7 @@ mod wasm {
         #[wasm_bindgen(js_name = renderFrame)]
         pub fn render_frame(&mut self, timestamp_ms: f64) -> Result<bool, JsValue> {
             let scene_time = self.clock.scene_time(timestamp_ms).map_err(js_error)?;
-            self.player.seek(scene_time).map_err(js_error)?;
+            self.player.advance_to(scene_time).map_err(js_error)?;
             self.render_current_frame()
         }
 
@@ -602,7 +610,10 @@ mod wasm {
                 return Ok(false);
             }
 
-            let prepared = self.preparer.prepare(self.player.frame());
+            let changes = self.player.take_frame_changes();
+            let prepared = self
+                .preparer
+                .prepare_incremental(self.player.frame(), &changes);
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
 

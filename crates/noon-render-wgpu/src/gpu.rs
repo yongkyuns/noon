@@ -357,51 +357,64 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedFrame<'_>,
     ) -> UploadStats {
-        let circle_bytes = bytemuck::cast_slice(prepared.circles);
-        let rectangle_bytes = bytemuck::cast_slice(prepared.rectangles);
-        let line_bytes = bytemuck::cast_slice(prepared.lines);
+        let circle_bytes = std::mem::size_of_val(prepared.circles);
+        let rectangle_bytes = std::mem::size_of_val(prepared.rectangles);
+        let line_bytes = std::mem::size_of_val(prepared.lines);
         let mut buffer_reallocations = 0;
 
-        if ensure_capacity(
+        let circle_reallocated = ensure_capacity(
             device,
             &mut self.circle_buffer,
             &mut self.circle_capacity_bytes,
-            circle_bytes.len(),
+            circle_bytes,
             "Noon circle instances",
-        ) {
+        );
+        if circle_reallocated {
             buffer_reallocations += 1;
         }
-        if ensure_capacity(
+        let rectangle_reallocated = ensure_capacity(
             device,
             &mut self.rectangle_buffer,
             &mut self.rectangle_capacity_bytes,
-            rectangle_bytes.len(),
+            rectangle_bytes,
             "Noon rectangle instances",
-        ) {
+        );
+        if rectangle_reallocated {
             buffer_reallocations += 1;
         }
-        if ensure_capacity(
+        let line_reallocated = ensure_capacity(
             device,
             &mut self.line_buffer,
             &mut self.line_capacity_bytes,
-            line_bytes.len(),
+            line_bytes,
             "Noon line instances",
-        ) {
+        );
+        if line_reallocated {
             buffer_reallocations += 1;
         }
 
-        if !circle_bytes.is_empty() {
-            queue.write_buffer(&self.circle_buffer, 0, circle_bytes);
-        }
-        if !rectangle_bytes.is_empty() {
-            queue.write_buffer(&self.rectangle_buffer, 0, rectangle_bytes);
-        }
-        if !line_bytes.is_empty() {
-            queue.write_buffer(&self.line_buffer, 0, line_bytes);
-        }
+        let bytes_uploaded = upload_dirty(
+            queue,
+            &self.circle_buffer,
+            prepared.circles,
+            prepared.circle_dirty_ranges,
+            circle_reallocated,
+        ) + upload_dirty(
+            queue,
+            &self.rectangle_buffer,
+            prepared.rectangles,
+            prepared.rectangle_dirty_ranges,
+            rectangle_reallocated,
+        ) + upload_dirty(
+            queue,
+            &self.line_buffer,
+            prepared.lines,
+            prepared.line_dirty_ranges,
+            line_reallocated,
+        );
 
         UploadStats {
-            bytes_uploaded: circle_bytes.len() + rectangle_bytes.len() + line_bytes.len(),
+            bytes_uploaded,
             buffer_reallocations,
         }
     }
@@ -580,10 +593,36 @@ fn ensure_capacity(
     true
 }
 
+fn upload_dirty<T: Pod>(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    instances: &[T],
+    dirty_ranges: &[std::ops::Range<usize>],
+    force_full_upload: bool,
+) -> usize {
+    if instances.is_empty() {
+        return 0;
+    }
+    if force_full_upload {
+        let bytes = bytemuck::cast_slice(instances);
+        queue.write_buffer(buffer, 0, bytes);
+        return bytes.len();
+    }
+
+    let stride = size_of::<T>();
+    let mut bytes_uploaded = 0;
+    for range in dirty_ranges {
+        let bytes = bytemuck::cast_slice(&instances[range.clone()]);
+        queue.write_buffer(buffer, (range.start * stride) as wgpu::BufferAddress, bytes);
+        bytes_uploaded += bytes.len();
+    }
+    bytes_uploaded
+}
+
 #[cfg(test)]
 mod tests {
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
-    use noon_runtime::{FrameObjectState, FrameState};
+    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 
     use crate::FramePreparer;
 
@@ -690,7 +729,7 @@ mod tests {
         assert_eq!(renderer.camera(), camera);
         assert_eq!(renderer.viewport_size(), [64, 64]);
 
-        let frame = test_frame();
+        let mut frame = test_frame();
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
 
@@ -706,8 +745,16 @@ mod tests {
         assert!(renderer.rectangle_capacity_bytes() >= size_of::<RectangleInstance>());
         assert!(renderer.line_capacity_bytes() >= size_of::<LineInstance>());
 
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
         let second_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(second_upload.buffer_reallocations, 0);
+        assert_eq!(second_upload.bytes_uploaded, 0);
+
+        frame.objects[0].transform.translation = Vec2::new(0.25, -0.5);
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let partial_upload = renderer.upload(&device, &queue, &prepared);
+        assert_eq!(partial_upload.buffer_reallocations, 0);
+        assert_eq!(partial_upload.bytes_uploaded, size_of::<CircleInstance>());
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Noon noop render target"),

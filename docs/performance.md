@@ -69,3 +69,29 @@ After adding preflighted in-place transactions for style and transform patches, 
 | 100,000 | 0.127 ms | 0.116 ms |
 
 At 100k objects this is roughly 150x faster than the original cloning path and more than 130x below a 16.7 ms frame budget. The fast path preflights every referenced object before mutation and then updates only the affected compiled/base/frame fields, reapplying active position, rotation, or opacity tracks for that object. Structural create/remove/track batches still use the conservative whole-state clone fallback.
+
+## Incremental frame preparation and upload volume
+
+Run the renderer preparation benchmark from the repository root:
+
+```bash
+cargo run --release -p noon-render-wgpu --example frame_preparation_perf
+```
+
+It compares a complete packed-instance rebuild with an unchanged frame and a one-object transform change. The upload column is the exact payload passed to `wgpu::Queue::write_buffer`; it is a structural byte count, not a GPU completion-time estimate.
+
+On the same 2026-08-19 baseline machine (10 warmups, 100 samples):
+
+| Objects | Operation | Median | p95 | Instances repacked | Upload bytes |
+|---:|---|---:|---:|---:|---:|
+| 1,000 | full rebuild | 0.011037 ms | 0.011116 ms | 1,000 | 88,000 |
+| 1,000 | unchanged | 0.000065 ms | 0.000067 ms | 0 | 0 |
+| 1,000 | one changed | 0.000090 ms | 0.000091 ms | 1 | 88 |
+| 10,000 | full rebuild | 0.113858 ms | 0.114862 ms | 10,000 | 880,000 |
+| 10,000 | unchanged | 0.000061 ms | 0.000062 ms | 0 | 0 |
+| 10,000 | one changed | 0.000086 ms | 0.000088 ms | 1 | 88 |
+| 100,000 | full rebuild | 1.539001 ms | 2.058757 ms | 100,000 | 8,800,000 |
+| 100,000 | unchanged | 0.000061 ms | 0.000062 ms | 0 | 0 |
+| 100,000 | one changed | 0.000079 ms | 0.000080 ms | 1 | 88 |
+
+For a static 100k-object scene, frame preparation is now constant-time after the initial build and the per-frame instance upload falls from 8.8 MB to zero. A single transform/style change repacks and uploads one 88-byte instance record. At 60 Hz, that removes the previous static-scene upload pressure of roughly 528 MB/s. These measurements isolate CPU instance preparation; they do not include runtime evaluation, browser/Pyodide work, command encoding, rasterization, or presentation.

@@ -12,7 +12,8 @@ pub use gpu::*;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D};
-use noon_runtime::FrameState;
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use std::ops::Range;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -93,6 +94,8 @@ pub struct RenderStats {
     pub instance_count: usize,
     pub unsupported_count: usize,
     pub capacity_growths: usize,
+    pub instances_repacked: usize,
+    pub dirty_instance_count: usize,
 }
 
 #[derive(Debug)]
@@ -105,7 +108,18 @@ pub struct PreparedFrame<'a> {
     pub line_ids: &'a [ObjectId],
     pub lines: &'a [LineInstance],
     pub unsupported: &'a [ObjectId],
+    pub circle_dirty_ranges: &'a [Range<usize>],
+    pub rectangle_dirty_ranges: &'a [Range<usize>],
+    pub line_dirty_ranges: &'a [Range<usize>],
     pub stats: RenderStats,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedSlot {
+    Circle(usize),
+    Rectangle(usize),
+    Line(usize),
+    Unsupported(usize),
 }
 
 #[derive(Debug, Default)]
@@ -117,6 +131,11 @@ pub struct FramePreparer {
     line_ids: Vec<ObjectId>,
     lines: Vec<LineInstance>,
     unsupported: Vec<ObjectId>,
+    slots: Vec<PreparedSlot>,
+    circle_dirty_ranges: Vec<Range<usize>>,
+    rectangle_dirty_ranges: Vec<Range<usize>>,
+    line_dirty_ranges: Vec<Range<usize>>,
+    initialized: bool,
 }
 
 impl FramePreparer {
@@ -125,6 +144,66 @@ impl FramePreparer {
     }
 
     pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
+        self.rebuild(frame)
+    }
+
+    /// Updates cached instance records using the runtime's consumed change set.
+    ///
+    /// Structural changes and seeks rebuild all records. Forward animation and
+    /// value patches repack only the object indices named by `changes`.
+    pub fn prepare_incremental<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+    ) -> PreparedFrame<'a> {
+        if !self.initialized
+            || changes.is_all()
+            || self.slots.len() != frame.objects.len()
+            || !changes
+                .object_indices()
+                .iter()
+                .all(|&index| self.slot_matches(frame, index))
+        {
+            return self.rebuild(frame);
+        }
+
+        self.clear_dirty_ranges();
+        let mut instances_repacked = 0;
+        for &object_index in changes.object_indices() {
+            let object = &frame.objects[object_index];
+            match self.slots[object_index] {
+                PreparedSlot::Circle(index) => {
+                    let packed = pack_circle(object);
+                    instances_repacked += 1;
+                    if self.circles[index] != packed {
+                        self.circles[index] = packed;
+                        push_dirty_range(&mut self.circle_dirty_ranges, index);
+                    }
+                }
+                PreparedSlot::Rectangle(index) => {
+                    let packed = pack_rectangle(object);
+                    instances_repacked += 1;
+                    if self.rectangles[index] != packed {
+                        self.rectangles[index] = packed;
+                        push_dirty_range(&mut self.rectangle_dirty_ranges, index);
+                    }
+                }
+                PreparedSlot::Line(index) => {
+                    let packed = pack_line(object);
+                    instances_repacked += 1;
+                    if self.lines[index] != packed {
+                        self.lines[index] = packed;
+                        push_dirty_range(&mut self.line_dirty_ranges, index);
+                    }
+                }
+                PreparedSlot::Unsupported(_) => {}
+            }
+        }
+
+        self.prepared_frame(frame.time, 0, instances_repacked)
+    }
+
+    fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
         let capacities_before = self.capacities();
 
         self.circle_ids.clear();
@@ -134,39 +213,45 @@ impl FramePreparer {
         self.line_ids.clear();
         self.lines.clear();
         self.unsupported.clear();
+        self.slots.clear();
+        self.clear_dirty_ranges();
 
         for object in &frame.objects {
             match object.geometry {
-                GeometryRef::Circle { radius } => {
+                GeometryRef::Circle { .. } => {
+                    self.slots.push(PreparedSlot::Circle(self.circles.len()));
                     self.circle_ids.push(object.id);
-                    self.circles.push(CircleInstance {
-                        transform: object.transform.into(),
-                        style: object.style.into(),
-                        radius,
-                        padding: [0.0; 3],
-                    });
+                    self.circles.push(pack_circle(object));
                 }
-                GeometryRef::Rectangle { size } => {
+                GeometryRef::Rectangle { .. } => {
+                    self.slots
+                        .push(PreparedSlot::Rectangle(self.rectangles.len()));
                     self.rectangle_ids.push(object.id);
-                    self.rectangles.push(RectangleInstance {
-                        transform: object.transform.into(),
-                        style: object.style.into(),
-                        size: [size.x, size.y],
-                        padding: [0.0; 2],
-                    });
+                    self.rectangles.push(pack_rectangle(object));
                 }
-                GeometryRef::Line { start, end } => {
+                GeometryRef::Line { .. } => {
+                    self.slots.push(PreparedSlot::Line(self.lines.len()));
                     self.line_ids.push(object.id);
-                    self.lines.push(LineInstance {
-                        transform: object.transform.into(),
-                        style: object.style.into(),
-                        start: [start.x, start.y],
-                        end: [end.x, end.y],
-                    });
+                    self.lines.push(pack_line(object));
                 }
-                GeometryRef::External(_) => self.unsupported.push(object.id),
+                GeometryRef::External(_) => {
+                    self.slots
+                        .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                    self.unsupported.push(object.id);
+                }
             }
         }
+
+        if !self.circles.is_empty() {
+            self.circle_dirty_ranges.push(0..self.circles.len());
+        }
+        if !self.rectangles.is_empty() {
+            self.rectangle_dirty_ranges.push(0..self.rectangles.len());
+        }
+        if !self.lines.is_empty() {
+            self.line_dirty_ranges.push(0..self.lines.len());
+        }
+        self.initialized = true;
 
         let capacities_after = self.capacities();
         let capacity_growths = capacities_before
@@ -175,19 +260,27 @@ impl FramePreparer {
             .filter(|(before, after)| after > before)
             .count();
 
-        let mut batch_count = 0;
-        if !self.circles.is_empty() {
-            batch_count += 1;
-        }
-        if !self.rectangles.is_empty() {
-            batch_count += 1;
-        }
-        if !self.lines.is_empty() {
-            batch_count += 1;
-        }
+        self.prepared_frame(
+            frame.time,
+            capacity_growths,
+            self.circles.len() + self.rectangles.len() + self.lines.len(),
+        )
+    }
 
+    fn prepared_frame(
+        &self,
+        time: f64,
+        capacity_growths: usize,
+        instances_repacked: usize,
+    ) -> PreparedFrame<'_> {
+        let batch_count = usize::from(!self.circles.is_empty())
+            + usize::from(!self.rectangles.is_empty())
+            + usize::from(!self.lines.is_empty());
+        let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
+            + dirty_len(&self.rectangle_dirty_ranges)
+            + dirty_len(&self.line_dirty_ranges);
         PreparedFrame {
-            time: frame.time,
+            time,
             circle_ids: &self.circle_ids,
             circles: &self.circles,
             rectangle_ids: &self.rectangle_ids,
@@ -195,16 +288,52 @@ impl FramePreparer {
             line_ids: &self.line_ids,
             lines: &self.lines,
             unsupported: &self.unsupported,
+            circle_dirty_ranges: &self.circle_dirty_ranges,
+            rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
+            line_dirty_ranges: &self.line_dirty_ranges,
             stats: RenderStats {
                 batch_count,
                 instance_count: self.circles.len() + self.rectangles.len() + self.lines.len(),
                 unsupported_count: self.unsupported.len(),
                 capacity_growths,
+                instances_repacked,
+                dirty_instance_count,
             },
         }
     }
 
-    fn capacities(&self) -> [usize; 7] {
+    fn clear_dirty_ranges(&mut self) {
+        self.circle_dirty_ranges.clear();
+        self.rectangle_dirty_ranges.clear();
+        self.line_dirty_ranges.clear();
+    }
+
+    fn slot_matches(&self, frame: &FrameState, object_index: usize) -> bool {
+        let Some(object) = frame.objects.get(object_index) else {
+            return false;
+        };
+        match self.slots.get(object_index) {
+            Some(PreparedSlot::Circle(index)) => {
+                matches!(object.geometry, GeometryRef::Circle { .. })
+                    && self.circle_ids.get(*index) == Some(&object.id)
+            }
+            Some(PreparedSlot::Rectangle(index)) => {
+                matches!(object.geometry, GeometryRef::Rectangle { .. })
+                    && self.rectangle_ids.get(*index) == Some(&object.id)
+            }
+            Some(PreparedSlot::Line(index)) => {
+                matches!(object.geometry, GeometryRef::Line { .. })
+                    && self.line_ids.get(*index) == Some(&object.id)
+            }
+            Some(PreparedSlot::Unsupported(index)) => {
+                matches!(object.geometry, GeometryRef::External(_))
+                    && self.unsupported.get(*index) == Some(&object.id)
+            }
+            None => false,
+        }
+    }
+
+    fn capacities(&self) -> [usize; 11] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -213,8 +342,62 @@ impl FramePreparer {
             self.line_ids.capacity(),
             self.lines.capacity(),
             self.unsupported.capacity(),
+            self.slots.capacity(),
+            self.circle_dirty_ranges.capacity(),
+            self.rectangle_dirty_ranges.capacity(),
+            self.line_dirty_ranges.capacity(),
         ]
     }
+}
+
+fn pack_circle(object: &FrameObjectState) -> CircleInstance {
+    let GeometryRef::Circle { radius } = object.geometry else {
+        unreachable!("circle slot must retain circle geometry")
+    };
+    CircleInstance {
+        transform: object.transform.into(),
+        style: object.style.into(),
+        radius,
+        padding: [0.0; 3],
+    }
+}
+
+fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
+    let GeometryRef::Rectangle { size } = object.geometry else {
+        unreachable!("rectangle slot must retain rectangle geometry")
+    };
+    RectangleInstance {
+        transform: object.transform.into(),
+        style: object.style.into(),
+        size: [size.x, size.y],
+        padding: [0.0; 2],
+    }
+}
+
+fn pack_line(object: &FrameObjectState) -> LineInstance {
+    let GeometryRef::Line { start, end } = object.geometry else {
+        unreachable!("line slot must retain line geometry")
+    };
+    LineInstance {
+        transform: object.transform.into(),
+        style: object.style.into(),
+        start: [start.x, start.y],
+        end: [end.x, end.y],
+    }
+}
+
+fn push_dirty_range(ranges: &mut Vec<Range<usize>>, index: usize) {
+    if let Some(last) = ranges.last_mut() {
+        if last.end == index {
+            last.end += 1;
+            return;
+        }
+    }
+    ranges.push(index..index + 1);
+}
+
+fn dirty_len(ranges: &[Range<usize>]) -> usize {
+    ranges.iter().map(Range::len).sum()
 }
 
 fn pack_optional_color(color: Option<Color>) -> ([f32; 4], u32) {
@@ -382,5 +565,60 @@ mod tests {
         assert_eq!(prepared.stats.instance_count, 0);
         assert_eq!(prepared.stats.unsupported_count, 1);
         assert_eq!(prepared.unsupported, &[ObjectId::new(42)]);
+    }
+
+    #[test]
+    fn unchanged_incremental_frame_skips_all_repacking() {
+        let frame = frame(
+            (0..100_000_u64)
+                .map(|id| object(id, GeometryRef::circle(1.0)))
+                .collect(),
+        );
+        let mut preparer = FramePreparer::new();
+        assert_eq!(preparer.prepare(&frame).stats.instances_repacked, 100_000);
+
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+
+        assert_eq!(prepared.stats.instances_repacked, 0);
+        assert_eq!(prepared.stats.dirty_instance_count, 0);
+        assert!(prepared.circle_dirty_ranges.is_empty());
+    }
+
+    #[test]
+    fn changed_objects_repack_and_dirty_only_their_packed_ranges() {
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::rectangle(2.0, 3.0)),
+            object(3, GeometryRef::circle(4.0)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        frame.objects[2].transform.translation = Vec2::new(3.0, 4.0);
+
+        let changes = FrameChanges::objects(vec![2]);
+        let prepared = preparer.prepare_incremental(&frame, &changes);
+
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.circle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.circle_dirty_ranges[0], 1..2);
+        assert!(prepared.rectangle_dirty_ranges.is_empty());
+        assert_eq!(prepared.circles[1].transform.translation, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn incompatible_incremental_layout_falls_back_to_full_rebuild() {
+        let mut frame = frame(vec![object(1, GeometryRef::circle(1.0))]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        frame.objects[0].geometry = GeometryRef::rectangle(2.0, 3.0);
+
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert!(prepared.circles.is_empty());
+        assert_eq!(prepared.rectangle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.rectangle_dirty_ranges[0], 0..1);
     }
 }

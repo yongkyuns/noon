@@ -21,6 +21,67 @@ pub struct FrameState {
     pub objects: Vec<FrameObjectState>,
 }
 
+/// Object-level changes accumulated since the renderer last consumed them.
+///
+/// A full invalidation is used after seeks and structural edits. Forward
+/// evaluation and value-only patches retain a compact, deduplicated list of
+/// changed object indices instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameChanges {
+    all: bool,
+    object_indices: Vec<usize>,
+}
+
+impl FrameChanges {
+    pub fn all() -> Self {
+        Self {
+            all: true,
+            object_indices: Vec::new(),
+        }
+    }
+
+    pub fn objects(mut object_indices: Vec<usize>) -> Self {
+        object_indices.sort_unstable();
+        object_indices.dedup();
+        Self {
+            all: false,
+            object_indices,
+        }
+    }
+
+    pub const fn is_all(&self) -> bool {
+        self.all
+    }
+
+    pub fn object_indices(&self) -> &[usize] {
+        &self.object_indices
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        !self.all && self.object_indices.is_empty()
+    }
+
+    fn invalidate_all(&mut self) {
+        self.all = true;
+        self.object_indices.clear();
+    }
+
+    fn insert(&mut self, object_index: usize) {
+        if self.all || self.object_indices.last() == Some(&object_index) {
+            return;
+        }
+        if self
+            .object_indices
+            .last()
+            .is_none_or(|last| *last < object_index)
+        {
+            self.object_indices.push(object_index);
+        } else if let Err(position) = self.object_indices.binary_search(&object_index) {
+            self.object_indices.insert(position, object_index);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EvaluationStats {
     pub groups_evaluated: usize,
@@ -58,6 +119,7 @@ pub struct SceneInstance {
     frame: FrameState,
     groups: Vec<TrackGroup>,
     last_stats: EvaluationStats,
+    changes: FrameChanges,
 }
 
 impl SceneInstance {
@@ -69,6 +131,7 @@ impl SceneInstance {
             frame,
             groups,
             last_stats: EvaluationStats::default(),
+            changes: FrameChanges::all(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -80,6 +143,11 @@ impl SceneInstance {
 
     pub const fn last_stats(&self) -> EvaluationStats {
         self.last_stats
+    }
+
+    /// Drains changes accumulated by evaluation and live patches.
+    pub fn take_frame_changes(&mut self) -> FrameChanges {
+        std::mem::take(&mut self.changes)
     }
 
     pub fn contains_object(&self, id: ObjectId) -> bool {
@@ -144,6 +212,7 @@ impl SceneInstance {
             .compiled
             .object_index(object)
             .ok_or(CompilePatchError::UnknownObject(object))? as usize;
+        let before = self.frame.objects[index].clone();
         self.compiled.apply_patch(patch)?;
 
         match patch {
@@ -156,6 +225,9 @@ impl SceneInstance {
                 self.reapply_properties(index, &[Property::Opacity]);
             }
             _ => unreachable!("value patch helper only accepts transform or style patches"),
+        }
+        if self.frame.objects[index] != before {
+            self.changes.insert(index);
         }
         Ok(())
     }
@@ -177,6 +249,7 @@ impl SceneInstance {
 
     fn seek_unchecked(&mut self, time: f64) {
         self.frame = base_frame(&self.compiled, time);
+        self.changes.invalidate_all();
         let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
 
@@ -194,6 +267,7 @@ impl SceneInstance {
         self.frame.time = time;
         let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
+        let changes = &mut self.changes;
 
         for group in &mut self.groups {
             let slice = &tracks[group.start..group.end];
@@ -201,7 +275,9 @@ impl SceneInstance {
                 group.cursor += 1;
                 stats.tracks_advanced += 1;
             }
-            apply_group(&mut self.frame, slice, group, time);
+            if apply_group(&mut self.frame, slice, group, time) {
+                changes.insert(group.object_index);
+            }
             stats.groups_evaluated += 1;
         }
 
@@ -267,26 +343,38 @@ fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> 
     low
 }
 
-fn apply_group(frame: &mut FrameState, tracks: &[CompiledTrack], group: &TrackGroup, time: f64) {
+fn apply_group(
+    frame: &mut FrameState,
+    tracks: &[CompiledTrack],
+    group: &TrackGroup,
+    time: f64,
+) -> bool {
     if group.cursor == 0 {
-        return;
+        return false;
     }
     let track = &tracks[group.cursor - 1];
     let value = interpolate(track, time);
     let object = &mut frame.objects[group.object_index];
 
-    match (group.property, value) {
+    let changed = match (group.property, value) {
         (Property::Position, EvaluatedValue::Vec2(value)) => {
+            let changed = object.transform.translation != value;
             object.transform.translation = value;
+            changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
+            let changed = object.transform.rotation != value;
             object.transform.rotation = value;
+            changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
+            let changed = object.style.opacity != value;
             object.style.opacity = value;
+            changed
         }
         _ => unreachable!("compiled track value type must match its property"),
-    }
+    };
+    changed
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -574,5 +662,50 @@ mod tests {
         );
         assert_eq!(instance.frame().objects[0].style.opacity, 0.5);
         assert_eq!(instance.frame().time, 1.0);
+    }
+
+    #[test]
+    fn frame_changes_are_consumed_and_static_steps_stay_clean() {
+        let mut scene = SceneDefinition::new();
+        scene.add(GeometryRef::circle(1.0));
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+
+        assert!(instance.take_frame_changes().is_all());
+        instance.advance_to(0.5).expect("valid time");
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn frame_changes_accumulate_animation_and_patches_until_consumed() {
+        let mut scene = SceneDefinition::new();
+        let animated = scene.add(GeometryRef::circle(1.0));
+        let patched = scene.add(GeometryRef::rectangle(2.0, 1.0));
+        scene
+            .animate_position(
+                animated,
+                Vec2::ZERO,
+                Vec2::new(10.0, 0.0),
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("valid track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        instance.take_frame_changes();
+
+        instance.advance_to(0.5).expect("valid time");
+        instance
+            .apply_patch(&ScenePatch::SetStyle {
+                object: patched,
+                style: Style {
+                    opacity: 0.5,
+                    ..Style::default()
+                },
+            })
+            .expect("valid patch");
+        instance.advance_to(0.75).expect("valid time");
+
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
+        assert!(instance.take_frame_changes().is_empty());
     }
 }

@@ -25,7 +25,7 @@ The first no-Python browser playback path is now implemented:
 
 - `NoonCanvasPlayer` asynchronously creates a WebGPU adapter/device and canvas surface;
 - `requestAnimationFrame` timestamps pass through a tested deterministic `PlaybackClock`;
-- each frame seeks the persistent `ScenePlayer`, prepares analytic batches, uploads them, and presents through `GpuRenderer`;
+- each frame advances the persistent `ScenePlayer`, incrementally prepares dirty analytic instances, uploads only changed ranges, and presents through `GpuRenderer`;
 - canvas backing-store resize preserves world-space aspect ratio and safely skips zero-sized canvases;
 - outdated, lost, occluded, timeout, and suboptimal surface states are handled explicitly;
 - renderer counters are exposed to JavaScript for structural/performance smoke checks;
@@ -49,10 +49,12 @@ The first no-Python browser playback path is now implemented:
 - measuring the initial Rust-only diff path showed it was slower than replacement because it repeated full JSON decoding, so compatible browser reruns now avoid that cost before entering wasm;
 - successful style/transform batches now use a preflighted in-place transaction and update only affected runtime fields while reapplying active tracks for that object;
 - the value-patch fast path retains all-or-nothing validation and reduced measured 100k style/transform latency from 17-19 ms to 0.12-0.13 ms; structural batches retain the clone fallback;
+- renderer-facing changes accumulate until consumed, so static frames repack and upload nothing while animation/value patches update only their affected packed ranges; seeks, loop wraps, and structural edits conservatively invalidate the full frame;
+- the 100k renderer benchmark reduced unchanged preparation from a 1.54 ms full rebuild to about 0.000061 ms and exact instance-buffer payload from 8.8 MB/frame to zero; one changed object repacks and uploads one 88-byte record;
 - the main thread validates the worker protocol and IR envelope before applying each batch transactionally to Rust, while animation and WebGPU presentation continue independently;
 - the release wasm package was built with `wasm-pack` and exercised in a real browser, where a circle, rectangle, and rotating line rendered as three analytic draw batches with a clean console.
 
-The next coherent slice should measure browser-side document diff and worker-transfer costs separately from the now-sub-millisecond native value-patch application. Structural patch transactions can then be specialized based on evidence rather than assuming they share the same bottleneck. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane.
+The next coherent slice should measure browser-side document diff and worker-transfer costs separately from the now-sub-millisecond native value-patch application. Structural patch transactions can then be specialized based on evidence rather than assuming they share the same bottleneck. Rendering and normal playback remain in the main-thread Rust/WebGPU module; Python remains an optional worker-side control plane. Renderer preparation and upload volume are now dirty-aware; GPU rasterization/presentation timing still needs real-browser profiling rather than noop-backend inference.
 
 ## Product/architecture goal
 
@@ -125,6 +127,7 @@ Persistent renderer-independent `SceneInstance`:
 - active-track grouping/cursors
 - live patch application while preserving current playhead
 - evaluation instrumentation proving completed timeline history is not rescanned on every frame
+- consumable object-level dirty tracking across forward evaluation and live patches
 
 ### `noon-ir`
 
@@ -148,9 +151,11 @@ Initial renderer boundary and GPU implementation:
 - analytic instanced rectangles
 - analytic instanced lines with semantic endpoints and round caps
 - packed reusable instance buffers
+- cached packed instances with coalesced dirty ranges and partial `Queue::write_buffer` uploads
 - no per-object draw calls for those primitive classes
 - structural test for 100k instances
 - upload byte/reallocation counters
+- repacked/dirty-instance counters and a 1k/10k/100k release benchmark
 - draw-call/instance counters
 - `Camera2D` world-to-clip uniform (world coordinates remain renderer-independent)
 - WGSL shaders with pixel-aware proxy expansion and derivative-based antialiasing
@@ -333,10 +338,11 @@ Implemented in this order:
 13. Added repeatable scene-operation timing baselines and replaced quadratic IR import validation with order-preserving bulk construction, cutting measured 100k replacement latency by 72.3x.
 14. Added explicit stable Python authoring keys and compatible scene-to-patch reconciliation, retaining a measured transactional fallback for unsafe geometry or ordering edits.
 15. Added preflighted in-place style/transform transactions with targeted active-track reevaluation, reducing measured 100k one-object patch latency by roughly 150x without weakening atomic rejection.
+16. Added consumable runtime dirty tracking, cached incremental frame preparation, and partial GPU buffer writes; unchanged 100k scenes now repack zero instances and upload zero bytes after their initial frame.
 
 Remaining order:
 
-1. Introduce stable authoring identities and diff a rerun scene into minimal `ScenePatch` batches so compatible runtime state survives edits.
+1. Measure browser-side worker transfer/document diff and real WebGPU rasterization/presentation separately from the quantified native runtime/preparation costs.
 2. Add a semantic headless browser smoke test only when CI WebGPU support is reliable; do not make browser screenshot equality the semantic test oracle.
 
 ## Browser/Python architecture to preserve
