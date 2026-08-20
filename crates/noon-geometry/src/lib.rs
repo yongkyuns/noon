@@ -102,15 +102,12 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
         .tessellate_path(
             &built.path,
             &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
-            &mut BuffersBuilder::new(
-                &mut buffers,
-                |vertex: FillVertex<'_>| TessellationVertex {
-                    position: vec2(vertex.position().x, vertex.position().y),
-                    surface: PathSurface::Fill,
-                    contour: usize::MAX,
-                    local_distance: 0.0,
-                },
-            ),
+            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| TessellationVertex {
+                position: vec2(vertex.position().x, vertex.position().y),
+                surface: PathSurface::Fill,
+                contour: usize::MAX,
+                local_distance: 0.0,
+            }),
         )
         .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
 
@@ -124,15 +121,14 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
                     .with_line_width(stroke_width)
                     .with_line_cap(LineCap::Round)
                     .with_line_join(LineJoin::Round),
-                &mut BuffersBuilder::new(
-                    &mut buffers,
-                    |vertex: StrokeVertex<'_, '_>| TessellationVertex {
+                &mut BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+                    TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
                         surface: PathSurface::Stroke,
                         contour: source_contour(vertex.source(), endpoint_contours),
                         local_distance: vertex.advancement(),
-                    },
-                ),
+                    }
+                }),
             )
             .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
     }
@@ -216,7 +212,8 @@ fn build_lyon_path(path: &VectorPath) -> Result<BuiltPath, GeometryError> {
                 require_active(active)?;
                 finite(control)?;
                 finite(to)?;
-                let id = builder.quadratic_bezier_to(point(control.x, control.y), point(to.x, to.y));
+                let id =
+                    builder.quadratic_bezier_to(point(control.x, control.y), point(to.x, to.y));
                 record_endpoint_contour(&mut endpoint_contours, id.to_usize(), current_contour);
             }
             PathCommand::CubicTo {
@@ -409,9 +406,7 @@ mod tests {
         let second_contour_progresses: Vec<f32> = mesh
             .vertices
             .iter()
-            .filter(|vertex| {
-                vertex.surface == PathSurface::Stroke && vertex.position.x > 9.0
-            })
+            .filter(|vertex| vertex.surface == PathSurface::Stroke && vertex.position.x > 9.0)
             .map(|vertex| vertex.path_progress)
             .collect();
         assert!(!second_contour_progresses.is_empty());
