@@ -41,18 +41,7 @@ jobs:
       - name: Apply and validate Transform refactor
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          lines = Path('.github/workflows/agent-transform-refactor.yml').read_text().splitlines()
-          start = lines.index("          python - <<'PY'") + 1
-          end = lines.index("          PY", start)
-          body = []
-          for line in lines[start:end]:
-              body.append(line[10:] if line.startswith('          ') else line)
-          Path('/tmp/refactor_transform.py').write_text('\n'.join(body) + '\n')
-          PY
-          python /tmp/refactor_transform.py
-
+          python scripts/agent_transform_refactor.py
           cargo fmt --all
           cargo fmt --all -- --check
           cargo check --workspace --all-targets --all-features
@@ -65,8 +54,8 @@ jobs:
       - name: Publish tested refactor and restore CI
         shell: bash
         run: |
-          git show HEAD^:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm .github/workflows/agent-transform-refactor.yml
+          git show HEAD^^^:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm .github/workflows/agent-transform-refactor.yml scripts/agent_transform_refactor.py
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -- \
@@ -82,6 +71,7 @@ jobs:
             web/index.html \
             docs/path-morphing.md \
             .github/workflows/agent-transform-refactor.yml \
+            scripts/agent_transform_refactor.py \
             .github/workflows/ci.yml
           git commit -m "Align morph authoring with Transform and Scene.play"
           git push origin HEAD:agent/browser-realtime-architecture
