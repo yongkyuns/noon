@@ -30,6 +30,13 @@ const SCENE_EXAMPLES = [
     features: "primitives · path morph · timeline",
   },
   {
+    name: "Path morph / Transform",
+    path: "./python/examples/path_morph_transform.py",
+    summary:
+      "A rounded closed loop transforms into a sharp star using Scene.play(Transform(...)).",
+    features: "Transform · path morph · GPU interpolation",
+  },
+  {
     name: "Staggered choreography",
     path: "./python/examples/staggered_choreography.py",
     summary:
