@@ -47,6 +47,13 @@ def _positive_number(name: str, value: Any) -> float:
     return result
 
 
+def _unit_interval(name: str, value: Any) -> float:
+    result = _finite_number(name, value)
+    if not 0.0 <= result <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return result
+
+
 def _authoring_key(name: str, value: str | None, fallback: str) -> str:
     if value is None:
         return fallback
@@ -312,6 +319,29 @@ class Scene:
     ) -> Scene:
         self._add_scalar_track(
             obj, "opacity", from_, to, start_time, duration, easing, key
+        )
+        return self
+
+    def animate_reveal(
+        self,
+        obj: Object,
+        from_: float = 0.0,
+        to: float = 1.0,
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+        key: str | None = None,
+    ) -> Scene:
+        self._add_scalar_track(
+            obj,
+            "reveal",
+            _unit_interval("from", from_),
+            _unit_interval("to", to),
+            start_time,
+            duration,
+            easing,
+            key,
         )
         return self
 
