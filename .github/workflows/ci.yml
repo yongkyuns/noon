@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,12 +21,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: agent/browser-realtime-architecture
+
+      - name: Apply playground performance instrumentation
+        run: python3 scripts/apply_playground_perf_instrumentation.py
 
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
+
+      - name: Format generated Rust
+        run: cargo fmt --all
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -68,6 +76,26 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
+
+      - name: Publish validated performance instrumentation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            crates/noon-web/Cargo.toml \
+            crates/noon-web/src/lib.rs \
+            web/main.js \
+            web/index.html \
+            web/frame-metrics.js \
+            web/frame-metrics.test.mjs \
+            web/python/examples/morph_stress_test.py \
+            scripts/build-web-demo.sh
+          if git diff --cached --quiet; then
+            echo "No source changes to publish"
+          else
+            git commit -m "Instrument morph stress performance"
+            git push origin HEAD:agent/browser-realtime-architecture
+          fi
 
   legacy-compat:
     name: Full legacy compatibility
