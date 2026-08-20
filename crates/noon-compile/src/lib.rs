@@ -401,12 +401,7 @@ mod tests {
                 .line_to(Vec2::ONE),
         ));
         scene
-            .animate_reveal(
-                object,
-                0.0,
-                1.0,
-                TrackTiming::new(0.0, 1.0, Easing::Linear),
-            )
+            .animate_reveal(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
             .expect("valid reveal track");
 
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
