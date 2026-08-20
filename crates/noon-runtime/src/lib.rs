@@ -513,12 +513,7 @@ mod tests {
                 .line_to(Vec2::new(3.0, 4.0)),
         ));
         scene
-            .animate_reveal(
-                object,
-                0.0,
-                1.0,
-                TrackTiming::new(1.0, 2.0, Easing::Linear),
-            )
+            .animate_reveal(object, 0.0, 1.0, TrackTiming::new(1.0, 2.0, Easing::Linear))
             .expect("valid reveal track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
