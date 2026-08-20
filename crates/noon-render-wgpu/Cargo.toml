@@ -16,3 +16,6 @@ noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 noon-runtime = { path = "../noon-runtime" }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
+
+[dev-dependencies]
+noon-compile = { path = "../noon-compile" }
