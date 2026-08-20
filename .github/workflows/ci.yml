@@ -54,6 +54,9 @@ jobs:
       - name: Clippy architecture workspace
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Test geometry correctness invariants
+        run: cargo test -p noon-geometry --test tessellation_correctness
+
       - name: Test architecture workspace
         run: cargo test --workspace --all-features
 
