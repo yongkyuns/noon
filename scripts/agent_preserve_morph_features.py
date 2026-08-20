@@ -353,7 +353,7 @@ fn push_distinct(points: &mut Vec<Vec2>, point: Vec2) {
     1,
 )
 
-marker = '''    #[test]\n    fn invalid_options_are_rejected() {\n'''
+marker = '''    #[test]\n    fn degenerate_contours_and_invalid_options_are_rejected() {\n'''
 test = '''    #[test]
     fn authored_star_vertices_survive_morph_resampling_exactly() {
         let source = VectorPath::new()
