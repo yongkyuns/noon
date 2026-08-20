@@ -19,6 +19,15 @@ pub struct FrameObjectState {
 pub struct FrameState {
     pub time: f64,
     pub objects: Vec<FrameObjectState>,
+    /// Normalized per-object reveal state. Renderers may ignore it for
+    /// geometry types that do not support reveal yet.
+    pub reveals: Vec<f32>,
+}
+
+impl FrameState {
+    pub fn reveal(&self, object_index: usize) -> f32 {
+        self.reveals[object_index]
+    }
 }
 
 /// Object-level changes accumulated since the renderer last consumed them.
@@ -286,19 +295,42 @@ impl SceneInstance {
 }
 
 fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
+    let objects: Vec<_> = compiled
+        .objects()
+        .iter()
+        .map(|object| FrameObjectState {
+            id: object.id,
+            geometry: object.geometry.clone(),
+            transform: object.base_transform,
+            style: object.base_style,
+        })
+        .collect();
     FrameState {
         time,
-        objects: compiled
-            .objects()
-            .iter()
-            .map(|object| FrameObjectState {
-                id: object.id,
-                geometry: object.geometry.clone(),
-                transform: object.base_transform,
-                style: object.base_style,
-            })
-            .collect(),
+        reveals: initial_reveals(compiled, objects.len()),
+        objects,
     }
+}
+
+fn initial_reveals(compiled: &CompiledScene, object_count: usize) -> Vec<f32> {
+    let mut reveals = vec![1.0; object_count];
+    let mut initialized = vec![false; object_count];
+    for track in compiled
+        .tracks()
+        .iter()
+        .filter(|track| track.property == Property::Reveal)
+    {
+        let index = track.object_index as usize;
+        if initialized[index] {
+            continue;
+        }
+        let TrackValues::Scalar { from, .. } = track.values else {
+            unreachable!("compiled reveal track must contain scalar values");
+        };
+        reveals[index] = from.clamp(0.0, 1.0);
+        initialized[index] = true;
+    }
+    reveals
 }
 
 fn build_groups(tracks: &[CompiledTrack]) -> Vec<TrackGroup> {
@@ -354,27 +386,34 @@ fn apply_group(
     }
     let track = &tracks[group.cursor - 1];
     let value = interpolate(track, time);
-    let object = &mut frame.objects[group.object_index];
 
-    let changed = match (group.property, value) {
+    match (group.property, value) {
+        (Property::Reveal, EvaluatedValue::Scalar(value)) => {
+            let value = value.clamp(0.0, 1.0);
+            let changed = frame.reveals[group.object_index] != value;
+            frame.reveals[group.object_index] = value;
+            changed
+        }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
+            let object = &mut frame.objects[group.object_index];
             let changed = object.transform.translation != value;
             object.transform.translation = value;
             changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
+            let object = &mut frame.objects[group.object_index];
             let changed = object.transform.rotation != value;
             object.transform.rotation = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
+            let object = &mut frame.objects[group.object_index];
             let changed = object.style.opacity != value;
             object.style.opacity = value;
             changed
         }
         _ => unreachable!("compiled track value type must match its property"),
-    };
-    changed
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -463,6 +502,31 @@ mod tests {
                 .translation,
             Vec2::new(10.0, 0.0)
         );
+    }
+
+    #[test]
+    fn reveal_endpoints_midpoint_and_prestart_state_are_deterministic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(3.0, 4.0)),
+        ));
+        scene
+            .animate_reveal(
+                object,
+                0.0,
+                1.0,
+                TrackTiming::new(1.0, 2.0, Easing::Linear),
+            )
+            .expect("valid reveal track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+
+        assert_eq!(instance.seek(0.0).expect("valid time").reveal(0), 0.0);
+        assert_eq!(instance.seek(1.0).expect("valid time").reveal(0), 0.0);
+        assert_eq!(instance.seek(2.0).expect("valid time").reveal(0), 0.5);
+        assert_eq!(instance.seek(3.0).expect("valid time").reveal(0), 1.0);
     }
 
     #[test]
