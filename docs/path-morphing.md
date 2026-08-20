@@ -86,8 +86,6 @@ The first playable morph renderer is implemented as a fixed-topology stroke mesh
 
 The runtime reuses the existing normalized path scalar channel: ordinary paths interpret it as reveal, while paths with a semantic `morph_target` interpret it as morph progress. This keeps frame state compact and means morph playback changes only the path instance record; geometry is not retessellated or re-uploaded each frame. The Python API exposes this as `scene.animate_morph(path, target, ...)`.
 
-The browser demo exercises this through the normal Python/Pyodide → scene IR → Rust/WASM → WebGPU path rather than a demo-only renderer shortcut.
-
 Current intentional boundary: morph rendering is stroke-only. Fill triangulation during topology-changing interpolation is deferred until a stable fill strategy is selected. A path cannot currently animate reveal and morph simultaneously because those operations share the normalized path channel.
 
 ## Validation
