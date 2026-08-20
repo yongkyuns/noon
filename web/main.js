@@ -37,6 +37,13 @@ const SCENE_EXAMPLES = [
     features: "Transform · path morph · GPU interpolation",
   },
   {
+    name: "Morph stress test",
+    path: "./python/examples/morph_stress_test.py",
+    summary:
+      "Six hundred simultaneous path morphs reuse twelve cached meshes to stress runtime evaluation, batching and dirty uploads.",
+    features: "600 morphs · 12 meshes · batching · dirty uploads",
+  },
+  {
     name: "Staggered choreography",
     path: "./python/examples/staggered_choreography.py",
     summary:
