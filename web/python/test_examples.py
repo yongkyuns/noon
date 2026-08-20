@@ -12,6 +12,7 @@ SCENE_EXAMPLES = (
     "instanced_field.py",
     "kinetic_lines.py",
     "mixed_geometry.py",
+    "path_reveal.py",
 )
 
 
@@ -26,6 +27,13 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertEqual(document["version"], 1)
                 self.assertGreater(len(document["objects"]), 0)
                 self.assertGreater(len(document["tracks"]), 0)
+
+    def test_path_reveal_example_contains_reveal_tracks(self) -> None:
+        namespace = runpy.run_path(EXAMPLES_DIR / "path_reveal.py")
+        result = namespace.get("result")
+        self.assertIsInstance(result, Scene)
+        properties = [track["property"] for track in result.to_document()["tracks"]]
+        self.assertGreaterEqual(properties.count("reveal"), 2)
 
     def test_transform_patch_builds_ordered_patch_batch(self) -> None:
         namespace = runpy.run_path(
