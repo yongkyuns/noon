@@ -27,6 +27,20 @@ jobs:
       - name: Apply playground performance instrumentation
         run: python3 scripts/apply_playground_perf_instrumentation.py
 
+      - name: Make stress context standalone-safe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("web/python/examples/morph_stress_test.py")
+          text = path.read_text()
+          old = 'requested_count = context.get("object_count", 600) if isinstance(context, dict) else 600\n'
+          new = 'authoring_context = globals().get("context", {})\nrequested_count = authoring_context.get("object_count", 600) if isinstance(authoring_context, dict) else 600\n'
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit("stress context fragment not found")
+          PY
+
       - name: Use stable Rust
         run: |
           rustup default stable
