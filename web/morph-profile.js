@@ -3,17 +3,21 @@ import { PythonAuthoringClient } from "./authoring-client.js";
 import { SampleWindow } from "./frame-metrics.js";
 
 const CASES = [600, 1000, 3000];
+const AUTHORING_IMPORT_WARMUP_OBJECTS = 12;
+const AUTHORING_SAMPLES = 5;
 const WARMUP_FRAMES = 30;
 const MEASURED_FRAMES = 180;
 const GPU_SETTLE_TIMEOUT_MS = 2000;
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
+const setup = document.querySelector("#setup");
 const resultsBody = document.querySelector("#results");
 const jsonOutput = document.querySelector("#json");
 
-const authoringClient = new PythonAuthoringClient();
+let authoringClient = null;
 let activePlayer = null;
+let authoringSetup = null;
 
 try {
   if (!navigator.gpu) {
@@ -23,14 +27,51 @@ try {
   const source = await loadText("./python/examples/morph_stress_test.py");
   const results = [];
 
+  status.value = "Starting Python/Pyodide authoring worker…";
+  const workerStartupStarted = performance.now();
+  authoringClient = new PythonAuthoringClient();
+  await authoringClient.ready();
+  const workerStartupMs = performance.now() - workerStartupStarted;
+
+  status.value = "Priming Noon import and authoring code…";
+  const importWarmupStarted = performance.now();
+  const importWarmup = await authoringClient.run(source, {
+    object_count: AUTHORING_IMPORT_WARMUP_OBJECTS,
+  });
+  const importWarmupMs = performance.now() - importWarmupStarted;
+  assertScene(importWarmup);
+  authoringSetup = {
+    workerStartupMs,
+    importWarmupMs,
+    importWarmupObjects: AUTHORING_IMPORT_WARMUP_OBJECTS,
+    measuredSamplesPerCase: AUTHORING_SAMPLES,
+  };
+  setup.value =
+    `One-time setup excluded from authoring rows · worker/Pyodide ${formatNumber(workerStartupMs)} ms · ` +
+    `first Noon import/source ${formatNumber(importWarmupMs)} ms · ` +
+    `${AUTHORING_SAMPLES} measured authoring runs per case`;
+
   for (const objectCount of CASES) {
-    status.value = `Authoring ${objectCount.toLocaleString()} morphing objects…`;
-    const authoredAt = performance.now();
-    const authored = await authoringClient.run(source, { object_count: objectCount });
-    const authoringMs = performance.now() - authoredAt;
-    if (authored.kind !== "scene_document") {
-      throw new Error("Morph stress source did not return a Scene");
+    status.value = `Priming ${objectCount.toLocaleString()}-object authoring path…`;
+    const caseWarmupStarted = performance.now();
+    const caseWarmup = await authoringClient.run(source, { object_count: objectCount });
+    const caseWarmupMs = performance.now() - caseWarmupStarted;
+    assertScene(caseWarmup);
+    await nextAnimationFrame();
+
+    const authoringSamples = new SampleWindow(AUTHORING_SAMPLES);
+    let authored = null;
+    for (let sample = 0; sample < AUTHORING_SAMPLES; sample += 1) {
+      status.value =
+        `Authoring ${objectCount.toLocaleString()} objects · sample ${sample + 1}/${AUTHORING_SAMPLES}…`;
+      const authoredAt = performance.now();
+      const candidate = await authoringClient.run(source, { object_count: objectCount });
+      authoringSamples.record(performance.now() - authoredAt);
+      assertScene(candidate);
+      authored = candidate;
+      await nextAnimationFrame();
     }
+    const authoringMs = authoringSamples.summary();
 
     activePlayer?.free?.();
     const createStarted = performance.now();
@@ -65,7 +106,7 @@ try {
     };
 
     for (let frame = 0; frame < WARMUP_FRAMES; frame += 1) {
-      status.value = `Warm-up ${frame + 1}/${WARMUP_FRAMES} · ${objectCount.toLocaleString()} objects…`;
+      status.value = `Render warm-up ${frame + 1}/${WARMUP_FRAMES} · ${objectCount.toLocaleString()} objects…`;
       const timestamp = await nextAnimationFrame();
       activePlayer.renderFrame(timestamp);
     }
@@ -104,7 +145,11 @@ try {
 
     const result = {
       objects: objectCount,
-      authoringMs,
+      authoring: {
+        samples: AUTHORING_SAMPLES,
+        warmupMs: caseWarmupMs,
+        endToEndMs: authoringMs,
+      },
       playerCreateMs,
       viewport: [canvas.width, canvas.height],
       devicePixelRatio: window.devicePixelRatio || 1,
@@ -150,7 +195,7 @@ try {
   status.value = `Benchmark failed: ${error}`;
   status.dataset.state = "error";
 } finally {
-  authoringClient.terminate();
+  authoringClient?.terminate();
 }
 
 function buildReport(results) {
@@ -158,8 +203,9 @@ function buildReport(results) {
     benchmark: "Noon fixed-topology path morph scaling",
     generatedAt: new Date().toISOString(),
     userAgent: navigator.userAgent,
-    warmupFrames: WARMUP_FRAMES,
-    measuredFrames: MEASURED_FRAMES,
+    authoringSetup,
+    renderWarmupFrames: WARMUP_FRAMES,
+    measuredRenderFrames: MEASURED_FRAMES,
     cases: results,
   };
 }
@@ -168,7 +214,7 @@ function appendResultRow(result) {
   const row = document.createElement("tr");
   const values = [
     result.objects.toLocaleString(),
-    formatNumber(result.authoringMs),
+    formatSummary(result.authoring.endToEndMs),
     formatNumber(result.cold.cpuFrameMs),
     formatBytes(result.cold.uploadBytes),
     String(result.cold.geometryCacheMisses),
@@ -189,6 +235,12 @@ function appendResultRow(result) {
     row.append(cell);
   }
   resultsBody.append(row);
+}
+
+function assertScene(result) {
+  if (result.kind !== "scene_document") {
+    throw new Error("Morph stress source did not return a Scene");
+  }
 }
 
 async function waitForGpuSamples(player, supported, measuredFrames) {
