@@ -44,6 +44,9 @@ jobs:
           python scripts/agent_transform_refactor.py
           python - <<'PY'
           from pathlib import Path
+
+          # Compatibility fixtures that construct expanded runtime/compiler
+          # state directly instead of using constructors.
           path = Path("crates/noon-compile/src/lib.rs")
           text = path.read_text()
           old = "                reveal: true,\n"
@@ -51,6 +54,26 @@ jobs:
           if old not in text:
               raise SystemExit("reveal-dynamic compatibility fixture missing")
           path.write_text(text.replace(old, new))
+
+          path = Path("crates/noon-render-wgpu/src/gpu.rs")
+          text = path.read_text()
+          replacements = {
+              "            reveals: vec![1.0; 3],\n": "            reveals: vec![1.0; 3],\n            morphs: vec![0.0; 3],\n",
+              "            reveals: vec![1.0; 2],\n": "            reveals: vec![1.0; 2],\n            morphs: vec![0.0; 2],\n",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"GPU FrameState fixture missing: {old!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          path = Path("crates/noon-render-wgpu/examples/frame_preparation_perf.rs")
+          text = path.read_text()
+          old = "        reveals: vec![1.0; object_count],\n"
+          new = "        reveals: vec![1.0; object_count],\n        morphs: vec![0.0; object_count],\n"
+          if old not in text:
+              raise SystemExit("perf FrameState fixture missing")
+          path.write_text(text.replace(old, new, 1))
           PY
           cargo fmt --all
           cargo fmt --all -- --check
@@ -75,6 +98,7 @@ jobs:
             crates/noon-render-wgpu/src/lib.rs \
             crates/noon-render-wgpu/src/gpu.rs \
             crates/noon-render-wgpu/src/path.wgsl \
+            crates/noon-render-wgpu/examples/frame_preparation_perf.rs \
             web/python/noon.py \
             web/python/test_noon.py \
             web/python/demo_scene.py \
