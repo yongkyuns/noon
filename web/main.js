@@ -4,11 +4,20 @@ import { diffSceneDocuments, SceneIdentityMap } from "./scene-identity.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
+const statusText = document.querySelector("#status-text");
 const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
 const sourceEditor = document.querySelector("#python-source");
+const sceneTab = document.querySelector("#scene-tab");
+const patchTab = document.querySelector("#patch-tab");
+const scenePanel = document.querySelector("#scene-editor-panel");
+const patchPanel = document.querySelector("#patch-editor-panel");
+const metricObjects = document.querySelector("#metric-objects");
+const metricDraws = document.querySelector("#metric-draws");
+const metricUpload = document.querySelector("#metric-upload");
+const metricTime = document.querySelector("#metric-time");
 
 const PALETTES = [
   {
@@ -25,11 +34,29 @@ const PALETTES = [
   },
 ];
 
+let activeEditor = "scene";
+
+function selectEditor(kind) {
+  activeEditor = kind;
+  const sceneActive = kind === "scene";
+  sceneTab.setAttribute("aria-selected", String(sceneActive));
+  patchTab.setAttribute("aria-selected", String(!sceneActive));
+  scenePanel.dataset.active = String(sceneActive);
+  patchPanel.dataset.active = String(!sceneActive);
+}
+
+sceneTab.addEventListener("click", () => selectEditor("scene"));
+patchTab.addEventListener("click", () => selectEditor("patch"));
+
+function setRuntimeStatus(message, state) {
+  statusText.textContent = message;
+  status.dataset.state = state;
+}
+
 function showError(error) {
   console.error(error);
-  status.value = `Error: ${error}`;
-  status.dataset.state = "error";
-  patchStatus.value = "Patch failed";
+  setRuntimeStatus(`Error: ${error}`, "error");
+  patchStatus.value = "Runtime failed";
   patchStatus.dataset.state = "error";
 }
 
@@ -37,6 +64,19 @@ function showPatchError(error) {
   console.error(error);
   patchStatus.value = `Python failed: ${error}`;
   patchStatus.dataset.state = "error";
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 async function loadDemoAuthoringSource(path) {
@@ -69,6 +109,7 @@ try {
   let authoringClient = null;
   const sceneIdentities = new SceneIdentityMap();
   let authoredScene = null;
+
   Promise.all([
     loadDemoAuthoringSource("./python/demo_scene.py"),
     loadDemoAuthoringSource("./python/demo_patch.py"),
@@ -78,16 +119,18 @@ try {
       sourceEditor.value = patchSource;
       sceneButton.disabled = false;
       patchButton.disabled = false;
-      patchStatus.value = "Python worker starts on first run";
+      patchStatus.value = "Ready · Python worker starts on first run";
       patchStatus.dataset.state = "ready";
     })
     .catch(showPatchError);
+
   patchStatus.dataset.sequence = String(player.nextSequence());
-  sceneButton.addEventListener("click", async () => {
+
+  async function runScene() {
     sceneButton.disabled = true;
     patchButton.disabled = true;
     try {
-      patchStatus.value = "Building a complete scene in Python…";
+      patchStatus.value = "Building Scene in the Python worker…";
       patchStatus.dataset.state = "running";
       authoringClient ??= new PythonAuthoringClient();
       const result = await authoringClient.run(sceneSourceEditor.value);
@@ -121,12 +164,13 @@ try {
         operation = "Scene already current";
       }
       authoredScene = stableDocument;
+
       const preservedPlayhead = player.time();
       if (preservedPlayhead !== playhead) {
         throw new Error("Scene replacement changed the current playhead");
       }
       const nextSequence = Number(player.nextSequence());
-      patchStatus.value = `${operation} · ${player.objectCount()} objects · next patch ${nextSequence} · playhead ${preservedPlayhead.toFixed(2)} s preserved`;
+      patchStatus.value = `${operation} · ${player.objectCount()} objects · playhead ${preservedPlayhead.toFixed(2)} s preserved`;
       patchStatus.dataset.state = "applied";
       patchStatus.dataset.sequence = String(nextSequence);
     } catch (error) {
@@ -135,8 +179,9 @@ try {
       sceneButton.disabled = false;
       patchButton.disabled = false;
     }
-  });
-  patchButton.addEventListener("click", async () => {
+  }
+
+  async function runPatch() {
     sceneButton.disabled = true;
     patchButton.disabled = true;
     try {
@@ -145,7 +190,7 @@ try {
         throw new Error("Patch sequence exceeds JavaScript's safe integer range");
       }
       const palette = PALETTES[paletteIndex];
-      patchStatus.value = "Running Python in the worker…";
+      patchStatus.value = "Running patch in the Python worker…";
       patchStatus.dataset.state = "running";
 
       authoringClient ??= new PythonAuthoringClient();
@@ -173,7 +218,7 @@ try {
       if (preservedPlayhead !== playhead) {
         throw new Error("Patch batch changed the current playhead");
       }
-      patchStatus.value = `Patch ${sequence} accepted · ${palette.name} · playhead ${preservedPlayhead.toFixed(2)} s preserved`;
+      patchStatus.value = `Patch ${sequence} accepted · ${palette.name} palette · playhead preserved`;
       patchStatus.dataset.state = "applied";
       patchStatus.dataset.sequence = String(nextSequence);
       patchStatus.dataset.theme = palette.name;
@@ -185,7 +230,22 @@ try {
       sceneButton.disabled = false;
       patchButton.disabled = false;
     }
+  }
+
+  sceneButton.addEventListener("click", runScene);
+  patchButton.addEventListener("click", runPatch);
+
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (activeEditor === "scene") {
+        runScene();
+      } else {
+        runPatch();
+      }
+    }
   });
+
   window.addEventListener("pagehide", () => authoringClient?.terminate(), {
     once: true,
   });
@@ -195,11 +255,22 @@ try {
     try {
       const presented = player.renderFrame(timestamp);
       if (presented && timestamp - lastStatusUpdate > 200) {
-        status.value = `${player.objectCount()} objects · ${player.lastDrawCalls()} draws · ${player.time().toFixed(2)} s`;
-        status.dataset.state = "running";
+        const objectCount = player.objectCount();
+        const drawCalls = player.lastDrawCalls();
+        const uploadBytes = player.lastBytesUploaded();
+        const playhead = player.time();
+
+        setRuntimeStatus(`${objectCount} objects · WebGPU live`, "running");
+        metricObjects.value = String(objectCount);
+        metricDraws.value = String(drawCalls);
+        metricUpload.value = formatBytes(uploadBytes);
+        metricTime.value = `${playhead.toFixed(2)} s`;
+
         status.dataset.instances = String(player.lastInstancesDrawn());
-        status.dataset.uploadBytes = String(player.lastBytesUploaded());
-        status.dataset.geometryCacheMisses = String(player.lastGeometryCacheMisses());
+        status.dataset.uploadBytes = String(uploadBytes);
+        status.dataset.geometryCacheMisses = String(
+          player.lastGeometryCacheMisses(),
+        );
         lastStatusUpdate = timestamp;
       }
       requestAnimationFrame(frame);
