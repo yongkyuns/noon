@@ -1,0 +1,287 @@
+name: Agent playable morph implementation
+
+on:
+  push:
+    branches:
+      - agent/browser-realtime-architecture
+    paths:
+      - .github/workflows/agent-morph-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/browser-realtime-architecture
+          fetch-depth: 0
+
+      - name: Apply playable morph slice
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected snippet not found in {path}: {old[:80]!r}")
+              updated = text.replace(old, new, count)
+              p.write_text(updated)
+
+          # Core: carry an optional semantic morph target without adding a new
+          # GeometryRef variant, so all existing path semantics remain valid.
+          replace(
+              "crates/noon-core/src/lib.rs",
+              "pub struct VectorPath {\n    commands: Vec<PathCommand>,\n}\n",
+              "pub struct VectorPath {\n    commands: Vec<PathCommand>,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    morph_target: Option<Box<VectorPath>>,\n}\n",
+          )
+          replace(
+              "crates/noon-core/src/lib.rs",
+              "        Self {\n            commands: Vec::new(),\n        }\n",
+              "        Self {\n            commands: Vec::new(),\n            morph_target: None,\n        }\n",
+          )
+          replace(
+              "crates/noon-core/src/lib.rs",
+              "    pub fn commands(&self) -> &[PathCommand] {\n        &self.commands\n    }\n\n    pub fn is_empty(&self) -> bool {\n",
+              "    pub fn commands(&self) -> &[PathCommand] {\n        &self.commands\n    }\n\n    pub fn with_morph_target(mut self, target: VectorPath) -> Self {\n        self.morph_target = Some(Box::new(target));\n        self\n    }\n\n    pub fn morph_target(&self) -> Option<&VectorPath> {\n        self.morph_target.as_deref()\n    }\n\n    pub fn is_empty(&self) -> bool {\n",
+          )
+          replace(
+              "crates/noon-core/src/lib.rs",
+              "    #[test]\n    fn id_namespaces_are_distinct_types() {\n",
+              "    #[test]\n    fn vector_path_can_carry_a_semantic_morph_target() {\n        let source = VectorPath::new()\n            .move_to(Vec2::new(-1.0, 0.0))\n            .line_to(Vec2::new(1.0, 0.0));\n        let target = VectorPath::new()\n            .move_to(Vec2::new(0.0, -1.0))\n            .line_to(Vec2::new(0.0, 1.0));\n        let morph = source.clone().with_morph_target(target.clone());\n\n        assert_eq!(morph.commands(), source.commands());\n        assert_eq!(morph.morph_target(), Some(&target));\n        assert_eq!(source.morph_target(), None);\n    }\n\n    #[test]\n    fn id_namespaces_are_distinct_types() {\n",
+          )
+
+          # Geometry: static paths now carry identical source/target positions;
+          # morph paths use the already-planned correspondence to build one
+          # fixed-topology stroke mesh with dual endpoint positions.
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "pub struct MeshVertex {\n    pub position: Vec2,\n    pub surface: PathSurface,\n",
+              "pub struct MeshVertex {\n    pub position: Vec2,\n    pub target_position: Vec2,\n    pub surface: PathSurface,\n",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "    /// Flattened length of all ordered stroke contours.\n    pub stroke_length: f32,\n}\n",
+              "    /// Flattened length of all ordered stroke contours.\n    pub stroke_length: f32,\n    /// True when vertices contain distinct source/target morph endpoints.\n    pub morphing: bool,\n}\n",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "    if !stroke_width.is_finite() || stroke_width < 0.0 {\n        return Err(GeometryError::InvalidStrokeWidth(stroke_width));\n    }\n    let path = build_lyon_path(path)?;\n",
+              "    if !stroke_width.is_finite() || stroke_width < 0.0 {\n        return Err(GeometryError::InvalidStrokeWidth(stroke_width));\n    }\n    if let Some(target) = path.morph_target() {\n        return tessellate_morph_path(path, target, stroke_width);\n    }\n    let path = build_lyon_path(path)?;\n",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "                MeshVertex {\n                    position: vertex.position,\n                    surface: vertex.surface,\n",
+              "                MeshVertex {\n                    position: vertex.position,\n                    target_position: vertex.position,\n                    surface: vertex.surface,\n",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "                MeshVertex {\n                    position: vertex.position,\n                    surface: vertex.surface,\n                    path_distance: stroke_length,\n",
+              "                MeshVertex {\n                    position: vertex.position,\n                    target_position: vertex.position,\n                    surface: vertex.surface,\n                    path_distance: stroke_length,\n",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "        bounds,\n        stroke_length,\n    })\n}\n\nfn build_lyon_path",
+              "        bounds,\n        stroke_length,\n        morphing: false,\n    })\n}\n\nfn tessellate_morph_path(\n    source: &VectorPath,\n    target: &VectorPath,\n    stroke_width: f32,\n) -> Result<TessellatedPath, GeometryError> {\n    if stroke_width == 0.0 {\n        return Ok(TessellatedPath {\n            morphing: true,\n            ..TessellatedPath::default()\n        });\n    }\n    let plan = crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)\n        .map_err(|error| GeometryError::Tessellation(format!(\"morph planning failed: {error}\")))?;\n    let total_points = plan.point_count();\n    let mut vertices = Vec::with_capacity(total_points.saturating_mul(2));\n    let mut indices = Vec::new();\n    let mut global_point = 0_usize;\n    let progress_denominator = total_points.saturating_sub(1).max(1) as f32;\n    let mut stroke_length = 0.0_f32;\n\n    for contour in &plan.contours {\n        let source_edges = stroke_edges(&contour.source_points, contour.closed, stroke_width * 0.5);\n        let target_edges = stroke_edges(&contour.target_points, contour.closed, stroke_width * 0.5);\n        let vertex_start = u32::try_from(vertices.len())\n            .map_err(|_| GeometryError::Tessellation(\"morph vertex count exceeds u32\".into()))?;\n        stroke_length += polyline_length(&contour.source_points, contour.closed);\n\n        for (index, ((source_left, source_right), (target_left, target_right))) in source_edges\n            .into_iter()\n            .zip(target_edges)\n            .enumerate()\n        {\n            let progress = (global_point + index) as f32 / progress_denominator;\n            for (position, target_position) in [\n                (source_left, target_left),\n                (source_right, target_right),\n            ] {\n                vertices.push(MeshVertex {\n                    position,\n                    target_position,\n                    surface: PathSurface::Stroke,\n                    path_distance: progress,\n                    path_progress: progress,\n                });\n            }\n        }\n\n        let point_count = contour.source_points.len();\n        let segment_count = if contour.closed { point_count } else { point_count - 1 };\n        for segment in 0..segment_count {\n            let next = if segment + 1 == point_count { 0 } else { segment + 1 };\n            let a = vertex_start + u32::try_from(segment * 2).unwrap();\n            let b = a + 1;\n            let c = vertex_start + u32::try_from(next * 2).unwrap();\n            let d = c + 1;\n            indices.extend_from_slice(&[a, b, c, b, d, c]);\n        }\n        global_point += point_count;\n    }\n\n    let bounds = morph_mesh_bounds(&vertices);\n    Ok(TessellatedPath {\n        vertices,\n        indices,\n        bounds,\n        stroke_length,\n        morphing: true,\n    })\n}\n\nfn stroke_edges(points: &[Vec2], closed: bool, half_width: f32) -> Vec<(Vec2, Vec2)> {\n    let mut result = Vec::with_capacity(points.len());\n    for index in 0..points.len() {\n        let previous = if index > 0 {\n            points[index - 1]\n        } else if closed {\n            points[points.len() - 1]\n        } else {\n            points[index]\n        };\n        let next = if index + 1 < points.len() {\n            points[index + 1]\n        } else if closed {\n            points[0]\n        } else {\n            points[index]\n        };\n        let tangent = normalized(Vec2::new(next.x - previous.x, next.y - previous.y));\n        let normal = Vec2::new(-tangent.y * half_width, tangent.x * half_width);\n        let point = points[index];\n        result.push((\n            Vec2::new(point.x + normal.x, point.y + normal.y),\n            Vec2::new(point.x - normal.x, point.y - normal.y),\n        ));\n    }\n    result\n}\n\nfn normalized(vector: Vec2) -> Vec2 {\n    let length = vector.x.hypot(vector.y);\n    if length <= f32::EPSILON {\n        Vec2::new(1.0, 0.0)\n    } else {\n        Vec2::new(vector.x / length, vector.y / length)\n    }\n}\n\nfn polyline_length(points: &[Vec2], closed: bool) -> f32 {\n    let mut length = points\n        .windows(2)\n        .map(|pair| (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y))\n        .sum::<f32>();\n    if closed {\n        let first = points[0];\n        let last = points[points.len() - 1];\n        length += (first.x - last.x).hypot(first.y - last.y);\n    }\n    length\n}\n\nfn morph_mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {\n    let first = vertices.first()?;\n    let mut min = Vec2::new(\n        first.position.x.min(first.target_position.x),\n        first.position.y.min(first.target_position.y),\n    );\n    let mut max = Vec2::new(\n        first.position.x.max(first.target_position.x),\n        first.position.y.max(first.target_position.y),\n    );\n    for vertex in &vertices[1..] {\n        for point in [vertex.position, vertex.target_position] {\n            min.x = min.x.min(point.x);\n            min.y = min.y.min(point.y);\n            max.x = max.x.max(point.x);\n            max.y = max.y.max(point.y);\n        }\n    }\n    Some(Rect::new(min, max))\n}\n\nfn build_lyon_path",
+          )
+          replace(
+              "crates/noon-geometry/src/tessellation.rs",
+              "    #[test]\n    fn malformed_and_degenerate_paths_are_handled_intentionally() {\n",
+              "    #[test]\n    fn morph_tessellation_has_fixed_dual_position_topology() {\n        let source = VectorPath::new()\n            .move_to(Vec2::new(-1.0, -1.0))\n            .line_to(Vec2::new(1.0, -1.0))\n            .line_to(Vec2::new(1.0, 1.0))\n            .line_to(Vec2::new(-1.0, 1.0))\n            .close();\n        let target = VectorPath::new()\n            .move_to(Vec2::new(0.0, -1.4))\n            .line_to(Vec2::new(1.4, 0.0))\n            .line_to(Vec2::new(0.0, 1.4))\n            .line_to(Vec2::new(-1.4, 0.0))\n            .close();\n        let mesh = tessellate(&source.with_morph_target(target), 0.1).expect(\"valid morph\");\n\n        assert!(mesh.morphing);\n        assert!(!mesh.vertices.is_empty());\n        assert!(!mesh.indices.is_empty());\n        assert!(mesh.vertices.iter().all(|vertex| vertex.surface == PathSurface::Stroke));\n        assert!(mesh\n            .vertices\n            .iter()\n            .any(|vertex| vertex.position != vertex.target_position));\n        assert!(mesh\n            .indices\n            .iter()\n            .all(|index| (*index as usize) < mesh.vertices.len()));\n    }\n\n    #[test]\n    fn malformed_and_degenerate_paths_are_handled_intentionally() {\n",
+          )
+
+          # Renderer CPU packing: add target position to the fixed path vertex
+          # and reserve a packed flag bit telling the shader to morph instead of reveal.
+          replace(
+              "crates/noon-render-wgpu/src/lib.rs",
+              "const PATH_PROGRESS_MAX: u32 = 16_777_215;\n",
+              "const PATH_PROGRESS_MAX: u32 = 16_777_215;\nconst PATH_MORPH_BIT: u32 = 1 << 25;\n",
+          )
+          replace(
+              "crates/noon-render-wgpu/src/lib.rs",
+              "pub struct PathVertex {\n    pub position: [f32; 2],\n",
+              "pub struct PathVertex {\n    pub position: [f32; 2],\n    pub target_position: [f32; 2],\n",
+          )
+          replace(
+              "crates/noon-render-wgpu/src/lib.rs",
+              "            next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {\n                position: [vertex.position.x, vertex.position.y],\n                surface: pack_path_surface(vertex.surface, vertex.path_progress),\n            }));\n",
+              "            next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {\n                position: [vertex.position.x, vertex.position.y],\n                target_position: [vertex.target_position.x, vertex.target_position.y],\n                surface: pack_path_surface(vertex.surface, vertex.path_progress, mesh.morphing),\n            }));\n",
+          )
+          replace(
+              "crates/noon-render-wgpu/src/lib.rs",
+              "fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {\n    let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;\n    (progress << 1)\n        | match surface {\n            PathSurface::Fill => 0,\n            PathSurface::Stroke => 1,\n        }\n}\n",
+              "fn pack_path_surface(surface: PathSurface, progress: f32, morphing: bool) -> u32 {\n    let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;\n    let mut packed = (progress << 1)\n        | match surface {\n            PathSurface::Fill => 0,\n            PathSurface::Stroke => 1,\n        };\n    if morphing {\n        packed |= PATH_MORPH_BIT;\n    }\n    packed\n}\n",
+          )
+          replace(
+              "crates/noon-render-wgpu/src/lib.rs",
+              "        assert_eq!(std::mem::size_of::<PathVertex>(), 12);\n",
+              "        assert_eq!(std::mem::size_of::<PathVertex>(), 20);\n",
+          )
+
+          # GPU vertex layout: source + target + packed surface/progress/flags.
+          replace(
+              "crates/noon-render-wgpu/src/gpu.rs",
+              "const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =\n    wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];\nconst PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 0,\n        shader_location: 2,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 8,\n        shader_location: 3,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32,\n        offset: 16,\n        shader_location: 4,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x4,\n        offset: 24,\n        shader_location: 5,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x4,\n        offset: 40,\n        shader_location: 6,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 56,\n        shader_location: 7,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Uint32x2,\n        offset: 64,\n        shader_location: 8,\n    },\n];\n",
+              "const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =\n    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];\nconst PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 0,\n        shader_location: 3,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 8,\n        shader_location: 4,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32,\n        offset: 16,\n        shader_location: 5,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x4,\n        offset: 24,\n        shader_location: 6,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x4,\n        offset: 40,\n        shader_location: 7,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Float32x2,\n        offset: 56,\n        shader_location: 8,\n    },\n    wgpu::VertexAttribute {\n        format: wgpu::VertexFormat::Uint32x2,\n        offset: 64,\n        shader_location: 9,\n    },\n];\n",
+          )
+
+          # Shader: the same instance scalar is reveal for normal paths and
+          # morph progress for dual-position paths. Morphing therefore only
+          # dirties/uploads the 72-byte path instance, not geometry.
+          Path("crates/noon-render-wgpu/src/path.wgsl").write_text(r'''struct Camera {
+              center: vec2<f32>,
+              clip_scale: vec2<f32>,
+              viewport_size: vec2<f32>,
+              padding: vec2<f32>,
+          };
+
+          @group(0) @binding(0)
+          var<uniform> camera: Camera;
+
+          struct PathVertexInput {
+              @location(0) local: vec2<f32>,
+              @location(1) target_local: vec2<f32>,
+              @location(2) surface_and_progress: u32,
+              @location(3) translation: vec2<f32>,
+              @location(4) scale: vec2<f32>,
+              @location(5) rotation: f32,
+              @location(6) fill: vec4<f32>,
+              @location(7) stroke: vec4<f32>,
+              @location(8) metrics: vec2<f32>,
+              @location(9) flags: vec2<u32>,
+          };
+
+          struct PathVertexOutput {
+              @builtin(position) position: vec4<f32>,
+              @location(0) color: vec4<f32>,
+              @location(1) path_progress: f32,
+              @location(2) reveal: f32,
+          };
+
+          fn premultiplied(color: vec4<f32>) -> vec4<f32> {
+              return vec4<f32>(color.rgb * color.a, color.a);
+          }
+
+          @vertex
+          fn vs_path(input: PathVertexInput) -> PathVertexOutput {
+              let is_stroke = (input.surface_and_progress & 1u) == 1u;
+              let is_morph = (input.surface_and_progress & 33554432u) != 0u;
+              let encoded_progress = (input.surface_and_progress >> 1u) & 16777215u;
+              let path_progress = f32(encoded_progress) / 16777215.0;
+              let scalar = clamp(input.metrics.x, 0.0, 1.0);
+              let local = select(input.local, mix(input.local, input.target_local, scalar), is_morph);
+
+              let c = cos(input.rotation);
+              let s = sin(input.rotation);
+              let scaled = local * input.scale;
+              let world = vec2<f32>(
+                  c * scaled.x - s * scaled.y,
+                  s * scaled.x + c * scaled.y,
+              ) + input.translation;
+
+              var output: PathVertexOutput;
+              output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+              let enabled = select(input.flags.x != 0u, input.flags.y != 0u, is_stroke);
+              let color = select(input.fill, input.stroke, is_stroke);
+              output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
+              output.path_progress = path_progress;
+              output.reveal = select(scalar, 1.0, is_morph);
+              return output;
+          }
+
+          @fragment
+          fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
+              if input.reveal <= 0.0 {
+                  return vec4<f32>(0.0);
+              }
+              if input.reveal >= 1.0 {
+                  return input.color;
+              }
+
+              let edge = max(fwidth(input.path_progress), 0.00001);
+              let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
+              return input.color * coverage;
+          }
+          '''.replace("          ", ""))
+
+          # Python: ergonomic animate_morph(path_object, target_path, ...).
+          # It stores the semantic target on the vector path and uses the
+          # existing normalized scalar timeline internally.
+          replace(
+              "web/python/noon.py",
+              "        return self\n\n    def _add_object(\n",
+              "        return self\n\n    def animate_morph(\n        self,\n        obj: Object,\n        target: VectorPath,\n        *,\n        duration: float,\n        start_time: float = 0.0,\n        easing: str = \"linear\",\n        key: str | None = None,\n    ) -> Scene:\n        if not isinstance(obj, Object) or obj._owner is not self._owner:\n            raise ValueError(\"morphed object must belong to this Scene\")\n        if not isinstance(target, VectorPath):\n            raise TypeError(\"target must be a VectorPath\")\n        geometry = self._objects[obj.id][\"geometry\"]\n        source = geometry.get(\"vector_path\")\n        if source is None:\n            raise ValueError(\"only vector path objects can morph\")\n        if \"morph_target\" in source:\n            raise ValueError(\"a path can currently have one morph target\")\n        if any(\n            track[\"object\"] == obj.id and track[\"property\"] == \"reveal\"\n            for track in self._tracks\n        ):\n            raise ValueError(\"morph and reveal currently share one normalized path channel\")\n        source[\"morph_target\"] = target.to_ir()\n        self._add_scalar_track(\n            obj, \"reveal\", 0.0, 1.0, start_time, duration, easing, key\n        )\n        return self\n\n    def _add_object(\n",
+          )
+
+          # Python API tests.
+          replace(
+              "web/python/test_noon.py",
+              "    def test_scene_rejects_foreign_objects_and_invalid_timing(self) -> None:\n",
+              "    def test_path_morph_serializes_target_and_normalized_progress(self) -> None:\n        scene = Scene()\n        source = VectorPath().move_to((-1.0, 0.0)).line_to((1.0, 0.0))\n        target = VectorPath().move_to((0.0, -1.0)).line_to((0.0, 1.0))\n        path = scene.path(\n            source,\n            fill=None,\n            stroke=Color(1.0, 1.0, 1.0),\n            stroke_width=0.1,\n            key=\"morph\",\n        )\n        scene.animate_morph(\n            path,\n            target,\n            duration=3.0,\n            start_time=0.5,\n            easing=\"ease_in_out_cubic\",\n            key=\"morph.shape\",\n        )\n\n        document = scene.to_document()\n        vector_path = document[\"objects\"][0][\"geometry\"][\"vector_path\"]\n        self.assertEqual(\n            vector_path[\"morph_target\"][\"commands\"][0][\"move_to\"][\"to\"],\n            {\"x\": 0.0, \"y\": -1.0},\n        )\n        track = document[\"tracks\"][0]\n        self.assertEqual(track[\"property\"], \"reveal\")\n        self.assertEqual(track[\"values\"][\"scalar\"], {\"from\": 0.0, \"to\": 1.0})\n\n        with self.assertRaises(ValueError):\n            scene.animate_reveal(path, duration=1.0)\n\n    def test_scene_rejects_foreign_objects_and_invalid_timing(self) -> None:\n",
+          )
+
+          # Default browser demo now visibly morphs the curved stroke.
+          replace(
+              "web/python/demo_scene.py",
+              "    fill=Color(0.62, 0.38, 0.96),\n    stroke=Color(1.0, 1.0, 1.0),\n    stroke_width=0.06,\n",
+              "    fill=None,\n    stroke=Color(0.72, 0.48, 1.0),\n    stroke_width=0.10,\n",
+          )
+          replace(
+              "web/python/demo_scene.py",
+              "scene.animate_rotation(line, -0.35, math.tau - 0.35, key=\"line.rotation\", **timing)\n\nresult = scene\n",
+              "scene.animate_rotation(line, -0.35, math.tau - 0.35, key=\"line.rotation\", **timing)\nmorph_target = (\n    VectorPath()\n    .move_to((0.0, 0.9))\n    .line_to((0.28, 0.28))\n    .line_to((0.9, 0.2))\n    .line_to((0.42, -0.2))\n    .line_to((0.58, -0.82))\n    .line_to((0.0, -0.48))\n    .line_to((-0.58, -0.82))\n    .line_to((-0.42, -0.2))\n    .line_to((-0.9, 0.2))\n    .line_to((-0.28, 0.28))\n    .close()\n)\nscene.animate_morph(curve, morph_target, key=\"curve.morph\", **timing)\n\nresult = scene\n",
+          )
+          replace(
+              "web/main.js",
+              "summary: \"Circles, rectangles, lines and a cubic path on one 4 s timeline.\",\n    features: \"primitives · vector path · timeline\",\n",
+              "summary: \"Circles, rectangles, lines and a cubic path morph on one 4 s timeline.\",\n    features: \"primitives · path morph · timeline\",\n",
+          )
+
+          # Document the now-playable renderer slice and its current stroke-only boundary.
+          p = Path("docs/path-morphing.md")
+          text = p.read_text()
+          marker = "## Next implementation step\n"
+          insertion = '''## Playable renderer slice\n\nThe first playable morph renderer is implemented as a fixed-topology stroke mesh. Each morph vertex stores both its source and target position; the WebGPU vertex shader interpolates them from normalized morph progress. The index buffer and vertex correspondence remain unchanged for the whole animation. Normal paths keep using the same path pipeline, with identical source/target positions.\n\nThe runtime reuses the existing normalized path scalar channel: ordinary paths interpret it as reveal, while paths with a semantic `morph_target` interpret it as morph progress. This keeps frame state compact and means morph playback changes only the path instance record; geometry is not retessellated or re-uploaded each frame. The Python API exposes this as `scene.animate_morph(path, target, ...)`.\n\nCurrent intentional boundary: morph rendering is stroke-only. Fill triangulation during topology-changing interpolation is deferred until a stable fill strategy is selected. A path cannot currently animate reveal and morph simultaneously because those operations share the normalized path channel.\n\n'''
+          if insertion not in text:
+              if marker not in text:
+                  raise SystemExit("path morph design marker missing")
+              text = text.replace(marker, insertion + marker, 1)
+          text = text.replace(
+              "Integrate `MorphPlan` into compiled scene data and introduce a morph-progress timeline property that references a precomputed target plan. Then add a renderer representation whose topology stays fixed for the duration of the morph, so each frame updates point positions rather than retessellating the source path.",
+              "Next, add fill morphing and decide whether reveal+morph composition warrants separate scalar channels. The stroke morph path is already fixed-topology and GPU-interpolated, so normal playback performs no path planning, tessellation, or geometry upload per frame.",
+          )
+          p.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --workspace --all-targets --all-features
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test -p noon-core -p noon-geometry -p noon-render-wgpu --all-features
+          PYTHONPATH=web/python python -m unittest web/python/test_noon.py
+
+      - name: Publish implementation commit
+        shell: bash
+        run: |
+          rm .github/workflows/agent-morph-once.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add -- \
+            crates/noon-core/src/lib.rs \
+            crates/noon-geometry/src/tessellation.rs \
+            crates/noon-render-wgpu/src/lib.rs \
+            crates/noon-render-wgpu/src/gpu.rs \
+            crates/noon-render-wgpu/src/path.wgsl \
+            web/python/noon.py \
+            web/python/test_noon.py \
+            web/python/demo_scene.py \
+            web/main.js \
+            docs/path-morphing.md \
+            .github/workflows/agent-morph-once.yml
+          git commit -m "Implement playable fixed-topology path morphing"
+          git push origin HEAD:agent/browser-realtime-architecture
