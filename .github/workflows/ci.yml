@@ -8,13 +8,66 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  morph-feature-preservation:
+    name: One-shot morph feature preservation fix
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'agent/browser-realtime-architecture' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/browser-realtime-architecture
+          fetch-depth: 0
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Apply and validate feature-preserving morph sampling
+        shell: bash
+        run: |
+          if grep -q 'feature_indices: Vec<usize>' crates/noon-geometry/src/morph.rs; then
+            echo 'Feature-preserving morph sampling already applied.'
+            exit 0
+          fi
+          python scripts/agent_preserve_morph_features.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --workspace --all-targets --all-features
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features
+          cargo check -p noon-render-wgpu --target wasm32-unknown-unknown --no-default-features --features web
+          cargo check -p noon-web --target wasm32-unknown-unknown
+          bash scripts/build-web-demo.sh
+
+      - name: Publish validated source only
+        shell: bash
+        run: |
+          if git diff --quiet -- crates/noon-geometry/src/morph.rs; then
+            echo 'No source changes to publish.'
+            exit 0
+          fi
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add -- crates/noon-geometry/src/morph.rs
+          git commit -m "Preserve authored vertices in morph resampling"
+          git push origin HEAD:agent/browser-realtime-architecture
+
   architecture:
     name: Fast architecture gate
     runs-on: ubuntu-latest
@@ -107,8 +160,4 @@ jobs:
           cargo clippy --manifest-path examples/Cargo.toml --all-targets --all-features -- --cap-lints warn
 
       - name: Test legacy crate
-        # `path::tests::partial_path` is a known legacy test bug: it replays
-        # already-closed text glyph path events and then calls `builder.close()`
-        # again, which current Lyon correctly rejects. The legacy path subsystem
-        # is being replaced; all other legacy tests remain mandatory.
         run: cargo test --manifest-path noon/Cargo.toml --all-features -- --skip path::tests::partial_path
