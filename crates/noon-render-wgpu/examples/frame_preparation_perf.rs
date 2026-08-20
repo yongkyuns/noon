@@ -101,6 +101,7 @@ fn build_frame(object_count: usize) -> FrameState {
             })
             .collect(),
         reveals: vec![1.0; object_count],
+        morphs: vec![0.0; object_count],
     }
 }
 

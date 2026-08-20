@@ -114,7 +114,7 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
 
 const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
-const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [
+const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -149,6 +149,11 @@ const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [
         format: wgpu::VertexFormat::Uint32x2,
         offset: 64,
         shader_location: 9,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 72,
+        shader_location: 10,
     },
 ];
 
@@ -1011,6 +1016,7 @@ mod tests {
                 },
             ],
             reveals: vec![1.0; 3],
+            morphs: vec![0.0; 3],
         }
     }
 
@@ -1040,6 +1046,7 @@ mod tests {
                 },
             ],
             reveals: vec![1.0; 2],
+            morphs: vec![0.0; 2],
         }
     }
 
@@ -1098,14 +1105,15 @@ mod tests {
         );
 
         let path_instance_layout = path_instance_layout();
-        assert_eq!(path_instance_layout.array_stride, 72);
+        assert_eq!(path_instance_layout.array_stride, 80);
         assert_eq!(
             path_instance_layout.step_mode,
             wgpu::VertexStepMode::Instance
         );
-        assert_eq!(path_instance_layout.attributes.len(), 7);
+        assert_eq!(path_instance_layout.attributes.len(), 8);
         assert_eq!(path_instance_layout.attributes[0].shader_location, 3);
         assert_eq!(path_instance_layout.attributes[6].shader_location, 9);
+        assert_eq!(path_instance_layout.attributes[7].shader_location, 10);
     }
 
     #[test]

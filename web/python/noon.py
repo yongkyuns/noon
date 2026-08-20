@@ -148,6 +148,20 @@ class VectorPath:
         return {"commands": list(self._commands)}
 
 
+@dataclass(frozen=True, slots=True)
+class Transform:
+    """Transform one scene object toward a target shape.
+
+    The first implementation supports VectorPath targets. Scene.play lowers
+    this authoring object into deterministic Noon IR; Python is not used during
+    frame playback.
+    """
+
+    source: Object
+    target: VectorPath
+    key: str | None = None
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -268,6 +282,58 @@ class Scene:
             key=key,
         )
 
+    def play(
+        self,
+        *animations: Transform,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+    ) -> Scene:
+        if not animations:
+            raise ValueError("play requires at least one animation")
+        for animation in animations:
+            if not isinstance(animation, Transform):
+                raise TypeError("unsupported animation; expected Transform")
+            self._schedule_transform(
+                animation,
+                duration=duration,
+                start_time=start_time,
+                easing=easing,
+            )
+        return self
+
+    def _schedule_transform(
+        self,
+        animation: Transform,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        obj = animation.source
+        target = animation.target
+        if not isinstance(obj, Object) or obj._owner is not self._owner:
+            raise ValueError("transformed object must belong to this Scene")
+        if not isinstance(target, VectorPath):
+            raise TypeError("Transform target must currently be a VectorPath")
+        geometry = self._objects[obj.id]["geometry"]
+        source = geometry.get("vector_path")
+        if source is None:
+            raise ValueError("the current Transform renderer supports vector paths only")
+        if "morph_target" in source:
+            raise ValueError("a path can currently have one geometric Transform target")
+        source["morph_target"] = target.to_ir()
+        self._add_scalar_track(
+            obj,
+            "morph",
+            0.0,
+            1.0,
+            start_time,
+            duration,
+            easing,
+            animation.key,
+        )
+
     def animate_position(
         self,
         obj: Object,
@@ -333,13 +399,6 @@ class Scene:
         easing: str = "linear",
         key: str | None = None,
     ) -> Scene:
-        if isinstance(obj, Object) and obj._owner is self._owner:
-            geometry = self._objects[obj.id]["geometry"]
-            vector_path = geometry.get("vector_path")
-            if vector_path is not None and "morph_target" in vector_path:
-                raise ValueError(
-                    "morph and reveal currently share one normalized path channel"
-                )
         self._add_scalar_track(
             obj,
             "reveal",
@@ -362,26 +421,12 @@ class Scene:
         easing: str = "linear",
         key: str | None = None,
     ) -> Scene:
-        if not isinstance(obj, Object) or obj._owner is not self._owner:
-            raise ValueError("morphed object must belong to this Scene")
-        if not isinstance(target, VectorPath):
-            raise TypeError("target must be a VectorPath")
-        geometry = self._objects[obj.id]["geometry"]
-        source = geometry.get("vector_path")
-        if source is None:
-            raise ValueError("only vector path objects can morph")
-        if "morph_target" in source:
-            raise ValueError("a path can currently have one morph target")
-        if any(
-            track["object"] == obj.id and track["property"] == "reveal"
-            for track in self._tracks
-        ):
-            raise ValueError("morph and reveal currently share one normalized path channel")
-        source["morph_target"] = target.to_ir()
-        self._add_scalar_track(
-            obj, "reveal", 0.0, 1.0, start_time, duration, easing, key
+        return self.play(
+            Transform(obj, target, key=key),
+            duration=duration,
+            start_time=start_time,
+            easing=easing,
         )
-        return self
 
     def _add_object(
         self,

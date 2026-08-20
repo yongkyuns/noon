@@ -1,6 +1,6 @@
 import math
 
-from noon import Color, Scene, VectorPath
+from noon import Color, Scene, Transform, VectorPath
 
 scene = Scene()
 circle = scene.circle(
@@ -71,6 +71,6 @@ morph_target = (
     .line_to((-0.28, 0.28))
     .close()
 )
-scene.animate_morph(curve, morph_target, key="curve.morph", **timing)
+scene.play(Transform(curve, morph_target, key="curve.transform"), **timing)
 
 result = scene

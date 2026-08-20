@@ -22,11 +22,17 @@ pub struct FrameState {
     /// Normalized per-object reveal state. Renderers may ignore it for
     /// geometry types that do not support reveal yet.
     pub reveals: Vec<f32>,
+    /// Normalized per-object morph progress, independent from reveal.
+    pub morphs: Vec<f32>,
 }
 
 impl FrameState {
     pub fn reveal(&self, object_index: usize) -> f32 {
         self.reveals[object_index]
+    }
+
+    pub fn morph(&self, object_index: usize) -> f32 {
+        self.morphs[object_index]
     }
 }
 
@@ -307,30 +313,36 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .collect();
     FrameState {
         time,
-        reveals: initial_reveals(compiled, objects.len()),
+        reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
+        morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
         objects,
     }
 }
 
-fn initial_reveals(compiled: &CompiledScene, object_count: usize) -> Vec<f32> {
-    let mut reveals = vec![1.0; object_count];
+fn initial_scalar_property(
+    compiled: &CompiledScene,
+    object_count: usize,
+    property: Property,
+    default: f32,
+) -> Vec<f32> {
+    let mut values = vec![default; object_count];
     let mut initialized = vec![false; object_count];
     for track in compiled
         .tracks()
         .iter()
-        .filter(|track| track.property == Property::Reveal)
+        .filter(|track| track.property == property)
     {
         let index = track.object_index as usize;
         if initialized[index] {
             continue;
         }
         let TrackValues::Scalar { from, .. } = track.values else {
-            unreachable!("compiled reveal track must contain scalar values");
+            unreachable!("compiled scalar property must contain scalar values");
         };
-        reveals[index] = from.clamp(0.0, 1.0);
+        values[index] = from.clamp(0.0, 1.0);
         initialized[index] = true;
     }
-    reveals
+    values
 }
 
 fn build_groups(tracks: &[CompiledTrack]) -> Vec<TrackGroup> {
@@ -392,6 +404,12 @@ fn apply_group(
             let value = value.clamp(0.0, 1.0);
             let changed = frame.reveals[group.object_index] != value;
             frame.reveals[group.object_index] = value;
+            changed
+        }
+        (Property::Morph, EvaluatedValue::Scalar(value)) => {
+            let value = value.clamp(0.0, 1.0);
+            let changed = frame.morphs[group.object_index] != value;
+            frame.morphs[group.object_index] = value;
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
@@ -522,6 +540,30 @@ mod tests {
         assert_eq!(instance.seek(1.0).expect("valid time").reveal(0), 0.0);
         assert_eq!(instance.seek(2.0).expect("valid time").reveal(0), 0.5);
         assert_eq!(instance.seek(3.0).expect("valid time").reveal(0), 1.0);
+    }
+
+    #[test]
+    fn reveal_and_morph_progress_are_independent() {
+        let source = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = noon_core::VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(source.with_morph_target(target)));
+        scene
+            .animate_reveal(object, 0.0, 1.0, TrackTiming::new(0.0, 2.0, Easing::Linear))
+            .expect("valid reveal track");
+        scene
+            .animate_morph(object, 0.0, 1.0, TrackTiming::new(0.0, 4.0, Easing::Linear))
+            .expect("valid morph track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+
+        let frame = instance.seek(1.0).expect("valid time");
+        assert_eq!(frame.reveal(0), 0.5);
+        assert_eq!(frame.morph(0), 0.25);
     }
 
     #[test]

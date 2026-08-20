@@ -17,6 +17,7 @@ pub enum Property {
     Rotation,
     Opacity,
     Reveal,
+    Morph,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +30,7 @@ impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
             Self::Position => ValueKind::Vec2,
-            Self::Rotation | Self::Opacity | Self::Reveal => ValueKind::Scalar,
+            Self::Rotation | Self::Opacity | Self::Reveal | Self::Morph => ValueKind::Scalar,
         }
     }
 }
@@ -189,6 +190,16 @@ impl SceneDefinition {
         self.animate_scalar(object, Property::Reveal, from, to, timing)
     }
 
+    pub fn animate_morph(
+        &mut self,
+        object: ObjectId,
+        from: f32,
+        to: f32,
+        timing: TrackTiming,
+    ) -> Result<TrackId, TimelineError> {
+        self.animate_scalar(object, Property::Morph, from, to, timing)
+    }
+
     pub fn tracks(&self) -> &[TrackDefinition] {
         &self.tracks
     }
@@ -244,6 +255,25 @@ mod tests {
 
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Reveal);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
+    }
+
+    #[test]
+    fn morph_is_a_distinct_scalar_timeline_property() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        ));
+        scene
+            .animate_morph(object, 0.0, 1.0, timing())
+            .expect("valid morph track");
+
+        assert_eq!(scene.tracks()[0].property, Property::Morph);
         assert_eq!(
             scene.tracks()[0].values,
             TrackValues::Scalar { from: 0.0, to: 1.0 }

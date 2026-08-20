@@ -15,6 +15,7 @@ pub struct DynamicProperties {
     pub rotation: bool,
     pub opacity: bool,
     pub reveal: bool,
+    pub morph: bool,
 }
 
 impl DynamicProperties {
@@ -24,11 +25,12 @@ impl DynamicProperties {
             Property::Rotation => self.rotation = true,
             Property::Opacity => self.opacity = true,
             Property::Reveal => self.reveal = true,
+            Property::Morph => self.morph = true,
         }
     }
 
     pub const fn any(self) -> bool {
-        self.position || self.rotation || self.opacity || self.reveal
+        self.position || self.rotation || self.opacity || self.reveal || self.morph
     }
 }
 
@@ -305,6 +307,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::Rotation => 1,
         Property::Opacity => 2,
         Property::Reveal => 3,
+        Property::Morph => 4,
     }
 }
 
@@ -387,6 +390,7 @@ mod tests {
                 rotation: false,
                 opacity: true,
                 reveal: false,
+                morph: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
@@ -412,8 +416,26 @@ mod tests {
                 rotation: false,
                 opacity: false,
                 reveal: true,
+                morph: false,
             }
         );
+    }
+
+    #[test]
+    fn morph_tracks_mark_only_morph_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        ));
+        scene
+            .animate_morph(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
+            .expect("valid morph track");
+
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert!(compiled.objects()[0].dynamic.morph);
+        assert!(!compiled.objects()[0].dynamic.reveal);
     }
 
     #[test]

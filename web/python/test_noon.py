@@ -2,7 +2,7 @@ import json
 import math
 import unittest
 
-from noon import Color, PatchBatch, Scene, VectorPath
+from noon import Color, PatchBatch, Scene, Transform, VectorPath
 
 
 class PatchBatchTests(unittest.TestCase):
@@ -126,13 +126,11 @@ class SceneTests(unittest.TestCase):
             stroke_width=0.1,
             key="morph",
         )
-        scene.animate_morph(
-            path,
-            target,
+        scene.play(
+            Transform(path, target, key="morph.shape"),
             duration=3.0,
             start_time=0.5,
             easing="ease_in_out_cubic",
-            key="morph.shape",
         )
 
         document = scene.to_document()
@@ -142,11 +140,35 @@ class SceneTests(unittest.TestCase):
             {"x": 0.0, "y": -1.0},
         )
         track = document["tracks"][0]
-        self.assertEqual(track["property"], "reveal")
+        self.assertEqual(track["property"], "morph")
         self.assertEqual(track["values"]["scalar"], {"from": 0.0, "to": 1.0})
 
-        with self.assertRaises(ValueError):
-            scene.animate_reveal(path, duration=1.0)
+        scene.animate_reveal(path, duration=1.0, key="morph.reveal")
+        self.assertEqual(scene.to_document()["tracks"][1]["property"], "reveal")
+
+    def test_play_supports_multiple_transform_animations(self) -> None:
+        scene = Scene()
+        first = scene.path(
+            VectorPath().move_to((-1.0, 0.0)).line_to((1.0, 0.0)),
+            fill=None,
+            stroke=Color(1.0, 1.0, 1.0),
+            key="first",
+        )
+        second = scene.path(
+            VectorPath().move_to((-1.0, -1.0)).line_to((1.0, 1.0)),
+            fill=None,
+            stroke=Color(1.0, 1.0, 1.0),
+            key="second",
+        )
+        scene.play(
+            Transform(first, VectorPath().move_to((0.0, -1.0)).line_to((0.0, 1.0))),
+            Transform(second, VectorPath().move_to((-1.0, 1.0)).line_to((1.0, -1.0))),
+            duration=2.0,
+        )
+        self.assertEqual(
+            [track["property"] for track in scene.to_document()["tracks"]],
+            ["morph", "morph"],
+        )
 
     def test_scene_rejects_foreign_objects_and_invalid_timing(self) -> None:
         first = Scene()

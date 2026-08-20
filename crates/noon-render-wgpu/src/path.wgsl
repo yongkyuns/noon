@@ -19,6 +19,7 @@ struct PathVertexInput {
     @location(7) stroke: vec4<f32>,
     @location(8) metrics: vec2<f32>,
     @location(9) flags: vec2<u32>,
+    @location(10) path_params: vec2<f32>,
 };
 
 struct PathVertexOutput {
@@ -35,11 +36,10 @@ fn premultiplied(color: vec4<f32>) -> vec4<f32> {
 @vertex
 fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
-    let is_morph = (input.surface_and_progress & 33554432u) != 0u;
-    let encoded_progress = (input.surface_and_progress >> 1u) & 16777215u;
+    let encoded_progress = input.surface_and_progress >> 1u;
     let path_progress = f32(encoded_progress) / 16777215.0;
-    let scalar = clamp(input.metrics.x, 0.0, 1.0);
-    let local = select(input.local, mix(input.local, input.target_local, scalar), is_morph);
+    let morph = clamp(input.path_params.y, 0.0, 1.0);
+    let local = mix(input.local, input.target_local, morph);
 
     let c = cos(input.rotation);
     let s = sin(input.rotation);
@@ -55,7 +55,7 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let color = select(input.fill, input.stroke, is_stroke);
     output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
     output.path_progress = path_progress;
-    output.reveal = select(scalar, 1.0, is_morph);
+    output.reveal = clamp(input.path_params.x, 0.0, 1.0);
     return output;
 }
 

@@ -84,9 +84,9 @@ The runtime does not rebuild semantic paths or run curve flattening each frame. 
 
 The first playable morph renderer is implemented as a fixed-topology stroke mesh. Each morph vertex stores both its source and target position; the WebGPU vertex shader interpolates them from normalized morph progress. The index buffer and vertex correspondence remain unchanged for the whole animation. Normal paths keep using the same path pipeline, with identical source/target positions.
 
-The runtime reuses the existing normalized path scalar channel: ordinary paths interpret it as reveal, while paths with a semantic `morph_target` interpret it as morph progress. This keeps frame state compact and means morph playback changes only the path instance record; geometry is not retessellated or re-uploaded each frame. The Python API exposes this as `scene.animate_morph(path, target, ...)`.
+Morph progress is now a first-class `Property::Morph`, independent from `Property::Reveal`. `FrameState` carries both normalized values and the path instance uploads them together, so reveal and morph can be composed on the same path without retessellation. The primary Python authoring surface is Manim-like: `scene.play(Transform(path, target), duration=...)`; `scene.animate_morph(...)` remains a compatibility helper that lowers to the same morph track.
 
-Current intentional boundary: morph rendering is stroke-only. Fill triangulation during topology-changing interpolation is deferred until a stable fill strategy is selected. A path cannot currently animate reveal and morph simultaneously because those operations share the normalized path channel.
+Current intentional boundary: the first `Transform` renderer supports `VectorPath` targets and stroke geometry. Fill triangulation and generic target mobjects/style interpolation are separate follow-up capabilities.
 
 ## Validation
 
@@ -96,7 +96,7 @@ Normal repository CI remains the authoritative post-push gate, including the bro
 
 ## Next implementation step
 
-Next, add fill morphing and decide whether reveal+morph composition warrants separate scalar channels. The stroke morph path is already fixed-topology and GPU-interpolated, so normal playback performs no path planning, tessellation, or geometry upload per frame.
+Next, broaden `Transform` from vector-path geometry into a generic compiled transform that can interpolate target transform/style and later detached target mobjects, then add fill morphing. The stroke morph path is already fixed-topology and GPU-interpolated, so normal playback performs no path planning, tessellation, or geometry upload per frame.
 
 Correctness follow-ups should cover:
 

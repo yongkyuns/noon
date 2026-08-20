@@ -20,7 +20,6 @@ use std::ops::Range;
 // progress in this exact domain avoids endpoint wraparound at reveal == 1.0
 // while retaining far more precision than pixel-scale path clipping needs.
 const PATH_PROGRESS_MAX: u32 = 16_777_215;
-const PATH_MORPH_BIT: u32 = 1 << 25;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -100,6 +99,8 @@ pub struct LineInstance {
 pub struct PathInstance {
     pub transform: PackedTransform,
     pub style: PackedStyle,
+    /// x = reveal, y = morph progress. Both are normalized and independent.
+    pub path_params: [f32; 2],
 }
 
 #[repr(C)]
@@ -260,7 +261,11 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Path { index, .. } => {
-                    let packed = pack_path(object, frame.reveal(object_index));
+                    let packed = pack_path(
+                        object,
+                        frame.reveal(object_index),
+                        frame.morph(object_index),
+                    );
                     instances_repacked += 1;
                     if self.paths[index] != packed {
                         self.paths[index] = packed;
@@ -337,9 +342,11 @@ impl FramePreparer {
                         });
                     let index = path_groups[batch].instances.len();
                     path_groups[batch].ids.push(object.id);
-                    path_groups[batch]
-                        .instances
-                        .push(pack_path(object, frame.reveal(object_index)));
+                    path_groups[batch].instances.push(pack_path(
+                        object,
+                        frame.reveal(object_index),
+                        frame.morph(object_index),
+                    ));
                     self.slots.push(PreparedSlot::Path { index, batch });
                 }
                 GeometryRef::External(_) => {
@@ -367,7 +374,7 @@ impl FramePreparer {
             next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
                 position: [vertex.position.x, vertex.position.y],
                 target_position: [vertex.target_position.x, vertex.target_position.y],
-                surface: pack_path_surface(vertex.surface, vertex.path_progress, mesh.morphing),
+                surface: pack_path_surface(vertex.surface, vertex.path_progress),
             }));
             next_indices.extend(mesh.indices.iter().map(|index| {
                 index
@@ -611,29 +618,22 @@ fn pack_line(object: &FrameObjectState) -> LineInstance {
     }
 }
 
-fn pack_path(object: &FrameObjectState, reveal: f32) -> PathInstance {
+fn pack_path(object: &FrameObjectState, reveal: f32, morph: f32) -> PathInstance {
     debug_assert!(matches!(object.geometry, GeometryRef::VectorPath(_)));
-    let mut style: PackedStyle = object.style.into();
-    // Path stroke width is baked into the cached mesh, so this otherwise-unused
-    // GPU field carries normalized reveal without growing the instance stride.
-    style.stroke_width = reveal.clamp(0.0, 1.0);
     PathInstance {
         transform: object.transform.into(),
-        style,
+        style: object.style.into(),
+        path_params: [reveal.clamp(0.0, 1.0), morph.clamp(0.0, 1.0)],
     }
 }
 
-fn pack_path_surface(surface: PathSurface, progress: f32, morphing: bool) -> u32 {
+fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
-    let mut packed = (progress << 1)
+    (progress << 1)
         | match surface {
             PathSurface::Fill => 0,
             PathSurface::Stroke => 1,
-        };
-    if morphing {
-        packed |= PATH_MORPH_BIT;
-    }
-    packed
+        }
 }
 
 #[cfg(test)]
@@ -680,10 +680,12 @@ mod tests {
 
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
         let reveals = vec![1.0; objects.len()];
+        let morphs = vec![0.0; objects.len()];
         FrameState {
             time: 1.25,
             objects,
             reveals,
+            morphs,
         }
     }
 
@@ -694,7 +696,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<CircleInstance>(), 88);
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
-        assert_eq!(std::mem::size_of::<PathInstance>(), 72);
+        assert_eq!(std::mem::size_of::<PathInstance>(), 80);
         assert_eq!(std::mem::size_of::<PathVertex>(), 20);
     }
 
@@ -813,8 +815,33 @@ mod tests {
         assert!(!prepared.path_geometry_dirty);
         assert_eq!(prepared.path_dirty_ranges.len(), 1);
         assert_eq!(prepared.path_dirty_ranges[0], 0..1);
-        assert_eq!(prepared.paths[0].style.stroke_width, 0.35);
+        assert_eq!(prepared.paths[0].path_params[0], 0.35);
         assert_eq!(preparer.cached_path_mesh_count(), 1);
+    }
+
+    #[test]
+    fn path_morph_changes_only_dirty_the_instance_record() {
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0))
+            .with_morph_target(target);
+        let mut state = object(7, GeometryRef::path(source));
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.2;
+        let mut frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+
+        frame.morphs[0] = 0.6;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.paths[0].path_params, [1.0, 0.6]);
     }
 
     #[test]
