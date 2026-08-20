@@ -25,7 +25,19 @@ jobs:
           ref: agent/browser-realtime-architecture
 
       - name: Apply morph scaling refactor
-        run: python3 scripts/apply_morph_perf_refactor.py
+        run: |
+          python3 scripts/apply_morph_perf_refactor.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("crates/noon-render-wgpu/src/lib.rs")
+          text = path.read_text()
+          text = text.replace(
+              "        assert_eq!(prepared.path_dirty_ranges, &[0..OBJECT_COUNT]);\n",
+              "        assert_eq!(prepared.path_dirty_ranges.len(), 1);\n"
+              "        assert_eq!(prepared.path_dirty_ranges[0], 0..OBJECT_COUNT);\n",
+          )
+          path.write_text(text)
+          PY
 
       - name: Use stable Rust
         run: |
