@@ -605,6 +605,11 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        last_cpu_frame_ms: f64,
+        last_runtime_evaluation_ms: f64,
+        last_frame_prepare_ms: f64,
+        last_upload_ms: f64,
+        last_encode_submit_ms: f64,
         gpu_profiler: Option<GpuFrameProfiler>,
     }
 
@@ -682,6 +687,11 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                last_cpu_frame_ms: f64::NAN,
+                last_runtime_evaluation_ms: f64::NAN,
+                last_frame_prepare_ms: f64::NAN,
+                last_upload_ms: f64::NAN,
+                last_encode_submit_ms: f64::NAN,
                 gpu_profiler,
             };
             result.update_camera()?;
@@ -725,9 +735,14 @@ mod wasm {
         /// Advances from a monotonic `requestAnimationFrame` timestamp and presents one frame.
         #[wasm_bindgen(js_name = renderFrame)]
         pub fn render_frame(&mut self, timestamp_ms: f64) -> Result<bool, JsValue> {
+            let frame_started_ms = performance_now_ms();
             let scene_time = self.clock.scene_time(timestamp_ms).map_err(js_error)?;
+            let runtime_started_ms = performance_now_ms();
             self.player.advance_to(scene_time).map_err(js_error)?;
-            self.render_current_frame()
+            self.last_runtime_evaluation_ms = elapsed_ms(runtime_started_ms);
+            let presented = self.render_current_frame()?;
+            self.last_cpu_frame_ms = elapsed_ms(frame_started_ms);
+            Ok(presented)
         }
 
         #[wasm_bindgen(js_name = applyPatchBatch)]
@@ -789,6 +804,31 @@ mod wasm {
         #[wasm_bindgen(js_name = lastGeometryCacheMisses)]
         pub fn last_geometry_cache_misses(&self) -> usize {
             self.last_geometry_cache_misses
+        }
+
+        #[wasm_bindgen(js_name = lastCpuFrameMs)]
+        pub fn last_cpu_frame_ms(&self) -> f64 {
+            self.last_cpu_frame_ms
+        }
+
+        #[wasm_bindgen(js_name = lastRuntimeEvaluationMs)]
+        pub fn last_runtime_evaluation_ms(&self) -> f64 {
+            self.last_runtime_evaluation_ms
+        }
+
+        #[wasm_bindgen(js_name = lastFramePrepareMs)]
+        pub fn last_frame_prepare_ms(&self) -> f64 {
+            self.last_frame_prepare_ms
+        }
+
+        #[wasm_bindgen(js_name = lastUploadMs)]
+        pub fn last_upload_ms(&self) -> f64 {
+            self.last_upload_ms
+        }
+
+        #[wasm_bindgen(js_name = lastEncodeSubmitMs)]
+        pub fn last_encode_submit_ms(&self) -> f64 {
+            self.last_encode_submit_ms
         }
 
         #[wasm_bindgen(js_name = gpuProfilingSupported)]
@@ -886,12 +926,16 @@ mod wasm {
                 return Ok(false);
             }
 
+            let prepare_started_ms = performance_now_ms();
             let changes = self.player.take_frame_changes();
             let prepared = self
                 .preparer
                 .prepare_incremental(self.player.frame(), &changes);
+            self.last_frame_prepare_ms = elapsed_ms(prepare_started_ms);
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
+            let upload_started_ms = performance_now_ms();
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
+            self.last_upload_ms = elapsed_ms(upload_started_ms);
             self.last_bytes_uploaded = upload.bytes_uploaded;
 
             let (surface_texture, reconfigure_after_present) =
@@ -916,6 +960,7 @@ mod wasm {
             let view = surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
+            let encode_started_ms = performance_now_ms();
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -949,6 +994,7 @@ mod wasm {
                     .finish_sample(&mut encoder, sample);
             }
             self.queue.submit(Some(encoder.finish()));
+            self.last_encode_submit_ms = elapsed_ms(encode_started_ms);
             surface_texture.present();
 
             self.last_draw_calls = draw.draw_calls;
@@ -1060,6 +1106,21 @@ mod wasm {
             )
             .map_err(js_error)?;
         encode_scene(&scene).map_err(js_error)
+    }
+
+    fn performance_now_ms() -> f64 {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or(f64::NAN, |performance| performance.now())
+    }
+
+    fn elapsed_ms(start_ms: f64) -> f64 {
+        let end_ms = performance_now_ms();
+        if start_ms.is_finite() && end_ms.is_finite() {
+            (end_ms - start_ms).max(0.0)
+        } else {
+            f64::NAN
+        }
     }
 
     fn create_surface(

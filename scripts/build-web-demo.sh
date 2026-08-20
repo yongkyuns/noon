@@ -13,6 +13,7 @@ node --check web/gpu-profile.js
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
+PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
 
 wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release

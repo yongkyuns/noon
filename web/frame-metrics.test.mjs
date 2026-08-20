@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FrameMetrics, summarizeSamples } from "./frame-metrics.js";
+import { FrameMetrics, SampleWindow, summarizeSamples } from "./frame-metrics.js";
 
 test("summarizes deterministic frame percentiles", () => {
   assert.deepEqual(summarizeSamples([4, 1, 3, 2]), {
@@ -30,6 +30,27 @@ test("records submission time separately from presentation cadence", () => {
     submission: null,
     interval: null,
   });
+});
+
+test("bounded sample windows retain recent measurements", () => {
+  const samples = new SampleWindow(3);
+  samples.record(1);
+  samples.record(2);
+  samples.record(3);
+  samples.record(10);
+
+  assert.equal(samples.size, 3);
+  assert.deepEqual(samples.summary(), {
+    p50: 3,
+    p95: 10,
+    max: 10,
+    mean: 5,
+  });
+  samples.reset();
+  assert.equal(samples.size, 0);
+  assert.equal(samples.summary(), null);
+  assert.throws(() => new SampleWindow(0), /positive integer/);
+  assert.throws(() => samples.record(Number.NaN), /finite values/);
 });
 
 test("rejects non-finite measurements", () => {

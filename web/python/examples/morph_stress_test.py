@@ -4,20 +4,25 @@ from noon import Color, Scene, Transform, VectorPath
 
 scene = Scene()
 
-# A deliberately dense morph scene that exercises the production path:
-# Python builds semantic geometry once, Noon prepares 12 reusable fixed-topology
-# morph meshes, then 600 objects animate by updating instance data only.
-#
-# In the browser metrics this should settle around:
-#   - 600 objects
-#   - ~12 path draw calls (one per reusable morph mesh)
-#   - no path-geometry upload during steady morph playback
-columns = 30
-rows = 20
+# A deliberately dense morph scene that exercises the production path. The
+# playground passes object_count through the worker context so the same source
+# can benchmark several scales without changing the animation semantics.
+authoring_context = globals().get("context", {})
+requested_count = authoring_context.get("object_count", 600) if isinstance(authoring_context, dict) else 600
+if isinstance(requested_count, bool) or not isinstance(requested_count, int):
+    raise TypeError("object_count must be an integer")
+if requested_count <= 0 or requested_count > 10_000:
+    raise ValueError("object_count must be between 1 and 10000")
+
+object_count = requested_count
 variant_count = 12
-spacing_x = 0.20
-spacing_y = 0.20
-object_count = columns * rows
+aspect = 1.5
+columns = math.ceil(math.sqrt(object_count * aspect))
+rows = math.ceil(object_count / columns)
+spacing_x = 5.8 / max(columns - 1, 1)
+spacing_y = 3.8 / max(rows - 1, 1)
+source_radius = min(spacing_x, spacing_y) * 0.37
+stroke_width = max(source_radius * 0.24, 0.0025)
 
 
 def rounded_source(radius: float) -> VectorPath:
@@ -38,10 +43,10 @@ def rounded_source(radius: float) -> VectorPath:
 
 def star_target(variant: int) -> VectorPath:
     # Twelve subtly different targets create twelve reusable geometry-cache
-    # entries. Each target remains a symmetric five-point star so visual defects
-    # in correspondence or stroke joins are easy to spot under load.
+    # entries. Every object therefore updates only its compact instance record
+    # during steady-state morph playback.
     phase = (variant / variant_count) * math.pi * 0.36
-    outer = 0.088 + 0.006 * math.sin(variant * 1.7)
+    outer = source_radius * (1.18 + 0.08 * math.sin(variant * 1.7))
     inner = outer * (0.42 + 0.05 * math.cos(variant * 0.9))
     points = []
     for point_index in range(10):
@@ -55,46 +60,45 @@ def star_target(variant: int) -> VectorPath:
     return target.close()
 
 
-source = rounded_source(0.074)
+source = rounded_source(source_radius)
 targets = [star_target(variant) for variant in range(variant_count)]
 
-for row in range(rows):
-    for column in range(columns):
-        index = row * columns + column
-        variant = index % variant_count
-        x = (column - (columns - 1) / 2.0) * spacing_x
-        y = ((rows - 1) / 2.0 - row) * spacing_y
-        phase = (row * 0.19 + column * 0.13) % (2.0 * math.pi)
+for index in range(object_count):
+    row = index // columns
+    column = index % columns
+    variant = index % variant_count
+    x = (column - (columns - 1) / 2.0) * spacing_x
+    y = ((rows - 1) / 2.0 - row) * spacing_y
+    phase = (row * 0.19 + column * 0.13) % (2.0 * math.pi)
 
-        color_t = variant / (variant_count - 1)
-        color = Color(
-            0.34 + 0.58 * color_t,
-            0.80 - 0.34 * color_t,
-            0.98 - 0.18 * math.sin(variant * 0.7) ** 2,
-            0.92,
-        )
-        shape = scene.path(
-            source,
-            position=(x, y),
-            rotation=phase * 0.18,
-            fill=None,
-            stroke=color,
-            stroke_width=0.018,
-            key=f"stress.{index}",
-        )
-        scene.play(
-            Transform(shape, targets[variant], key=f"stress.{index}.morph"),
-            duration=4.0,
-            easing="ease_in_out_cubic",
-        )
-        scene.animate_rotation(
-            shape,
-            phase * 0.18,
-            phase * 0.18 + (0.75 if (row + column) % 2 == 0 else -0.75),
-            duration=4.0,
-            easing="ease_in_out_cubic",
-            key=f"stress.{index}.rotation",
-        )
+    color_t = variant / (variant_count - 1)
+    color = Color(
+        0.34 + 0.58 * color_t,
+        0.80 - 0.34 * color_t,
+        0.98 - 0.18 * math.sin(variant * 0.7) ** 2,
+        0.92,
+    )
+    shape = scene.path(
+        source,
+        position=(x, y),
+        rotation=phase * 0.18,
+        fill=None,
+        stroke=color,
+        stroke_width=stroke_width,
+        key=f"stress.{index}",
+    )
+    scene.play(
+        Transform(shape, targets[variant], key=f"stress.{index}.morph"),
+        duration=4.0,
+        easing="ease_in_out_cubic",
+    )
+    scene.animate_rotation(
+        shape,
+        phase * 0.18,
+        phase * 0.18 + (0.75 if (row + column) % 2 == 0 else -0.75),
+        duration=4.0,
+        easing="ease_in_out_cubic",
+        key=f"stress.{index}.rotation",
+    )
 
-assert object_count == 600
 result = scene

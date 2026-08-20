@@ -29,6 +29,40 @@ export class FrameMetrics {
   }
 }
 
+export class SampleWindow {
+  #capacity;
+  #samples = [];
+
+  constructor(capacity = 180) {
+    if (!Number.isSafeInteger(capacity) || capacity <= 0) {
+      throw new RangeError("sample window capacity must be a positive integer");
+    }
+    this.#capacity = capacity;
+  }
+
+  record(value) {
+    if (!Number.isFinite(value)) {
+      throw new TypeError("sample window requires finite values");
+    }
+    this.#samples.push(value);
+    if (this.#samples.length > this.#capacity) {
+      this.#samples.splice(0, this.#samples.length - this.#capacity);
+    }
+  }
+
+  reset() {
+    this.#samples.length = 0;
+  }
+
+  summary() {
+    return summarizeSamples(this.#samples);
+  }
+
+  get size() {
+    return this.#samples.length;
+  }
+}
+
 export function summarizeSamples(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
     return null;

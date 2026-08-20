@@ -1,6 +1,7 @@
 import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { diffSceneDocuments, SceneIdentityMap } from "./scene-identity.js";
+import { SampleWindow } from "./frame-metrics.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -18,6 +19,12 @@ const metricObjects = document.querySelector("#metric-objects");
 const metricDraws = document.querySelector("#metric-draws");
 const metricUpload = document.querySelector("#metric-upload");
 const metricTime = document.querySelector("#metric-time");
+const metricCpuFrame = document.querySelector("#metric-cpu-frame");
+const metricRuntime = document.querySelector("#metric-runtime");
+const metricPrepare = document.querySelector("#metric-prepare");
+const metricUploadMs = document.querySelector("#metric-upload-ms");
+const metricEncode = document.querySelector("#metric-encode");
+const metricGpu = document.querySelector("#metric-gpu");
 const paneToolbar = document.querySelector(".pane-toolbar");
 const toolbarActions = document.querySelector(".actions");
 const editorStack = document.querySelector(".editor-stack");
@@ -37,11 +44,28 @@ const SCENE_EXAMPLES = [
     features: "Transform · path morph · GPU interpolation",
   },
   {
-    name: "Morph stress test",
+    name: "Morph stress · 600",
     path: "./python/examples/morph_stress_test.py",
+    context: { object_count: 600 },
     summary:
-      "Six hundred simultaneous path morphs reuse twelve cached meshes to stress runtime evaluation, batching and dirty uploads.",
-    features: "600 morphs · 12 meshes · batching · dirty uploads",
+      "Six hundred simultaneous path morphs reuse twelve cached meshes with live CPU/GPU percentile profiling.",
+    features: "600 morphs · 12 meshes · CPU/GPU profile",
+  },
+  {
+    name: "Morph stress · 1,000",
+    path: "./python/examples/morph_stress_test.py",
+    context: { object_count: 1000 },
+    summary:
+      "One thousand simultaneous path morphs reuse twelve cached meshes with live CPU/GPU percentile profiling.",
+    features: "1,000 morphs · 12 meshes · CPU/GPU profile",
+  },
+  {
+    name: "Morph stress · 3,000",
+    path: "./python/examples/morph_stress_test.py",
+    context: { object_count: 3000 },
+    summary:
+      "Three thousand simultaneous path morphs reuse twelve cached meshes to expose CPU preparation and GPU limits.",
+    features: "3,000 morphs · 12 meshes · CPU/GPU profile",
   },
   {
     name: "Staggered choreography",
@@ -299,6 +323,8 @@ try {
 
   await init();
   const player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
+  const gpuProfilingSupported = player.gpuProfilingSupported();
+  player.setGpuProfilingEnabled(gpuProfilingSupported);
 
   function resize() {
     const scale = window.devicePixelRatio || 1;
@@ -314,6 +340,91 @@ try {
   let authoringClient = null;
   const sceneIdentities = new SceneIdentityMap();
   let authoredScene = null;
+  const PERF_SAMPLE_CAPACITY = 180;
+  const PERF_WARMUP_FRAMES = 30;
+  const perfSamples = {
+    cpuFrame: new SampleWindow(PERF_SAMPLE_CAPACITY),
+    runtime: new SampleWindow(PERF_SAMPLE_CAPACITY),
+    prepare: new SampleWindow(PERF_SAMPLE_CAPACITY),
+    upload: new SampleWindow(PERF_SAMPLE_CAPACITY),
+    encode: new SampleWindow(PERF_SAMPLE_CAPACITY),
+  };
+  let perfWarmupRemaining = PERF_WARMUP_FRAMES;
+
+  function resetPerformanceProfile() {
+    Object.values(perfSamples).forEach((samples) => samples.reset());
+    perfWarmupRemaining = PERF_WARMUP_FRAMES;
+    player.resetGpuProfiling();
+  }
+
+  function recordPerformanceFrame() {
+    if (perfWarmupRemaining > 0) {
+      perfWarmupRemaining -= 1;
+      if (perfWarmupRemaining === 0) {
+        player.resetGpuProfiling();
+      }
+      return;
+    }
+    perfSamples.cpuFrame.record(player.lastCpuFrameMs());
+    perfSamples.runtime.record(player.lastRuntimeEvaluationMs());
+    perfSamples.prepare.record(player.lastFramePrepareMs());
+    perfSamples.upload.record(player.lastUploadMs());
+    perfSamples.encode.record(player.lastEncodeSubmitMs());
+  }
+
+  function formatPerfSummary(summary) {
+    if (summary === null) {
+      return "—";
+    }
+    return `${summary.p50.toFixed(2)} / ${summary.p95.toFixed(2)} ms`;
+  }
+
+  function formatGpuSummary() {
+    if (!gpuProfilingSupported) {
+      return "unsupported";
+    }
+    const p50 = player.gpuRenderP50Ms();
+    const p95 = player.gpuRenderP95Ms();
+    if (!Number.isFinite(p50) || !Number.isFinite(p95)) {
+      return "sampling…";
+    }
+    return `${p50.toFixed(2)} / ${p95.toFixed(2)} ms`;
+  }
+
+  function updatePerformanceMetrics() {
+    if (perfWarmupRemaining > 0) {
+      const warmup = `warming ${PERF_WARMUP_FRAMES - perfWarmupRemaining}/${PERF_WARMUP_FRAMES}`;
+      metricCpuFrame.value = warmup;
+      metricRuntime.value = warmup;
+      metricPrepare.value = warmup;
+      metricUploadMs.value = warmup;
+      metricEncode.value = warmup;
+      metricGpu.value = gpuProfilingSupported ? warmup : "unsupported";
+      return;
+    }
+
+    metricCpuFrame.value = formatPerfSummary(perfSamples.cpuFrame.summary());
+    metricRuntime.value = formatPerfSummary(perfSamples.runtime.summary());
+    metricPrepare.value = formatPerfSummary(perfSamples.prepare.summary());
+    metricUploadMs.value = formatPerfSummary(perfSamples.upload.summary());
+    metricEncode.value = formatPerfSummary(perfSamples.encode.summary());
+    metricGpu.value = formatGpuSummary();
+
+    status.dataset.profileSamples = String(perfSamples.cpuFrame.size);
+    status.dataset.cpuFrameP95Ms = String(perfSamples.cpuFrame.summary()?.p95 ?? "");
+    status.dataset.runtimeP95Ms = String(perfSamples.runtime.summary()?.p95 ?? "");
+    status.dataset.prepareP95Ms = String(perfSamples.prepare.summary()?.p95 ?? "");
+    status.dataset.uploadP95Ms = String(perfSamples.upload.summary()?.p95 ?? "");
+    status.dataset.encodeP95Ms = String(perfSamples.encode.summary()?.p95 ?? "");
+    status.dataset.gpuTimestampSupported = String(gpuProfilingSupported);
+    status.dataset.gpuP95Ms = String(
+      gpuProfilingSupported && Number.isFinite(player.gpuRenderP95Ms())
+        ? player.gpuRenderP95Ms()
+        : "",
+    );
+    status.dataset.gpuDroppedSamples = String(player.gpuDroppedSampleCount());
+    status.dataset.gpuFailedSamples = String(player.gpuFailedSampleCount());
+  }
 
   async function loadExample(kind, index, { run = false } = {}) {
     const examples = examplesFor(kind);
@@ -370,7 +481,10 @@ try {
       patchStatus.value = "Building Scene in the Python worker…";
       patchStatus.dataset.state = "running";
       authoringClient ??= new PythonAuthoringClient();
-      const result = await authoringClient.run(sceneSourceEditor.value);
+      const result = await authoringClient.run(
+        sceneSourceEditor.value,
+        currentExample("scene").context ?? {},
+      );
       if (result.kind !== "scene_document") {
         throw new Error("Python scene source returned a PatchBatch");
       }
@@ -401,6 +515,7 @@ try {
         operation = "Scene already current";
       }
       authoredScene = stableDocument;
+      resetPerformanceProfile();
 
       const preservedPlayhead = player.time();
       if (preservedPlayhead !== playhead) {
@@ -498,6 +613,9 @@ try {
   function frame(timestamp) {
     try {
       const presented = player.renderFrame(timestamp);
+      if (presented) {
+        recordPerformanceFrame();
+      }
       if (presented && timestamp - lastStatusUpdate > 200) {
         const objectCount = player.objectCount();
         const drawCalls = player.lastDrawCalls();
@@ -509,6 +627,7 @@ try {
         metricDraws.value = String(drawCalls);
         metricUpload.value = formatBytes(uploadBytes);
         metricTime.value = `${playhead.toFixed(2)} s`;
+        updatePerformanceMetrics();
 
         status.dataset.instances = String(player.lastInstancesDrawn());
         status.dataset.uploadBytes = String(uploadBytes);
