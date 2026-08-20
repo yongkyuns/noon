@@ -10,7 +10,7 @@ var<uniform> camera: Camera;
 
 struct PathVertexInput {
     @location(0) local: vec2<f32>,
-    @location(1) surface: u32,
+    @location(1) surface_and_progress: u32,
     @location(2) translation: vec2<f32>,
     @location(3) scale: vec2<f32>,
     @location(4) rotation: f32,
@@ -23,6 +23,8 @@ struct PathVertexInput {
 struct PathVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) path_progress: f32,
+    @location(2) reveal: f32,
 };
 
 fn premultiplied(color: vec4<f32>) -> vec4<f32> {
@@ -39,16 +41,34 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
         s * scaled.x + c * scaled.y,
     ) + input.translation;
 
+    let is_stroke = (input.surface_and_progress & 1u) == 1u;
+    let encoded_progress = input.surface_and_progress >> 1u;
+    let path_progress = f32(encoded_progress) / 2147483647.0;
+
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
-    let is_stroke = input.surface == 1u;
     let enabled = select(input.flags.x != 0u, input.flags.y != 0u, is_stroke);
     let color = select(input.fill, input.stroke, is_stroke);
     output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
+    output.path_progress = path_progress;
+    // Path stroke width is already baked into the mesh. The path instance
+    // reuses metrics.x to carry normalized reveal without increasing stride.
+    output.reveal = clamp(input.metrics.x, 0.0, 1.0);
     return output;
 }
 
 @fragment
 fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
-    return input.color;
+    if input.reveal <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    if input.reveal >= 1.0 {
+        return input.color;
+    }
+
+    // Interpolated arc-length progress clips the already-tessellated stroke;
+    // fwidth gives the moving reveal edge a pixel-scale antialiasing ramp.
+    let edge = max(fwidth(input.path_progress), 0.00001);
+    let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
+    return input.color * coverage;
 }
