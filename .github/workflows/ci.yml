@@ -42,6 +42,16 @@ jobs:
         shell: bash
         run: |
           python scripts/agent_transform_refactor.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("crates/noon-compile/src/lib.rs")
+          text = path.read_text()
+          old = "                reveal: true,\n"
+          new = "                reveal: true,\n                morph: false,\n"
+          if old not in text:
+              raise SystemExit("reveal-dynamic compatibility fixture missing")
+          path.write_text(text.replace(old, new))
+          PY
           cargo fmt --all
           cargo fmt --all -- --check
           cargo check --workspace --all-targets --all-features
@@ -54,7 +64,7 @@ jobs:
       - name: Publish tested refactor and restore CI
         shell: bash
         run: |
-          git show HEAD^^^:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git show 04616cb095440b5f8a30e2ddf87e1881b97362a1:.github/workflows/ci.yml > .github/workflows/ci.yml
           rm .github/workflows/agent-transform-refactor.yml scripts/agent_transform_refactor.py
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
