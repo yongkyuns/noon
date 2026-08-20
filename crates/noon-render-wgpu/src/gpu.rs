@@ -1099,6 +1099,7 @@ mod tests {
             ],
             reveals: vec![1.0; 3],
             morphs: vec![0.0; 3],
+            render_geometries: vec![None; 3],
         }
     }
 
@@ -1129,6 +1130,7 @@ mod tests {
             ],
             reveals: vec![1.0; 2],
             morphs: vec![0.0; 2],
+            render_geometries: vec![None; 2],
         }
     }
 

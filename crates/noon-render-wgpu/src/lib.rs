@@ -316,7 +316,8 @@ impl FramePreparer {
         let mut path_group_lookup = HashMap::<usize, usize>::new();
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
-            match &object.geometry {
+            let render_geometry = frame.render_geometry(object_index);
+            match render_geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
                     self.circle_ids.push(object.id);
@@ -517,21 +518,22 @@ impl FramePreparer {
         let Some(object) = frame.objects.get(object_index) else {
             return false;
         };
+        let render_geometry = frame.render_geometry(object_index);
         match self.slots.get(object_index) {
             Some(PreparedSlot::Circle(index)) => {
-                matches!(object.geometry, GeometryRef::Circle { .. })
+                matches!(render_geometry, GeometryRef::Circle { .. })
                     && self.circle_ids.get(*index) == Some(&object.id)
             }
             Some(PreparedSlot::Rectangle(index)) => {
-                matches!(object.geometry, GeometryRef::Rectangle { .. })
+                matches!(render_geometry, GeometryRef::Rectangle { .. })
                     && self.rectangle_ids.get(*index) == Some(&object.id)
             }
             Some(PreparedSlot::Line(index)) => {
-                matches!(object.geometry, GeometryRef::Line { .. })
+                matches!(render_geometry, GeometryRef::Line { .. })
                     && self.line_ids.get(*index) == Some(&object.id)
             }
             Some(PreparedSlot::Path { index, batch }) => {
-                let GeometryRef::VectorPath(path) = &object.geometry else {
+                let GeometryRef::VectorPath(path) = render_geometry else {
                     return false;
                 };
                 let Some(cache_index) = self.path_batch_cache_indices.get(*batch) else {
@@ -543,7 +545,7 @@ impl FramePreparer {
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
             }
             Some(PreparedSlot::Unsupported(index)) => {
-                matches!(object.geometry, GeometryRef::External(_))
+                matches!(render_geometry, GeometryRef::External(_))
                     && self.unsupported.get(*index) == Some(&object.id)
             }
             None => false,
@@ -776,11 +778,13 @@ mod tests {
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
         let reveals = vec![1.0; objects.len()];
         let morphs = vec![0.0; objects.len()];
+        let render_geometries = vec![None; objects.len()];
         FrameState {
             time: 1.25,
             objects,
             reveals,
             morphs,
+            render_geometries,
         }
     }
 

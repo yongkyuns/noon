@@ -25,6 +25,9 @@ pub struct FrameState {
     pub reveals: Vec<f32>,
     /// Normalized per-object morph progress, independent from reveal.
     pub morphs: Vec<f32>,
+    /// Optional compiler-prepared geometry used only by the renderer. Semantic
+    /// object geometry remains in `objects` and reaches exact Transform endpoints.
+    pub render_geometries: Vec<Option<GeometryRef>>,
 }
 
 impl FrameState {
@@ -34,6 +37,12 @@ impl FrameState {
 
     pub fn morph(&self, object_index: usize) -> f32 {
         self.morphs[object_index]
+    }
+
+    pub fn render_geometry(&self, object_index: usize) -> &GeometryRef {
+        self.render_geometries[object_index]
+            .as_ref()
+            .unwrap_or(&self.objects[object_index].geometry)
     }
 }
 
@@ -319,6 +328,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         time,
         reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
         morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
+        render_geometries: vec![None; objects.len()],
         objects,
     }
 }
@@ -457,26 +467,29 @@ fn apply_transform_track(
         unreachable!("compiled Transform track must contain object snapshots");
     };
     let progress = track_progress(track, time);
-    let next_geometry = track
-        .transform_geometry
-        .as_ref()
-        .expect("compiled Transform track must carry prepared geometry");
     let before_object = frame.objects[object_index].clone();
     let before_morph = frame.morphs[object_index];
+    let before_render_geometry = frame.render_geometries[object_index].clone();
 
     let object = &mut frame.objects[object_index];
-    if object.geometry != *next_geometry {
-        object.geometry = next_geometry.clone();
-    }
+    object.geometry = if progress >= 1.0 {
+        to.geometry.clone()
+    } else {
+        from.geometry.clone()
+    };
     object.transform = interpolate_transform(from.transform, to.transform, progress);
     object.style = interpolate_style(from.style, to.style, progress);
-    frame.morphs[object_index] = if path_geometry_morphs(from, to) {
-        progress
+    let geometry_morphs = path_geometry_morphs(from, to);
+    frame.morphs[object_index] = if geometry_morphs { progress } else { 0.0 };
+    frame.render_geometries[object_index] = if geometry_morphs {
+        track.transform_geometry.clone()
     } else {
-        0.0
+        None
     };
 
-    frame.objects[object_index] != before_object || frame.morphs[object_index] != before_morph
+    frame.objects[object_index] != before_object
+        || frame.morphs[object_index] != before_morph
+        || frame.render_geometries[object_index] != before_render_geometry
 }
 
 fn path_geometry_morphs(from: &ObjectSnapshot, to: &ObjectSnapshot) -> bool {

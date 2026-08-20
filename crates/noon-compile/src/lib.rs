@@ -349,15 +349,20 @@ fn compile_transform_geometry(
         unreachable!("validated Transform track must contain object snapshots");
     };
 
+    if let (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_)) = (&from.geometry, &to.geometry)
+    {
+        if from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits() {
+            return Err(TransformCompileFailure::RequiresRetessellation);
+        }
+    }
+
     if from.geometry == to.geometry {
-        return Ok(Some(from.geometry.clone()));
+        return Ok(None);
     }
 
     match (&from.geometry, &to.geometry) {
         (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
-            if from.style.fill != to.style.fill
-                || from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits()
-            {
+            if from.style.fill.is_some() || to.style.fill.is_some() {
                 return Err(TransformCompileFailure::RequiresRetessellation);
             }
             Ok(Some(GeometryRef::path(
