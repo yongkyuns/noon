@@ -53,6 +53,10 @@ fn midpoint(a: Vec2, b: Vec2) -> Vec2 {
     scale(add(a, b), 0.5)
 }
 
+fn reflect_x(value: Vec2) -> Vec2 {
+    Vec2::new(-value.x, value.y)
+}
+
 fn signed_triangle_area(a: Vec2, b: Vec2, c: Vec2) -> f32 {
     ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) * 0.5
 }
@@ -519,21 +523,25 @@ fn morph_target_endpoint_mesh_contains_every_authored_star_vertex() {
 }
 
 #[test]
-fn symmetric_star_tip_has_symmetric_left_and_right_taper() {
+fn symmetric_star_tip_taper_is_mirror_symmetric() {
     let target_vertices = star_vertices();
     let target = polygon_path(&target_vertices);
     let mesh = tessellate(&rounded_source().with_morph_target(target), 0.16)
         .expect("valid star morph tessellation");
-    let tip = target_vertices[0];
-    let pair = find_pair_at_center(target_pairs(&mesh), tip);
 
-    assert_close(pair.0.x + pair.1.x, tip.x * 2.0, EPS);
-    assert_close(pair.0.y, pair.1.y, EPS);
-    assert_close(
-        magnitude(sub(pair.0, tip)),
-        magnitude(sub(pair.1, tip)),
-        EPS,
-    );
+    let tip_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[0]);
+    assert_close(tip_pair.0.x, 0.0, EPS);
+    assert_close(tip_pair.1.x, 0.0, EPS);
+
+    for (right_index, left_index) in [(1, 9), (2, 8), (3, 7), (4, 6)] {
+        let right_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[right_index]);
+        let left_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[left_index]);
+        let reflected_right = (reflect_x(right_pair.0), reflect_x(right_pair.1));
+        assert!(
+            unordered_pair_matches(left_pair, reflected_right, EPS),
+            "stroke corners at mirrored star vertices {right_index}/{left_index} are asymmetric"
+        );
+    }
 }
 
 #[test]
