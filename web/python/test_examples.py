@@ -1,3 +1,4 @@
+import json
 import runpy
 import unittest
 from pathlib import Path
@@ -13,6 +14,8 @@ SCENE_EXAMPLES = (
     "kinetic_lines.py",
     "mixed_geometry.py",
     "path_reveal.py",
+    "path_morph_transform.py",
+    "morph_stress_test.py",
 )
 
 
@@ -34,6 +37,27 @@ class PlaygroundExampleTests(unittest.TestCase):
         self.assertIsInstance(result, Scene)
         properties = [track["property"] for track in result.to_document()["tracks"]]
         self.assertGreaterEqual(properties.count("reveal"), 2)
+
+    def test_morph_stress_example_exercises_reuse_and_many_active_tracks(self) -> None:
+        namespace = runpy.run_path(EXAMPLES_DIR / "morph_stress_test.py")
+        result = namespace.get("result")
+        self.assertIsInstance(result, Scene)
+        document = result.to_document()
+
+        self.assertEqual(len(document["objects"]), 600)
+        properties = [track["property"] for track in document["tracks"]]
+        self.assertEqual(properties.count("morph"), 600)
+        self.assertEqual(properties.count("rotation"), 600)
+
+        morph_geometries = {
+            json.dumps(
+                obj["geometry"]["vector_path"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for obj in document["objects"]
+        }
+        self.assertEqual(len(morph_geometries), 12)
 
     def test_transform_patch_builds_ordered_patch_batch(self) -> None:
         namespace = runpy.run_path(
