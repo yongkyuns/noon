@@ -59,6 +59,32 @@ class PlaygroundExampleTests(unittest.TestCase):
         }
         self.assertEqual(len(morph_geometries), 12)
 
+    def test_morph_stress_scale_presets_preserve_twelve_geometry_variants(self) -> None:
+        for object_count in (1_000, 3_000):
+            with self.subTest(object_count=object_count):
+                namespace = runpy.run_path(
+                    EXAMPLES_DIR / "morph_stress_test.py",
+                    init_globals={"context": {"object_count": object_count}},
+                )
+                result = namespace.get("result")
+                self.assertIsInstance(result, Scene)
+                document = result.to_document()
+                self.assertEqual(len(document["objects"]), object_count)
+
+                properties = [track["property"] for track in document["tracks"]]
+                self.assertEqual(properties.count("morph"), object_count)
+                self.assertEqual(properties.count("rotation"), object_count)
+
+                morph_geometries = {
+                    json.dumps(
+                        obj["geometry"]["vector_path"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    for obj in document["objects"]
+                }
+                self.assertEqual(len(morph_geometries), 12)
+
     def test_transform_patch_builds_ordered_patch_batch(self) -> None:
         namespace = runpy.run_path(
             EXAMPLES_DIR / "transform_patch.py",
