@@ -16,7 +16,10 @@ use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use std::ops::Range;
 
-const PATH_PROGRESS_MAX: u32 = u32::MAX >> 1;
+// `f32` represents every integer through 2^24 exactly. Keeping the encoded
+// progress in this exact domain avoids endpoint wraparound at reveal == 1.0
+// while retaining far more precision than pixel-scale path clipping needs.
+const PATH_PROGRESS_MAX: u32 = 16_777_215;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -102,7 +105,7 @@ pub struct PathInstance {
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PathVertex {
     pub position: [f32; 2],
-    /// Low bit is surface (0 fill, 1 stroke); upper 31 bits are normalized
+    /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
     /// ordered path progress. Keeping this packed preserves the existing GPU
     /// vertex stride while adding reveal metadata.
     pub surface: u32,
@@ -746,7 +749,7 @@ mod tests {
             .filter(|vertex| vertex.surface & 1 == 1)
             .map(|vertex| unpack_path_progress(vertex.surface))
             .collect();
-        assert!(stroke_progresses.iter().any(|progress| *progress == 0.0));
+        assert!(stroke_progresses.contains(&0.0));
         assert!(stroke_progresses
             .iter()
             .any(|progress| (*progress - 1.0).abs() < 1e-6));
@@ -801,7 +804,8 @@ mod tests {
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
         assert!(!prepared.path_geometry_dirty);
-        assert_eq!(prepared.path_dirty_ranges, &[0..1]);
+        assert_eq!(prepared.path_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_dirty_ranges[0], 0..1);
         assert_eq!(prepared.paths[0].style.stroke_width, 0.35);
         assert_eq!(preparer.cached_path_mesh_count(), 1);
     }
