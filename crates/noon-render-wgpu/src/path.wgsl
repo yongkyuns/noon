@@ -10,14 +10,15 @@ var<uniform> camera: Camera;
 
 struct PathVertexInput {
     @location(0) local: vec2<f32>,
-    @location(1) surface_and_progress: u32,
-    @location(2) translation: vec2<f32>,
-    @location(3) scale: vec2<f32>,
-    @location(4) rotation: f32,
-    @location(5) fill: vec4<f32>,
-    @location(6) stroke: vec4<f32>,
-    @location(7) metrics: vec2<f32>,
-    @location(8) flags: vec2<u32>,
+    @location(1) target_local: vec2<f32>,
+    @location(2) surface_and_progress: u32,
+    @location(3) translation: vec2<f32>,
+    @location(4) scale: vec2<f32>,
+    @location(5) rotation: f32,
+    @location(6) fill: vec4<f32>,
+    @location(7) stroke: vec4<f32>,
+    @location(8) metrics: vec2<f32>,
+    @location(9) flags: vec2<u32>,
 };
 
 struct PathVertexOutput {
@@ -33,19 +34,20 @@ fn premultiplied(color: vec4<f32>) -> vec4<f32> {
 
 @vertex
 fn vs_path(input: PathVertexInput) -> PathVertexOutput {
+    let is_stroke = (input.surface_and_progress & 1u) == 1u;
+    let is_morph = (input.surface_and_progress & 33554432u) != 0u;
+    let encoded_progress = (input.surface_and_progress >> 1u) & 16777215u;
+    let path_progress = f32(encoded_progress) / 16777215.0;
+    let scalar = clamp(input.metrics.x, 0.0, 1.0);
+    let local = select(input.local, mix(input.local, input.target_local, scalar), is_morph);
+
     let c = cos(input.rotation);
     let s = sin(input.rotation);
-    let scaled = input.local * input.scale;
+    let scaled = local * input.scale;
     let world = vec2<f32>(
         c * scaled.x - s * scaled.y,
         s * scaled.x + c * scaled.y,
     ) + input.translation;
-
-    let is_stroke = (input.surface_and_progress & 1u) == 1u;
-    let encoded_progress = input.surface_and_progress >> 1u;
-    // The CPU uses an exact 24-bit integer domain for normalized path
-    // progress so both endpoints survive the f32 conversion exactly.
-    let path_progress = f32(encoded_progress) / 16777215.0;
 
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
@@ -53,9 +55,7 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let color = select(input.fill, input.stroke, is_stroke);
     output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
     output.path_progress = path_progress;
-    // Path stroke width is already baked into the mesh. The path instance
-    // reuses metrics.x to carry normalized reveal without increasing stride.
-    output.reveal = clamp(input.metrics.x, 0.0, 1.0);
+    output.reveal = select(scalar, 1.0, is_morph);
     return output;
 }
 
@@ -68,8 +68,6 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
         return input.color;
     }
 
-    // Interpolated arc-length progress clips the already-tessellated stroke;
-    // fwidth gives the moving reveal edge a pixel-scale antialiasing ramp.
     let edge = max(fwidth(input.path_progress), 0.00001);
     let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
     return input.color * coverage;

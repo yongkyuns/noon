@@ -20,6 +20,7 @@ use std::ops::Range;
 // progress in this exact domain avoids endpoint wraparound at reveal == 1.0
 // while retaining far more precision than pixel-scale path clipping needs.
 const PATH_PROGRESS_MAX: u32 = 16_777_215;
+const PATH_MORPH_BIT: u32 = 1 << 25;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -105,6 +106,7 @@ pub struct PathInstance {
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PathVertex {
     pub position: [f32; 2],
+    pub target_position: [f32; 2],
     /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
     /// ordered path progress. Keeping this packed preserves the existing GPU
     /// vertex stride while adding reveal metadata.
@@ -364,7 +366,8 @@ impl FramePreparer {
                 .expect("path index count exceeds renderer limits");
             next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
                 position: [vertex.position.x, vertex.position.y],
-                surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                target_position: [vertex.target_position.x, vertex.target_position.y],
+                surface: pack_path_surface(vertex.surface, vertex.path_progress, mesh.morphing),
             }));
             next_indices.extend(mesh.indices.iter().map(|index| {
                 index
@@ -620,13 +623,17 @@ fn pack_path(object: &FrameObjectState, reveal: f32) -> PathInstance {
     }
 }
 
-fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
+fn pack_path_surface(surface: PathSurface, progress: f32, morphing: bool) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
-    (progress << 1)
+    let mut packed = (progress << 1)
         | match surface {
             PathSurface::Fill => 0,
             PathSurface::Stroke => 1,
-        }
+        };
+    if morphing {
+        packed |= PATH_MORPH_BIT;
+    }
+    packed
 }
 
 #[cfg(test)]
@@ -688,7 +695,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
         assert_eq!(std::mem::size_of::<PathInstance>(), 72);
-        assert_eq!(std::mem::size_of::<PathVertex>(), 12);
+        assert_eq!(std::mem::size_of::<PathVertex>(), 20);
     }
 
     fn curved_path() -> VectorPath {

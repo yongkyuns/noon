@@ -115,6 +115,39 @@ class SceneTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scene.animate_reveal(path, to=1.1, duration=1.0)
 
+    def test_path_morph_serializes_target_and_normalized_progress(self) -> None:
+        scene = Scene()
+        source = VectorPath().move_to((-1.0, 0.0)).line_to((1.0, 0.0))
+        target = VectorPath().move_to((0.0, -1.0)).line_to((0.0, 1.0))
+        path = scene.path(
+            source,
+            fill=None,
+            stroke=Color(1.0, 1.0, 1.0),
+            stroke_width=0.1,
+            key="morph",
+        )
+        scene.animate_morph(
+            path,
+            target,
+            duration=3.0,
+            start_time=0.5,
+            easing="ease_in_out_cubic",
+            key="morph.shape",
+        )
+
+        document = scene.to_document()
+        vector_path = document["objects"][0]["geometry"]["vector_path"]
+        self.assertEqual(
+            vector_path["morph_target"]["commands"][0]["move_to"]["to"],
+            {"x": 0.0, "y": -1.0},
+        )
+        track = document["tracks"][0]
+        self.assertEqual(track["property"], "reveal")
+        self.assertEqual(track["values"]["scalar"], {"from": 0.0, "to": 1.0})
+
+        with self.assertRaises(ValueError):
+            scene.animate_reveal(path, duration=1.0)
+
     def test_scene_rejects_foreign_objects_and_invalid_timing(self) -> None:
         first = Scene()
         second = Scene()

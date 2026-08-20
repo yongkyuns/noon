@@ -38,9 +38,9 @@ curve = scene.path(
     key="curve",
     position=(0.0, 1.45),
     scale=(0.75, 0.75),
-    fill=Color(0.62, 0.38, 0.96),
-    stroke=Color(1.0, 1.0, 1.0),
-    stroke_width=0.06,
+    fill=None,
+    stroke=Color(0.72, 0.48, 1.0),
+    stroke_width=0.10,
     opacity=0.95,
 )
 
@@ -57,5 +57,20 @@ scene.animate_rotation(
     rectangle, -0.7, math.tau - 0.7, key="rectangle.rotation", **timing
 )
 scene.animate_rotation(line, -0.35, math.tau - 0.35, key="line.rotation", **timing)
+morph_target = (
+    VectorPath()
+    .move_to((0.0, 0.9))
+    .line_to((0.28, 0.28))
+    .line_to((0.9, 0.2))
+    .line_to((0.42, -0.2))
+    .line_to((0.58, -0.82))
+    .line_to((0.0, -0.48))
+    .line_to((-0.58, -0.82))
+    .line_to((-0.42, -0.2))
+    .line_to((-0.9, 0.2))
+    .line_to((-0.28, 0.28))
+    .close()
+)
+scene.animate_morph(curve, morph_target, key="curve.morph", **timing)
 
 result = scene

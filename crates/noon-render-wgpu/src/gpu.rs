@@ -112,43 +112,43 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
     },
 ];
 
-const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];
+const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
 const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
-        shader_location: 2,
+        shader_location: 3,
     },
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 8,
-        shader_location: 3,
+        shader_location: 4,
     },
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32,
         offset: 16,
-        shader_location: 4,
-    },
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Float32x4,
-        offset: 24,
         shader_location: 5,
     },
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x4,
-        offset: 40,
+        offset: 24,
         shader_location: 6,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 40,
+        shader_location: 7,
     },
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 56,
-        shader_location: 7,
+        shader_location: 8,
     },
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Uint32x2,
         offset: 64,
-        shader_location: 8,
+        shader_location: 9,
     },
 ];
 
@@ -1085,11 +1085,15 @@ mod tests {
         assert_eq!(line_layout.attributes[8].shader_location, 9);
 
         let path_vertex_layout = path_vertex_layout();
-        assert_eq!(path_vertex_layout.array_stride, 12);
+        assert_eq!(path_vertex_layout.array_stride, 20);
         assert_eq!(path_vertex_layout.step_mode, wgpu::VertexStepMode::Vertex);
-        assert_eq!(path_vertex_layout.attributes.len(), 2);
+        assert_eq!(path_vertex_layout.attributes.len(), 3);
         assert_eq!(
             path_vertex_layout.attributes[1].format,
+            wgpu::VertexFormat::Float32x2
+        );
+        assert_eq!(
+            path_vertex_layout.attributes[2].format,
             wgpu::VertexFormat::Uint32
         );
 
@@ -1100,8 +1104,8 @@ mod tests {
             wgpu::VertexStepMode::Instance
         );
         assert_eq!(path_instance_layout.attributes.len(), 7);
-        assert_eq!(path_instance_layout.attributes[0].shader_location, 2);
-        assert_eq!(path_instance_layout.attributes[6].shader_location, 8);
+        assert_eq!(path_instance_layout.attributes[0].shader_location, 3);
+        assert_eq!(path_instance_layout.attributes[6].shader_location, 9);
     }
 
     #[test]

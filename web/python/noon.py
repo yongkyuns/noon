@@ -333,6 +333,13 @@ class Scene:
         easing: str = "linear",
         key: str | None = None,
     ) -> Scene:
+        if isinstance(obj, Object) and obj._owner is self._owner:
+            geometry = self._objects[obj.id]["geometry"]
+            vector_path = geometry.get("vector_path")
+            if vector_path is not None and "morph_target" in vector_path:
+                raise ValueError(
+                    "morph and reveal currently share one normalized path channel"
+                )
         self._add_scalar_track(
             obj,
             "reveal",
@@ -342,6 +349,37 @@ class Scene:
             duration,
             easing,
             key,
+        )
+        return self
+
+    def animate_morph(
+        self,
+        obj: Object,
+        target: VectorPath,
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+        key: str | None = None,
+    ) -> Scene:
+        if not isinstance(obj, Object) or obj._owner is not self._owner:
+            raise ValueError("morphed object must belong to this Scene")
+        if not isinstance(target, VectorPath):
+            raise TypeError("target must be a VectorPath")
+        geometry = self._objects[obj.id]["geometry"]
+        source = geometry.get("vector_path")
+        if source is None:
+            raise ValueError("only vector path objects can morph")
+        if "morph_target" in source:
+            raise ValueError("a path can currently have one morph target")
+        if any(
+            track["object"] == obj.id and track["property"] == "reveal"
+            for track in self._tracks
+        ):
+            raise ValueError("morph and reveal currently share one normalized path channel")
+        source["morph_target"] = target.to_ir()
+        self._add_scalar_track(
+            obj, "reveal", 0.0, 1.0, start_time, duration, easing, key
         )
         return self
 

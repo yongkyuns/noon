@@ -135,12 +135,15 @@ impl Default for Style {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VectorPath {
     commands: Vec<PathCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    morph_target: Option<Box<VectorPath>>,
 }
 
 impl VectorPath {
     pub const fn new() -> Self {
         Self {
             commands: Vec::new(),
+            morph_target: None,
         }
     }
 
@@ -175,6 +178,15 @@ impl VectorPath {
 
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
+    }
+
+    pub fn with_morph_target(mut self, target: VectorPath) -> Self {
+        self.morph_target = Some(Box::new(target));
+        self
+    }
+
+    pub fn morph_target(&self) -> Option<&VectorPath> {
+        self.morph_target.as_deref()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -370,6 +382,21 @@ mod tests {
             GeometryRef::path(path.clone()),
             GeometryRef::VectorPath(path)
         );
+    }
+
+    #[test]
+    fn vector_path_can_carry_a_semantic_morph_target() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let morph = source.clone().with_morph_target(target.clone());
+
+        assert_eq!(morph.commands(), source.commands());
+        assert_eq!(morph.morph_target(), Some(&target));
+        assert_eq!(source.morph_target(), None);
     }
 
     #[test]

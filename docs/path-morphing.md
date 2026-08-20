@@ -77,9 +77,17 @@ stable morph mesh/render path
 
 The runtime should not rebuild semantic paths or run curve flattening each frame. `MorphFrame::to_vector_path()` exists only as a reference/debug CPU representation; normal playback should interpolate the precomputed correspondence directly.
 
+## Playable renderer slice
+
+The first playable morph renderer is implemented as a fixed-topology stroke mesh. Each morph vertex stores both its source and target position; the WebGPU vertex shader interpolates them from normalized morph progress. The index buffer and vertex correspondence remain unchanged for the whole animation. Normal paths keep using the same path pipeline, with identical source/target positions.
+
+The runtime reuses the existing normalized path scalar channel: ordinary paths interpret it as reveal, while paths with a semantic `morph_target` interpret it as morph progress. This keeps frame state compact and means morph playback changes only the path instance record; geometry is not retessellated or re-uploaded each frame. The Python API exposes this as `scene.animate_morph(path, target, ...)`.
+
+Current intentional boundary: morph rendering is stroke-only. Fill triangulation during topology-changing interpolation is deferred until a stable fill strategy is selected. A path cannot currently animate reveal and morph simultaneously because those operations share the normalized path channel.
+
 ## Next implementation step
 
-Integrate `MorphPlan` into compiled scene data and introduce a morph-progress timeline property that references a precomputed target plan. Then add a renderer representation whose topology stays fixed for the duration of the morph, so each frame updates point positions rather than retessellating the source path.
+Next, add fill morphing and decide whether reveal+morph composition warrants separate scalar channels. The stroke morph path is already fixed-topology and GPU-interpolated, so normal playback performs no path planning, tessellation, or geometry upload per frame.
 
 Correctness tests should cover:
 

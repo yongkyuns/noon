@@ -26,8 +26,8 @@ const SCENE_EXAMPLES = [
   {
     name: "Getting started",
     path: "./python/demo_scene.py",
-    summary: "Circles, rectangles, lines and a cubic path on one 4 s timeline.",
-    features: "primitives · vector path · timeline",
+    summary: "Circles, rectangles, lines and a cubic path morph on one 4 s timeline.",
+    features: "primitives · path morph · timeline",
   },
   {
     name: "Staggered choreography",

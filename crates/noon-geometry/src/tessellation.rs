@@ -16,6 +16,7 @@ pub enum PathSurface {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshVertex {
     pub position: Vec2,
+    pub target_position: Vec2,
     pub surface: PathSurface,
     /// Global distance along the ordered path for stroke vertices.
     /// Fill vertices use the total stroke length so they remain hidden until
@@ -32,6 +33,8 @@ pub struct TessellatedPath {
     pub bounds: Option<Rect>,
     /// Flattened length of all ordered stroke contours.
     pub stroke_length: f32,
+    /// True when vertices contain distinct source/target morph endpoints.
+    pub morphing: bool,
 }
 
 impl TessellatedPath {
@@ -79,6 +82,9 @@ struct TessellationVertex {
 pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPath, GeometryError> {
     if !stroke_width.is_finite() || stroke_width < 0.0 {
         return Err(GeometryError::InvalidStrokeWidth(stroke_width));
+    }
+    if let Some(target) = path.morph_target() {
+        return tessellate_morph_path(path, target, stroke_width);
     }
     let path = build_lyon_path(path)?;
     let mut buffers = VertexBuffers::new();
@@ -138,6 +144,7 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
                 };
                 MeshVertex {
                     position: vertex.position,
+                    target_position: vertex.position,
                     surface: vertex.surface,
                     path_distance: vertex.path_distance,
                     path_progress,
@@ -145,6 +152,7 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
             } else {
                 MeshVertex {
                     position: vertex.position,
+                    target_position: vertex.position,
                     surface: vertex.surface,
                     path_distance: stroke_length,
                     path_progress: 1.0,
@@ -159,7 +167,154 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
         indices: buffers.indices,
         bounds,
         stroke_length,
+        morphing: false,
     })
+}
+
+fn tessellate_morph_path(
+    source: &VectorPath,
+    target: &VectorPath,
+    stroke_width: f32,
+) -> Result<TessellatedPath, GeometryError> {
+    if stroke_width == 0.0 {
+        return Ok(TessellatedPath {
+            morphing: true,
+            ..TessellatedPath::default()
+        });
+    }
+    let plan = crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
+        .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
+    let total_points = plan.point_count();
+    let mut vertices = Vec::with_capacity(total_points.saturating_mul(2));
+    let mut indices = Vec::new();
+    let mut global_point = 0_usize;
+    let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
+    let mut stroke_length = 0.0_f32;
+
+    for contour in &plan.contours {
+        let source_edges = stroke_edges(&contour.source_points, contour.closed, stroke_width * 0.5);
+        let target_edges = stroke_edges(&contour.target_points, contour.closed, stroke_width * 0.5);
+        let vertex_start = u32::try_from(vertices.len())
+            .map_err(|_| GeometryError::Tessellation("morph vertex count exceeds u32".into()))?;
+        stroke_length += polyline_length(&contour.source_points, contour.closed);
+
+        for (index, ((source_left, source_right), (target_left, target_right))) in
+            source_edges.into_iter().zip(target_edges).enumerate()
+        {
+            let progress = (global_point + index) as f32 / progress_denominator;
+            for (position, target_position) in
+                [(source_left, target_left), (source_right, target_right)]
+            {
+                vertices.push(MeshVertex {
+                    position,
+                    target_position,
+                    surface: PathSurface::Stroke,
+                    path_distance: progress,
+                    path_progress: progress,
+                });
+            }
+        }
+
+        let point_count = contour.source_points.len();
+        let segment_count = if contour.closed {
+            point_count
+        } else {
+            point_count - 1
+        };
+        for segment in 0..segment_count {
+            let next = if segment + 1 == point_count {
+                0
+            } else {
+                segment + 1
+            };
+            let a = vertex_start + u32::try_from(segment * 2).unwrap();
+            let b = a + 1;
+            let c = vertex_start + u32::try_from(next * 2).unwrap();
+            let d = c + 1;
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+        global_point += point_count;
+    }
+
+    let bounds = morph_mesh_bounds(&vertices);
+    Ok(TessellatedPath {
+        vertices,
+        indices,
+        bounds,
+        stroke_length,
+        morphing: true,
+    })
+}
+
+fn stroke_edges(points: &[Vec2], closed: bool, half_width: f32) -> Vec<(Vec2, Vec2)> {
+    let mut result = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        let previous = if index > 0 {
+            points[index - 1]
+        } else if closed {
+            points[points.len() - 1]
+        } else {
+            points[index]
+        };
+        let next = if index + 1 < points.len() {
+            points[index + 1]
+        } else if closed {
+            points[0]
+        } else {
+            points[index]
+        };
+        let tangent = normalized(Vec2::new(next.x - previous.x, next.y - previous.y));
+        let normal = Vec2::new(-tangent.y * half_width, tangent.x * half_width);
+        let point = points[index];
+        result.push((
+            Vec2::new(point.x + normal.x, point.y + normal.y),
+            Vec2::new(point.x - normal.x, point.y - normal.y),
+        ));
+    }
+    result
+}
+
+fn normalized(vector: Vec2) -> Vec2 {
+    let length = vector.x.hypot(vector.y);
+    if length <= f32::EPSILON {
+        Vec2::new(1.0, 0.0)
+    } else {
+        Vec2::new(vector.x / length, vector.y / length)
+    }
+}
+
+fn polyline_length(points: &[Vec2], closed: bool) -> f32 {
+    let mut length = points
+        .windows(2)
+        .map(|pair| (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y))
+        .sum::<f32>();
+    if closed {
+        let first = points[0];
+        let last = points[points.len() - 1];
+        length += (first.x - last.x).hypot(first.y - last.y);
+    }
+    length
+}
+
+fn morph_mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
+    let first = vertices.first()?;
+    let mut min = Vec2::new(
+        first.position.x.min(first.target_position.x),
+        first.position.y.min(first.target_position.y),
+    );
+    let mut max = Vec2::new(
+        first.position.x.max(first.target_position.x),
+        first.position.y.max(first.target_position.y),
+    );
+    for vertex in &vertices[1..] {
+        for point in [vertex.position, vertex.target_position] {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+    }
+    Some(Rect::new(min, max))
 }
 
 fn build_lyon_path(path: &VectorPath) -> Result<Path, GeometryError> {
@@ -361,6 +516,39 @@ mod tests {
         assert!(second_contour_progresses
             .iter()
             .any(|progress| (*progress - 1.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn morph_tessellation_has_fixed_dual_position_topology() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-1.0, 1.0))
+            .close();
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.4))
+            .line_to(Vec2::new(1.4, 0.0))
+            .line_to(Vec2::new(0.0, 1.4))
+            .line_to(Vec2::new(-1.4, 0.0))
+            .close();
+        let mesh = tessellate(&source.with_morph_target(target), 0.1).expect("valid morph");
+
+        assert!(mesh.morphing);
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
+        assert!(mesh
+            .vertices
+            .iter()
+            .all(|vertex| vertex.surface == PathSurface::Stroke));
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.position != vertex.target_position));
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|index| (*index as usize) < mesh.vertices.len()));
     }
 
     #[test]
