@@ -80,9 +80,6 @@ pub struct MorphFrame {
 }
 
 impl MorphFrame {
-    /// Converts the reference CPU interpolation into a semantic polyline path.
-    /// Runtime/render backends should normally consume the precomputed point
-    /// correspondence directly instead of rebuilding this path every frame.
     pub fn to_vector_path(&self) -> VectorPath {
         let mut path = VectorPath::new();
         for contour in &self.contours {
@@ -131,9 +128,10 @@ impl std::fmt::Display for MorphError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Geometry(error) => write!(formatter, "invalid morph path: {error}"),
-            Self::InvalidSampleCount(count) => {
-                write!(formatter, "morph samples per contour must be at least 3, got {count}")
-            }
+            Self::InvalidSampleCount(count) => write!(
+                formatter,
+                "morph samples per contour must be at least 3, got {count}"
+            ),
             Self::InvalidFlattenTolerance(tolerance) => write!(
                 formatter,
                 "morph flatten tolerance must be finite and positive, got {tolerance}"
@@ -176,15 +174,7 @@ pub fn plan_morph(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<MorphPlan, MorphError> {
-    if options.samples_per_contour < 3 {
-        return Err(MorphError::InvalidSampleCount(options.samples_per_contour));
-    }
-    if !options.flatten_tolerance.is_finite() || options.flatten_tolerance <= 0.0 {
-        return Err(MorphError::InvalidFlattenTolerance(
-            options.flatten_tolerance,
-        ));
-    }
-
+    validate_options(options)?;
     let source_contours = flatten_path(source, options.flatten_tolerance)?;
     let target_contours = flatten_path(target, options.flatten_tolerance)?;
     if source_contours.len() != target_contours.len() {
@@ -195,11 +185,7 @@ pub fn plan_morph(
     }
 
     let mut contours = Vec::with_capacity(source_contours.len());
-    for (index, (source, target)) in source_contours
-        .into_iter()
-        .zip(target_contours)
-        .enumerate()
-    {
+    for (index, (source, target)) in source_contours.into_iter().zip(target_contours).enumerate() {
         if source.closed != target.closed {
             return Err(MorphError::ClosureMismatch {
                 contour: index,
@@ -228,8 +214,19 @@ pub fn plan_morph(
             closed: source.closed,
         });
     }
-
     Ok(MorphPlan { contours })
+}
+
+fn validate_options(options: MorphOptions) -> Result<(), MorphError> {
+    if options.samples_per_contour < 3 {
+        return Err(MorphError::InvalidSampleCount(options.samples_per_contour));
+    }
+    if !options.flatten_tolerance.is_finite() || options.flatten_tolerance <= 0.0 {
+        return Err(MorphError::InvalidFlattenTolerance(
+            options.flatten_tolerance,
+        ));
+    }
+    Ok(())
 }
 
 fn flatten_path(path: &VectorPath, tolerance: f32) -> Result<Vec<FlattenedContour>, GeometryError> {
@@ -264,14 +261,7 @@ fn flatten_path(path: &VectorPath, tolerance: f32) -> Result<Vec<FlattenedContou
                 require_active(active)?;
                 finite(control)?;
                 finite(to)?;
-                flatten_quadratic(
-                    current,
-                    control,
-                    to,
-                    tolerance,
-                    0,
-                    &mut points,
-                );
+                flatten_quadratic(current, control, to, tolerance, 0, &mut points);
                 current = to;
             }
             PathCommand::CubicTo {
@@ -283,15 +273,7 @@ fn flatten_path(path: &VectorPath, tolerance: f32) -> Result<Vec<FlattenedContou
                 finite(control1)?;
                 finite(control2)?;
                 finite(to)?;
-                flatten_cubic(
-                    current,
-                    control1,
-                    control2,
-                    to,
-                    tolerance,
-                    0,
-                    &mut points,
-                );
+                flatten_cubic(current, control1, control2, to, tolerance, 0, &mut points);
                 current = to;
             }
             PathCommand::Close => {
@@ -334,22 +316,8 @@ fn flatten_quadratic(
     let from_control = midpoint(from, control);
     let control_to = midpoint(control, to);
     let middle = midpoint(from_control, control_to);
-    flatten_quadratic(
-        from,
-        from_control,
-        middle,
-        tolerance,
-        depth + 1,
-        points,
-    );
-    flatten_quadratic(
-        middle,
-        control_to,
-        to,
-        tolerance,
-        depth + 1,
-        points,
-    );
+    flatten_quadratic(from, from_control, middle, tolerance, depth + 1, points);
+    flatten_quadratic(middle, control_to, to, tolerance, depth + 1, points);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -362,13 +330,12 @@ fn flatten_cubic(
     depth: u32,
     points: &mut Vec<Vec2>,
 ) {
-    let flatness = point_line_distance(control1, from, to)
-        .max(point_line_distance(control2, from, to));
+    let flatness =
+        point_line_distance(control1, from, to).max(point_line_distance(control2, from, to));
     if depth >= MAX_FLATTEN_DEPTH || flatness <= tolerance {
         push_distinct(points, to);
         return;
     }
-
     let a = midpoint(from, control1);
     let b = midpoint(control1, control2);
     let c = midpoint(control2, to);
@@ -391,7 +358,6 @@ fn resample_contour(
             side,
         });
     }
-
     let segment_count = if contour.closed {
         contour.points.len()
     } else {
@@ -415,7 +381,6 @@ fn resample_contour(
             side,
         });
     }
-
     let denominator = if contour.closed {
         sample_count as f32
     } else {
@@ -459,16 +424,11 @@ fn align_closed_contour(source: &[Vec2], target: &[Vec2]) -> Vec<Vec2> {
     let mut best_cost = f64::INFINITY;
     let mut best_reversed = false;
     let mut best_shift = 0;
-
     for reversed in [false, true] {
         for shift in 0..count {
             let cost = (0..count)
                 .map(|index| {
-                    let target_index = if reversed {
-                        (shift + count - index % count) % count
-                    } else {
-                        (index + shift) % count
-                    };
+                    let target_index = correspondence_index(index, shift, count, reversed);
                     squared_distance(source[index], target[target_index]) as f64
                 })
                 .sum::<f64>();
@@ -479,17 +439,17 @@ fn align_closed_contour(source: &[Vec2], target: &[Vec2]) -> Vec<Vec2> {
             }
         }
     }
-
     (0..count)
-        .map(|index| {
-            let target_index = if best_reversed {
-                (best_shift + count - index % count) % count
-            } else {
-                (index + best_shift) % count
-            };
-            target[target_index]
-        })
+        .map(|index| target[correspondence_index(index, best_shift, count, best_reversed)])
         .collect()
+}
+
+fn correspondence_index(index: usize, shift: usize, count: usize, reversed: bool) -> usize {
+    if reversed {
+        (shift + count - index % count) % count
+    } else {
+        (index + shift) % count
+    }
 }
 
 fn push_distinct(points: &mut Vec<Vec2>, point: Vec2) {
@@ -581,7 +541,6 @@ mod tests {
             samples_per_contour: 9,
             ..MorphOptions::DEFAULT
         };
-
         let first = plan_morph(&source, &target, options).expect("compatible paths");
         let second = plan_morph(&source, &target, options).expect("deterministic plan");
         assert_eq!(first, second);
@@ -610,9 +569,14 @@ mod tests {
             },
         )
         .expect("compatible paths");
-
-        assert_eq!(plan.interpolate(0.0).contours[0].points, plan.contours[0].source_points);
-        assert_eq!(plan.interpolate(1.0).contours[0].points, plan.contours[0].target_points);
+        assert_eq!(
+            plan.interpolate(0.0).contours[0].points,
+            plan.contours[0].source_points
+        );
+        assert_eq!(
+            plan.interpolate(1.0).contours[0].points,
+            plan.contours[0].target_points
+        );
         assert!(plan.interpolate(0.5).contours[0]
             .points
             .iter()
@@ -644,9 +608,7 @@ mod tests {
 
     #[test]
     fn incompatible_topology_is_rejected_before_runtime() {
-        let open = VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::ONE);
+        let open = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
         let closed = VectorPath::new()
             .move_to(Vec2::ZERO)
             .line_to(Vec2::new(1.0, 0.0))
@@ -656,7 +618,6 @@ mod tests {
             plan_morph(&open, &closed, MorphOptions::DEFAULT),
             Err(MorphError::ClosureMismatch { .. })
         ));
-
         let two_contours = VectorPath::new()
             .move_to(Vec2::ZERO)
             .line_to(Vec2::ONE)
@@ -674,9 +635,7 @@ mod tests {
     #[test]
     fn degenerate_contours_and_invalid_options_are_rejected() {
         let point = VectorPath::new().move_to(Vec2::ZERO);
-        let line = VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::ONE);
+        let line = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
         assert_eq!(
             plan_morph(&point, &line, MorphOptions::DEFAULT),
             Err(MorphError::DegenerateContour {
@@ -718,7 +677,6 @@ mod tests {
             },
         )
         .expect("compatible multi-contour paths");
-
         assert_eq!(plan.contours.len(), 2);
         assert_eq!(plan.point_count(), 16);
         assert!(plan.contours.iter().all(|contour| !contour.closed));
