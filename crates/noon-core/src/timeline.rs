@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ObjectId, SceneDefinition, TrackId, Vec2};
+use crate::{ObjectId, ObjectSnapshot, SceneDefinition, TrackId, Vec2};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,6 +13,7 @@ pub enum Easing {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Property {
+    Transform,
     Position,
     Rotation,
     Opacity,
@@ -24,29 +25,42 @@ pub enum Property {
 pub enum ValueKind {
     Scalar,
     Vec2,
+    Object,
 }
 
 impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
+            Self::Transform => ValueKind::Object,
             Self::Position => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Reveal | Self::Morph => ValueKind::Scalar,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
-    Scalar { from: f32, to: f32 },
-    Vec2 { from: Vec2, to: Vec2 },
+    Scalar {
+        from: f32,
+        to: f32,
+    },
+    Vec2 {
+        from: Vec2,
+        to: Vec2,
+    },
+    Object {
+        from: ObjectSnapshot,
+        to: ObjectSnapshot,
+    },
 }
 
 impl TrackValues {
-    pub const fn value_kind(self) -> ValueKind {
+    pub const fn value_kind(&self) -> ValueKind {
         match self {
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
+            Self::Object { .. } => ValueKind::Object,
         }
     }
 }
@@ -152,6 +166,21 @@ impl SceneDefinition {
             timing,
         });
         Ok(id)
+    }
+
+    pub fn animate_transform(
+        &mut self,
+        object: ObjectId,
+        from: ObjectSnapshot,
+        to: ObjectSnapshot,
+        timing: TrackTiming,
+    ) -> Result<TrackId, TimelineError> {
+        self.add_track(
+            object,
+            Property::Transform,
+            TrackValues::Object { from, to },
+            timing,
+        )
     }
 
     pub fn animate_position(

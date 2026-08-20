@@ -4,7 +4,8 @@
 
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack};
 use noon_core::{
-    Easing, GeometryRef, ObjectId, Property, ScenePatch, Style, TrackValues, Transform2D, Vec2,
+    Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
+    Transform2D, Vec2,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -233,11 +234,14 @@ impl SceneInstance {
         match patch {
             ScenePatch::SetTransform { transform, .. } => {
                 self.frame.objects[index].transform = *transform;
-                self.reapply_properties(index, &[Property::Position, Property::Rotation]);
+                self.reapply_properties(
+                    index,
+                    &[Property::Transform, Property::Position, Property::Rotation],
+                );
             }
             ScenePatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
-                self.reapply_properties(index, &[Property::Opacity]);
+                self.reapply_properties(index, &[Property::Transform, Property::Opacity]);
             }
             _ => unreachable!("value patch helper only accepts transform or style patches"),
         }
@@ -336,7 +340,7 @@ fn initial_scalar_property(
         if initialized[index] {
             continue;
         }
-        let TrackValues::Scalar { from, .. } = track.values else {
+        let TrackValues::Scalar { from, .. } = &track.values else {
             unreachable!("compiled scalar property must contain scalar values");
         };
         values[index] = from.clamp(0.0, 1.0);
@@ -397,6 +401,9 @@ fn apply_group(
         return false;
     }
     let track = &tracks[group.cursor - 1];
+    if group.property == Property::Transform {
+        return apply_transform_track(frame, group.object_index, track, time);
+    }
     let value = interpolate(track, time);
 
     match (group.property, value) {
@@ -440,15 +447,121 @@ enum EvaluatedValue {
     Vec2(Vec2),
 }
 
-fn interpolate(track: &CompiledTrack, time: f64) -> EvaluatedValue {
+fn apply_transform_track(
+    frame: &mut FrameState,
+    object_index: usize,
+    track: &CompiledTrack,
+    time: f64,
+) -> bool {
+    let TrackValues::Object { from, to } = &track.values else {
+        unreachable!("compiled Transform track must contain object snapshots");
+    };
+    let progress = track_progress(track, time);
+    let next_geometry = track
+        .transform_geometry
+        .as_ref()
+        .expect("compiled Transform track must carry prepared geometry");
+    let before_object = frame.objects[object_index].clone();
+    let before_morph = frame.morphs[object_index];
+
+    let object = &mut frame.objects[object_index];
+    if object.geometry != *next_geometry {
+        object.geometry = next_geometry.clone();
+    }
+    object.transform = interpolate_transform(from.transform, to.transform, progress);
+    object.style = interpolate_style(from.style, to.style, progress);
+    frame.morphs[object_index] = if path_geometry_morphs(from, to) {
+        progress
+    } else {
+        0.0
+    };
+
+    frame.objects[object_index] != before_object || frame.morphs[object_index] != before_morph
+}
+
+fn path_geometry_morphs(from: &ObjectSnapshot, to: &ObjectSnapshot) -> bool {
+    from.geometry != to.geometry
+        && matches!(
+            (&from.geometry, &to.geometry),
+            (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
+        )
+}
+
+fn interpolate_transform(from: Transform2D, to: Transform2D, progress: f32) -> Transform2D {
+    Transform2D {
+        translation: Vec2::new(
+            lerp(from.translation.x, to.translation.x, progress),
+            lerp(from.translation.y, to.translation.y, progress),
+        ),
+        rotation: lerp(from.rotation, to.rotation, progress),
+        scale: Vec2::new(
+            lerp(from.scale.x, to.scale.x, progress),
+            lerp(from.scale.y, to.scale.y, progress),
+        ),
+    }
+}
+
+fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
+    Style {
+        fill: interpolate_optional_color(from.fill, to.fill, progress),
+        stroke: interpolate_optional_color(from.stroke, to.stroke, progress),
+        stroke_width: lerp(from.stroke_width, to.stroke_width, progress),
+        opacity: lerp(from.opacity, to.opacity, progress),
+    }
+}
+
+fn interpolate_optional_color(
+    from: Option<Color>,
+    to: Option<Color>,
+    progress: f32,
+) -> Option<Color> {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
+    match (from, to) {
+        (None, None) => None,
+        (Some(from), Some(to)) => Some(interpolate_color(from, to, progress)),
+        (None, Some(to)) => Some(interpolate_color(
+            Color::rgba(to.red, to.green, to.blue, 0.0),
+            to,
+            progress,
+        )),
+        (Some(from), None) => Some(interpolate_color(
+            from,
+            Color::rgba(from.red, from.green, from.blue, 0.0),
+            progress,
+        )),
+    }
+}
+
+fn interpolate_color(from: Color, to: Color, progress: f32) -> Color {
+    Color::rgba(
+        lerp(from.red, to.red, progress),
+        lerp(from.green, to.green, progress),
+        lerp(from.blue, to.blue, progress),
+        lerp(from.alpha, to.alpha, progress),
+    )
+}
+
+fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
-    let progress = apply_easing(track.timing.easing, raw);
-    match track.values {
-        TrackValues::Scalar { from, to } => EvaluatedValue::Scalar(lerp(from, to, progress)),
+    apply_easing(track.timing.easing, raw)
+}
+
+fn interpolate(track: &CompiledTrack, time: f64) -> EvaluatedValue {
+    let progress = track_progress(track, time);
+    match &track.values {
+        TrackValues::Scalar { from, to } => EvaluatedValue::Scalar(lerp(*from, *to, progress)),
         TrackValues::Vec2 { from, to } => EvaluatedValue::Vec2(Vec2::new(
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
         )),
+        TrackValues::Object { .. } => {
+            unreachable!("Transform tracks are evaluated atomically")
+        }
     }
 }
 

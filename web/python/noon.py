@@ -6,6 +6,7 @@ touch the canvas, or own runtime state.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from dataclasses import dataclass
@@ -89,6 +90,22 @@ class Color:
 
 
 @dataclass(frozen=True, slots=True)
+class Mobject:
+    """Detached semantic object snapshot usable as a Transform target."""
+
+    geometry: dict[str, Any]
+    transform: dict[str, Any]
+    style: dict[str, Any]
+
+    def to_ir(self) -> dict[str, Any]:
+        return {
+            "geometry": copy.deepcopy(self.geometry),
+            "transform": copy.deepcopy(self.transform),
+            "style": copy.deepcopy(self.style),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Object:
     """Stable reference to an object owned by one Scene."""
 
@@ -148,17 +165,88 @@ class VectorPath:
         return {"commands": list(self._commands)}
 
 
+def _make_mobject(
+    geometry: dict[str, Any],
+    *,
+    position: tuple[float, float] = (0.0, 0.0),
+    rotation: float = 0.0,
+    scale: tuple[float, float] = (1.0, 1.0),
+    fill: Color | None = Color(1.0, 1.0, 1.0),
+    stroke: Color | None = None,
+    stroke_width: float = 1.0,
+    opacity: float = 1.0,
+) -> Mobject:
+    if fill is not None and not isinstance(fill, Color):
+        raise TypeError("fill must be a Color or None")
+    if stroke is not None and not isinstance(stroke, Color):
+        raise TypeError("stroke must be a Color or None")
+    width = _finite_number("stroke_width", stroke_width)
+    if width < 0.0:
+        raise ValueError("stroke_width must be non-negative")
+    return Mobject(
+        geometry=copy.deepcopy(geometry),
+        transform={
+            "translation": _vec2("position", position),
+            "rotation": _finite_number("rotation", rotation),
+            "scale": _vec2("scale", scale),
+        },
+        style={
+            "fill": None if fill is None else fill.to_ir(),
+            "stroke": None if stroke is None else stroke.to_ir(),
+            "stroke_width": width,
+            "opacity": _finite_number("opacity", opacity),
+        },
+    )
+
+
+def Circle(radius: float, **kwargs: Any) -> Mobject:
+    return _make_mobject(
+        {"circle": {"radius": _positive_number("radius", radius)}},
+        **kwargs,
+    )
+
+
+def Rectangle(width: float, height: float, **kwargs: Any) -> Mobject:
+    return _make_mobject(
+        {
+            "rectangle": {
+                "size": {
+                    "x": _positive_number("width", width),
+                    "y": _positive_number("height", height),
+                }
+            }
+        },
+        **kwargs,
+    )
+
+
+def Line(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    **kwargs: Any,
+) -> Mobject:
+    kwargs.setdefault("fill", None)
+    kwargs.setdefault("stroke", Color(1.0, 1.0, 1.0))
+    kwargs.setdefault("stroke_width", 0.1)
+    return _make_mobject(
+        {"line": {"start": _vec2("start", start), "end": _vec2("end", end)}},
+        **kwargs,
+    )
+
+
+def Path(path: VectorPath, **kwargs: Any) -> Mobject:
+    if not isinstance(path, VectorPath):
+        raise TypeError("path must be a VectorPath")
+    kwargs.setdefault("stroke_width", 0.1)
+    return _make_mobject({"vector_path": path.to_ir()}, **kwargs)
+
+
 @dataclass(frozen=True, slots=True)
 class Transform:
-    """Transform one scene object toward a target shape.
-
-    The first implementation supports VectorPath targets. Scene.play lowers
-    this authoring object into deterministic Noon IR; Python is not used during
-    frame playback.
-    """
+    """Atomically transform one scene object toward a detached target snapshot."""
 
     source: Object
-    target: VectorPath
+    target: Mobject | VectorPath
     key: str | None = None
 
 
@@ -171,6 +259,13 @@ class Scene:
         self._tracks: list[dict[str, Any]] = []
         self._object_keys: dict[int, str] = {}
         self._track_keys: dict[int, str] = {}
+        self._scheduled_transform_targets: dict[int, dict[str, Any]] = {}
+        self._scheduled_transform_ends: dict[int, float] = {}
+
+    def add(self, mobject: Mobject, *, key: str | None = None) -> Object:
+        if not isinstance(mobject, Mobject):
+            raise TypeError("add expects a detached Mobject")
+        return self._append_snapshot(mobject.to_ir(), key)
 
     def circle(
         self,
@@ -314,25 +409,40 @@ class Scene:
         target = animation.target
         if not isinstance(obj, Object) or obj._owner is not self._owner:
             raise ValueError("transformed object must belong to this Scene")
-        if not isinstance(target, VectorPath):
-            raise TypeError("Transform target must currently be a VectorPath")
-        geometry = self._objects[obj.id]["geometry"]
-        source = geometry.get("vector_path")
-        if source is None:
-            raise ValueError("the current Transform renderer supports vector paths only")
-        if "morph_target" in source:
-            raise ValueError("a path can currently have one geometric Transform target")
-        source["morph_target"] = target.to_ir()
-        self._add_scalar_track(
+
+        start = _finite_number("start_time", start_time)
+        run_duration = _positive_number("duration", duration)
+        previous_end = self._scheduled_transform_ends.get(obj.id)
+        if previous_end is not None and start < previous_end:
+            raise ValueError("generic Transform tracks for one object must not overlap")
+
+        source_snapshot = copy.deepcopy(
+            self._scheduled_transform_targets.get(obj.id, self._snapshot_for_object(obj))
+        )
+        if isinstance(target, VectorPath):
+            target_snapshot = copy.deepcopy(source_snapshot)
+            target_snapshot["geometry"] = {"vector_path": target.to_ir()}
+        elif isinstance(target, Mobject):
+            target_snapshot = target.to_ir()
+        else:
+            raise TypeError("Transform target must be a detached Mobject or VectorPath")
+
+        self._add_track(
             obj,
-            "morph",
-            0.0,
-            1.0,
-            start_time,
-            duration,
+            "transform",
+            {
+                "object": {
+                    "from": source_snapshot,
+                    "to": target_snapshot,
+                }
+            },
+            start,
+            run_duration,
             easing,
             animation.key,
         )
+        self._scheduled_transform_targets[obj.id] = copy.deepcopy(target_snapshot)
+        self._scheduled_transform_ends[obj.id] = start + run_duration
 
     def animate_position(
         self,
@@ -428,6 +538,27 @@ class Scene:
             easing=easing,
         )
 
+    def _snapshot_for_object(self, obj: Object) -> dict[str, Any]:
+        stored = self._objects[obj.id]
+        return {
+            "geometry": copy.deepcopy(stored["geometry"]),
+            "transform": copy.deepcopy(stored["transform"]),
+            "style": copy.deepcopy(stored["style"]),
+        }
+
+    def _append_snapshot(
+        self, snapshot: dict[str, Any], key: str | None
+    ) -> Object:
+        object_id = len(self._objects)
+        authoring_key = _authoring_key("key", key, f"@object:{object_id}")
+        if authoring_key in self._object_keys.values():
+            raise ValueError(f"duplicate object key: {authoring_key}")
+        self._object_keys[object_id] = authoring_key
+        stored = copy.deepcopy(snapshot)
+        stored["id"] = object_id
+        self._objects.append(stored)
+        return Object(object_id, self._owner)
+
     def _add_object(
         self,
         geometry: dict[str, Any],
@@ -449,14 +580,8 @@ class Scene:
         if width < 0.0:
             raise ValueError("stroke_width must be non-negative")
 
-        object_id = len(self._objects)
-        authoring_key = _authoring_key("key", key, f"@object:{object_id}")
-        if authoring_key in self._object_keys.values():
-            raise ValueError(f"duplicate object key: {authoring_key}")
-        self._object_keys[object_id] = authoring_key
-        self._objects.append(
+        return self._append_snapshot(
             {
-                "id": object_id,
                 "geometry": geometry,
                 "transform": {
                     "translation": _vec2("position", position),
@@ -469,9 +594,9 @@ class Scene:
                     "stroke_width": width,
                     "opacity": _finite_number("opacity", opacity),
                 },
-            }
+            },
+            key,
         )
-        return Object(object_id, self._owner)
 
     def _add_scalar_track(
         self,

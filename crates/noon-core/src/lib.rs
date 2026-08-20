@@ -264,6 +264,33 @@ impl ObjectDefinition {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObjectSnapshot {
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub style: Style,
+}
+
+impl ObjectSnapshot {
+    pub fn new(geometry: GeometryRef) -> Self {
+        Self {
+            geometry,
+            transform: Transform2D::default(),
+            style: Style::default(),
+        }
+    }
+}
+
+impl From<&ObjectDefinition> for ObjectSnapshot {
+    fn from(value: &ObjectDefinition) -> Self {
+        Self {
+            geometry: value.geometry.clone(),
+            transform: value.transform,
+            style: value.style,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneDefinition {
     pub(crate) objects: Vec<ObjectDefinition>,

@@ -46,16 +46,17 @@ class PlaygroundExampleTests(unittest.TestCase):
 
         self.assertEqual(len(document["objects"]), 600)
         properties = [track["property"] for track in document["tracks"]]
-        self.assertEqual(properties.count("morph"), 600)
+        self.assertEqual(properties.count("transform"), 600)
         self.assertEqual(properties.count("rotation"), 600)
 
         morph_geometries = {
             json.dumps(
-                obj["geometry"]["vector_path"],
+                track["values"]["object"]["to"]["geometry"]["vector_path"],
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            for obj in document["objects"]
+            for track in document["tracks"]
+            if track["property"] == "transform"
         }
         self.assertEqual(len(morph_geometries), 12)
 
@@ -72,16 +73,17 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertEqual(len(document["objects"]), object_count)
 
                 properties = [track["property"] for track in document["tracks"]]
-                self.assertEqual(properties.count("morph"), object_count)
+                self.assertEqual(properties.count("transform"), object_count)
                 self.assertEqual(properties.count("rotation"), object_count)
 
                 morph_geometries = {
                     json.dumps(
-                        obj["geometry"]["vector_path"],
+                        track["values"]["object"]["to"]["geometry"]["vector_path"],
                         sort_keys=True,
                         separators=(",", ":"),
                     )
-                    for obj in document["objects"]
+                    for track in document["tracks"]
+                    if track["property"] == "transform"
                 }
                 self.assertEqual(len(morph_geometries), 12)
 

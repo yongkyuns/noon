@@ -11,6 +11,7 @@ use noon_core::{
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
+    pub transform: bool,
     pub position: bool,
     pub rotation: bool,
     pub opacity: bool,
@@ -21,6 +22,7 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
+            Property::Transform => self.transform = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Opacity => self.opacity = true,
@@ -30,7 +32,12 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.position || self.rotation || self.opacity || self.reveal || self.morph
+        self.transform
+            || self.position
+            || self.rotation
+            || self.opacity
+            || self.reveal
+            || self.morph
     }
 }
 
@@ -50,6 +57,10 @@ pub struct CompiledTrack {
     pub property: Property,
     pub values: TrackValues,
     pub timing: TrackTiming,
+    /// Stable geometry used by an atomic Transform. For path morphing this is
+    /// the source path carrying its target correspondence; it does not change
+    /// during steady-state playback.
+    pub transform_geometry: Option<GeometryRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +74,8 @@ pub struct CompiledScene {
 pub enum CompileError {
     TooManyObjects(usize),
     UnknownObject(ObjectId),
+    UnsupportedTransformGeometry(TrackId),
+    PathTransformRequiresRetessellation(TrackId),
 }
 
 impl std::fmt::Display for CompileError {
@@ -74,6 +87,16 @@ impl std::fmt::Display for CompileError {
             Self::UnknownObject(id) => {
                 write!(formatter, "track references unknown object {}", id.get())
             }
+            Self::UnsupportedTransformGeometry(id) => write!(
+                formatter,
+                "transform track {} uses unsupported geometry interpolation",
+                id.get()
+            ),
+            Self::PathTransformRequiresRetessellation(id) => write!(
+                formatter,
+                "transform track {} changes path fill topology or stroke width",
+                id.get()
+            ),
         }
     }
 }
@@ -88,6 +111,8 @@ pub enum CompilePatchError {
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
     InvalidTrack(TimelineError),
+    UnsupportedTransformGeometry(TrackId),
+    PathTransformRequiresRetessellation(TrackId),
 }
 
 impl std::fmt::Display for CompilePatchError {
@@ -101,6 +126,16 @@ impl std::fmt::Display for CompilePatchError {
             Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
             Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
             Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
+            Self::UnsupportedTransformGeometry(id) => write!(
+                formatter,
+                "transform track {} uses unsupported geometry interpolation",
+                id.get()
+            ),
+            Self::PathTransformRequiresRetessellation(id) => write!(
+                formatter,
+                "transform track {} changes path fill topology or stroke width",
+                id.get()
+            ),
         }
     }
 }
@@ -131,7 +166,10 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             objects[object_index as usize].dynamic.mark(track.property);
-            tracks.push(compile_track(track, object_index));
+            tracks.push(
+                compile_track(track, object_index)
+                    .map_err(|error| compile_error(track.id, error))?,
+            );
         }
         sort_tracks(&mut tracks);
 
@@ -258,7 +296,7 @@ impl CompiledScene {
                 },
             ));
         }
-        Ok(compile_track(track, object_index))
+        compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
     }
 
     fn rebuild_object_indices(&mut self) {
@@ -281,13 +319,74 @@ impl CompiledScene {
     }
 }
 
-fn compile_track(track: &TrackDefinition, object_index: u32) -> CompiledTrack {
-    CompiledTrack {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransformCompileFailure {
+    UnsupportedGeometry,
+    RequiresRetessellation,
+}
+
+fn compile_track(
+    track: &TrackDefinition,
+    object_index: u32,
+) -> Result<CompiledTrack, TransformCompileFailure> {
+    Ok(CompiledTrack {
         id: track.id,
         object_index,
         property: track.property,
-        values: track.values,
+        values: track.values.clone(),
         timing: track.timing,
+        transform_geometry: compile_transform_geometry(track)?,
+    })
+}
+
+fn compile_transform_geometry(
+    track: &TrackDefinition,
+) -> Result<Option<GeometryRef>, TransformCompileFailure> {
+    if track.property != Property::Transform {
+        return Ok(None);
+    }
+    let TrackValues::Object { from, to } = &track.values else {
+        unreachable!("validated Transform track must contain object snapshots");
+    };
+
+    if from.geometry == to.geometry {
+        return Ok(Some(from.geometry.clone()));
+    }
+
+    match (&from.geometry, &to.geometry) {
+        (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
+            if from.style.fill != to.style.fill
+                || from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits()
+            {
+                return Err(TransformCompileFailure::RequiresRetessellation);
+            }
+            Ok(Some(GeometryRef::path(
+                source.clone().with_morph_target(target.clone()),
+            )))
+        }
+        _ => Err(TransformCompileFailure::UnsupportedGeometry),
+    }
+}
+
+fn compile_error(id: TrackId, error: TransformCompileFailure) -> CompileError {
+    match error {
+        TransformCompileFailure::UnsupportedGeometry => {
+            CompileError::UnsupportedTransformGeometry(id)
+        }
+        TransformCompileFailure::RequiresRetessellation => {
+            CompileError::PathTransformRequiresRetessellation(id)
+        }
+    }
+}
+
+fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePatchError {
+    match error {
+        TransformCompileFailure::UnsupportedGeometry => {
+            CompilePatchError::UnsupportedTransformGeometry(id)
+        }
+        TransformCompileFailure::RequiresRetessellation => {
+            CompilePatchError::PathTransformRequiresRetessellation(id)
+        }
     }
 }
 
@@ -303,11 +402,12 @@ fn sort_tracks(tracks: &mut [CompiledTrack]) {
 
 const fn property_rank(property: Property) -> u8 {
     match property {
-        Property::Position => 0,
-        Property::Rotation => 1,
-        Property::Opacity => 2,
-        Property::Reveal => 3,
-        Property::Morph => 4,
+        Property::Transform => 0,
+        Property::Position => 1,
+        Property::Rotation => 2,
+        Property::Opacity => 3,
+        Property::Reveal => 4,
+        Property::Morph => 5,
     }
 }
 
@@ -386,6 +486,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
+                transform: false,
                 position: false,
                 rotation: false,
                 opacity: true,
@@ -412,6 +513,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                transform: false,
                 position: false,
                 rotation: false,
                 opacity: false,
