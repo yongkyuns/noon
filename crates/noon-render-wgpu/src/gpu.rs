@@ -1010,6 +1010,7 @@ mod tests {
                     style: Style::default(),
                 },
             ],
+            reveals: vec![1.0; 3],
         }
     }
 
@@ -1038,6 +1039,7 @@ mod tests {
                     style: Style::default(),
                 },
             ],
+            reveals: vec![1.0; 2],
         }
     }
 
