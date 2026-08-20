@@ -10,6 +10,7 @@ node --check web/authoring-client.js
 node --check web/python-worker.js
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
+node --check web/morph-profile.js
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
