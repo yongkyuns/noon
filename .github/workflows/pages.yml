@@ -59,7 +59,10 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     environment:
-      name: github-pages
+      # Keep feature-branch preview deployments separate from the protected
+      # production `github-pages` environment. deploy-pages supports a custom
+      # environment name, while the Pages site itself remains unchanged.
+      name: noon-playground-preview
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
