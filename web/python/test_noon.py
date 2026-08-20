@@ -86,6 +86,35 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(document["tracks"][0]["property"], "position")
         self.assertEqual(document["tracks"][1]["values"]["scalar"]["from"], -0.7)
 
+    def test_path_reveal_serializes_as_normalized_scalar_track(self) -> None:
+        scene = Scene()
+        path = scene.path(
+            VectorPath().move_to((-1.0, 0.0)).line_to((1.0, 0.0)),
+            fill=None,
+            stroke=Color(1.0, 1.0, 1.0),
+            stroke_width=0.08,
+            key="stroke",
+        )
+        scene.animate_reveal(
+            path,
+            duration=2.5,
+            start_time=0.75,
+            easing="ease_in_out_cubic",
+            key="stroke.reveal",
+        )
+
+        track = scene.to_document()["tracks"][0]
+        self.assertEqual(track["property"], "reveal")
+        self.assertEqual(track["values"]["scalar"], {"from": 0.0, "to": 1.0})
+        self.assertEqual(track["timing"]["start_time"], 0.75)
+        self.assertEqual(track["timing"]["duration"], 2.5)
+        self.assertEqual(track["timing"]["easing"], "ease_in_out_cubic")
+
+        with self.assertRaises(ValueError):
+            scene.animate_reveal(path, from_=-0.1, duration=1.0)
+        with self.assertRaises(ValueError):
+            scene.animate_reveal(path, to=1.1, duration=1.0)
+
     def test_scene_rejects_foreign_objects_and_invalid_timing(self) -> None:
         first = Scene()
         second = Scene()
@@ -124,7 +153,10 @@ class SceneTests(unittest.TestCase):
         )
 
         geometry = json.loads(scene.to_json())["objects"][0]["geometry"]
-        self.assertEqual(geometry["vector_path"]["commands"][0]["move_to"]["to"], {"x": -1.0, "y": 0.0})
+        self.assertEqual(
+            geometry["vector_path"]["commands"][0]["move_to"]["to"],
+            {"x": -1.0, "y": 0.0},
+        )
         self.assertEqual(geometry["vector_path"]["commands"][-1], "close")
 
         with self.assertRaises(TypeError):
