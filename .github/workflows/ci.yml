@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,20 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: agent/browser-realtime-architecture
-
-      - name: Apply path render bundle refactor
-        run: python3 scripts/apply_path_render_bundle.py
 
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
-
-      - name: Format generated refactor
-        run: cargo fmt --all
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -76,19 +68,6 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
-
-      - name: Publish validated path render bundle refactor
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          if git diff --quiet -- crates/noon-render-wgpu/src/gpu.rs; then
-            echo "No source changes to publish"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/noon-render-wgpu/src/gpu.rs
-          git commit -m "Cache path render bundles"
-          git push origin HEAD:agent/browser-realtime-architecture
 
   legacy-compat:
     name: Full legacy compatibility
