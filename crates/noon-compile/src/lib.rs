@@ -14,6 +14,7 @@ pub struct DynamicProperties {
     pub position: bool,
     pub rotation: bool,
     pub opacity: bool,
+    pub reveal: bool,
 }
 
 impl DynamicProperties {
@@ -22,11 +23,12 @@ impl DynamicProperties {
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Opacity => self.opacity = true,
+            Property::Reveal => self.reveal = true,
         }
     }
 
     pub const fn any(self) -> bool {
-        self.position || self.rotation || self.opacity
+        self.position || self.rotation || self.opacity || self.reveal
     }
 }
 
@@ -302,6 +304,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::Position => 0,
         Property::Rotation => 1,
         Property::Opacity => 2,
+        Property::Reveal => 3,
     }
 }
 
@@ -383,9 +386,39 @@ mod tests {
                 position: false,
                 rotation: false,
                 opacity: true,
+                reveal: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
+    }
+
+    #[test]
+    fn reveal_tracks_mark_only_reveal_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        ));
+        scene
+            .animate_reveal(
+                object,
+                0.0,
+                1.0,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .expect("valid reveal track");
+
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                position: false,
+                rotation: false,
+                opacity: false,
+                reveal: true,
+            }
+        );
     }
 
     #[test]
