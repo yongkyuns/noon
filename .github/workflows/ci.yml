@@ -45,8 +45,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          # Compatibility fixtures that construct expanded runtime/compiler
-          # state directly instead of using constructors.
           path = Path("crates/noon-compile/src/lib.rs")
           text = path.read_text()
           old = "                reveal: true,\n"
@@ -84,11 +82,9 @@ jobs:
           cargo check -p noon-web --target wasm32-unknown-unknown
           bash scripts/build-web-demo.sh
 
-      - name: Publish tested refactor and restore CI
+      - name: Publish validated source only
         shell: bash
         run: |
-          git show 04616cb095440b5f8a30e2ddf87e1881b97362a1:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm .github/workflows/agent-transform-refactor.yml scripts/agent_transform_refactor.py
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -- \
@@ -103,10 +99,7 @@ jobs:
             web/python/test_noon.py \
             web/python/demo_scene.py \
             web/index.html \
-            docs/path-morphing.md \
-            .github/workflows/agent-transform-refactor.yml \
-            scripts/agent_transform_refactor.py \
-            .github/workflows/ci.yml
+            docs/path-morphing.md
           git commit -m "Align morph authoring with Transform and Scene.play"
           git push origin HEAD:agent/browser-realtime-architecture
 
