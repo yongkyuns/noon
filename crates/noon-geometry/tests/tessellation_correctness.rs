@@ -223,11 +223,7 @@ where
         .unwrap_or_else(|| panic!("no stroke pair centered at {center:?}"))
 }
 
-fn unordered_pair_matches(
-    actual: (Vec2, Vec2),
-    expected: (Vec2, Vec2),
-    tolerance: f32,
-) -> bool {
+fn unordered_pair_matches(actual: (Vec2, Vec2), expected: (Vec2, Vec2), tolerance: f32) -> bool {
     let direct = magnitude(sub(actual.0, expected.0)) <= tolerance
         && magnitude(sub(actual.1, expected.1)) <= tolerance;
     let swapped = magnitude(sub(actual.0, expected.1)) <= tolerance
@@ -343,12 +339,8 @@ fn quadratic_advancement_matches_independent_high_resolution_length() {
     let point = |t: f32| {
         let one_minus_t = 1.0 - t;
         Vec2::new(
-            one_minus_t * one_minus_t * from.x
-                + 2.0 * one_minus_t * t * control.x
-                + t * t * to.x,
-            one_minus_t * one_minus_t * from.y
-                + 2.0 * one_minus_t * t * control.y
-                + t * t * to.y,
+            one_minus_t * one_minus_t * from.x + 2.0 * one_minus_t * t * control.x + t * t * to.x,
+            one_minus_t * one_minus_t * from.y + 2.0 * one_minus_t * t * control.y + t * t * to.y,
         )
     };
     let steps = 8192;
@@ -429,11 +421,7 @@ fn morph_miter_limit_bounds_near_reversal_spikes() {
     for edge in [pair.0, pair.1] {
         let offset = sub(edge, corner);
         assert!(offset.x.is_finite() && offset.y.is_finite());
-        assert_close(
-            magnitude(offset),
-            half_width * MORPH_MITER_LIMIT,
-            EPS,
-        );
+        assert_close(magnitude(offset), half_width * MORPH_MITER_LIMIT, EPS);
     }
 }
 
@@ -465,11 +453,7 @@ fn star_morph_target_miters_match_offset_line_theory_or_miter_limit() {
             assert_close(dot(offset, incoming_normal).abs(), half_width, EPS);
             assert_close(dot(offset, outgoing_normal).abs(), half_width, EPS);
         } else {
-            assert_close(
-                magnitude(offset),
-                half_width * MORPH_MITER_LIMIT,
-                EPS,
-            );
+            assert_close(magnitude(offset), half_width * MORPH_MITER_LIMIT, EPS);
         }
     }
 }
@@ -526,7 +510,9 @@ fn morph_target_endpoint_mesh_contains_every_authored_star_vertex() {
         .collect();
     for vertex in target_vertices {
         assert!(
-            centers.iter().any(|center| magnitude(sub(*center, vertex)) < EPS),
+            centers
+                .iter()
+                .any(|center| magnitude(sub(*center, vertex)) < EPS),
             "authored target vertex {vertex:?} was lost during morph tessellation"
         );
     }
@@ -543,7 +529,11 @@ fn symmetric_star_tip_has_symmetric_left_and_right_taper() {
 
     assert_close(pair.0.x + pair.1.x, tip.x * 2.0, EPS);
     assert_close(pair.0.y, pair.1.y, EPS);
-    assert_close(magnitude(sub(pair.0, tip)), magnitude(sub(pair.1, tip)), EPS);
+    assert_close(
+        magnitude(sub(pair.0, tip)),
+        magnitude(sub(pair.1, tip)),
+        EPS,
+    );
 }
 
 #[test]
@@ -595,7 +585,10 @@ fn morph_strip_triangles_keep_winding_through_interpolation() {
                 position(triangle[1]),
                 position(triangle[2]),
             );
-            assert!(area > EPS, "triangle inverted or collapsed at alpha={alpha}: {area}");
+            assert!(
+                area > EPS,
+                "triangle inverted or collapsed at alpha={alpha}: {area}"
+            );
         }
     }
 }
