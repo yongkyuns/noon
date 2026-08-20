@@ -43,7 +43,9 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
 
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
     let encoded_progress = input.surface_and_progress >> 1u;
-    let path_progress = f32(encoded_progress) / 2147483647.0;
+    // The CPU uses an exact 24-bit integer domain for normalized path
+    // progress so both endpoints survive the f32 conversion exactly.
+    let path_progress = f32(encoded_progress) / 16777215.0;
 
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
