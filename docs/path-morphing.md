@@ -51,13 +51,13 @@ Closed-contour alignment uses a deterministic exhaustive search over forward/rev
 
 ## Runtime/render architecture
 
-The intended next seam is:
+The implemented seam is:
 
 ```text
 VectorPath source + target
         |
         v
-plan_morph()                 authoring/compile time
+plan_morph()                 geometry preparation
         |
         v
 MorphPlan
@@ -66,16 +66,19 @@ MorphPlan
   contour metadata
         |
         v
+fixed-topology dual-position stroke mesh
+        |
+        v
 morph progress scalar        frame time
         |
         v
-GPU/CPU point interpolation
+WebGPU vertex interpolation
         |
         v
-stable morph mesh/render path
+stable morph render path
 ```
 
-The runtime should not rebuild semantic paths or run curve flattening each frame. `MorphFrame::to_vector_path()` exists only as a reference/debug CPU representation; normal playback should interpolate the precomputed correspondence directly.
+The runtime does not rebuild semantic paths or run curve flattening each frame. `MorphFrame::to_vector_path()` exists only as a reference/debug CPU representation; normal playback interpolates the precomputed correspondence directly in the GPU vertex shader.
 
 ## Playable renderer slice
 
@@ -83,17 +86,24 @@ The first playable morph renderer is implemented as a fixed-topology stroke mesh
 
 The runtime reuses the existing normalized path scalar channel: ordinary paths interpret it as reveal, while paths with a semantic `morph_target` interpret it as morph progress. This keeps frame state compact and means morph playback changes only the path instance record; geometry is not retessellated or re-uploaded each frame. The Python API exposes this as `scene.animate_morph(path, target, ...)`.
 
+The browser demo exercises this through the normal Python/Pyodide → scene IR → Rust/WASM → WebGPU path rather than a demo-only renderer shortcut.
+
 Current intentional boundary: morph rendering is stroke-only. Fill triangulation during topology-changing interpolation is deferred until a stable fill strategy is selected. A path cannot currently animate reveal and morph simultaneously because those operations share the normalized path channel.
+
+## Validation
+
+The implementation gate validates workspace formatting, compilation, strict Clippy, the complete Rust test suite, and the Python authoring API tests before publishing the source commit. Geometry tests cover deterministic correspondence and fixed dual-position topology; renderer tests validate the 20-byte dual-position path vertex layout and WebGPU pipeline construction.
+
+Normal repository CI remains the authoritative post-push gate, including the browser WebGPU target and generated browser package validation.
 
 ## Next implementation step
 
 Next, add fill morphing and decide whether reveal+morph composition warrants separate scalar channels. The stroke morph path is already fixed-topology and GPU-interpolated, so normal playback performs no path planning, tessellation, or geometry upload per frame.
 
-Correctness tests should cover:
+Correctness follow-ups should cover:
 
-- exact progress 0 and 1 correspondence endpoints;
-- direct seek vs sequential playback parity;
-- closed-path start-offset/winding normalization;
-- no per-frame path flattening or correspondence work;
-- stable renderer topology and bounded dirty uploads;
-- browser/native parity.
+- direct seek vs sequential playback parity specifically for morph progress;
+- explicit measurement that morph frames upload only the path instance record;
+- fill-morph triangulation once its topology policy is selected;
+- simultaneous reveal + morph if separate channels are introduced;
+- browser/native visual parity.
