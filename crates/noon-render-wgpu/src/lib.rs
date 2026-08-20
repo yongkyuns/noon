@@ -11,10 +11,14 @@ mod gpu;
 pub use gpu::*;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, VectorPath};
+use noon_core::{Color, GeometryRef, ObjectId, PathCommand, Style, Transform2D, VectorPath};
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use std::ops::Range;
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap},
+    hash::{Hash, Hasher},
+    ops::Range,
+};
 
 // `f32` represents every integer through 2^24 exactly. Keeping the encoded
 // progress in this exact domain avoids endpoint wraparound at reveal == 1.0
@@ -163,6 +167,12 @@ enum PreparedSlot {
     Unsupported(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PathMeshKey {
+    path_hash: u64,
+    stroke_width_bits: u32,
+}
+
 #[derive(Clone, Debug)]
 struct CachedPathMesh {
     path: VectorPath,
@@ -192,6 +202,7 @@ pub struct FramePreparer {
     path_batches: Vec<PathBatch>,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
+    path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
     circle_dirty_ranges: Vec<Range<usize>>,
@@ -276,6 +287,11 @@ impl FramePreparer {
             }
         }
 
+        normalize_dirty_ranges(&mut self.circle_dirty_ranges);
+        normalize_dirty_ranges(&mut self.rectangle_dirty_ranges);
+        normalize_dirty_ranges(&mut self.line_dirty_ranges);
+        normalize_dirty_ranges(&mut self.path_dirty_ranges);
+
         self.prepared_frame(frame.time, 0, instances_repacked, 0)
     }
 
@@ -297,6 +313,7 @@ impl FramePreparer {
         self.clear_dirty_ranges();
 
         let mut path_groups = Vec::<PathGroup>::new();
+        let mut path_group_lookup = HashMap::<usize, usize>::new();
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
             match &object.geometry {
@@ -329,17 +346,19 @@ impl FramePreparer {
                             continue;
                         }
                     };
-                    let batch = path_groups
-                        .iter()
-                        .position(|group| group.cache_index == cache_index)
-                        .unwrap_or_else(|| {
+                    let batch = match path_group_lookup.get(&cache_index).copied() {
+                        Some(batch) => batch,
+                        None => {
+                            let batch = path_groups.len();
                             path_groups.push(PathGroup {
                                 cache_index,
                                 ids: Vec::new(),
                                 instances: Vec::new(),
                             });
-                            path_groups.len() - 1
-                        });
+                            path_group_lookup.insert(cache_index, batch);
+                            batch
+                        }
+                    };
                     let index = path_groups[batch].instances.len();
                     path_groups[batch].ids.push(object.id);
                     path_groups[batch].instances.push(pack_path(
@@ -531,7 +550,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 19] {
+    fn capacities(&self) -> [usize; 20] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -546,6 +565,7 @@ impl FramePreparer {
             self.path_batches.capacity(),
             self.path_batch_cache_indices.capacity(),
             self.path_mesh_cache.capacity(),
+            self.path_mesh_lookup.capacity(),
             self.unsupported.capacity(),
             self.slots.capacity(),
             self.circle_dirty_ranges.capacity(),
@@ -561,25 +581,83 @@ impl FramePreparer {
         stroke_width: f32,
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
         let stroke_width_bits = stroke_width.to_bits();
-        if let Some(index) = self
-            .path_mesh_cache
-            .iter()
-            .position(|entry| entry.path == *path && entry.stroke_width_bits == stroke_width_bits)
-        {
-            return Ok((index, false));
+        let key = path_mesh_key(path, stroke_width_bits);
+        if let Some(candidates) = self.path_mesh_lookup.get(&key) {
+            if let Some(index) = candidates.iter().copied().find(|&index| {
+                let entry = &self.path_mesh_cache[index];
+                entry.path == *path && entry.stroke_width_bits == stroke_width_bits
+            }) {
+                return Ok((index, false));
+            }
         }
+
         let mesh = noon_geometry::tessellate(path, stroke_width)?;
+        let index = self.path_mesh_cache.len();
         self.path_mesh_cache.push(CachedPathMesh {
             path: path.clone(),
             stroke_width_bits,
             mesh,
         });
-        Ok((self.path_mesh_cache.len() - 1, true))
+        self.path_mesh_lookup.entry(key).or_default().push(index);
+        Ok((index, true))
     }
 
     pub fn cached_path_mesh_count(&self) -> usize {
         self.path_mesh_cache.len()
     }
+}
+
+fn path_mesh_key(path: &VectorPath, stroke_width_bits: u32) -> PathMeshKey {
+    let mut hasher = DefaultHasher::new();
+    hash_vector_path(path, &mut hasher);
+    PathMeshKey {
+        path_hash: hasher.finish(),
+        stroke_width_bits,
+    }
+}
+
+fn hash_vector_path(path: &VectorPath, hasher: &mut impl Hasher) {
+    path.commands().len().hash(hasher);
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo { to } => {
+                0_u8.hash(hasher);
+                hash_vec2(to, hasher);
+            }
+            PathCommand::LineTo { to } => {
+                1_u8.hash(hasher);
+                hash_vec2(to, hasher);
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                2_u8.hash(hasher);
+                hash_vec2(control, hasher);
+                hash_vec2(to, hasher);
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                3_u8.hash(hasher);
+                hash_vec2(control1, hasher);
+                hash_vec2(control2, hasher);
+                hash_vec2(to, hasher);
+            }
+            PathCommand::Close => 4_u8.hash(hasher),
+        }
+    }
+    match path.morph_target() {
+        Some(target) => {
+            1_u8.hash(hasher);
+            hash_vector_path(target, hasher);
+        }
+        None => 0_u8.hash(hasher),
+    }
+}
+
+fn hash_vec2(value: noon_core::Vec2, hasher: &mut impl Hasher) {
+    value.x.to_bits().hash(hasher);
+    value.y.to_bits().hash(hasher);
 }
 
 fn pack_circle(object: &FrameObjectState) -> CircleInstance {
@@ -649,6 +727,23 @@ fn push_dirty_range(ranges: &mut Vec<Range<usize>>, index: usize) {
         }
     }
     ranges.push(index..index + 1);
+}
+
+fn normalize_dirty_ranges(ranges: &mut Vec<Range<usize>>) {
+    if ranges.len() < 2 {
+        return;
+    }
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut write = 0;
+    for read in 1..ranges.len() {
+        if ranges[read].start <= ranges[write].end {
+            ranges[write].end = ranges[write].end.max(ranges[read].end);
+        } else {
+            write += 1;
+            ranges[write] = ranges[read].clone();
+        }
+    }
+    ranges.truncate(write + 1);
 }
 
 fn dirty_len(ranges: &[Range<usize>]) -> usize {
@@ -842,6 +937,54 @@ mod tests {
         assert_eq!(prepared.stats.dirty_instance_count, 1);
         assert!(!prepared.path_geometry_dirty);
         assert_eq!(prepared.paths[0].path_params, [1.0, 0.6]);
+    }
+
+    fn stress_morph_geometry(variant: usize) -> GeometryRef {
+        let scale = 0.8 + variant as f32 * 0.03;
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, scale))
+            .line_to(Vec2::new(scale, 0.0))
+            .line_to(Vec2::new(0.0, -scale))
+            .line_to(Vec2::new(-scale, 0.0))
+            .close();
+        GeometryRef::path(curved_path().with_morph_target(target))
+    }
+
+    #[test]
+    fn six_hundred_morphs_reuse_twelve_meshes_and_coalesce_uploads() {
+        const OBJECT_COUNT: usize = 600;
+        const VARIANT_COUNT: usize = 12;
+        let geometries: Vec<_> = (0..VARIANT_COUNT).map(stress_morph_geometry).collect();
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let mut state = object(index as u64, geometries[index % VARIANT_COUNT].clone());
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.02;
+                state
+            })
+            .collect();
+        let mut frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.stats.instance_count, OBJECT_COUNT);
+        assert_eq!(prepared.stats.geometry_cache_misses, VARIANT_COUNT);
+        assert_eq!(prepared.stats.batch_count, VARIANT_COUNT);
+        assert_eq!(prepared.path_batches.len(), VARIANT_COUNT);
+        assert_eq!(prepared.paths.len(), OBJECT_COUNT);
+        assert_eq!(preparer.cached_path_mesh_count(), VARIANT_COUNT);
+
+        frame.morphs.fill(0.5);
+        let changes = FrameChanges::objects((0..OBJECT_COUNT).collect());
+        let prepared = preparer.prepare_incremental(&frame, &changes);
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.instances_repacked, OBJECT_COUNT);
+        assert_eq!(prepared.stats.dirty_instance_count, OBJECT_COUNT);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.path_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_dirty_ranges[0], 0..OBJECT_COUNT);
+        assert_eq!(preparer.cached_path_mesh_count(), VARIANT_COUNT);
     }
 
     #[test]
