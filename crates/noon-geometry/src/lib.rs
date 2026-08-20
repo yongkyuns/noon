@@ -5,7 +5,7 @@
 use lyon_path::{math::point, Path};
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
-    StrokeTessellator, StrokeVertex, VertexBuffers, VertexSource,
+    StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use noon_core::{PathCommand, Rect, Vec2, VectorPath};
 
@@ -21,9 +21,9 @@ pub enum PathSurface {
 pub struct MeshVertex {
     pub position: Vec2,
     pub surface: PathSurface,
-    /// Global distance along the ordered path contours for stroke vertices.
-    /// Fill vertices use the total stroke length so they can remain hidden
-    /// until a reveal reaches its endpoint.
+    /// Global distance along the ordered path for stroke vertices.
+    /// Fill vertices use the total stroke length so they remain hidden until
+    /// a reveal reaches its endpoint.
     pub path_distance: f32,
     /// `path_distance / stroke_length` in the inclusive range `[0, 1]`.
     pub path_progress: f32,
@@ -34,12 +34,11 @@ pub struct TessellatedPath {
     pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u32>,
     pub bounds: Option<Rect>,
-    /// Sum of the flattened lengths of all ordered stroke contours.
+    /// Flattened length of all ordered stroke contours.
     pub stroke_length: f32,
 }
 
 impl TessellatedPath {
-    /// Returns the amount of stroke arc length visible at a normalized reveal.
     pub fn revealed_stroke_length(&self, reveal: f32) -> f32 {
         if !reveal.is_finite() {
             return 0.0;
@@ -63,12 +62,10 @@ impl std::fmt::Display for GeometryError {
             Self::DrawingBeforeMove => formatter.write_str("path drawing command precedes move_to"),
             Self::CloseBeforeMove => formatter.write_str("path close command precedes move_to"),
             Self::NonFinitePoint => formatter.write_str("path contains a non-finite point"),
-            Self::InvalidStrokeWidth(width) => {
-                write!(
-                    formatter,
-                    "path stroke width must be finite and non-negative: {width}"
-                )
-            }
+            Self::InvalidStrokeWidth(width) => write!(
+                formatter,
+                "path stroke width must be finite and non-negative: {width}"
+            ),
             Self::Tessellation(message) => write!(formatter, "path tessellation failed: {message}"),
         }
     }
@@ -80,42 +77,32 @@ impl std::error::Error for GeometryError {}
 struct TessellationVertex {
     position: Vec2,
     surface: PathSurface,
-    contour: usize,
-    local_distance: f32,
-}
-
-#[derive(Debug)]
-struct BuiltPath {
-    path: Path,
-    endpoint_contours: Vec<usize>,
-    contour_count: usize,
+    path_distance: f32,
 }
 
 pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPath, GeometryError> {
     if !stroke_width.is_finite() || stroke_width < 0.0 {
         return Err(GeometryError::InvalidStrokeWidth(stroke_width));
     }
-    let built = build_lyon_path(path)?;
+    let path = build_lyon_path(path)?;
     let mut buffers = VertexBuffers::new();
 
     FillTessellator::new()
         .tessellate_path(
-            &built.path,
+            &path,
             &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
             &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| TessellationVertex {
                 position: vec2(vertex.position().x, vertex.position().y),
                 surface: PathSurface::Fill,
-                contour: usize::MAX,
-                local_distance: 0.0,
+                path_distance: 0.0,
             }),
         )
         .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
 
     if stroke_width > 0.0 {
-        let endpoint_contours = &built.endpoint_contours;
         StrokeTessellator::new()
             .tessellate_path(
-                &built.path,
+                &path,
                 &StrokeOptions::default()
                     .with_tolerance(PATH_TESSELLATION_TOLERANCE)
                     .with_line_width(stroke_width)
@@ -125,43 +112,38 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
                     TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
                         surface: PathSurface::Stroke,
-                        contour: source_contour(vertex.source(), endpoint_contours),
-                        local_distance: vertex.advancement(),
+                        // Lyon defines advancement as how far along the complete
+                        // input path the stroke vertex is. It is already global
+                        // across subpaths, so adding contour offsets would
+                        // double-count later contours.
+                        path_distance: vertex.advancement(),
                     }
                 }),
             )
             .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
     }
 
-    let mut contour_lengths = vec![0.0_f32; built.contour_count];
-    for vertex in &buffers.vertices {
-        if vertex.surface == PathSurface::Stroke {
-            contour_lengths[vertex.contour] =
-                contour_lengths[vertex.contour].max(vertex.local_distance);
-        }
-    }
-    let mut contour_offsets = vec![0.0_f32; built.contour_count];
-    let mut stroke_length = 0.0_f32;
-    for (index, length) in contour_lengths.iter().copied().enumerate() {
-        contour_offsets[index] = stroke_length;
-        stroke_length += length;
-    }
+    let stroke_length = buffers
+        .vertices
+        .iter()
+        .filter(|vertex| vertex.surface == PathSurface::Stroke)
+        .map(|vertex| vertex.path_distance)
+        .fold(0.0_f32, f32::max);
 
     let vertices: Vec<MeshVertex> = buffers
         .vertices
         .into_iter()
         .map(|vertex| {
             if vertex.surface == PathSurface::Stroke {
-                let path_distance = contour_offsets[vertex.contour] + vertex.local_distance;
                 let path_progress = if stroke_length > 0.0 {
-                    (path_distance / stroke_length).clamp(0.0, 1.0)
+                    (vertex.path_distance / stroke_length).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
                 MeshVertex {
                     position: vertex.position,
                     surface: vertex.surface,
-                    path_distance,
+                    path_distance: vertex.path_distance,
                     path_progress,
                 }
             } else {
@@ -184,11 +166,9 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
     })
 }
 
-fn build_lyon_path(path: &VectorPath) -> Result<BuiltPath, GeometryError> {
+fn build_lyon_path(path: &VectorPath) -> Result<Path, GeometryError> {
     let mut builder = Path::builder();
     let mut active = false;
-    let mut current_contour = 0_usize;
-    let mut endpoint_contours = Vec::new();
 
     for command in path.commands() {
         match *command {
@@ -196,25 +176,20 @@ fn build_lyon_path(path: &VectorPath) -> Result<BuiltPath, GeometryError> {
                 finite(to)?;
                 if active {
                     builder.end(false);
-                    current_contour += 1;
                 }
-                let id = builder.begin(point(to.x, to.y));
-                record_endpoint_contour(&mut endpoint_contours, id.to_usize(), current_contour);
+                builder.begin(point(to.x, to.y));
                 active = true;
             }
             PathCommand::LineTo { to } => {
                 require_active(active)?;
                 finite(to)?;
-                let id = builder.line_to(point(to.x, to.y));
-                record_endpoint_contour(&mut endpoint_contours, id.to_usize(), current_contour);
+                builder.line_to(point(to.x, to.y));
             }
             PathCommand::QuadraticTo { control, to } => {
                 require_active(active)?;
                 finite(control)?;
                 finite(to)?;
-                let id =
-                    builder.quadratic_bezier_to(point(control.x, control.y), point(to.x, to.y));
-                record_endpoint_contour(&mut endpoint_contours, id.to_usize(), current_contour);
+                builder.quadratic_bezier_to(point(control.x, control.y), point(to.x, to.y));
             }
             PathCommand::CubicTo {
                 control1,
@@ -225,12 +200,11 @@ fn build_lyon_path(path: &VectorPath) -> Result<BuiltPath, GeometryError> {
                 finite(control1)?;
                 finite(control2)?;
                 finite(to)?;
-                let id = builder.cubic_bezier_to(
+                builder.cubic_bezier_to(
                     point(control1.x, control1.y),
                     point(control2.x, control2.y),
                     point(to.x, to.y),
                 );
-                record_endpoint_contour(&mut endpoint_contours, id.to_usize(), current_contour);
             }
             PathCommand::Close => {
                 if !active {
@@ -238,39 +212,14 @@ fn build_lyon_path(path: &VectorPath) -> Result<BuiltPath, GeometryError> {
                 }
                 builder.end(true);
                 active = false;
-                current_contour += 1;
             }
         }
     }
     if active {
         builder.end(false);
-        current_contour += 1;
     }
 
-    Ok(BuiltPath {
-        path: builder.build(),
-        endpoint_contours,
-        contour_count: current_contour,
-    })
-}
-
-fn record_endpoint_contour(endpoint_contours: &mut Vec<usize>, endpoint: usize, contour: usize) {
-    if endpoint == endpoint_contours.len() {
-        endpoint_contours.push(contour);
-    } else if endpoint < endpoint_contours.len() {
-        endpoint_contours[endpoint] = contour;
-    } else {
-        endpoint_contours.resize(endpoint + 1, contour);
-        endpoint_contours[endpoint] = contour;
-    }
-}
-
-fn source_contour(source: VertexSource, endpoint_contours: &[usize]) -> usize {
-    let endpoint = match source {
-        VertexSource::Endpoint { id } => id,
-        VertexSource::Edge { from, .. } => from,
-    };
-    endpoint_contours[endpoint.to_usize()]
+    Ok(builder.build())
 }
 
 fn finite(value: Vec2) -> Result<(), GeometryError> {
