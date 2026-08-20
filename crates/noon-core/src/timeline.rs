@@ -16,6 +16,7 @@ pub enum Property {
     Position,
     Rotation,
     Opacity,
+    Reveal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +29,7 @@ impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
             Self::Position => ValueKind::Vec2,
-            Self::Rotation | Self::Opacity => ValueKind::Scalar,
+            Self::Rotation | Self::Opacity | Self::Reveal => ValueKind::Scalar,
         }
     }
 }
@@ -178,6 +179,16 @@ impl SceneDefinition {
         self.add_track(object, property, TrackValues::Scalar { from, to }, timing)
     }
 
+    pub fn animate_reveal(
+        &mut self,
+        object: ObjectId,
+        from: f32,
+        to: f32,
+        timing: TrackTiming,
+    ) -> Result<TrackId, TimelineError> {
+        self.animate_scalar(object, Property::Reveal, from, to, timing)
+    }
+
     pub fn tracks(&self) -> &[TrackDefinition] {
         &self.tracks
     }
@@ -217,6 +228,26 @@ mod tests {
         assert_eq!(first_position, second_position);
         assert_eq!(first_opacity, second_opacity);
         assert_eq!(first.tracks(), second.tracks());
+    }
+
+    #[test]
+    fn reveal_is_a_scalar_timeline_property() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        ));
+        let track = scene
+            .animate_reveal(object, 0.0, 1.0, timing())
+            .expect("valid reveal track");
+
+        assert_eq!(track, TrackId::new(0));
+        assert_eq!(scene.tracks()[0].property, Property::Reveal);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
     }
 
     #[test]
