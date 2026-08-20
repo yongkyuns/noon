@@ -16,6 +16,8 @@ use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use std::ops::Range;
 
+const PATH_PROGRESS_MAX: u32 = u32::MAX >> 1;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PackedTransform {
@@ -100,6 +102,9 @@ pub struct PathInstance {
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct PathVertex {
     pub position: [f32; 2],
+    /// Low bit is surface (0 fill, 1 stroke); upper 31 bits are normalized
+    /// ordered path progress. Keeping this packed preserves the existing GPU
+    /// vertex stride while adding reveal metadata.
     pub surface: u32,
 }
 
@@ -250,7 +255,7 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Path { index, .. } => {
-                    let packed = pack_path(object);
+                    let packed = pack_path(object, frame.reveal(object_index));
                     instances_repacked += 1;
                     if self.paths[index] != packed {
                         self.paths[index] = packed;
@@ -283,7 +288,7 @@ impl FramePreparer {
 
         let mut path_groups = Vec::<PathGroup>::new();
         let mut geometry_cache_misses = 0;
-        for object in &frame.objects {
+        for (object_index, object) in frame.objects.iter().enumerate() {
             match &object.geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
@@ -327,7 +332,9 @@ impl FramePreparer {
                         });
                     let index = path_groups[batch].instances.len();
                     path_groups[batch].ids.push(object.id);
-                    path_groups[batch].instances.push(pack_path(object));
+                    path_groups[batch]
+                        .instances
+                        .push(pack_path(object, frame.reveal(object_index)));
                     self.slots.push(PreparedSlot::Path { index, batch });
                 }
                 GeometryRef::External(_) => {
@@ -354,10 +361,7 @@ impl FramePreparer {
                 .expect("path index count exceeds renderer limits");
             next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
                 position: [vertex.position.x, vertex.position.y],
-                surface: match vertex.surface {
-                    PathSurface::Fill => 0,
-                    PathSurface::Stroke => 1,
-                },
+                surface: pack_path_surface(vertex.surface, vertex.path_progress),
             }));
             next_indices.extend(mesh.indices.iter().map(|index| {
                 index
@@ -601,12 +605,30 @@ fn pack_line(object: &FrameObjectState) -> LineInstance {
     }
 }
 
-fn pack_path(object: &FrameObjectState) -> PathInstance {
+fn pack_path(object: &FrameObjectState, reveal: f32) -> PathInstance {
     debug_assert!(matches!(object.geometry, GeometryRef::VectorPath(_)));
+    let mut style: PackedStyle = object.style.into();
+    // Path stroke width is baked into the cached mesh, so this otherwise-unused
+    // GPU field carries normalized reveal without growing the instance stride.
+    style.stroke_width = reveal.clamp(0.0, 1.0);
     PathInstance {
         transform: object.transform.into(),
-        style: object.style.into(),
+        style,
     }
+}
+
+fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
+    let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
+    (progress << 1)
+        | match surface {
+            PathSurface::Fill => 0,
+            PathSurface::Stroke => 1,
+        }
+}
+
+#[cfg(test)]
+fn unpack_path_progress(surface: u32) -> f32 {
+    (surface >> 1) as f32 / PATH_PROGRESS_MAX as f32
 }
 
 fn push_dirty_range(ranges: &mut Vec<Range<usize>>, index: usize) {
@@ -647,9 +669,11 @@ mod tests {
     }
 
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
+        let reveals = vec![1.0; objects.len()];
         FrameState {
             time: 1.25,
             objects,
+            reveals,
         }
     }
 
@@ -701,6 +725,37 @@ mod tests {
     }
 
     #[test]
+    fn prepared_path_vertices_preserve_ordered_reveal_progress() {
+        let mut state = object(
+            7,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(0.0, 0.0))
+                    .line_to(Vec2::new(3.0, 4.0)),
+            ),
+        );
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.2;
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+
+        let stroke_progresses: Vec<f32> = prepared
+            .path_vertices
+            .iter()
+            .filter(|vertex| vertex.surface & 1 == 1)
+            .map(|vertex| unpack_path_progress(vertex.surface))
+            .collect();
+        assert!(stroke_progresses.iter().any(|progress| *progress == 0.0));
+        assert!(stroke_progresses
+            .iter()
+            .any(|progress| (*progress - 1.0).abs() < 1e-6));
+        assert!(stroke_progresses
+            .iter()
+            .all(|progress| (0.0..=1.0).contains(progress)));
+    }
+
+    #[test]
     fn path_transform_and_color_changes_do_not_retessellate() {
         let mut state = object(7, GeometryRef::path(curved_path()));
         state.style.stroke = Some(Color::BLACK);
@@ -727,6 +782,28 @@ mod tests {
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
         assert!(prepared.path_geometry_dirty);
         assert_eq!(preparer.cached_path_mesh_count(), 2);
+    }
+
+    #[test]
+    fn path_reveal_changes_only_dirty_the_instance_record() {
+        let mut state = object(7, GeometryRef::path(curved_path()));
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.2;
+        let mut frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
+
+        frame.reveals[0] = 0.35;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.path_dirty_ranges, &[0..1]);
+        assert_eq!(prepared.paths[0].style.stroke_width, 0.35);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
     }
 
     #[test]
