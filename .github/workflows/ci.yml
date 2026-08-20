@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +21,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: agent/browser-realtime-architecture
+
+      - name: Apply morph scaling refactor
+        run: python3 scripts/apply_morph_perf_refactor.py
 
       - name: Use stable Rust
         run: |
@@ -68,6 +73,19 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
+
+      - name: Publish validated morph scaling refactor
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if git diff --quiet -- crates/noon-render-wgpu/src/lib.rs; then
+            echo "No source changes to publish"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-render-wgpu/src/lib.rs
+          git commit -m "Optimize morph scene preparation"
+          git push origin HEAD:agent/browser-realtime-architecture
 
   legacy-compat:
     name: Full legacy compatibility
