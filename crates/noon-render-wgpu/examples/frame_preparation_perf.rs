@@ -100,6 +100,7 @@ fn build_frame(object_count: usize) -> FrameState {
                 style: Style::default(),
             })
             .collect(),
+        reveals: vec![1.0; object_count],
     }
 }
 
