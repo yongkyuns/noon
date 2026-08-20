@@ -74,7 +74,8 @@ fn steady_generic_path_transform_updates_instance_without_retessellation() {
     assert_eq!(steady.stats.geometry_cache_misses, 0);
     assert!(!steady.path_geometry_dirty);
     assert_eq!(steady.stats.dirty_instance_count, 1);
-    assert_eq!(steady.path_dirty_ranges, &[0..1]);
+    assert_eq!(steady.path_dirty_ranges.len(), 1);
+    assert_eq!(steady.path_dirty_ranges[0], 0..1);
 
     instance.advance_to(1.0).unwrap();
     let changes = instance.take_frame_changes();
