@@ -4,7 +4,7 @@
 
 Noon models object lifetime independently from opacity. `Presence` is a first-class, renderer-independent boolean timeline property represented as a zero-duration event. This lets lifecycle animations preserve stable `ObjectId` values while arbitrary seek, forward playback, live reconciliation, and rendering all agree on whether an object exists in the visible scene at a given time.
 
-The lifecycle animations built on this primitive are `ReplacementTransform` and `TransformFromCopy`. The geometry/interpolation contract they reuse is documented in [generic-transform.md](generic-transform.md), authoring-time state evaluation is documented in [evaluated-authoring-snapshots.md](evaluated-authoring-snapshots.md), and repeated lifecycle composition is documented in [chained-lifecycle.md](chained-lifecycle.md).
+The lifecycle animations built on this primitive now include `ReplacementTransform`, `TransformFromCopy`, `TransformMatchingShapes`, `FadeIn`, and `FadeOut`. Transform geometry/interpolation is documented in [generic-transform.md](generic-transform.md), authoring-time state evaluation is documented in [evaluated-authoring-snapshots.md](evaluated-authoring-snapshots.md), repeated lifecycle composition is documented in [chained-lifecycle.md](chained-lifecycle.md), and Fade's independent visibility channel is documented in [fade-appearance.md](fade-appearance.md).
 
 ## Presence contract
 
@@ -79,6 +79,22 @@ The source side is stricter. Runtime narrow-property groups override generic Tra
 
 Presence is handled separately by the lifecycle state machine and is not folded into `ObjectSnapshot`. Other independent channels that cannot be represented by `ObjectSnapshot`, currently `Reveal` and standalone `Morph` state, remain explicit snapshot safety boundaries.
 
+## Fade lifecycle
+
+Fade does not overload `Style.opacity`. Noon has a separate normalized `Appearance` scalar channel whose renderer contract is:
+
+```text
+effective opacity = semantic Style.opacity * Appearance
+```
+
+This keeps authored opacity stable while Fade controls lifecycle visibility. For example, an object authored at opacity `0.4` and halfway through a fade has appearance `0.5` and packs to effective opacity `0.2`; completing a later `FadeIn` restores the rendered opacity to `0.4`, not `1.0`.
+
+`FadeOut(object)` animates Appearance from the value evaluated at the fade start to `0.0`, then emits `Presence(true -> false)` at the exact endpoint. `FadeIn(object)` emits `Presence(false -> true)` at the exact start and animates Appearance toward `1.0`. A first-use FadeIn establishes the object's pre-animation lifecycle state with that first `false -> true` Presence event and starts Appearance from zero, so direct seek before the animation sees the object as absent.
+
+High-level fades for one object are authored chronologically and may not overlap. A later fade starts from the Appearance value produced by the existing timeline rather than assuming a hard-coded endpoint. Fade authoring participates in the same `Scene.play(...)` transaction boundary as Transform lifecycle operations, so a failed multi-animation call restores object IDs, track IDs, and scheduler state.
+
+Appearance is independent from Transform, Position, Rotation, semantic Opacity, Reveal, and Morph. It changes only packed instance opacity: it does not change GPU instance layout, path tessellation, or path-mesh cache identity. See [fade-appearance.md](fade-appearance.md) for the complete contract.
+
 ## Current safety boundaries
 
 Lifecycle composition remains explicit where exact semantics are not defined:
@@ -87,6 +103,8 @@ Lifecycle composition remains explicit where exact semantics are not defined:
 - lifecycle operations for one participant are authored chronologically;
 - a lifecycle source must be present at animation start;
 - a reused lifecycle target must be absent at animation start;
+- high-level Fade operations for one object must not overlap;
+- `FadeOut` requires a present object and a reused `FadeIn` requires an absent object at animation start;
 - a lifecycle snapshot cannot be taken inside an active generic Transform;
 - Reveal/Morph snapshot state that is not represented by `ObjectSnapshot` is rejected;
 - target and TransformFromCopy-source `Position`, `Rotation`, and `Opacity` tracks are evaluated with the same latest-started-track precedence and easing rules as runtime playback;
@@ -98,13 +116,13 @@ These are authoring restrictions, not renderer fallbacks. Noon should not silent
 
 Coverage spans the semantic pipeline:
 
-- core: zero-duration boolean presence validation and deterministic IDs;
-- IR: human-readable presence/bool JSON round trip;
-- compiler: presence dynamic classification, chain continuity, and patch validation;
-- runtime: direct seek, forward playback, rewind, live-patch presence parity, and multi-handoff `A -> B -> C` chains;
-- renderer: absent objects keep semantic slots but create no GPU instances; toggling presence rebuilds the prepared slot layout;
-- Python: lifecycle lowering, exact-boundary chains, valid source/target reuse, absent-source and present-target rejection, chronological composition, evaluated Position/Rotation/Opacity snapshots, deterministic transient-copy identity, and transactional rollback.
+- core: zero-duration boolean presence validation, distinct scalar Appearance, and deterministic IDs;
+- IR: human-readable presence/bool and appearance/scalar JSON round trips through the normal serde document path;
+- compiler: presence dynamic classification, chain continuity, patch validation, and independent Appearance dynamic classification;
+- runtime: direct seek, forward playback, rewind, live-patch presence parity, multi-handoff `A -> B -> C` chains, normalized Appearance evaluation, and semantic-opacity independence;
+- renderer: absent objects keep semantic slots but create no GPU instances; toggling presence rebuilds the prepared slot layout; Appearance multiplies packed opacity without changing geometry/cache identity;
+- Python: lifecycle lowering, exact-boundary chains, matching-shape replacement, FadeIn/FadeOut lowering, fade chaining and overlap rejection, valid source/target reuse, absent-source and present-target rejection, chronological composition, evaluated Position/Rotation/Opacity snapshots, deterministic transient-copy identity, and transactional rollback.
 
 ## Next work
 
-The higher-value Transform milestone after sequential lifecycle composition is matching-shape correspondence. Truly overlapping lifecycle graphs can be considered later only with explicit ownership and precedence rules rather than implicit event insertion.
+The core lifecycle family now covers direct replacement, copy-based replacement, deterministic matching-shape replacement, and Fade visibility semantics. Further lifecycle expansion should focus on richer composition only when ownership and precedence can remain explicit—for example simultaneous group transitions or staggered appearance—rather than adding ad-hoc renderer behavior.
