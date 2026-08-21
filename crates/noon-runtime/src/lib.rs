@@ -14,6 +14,10 @@ pub struct FrameObjectState {
     pub geometry: GeometryRef,
     pub transform: Transform2D,
     pub style: Style,
+    /// Normalized renderer-only visibility modulation. Unlike semantic style
+    /// opacity, appearance survives Transform/style changes and is composed by
+    /// the renderer rather than written back into `Style`.
+    pub appearance: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,6 +41,10 @@ pub struct FrameState {
 impl FrameState {
     pub fn is_present(&self, object_index: usize) -> bool {
         self.presences[object_index]
+    }
+
+    pub fn appearance(&self, object_index: usize) -> f32 {
+        self.objects[object_index].appearance
     }
 
     pub fn reveal(&self, object_index: usize) -> f32 {
@@ -322,14 +330,22 @@ impl SceneInstance {
 }
 
 fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
+    let appearances = initial_scalar_property(
+        compiled,
+        compiled.objects().len(),
+        Property::Appearance,
+        1.0,
+    );
     let objects: Vec<_> = compiled
         .objects()
         .iter()
-        .map(|object| FrameObjectState {
+        .enumerate()
+        .map(|(index, object)| FrameObjectState {
             id: object.id,
             geometry: object.geometry.clone(),
             transform: object.base_transform,
             style: object.base_style,
+            appearance: appearances[index],
         })
         .collect();
     FrameState {
@@ -460,6 +476,13 @@ fn apply_group(
     let value = interpolate(track, time);
 
     match (group.property, value) {
+        (Property::Appearance, EvaluatedValue::Scalar(value)) => {
+            let value = value.clamp(0.0, 1.0);
+            let object = &mut frame.objects[group.object_index];
+            let changed = object.appearance != value;
+            object.appearance = value;
+            changed
+        }
         (Property::Reveal, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
             let changed = frame.reveals[group.object_index] != value;
@@ -867,6 +890,27 @@ mod tests {
         assert_eq!(instance.seek(1.0).expect("valid time").reveal(0), 0.0);
         assert_eq!(instance.seek(2.0).expect("valid time").reveal(0), 0.5);
         assert_eq!(instance.seek(3.0).expect("valid time").reveal(0), 1.0);
+    }
+
+    #[test]
+    fn appearance_and_semantic_opacity_are_independent() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene.object_mut(object).expect("object exists").style.opacity = 0.4;
+        scene
+            .animate_appearance(
+                object,
+                1.0,
+                0.0,
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("valid appearance track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+
+        let frame = instance.seek(1.0).expect("valid time");
+        assert_eq!(frame.objects[0].style.opacity, 0.4);
+        assert_eq!(frame.appearance(0), 0.5);
     }
 
     #[test]
