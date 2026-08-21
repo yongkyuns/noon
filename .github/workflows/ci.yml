@@ -29,6 +29,7 @@ jobs:
           python3 scripts/apply_stroke_style_parity.py
           python3 scripts/fix_stroke_style_literal_migration.py
           python3 scripts/fix_stroke_style_compile.py
+          python3 scripts/update_stroke_correctness_tests.py
 
       - name: Use stable Rust
         run: |
