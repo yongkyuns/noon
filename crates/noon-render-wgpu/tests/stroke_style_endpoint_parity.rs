@@ -1,4 +1,6 @@
-use noon_core::{Color, GeometryRef, ObjectId, StrokeCap, StrokeJoin, Style, Transform2D, Vec2, VectorPath};
+use noon_core::{
+    Color, GeometryRef, ObjectId, StrokeCap, StrokeJoin, Style, Transform2D, Vec2, VectorPath,
+};
 use noon_render_wgpu::{FramePreparer, PathVertex};
 use noon_runtime::{FrameObjectState, FrameState};
 
@@ -39,7 +41,13 @@ fn stroke_bounds(vertices: &[PathVertex], target: bool) -> ([f32; 2], [f32; 2]) 
     let mut points = vertices
         .iter()
         .filter(|vertex| vertex.surface & 1 == 1)
-        .map(|vertex| if target { vertex.target_position } else { vertex.position });
+        .map(|vertex| {
+            if target {
+                vertex.target_position
+            } else {
+                vertex.position
+            }
+        });
     let first = points.next().expect("prepared stroke must have vertices");
     let mut min = first;
     let mut max = first;
