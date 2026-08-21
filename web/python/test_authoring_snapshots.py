@@ -178,6 +178,24 @@ class EvaluatedAuthoringSnapshotTests(unittest.TestCase):
         self.assertEqual(scene.to_document(), before_document)
         self.assertEqual(scene.identity_document(), before_identity)
 
+    def test_replacement_rejects_unrepresentable_source_state(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0)
+        target = scene.circle(2.0)
+        scene.animate_reveal(source, duration=1.0, start_time=0.0)
+        before_document = scene.to_document()
+        before_identity = scene.identity_document()
+
+        with self.assertRaisesRegex(ValueError, "replacement source.*reveal"):
+            scene.play(
+                ReplacementTransform(source, target),
+                duration=1.0,
+                start_time=2.0,
+            )
+
+        self.assertEqual(scene.to_document(), before_document)
+        self.assertEqual(scene.identity_document(), before_identity)
+
     def test_replacement_allows_source_narrow_track_after_handoff(self) -> None:
         scene = Scene()
         source = scene.circle(1.0)
