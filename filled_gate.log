@@ -13,6 +13,8 @@
 
 >>> python3 scripts/fix_filled_compat_wrapper.py
 
+>>> python3 scripts/fix_filled_generic_transform_test.py
+
 >>> cargo fmt --all
 
 >>> cargo fmt --all -- --check
@@ -22,89 +24,89 @@
      Locking 134 packages to latest compatible versions
       Adding wgpu v29.0.4 (available: v30.0.0)
  Downloading crates ...
-  Downloaded bit-set v0.9.1
-  Downloaded hexf-parse v0.2.1
-  Downloaded itoa v1.0.18
   Downloaded autocfg v1.5.1
   Downloaded arrayvec v0.7.8
+  Downloaded bit-set v0.9.1
+  Downloaded bytemuck v1.25.2
   Downloaded allocator-api2 v0.2.21
-  Downloaded scopeguard v1.2.0
-  Downloaded khronos-egl v6.0.0
-  Downloaded zerocopy-derive v0.8.56
-  Downloaded cfg-if v1.0.4
-  Downloaded glow v0.17.0
-  Downloaded gpu-descriptor v0.3.2
-  Downloaded indexmap v2.14.0
-  Downloaded proc-macro2 v1.0.107
-  Downloaded profiling v1.0.18
-  Downloaded wgpu-naga-bridge v29.0.4
-  Downloaded thiserror v2.0.20
-  Downloaded smallvec v1.15.2
-  Downloaded thiserror-impl v2.0.20
+  Downloaded bytemuck_derive v1.12.0
   Downloaded document-features v0.2.12
-  Downloaded wgpu-core-deps-windows-linux-android v29.0.4
-  Downloaded rustc-hash v1.1.0
-  Downloaded dlib v0.5.3
-  Downloaded renderdoc-sys v1.1.0
-  Downloaded equivalent v1.0.2
-  Downloaded hashbrown v0.16.1
-  Downloaded hashbrown v0.17.1
-  Downloaded wayland-sys v0.31.11
   Downloaded cfg_aliases v0.2.2
   Downloaded float_next_after v1.0.0
+  Downloaded hexf-parse v0.2.1
+  Downloaded gpu-descriptor v0.3.2
   Downloaded gpu-descriptor-types v0.2.0
-  Downloaded lyon_path v1.0.19
-  Downloaded libloading v0.8.9
-  Downloaded pkg-config v0.3.34
-  Downloaded raw-window-handle v0.6.2
-  Downloaded presser v0.3.1
-  Downloaded quote v1.0.47
+  Downloaded cfg-if v1.0.4
+  Downloaded dlib v0.5.3
+  Downloaded profiling v1.0.18
+  Downloaded scopeguard v1.2.0
+  Downloaded rustc-hash v1.1.0
   Downloaded bit-vec v0.9.1
-  Downloaded bytemuck_derive v1.12.0
-  Downloaded hashbrown v0.15.5
-  Downloaded gpu-allocator v0.28.0
-  Downloaded zmij v1.0.23
+  Downloaded itoa v1.0.18
+  Downloaded thiserror v2.0.20
+  Downloaded wgpu-naga-bridge v29.0.4
+  Downloaded wayland-sys v0.31.11
+  Downloaded renderdoc-sys v1.1.0
+  Downloaded wgpu-core-deps-windows-linux-android v29.0.4
+  Downloaded equivalent v1.0.2
+  Downloaded libloading v0.8.9
+  Downloaded presser v0.3.1
+  Downloaded raw-window-handle v0.6.2
+  Downloaded khronos-egl v6.0.0
+  Downloaded static_assertions v1.1.0
+  Downloaded foldhash v0.1.5
   Downloaded foldhash v0.2.0
-  Downloaded once_cell v1.21.4
+  Downloaded parking_lot_core v0.9.12
+  Downloaded termcolor v1.4.1
+  Downloaded pkg-config v0.3.34
+  Downloaded thiserror-impl v2.0.20
+  Downloaded zmij v1.0.23
+  Downloaded quote v1.0.47
+  Downloaded litrs v1.0.0
   Downloaded ordered-float v5.3.0
   Downloaded parking_lot v0.12.5
-  Downloaded parking_lot_core v0.9.12
-  Downloaded spirv v0.4.0+sdk-1.4.341.0
-  Downloaded termcolor v1.4.1
-  Downloaded foldhash v0.1.5
-  Downloaded litrs v1.0.0
   Downloaded lock_api v0.4.14
-  Downloaded lyon_geom v1.0.19
-  Downloaded num-traits v0.2.19
-  Downloaded static_assertions v1.1.0
-  Downloaded unicode-ident v1.0.24
-  Downloaded half v2.7.1
-  Downloaded log v0.4.33
-  Downloaded serde_derive v1.0.229
-  Downloaded serde_core v1.0.229
+  Downloaded lyon_path v1.0.19
+  Downloaded smallvec v1.15.2
   Downloaded bitflags v2.13.1
-  Downloaded bytemuck v1.25.2
+  Downloaded proc-macro2 v1.0.107
+  Downloaded once_cell v1.21.4
+  Downloaded gpu-allocator v0.28.0
+  Downloaded half v2.7.1
+  Downloaded num-traits v0.2.19
+  Downloaded serde_derive v1.0.229
+  Downloaded lyon_geom v1.0.19
+  Downloaded unicode-ident v1.0.24
+  Downloaded serde_core v1.0.229
+  Downloaded spirv v0.4.0+sdk-1.4.341.0
   Downloaded codespan-reporting v0.13.1
+  Downloaded log v0.4.33
   Downloaded euclid v0.22.14
+  Downloaded indexmap v2.14.0
+  Downloaded zerocopy-derive v0.8.56
   Downloaded serde v1.0.229
   Downloaded memchr v2.8.3
+  Downloaded hashbrown v0.15.5
+  Downloaded hashbrown v0.17.1
   Downloaded wgpu-types v29.0.4
-  Downloaded ash v0.38.0+1.3.281
+  Downloaded hashbrown v0.16.1
   Downloaded libm v0.2.16
+  Downloaded glow v0.17.0
   Downloaded serde_json v1.0.151
-  Downloaded wgpu v29.0.4
   Downloaded lyon_tessellation v1.0.20
-  Downloaded zerocopy v0.8.56
+  Downloaded wgpu v29.0.4
   Downloaded unicode-width v0.2.2
-  Downloaded syn v2.0.119
   Downloaded syn v3.0.3
+  Downloaded zerocopy v0.8.56
+  Downloaded syn v2.0.119
   Downloaded wgpu-core v29.0.4
   Downloaded wgpu-hal v29.0.4
-  Downloaded libc v0.2.189
+  Downloaded ash v0.38.0+1.3.281
   Downloaded naga v29.0.4
+  Downloaded libc v0.2.189
    Compiling proc-macro2 v1.0.107
-   Compiling unicode-ident v1.0.24
    Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
    Compiling libm v0.2.16
    Compiling autocfg v1.5.1
    Compiling num-traits v0.2.19
@@ -116,18 +118,18 @@
    Compiling cfg_aliases v0.2.2
     Checking bitflags v2.13.1
     Checking libloading v0.8.9
-   Compiling libc v0.2.189
+    Checking equivalent v1.0.2
+    Checking log v0.4.33
+   Compiling zerocopy v0.8.56
    Compiling syn v3.0.3
    Compiling syn v2.0.119
     Checking euclid v0.22.14
-    Checking log v0.4.33
+   Compiling libc v0.2.189
    Compiling thiserror v2.0.20
     Checking lyon_geom v1.0.19
-   Compiling zerocopy v0.8.56
-    Checking equivalent v1.0.2
     Checking foldhash v0.2.0
-    Checking lyon_path v1.0.19
     Checking allocator-api2 v0.2.21
+    Checking lyon_path v1.0.19
     Checking hashbrown v0.16.1
     Checking lyon_tessellation v1.0.20
    Compiling serde_derive v1.0.229
@@ -135,33 +137,33 @@
    Compiling bytemuck_derive v1.12.0
    Compiling zerocopy-derive v0.8.56
    Compiling naga v29.0.4
-    Checking hashbrown v0.17.1
    Compiling parking_lot_core v0.9.12
-   Compiling ash v0.38.0+1.3.281
-    Checking once_cell v1.21.4
-   Compiling pkg-config v0.3.34
     Checking bit-vec v0.9.1
+    Checking once_cell v1.21.4
+   Compiling ash v0.38.0+1.3.281
+   Compiling pkg-config v0.3.34
+    Checking hashbrown v0.17.1
     Checking unicode-width v0.2.2
     Checking codespan-reporting v0.13.1
+    Checking indexmap v2.14.0
    Compiling wayland-sys v0.31.11
     Checking bit-set v0.9.1
-    Checking indexmap v2.14.0
     Checking bytemuck v1.25.2
     Checking noon-core v0.1.0 (/home/runner/work/noon/noon/crates/noon-core)
     Checking spirv v0.4.0+sdk-1.4.341.0
-    Checking raw-window-handle v0.6.2
-    Checking smallvec v1.15.2
     Checking scopeguard v1.2.0
-   Compiling khronos-egl v6.0.0
-    Checking noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
+    Checking smallvec v1.15.2
     Checking foldhash v0.1.5
+   Compiling khronos-egl v6.0.0
+    Checking raw-window-handle v0.6.2
     Checking rustc-hash v1.1.0
     Checking hexf-parse v0.2.1
-    Checking hashbrown v0.15.5
-    Checking noon-compile v0.1.0 (/home/runner/work/noon/noon/crates/noon-compile)
-    Checking lock_api v0.4.14
-    Checking noon-runtime v0.1.0 (/home/runner/work/noon/noon/crates/noon-runtime)
     Checking wgpu-types v29.0.4
+    Checking hashbrown v0.15.5
+    Checking noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
+    Checking noon-compile v0.1.0 (/home/runner/work/noon/noon/crates/noon-compile)
+    Checking noon-runtime v0.1.0 (/home/runner/work/noon/noon/crates/noon-runtime)
+    Checking lock_api v0.4.14
     Checking dlib v0.5.3
     Checking gpu-descriptor-types v0.2.0
    Compiling wgpu-hal v29.0.4
@@ -169,26 +171,26 @@
     Checking gpu-descriptor v0.3.2
     Checking parking_lot v0.12.5
     Checking ordered-float v5.3.0
-    Checking renderdoc-sys v1.1.0
     Checking glow v0.17.0
     Checking profiling v1.0.18
-    Checking half v2.7.1
+    Checking renderdoc-sys v1.1.0
    Compiling wgpu-core v29.0.4
    Compiling litrs v1.0.0
+    Checking half v2.7.1
    Compiling document-features v0.2.12
    Compiling wgpu v29.0.4
    Compiling zmij v1.0.23
-   Compiling serde_json v1.0.151
     Checking static_assertions v1.1.0
-    Checking itoa v1.0.18
+   Compiling serde_json v1.0.151
     Checking memchr v2.8.3
+    Checking itoa v1.0.18
     Checking noon-ir v0.1.0 (/home/runner/work/noon/noon/crates/noon-ir)
     Checking noon-web v0.1.0 (/home/runner/work/noon/noon/crates/noon-web)
     Checking gpu-allocator v0.28.0
     Checking wgpu-naga-bridge v29.0.4
     Checking wgpu-core-deps-windows-linux-android v29.0.4
     Checking noon-render-wgpu v0.1.0 (/home/runner/work/noon/noon/crates/noon-render-wgpu)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.07s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.32s
 
 >>> cargo clippy --workspace --all-targets --all-features -- -D warnings
     Checking noon-core v0.1.0 (/home/runner/work/noon/noon/crates/noon-core)
@@ -198,7 +200,7 @@
     Checking noon-runtime v0.1.0 (/home/runner/work/noon/noon/crates/noon-runtime)
     Checking noon-render-wgpu v0.1.0 (/home/runner/work/noon/noon/crates/noon-render-wgpu)
     Checking noon-web v0.1.0 (/home/runner/work/noon/noon/crates/noon-web)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.12s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.47s
 
 >>> cargo test -p noon-geometry --test tessellation_correctness
    Compiling proc-macro2 v1.0.107
@@ -207,43 +209,43 @@
    Compiling arrayvec v0.7.8
    Compiling serde_core v1.0.229
    Compiling float_next_after v1.0.0
-   Compiling num-traits v0.2.19
    Compiling syn v3.0.3
+   Compiling num-traits v0.2.19
    Compiling euclid v0.22.14
    Compiling lyon_geom v1.0.19
-   Compiling lyon_path v1.0.19
    Compiling serde_derive v1.0.229
+   Compiling lyon_path v1.0.19
    Compiling lyon_tessellation v1.0.20
    Compiling serde v1.0.229
    Compiling noon-core v0.1.0 (/home/runner/work/noon/noon/crates/noon-core)
    Compiling noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.74s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
      Running tests/tessellation_correctness.rs (target/debug/deps/tessellation_correctness-2c48930b233422f1)
 
 running 16 tests
 test invalid_stroke_widths_are_rejected_consistently ... ok
-test lyon_round_cap_line_matches_capsule_extents_and_area ... ok
 test lyon_round_caps_are_rotation_invariant_in_tangent_space ... ok
+test lyon_round_cap_line_matches_capsule_extents_and_area ... ok
 test morph_miter_limit_bounds_near_reversal_spikes ... ok
 test morph_active_triangles_keep_winding_through_interpolation ... ok
 test morph_open_stroke_ends_are_centered_perpendicular_and_full_width ... ok
 test morph_right_angle_miter_matches_closed_form_offset_intersection ... ok
 test morph_straight_authored_join_does_not_bulge_or_shrink ... ok
-test quadratic_advancement_matches_independent_high_resolution_length ... ok
 test morph_target_endpoint_mesh_contains_every_authored_star_vertex ... ok
+test morph_topology_matches_fixed_segment_join_cap_theory ... ok
+test quadratic_advancement_matches_independent_high_resolution_length ... ok
+test static_wrapper_matches_direct_lyon_reference ... ok
 test closed_morph_stroke_is_invariant_to_contour_start_index ... ok
 test star_morph_target_miters_match_offset_line_theory_or_miter_limit ... ok
-test static_wrapper_matches_direct_lyon_reference ... ok
-test morph_topology_matches_fixed_segment_join_cap_theory ... ok
 test symmetric_star_tip_taper_is_mirror_symmetric ... ok
 test reversing_closed_morph_contour_preserves_geometry_and_swaps_sides_only ... ok
 
-test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
 >>> cargo test -p noon-geometry --test stroke_style_parity
    Compiling noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
      Running tests/stroke_style_parity.rs (target/debug/deps/stroke_style_parity-7ac2b3d9f0486fce)
 
 running 4 tests
@@ -257,7 +259,7 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 >>> cargo test -p noon-geometry --test filled_morph
    Compiling noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
      Running tests/filled_morph.rs (target/debug/deps/filled_morph-0194fd972aeef7ad)
 
 running 4 tests
@@ -280,34 +282,34 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
    Compiling foldhash v0.2.0
    Compiling allocator-api2 v0.2.21
    Compiling libc v0.2.189
-   Compiling hashbrown v0.17.1
+   Compiling once_cell v1.21.4
    Compiling quote v1.0.47
+   Compiling hashbrown v0.16.1
    Compiling syn v3.0.3
    Compiling syn v2.0.119
-   Compiling hashbrown v0.16.1
-   Compiling unicode-width v0.2.2
+   Compiling hashbrown v0.17.1
    Compiling bit-vec v0.9.1
-   Compiling once_cell v1.21.4
-   Compiling bit-set v0.9.1
+   Compiling unicode-width v0.2.2
    Compiling codespan-reporting v0.13.1
    Compiling indexmap v2.14.0
+   Compiling bit-set v0.9.1
    Compiling spirv v0.4.0+sdk-1.4.341.0
-   Compiling foldhash v0.1.5
-   Compiling smallvec v1.15.2
    Compiling scopeguard v1.2.0
+   Compiling smallvec v1.15.2
+   Compiling foldhash v0.1.5
    Compiling raw-window-handle v0.6.2
    Compiling rustc-hash v1.1.0
    Compiling hexf-parse v0.2.1
-   Compiling lock_api v0.4.14
    Compiling serde_derive v1.0.229
    Compiling thiserror-impl v2.0.20
    Compiling bytemuck_derive v1.12.0
    Compiling thiserror v2.0.20
-   Compiling parking_lot_core v0.9.12
-   Compiling zerocopy-derive v0.8.56
    Compiling hashbrown v0.15.5
+   Compiling zerocopy-derive v0.8.56
    Compiling bytemuck v1.25.2
+   Compiling parking_lot_core v0.9.12
    Compiling wgpu-types v29.0.4
+   Compiling lock_api v0.4.14
    Compiling ash v0.38.0+1.3.281
    Compiling zerocopy v0.8.56
    Compiling serde v1.0.229
@@ -323,15 +325,15 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
    Compiling parking_lot v0.12.5
    Compiling khronos-egl v6.0.0
    Compiling ordered-float v5.3.0
-   Compiling renderdoc-sys v1.1.0
-   Compiling half v2.7.1
    Compiling profiling v1.0.18
    Compiling glow v0.17.0
+   Compiling renderdoc-sys v1.1.0
+   Compiling half v2.7.1
    Compiling zmij v1.0.23
    Compiling naga v29.0.4
    Compiling static_assertions v1.1.0
-   Compiling memchr v2.8.3
    Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
    Compiling serde_json v1.0.151
    Compiling noon-ir v0.1.0 (/home/runner/work/noon/noon/crates/noon-ir)
    Compiling noon-web v0.1.0 (/home/runner/work/noon/noon/crates/noon-web)
@@ -342,17 +344,17 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
    Compiling wgpu-core v29.0.4
    Compiling wgpu v29.0.4
    Compiling noon-render-wgpu v0.1.0 (/home/runner/work/noon/noon/crates/noon-render-wgpu)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.55s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.13s
      Running unittests src/lib.rs (target/debug/deps/noon_compile-0c22f11d9a89189b)
 
 running 9 tests
 test tests::compiled_patches_preserve_dense_identity_and_dynamic_flags ... ok
 test tests::filled_path_transform_rejects_fill_presence_change ... ok
 test tests::identical_input_compiles_identically ... ok
+test tests::morph_tracks_mark_only_morph_dynamic ... ok
 test tests::object_ids_resolve_to_dense_indices ... ok
 test tests::only_animated_properties_are_marked_dynamic ... ok
 test tests::reveal_tracks_mark_only_reveal_dynamic ... ok
-test tests::morph_tracks_mark_only_morph_dynamic ... ok
 test tests::tracks_are_sorted_for_runtime_access ... ok
 test tests::safe_filled_path_transform_compiles_to_fixed_path_pair ... ok
 
@@ -367,28 +369,29 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
      Running tests/generic_transform.rs (target/debug/deps/generic_transform-003e7647714233c7)
 
-running 6 tests
+running 7 tests
 test identical_geometry_transform_needs_no_render_geometry_override ... ok
-test filled_geometry_changing_path_transform_is_rejected ... FAILED
 test path_stroke_width_change_is_rejected_even_when_geometry_is_identical ... ok
 test path_transform_compiles_to_one_prepared_geometry_pair ... ok
 test path_transform_rejects_join_or_cap_topology_changes ... ok
 test unsupported_cross_geometry_transform_is_rejected_before_runtime ... ok
+test unsafe_filled_path_transform_is_rejected_before_runtime ... FAILED
+test certified_closed_filled_path_transform_compiles ... ok
 
 failures:
 
----- filled_geometry_changing_path_transform_is_rejected stdout ----
+---- unsafe_filled_path_transform_is_rejected_before_runtime stdout ----
 
-thread 'filled_geometry_changing_path_transform_is_rejected' (6755) panicked at crates/noon-compile/tests/generic_transform.rs:146:5:
+thread 'unsafe_filled_path_transform_is_rejected_before_runtime' (6669) panicked at crates/noon-compile/tests/generic_transform.rs:199:5:
 assertion failed: matches!(CompiledScene::compile(&scene),
     Err(CompileError::PathTransformRequiresRetessellation(_)))
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 
 failures:
-    filled_geometry_changing_path_transform_is_rejected
+    unsafe_filled_path_transform_is_rejected_before_runtime
 
-test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `-p noon-compile --test generic_transform`
 
