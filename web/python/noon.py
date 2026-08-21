@@ -279,6 +279,15 @@ class ReplacementTransform:
     key: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TransformFromCopy:
+    """Transform a transient copy of source into target while source remains."""
+
+    source: Object
+    target: Object
+    key: str | None = None
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -425,7 +434,7 @@ class Scene:
 
     def play(
         self,
-        *animations: Transform | ReplacementTransform,
+        *animations: Transform | ReplacementTransform | TransformFromCopy,
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
@@ -433,7 +442,14 @@ class Scene:
         if not animations:
             raise ValueError("play requires at least one animation")
         for animation in animations:
-            if isinstance(animation, ReplacementTransform):
+            if isinstance(animation, TransformFromCopy):
+                self._schedule_transform_from_copy(
+                    animation,
+                    duration=duration,
+                    start_time=start_time,
+                    easing=easing,
+                )
+            elif isinstance(animation, ReplacementTransform):
                 self._schedule_replacement_transform(
                     animation,
                     duration=duration,
@@ -449,7 +465,7 @@ class Scene:
                 )
             else:
                 raise TypeError(
-                    "unsupported animation; expected Transform or ReplacementTransform"
+                    "unsupported animation; expected Transform, ReplacementTransform, or TransformFromCopy"
                 )
         return self
 
@@ -500,6 +516,32 @@ class Scene:
         self._scheduled_transform_targets[obj.id] = copy.deepcopy(target_snapshot)
         self._scheduled_transform_ends[obj.id] = start + run_duration
 
+    def _validate_lifecycle_target(
+        self,
+        target: Object,
+        *,
+        start: float,
+        end: float,
+        label: str,
+    ) -> dict[str, Any]:
+        target_previous_end = self._scheduled_transform_ends.get(target.id)
+        if target_previous_end is not None and start < target_previous_end:
+            raise ValueError(f"{label} target has an overlapping Transform track")
+        if any(
+            track["object"] == target.id
+            and track["property"] != "transform"
+            and track["timing"]["start_time"] <= end
+            for track in self._tracks
+        ):
+            raise ValueError(
+                f"{label} target has property state not represented by its Transform snapshot"
+            )
+        return copy.deepcopy(
+            self._scheduled_transform_targets.get(
+                target.id, self._snapshot_for_object(target)
+            )
+        )
+
     def _schedule_replacement_transform(
         self,
         animation: ReplacementTransform,
@@ -522,22 +564,8 @@ class Scene:
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
-        target_previous_end = self._scheduled_transform_ends.get(target.id)
-        if target_previous_end is not None and start < target_previous_end:
-            raise ValueError("replacement target has an overlapping Transform track")
-        if any(
-            track["object"] == target.id
-            and track["property"] != "transform"
-            and track["timing"]["start_time"] <= end
-            for track in self._tracks
-        ):
-            raise ValueError(
-                "replacement target has property state not represented by its Transform snapshot"
-            )
-        target_snapshot = copy.deepcopy(
-            self._scheduled_transform_targets.get(
-                target.id, self._snapshot_for_object(target)
-            )
+        target_snapshot = self._validate_lifecycle_target(
+            target, start=start, end=end, label="replacement"
         )
         detached_target = Mobject(
             geometry=target_snapshot["geometry"],
@@ -555,9 +583,118 @@ class Scene:
         self._add_presence_track(target, False, True, end)
         self._lifecycle_objects.update((source.id, target.id))
 
-    def _add_presence_track(
-        self, obj: Object, from_: bool, to: bool, time: float
+    def _schedule_transform_from_copy(
+        self,
+        animation: TransformFromCopy,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
     ) -> None:
+        source = animation.source
+        target = animation.target
+        if not isinstance(source, Object) or source._owner is not self._owner:
+            raise ValueError("copy source must belong to this Scene")
+        if not isinstance(target, Object) or target._owner is not self._owner:
+            raise ValueError("copy target must belong to this Scene")
+        if source.id == target.id:
+            raise ValueError("copy source and target must be different objects")
+        if source.id in self._lifecycle_objects or target.id in self._lifecycle_objects:
+            raise ValueError("an object may participate in only one lifecycle animation")
+
+        start = _finite_number("start_time", start_time)
+        run_duration = _positive_number("duration", duration)
+        end = start + run_duration
+
+        source_previous_end = self._scheduled_transform_ends.get(source.id)
+        if source_previous_end is not None and start < source_previous_end:
+            raise ValueError("copy source has an overlapping Transform track")
+        if any(
+            track["object"] == source.id
+            and track["property"] != "transform"
+            and track["timing"]["start_time"] <= start
+            for track in self._tracks
+        ):
+            raise ValueError(
+                "copy source has property state not represented by its snapshot"
+            )
+
+        source_snapshot = copy.deepcopy(
+            self._scheduled_transform_targets.get(
+                source.id, self._snapshot_for_object(source)
+            )
+        )
+        target_snapshot = self._validate_lifecycle_target(
+            target, start=start, end=end, label="copy"
+        )
+
+        source_key = self._object_keys[source.id]
+        target_key = self._object_keys[target.id]
+        copy_key = (
+            f"{animation.key}.copy"
+            if animation.key is not None
+            else f"@copy:{source_key}->{target_key}"
+        )
+        copy_object = self._append_snapshot(source_snapshot, copy_key)
+        transform_key = (
+            animation.key if animation.key is not None else f"{copy_key}.transform"
+        )
+        detached_target = Mobject(
+            geometry=target_snapshot["geometry"],
+            transform=target_snapshot["transform"],
+            style=target_snapshot["style"],
+        )
+        self._schedule_transform(
+            Transform(copy_object, detached_target, key=transform_key),
+            duration=run_duration,
+            start_time=start,
+            easing=easing,
+        )
+
+        self._add_presence_track(
+            copy_object,
+            False,
+            True,
+            start,
+            key=f"{copy_key}.show",
+        )
+        self._add_presence_track(
+            copy_object,
+            True,
+            False,
+            end,
+            key=f"{copy_key}.hide",
+        )
+        self._add_presence_track(
+            target,
+            False,
+            True,
+            end,
+            key=f"{copy_key}.target-show",
+        )
+        self._lifecycle_objects.update((source.id, target.id, copy_object.id))
+
+    def _add_presence_track(
+        self,
+        obj: Object,
+        from_: bool,
+        to: bool,
+        time: float,
+        *,
+        key: str | None = None,
+    ) -> None:
+        existing = [
+            track
+            for track in self._tracks
+            if track["object"] == obj.id and track["property"] == "presence"
+        ]
+        if existing:
+            previous = existing[-1]
+            previous_time = previous["timing"]["start_time"]
+            if time < previous_time:
+                raise ValueError("presence events must be scheduled in chronological order")
+            if previous["values"]["bool"]["to"] is not from_:
+                raise ValueError("presence event chain must be continuous")
         self._add_track(
             obj,
             "presence",
@@ -565,7 +702,7 @@ class Scene:
             time,
             0.0,
             "linear",
-            None,
+            key,
         )
 
     def animate_position(
