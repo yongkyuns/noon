@@ -67,7 +67,7 @@ Round join/cap remain the default. Rust/IR deserialization uses serde defaults f
 
 `Transform(source, VectorPath(...))` remains a convenience form. It snapshots the current/source transform and style and replaces only the target geometry.
 
-Targets are copied when scheduled. Later mutation of a detached target does not change an already-authored Transform. Sequential Transforms on one Python object chain snapshots: the previous target becomes the next source snapshot. Overlapping generic Transforms for the same object are currently rejected because precedence between two whole-object snapshots would otherwise be ambiguous.
+Targets are copied when scheduled. Later mutation of a detached target does not change an already-authored Transform. Sequential Transforms on one Python object chain snapshots, and the source snapshot is evaluated at the Transform start so prior/current Position, Rotation, and Opacity tracks are reflected using the same interpolation and precedence rules as runtime playback. Overlapping generic Transforms for the same object are currently rejected because precedence between two whole-object snapshots would otherwise be ambiguous. See [evaluated-authoring-snapshots.md](evaluated-authoring-snapshots.md) for the authoring-time evaluation contract.
 
 The playground includes stroke path, filled path, and analytic primitive Transform examples.
 
@@ -159,6 +159,12 @@ Transform/style interpolation is deterministic under direct seek and forward pla
 
 Path Transform progress and path reveal remain independent. Filled path runtime coverage also verifies direct-seek/forward parity, interpolated fill/style/transform state, exact semantic endpoints, and the detached prepared render pair.
 
+## Lifecycle composition
+
+`ReplacementTransform` and `TransformFromCopy` are implemented on top of the same generic Transform contract plus explicit zero-duration `Presence` events; they do not require renderer-specific object insertion or deletion. Stable object identities remain in the semantic scene while presence determines whether they produce render instances.
+
+Lifecycle source/target snapshots are evaluated at their semantic start/handoff times when the state can be represented exactly by `ObjectSnapshot`. Ambiguous active generic Transform state and non-snapshot lifecycle channels are rejected instead of silently approximated. `ReplacementTransform` also guards source-side narrow-property precedence so an override cannot create a discontinuous presence handoff. See [transform-lifecycle.md](transform-lifecycle.md) and [transform-from-copy.md](transform-from-copy.md).
+
 ## Performance contract
 
 For an active same-kind analytic Transform:
@@ -186,23 +192,25 @@ The runtime only clones semantic or prepared path geometry when the selected geo
 
 Coverage is intentionally split across independent layers:
 
-- Python: detached targets, snapshot-by-value behavior, stable source identity, multiple/sequential Transforms, overlap rejection, VectorPath convenience syntax, analytic targets, stroke join/cap serialization, and execution of the filled-path playground example;
+- Python: detached targets, evaluated source snapshots, snapshot-by-value behavior, stable source identity, multiple/sequential Transforms, overlap rejection, lifecycle lowering/rollback, VectorPath convenience syntax, analytic targets, stroke join/cap serialization, and execution of the filled-path playground example;
 - IR/core: object-snapshot Transform round trips and backward-compatible stroke-style defaults;
-- compiler: explicit geometry plans, safe filled-path acceptance, distinct `UnsafeFilledPathTransform` rejection, fill-presence rejection, stroke-width/join/cap safety boundaries, and unsupported cross-kind rejection;
+- compiler: explicit geometry plans, safe filled-path acceptance, distinct `UnsafeFilledPathTransform` rejection, fill-presence rejection, stroke-width/join/cap safety boundaries, unsupported cross-kind rejection, and Presence-chain continuity;
 - geometry/stroke: Lyon reference checks, cap/miter theory, contour-start/winding invariance, fixed topology, active-triangle winding, and all nine join/cap parity combinations;
 - geometry/fill: rounded-loop -> concave-star topology, fill-only meshes, fill+stroke meshes, self-intersection/open-contour rejection, static-Lyon endpoint area fidelity, and a regression where both endpoints are individually valid but a fan triangle would invert only inside the animation interval;
-- runtime: exact analytic/path endpoints, seek/forward parity, sequential continuity, precedence, reveal independence, path allocation stability, plus filled-path seek/forward parity and fill interpolation;
-- renderer: stroke/fill-aware cache identity, analytic instance-only dirty ranges, filled-path cold-geometry reuse, no steady retessellation, and path instance-only morph updates;
+- runtime: exact analytic/path endpoints, seek/forward parity, sequential continuity, precedence, reveal independence, lifecycle presence, path allocation stability, plus filled-path seek/forward parity and fill interpolation;
+- renderer: stroke/fill-aware cache identity, analytic instance-only dirty ranges, lifecycle presence topology, filled-path cold-geometry reuse, no steady retessellation, and path instance-only morph updates;
 - full CI: format, workspace compile, strict Clippy, stroke geometry suites, both filled-morph suites, all workspace tests, WebGPU wasm compile, browser-runtime wasm compile, and browser package validation.
 
 ## Current limitations / next work
 
-Completed Transform geometry support now includes:
+Completed Transform and lifecycle support now includes:
 
 - same-kind analytic `Circle`, `Rectangle`, and `Line` interpolation;
 - fixed-topology stroked vector-path Transform;
 - shared round/miter/bevel joins and round/butt/square caps;
-- bounded fixed-topology filled vector-path Transform for one continuously certifiable closed contour.
+- bounded fixed-topology filled vector-path Transform for one continuously certifiable closed contour;
+- first-class `ReplacementTransform` and `TransformFromCopy` lifecycle semantics with stable IDs and `Presence` events;
+- authoring-time Position/Rotation/Opacity snapshot evaluation and transactional compound lowering.
 
 Remaining limitations include:
 
@@ -211,6 +219,7 @@ Remaining limitations include:
 - cross-kind geometry interpolation;
 - path stroke-width interpolation across geometry-changing morphs;
 - changing join/cap topology during an active geometry-changing path Transform;
-- `ReplacementTransform`, `TransformFromCopy`, and matching-shape variants.
+- repeated/chained lifecycle composition beyond the current one-lifecycle-animation-per-object guard;
+- matching-shape Transform variants.
 
-The next Transform milestone should focus on lifecycle semantics: `ReplacementTransform` and `TransformFromCopy` first, then matching-shape correspondence. Those can build on the existing stable `ObjectId` plus detached `ObjectSnapshot` model without weakening the fixed-topology renderer contract.
+The next Transform/lifecycle milestone should make repeated lifecycle operations an explicit state machine, then add matching-shape correspondence on top of the existing stable-ID, evaluated-snapshot, and fixed-topology renderer contracts.
