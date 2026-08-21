@@ -27,6 +27,7 @@ use std::{
 // progress in this exact domain avoids endpoint wraparound at reveal == 1.0
 // while retaining far more precision than pixel-scale path clipping needs.
 const PATH_PROGRESS_MAX: u32 = 16_777_215;
+const DEFAULT_PATH_MESH_CACHE_LIMIT: usize = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -188,6 +189,7 @@ struct CachedPathMesh {
     stroke_cap: StrokeCap,
     fill_enabled: bool,
     mesh: TessellatedPath,
+    last_used: u64,
 }
 
 #[derive(Debug)]
@@ -213,6 +215,8 @@ pub struct FramePreparer {
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
+    path_mesh_cache_limit: Option<usize>,
+    path_mesh_clock: u64,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
     circle_dirty_ranges: Vec<Range<usize>>,
@@ -307,6 +311,7 @@ impl FramePreparer {
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
+        self.prune_path_mesh_cache();
         let capacities_before = self.capacities();
 
         self.circle_ids.clear();
@@ -618,17 +623,19 @@ impl FramePreparer {
             style.stroke_cap,
             fill_enabled,
         );
-        if let Some(candidates) = self.path_mesh_lookup.get(&key) {
-            if let Some(index) = candidates.iter().copied().find(|&index| {
+        let existing = self.path_mesh_lookup.get(&key).and_then(|candidates| {
+            candidates.iter().copied().find(|&index| {
                 let entry = &self.path_mesh_cache[index];
                 entry.path == *path
                     && entry.stroke_width_bits == stroke_width_bits
                     && entry.stroke_join == style.stroke_join
                     && entry.stroke_cap == style.stroke_cap
                     && entry.fill_enabled == fill_enabled
-            }) {
-                return Ok((index, false));
-            }
+            })
+        });
+        if let Some(index) = existing {
+            self.mark_path_mesh_used(index);
+            return Ok((index, false));
         }
 
         let mesh = noon_geometry::tessellate_styled_with_fill(
@@ -639,6 +646,7 @@ impl FramePreparer {
             fill_enabled,
         )?;
         let index = self.path_mesh_cache.len();
+        let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
             path: path.clone(),
             stroke_width_bits,
@@ -646,9 +654,71 @@ impl FramePreparer {
             stroke_cap: style.stroke_cap,
             fill_enabled,
             mesh,
+            last_used,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
         Ok((index, true))
+    }
+
+    fn next_path_mesh_use(&mut self) -> u64 {
+        self.path_mesh_clock = self.path_mesh_clock.saturating_add(1);
+        self.path_mesh_clock
+    }
+
+    fn mark_path_mesh_used(&mut self, index: usize) {
+        let last_used = self.next_path_mesh_use();
+        self.path_mesh_cache[index].last_used = last_used;
+    }
+
+    fn prune_path_mesh_cache(&mut self) {
+        let limit = self.path_mesh_cache_limit();
+        if self.path_mesh_cache.len() <= limit {
+            return;
+        }
+
+        let mut order: Vec<usize> = (0..self.path_mesh_cache.len()).collect();
+        order.sort_unstable_by(|&left, &right| {
+            self.path_mesh_cache[right]
+                .last_used
+                .cmp(&self.path_mesh_cache[left].last_used)
+                .then_with(|| right.cmp(&left))
+        });
+        let mut keep = vec![false; self.path_mesh_cache.len()];
+        for index in order.into_iter().take(limit) {
+            keep[index] = true;
+        }
+
+        let old_cache = std::mem::take(&mut self.path_mesh_cache);
+        self.path_mesh_lookup.clear();
+        for (old_index, entry) in old_cache.into_iter().enumerate() {
+            if !keep[old_index] {
+                continue;
+            }
+            let key = path_mesh_key(
+                &entry.path,
+                entry.stroke_width_bits,
+                entry.stroke_join,
+                entry.stroke_cap,
+                entry.fill_enabled,
+            );
+            let new_index = self.path_mesh_cache.len();
+            self.path_mesh_cache.push(entry);
+            self.path_mesh_lookup.entry(key).or_default().push(new_index);
+        }
+    }
+
+    /// Sets the number of recently used path meshes retained between full rebuilds.
+    ///
+    /// The limit is applied at the next full rebuild boundary. A prepared frame may
+    /// temporarily contain more meshes than this limit because meshes created while
+    /// rebuilding are never evicted out from under that frame's batch indices.
+    pub fn set_path_mesh_cache_limit(&mut self, limit: usize) {
+        self.path_mesh_cache_limit = Some(limit);
+    }
+
+    pub fn path_mesh_cache_limit(&self) -> usize {
+        self.path_mesh_cache_limit
+            .unwrap_or(DEFAULT_PATH_MESH_CACHE_LIMIT)
     }
 
     pub fn cached_path_mesh_count(&self) -> usize {
