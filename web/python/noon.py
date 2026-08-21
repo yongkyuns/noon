@@ -81,6 +81,25 @@ def _authoring_key(name: str, value: str | None, fallback: str) -> str:
     return value
 
 
+def _track_progress(timing: dict[str, Any], time: float) -> float:
+    raw = max(
+        0.0,
+        min(1.0, (time - timing["start_time"]) / timing["duration"]),
+    )
+    easing = timing["easing"]
+    if easing == "linear":
+        return raw
+    if easing == "ease_in_out_cubic":
+        if raw < 0.5:
+            return 4.0 * raw * raw * raw
+        return 1.0 - ((-2.0 * raw + 2.0) ** 3) / 2.0
+    raise ValueError(f"unsupported easing: {easing}")
+
+
+def _lerp(from_: float, to: float, progress: float) -> float:
+    return from_ + (to - from_) * progress
+
+
 @dataclass(frozen=True, slots=True)
 class Color:
     red: float
@@ -520,9 +539,7 @@ class Scene:
         if previous_end is not None and start < previous_end:
             raise ValueError("generic Transform tracks for one object must not overlap")
 
-        source_snapshot = copy.deepcopy(
-            self._scheduled_transform_targets.get(obj.id, self._snapshot_for_object(obj))
-        )
+        source_snapshot = self._snapshot_for_object_at(obj, start)
         if isinstance(target, VectorPath):
             target_snapshot = copy.deepcopy(source_snapshot)
             target_snapshot["geometry"] = {"vector_path": target.to_ir()}
@@ -552,27 +569,16 @@ class Scene:
         self,
         target: Object,
         *,
-        start: float,
         end: float,
         label: str,
     ) -> dict[str, Any]:
-        target_previous_end = self._scheduled_transform_ends.get(target.id)
-        if target_previous_end is not None and start < target_previous_end:
-            raise ValueError(f"{label} target has an overlapping Transform track")
-        if any(
-            track["object"] == target.id
-            and track["property"] != "transform"
-            and track["timing"]["start_time"] <= end
-            for track in self._tracks
-        ):
+        self._ensure_snapshot_representable(target, end, f"{label} target")
+        try:
+            return self._snapshot_for_object_at(target, end)
+        except ValueError as error:
             raise ValueError(
-                f"{label} target has property state not represented by its Transform snapshot"
-            )
-        return copy.deepcopy(
-            self._scheduled_transform_targets.get(
-                target.id, self._snapshot_for_object(target)
-            )
-        )
+                f"{label} target cannot be snapshotted at handoff: {error}"
+            ) from error
 
     def _schedule_replacement_transform(
         self,
@@ -597,7 +603,7 @@ class Scene:
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
         target_snapshot = self._validate_lifecycle_target(
-            target, start=start, end=end, label="replacement"
+            target, end=end, label="replacement"
         )
         detached_target = Mobject(
             geometry=target_snapshot["geometry"],
@@ -638,26 +644,13 @@ class Scene:
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
 
-        source_previous_end = self._scheduled_transform_ends.get(source.id)
-        if source_previous_end is not None and start < source_previous_end:
-            raise ValueError("copy source has an overlapping Transform track")
-        if any(
-            track["object"] == source.id
-            and track["property"] != "transform"
-            and track["timing"]["start_time"] <= start
-            for track in self._tracks
-        ):
-            raise ValueError(
-                "copy source has property state not represented by its snapshot"
-            )
-
-        source_snapshot = copy.deepcopy(
-            self._scheduled_transform_targets.get(
-                source.id, self._snapshot_for_object(source)
-            )
-        )
+        self._ensure_snapshot_representable(source, start, "copy source")
+        try:
+            source_snapshot = self._snapshot_for_object_at(source, start)
+        except ValueError as error:
+            raise ValueError(f"copy source cannot be snapshotted: {error}") from error
         target_snapshot = self._validate_lifecycle_target(
-            target, start=start, end=end, label="copy"
+            target, end=end, label="copy"
         )
 
         source_key = self._object_keys[source.id]
@@ -838,6 +831,75 @@ class Scene:
             "transform": copy.deepcopy(stored["transform"]),
             "style": copy.deepcopy(stored["style"]),
         }
+
+    def _latest_track_at(
+        self, obj: Object, property_name: str, time: float
+    ) -> dict[str, Any] | None:
+        candidates = [
+            track
+            for track in self._tracks
+            if track["object"] == obj.id
+            and track["property"] == property_name
+            and track["timing"]["start_time"] <= time
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda track: (track["timing"]["start_time"], track["id"]),
+        )
+
+    def _snapshot_for_object_at(self, obj: Object, time: float) -> dict[str, Any]:
+        snapshot = self._snapshot_for_object(obj)
+        transform_track = self._latest_track_at(obj, "transform", time)
+        if transform_track is not None:
+            timing = transform_track["timing"]
+            if time < timing["start_time"] + timing["duration"]:
+                raise ValueError("object is inside an active generic Transform")
+            snapshot = copy.deepcopy(transform_track["values"]["object"]["to"])
+
+        position_track = self._latest_track_at(obj, "position", time)
+        if position_track is not None:
+            progress = _track_progress(position_track["timing"], time)
+            values = position_track["values"]["vec2"]
+            snapshot["transform"]["translation"] = {
+                "x": _lerp(values["from"]["x"], values["to"]["x"], progress),
+                "y": _lerp(values["from"]["y"], values["to"]["y"], progress),
+            }
+
+        rotation_track = self._latest_track_at(obj, "rotation", time)
+        if rotation_track is not None:
+            progress = _track_progress(rotation_track["timing"], time)
+            values = rotation_track["values"]["scalar"]
+            snapshot["transform"]["rotation"] = _lerp(
+                values["from"], values["to"], progress
+            )
+
+        opacity_track = self._latest_track_at(obj, "opacity", time)
+        if opacity_track is not None:
+            progress = _track_progress(opacity_track["timing"], time)
+            values = opacity_track["values"]["scalar"]
+            snapshot["style"]["opacity"] = _lerp(
+                values["from"], values["to"], progress
+            )
+
+        return snapshot
+
+    def _ensure_snapshot_representable(
+        self, obj: Object, time: float, label: str
+    ) -> None:
+        unsupported = [
+            track["property"]
+            for track in self._tracks
+            if track["object"] == obj.id
+            and track["property"] in {"presence", "reveal", "morph"}
+            and track["timing"]["start_time"] <= time
+        ]
+        if unsupported:
+            properties = ", ".join(sorted(set(unsupported)))
+            raise ValueError(
+                f"{label} has state not represented by ObjectSnapshot: {properties}"
+            )
 
     def _append_snapshot(
         self, snapshot: dict[str, Any], key: str | None
