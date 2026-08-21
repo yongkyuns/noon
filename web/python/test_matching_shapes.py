@@ -2,7 +2,9 @@ import unittest
 
 from noon import (
     Color,
+    Rectangle,
     Scene,
+    Transform,
     TransformMatchingShapes,
     VectorPath,
 )
@@ -108,6 +110,36 @@ class TransformMatchingShapesTests(unittest.TestCase):
         self.assertEqual(
             transform["values"]["object"]["to"]["geometry"],
             {"rectangle": {"size": {"x": 1.0, "y": 2.0}}},
+        )
+
+    def test_matching_uses_evaluated_geometry_after_completed_transform(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0, key="source")
+        target = scene.rectangle(4.0, 2.0, key="target")
+
+        scene.play(
+            Transform(source, Rectangle(2.0, 1.0), key="become-rectangle"),
+            duration=1.0,
+        )
+        scene.play(
+            TransformMatchingShapes([source], [target], key="match-evaluated"),
+            duration=1.0,
+            start_time=1.0,
+        )
+
+        transforms = [
+            track
+            for track in scene.to_document()["tracks"]
+            if track["property"] == "transform"
+        ]
+        self.assertEqual(len(transforms), 2)
+        self.assertEqual(
+            transforms[-1]["values"]["object"]["from"]["geometry"],
+            {"rectangle": {"size": {"x": 2.0, "y": 1.0}}},
+        )
+        self.assertEqual(
+            transforms[-1]["values"]["object"]["to"]["geometry"],
+            {"rectangle": {"size": {"x": 4.0, "y": 2.0}}},
         )
 
     def test_exact_local_vector_paths_match(self) -> None:
