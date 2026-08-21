@@ -3,7 +3,7 @@ name: Agent filled path Transform
 on:
   push:
     branches:
-      - agent/filled-path-transform-impl
+      - agent/browser-realtime-architecture
 
 permissions:
   contents: write
@@ -16,10 +16,10 @@ jobs:
   validate-and-publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout implementation branch
+      - name: Checkout draft feature branch
         uses: actions/checkout@v4
         with:
-          ref: agent/filled-path-transform-impl
+          ref: agent/browser-realtime-architecture
 
       - name: Use stable Rust
         run: |
@@ -84,7 +84,7 @@ jobs:
               web/python/test_examples.py
             if ! git diff --cached --quiet; then
               git commit -m "Add bounded filled path Transform"
-              git push origin HEAD:agent/filled-path-transform-impl
+              git push origin HEAD:agent/browser-realtime-architecture
             fi
             rm -f filled_gate.log
           else
@@ -96,7 +96,7 @@ jobs:
             cp /tmp/filled_gate.log filled_gate.log
             git add -- filled_gate.log
             git commit -m "Record filled Transform gate failure"
-            git push origin HEAD:agent/filled-path-transform-impl
+            git push origin HEAD:agent/browser-realtime-architecture
           fi
 
           exit 0
