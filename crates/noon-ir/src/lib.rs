@@ -147,6 +147,22 @@ mod tests {
     }
 
     #[test]
+    fn presence_events_round_trip_with_human_readable_bool_values() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .set_presence_at(object, false, true, 1.5)
+            .expect("presence event must be valid");
+
+        let json = encode_scene(&scene).expect("scene must serialize");
+        assert!(json.contains("\"presence\""));
+        assert!(json.contains("\"bool\""));
+        let decoded = decode_scene(&json).expect("scene must deserialize");
+        assert_eq!(decoded.objects(), scene.objects());
+        assert_eq!(decoded.tracks(), scene.tracks());
+    }
+
+    #[test]
     fn identical_scene_produces_identical_json() {
         let first = encode_scene(&sample_scene()).expect("scene must serialize");
         let second = encode_scene(&sample_scene()).expect("scene must serialize");
