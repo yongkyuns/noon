@@ -73,12 +73,7 @@ fn identical_geometry_transform_needs_no_render_geometry_override() {
     to.transform.translation = Vec2::new(3.0, -2.0);
     to.style.opacity = 0.25;
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
         .unwrap();
 
     let compiled = CompiledScene::compile(&scene).unwrap();
@@ -92,12 +87,7 @@ fn unsupported_cross_geometry_transform_is_rejected_before_runtime() {
     let from = ObjectSnapshot::from(scene.object(object).unwrap());
     let to = snapshot(GeometryRef::rectangle(2.0, 2.0), Style::default());
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
         .unwrap();
 
     assert!(matches!(
@@ -116,12 +106,7 @@ fn path_stroke_width_change_is_rejected_even_when_geometry_is_identical() {
     let mut to = from.clone();
     to.style.stroke_width = 0.2;
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
         .unwrap();
 
     assert!(matches!(
