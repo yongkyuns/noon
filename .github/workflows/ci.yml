@@ -25,7 +25,9 @@ jobs:
           ref: agent/browser-realtime-architecture
 
       - name: Apply stroke join/cap parity implementation
-        run: python3 scripts/apply_stroke_style_parity.py
+        run: |
+          python3 scripts/apply_stroke_style_parity.py
+          python3 scripts/fix_stroke_style_literal_migration.py
 
       - name: Use stable Rust
         run: |
