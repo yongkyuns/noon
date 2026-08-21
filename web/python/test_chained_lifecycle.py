@@ -120,6 +120,35 @@ class ChainedLifecycleTests(unittest.TestCase):
             ],
         )
 
+    def test_absent_object_can_become_a_later_target(self) -> None:
+        scene = Scene()
+        first = scene.circle(1.0, key="first")
+        second = scene.circle(2.0, key="second")
+        third = scene.circle(3.0, key="third")
+
+        scene.play(ReplacementTransform(first, second), duration=1.0)
+        scene.play(
+            ReplacementTransform(third, first),
+            duration=1.0,
+            start_time=2.0,
+        )
+
+        events = [
+            track
+            for track in scene.to_document()["tracks"]
+            if track["object"] == first.id and track["property"] == "presence"
+        ]
+        self.assertEqual(
+            [track["values"]["bool"] for track in events],
+            [
+                {"from": True, "to": False},
+                {"from": False, "to": True},
+            ],
+        )
+        self.assertEqual(
+            [track["timing"]["start_time"] for track in events], [1.0, 3.0]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
