@@ -61,10 +61,7 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
         )
         .unwrap();
 
-    let line = scene.add(GeometryRef::line(
-        Vec2::new(-1.0, 0.0),
-        Vec2::new(1.0, 0.0),
-    ));
+    let line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
     scene
         .animate_transform(
             line,

@@ -37,6 +37,13 @@ const SCENE_EXAMPLES = [
     features: "primitives · path morph · timeline",
   },
   {
+    name: "Analytic primitive Transform",
+    path: "./python/examples/analytic_transform.py",
+    summary:
+      "Circle radius, rectangle size and line endpoints interpolate directly without path conversion or tessellation.",
+    features: "Transform · analytic geometry · zero tessellation",
+  },
+  {
     name: "Path morph / Transform",
     path: "./python/examples/path_morph_transform.py",
     summary:
