@@ -81,10 +81,16 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
     assert_eq!(midpoint.objects[0].id, object);
     assert_eq!(midpoint.objects[0].geometry, from.geometry);
     assert_eq!(midpoint.morph(0), 0.5);
-    assert_eq!(midpoint.objects[0].transform.translation, Vec2::new(1.0, -0.5));
+    assert_eq!(
+        midpoint.objects[0].transform.translation,
+        Vec2::new(1.0, -0.5)
+    );
     assert_close(midpoint.objects[0].transform.rotation, 0.3);
     assert_eq!(midpoint.objects[0].transform.scale, Vec2::new(1.2, 0.85));
-    let fill = midpoint.objects[0].style.fill.expect("fill remains enabled");
+    let fill = midpoint.objects[0]
+        .style
+        .fill
+        .expect("fill remains enabled");
     assert_close(fill.red, 0.5);
     assert_close(fill.green, 0.5);
     assert_close(fill.blue, 0.4);
