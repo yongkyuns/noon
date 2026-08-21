@@ -7,3 +7,4 @@ description = "Compiler from Noon authoring IR to dense runtime data"
 
 [dependencies]
 noon-core = { path = "../noon-core" }
+noon-geometry = { path = "../noon-geometry" }

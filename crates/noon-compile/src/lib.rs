@@ -96,6 +96,7 @@ pub enum CompileError {
     UnknownObject(ObjectId),
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
+    UnsafeFilledPathTransform(TrackId),
 }
 
 impl std::fmt::Display for CompileError {
@@ -114,7 +115,12 @@ impl std::fmt::Display for CompileError {
             ),
             Self::PathTransformRequiresRetessellation(id) => write!(
                 formatter,
-                "transform track {} changes path fill topology or stroke width",
+                "transform track {} changes path fill presence, stroke topology, or stroke width",
+                id.get()
+            ),
+            Self::UnsafeFilledPathTransform(id) => write!(
+                formatter,
+                "transform track {} uses filled path geometry without a stable fixed triangulation",
                 id.get()
             ),
         }
@@ -133,6 +139,7 @@ pub enum CompilePatchError {
     InvalidTrack(TimelineError),
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
+    UnsafeFilledPathTransform(TrackId),
 }
 
 impl std::fmt::Display for CompilePatchError {
@@ -153,7 +160,12 @@ impl std::fmt::Display for CompilePatchError {
             ),
             Self::PathTransformRequiresRetessellation(id) => write!(
                 formatter,
-                "transform track {} changes path fill topology or stroke width",
+                "transform track {} changes path fill presence, stroke topology, or stroke width",
+                id.get()
+            ),
+            Self::UnsafeFilledPathTransform(id) => write!(
+                formatter,
+                "transform track {} uses filled path geometry without a stable fixed triangulation",
                 id.get()
             ),
         }
@@ -343,6 +355,7 @@ impl CompiledScene {
 enum TransformCompileFailure {
     UnsupportedGeometry,
     RequiresRetessellation,
+    UnsafeFilledPath,
 }
 
 fn compile_track(
@@ -415,8 +428,18 @@ fn compile_transform_geometry_plan(
             to_end: *to_end,
         },
         (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
-            if from.style.fill.is_some() || to.style.fill.is_some() {
+            if from.style.fill.is_some() != to.style.fill.is_some() {
                 return Err(TransformCompileFailure::RequiresRetessellation);
+            }
+            if from.style.fill.is_some()
+                && noon_geometry::plan_filled_morph(
+                    source,
+                    target,
+                    noon_geometry::MorphOptions::DEFAULT,
+                )
+                .is_err()
+            {
+                return Err(TransformCompileFailure::UnsafeFilledPath);
             }
             TransformGeometryPlan::PathPair(GeometryRef::path(
                 source.clone().with_morph_target(target.clone()),
@@ -435,6 +458,7 @@ fn compile_error(id: TrackId, error: TransformCompileFailure) -> CompileError {
         TransformCompileFailure::RequiresRetessellation => {
             CompileError::PathTransformRequiresRetessellation(id)
         }
+        TransformCompileFailure::UnsafeFilledPath => CompileError::UnsafeFilledPathTransform(id),
     }
 }
 
@@ -445,6 +469,9 @@ fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePa
         }
         TransformCompileFailure::RequiresRetessellation => {
             CompilePatchError::PathTransformRequiresRetessellation(id)
+        }
+        TransformCompileFailure::UnsafeFilledPath => {
+            CompilePatchError::UnsafeFilledPathTransform(id)
         }
     }
 }
@@ -477,6 +504,94 @@ mod tests {
     };
 
     use super::*;
+
+    fn filled_loop() -> noon_core::VectorPath {
+        noon_core::VectorPath::new()
+            .move_to(Vec2::new(0.0, 1.5))
+            .cubic_to(
+                Vec2::new(1.0, 1.5),
+                Vec2::new(1.5, 1.0),
+                Vec2::new(1.5, 0.0),
+            )
+            .cubic_to(
+                Vec2::new(1.5, -1.0),
+                Vec2::new(1.0, -1.5),
+                Vec2::new(0.0, -1.5),
+            )
+            .cubic_to(
+                Vec2::new(-1.0, -1.5),
+                Vec2::new(-1.5, -1.0),
+                Vec2::new(-1.5, 0.0),
+            )
+            .cubic_to(
+                Vec2::new(-1.5, 1.0),
+                Vec2::new(-1.0, 1.5),
+                Vec2::new(0.0, 1.5),
+            )
+            .close()
+    }
+
+    fn filled_star() -> noon_core::VectorPath {
+        noon_core::VectorPath::new()
+            .move_to(Vec2::new(0.0, 1.9))
+            .line_to(Vec2::new(0.45, 0.62))
+            .line_to(Vec2::new(1.8, 0.58))
+            .line_to(Vec2::new(0.72, -0.24))
+            .line_to(Vec2::new(1.12, -1.54))
+            .line_to(Vec2::new(0.0, -0.78))
+            .line_to(Vec2::new(-1.12, -1.54))
+            .line_to(Vec2::new(-0.72, -0.24))
+            .line_to(Vec2::new(-1.8, 0.58))
+            .line_to(Vec2::new(-0.45, 0.62))
+            .close()
+    }
+
+    #[test]
+    fn safe_filled_path_transform_compiles_to_fixed_path_pair() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(filled_loop()));
+        let mut from = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_loop()));
+        let mut to = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_star()));
+        from.style.fill = Some(noon_core::Color::WHITE);
+        to.style.fill = Some(noon_core::Color::BLACK);
+        scene
+            .add_track(
+                object,
+                Property::Transform,
+                TrackValues::Object { from, to },
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("safe filled Transform track must be valid");
+
+        let compiled = CompiledScene::compile(&scene).expect("safe filled path must compile");
+        assert!(matches!(
+            compiled.tracks()[0].transform_geometry_plan,
+            Some(TransformGeometryPlan::PathPair(_))
+        ));
+    }
+
+    #[test]
+    fn filled_path_transform_rejects_fill_presence_change() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(filled_loop()));
+        let from = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_loop()));
+        let mut to = noon_core::ObjectSnapshot::new(GeometryRef::path(filled_star()));
+        to.style.fill = None;
+        let mut from = from;
+        from.style.fill = Some(noon_core::Color::WHITE);
+        scene
+            .add_track(
+                object,
+                Property::Transform,
+                TrackValues::Object { from, to },
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .expect("semantic track is valid before compilation");
+        assert!(matches!(
+            CompiledScene::compile(&scene),
+            Err(CompileError::PathTransformRequiresRetessellation(_))
+        ));
+    }
 
     #[test]
     fn object_ids_resolve_to_dense_indices() {

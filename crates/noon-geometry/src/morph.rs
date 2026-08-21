@@ -591,6 +591,327 @@ fn require_active(active: bool) -> Result<(), GeometryError> {
     }
 }
 
+fn cross(a: Vec2, b: Vec2) -> f32 {
+    a.x * b.y - a.y * b.x
+}
+
+const FILL_AREA_EPSILON: f32 = 1.0e-5;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilledMorphPlan {
+    pub contour: MorphContourPlan,
+    pub source_center: Vec2,
+    pub target_center: Vec2,
+    /// Triangle indices over boundary points followed by one center vertex.
+    pub indices: Vec<u32>,
+}
+
+impl FilledMorphPlan {
+    pub fn vertex_count(&self) -> usize {
+        self.contour.source_points.len() + 1
+    }
+
+    pub fn interpolate_vertices(&self, progress: f32) -> Vec<Vec2> {
+        let progress = if progress.is_finite() {
+            progress.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let mut vertices = self
+            .contour
+            .source_points
+            .iter()
+            .zip(&self.contour.target_points)
+            .map(|(source, target)| lerp_vec2(*source, *target, progress))
+            .collect::<Vec<_>>();
+        vertices.push(lerp_vec2(self.source_center, self.target_center, progress));
+        vertices
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FilledMorphError {
+    Morph(MorphError),
+    RequiresSingleClosedContour,
+    DegenerateArea { side: MorphSide },
+    SelfIntersecting { side: MorphSide },
+    NoStableFanTriangulation,
+}
+
+impl std::fmt::Display for FilledMorphError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Morph(error) => write!(formatter, "filled morph planning failed: {error}"),
+            Self::RequiresSingleClosedContour => formatter.write_str(
+                "filled path Transform currently requires exactly one closed contour",
+            ),
+            Self::DegenerateArea { side } => {
+                write!(formatter, "filled morph {side:?} contour has degenerate area")
+            }
+            Self::SelfIntersecting { side } => {
+                write!(formatter, "filled morph {side:?} contour self-intersects")
+            }
+            Self::NoStableFanTriangulation => formatter.write_str(
+                "filled morph has no stable center-fan triangulation over the full interpolation interval",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FilledMorphError {}
+
+impl From<MorphError> for FilledMorphError {
+    fn from(value: MorphError) -> Self {
+        Self::Morph(value)
+    }
+}
+
+/// Plans the deliberately bounded first filled-path Transform topology.
+///
+/// The supported class is one simple closed contour whose source and target
+/// are both star-shaped around their area centroids, with every center-fan
+/// triangle retaining positive orientation for the complete linear morph.
+/// This gives one provably fixed triangle topology and rejects cases that would
+/// require per-frame triangulation or could invert triangles during playback.
+pub fn plan_filled_morph(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<FilledMorphPlan, FilledMorphError> {
+    let plan = plan_morph(source, target, options)?;
+    if plan.contours.len() != 1 || !plan.contours[0].closed {
+        return Err(FilledMorphError::RequiresSingleClosedContour);
+    }
+    let mut contour = plan
+        .contours
+        .into_iter()
+        .next()
+        .expect("one contour validated");
+
+    canonicalize_ccw(&mut contour.source_points, MorphSide::Source)?;
+    canonicalize_ccw(&mut contour.target_points, MorphSide::Target)?;
+    contour.target_points =
+        align_closed_contour_preserving_winding(&contour.source_points, &contour.target_points);
+
+    if !polygon_is_simple(&contour.source_points) {
+        return Err(FilledMorphError::SelfIntersecting {
+            side: MorphSide::Source,
+        });
+    }
+    if !polygon_is_simple(&contour.target_points) {
+        return Err(FilledMorphError::SelfIntersecting {
+            side: MorphSide::Target,
+        });
+    }
+
+    let source_center =
+        polygon_centroid(&contour.source_points).ok_or(FilledMorphError::DegenerateArea {
+            side: MorphSide::Source,
+        })?;
+    let target_center =
+        polygon_centroid(&contour.target_points).ok_or(FilledMorphError::DegenerateArea {
+            side: MorphSide::Target,
+        })?;
+
+    let count = contour.source_points.len();
+    if count < 3 {
+        return Err(FilledMorphError::NoStableFanTriangulation);
+    }
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let minimum = minimum_triangle_orientation_over_interval(
+            source_center,
+            target_center,
+            contour.source_points[index],
+            contour.target_points[index],
+            contour.source_points[next],
+            contour.target_points[next],
+        );
+        if !minimum.is_finite() || minimum <= FILL_AREA_EPSILON as f64 {
+            return Err(FilledMorphError::NoStableFanTriangulation);
+        }
+    }
+
+    let center = u32::try_from(count).map_err(|_| FilledMorphError::NoStableFanTriangulation)?;
+    let mut indices = Vec::with_capacity(count * 3);
+    for index in 0..count {
+        let next = (index + 1) % count;
+        indices.extend([
+            center,
+            u32::try_from(index).map_err(|_| FilledMorphError::NoStableFanTriangulation)?,
+            u32::try_from(next).map_err(|_| FilledMorphError::NoStableFanTriangulation)?,
+        ]);
+    }
+
+    Ok(FilledMorphPlan {
+        contour,
+        source_center,
+        target_center,
+        indices,
+    })
+}
+
+fn canonicalize_ccw(points: &mut [Vec2], side: MorphSide) -> Result<(), FilledMorphError> {
+    let area = signed_polygon_area(points);
+    if !area.is_finite() || area.abs() <= FILL_AREA_EPSILON {
+        return Err(FilledMorphError::DegenerateArea { side });
+    }
+    if area < 0.0 {
+        points.reverse();
+    }
+    Ok(())
+}
+
+fn signed_polygon_area(points: &[Vec2]) -> f32 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    0.5 * (0..points.len())
+        .map(|index| {
+            let next = (index + 1) % points.len();
+            points[index].x * points[next].y - points[next].x * points[index].y
+        })
+        .sum::<f32>()
+}
+
+fn polygon_centroid(points: &[Vec2]) -> Option<Vec2> {
+    let twice_area = 2.0 * signed_polygon_area(points);
+    if !twice_area.is_finite() || twice_area.abs() <= 2.0 * FILL_AREA_EPSILON {
+        return None;
+    }
+    let mut x = 0.0_f32;
+    let mut y = 0.0_f32;
+    for index in 0..points.len() {
+        let next = (index + 1) % points.len();
+        let cross = points[index].x * points[next].y - points[next].x * points[index].y;
+        x += (points[index].x + points[next].x) * cross;
+        y += (points[index].y + points[next].y) * cross;
+    }
+    let denominator = 3.0 * twice_area;
+    let centroid = Vec2::new(x / denominator, y / denominator);
+    (centroid.x.is_finite() && centroid.y.is_finite()).then_some(centroid)
+}
+
+fn align_closed_contour_preserving_winding(source: &[Vec2], target: &[Vec2]) -> Vec<Vec2> {
+    debug_assert_eq!(source.len(), target.len());
+    let count = source.len();
+    let mut best_cost = f64::INFINITY;
+    let mut best_shift = 0;
+    for shift in 0..count {
+        let cost = (0..count)
+            .map(|index| squared_distance(source[index], target[(index + shift) % count]) as f64)
+            .sum::<f64>();
+        if cost < best_cost {
+            best_cost = cost;
+            best_shift = shift;
+        }
+    }
+    (0..count)
+        .map(|index| target[(index + best_shift) % count])
+        .collect()
+}
+
+fn polygon_is_simple(points: &[Vec2]) -> bool {
+    if points.len() < 3 {
+        return false;
+    }
+    let count = points.len();
+    for first in 0..count {
+        let first_next = (first + 1) % count;
+        if distance(points[first], points[first_next]) <= DEGENERATE_LENGTH_EPSILON {
+            return false;
+        }
+        for second in first + 1..count {
+            let second_next = (second + 1) % count;
+            if first == second
+                || first_next == second
+                || second_next == first
+                || (first == 0 && second_next == 0)
+            {
+                continue;
+            }
+            if segments_intersect(
+                points[first],
+                points[first_next],
+                points[second],
+                points[second_next],
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn segments_intersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    let ab_c = orientation(a, b, c);
+    let ab_d = orientation(a, b, d);
+    let cd_a = orientation(c, d, a);
+    let cd_b = orientation(c, d, b);
+    let epsilon = FILL_AREA_EPSILON;
+
+    if ((ab_c > epsilon && ab_d < -epsilon) || (ab_c < -epsilon && ab_d > epsilon))
+        && ((cd_a > epsilon && cd_b < -epsilon) || (cd_a < -epsilon && cd_b > epsilon))
+    {
+        return true;
+    }
+    (ab_c.abs() <= epsilon && point_on_segment(c, a, b))
+        || (ab_d.abs() <= epsilon && point_on_segment(d, a, b))
+        || (cd_a.abs() <= epsilon && point_on_segment(a, c, d))
+        || (cd_b.abs() <= epsilon && point_on_segment(b, c, d))
+}
+
+fn orientation(a: Vec2, b: Vec2, c: Vec2) -> f32 {
+    cross(
+        Vec2::new(b.x - a.x, b.y - a.y),
+        Vec2::new(c.x - a.x, c.y - a.y),
+    )
+}
+
+fn point_on_segment(point: Vec2, start: Vec2, end: Vec2) -> bool {
+    let epsilon = FILL_AREA_EPSILON;
+    point.x >= start.x.min(end.x) - epsilon
+        && point.x <= start.x.max(end.x) + epsilon
+        && point.y >= start.y.min(end.y) - epsilon
+        && point.y <= start.y.max(end.y) + epsilon
+}
+
+fn minimum_triangle_orientation_over_interval(
+    source_center: Vec2,
+    target_center: Vec2,
+    source_a: Vec2,
+    target_a: Vec2,
+    source_b: Vec2,
+    target_b: Vec2,
+) -> f64 {
+    let a0 = Vec2::new(source_a.x - source_center.x, source_a.y - source_center.y);
+    let b0 = Vec2::new(source_b.x - source_center.x, source_b.y - source_center.y);
+    let center_delta = Vec2::new(
+        target_center.x - source_center.x,
+        target_center.y - source_center.y,
+    );
+    let da = Vec2::new(
+        target_a.x - source_a.x - center_delta.x,
+        target_a.y - source_a.y - center_delta.y,
+    );
+    let db = Vec2::new(
+        target_b.x - source_b.x - center_delta.x,
+        target_b.y - source_b.y - center_delta.y,
+    );
+    let c0 = cross(a0, b0) as f64;
+    let c1 = (cross(da, b0) + cross(a0, db)) as f64;
+    let c2 = cross(da, db) as f64;
+    let evaluate = |time: f64| c0 + c1 * time + c2 * time * time;
+    let mut minimum = evaluate(0.0).min(evaluate(1.0));
+    if c2 > 0.0 {
+        let critical = -c1 / (2.0 * c2);
+        if (0.0..1.0).contains(&critical) {
+            minimum = minimum.min(evaluate(critical));
+        }
+    }
+    minimum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

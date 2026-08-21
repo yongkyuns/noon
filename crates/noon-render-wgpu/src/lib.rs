@@ -176,6 +176,7 @@ struct PathMeshKey {
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    fill_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +185,7 @@ struct CachedPathMesh {
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    fill_enabled: bool,
     mesh: TessellatedPath,
 }
 
@@ -552,6 +554,7 @@ impl FramePreparer {
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
+                    && cache.fill_enabled == object.style.fill.is_some()
             }
             Some(PreparedSlot::Unsupported(index)) => {
                 matches!(render_geometry, GeometryRef::External(_))
@@ -592,7 +595,14 @@ impl FramePreparer {
         style: Style,
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
         let stroke_width_bits = style.stroke_width.to_bits();
-        let key = path_mesh_key(path, stroke_width_bits, style.stroke_join, style.stroke_cap);
+        let fill_enabled = style.fill.is_some();
+        let key = path_mesh_key(
+            path,
+            stroke_width_bits,
+            style.stroke_join,
+            style.stroke_cap,
+            fill_enabled,
+        );
         if let Some(candidates) = self.path_mesh_lookup.get(&key) {
             if let Some(index) = candidates.iter().copied().find(|&index| {
                 let entry = &self.path_mesh_cache[index];
@@ -600,16 +610,18 @@ impl FramePreparer {
                     && entry.stroke_width_bits == stroke_width_bits
                     && entry.stroke_join == style.stroke_join
                     && entry.stroke_cap == style.stroke_cap
+                    && entry.fill_enabled == fill_enabled
             }) {
                 return Ok((index, false));
             }
         }
 
-        let mesh = noon_geometry::tessellate_styled(
+        let mesh = noon_geometry::tessellate_styled_with_fill(
             path,
             style.stroke_width,
             style.stroke_join,
             style.stroke_cap,
+            fill_enabled,
         )?;
         let index = self.path_mesh_cache.len();
         self.path_mesh_cache.push(CachedPathMesh {
@@ -617,6 +629,7 @@ impl FramePreparer {
             stroke_width_bits,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
+            fill_enabled,
             mesh,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
@@ -633,6 +646,7 @@ fn path_mesh_key(
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    fill_enabled: bool,
 ) -> PathMeshKey {
     let mut hasher = DefaultHasher::new();
     hash_vector_path(path, &mut hasher);
@@ -641,6 +655,7 @@ fn path_mesh_key(
         stroke_width_bits,
         stroke_join,
         stroke_cap,
+        fill_enabled,
     }
 }
 
@@ -815,6 +830,79 @@ mod tests {
     }
 
     #[test]
+    fn filled_morph_reuses_geometry_after_cold_prepare() {
+        let source = curved_path();
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, 1.3))
+            .line_to(Vec2::new(0.38, 0.42))
+            .line_to(Vec2::new(1.2, 0.4))
+            .line_to(Vec2::new(0.5, -0.18))
+            .line_to(Vec2::new(0.74, -1.05))
+            .line_to(Vec2::new(0.0, -0.52))
+            .line_to(Vec2::new(-0.74, -1.05))
+            .line_to(Vec2::new(-0.5, -0.18))
+            .line_to(Vec2::new(-1.2, 0.4))
+            .line_to(Vec2::new(-0.38, 0.42))
+            .close();
+        let geometry = GeometryRef::path(source.with_morph_target(target));
+        let mut path = object(7, geometry.clone());
+        path.style.fill = Some(Color::WHITE);
+        path.style.stroke = Some(Color::BLACK);
+        path.style.stroke_width = 0.08;
+        let mut initial = frame(vec![path.clone()]);
+        initial.render_geometries[0] = Some(geometry.clone());
+        let mut preparer = FramePreparer::new();
+
+        let cold = preparer.prepare(&initial);
+        assert_eq!(cold.stats.geometry_cache_misses, 1);
+        assert!(cold
+            .path_vertices
+            .iter()
+            .any(|vertex| vertex.surface & 1 == 0));
+        let vertices = cold.path_vertices.to_vec();
+        let indices = cold.path_indices.to_vec();
+
+        let mut advanced = initial.clone();
+        advanced.morphs[0] = 0.5;
+        let changes = FrameChanges::objects(vec![0]);
+        let steady = preparer.prepare_incremental(&advanced, &changes);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert!(!steady.path_geometry_dirty);
+        assert_eq!(steady.path_vertices, vertices);
+        assert_eq!(steady.path_indices, indices);
+        assert_eq!(steady.path_dirty_ranges.len(), 1);
+        assert_eq!(steady.path_dirty_ranges[0].start, 0);
+        assert_eq!(steady.path_dirty_ranges[0].end, 1);
+    }
+
+    #[test]
+    fn fill_presence_is_part_of_path_mesh_cache_identity() {
+        let geometry = GeometryRef::path(curved_path());
+        let mut path = object(17, geometry);
+        path.style.fill = None;
+        path.style.stroke = Some(Color::WHITE);
+        path.style.stroke_width = 0.08;
+        let initial = frame(vec![path]);
+        let mut preparer = FramePreparer::new();
+
+        let cold = preparer.prepare(&initial);
+        assert_eq!(cold.stats.geometry_cache_misses, 1);
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
+
+        let mut filled = initial.clone();
+        filled.objects[0].style.fill = Some(Color::WHITE);
+        let changes = FrameChanges::objects(vec![0]);
+        let rebuilt = preparer.prepare_incremental(&filled, &changes);
+        assert_eq!(rebuilt.stats.geometry_cache_misses, 1);
+        assert!(rebuilt.path_geometry_dirty);
+        assert!(rebuilt
+            .path_vertices
+            .iter()
+            .any(|vertex| vertex.surface & 1 == 0));
+        assert_eq!(preparer.cached_path_mesh_count(), 2);
+    }
+
+    #[test]
     fn packed_instance_layout_is_stable() {
         assert_eq!(std::mem::size_of::<PackedTransform>(), 24);
         assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
@@ -954,6 +1042,10 @@ mod tests {
             .line_to(Vec2::new(1.0, 0.0))
             .with_morph_target(target);
         let mut state = object(7, GeometryRef::path(source));
+        // This regression is specifically for the established stroke-only morph
+        // path. `Style::default()` carries a fill, which now has real topology
+        // semantics and would intentionally reject this open contour.
+        state.style.fill = None;
         state.style.stroke = Some(Color::WHITE);
         state.style.stroke_width = 0.2;
         let mut frame = frame(vec![state]);
@@ -988,6 +1080,9 @@ mod tests {
         let objects = (0..OBJECT_COUNT)
             .map(|index| {
                 let mut state = object(index as u64, geometries[index % VARIANT_COUNT].clone());
+                // Keep the 600-object stress regression scoped to stroke morphing;
+                // filled morphs have their own topology/cache tests.
+                state.style.fill = None;
                 state.style.stroke = Some(Color::WHITE);
                 state.style.stroke_width = 0.02;
                 state

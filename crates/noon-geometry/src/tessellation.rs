@@ -92,26 +92,51 @@ pub fn tessellate_styled(
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
 ) -> Result<TessellatedPath, GeometryError> {
+    // Preserve the historical helper contract: static paths include their fill
+    // surface, while morph paths were stroke-only before fill became an explicit
+    // renderer/style decision. Production rendering uses the explicit variant.
+    let fill_enabled = path.morph_target().is_none();
+    tessellate_styled_with_fill(path, stroke_width, stroke_join, stroke_cap, fill_enabled)
+}
+
+pub fn tessellate_styled_with_fill(
+    path: &VectorPath,
+    stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, GeometryError> {
     if !stroke_width.is_finite() || stroke_width < 0.0 {
         return Err(GeometryError::InvalidStrokeWidth(stroke_width));
     }
     if let Some(target) = path.morph_target() {
-        return tessellate_morph_path(path, target, stroke_width, stroke_join, stroke_cap);
+        return tessellate_morph_path(
+            path,
+            target,
+            stroke_width,
+            stroke_join,
+            stroke_cap,
+            fill_enabled,
+        );
     }
     let path = build_lyon_path(path)?;
     let mut buffers = VertexBuffers::new();
 
-    FillTessellator::new()
-        .tessellate_path(
-            &path,
-            &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
-            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| TessellationVertex {
-                position: vec2(vertex.position().x, vertex.position().y),
-                surface: PathSurface::Fill,
-                path_distance: 0.0,
-            }),
-        )
-        .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    if fill_enabled {
+        FillTessellator::new()
+            .tessellate_path(
+                &path,
+                &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
+                &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| {
+                    TessellationVertex {
+                        position: vec2(vertex.position().x, vertex.position().y),
+                        surface: PathSurface::Fill,
+                        path_distance: 0.0,
+                    }
+                }),
+            )
+            .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    }
 
     if stroke_width > 0.0 {
         StrokeTessellator::new()
@@ -206,18 +231,60 @@ fn tessellate_morph_path(
     stroke_width: f32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    fill_enabled: bool,
 ) -> Result<TessellatedPath, GeometryError> {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    if fill_enabled {
+        let fill = crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT).map_err(
+            |error| GeometryError::Tessellation(format!("filled morph planning failed: {error}")),
+        )?;
+        let vertex_start = u32::try_from(vertices.len()).map_err(|_| {
+            GeometryError::Tessellation("filled morph vertex count overflow".into())
+        })?;
+        for (source_point, target_point) in fill
+            .contour
+            .source_points
+            .iter()
+            .zip(&fill.contour.target_points)
+        {
+            vertices.push(MeshVertex {
+                position: *source_point,
+                target_position: *target_point,
+                surface: PathSurface::Fill,
+                path_distance: 0.0,
+                path_progress: 1.0,
+            });
+        }
+        vertices.push(MeshVertex {
+            position: fill.source_center,
+            target_position: fill.target_center,
+            surface: PathSurface::Fill,
+            path_distance: 0.0,
+            path_progress: 1.0,
+        });
+        indices.extend(fill.indices.iter().map(|index| {
+            index
+                .checked_add(vertex_start)
+                .expect("filled morph index overflow validated by vertex count")
+        }));
+    }
+
     if stroke_width == 0.0 {
+        let bounds = morph_mesh_bounds(&vertices);
         return Ok(TessellatedPath {
+            vertices,
+            indices,
+            bounds,
+            stroke_length: 0.0,
             morphing: true,
-            ..TessellatedPath::default()
         });
     }
+
     let plan = crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
         .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
     let total_points = plan.point_count();
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
     let mut global_point = 0_usize;
     let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
     let half_width = stroke_width * 0.5;

@@ -15,6 +15,7 @@ SCENE_EXAMPLES = (
     "mixed_geometry.py",
     "path_reveal.py",
     "path_morph_transform.py",
+    "filled_path_transform.py",
     "morph_stress_test.py",
 )
 

@@ -44,6 +44,13 @@ const SCENE_EXAMPLES = [
     features: "Transform · analytic geometry · zero tessellation",
   },
   {
+    name: "Filled path Transform",
+    path: "./python/examples/filled_path_transform.py",
+    summary:
+      "A filled rounded loop morphs into a concave star using one validated fixed triangle topology.",
+    features: "Transform · fixed fill topology · fill + stroke",
+  },
+  {
     name: "Path morph / Transform",
     path: "./python/examples/path_morph_transform.py",
     summary:
