@@ -57,6 +57,7 @@ jobs:
             run_gate python3 scripts/fix_filled_compile_tests.py
             run_gate python3 scripts/fix_filled_clippy.py
             run_gate python3 scripts/fix_filled_renderer_test.py
+            run_gate python3 scripts/fix_filled_compat_wrapper.py
           fi
           run_gate cargo fmt --all
           run_gate cargo fmt --all -- --check
