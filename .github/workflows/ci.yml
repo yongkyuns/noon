@@ -28,14 +28,7 @@ jobs:
         run: |
           python3 scripts/apply_stroke_style_parity.py
           python3 scripts/fix_stroke_style_literal_migration.py
-          echo '--- compile generic ---'
-          sed -n '1,45p' crates/noon-compile/tests/generic_transform.rs
-          echo '--- renderer packed style ---'
-          sed -n '50,85p' crates/noon-render-wgpu/src/lib.rs
-          echo '--- runtime style interpolation ---'
-          sed -n '620,650p' crates/noon-runtime/src/lib.rs
-          echo '--- analytic struct update ---'
-          sed -n '12,40p' crates/noon-runtime/tests/analytic_transform.rs
+          python3 scripts/fix_stroke_style_compile.py
 
       - name: Use stable Rust
         run: |
