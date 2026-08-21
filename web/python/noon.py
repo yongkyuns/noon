@@ -521,9 +521,19 @@ class Scene:
 
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
+        end = start + run_duration
         target_previous_end = self._scheduled_transform_ends.get(target.id)
         if target_previous_end is not None and start < target_previous_end:
             raise ValueError("replacement target has an overlapping Transform track")
+        if any(
+            track["object"] == target.id
+            and track["property"] != "transform"
+            and track["timing"]["start_time"] <= end
+            for track in self._tracks
+        ):
+            raise ValueError(
+                "replacement target has property state not represented by its Transform snapshot"
+            )
         target_snapshot = copy.deepcopy(
             self._scheduled_transform_targets.get(
                 target.id, self._snapshot_for_object(target)
@@ -541,7 +551,6 @@ class Scene:
             easing=easing,
         )
 
-        end = start + run_duration
         self._add_presence_track(source, True, False, end)
         self._add_presence_track(target, False, True, end)
         self._lifecycle_objects.update((source.id, target.id))
