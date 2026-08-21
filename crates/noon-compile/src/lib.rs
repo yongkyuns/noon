@@ -753,12 +753,7 @@ mod tests {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
         scene
-            .animate_appearance(
-                object,
-                0.0,
-                1.0,
-                TrackTiming::new(0.0, 1.0, Easing::Linear),
-            )
+            .animate_appearance(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
             .expect("valid appearance track");
 
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
