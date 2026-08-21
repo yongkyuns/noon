@@ -16,6 +16,18 @@ TrackValues::Object {
 
 An `ObjectSnapshot` contains geometry, transform, and style but no scene identity. The source `ObjectId` remains stable for the lifetime of the animation.
 
+The compiler now selects an explicit geometry strategy for every Transform:
+
+```rust
+TransformGeometryPlan::Static
+TransformGeometryPlan::Circle { from_radius, to_radius }
+TransformGeometryPlan::Rectangle { from_size, to_size }
+TransformGeometryPlan::Line { from_start, from_end, to_start, to_end }
+TransformGeometryPlan::PathPair(prepared_geometry)
+```
+
+This keeps primitive interpolation analytic, path interpolation precomputed, and unsupported geometry changes explicit.
+
 ## Python authoring model
 
 Detached objects are valid Transform targets without becoming rendered scene objects:
@@ -52,13 +64,27 @@ Targets are copied when scheduled. Later mutation of a detached target does not 
 
 Sequential Transforms on one Python object chain snapshots: the previous target becomes the next source snapshot. Overlapping generic Transforms for the same object are currently rejected by the Python authoring layer because precedence between two whole-object snapshots would otherwise be ambiguous.
 
+The playground includes both path Transform and analytic primitive Transform examples. The analytic example exercises circle radius, rectangle size, and line endpoint interpolation through the same `scene.play(Transform(...))` API.
+
 ## Compiler lowering
 
-The compiler keeps the semantic `from`/`to` snapshots on one compiled Transform track and may additionally create renderer-only prepared geometry.
+The compiler keeps the semantic `from`/`to` snapshots on one compiled Transform track and creates a `TransformGeometryPlan` describing how geometry changes should execute.
 
 ### Same geometry
 
-If source and target geometry are identical, no renderer geometry override is needed. Transform, scale, rotation, fill/stroke color, opacity, and other supported style channels interpolate from the snapshots.
+If source and target geometry are identical, the compiler emits `TransformGeometryPlan::Static`. Transform, scale, rotation, fill/stroke color, opacity, and other supported style channels interpolate from the snapshots without a renderer geometry override.
+
+### Analytic primitive -> same analytic primitive
+
+Same-kind analytic geometry is interpolated without path conversion:
+
+- `Circle -> Circle`: radius;
+- `Rectangle -> Rectangle`: size;
+- `Line -> Line`: start and end points.
+
+The runtime writes these interpolated values directly into semantic `FrameObjectState.geometry`. The analytic renderer consumes the same values through its packed instance records, so native/runtime consumers and WebGPU rendering see the same geometry state.
+
+No Lyon tessellation, path cache entry, path geometry upload, or renderer-only morph geometry is involved.
 
 ### Vector path -> vector path
 
@@ -68,13 +94,17 @@ Current safety boundary:
 
 - path stroke width must remain constant across a geometry-changing Transform;
 - geometry-changing filled paths are rejected because the current fixed-topology morph mesh is stroke-only;
-- unsupported cross-geometry Transforms are rejected before runtime.
+- unsupported cross-kind geometry Transforms are rejected before runtime.
 
 This is intentional. Noon must not silently fall back to per-frame Lyon tessellation.
 
 ## Runtime semantics
 
-`FrameObjectState` remains semantic. Its geometry is the exact source endpoint before completion and the exact target endpoint at completion; renderer-prepared morph geometry is stored separately in `FrameState::render_geometries`.
+`FrameObjectState` remains semantic.
+
+For analytic primitive Transforms, geometry itself is interpolated at every evaluated time: a circle frame contains the actual current radius, a rectangle contains the actual current size, and a line contains the actual current endpoints. `FrameState::render_geometries` remains `None` for these cases.
+
+For path Transforms, semantic geometry remains the exact source endpoint before completion and the exact target endpoint at completion; renderer-prepared fixed-topology morph geometry is stored separately in `FrameState::render_geometries`.
 
 This separation prevents a GPU optimization artifact such as `source.with_morph_target(target)` from leaking into the renderer-independent scene state.
 
@@ -83,6 +113,14 @@ Transform/style interpolation is deterministic under direct seek and forward pla
 Path Transform progress and path reveal remain independent.
 
 ## Performance contract
+
+For an active same-kind analytic Transform:
+
+- geometry remains analytic;
+- no path conversion or tessellation occurs;
+- no path mesh is inserted into the cache;
+- no path geometry buffer is uploaded;
+- a changed object repacks and dirties only its analytic instance record.
 
 For an active geometry-changing path Transform:
 
@@ -93,30 +131,28 @@ For an active geometry-changing path Transform:
 - steady frames dirty only the path instance record;
 - semantic and renderer path allocations are reused across steady forward frames.
 
-The runtime only clones semantic or prepared geometry when the selected geometry actually changes, such as entering a different sequential Transform pair or reaching a semantic endpoint. A regression test compares the underlying path command-buffer addresses across successive steady frames so accidental deep cloning becomes a structural test failure.
+The runtime only clones semantic or prepared path geometry when the selected geometry actually changes, such as entering a different sequential Transform pair or reaching a semantic endpoint. A regression test compares the underlying path command-buffer addresses across successive steady frames so accidental deep cloning becomes a structural test failure.
 
 ## Validation
 
 Coverage is split across independent layers:
 
-- Python: detached targets, snapshot-by-value behavior, stable source identity, multiple and sequential Transforms, overlap rejection, old VectorPath convenience syntax;
+- Python: detached targets, snapshot-by-value behavior, stable source identity, multiple and sequential Transforms, overlap rejection, old VectorPath convenience syntax, and analytic detached targets;
 - IR: object-snapshot Transform round trips;
-- compiler: prepared path pair creation, same-geometry fast path, unsupported geometry rejection, fill/stroke-width safety boundaries;
-- runtime: exact endpoints, seek/forward parity, sequential boundary continuity, property precedence, reveal independence, allocation stability;
-- renderer: no steady retessellation/cache miss, instance-only dirty ranges, one-time prepared-geometry switch between sequential path pairs;
+- compiler: explicit `Static`/`Circle`/`Rectangle`/`Line`/`PathPair` geometry plans, unsupported cross-kind rejection, fill/stroke-width safety boundaries;
+- runtime: exact analytic midpoints/endpoints, seek/forward parity, sequential boundary continuity, property precedence, reveal independence, and path allocation stability;
+- renderer: analytic instance-only dirty ranges with zero path work; path no-retessellation/cache-miss behavior and one-time prepared-geometry switches between sequential path pairs;
+- browser playground: separate path and analytic primitive Transform examples;
 - full CI: format, workspace compile, strict Clippy, geometry correctness, all workspace tests, WebGPU wasm compile, browser-runtime wasm compile, and browser package validation.
 
 ## Current limitations / next work
 
-The current generic Transform milestone deliberately does not yet provide:
+The completed generic Transform milestone supports same-kind analytic geometry (`Circle`, `Rectangle`, `Line`) plus stroke-only vector-path geometry changes. Remaining limitations include:
 
-- circle radius -> circle radius interpolation;
-- rectangle size -> rectangle size interpolation;
-- line endpoint -> line endpoint interpolation;
 - cross-kind geometry interpolation;
 - filled path morphing;
-- path stroke-width interpolation;
+- path stroke-width interpolation across geometry-changing morphs;
 - shared round/miter/bevel join and cap semantics between static and morph paths;
 - `ReplacementTransform`, `TransformFromCopy`, or matching-shape variants.
 
-The next generic-Transform slice should add same-kind analytic primitive geometry interpolation (`Circle`, `Rectangle`, `Line`) without converting primitives to paths. After that, path join/cap parity and endpoint visual-regression coverage should close the remaining stroke-rendering fidelity gap.
+The next rendering-fidelity slice is explicit stroke join/cap style shared by static Lyon paths and fixed-topology path Transform. It should include structural join/cap tests plus renderer-boundary endpoint visual-regression coverage, while preserving the fixed-topology/no-retessellation performance contract.
