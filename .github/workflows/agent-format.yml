@@ -1,0 +1,34 @@
+name: Agent branch formatter
+
+on:
+  push:
+    branches:
+      - agent/transform-lifecycle
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/transform-lifecycle
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt
+      - name: Format architecture workspace
+        run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates
+          git commit -m "Format lifecycle implementation"
+          git push origin HEAD:agent/transform-lifecycle
