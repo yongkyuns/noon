@@ -2,7 +2,7 @@
 
 ## Goal
 
-`TransformFromCopy` should preserve the original source object while a distinct transient copy moves through Noon's existing generic Transform pipeline toward a stable target object. Object lifetime remains an explicit semantic concern expressed with `Presence`; playback does not create or destroy objects.
+`TransformFromCopy` preserves the original source object while a distinct transient copy moves through Noon's existing generic Transform pipeline toward a stable target object. Object lifetime remains an explicit semantic concern expressed with `Presence`; playback does not create or destroy objects.
 
 This design builds directly on [transform-lifecycle.md](transform-lifecycle.md) and reuses the geometry/interpolation rules in [generic-transform.md](generic-transform.md).
 
@@ -24,7 +24,7 @@ The scene owns three stable identities:
 2. `target`: absent before the end-time handoff, visible afterward;
 3. an internally authored transient copy: absent before `start_time`, visible only during the transform interval, absent afterward.
 
-The transient copy is a snapshot of the source at scheduling time and receives a deterministic authoring identity so Python reruns map it back to the same stable runtime object.
+The transient copy is a snapshot of the source at scheduling time and receives a deterministic authoring identity so equivalent Python reruns map it back to the same stable runtime object.
 
 ## Lowering
 
@@ -41,38 +41,41 @@ Presence(target): false -> true   at end
 
 ## Presence-chain invariant
 
-This is the first lifecycle primitive that naturally gives one object multiple presence events. The copy's chain must be continuous:
+This is the first lifecycle primitive that naturally gives one object multiple presence events. The copy's chain is continuous:
 
 ```text
 false -> true
 true  -> false
 ```
 
-Adjacent events for one object must agree (`previous.to == next.from`). The implementation should validate this invariant rather than silently ignoring an inconsistent later `from` value. This makes arbitrary seek and forward playback describe the same state transition sequence.
+Adjacent events for one object must agree (`previous.to == next.from`). Python authoring validates the chain as it is built. The Rust compiler independently validates sorted `Presence` tracks before runtime playback, and add/replace/remove-track live patches are validated transactionally before they replace the compiled track set. An inconsistent later `from` value is therefore rejected rather than silently ignored.
 
 ## Initial safety boundaries
 
-The first implementation should reject ambiguous composition rather than synthesize hidden precedence rules:
+The bounded implementation rejects ambiguous composition rather than synthesizing hidden precedence rules:
 
 - source and target must be distinct objects owned by the same `Scene`;
-- source/target objects already participating in incompatible lifecycle replacement state are rejected;
+- source or target objects already participating in another lifecycle animation are rejected;
+- source generic Transform state overlapping the copy start is rejected;
 - target generic Transform state overlapping the copy interval is rejected;
-- target narrow-property state at or before handoff is rejected until lifecycle lowering can snapshot evaluated target state exactly;
-- transient copy keys must be deterministic and collision-free within one scene.
+- source narrow-property state at or before copy start is rejected until source state can be evaluated into an exact snapshot;
+- target narrow-property state at or before handoff is rejected until target state can be evaluated into an exact snapshot;
+- transient copy and generated track keys are deterministic and duplicate keys are rejected within one scene.
+
+Completed generic Transform tracks that end before the relevant snapshot time are supported: the scheduled Transform target snapshot is used as the source or target semantic snapshot.
 
 ## Validation
 
-The first slice should prove:
+The implementation is covered end to end:
 
-- Python lowering creates a stable transient copy and exact presence/Transform tracks;
-- transient copy identity is deterministic across equivalent reruns;
-- direct seek, sequential forward playback, and rewind agree at pre-start, start, midpoint, and end;
-- source remains present throughout;
-- copy is visible only during the interval;
-- target appears exactly at the end;
-- renderer preparation contains the correct visible instance count at each lifecycle phase;
-- inconsistent presence chains are rejected before runtime playback.
+- Python lowering tests verify the stable transient copy and exact presence/Transform tracks;
+- explicit and generated transient-copy identities are deterministic across equivalent reruns;
+- runtime tests verify direct seek, sequential forward playback, and rewind at pre-start, start, midpoint, and end;
+- runtime tests verify the source remains present, the copy is visible only during the interval, and the target appears exactly at the end;
+- renderer incremental preparation verifies visible instance IDs across all lifecycle phases;
+- compiler tests reject discontinuous presence chains before runtime playback;
+- patch tests reject add/remove operations that would break a presence chain without mutating the previously valid compiled tracks.
 
 ## Follow-up
 
-After this bounded contract is green, lifecycle composition can be generalized: repeated copy transforms, chained replacements, evaluated target snapshots, and eventually matching-shape Transform variants can build on the same stable-ID/presence machinery.
+The next useful lifecycle work is to generalize composition without weakening determinism: repeated copy transforms, chained replacements, evaluated source/target snapshots, and matching-shape Transform variants can build on the same stable-ID/presence machinery. Generated lifecycle operations should also become fully transactional at the authoring layer so any late validation error leaves the `Scene` unchanged.
