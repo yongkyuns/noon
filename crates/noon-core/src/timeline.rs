@@ -13,6 +13,7 @@ pub enum Easing {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Property {
+    Presence,
     Transform,
     Position,
     Rotation,
@@ -23,6 +24,7 @@ pub enum Property {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
+    Bool,
     Scalar,
     Vec2,
     Object,
@@ -31,16 +33,25 @@ pub enum ValueKind {
 impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
+            Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
             Self::Position => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Reveal | Self::Morph => ValueKind::Scalar,
         }
+    }
+
+    pub const fn is_instant(self) -> bool {
+        matches!(self, Self::Presence)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
+    Bool {
+        from: bool,
+        to: bool,
+    },
     Scalar {
         from: f32,
         to: f32,
@@ -58,6 +69,7 @@ pub enum TrackValues {
 impl TrackValues {
     pub const fn value_kind(&self) -> ValueKind {
         match self {
+            Self::Bool { .. } => ValueKind::Bool,
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
             Self::Object { .. } => ValueKind::Object,
@@ -80,6 +92,10 @@ impl TrackTiming {
             easing,
         }
     }
+
+    pub const fn instant(start_time: f64) -> Self {
+        Self::new(start_time, 0.0, Easing::Linear)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -96,6 +112,10 @@ pub enum TimelineError {
     UnknownObject(ObjectId),
     InvalidStartTime(f64),
     InvalidDuration(f64),
+    InvalidInstantDuration {
+        property: Property,
+        duration: f64,
+    },
     ValueTypeMismatch {
         property: Property,
         expected: ValueKind,
@@ -110,6 +130,10 @@ impl std::fmt::Display for TimelineError {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),
             Self::InvalidDuration(value) => write!(formatter, "invalid duration {value}"),
+            Self::InvalidInstantDuration { property, duration } => write!(
+                formatter,
+                "instant {property:?} track requires zero duration, got {duration}"
+            ),
             Self::ValueTypeMismatch {
                 property,
                 expected,
@@ -125,6 +149,29 @@ impl std::fmt::Display for TimelineError {
 
 impl std::error::Error for TimelineError {}
 
+pub(crate) fn validate_track_timing(
+    property: Property,
+    timing: TrackTiming,
+) -> Result<(), TimelineError> {
+    if !timing.start_time.is_finite() {
+        return Err(TimelineError::InvalidStartTime(timing.start_time));
+    }
+    if !timing.duration.is_finite() {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    if property.is_instant() {
+        if timing.duration != 0.0 {
+            return Err(TimelineError::InvalidInstantDuration {
+                property,
+                duration: timing.duration,
+            });
+        }
+    } else if timing.duration <= 0.0 {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    Ok(())
+}
+
 impl SceneDefinition {
     pub fn add_track(
         &mut self,
@@ -136,12 +183,7 @@ impl SceneDefinition {
         if self.object(object).is_none() {
             return Err(TimelineError::UnknownObject(object));
         }
-        if !timing.start_time.is_finite() {
-            return Err(TimelineError::InvalidStartTime(timing.start_time));
-        }
-        if !timing.duration.is_finite() || timing.duration <= 0.0 {
-            return Err(TimelineError::InvalidDuration(timing.duration));
-        }
+        validate_track_timing(property, timing)?;
 
         let expected = property.value_kind();
         let actual = values.value_kind();
@@ -166,6 +208,21 @@ impl SceneDefinition {
             timing,
         });
         Ok(id)
+    }
+
+    pub fn set_presence_at(
+        &mut self,
+        object: ObjectId,
+        from: bool,
+        to: bool,
+        time: f64,
+    ) -> Result<TrackId, TimelineError> {
+        self.add_track(
+            object,
+            Property::Presence,
+            TrackValues::Bool { from, to },
+            TrackTiming::instant(time),
+        )
     }
 
     pub fn animate_transform(
@@ -268,6 +325,58 @@ mod tests {
         assert_eq!(first_position, second_position);
         assert_eq!(first_opacity, second_opacity);
         assert_eq!(first.tracks(), second.tracks());
+    }
+
+    #[test]
+    fn presence_is_a_zero_duration_bool_event() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let track = scene
+            .set_presence_at(object, false, true, 1.25)
+            .expect("valid presence event");
+
+        assert_eq!(track, TrackId::new(0));
+        assert_eq!(scene.tracks()[0].property, Property::Presence);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Bool {
+                from: false,
+                to: true
+            }
+        );
+        assert_eq!(scene.tracks()[0].timing, TrackTiming::instant(1.25));
+    }
+
+    #[test]
+    fn presence_rejects_nonzero_duration_and_other_tracks_reject_zero_duration() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+
+        assert!(matches!(
+            scene.add_track(
+                object,
+                Property::Presence,
+                TrackValues::Bool {
+                    from: true,
+                    to: false,
+                },
+                TrackTiming::new(1.0, 0.5, Easing::Linear),
+            ),
+            Err(TimelineError::InvalidInstantDuration {
+                property: Property::Presence,
+                ..
+            })
+        ));
+        assert!(matches!(
+            scene.animate_scalar(
+                object,
+                Property::Opacity,
+                1.0,
+                0.0,
+                TrackTiming::instant(1.0),
+            ),
+            Err(TimelineError::InvalidDuration(0.0))
+        ));
     }
 
     #[test]

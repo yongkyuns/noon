@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::timeline::validate_track_timing;
 use crate::{
     ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError, TrackDefinition, TrackId,
     Transform2D,
@@ -187,16 +188,7 @@ impl SceneDefinition {
     }
 
     fn validate_track_fields(track: &TrackDefinition) -> Result<(), PatchError> {
-        if !track.timing.start_time.is_finite() {
-            return Err(PatchError::InvalidTrack(TimelineError::InvalidStartTime(
-                track.timing.start_time,
-            )));
-        }
-        if !track.timing.duration.is_finite() || track.timing.duration <= 0.0 {
-            return Err(PatchError::InvalidTrack(TimelineError::InvalidDuration(
-                track.timing.duration,
-            )));
-        }
+        validate_track_timing(track.property, track.timing).map_err(PatchError::InvalidTrack)?;
         let expected = track.property.value_kind();
         let actual = track.values.value_kind();
         if expected != actual {
@@ -338,6 +330,25 @@ mod tests {
                 .expect("track must be valid"),
             TrackId::new(5)
         );
+    }
+
+    #[test]
+    fn bulk_construction_accepts_zero_duration_presence_events() {
+        let object = ObjectDefinition::new(ObjectId::new(1), GeometryRef::circle(1.0));
+        let track = TrackDefinition {
+            id: TrackId::new(2),
+            object: object.id,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::instant(3.0),
+        };
+
+        let scene = SceneDefinition::from_parts(vec![object], vec![track.clone()])
+            .expect("presence event must survive IR reconstruction");
+        assert_eq!(scene.tracks(), &[track]);
     }
 
     #[test]

@@ -100,6 +100,7 @@ fn build_frame(object_count: usize) -> FrameState {
                 style: Style::default(),
             })
             .collect(),
+        presences: vec![true; object_count],
         reveals: vec![1.0; object_count],
         morphs: vec![0.0; object_count],
         render_geometries: vec![None; object_count],
