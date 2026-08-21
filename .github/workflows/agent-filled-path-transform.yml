@@ -58,6 +58,7 @@ jobs:
             run_gate python3 scripts/fix_filled_clippy.py
             run_gate python3 scripts/fix_filled_renderer_test.py
             run_gate python3 scripts/fix_filled_compat_wrapper.py
+            run_gate python3 scripts/fix_filled_generic_transform_test.py
           fi
           run_gate cargo fmt --all
           run_gate cargo fmt --all -- --check
@@ -84,6 +85,7 @@ jobs:
               Cargo.lock \
               crates/noon-compile/Cargo.toml \
               crates/noon-compile/src/lib.rs \
+              crates/noon-compile/tests/generic_transform.rs \
               crates/noon-geometry/src/morph.rs \
               crates/noon-geometry/src/tessellation.rs \
               crates/noon-geometry/tests/filled_morph.rs \
