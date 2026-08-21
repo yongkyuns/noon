@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,12 +21,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: agent/browser-realtime-architecture
+
+      - name: Apply stroke join/cap parity implementation
+        run: python3 scripts/apply_stroke_style_parity.py
 
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
+
+      - name: Format generated Rust
+        run: cargo fmt --all
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -55,7 +63,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test geometry correctness invariants
-        run: cargo test -p noon-geometry --test tessellation_correctness
+        run: |
+          cargo test -p noon-geometry --test tessellation_correctness
+          cargo test -p noon-geometry --test stroke_style_parity
 
       - name: Test architecture workspace
         run: cargo test --workspace --all-features
@@ -68,6 +78,18 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
+
+      - name: Publish validated stroke join/cap parity implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- crates web/python/noon.py web/python/test_noon.py
+          if git diff --cached --quiet; then
+            echo "No stroke style changes to publish"
+          else
+            git commit -m "Unify path stroke join and cap semantics"
+            git push origin HEAD:agent/browser-realtime-architecture
+          fi
 
   legacy-compat:
     name: Full legacy compatibility
