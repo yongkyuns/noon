@@ -51,16 +51,36 @@ pub struct CompiledObject {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum TransformGeometryPlan {
+    Static,
+    Circle {
+        from_radius: f32,
+        to_radius: f32,
+    },
+    Rectangle {
+        from_size: noon_core::Vec2,
+        to_size: noon_core::Vec2,
+    },
+    Line {
+        from_start: noon_core::Vec2,
+        from_end: noon_core::Vec2,
+        to_start: noon_core::Vec2,
+        to_end: noon_core::Vec2,
+    },
+    /// Fixed source/target topology prepared once for the path renderer.
+    PathPair(GeometryRef),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CompiledTrack {
     pub id: TrackId,
     pub object_index: u32,
     pub property: Property,
     pub values: TrackValues,
     pub timing: TrackTiming,
-    /// Stable geometry used by an atomic Transform. For path morphing this is
-    /// the source path carrying its target correspondence; it does not change
-    /// during steady-state playback.
-    pub transform_geometry: Option<GeometryRef>,
+    /// Compiler-selected geometry interpolation strategy for an atomic Transform.
+    /// Non-Transform tracks carry `None`.
+    pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -335,13 +355,13 @@ fn compile_track(
         property: track.property,
         values: track.values.clone(),
         timing: track.timing,
-        transform_geometry: compile_transform_geometry(track)?,
+        transform_geometry_plan: compile_transform_geometry_plan(track)?,
     })
 }
 
-fn compile_transform_geometry(
+fn compile_transform_geometry_plan(
     track: &TrackDefinition,
-) -> Result<Option<GeometryRef>, TransformCompileFailure> {
+) -> Result<Option<TransformGeometryPlan>, TransformCompileFailure> {
     if track.property != Property::Transform {
         return Ok(None);
     }
@@ -357,20 +377,51 @@ fn compile_transform_geometry(
     }
 
     if from.geometry == to.geometry {
-        return Ok(None);
+        return Ok(Some(TransformGeometryPlan::Static));
     }
 
-    match (&from.geometry, &to.geometry) {
+    let plan = match (&from.geometry, &to.geometry) {
+        (
+            GeometryRef::Circle {
+                radius: from_radius,
+            },
+            GeometryRef::Circle { radius: to_radius },
+        ) => TransformGeometryPlan::Circle {
+            from_radius: *from_radius,
+            to_radius: *to_radius,
+        },
+        (GeometryRef::Rectangle { size: from_size }, GeometryRef::Rectangle { size: to_size }) => {
+            TransformGeometryPlan::Rectangle {
+                from_size: *from_size,
+                to_size: *to_size,
+            }
+        }
+        (
+            GeometryRef::Line {
+                start: from_start,
+                end: from_end,
+            },
+            GeometryRef::Line {
+                start: to_start,
+                end: to_end,
+            },
+        ) => TransformGeometryPlan::Line {
+            from_start: *from_start,
+            from_end: *from_end,
+            to_start: *to_start,
+            to_end: *to_end,
+        },
         (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
             if from.style.fill.is_some() || to.style.fill.is_some() {
                 return Err(TransformCompileFailure::RequiresRetessellation);
             }
-            Ok(Some(GeometryRef::path(
+            TransformGeometryPlan::PathPair(GeometryRef::path(
                 source.clone().with_morph_target(target.clone()),
-            )))
+            ))
         }
-        _ => Err(TransformCompileFailure::UnsupportedGeometry),
-    }
+        _ => return Err(TransformCompileFailure::UnsupportedGeometry),
+    };
+    Ok(Some(plan))
 }
 
 fn compile_error(id: TrackId, error: TransformCompileFailure) -> CompileError {

@@ -1,4 +1,4 @@
-use noon_compile::{CompileError, CompiledScene};
+use noon_compile::{CompileError, CompiledScene, TransformGeometryPlan};
 use noon_core::{
     Color, Easing, GeometryRef, ObjectSnapshot, Property, SceneDefinition, Style, TrackTiming,
     Transform2D, Vec2, VectorPath,
@@ -56,7 +56,8 @@ fn path_transform_compiles_to_one_prepared_geometry_pair() {
         .find(|candidate| candidate.id == track)
         .unwrap();
     assert_eq!(compiled_track.property, Property::Transform);
-    let GeometryRef::VectorPath(prepared) = compiled_track.transform_geometry.as_ref().unwrap()
+    let Some(TransformGeometryPlan::PathPair(GeometryRef::VectorPath(prepared))) =
+        compiled_track.transform_geometry_plan.as_ref()
     else {
         panic!("path Transform must carry a prepared path pair");
     };
@@ -77,7 +78,10 @@ fn identical_geometry_transform_needs_no_render_geometry_override() {
         .unwrap();
 
     let compiled = CompiledScene::compile(&scene).unwrap();
-    assert!(compiled.tracks()[0].transform_geometry.is_none());
+    assert!(matches!(
+        compiled.tracks()[0].transform_geometry_plan,
+        Some(TransformGeometryPlan::Static)
+    ));
 }
 
 #[test]

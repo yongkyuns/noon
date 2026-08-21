@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack};
+use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
 use noon_core::{
     Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
     Transform2D, Vec2,
@@ -467,23 +467,24 @@ fn apply_transform_track(
         unreachable!("compiled Transform track must contain object snapshots");
     };
     let progress = track_progress(track, time);
-    let semantic_geometry = if progress >= 1.0 {
-        &to.geometry
-    } else {
-        &from.geometry
-    };
+    let plan = track
+        .transform_geometry_plan
+        .as_ref()
+        .expect("compiled Transform track must carry a geometry plan");
     let next_transform = interpolate_transform(from.transform, to.transform, progress);
     let next_style = interpolate_style(from.style, to.style, progress);
-    let geometry_morphs = path_geometry_morphs(from, to);
-    let next_morph = if geometry_morphs { progress } else { 0.0 };
-    let next_render_geometry = if geometry_morphs {
-        track.transform_geometry.as_ref()
+    let next_morph = if matches!(plan, TransformGeometryPlan::PathPair(_)) {
+        progress
     } else {
-        None
+        0.0
+    };
+    let next_render_geometry = match plan {
+        TransformGeometryPlan::PathPair(prepared) => Some(prepared),
+        _ => None,
     };
 
     let object = &mut frame.objects[object_index];
-    let mut changed = set_geometry_if_changed(&mut object.geometry, semantic_geometry);
+    let mut changed = apply_transform_geometry(&mut object.geometry, plan, from, to, progress);
     if object.transform != next_transform {
         object.transform = next_transform;
         changed = true;
@@ -501,6 +502,84 @@ fn apply_transform_track(
         next_render_geometry,
     );
     changed
+}
+
+fn apply_transform_geometry(
+    current: &mut GeometryRef,
+    plan: &TransformGeometryPlan,
+    from: &ObjectSnapshot,
+    to: &ObjectSnapshot,
+    progress: f32,
+) -> bool {
+    match plan {
+        TransformGeometryPlan::Static => set_geometry_if_changed(current, &from.geometry),
+        TransformGeometryPlan::Circle {
+            from_radius,
+            to_radius,
+        } => {
+            let next = lerp(*from_radius, *to_radius, progress);
+            match current {
+                GeometryRef::Circle { radius } if *radius == next => false,
+                GeometryRef::Circle { radius } => {
+                    *radius = next;
+                    true
+                }
+                _ => {
+                    *current = GeometryRef::circle(next);
+                    true
+                }
+            }
+        }
+        TransformGeometryPlan::Rectangle { from_size, to_size } => {
+            let next = interpolate_vec2(*from_size, *to_size, progress);
+            match current {
+                GeometryRef::Rectangle { size } if *size == next => false,
+                GeometryRef::Rectangle { size } => {
+                    *size = next;
+                    true
+                }
+                _ => {
+                    *current = GeometryRef::rectangle(next.x, next.y);
+                    true
+                }
+            }
+        }
+        TransformGeometryPlan::Line {
+            from_start,
+            from_end,
+            to_start,
+            to_end,
+        } => {
+            let next_start = interpolate_vec2(*from_start, *to_start, progress);
+            let next_end = interpolate_vec2(*from_end, *to_end, progress);
+            match current {
+                GeometryRef::Line { start, end } if *start == next_start && *end == next_end => {
+                    false
+                }
+                GeometryRef::Line { start, end } => {
+                    *start = next_start;
+                    *end = next_end;
+                    true
+                }
+                _ => {
+                    *current = GeometryRef::line(next_start, next_end);
+                    true
+                }
+            }
+        }
+        TransformGeometryPlan::PathPair(_) => {
+            let semantic_geometry = if progress >= 1.0 {
+                &to.geometry
+            } else {
+                &from.geometry
+            };
+            set_geometry_if_changed(current, semantic_geometry)
+        }
+    }
+}
+
+fn interpolate_vec2(from: Vec2, to: Vec2, progress: f32) -> Vec2 {
+    Vec2::new(lerp(from.x, to.x, progress), lerp(from.y, to.y, progress))
 }
 
 fn set_geometry_if_changed(current: &mut GeometryRef, next: &GeometryRef) -> bool {
@@ -531,14 +610,6 @@ fn set_optional_geometry_if_changed(
         }
         None => false,
     }
-}
-
-fn path_geometry_morphs(from: &ObjectSnapshot, to: &ObjectSnapshot) -> bool {
-    from.geometry != to.geometry
-        && matches!(
-            (&from.geometry, &to.geometry),
-            (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
-        )
 }
 
 fn interpolate_transform(from: Transform2D, to: Transform2D, progress: f32) -> Transform2D {
