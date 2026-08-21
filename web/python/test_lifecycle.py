@@ -71,7 +71,7 @@ class ReplacementTransformTests(unittest.TestCase):
         self.assertEqual(identities[1]["key"], "@track:1")
         self.assertEqual(identities[2]["key"], "@track:2")
 
-    def test_replacement_rejects_foreign_self_and_reused_lifecycle_objects(self) -> None:
+    def test_replacement_rejects_foreign_self_and_allows_chained_objects(self) -> None:
         scene = Scene()
         source = scene.circle(1.0)
         target = scene.circle(2.0)
@@ -84,12 +84,28 @@ class ReplacementTransformTests(unittest.TestCase):
 
         scene.play(ReplacementTransform(source, target), duration=1.0)
         third = scene.circle(4.0)
-        with self.assertRaises(ValueError):
-            scene.play(
-                ReplacementTransform(target, third),
-                duration=1.0,
-                start_time=2.0,
-            )
+        scene.play(
+            ReplacementTransform(target, third),
+            duration=1.0,
+            start_time=1.0,
+        )
+
+        target_presence = [
+            track
+            for track in scene.to_document()["tracks"]
+            if track["object"] == target.id and track["property"] == "presence"
+        ]
+        self.assertEqual(
+            [track["values"]["bool"] for track in target_presence],
+            [
+                {"from": False, "to": True},
+                {"from": True, "to": False},
+            ],
+        )
+        self.assertEqual(
+            [track["timing"]["start_time"] for track in target_presence],
+            [1.0, 2.0],
+        )
 
     def test_replacement_evaluates_target_property_state_at_handoff(self) -> None:
         scene = Scene()
@@ -251,10 +267,10 @@ class TransformFromCopyTests(unittest.TestCase):
             ],
         )
 
-    def test_transform_from_copy_rejects_foreign_self_and_reused_objects(self) -> None:
+    def test_transform_from_copy_rejects_foreign_self_and_allows_valid_reuse(self) -> None:
         scene = Scene()
-        source = scene.circle(1.0)
-        target = scene.circle(2.0)
+        source = scene.circle(1.0, key="source")
+        target = scene.circle(2.0, key="target")
         foreign = Scene().circle(3.0)
 
         with self.assertRaises(ValueError):
@@ -262,12 +278,31 @@ class TransformFromCopyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scene.play(TransformFromCopy(source, source), duration=1.0)
 
-        scene.play(TransformFromCopy(source, target), duration=1.0)
-        third = scene.circle(4.0)
-        with self.assertRaises(ValueError):
-            scene.play(TransformFromCopy(source, third), duration=1.0, start_time=2.0)
-        with self.assertRaises(ValueError):
-            scene.play(TransformFromCopy(target, third), duration=1.0, start_time=2.0)
+        scene.play(TransformFromCopy(source, target, key="first"), duration=1.0)
+        third = scene.circle(4.0, key="third")
+        fourth = scene.circle(5.0, key="fourth")
+        scene.play(
+            TransformFromCopy(source, third, key="second"),
+            duration=1.0,
+            start_time=2.0,
+        )
+        scene.play(
+            TransformFromCopy(target, fourth, key="third-copy"),
+            duration=1.0,
+            start_time=2.0,
+        )
+
+        document = scene.to_document()
+        self.assertEqual(len(document["objects"]), 7)
+        target_presence = [
+            track
+            for track in document["tracks"]
+            if track["object"] == target.id and track["property"] == "presence"
+        ]
+        self.assertEqual(
+            [track["values"]["bool"] for track in target_presence],
+            [{"from": False, "to": True}],
+        )
 
     def test_transform_from_copy_evaluates_source_and_target_property_state(self) -> None:
         scene = Scene()
