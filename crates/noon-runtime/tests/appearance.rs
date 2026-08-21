@@ -5,7 +5,11 @@ use noon_runtime::SceneInstance;
 fn appearance_scene() -> CompiledScene {
     let mut scene = SceneDefinition::new();
     let object = scene.add(GeometryRef::circle(1.0));
-    scene.object_mut(object).expect("object exists").style.opacity = 0.4;
+    scene
+        .object_mut(object)
+        .expect("object exists")
+        .style
+        .opacity = 0.4;
     scene
         .animate_scalar(
             object,
