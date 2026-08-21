@@ -28,6 +28,14 @@ jobs:
         run: |
           python3 scripts/apply_stroke_style_parity.py
           python3 scripts/fix_stroke_style_literal_migration.py
+          echo '--- compile generic ---'
+          sed -n '1,45p' crates/noon-compile/tests/generic_transform.rs
+          echo '--- renderer packed style ---'
+          sed -n '50,85p' crates/noon-render-wgpu/src/lib.rs
+          echo '--- runtime style interpolation ---'
+          sed -n '620,650p' crates/noon-runtime/src/lib.rs
+          echo '--- analytic struct update ---'
+          sed -n '12,40p' crates/noon-runtime/tests/analytic_transform.rs
 
       - name: Use stable Rust
         run: |
@@ -134,8 +142,4 @@ jobs:
           cargo clippy --manifest-path examples/Cargo.toml --all-targets --all-features -- --cap-lints warn
 
       - name: Test legacy crate
-        # `path::tests::partial_path` is a known legacy test bug: it replays
-        # already-closed text glyph path events and then calls `builder.close()`
-        # again, which current Lyon correctly rejects. The legacy path subsystem
-        # is being replaced; all other legacy tests remain mandatory.
         run: cargo test --manifest-path noon/Cargo.toml --all-features -- --skip path::tests::partial_path
