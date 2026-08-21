@@ -1038,9 +1038,8 @@ mod tests {
     fn adding_presence_event_live_reconciles_at_current_time() {
         let mut definition = SceneDefinition::new();
         let object = definition.add(GeometryRef::circle(1.0));
-        let mut live = SceneInstance::new(
-            CompiledScene::compile(&definition).expect("scene must compile"),
-        );
+        let mut live =
+            SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
         live.seek(2.0).expect("valid time");
         assert!(live.frame().is_present(0));
 
@@ -1056,7 +1055,9 @@ mod tests {
         };
         let patch = ScenePatch::AddTrack(presence);
         live.apply_patch(&patch).expect("presence patch must apply");
-        definition.apply_patch(patch).expect("definition patch must apply");
+        definition
+            .apply_patch(patch)
+            .expect("definition patch must apply");
 
         let mut expected = SceneInstance::new(
             CompiledScene::compile(&definition).expect("scene must compile after patch"),
