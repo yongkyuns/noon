@@ -476,25 +476,30 @@ class Scene:
 
     def _authoring_checkpoint(self) -> tuple[Any, ...]:
         return (
-            copy.deepcopy(self._objects),
-            copy.deepcopy(self._tracks),
-            dict(self._object_keys),
-            dict(self._track_keys),
-            copy.deepcopy(self._scheduled_transform_targets),
+            len(self._objects),
+            len(self._tracks),
+            dict(self._scheduled_transform_targets),
             dict(self._scheduled_transform_ends),
             set(self._lifecycle_objects),
         )
 
     def _restore_authoring_checkpoint(self, checkpoint: tuple[Any, ...]) -> None:
         (
-            self._objects,
-            self._tracks,
-            self._object_keys,
-            self._track_keys,
-            self._scheduled_transform_targets,
-            self._scheduled_transform_ends,
-            self._lifecycle_objects,
+            object_count,
+            track_count,
+            scheduled_transform_targets,
+            scheduled_transform_ends,
+            lifecycle_objects,
         ) = checkpoint
+        for object_id in range(object_count, len(self._objects)):
+            self._object_keys.pop(object_id, None)
+        for track_id in range(track_count, len(self._tracks)):
+            self._track_keys.pop(track_id, None)
+        del self._objects[object_count:]
+        del self._tracks[track_count:]
+        self._scheduled_transform_targets = scheduled_transform_targets
+        self._scheduled_transform_ends = scheduled_transform_ends
+        self._lifecycle_objects = lifecycle_objects
 
     def _schedule_transform(
         self,
