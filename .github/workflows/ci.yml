@@ -25,7 +25,9 @@ jobs:
           ref: agent/browser-realtime-architecture
 
       - name: Apply analytic primitive Transform implementation
-        run: python3 scripts/apply_analytic_transform.py
+        run: |
+          python3 scripts/apply_analytic_transform.py
+          python3 scripts/fix_analytic_transform_dead_code.py
 
       - name: Use stable Rust
         run: |
