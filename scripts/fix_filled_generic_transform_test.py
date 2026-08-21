@@ -107,7 +107,7 @@ fn unsafe_filled_path_transform_is_rejected_before_runtime() {
 
     assert!(matches!(
         CompiledScene::compile(&scene),
-        Err(CompileError::PathTransformRequiresRetessellation(_))
+        Err(CompileError::UnsafeFilledPathTransform(_))
     ));
 }
 '''
