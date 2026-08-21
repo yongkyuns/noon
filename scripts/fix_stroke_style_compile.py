@@ -130,3 +130,14 @@ fn path_cache_key_includes_join_and_cap_policy() {
     assert_eq!(preparer.cached_path_mesh_count(), 3);
 }
 ''')
+
+# Pair-based topology tests were replaced by geometry invariants, so the old
+# midpoint helper is intentionally removed to keep the strict Clippy gate clean.
+correctness = Path("crates/noon-geometry/tests/tessellation_correctness.rs")
+text = correctness.read_text()
+text = text.replace(
+    '''fn midpoint(a: Vec2, b: Vec2) -> Vec2 {\n    scale(add(a, b), 0.5)\n}\n\n''',
+    "",
+    1,
+)
+correctness.write_text(text)
