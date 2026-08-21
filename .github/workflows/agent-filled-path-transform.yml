@@ -53,6 +53,7 @@ jobs:
           if [ ! -f crates/noon-geometry/tests/filled_morph.rs ]; then
             run_gate python3 scripts/apply_filled_path_transform.py
             run_gate python3 scripts/fix_filled_path_demo.py
+            run_gate python3 scripts/fix_filled_geometry_compile.py
           fi
           run_gate cargo fmt --all
           run_gate cargo fmt --all -- --check
