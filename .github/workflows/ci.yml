@@ -58,6 +58,8 @@ jobs:
         run: |
           cargo test -p noon-geometry --test tessellation_correctness
           cargo test -p noon-geometry --test stroke_style_parity
+          cargo test -p noon-geometry --test filled_morph
+          cargo test -p noon-geometry --test filled_morph_interval
 
       - name: Test architecture workspace
         run: cargo test --workspace --all-features
