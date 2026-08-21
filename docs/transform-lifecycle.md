@@ -47,9 +47,11 @@ This contract makes direct seek and sequential playback equivalent. Seeking back
 
 ## Evaluated handoff state
 
-Python authoring evaluates snapshot-representable timeline state at the relevant lifecycle time instead of requiring the object to have no prior narrow-property animation.
+Python authoring evaluates snapshot-representable timeline state at the relevant lifecycle time instead of requiring the target object to have no prior narrow-property animation.
 
 For `ReplacementTransform`, target `Position`, `Rotation`, and `Opacity` use their runtime-equivalent values at the exact handoff. Completed generic Transforms are also reflected in the snapshot. A generic Transform that is still active at the snapshot time remains rejected because an arbitrary in-progress path morph cannot be represented faithfully by one `ObjectSnapshot`.
+
+The source side is stricter. Runtime narrow-property groups override generic Transform channels. Therefore a source Position, Rotation, or Opacity track that starts before the handoff would continue overriding the replacement Transform and could make the disappearing source disagree with the appearing target. `ReplacementTransform` rejects those source tracks. Tracks that begin at or after handoff are allowed because the source is already absent. `TransformFromCopy` does not have this restriction because its moving transient copy has no pre-existing narrow tracks.
 
 Channels that are independent of `ObjectSnapshot`, such as `Presence`, `Reveal`, and standalone `Morph` state, remain explicit safety boundaries for lifecycle snapshots. Noon rejects them rather than pretending the Transform endpoint captures state it does not encode.
 
@@ -61,7 +63,8 @@ Lifecycle composition remains deliberately bounded where exact semantics are not
 - an object may participate in only one lifecycle animation in the current composition model;
 - a lifecycle snapshot cannot be taken inside an active generic Transform;
 - lifecycle snapshot state that is not representable by `ObjectSnapshot` is rejected;
-- narrow `Position`, `Rotation`, and `Opacity` tracks are evaluated with the same latest-started-track precedence and easing rules as runtime playback.
+- target and TransformFromCopy-source `Position`, `Rotation`, and `Opacity` tracks are evaluated with the same latest-started-track precedence and easing rules as runtime playback;
+- `ReplacementTransform` source narrow-property tracks that begin before handoff are rejected because they would override the replacement Transform.
 
 These are explicit authoring restrictions, not renderer fallbacks. Noon should not silently produce a discontinuous handoff.
 
@@ -74,7 +77,7 @@ Coverage spans the semantic pipeline:
 - compiler: presence dynamic classification, chain continuity, and patch validation;
 - runtime: direct seek, forward playback, rewind, and live-patch presence parity;
 - renderer: absent objects keep semantic slots but create no GPU instances; toggling presence rebuilds the prepared slot layout;
-- Python: lifecycle lowering, evaluated Position/Rotation/Opacity snapshots, deterministic transient-copy identity, transactional rollback, and rejection of active/unrepresentable snapshot state.
+- Python: lifecycle lowering, evaluated Position/Rotation/Opacity snapshots, deterministic transient-copy identity, transactional rollback, replacement-source precedence guards, and rejection of active/unrepresentable snapshot state.
 
 ## Next work
 
