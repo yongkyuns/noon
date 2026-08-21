@@ -441,33 +441,65 @@ class Scene:
     ) -> Scene:
         if not animations:
             raise ValueError("play requires at least one animation")
-        for animation in animations:
-            if isinstance(animation, TransformFromCopy):
-                self._schedule_transform_from_copy(
-                    animation,
-                    duration=duration,
-                    start_time=start_time,
-                    easing=easing,
-                )
-            elif isinstance(animation, ReplacementTransform):
-                self._schedule_replacement_transform(
-                    animation,
-                    duration=duration,
-                    start_time=start_time,
-                    easing=easing,
-                )
-            elif isinstance(animation, Transform):
-                self._schedule_transform(
-                    animation,
-                    duration=duration,
-                    start_time=start_time,
-                    easing=easing,
-                )
-            else:
-                raise TypeError(
-                    "unsupported animation; expected Transform, ReplacementTransform, or TransformFromCopy"
-                )
+        checkpoint = self._authoring_checkpoint()
+        try:
+            for animation in animations:
+                if isinstance(animation, TransformFromCopy):
+                    self._schedule_transform_from_copy(
+                        animation,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                elif isinstance(animation, ReplacementTransform):
+                    self._schedule_replacement_transform(
+                        animation,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                elif isinstance(animation, Transform):
+                    self._schedule_transform(
+                        animation,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                else:
+                    raise TypeError(
+                        "unsupported animation; expected Transform, ReplacementTransform, or TransformFromCopy"
+                    )
+        except Exception:
+            self._restore_authoring_checkpoint(checkpoint)
+            raise
         return self
+
+    def _authoring_checkpoint(self) -> tuple[Any, ...]:
+        return (
+            len(self._objects),
+            len(self._tracks),
+            dict(self._scheduled_transform_targets),
+            dict(self._scheduled_transform_ends),
+            set(self._lifecycle_objects),
+        )
+
+    def _restore_authoring_checkpoint(self, checkpoint: tuple[Any, ...]) -> None:
+        (
+            object_count,
+            track_count,
+            scheduled_transform_targets,
+            scheduled_transform_ends,
+            lifecycle_objects,
+        ) = checkpoint
+        for object_id in range(object_count, len(self._objects)):
+            self._object_keys.pop(object_id, None)
+        for track_id in range(track_count, len(self._tracks)):
+            self._track_keys.pop(track_id, None)
+        del self._objects[object_count:]
+        del self._tracks[track_count:]
+        self._scheduled_transform_targets = scheduled_transform_targets
+        self._scheduled_transform_ends = scheduled_transform_ends
+        self._lifecycle_objects = lifecycle_objects
 
     def _schedule_transform(
         self,
