@@ -63,6 +63,8 @@ scene.play(ReplacementTransform(b, c), duration=1.0, start_time=1.0)
 
 A source that remains present may also seed multiple later `TransformFromCopy` operations. The generated transient copies remain independent stable objects with their own `false -> true -> false` Presence chains.
 
+An object hidden by an earlier lifecycle operation may later be reused as a target. Reactivation does not reset it to its original authoring snapshot: the target snapshot is evaluated from that object's latest timeline-resolved Transform/Position/Rotation/Opacity state at the new handoff. This matches runtime seek semantics and preserves stable identity rather than silently resurrecting stale base state.
+
 ## Rejected composition
 
 Noon rejects rather than guesses when:
