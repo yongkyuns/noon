@@ -1,0 +1,22 @@
+[package]
+name = "noon-web"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Browser-facing persistent runtime and live patch control for Noon"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+noon-compile = { path = "../noon-compile" }
+noon-core = { path = "../noon-core" }
+noon-ir = { path = "../noon-ir" }
+noon-runtime = { path = "../noon-runtime" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Performance", "Window"] }
+wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "webgpu"] }

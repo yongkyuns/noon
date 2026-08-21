@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Noon WebGPU profiler</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #090c13;
+        color: #e9efff;
+      }
+      body {
+        width: min(96vw, 80rem);
+        margin: 1.5rem auto;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border: 1px solid #29334b;
+        border-radius: 0.75rem;
+      }
+      output {
+        display: block;
+        margin-bottom: 1rem;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <output id="result" data-state="starting">Building profile scene…</output>
+    <canvas id="scene" width="960" height="540" aria-label="Noon GPU profiling scene"></canvas>
+    <script type="module" src="./gpu-profile.js"></script>
+  </body>
+</html>

@@ -1,8 +1,15 @@
 [workspace]
 members = [
+	"crates/noon-core",
+	"crates/noon-geometry",
+	"crates/noon-ir",
+	"crates/noon-compile",
+	"crates/noon-runtime",
+	"crates/noon-render-wgpu",
+	"crates/noon-web",
+]
+exclude = [
 	"noon",
 	"examples",
 ]
-
-# Required for wgpu v0.10 feature resolution.
 resolver = "2"

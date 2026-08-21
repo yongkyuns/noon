@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Noon Playground: author mathematical animation in Python and run it in a persistent Rust/WebGPU runtime."
+    />
+    <link rel="icon" href="data:," />
+    <title>Noon Playground · Python + WebGPU</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        background: #07090f;
+        color: #f7f8fb;
+        --panel: rgb(14 18 28 / 88%);
+        --panel-strong: #101521;
+        --border: #263149;
+        --border-strong: #3a4968;
+        --muted: #96a2ba;
+        --muted-2: #6f7d99;
+        --accent: #8e7cff;
+        --accent-strong: #aa9cff;
+        --accent-bg: rgb(142 124 255 / 13%);
+        --success: #75d7b0;
+        --danger: #ff8f9d;
+        --code: #080b12;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 14% -10%, rgb(83 68 178 / 25%), transparent 32rem),
+          radial-gradient(circle at 88% 6%, rgb(35 113 143 / 16%), transparent 28rem),
+          #07090f;
+      }
+
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      button:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent-strong);
+        outline-offset: 2px;
+      }
+
+      .shell {
+        width: min(100% - 2rem, 92rem);
+        margin: 0 auto;
+        padding: 1.4rem 0 2.5rem;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1.1rem;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+      }
+
+      .mark {
+        display: grid;
+        width: 2.25rem;
+        height: 2.25rem;
+        place-items: center;
+        border: 1px solid #514691;
+        border-radius: 0.75rem;
+        background: linear-gradient(145deg, #2a2351, #171426);
+        color: #d7d0ff;
+        font-weight: 800;
+        letter-spacing: -0.08em;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 1.05rem;
+        letter-spacing: -0.02em;
+      }
+
+      .subtitle {
+        margin-top: 0.16rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .runtime-status {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+        padding: 0.5rem 0.72rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgb(8 11 18 / 72%);
+        color: #bdc7da;
+        font: 0.76rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .status-dot {
+        width: 0.48rem;
+        height: 0.48rem;
+        flex: none;
+        border-radius: 50%;
+        background: #71809c;
+        box-shadow: 0 0 0 0.2rem rgb(113 128 156 / 10%);
+      }
+
+      .runtime-status[data-state="running"] .status-dot {
+        background: var(--success);
+        box-shadow: 0 0 0 0.2rem rgb(117 215 176 / 12%);
+      }
+
+      .runtime-status[data-state="error"] .status-dot {
+        background: var(--danger);
+        box-shadow: 0 0 0 0.2rem rgb(255 143 157 / 12%);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(21rem, 0.86fr) minmax(0, 1.34fr);
+        min-height: 38rem;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 1.1rem;
+        background: rgb(7 10 16 / 78%);
+        box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 30%);
+      }
+
+      .editor-pane,
+      .preview-pane {
+        min-width: 0;
+      }
+
+      .editor-pane {
+        display: flex;
+        min-height: 38rem;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        background: var(--panel-strong);
+      }
+
+      .pane-toolbar {
+        display: flex;
+        min-height: 3.1rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.8rem;
+        padding: 0 0.8rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tabs,
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 0.38rem;
+      }
+
+      .tab,
+      .secondary-button,
+      .primary-button {
+        appearance: none;
+        border-radius: 0.58rem;
+        cursor: pointer;
+      }
+
+      .tab {
+        border: 0;
+        padding: 0.46rem 0.62rem;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 650;
+      }
+
+      .tab[aria-selected="true"] {
+        background: #1c2332;
+        color: #f3f5fb;
+      }
+
+      .secondary-button,
+      .primary-button {
+        border: 1px solid var(--border-strong);
+        padding: 0.48rem 0.68rem;
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .secondary-button {
+        background: #171d2a;
+        color: #d9deeb;
+      }
+
+      .secondary-button:hover:not(:disabled) {
+        background: #20283a;
+      }
+
+      .primary-button {
+        border-color: #7061d1;
+        background: #6658c6;
+        color: white;
+      }
+
+      .primary-button:hover:not(:disabled) {
+        background: #7567d6;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.48;
+      }
+
+      .editor-stack {
+        position: relative;
+        display: flex;
+        min-height: 0;
+        flex: 1;
+      }
+
+      .editor-panel {
+        display: none;
+        width: 100%;
+      }
+
+      .editor-panel[data-active="true"] {
+        display: flex;
+        flex-direction: column;
+      }
+
+      textarea {
+        display: block;
+        width: 100%;
+        min-height: 0;
+        flex: 1;
+        resize: none;
+        border: 0;
+        padding: 1rem 1.05rem 1.4rem 3.25rem;
+        background:
+          linear-gradient(90deg, #0b0f18 0 2.55rem, transparent 2.55rem),
+          var(--code);
+        color: #dce4f7;
+        font: 0.82rem/1.58 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          monospace;
+        tab-size: 4;
+        caret-color: #d6d0ff;
+      }
+
+      .editor-footer {
+        display: flex;
+        min-height: 2.65rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.58rem 0.8rem;
+        border-top: 1px solid var(--border);
+        color: var(--muted-2);
+        font-size: 0.72rem;
+      }
+
+      #patch-status {
+        min-width: 0;
+        overflow: hidden;
+        color: #9aa9c4;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #patch-status[data-state="applied"] {
+        color: var(--success);
+      }
+
+      #patch-status[data-state="error"] {
+        color: var(--danger);
+      }
+
+      .shortcut {
+        flex: none;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .preview-pane {
+        display: flex;
+        min-height: 38rem;
+        flex-direction: column;
+        background:
+          radial-gradient(circle at 50% 42%, rgb(62 70 100 / 16%), transparent 22rem),
+          #090c13;
+      }
+
+      .preview-head {
+        display: flex;
+        min-height: 3.1rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0 0.9rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .preview-title {
+        color: #d5dbea;
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .badges {
+        display: flex;
+        gap: 0.38rem;
+      }
+
+      .badge {
+        padding: 0.25rem 0.45rem;
+        border: 1px solid #2c3850;
+        border-radius: 999px;
+        background: #111722;
+        color: #8f9db5;
+        font: 0.66rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .canvas-wrap {
+        display: grid;
+        min-height: 0;
+        flex: 1;
+        place-items: center;
+        padding: clamp(0.8rem, 2vw, 1.4rem);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        max-width: 64rem;
+        aspect-ratio: 16 / 9;
+        border: 1px solid #202a3e;
+        border-radius: 0.8rem;
+        background: #090c13;
+        box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
+      }
+
+      .metrics,
+      .perf-metrics {
+        display: grid;
+        border-top: 1px solid var(--border);
+        background: rgb(10 13 21 / 86%);
+      }
+
+      .metrics {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .perf-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        background: rgb(8 11 18 / 92%);
+      }
+
+      .metric {
+        min-width: 0;
+        padding: 0.72rem 0.85rem 0.78rem;
+        border-right: 1px solid var(--border);
+      }
+
+      .metric:last-child {
+        border-right: 0;
+      }
+
+      .metric-label {
+        display: block;
+        margin-bottom: 0.22rem;
+        color: var(--muted-2);
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .metric-value {
+        display: block;
+        overflow: hidden;
+        color: #dce3f1;
+        font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .below {
+        display: grid;
+        grid-template-columns: 1.25fr 0.75fr;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      .info-panel {
+        border: 1px solid var(--border);
+        border-radius: 0.9rem;
+        background: var(--panel);
+        padding: 1rem;
+      }
+
+      .info-panel h2 {
+        margin-bottom: 0.75rem;
+        color: #dce3f1;
+        font-size: 0.8rem;
+      }
+
+      .pipeline {
+        display: flex;
+        align-items: stretch;
+        gap: 0.38rem;
+      }
+
+      .pipeline-step {
+        min-width: 0;
+        flex: 1;
+        padding: 0.72rem 0.7rem;
+        border: 1px solid #263149;
+        border-radius: 0.65rem;
+        background: #0c111b;
+      }
+
+      .pipeline-step strong {
+        display: block;
+        color: #d6dceb;
+        font-size: 0.72rem;
+      }
+
+      .pipeline-step span {
+        display: block;
+        margin-top: 0.2rem;
+        color: var(--muted-2);
+        font-size: 0.66rem;
+      }
+
+      .arrow {
+        align-self: center;
+        color: #58647a;
+        font-size: 0.78rem;
+      }
+
+      .api-list {
+        display: grid;
+        gap: 0.48rem;
+      }
+
+      code {
+        color: #cfc8ff;
+        font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .api-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding-bottom: 0.45rem;
+        border-bottom: 1px solid #20293b;
+      }
+
+      .api-row:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      .api-row span {
+        color: var(--muted-2);
+        font-size: 0.68rem;
+        text-align: right;
+      }
+
+      @media (max-width: 68rem) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .editor-pane {
+          min-height: 31rem;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .preview-pane {
+          min-height: 30rem;
+        }
+
+        .below {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 44rem) {
+        .shell {
+          width: min(100% - 1rem, 92rem);
+          padding-top: 0.75rem;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .runtime-status {
+          max-width: 100%;
+        }
+
+        .workspace {
+          border-radius: 0.85rem;
+        }
+
+        .pane-toolbar {
+          min-height: auto;
+          align-items: stretch;
+          flex-direction: column;
+          padding: 0.62rem;
+        }
+
+        .tabs,
+        .actions {
+          justify-content: space-between;
+        }
+
+        .actions button {
+          flex: 1;
+        }
+
+        textarea {
+          min-height: 25rem;
+          padding-left: 0.85rem;
+          background: var(--code);
+          font-size: 0.76rem;
+        }
+
+        .preview-pane {
+          min-height: 25rem;
+        }
+
+        .badges {
+          display: none;
+        }
+
+        .canvas-wrap {
+          padding: 0.55rem;
+        }
+
+        canvas {
+          aspect-ratio: 4 / 3;
+        }
+
+        .metrics,
+        .perf-metrics {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .metric:nth-child(2) {
+          border-right: 0;
+        }
+
+        .metric:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--border);
+        }
+
+        .pipeline {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .arrow {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">N</div>
+          <div>
+            <h1>Noon Playground</h1>
+            <p class="subtitle">Write Python. Keep the animation loop in Rust + WebGPU.</p>
+          </div>
+        </div>
+        <output id="status" class="runtime-status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">Starting WebGPU…</span>
+        </output>
+      </header>
+
+      <section class="workspace" aria-label="Noon interactive playground">
+        <section class="editor-pane" aria-label="Python editor">
+          <div class="pane-toolbar">
+            <div class="tabs" role="tablist" aria-label="Python source type">
+              <button
+                id="scene-tab"
+                class="tab"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="scene-editor-panel"
+              >
+                scene.py
+              </button>
+              <button
+                id="patch-tab"
+                class="tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="patch-editor-panel"
+              >
+                patch.py
+              </button>
+            </div>
+            <div class="actions">
+              <button id="apply-patch" class="secondary-button" type="button" disabled>
+                Apply patch
+              </button>
+              <button id="replace-scene" class="primary-button" type="button" disabled>
+                Run scene
+              </button>
+            </div>
+          </div>
+
+          <div class="editor-stack">
+            <div id="scene-editor-panel" class="editor-panel" data-active="true" role="tabpanel">
+              <textarea
+                id="python-scene-source"
+                aria-label="Python scene source"
+                autocomplete="off"
+                autocorrect="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+            <div id="patch-editor-panel" class="editor-panel" data-active="false" role="tabpanel">
+              <textarea
+                id="python-source"
+                aria-label="Python patch source"
+                autocomplete="off"
+                autocorrect="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+
+          <footer class="editor-footer">
+            <output id="patch-status" aria-live="polite">Loading Python examples…</output>
+            <span class="shortcut">⌘/Ctrl + Enter</span>
+          </footer>
+        </section>
+
+        <section class="preview-pane" aria-label="WebGPU preview">
+          <div class="preview-head">
+            <span class="preview-title">Live preview</span>
+            <div class="badges" aria-label="Runtime technologies">
+              <span class="badge">Pyodide worker</span>
+              <span class="badge">Rust/WASM</span>
+              <span class="badge">WebGPU</span>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="scene" aria-label="Animated Noon scene"></canvas>
+          </div>
+          <div class="metrics" aria-label="Runtime metrics">
+            <div class="metric">
+              <span class="metric-label">Objects</span>
+              <output id="metric-objects" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Draw calls</span>
+              <output id="metric-draws" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">GPU upload</span>
+              <output id="metric-upload" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Playhead</span>
+              <output id="metric-time" class="metric-value">—</output>
+            </div>
+          </div>
+          <div class="perf-metrics" aria-label="Frame performance p50 and p95">
+            <div class="metric">
+              <span class="metric-label">CPU frame · p50 / p95</span>
+              <output id="metric-cpu-frame" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Runtime eval · p50 / p95</span>
+              <output id="metric-runtime" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Frame prepare · p50 / p95</span>
+              <output id="metric-prepare" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">GPU upload CPU · p50 / p95</span>
+              <output id="metric-upload-ms" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Encode + submit · p50 / p95</span>
+              <output id="metric-encode" class="metric-value">—</output>
+            </div>
+            <div class="metric">
+              <span class="metric-label">GPU render · p50 / p95</span>
+              <output id="metric-gpu" class="metric-value">—</output>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="below" aria-label="Architecture and API notes">
+        <article class="info-panel">
+          <h2>What happens when you press Run</h2>
+          <div class="pipeline" aria-label="Noon browser execution pipeline">
+            <div class="pipeline-step">
+              <strong>Python</strong>
+              <span>authoring API</span>
+            </div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="pipeline-step">
+              <strong>Scene IR</strong>
+              <span>document / patches</span>
+            </div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="pipeline-step">
+              <strong>Rust runtime</strong>
+              <span>deterministic timeline</span>
+            </div>
+            <span class="arrow" aria-hidden="true">→</span>
+            <div class="pipeline-step">
+              <strong>WebGPU</strong>
+              <span>persistent renderer</span>
+            </div>
+          </div>
+        </article>
+
+        <aside class="info-panel">
+          <h2>Python API in this demo</h2>
+          <div class="api-list">
+            <div class="api-row"><code>scene.circle(...)</code><span>analytic primitive</span></div>
+            <div class="api-row"><code>scene.rectangle(...)</code><span>analytic primitive</span></div>
+            <div class="api-row"><code>scene.path(...)</code><span>cached vector path</span></div>
+            <div class="api-row"><code>scene.play(Transform(...))</code><span>compiled transform</span></div>
+            <div class="api-row"><code>scene.animate_*(...)</code><span>low-level tracks</span></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

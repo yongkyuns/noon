@@ -1,0 +1,11 @@
+[package]
+name = "noon-geometry"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Vector geometry compilation and tessellation for Noon"
+
+[dependencies]
+lyon_path = "1"
+lyon_tessellation = "1"
+noon-core = { path = "../noon-core" }

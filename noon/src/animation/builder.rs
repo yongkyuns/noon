@@ -66,7 +66,9 @@ impl<'a> Drop for AnimBuilder<'a> {
         };
         for animation in animations.into_iter() {
             animation.set_properties(t, *run_time, *rate_func);
-            animation.clone().insert_animation(&mut self.scene.world.borrow_mut());
+            animation
+                .clone()
+                .insert_animation(&mut self.scene.world.borrow_mut());
             t += *lag;
         }
         self.scene.event_time = t - *lag + *run_time;
