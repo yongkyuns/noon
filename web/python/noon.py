@@ -318,7 +318,6 @@ class Scene:
         self._track_keys: dict[int, str] = {}
         self._scheduled_transform_targets: dict[int, dict[str, Any]] = {}
         self._scheduled_transform_ends: dict[int, float] = {}
-        self._lifecycle_objects: set[int] = set()
 
     def add(self, mobject: Mobject, *, key: str | None = None) -> Object:
         if not isinstance(mobject, Mobject):
@@ -499,7 +498,6 @@ class Scene:
             len(self._tracks),
             dict(self._scheduled_transform_targets),
             dict(self._scheduled_transform_ends),
-            set(self._lifecycle_objects),
         )
 
     def _restore_authoring_checkpoint(self, checkpoint: tuple[Any, ...]) -> None:
@@ -508,7 +506,6 @@ class Scene:
             track_count,
             scheduled_transform_targets,
             scheduled_transform_ends,
-            lifecycle_objects,
         ) = checkpoint
         for object_id in range(object_count, len(self._objects)):
             self._object_keys.pop(object_id, None)
@@ -518,7 +515,6 @@ class Scene:
         del self._tracks[track_count:]
         self._scheduled_transform_targets = scheduled_transform_targets
         self._scheduled_transform_ends = scheduled_transform_ends
-        self._lifecycle_objects = lifecycle_objects
 
     def _schedule_transform(
         self,
@@ -569,9 +565,11 @@ class Scene:
         self,
         target: Object,
         *,
+        start: float,
         end: float,
         label: str,
     ) -> dict[str, Any]:
+        self._ensure_lifecycle_target_available(target, start, label)
         self._ensure_snapshot_representable(target, end, f"{label} target")
         try:
             return self._snapshot_for_object_at(target, end)
@@ -596,16 +594,15 @@ class Scene:
             raise ValueError("replacement target must belong to this Scene")
         if source.id == target.id:
             raise ValueError("replacement source and target must be different objects")
-        if source.id in self._lifecycle_objects or target.id in self._lifecycle_objects:
-            raise ValueError("an object may participate in only one lifecycle replacement")
 
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
+        self._ensure_lifecycle_source_present(source, start, "replacement source")
         self._ensure_snapshot_representable(source, end, "replacement source")
         self._ensure_replacement_source_unoverridden(source, end)
         target_snapshot = self._validate_lifecycle_target(
-            target, end=end, label="replacement"
+            target, start=start, end=end, label="replacement"
         )
         detached_target = Mobject(
             geometry=target_snapshot["geometry"],
@@ -621,7 +618,6 @@ class Scene:
 
         self._add_presence_track(source, True, False, end)
         self._add_presence_track(target, False, True, end)
-        self._lifecycle_objects.update((source.id, target.id))
 
     def _schedule_transform_from_copy(
         self,
@@ -639,20 +635,19 @@ class Scene:
             raise ValueError("copy target must belong to this Scene")
         if source.id == target.id:
             raise ValueError("copy source and target must be different objects")
-        if source.id in self._lifecycle_objects or target.id in self._lifecycle_objects:
-            raise ValueError("an object may participate in only one lifecycle animation")
 
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
 
+        self._ensure_lifecycle_source_present(source, start, "copy source")
         self._ensure_snapshot_representable(source, start, "copy source")
         try:
             source_snapshot = self._snapshot_for_object_at(source, start)
         except ValueError as error:
             raise ValueError(f"copy source cannot be snapshotted: {error}") from error
         target_snapshot = self._validate_lifecycle_target(
-            target, end=end, label="copy"
+            target, start=start, end=end, label="copy"
         )
 
         source_key = self._object_keys[source.id]
@@ -699,7 +694,53 @@ class Scene:
             end,
             key=f"{copy_key}.target-show",
         )
-        self._lifecycle_objects.update((source.id, target.id, copy_object.id))
+
+    def _presence_tracks(self, obj: Object) -> list[dict[str, Any]]:
+        return sorted(
+            (
+                track
+                for track in self._tracks
+                if track["object"] == obj.id and track["property"] == "presence"
+            ),
+            key=lambda track: (track["timing"]["start_time"], track["id"]),
+        )
+
+    def _presence_at(self, obj: Object, time: float) -> bool:
+        tracks = self._presence_tracks(obj)
+        if not tracks:
+            return True
+        state = tracks[0]["values"]["bool"]["from"]
+        for track in tracks:
+            if track["timing"]["start_time"] > time:
+                break
+            state = track["values"]["bool"]["to"]
+        return state
+
+    def _ensure_lifecycle_timeline_available(
+        self, obj: Object, start: float, label: str
+    ) -> list[dict[str, Any]]:
+        tracks = self._presence_tracks(obj)
+        if tracks and tracks[-1]["timing"]["start_time"] > start:
+            raise ValueError(
+                f"{label} has a future lifecycle event; lifecycle operations must be authored chronologically"
+            )
+        return tracks
+
+    def _ensure_lifecycle_source_present(
+        self, source: Object, start: float, label: str
+    ) -> None:
+        self._ensure_lifecycle_timeline_available(source, start, label)
+        if not self._presence_at(source, start):
+            raise ValueError(f"{label} must be present at animation start")
+
+    def _ensure_lifecycle_target_available(
+        self, target: Object, start: float, label: str
+    ) -> None:
+        tracks = self._ensure_lifecycle_timeline_available(
+            target, start, f"{label} target"
+        )
+        if tracks and self._presence_at(target, start):
+            raise ValueError(f"{label} target must be absent before handoff")
 
     def _add_presence_track(
         self,
@@ -710,11 +751,7 @@ class Scene:
         *,
         key: str | None = None,
     ) -> None:
-        existing = [
-            track
-            for track in self._tracks
-            if track["object"] == obj.id and track["property"] == "presence"
-        ]
+        existing = self._presence_tracks(obj)
         if existing:
             previous = existing[-1]
             previous_time = previous["timing"]["start_time"]
@@ -894,7 +931,7 @@ class Scene:
             track["property"]
             for track in self._tracks
             if track["object"] == obj.id
-            and track["property"] in {"presence", "reveal", "morph"}
+            and track["property"] in {"reveal", "morph"}
             and track["timing"]["start_time"] <= time
         ]
         if unsupported:
