@@ -16,6 +16,7 @@ pub struct DynamicProperties {
     pub position: bool,
     pub rotation: bool,
     pub opacity: bool,
+    pub appearance: bool,
     pub reveal: bool,
     pub morph: bool,
 }
@@ -28,6 +29,7 @@ impl DynamicProperties {
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Opacity => self.opacity = true,
+            Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
             Property::Morph => self.morph = true,
         }
@@ -39,6 +41,7 @@ impl DynamicProperties {
             || self.position
             || self.rotation
             || self.opacity
+            || self.appearance
             || self.reveal
             || self.morph
     }
@@ -563,8 +566,9 @@ const fn property_rank(property: Property) -> u8 {
         Property::Position => 2,
         Property::Rotation => 3,
         Property::Opacity => 4,
-        Property::Reveal => 5,
-        Property::Morph => 6,
+        Property::Appearance => 5,
+        Property::Reveal => 6,
+        Property::Morph => 7,
     }
 }
 
@@ -736,11 +740,30 @@ mod tests {
                 position: false,
                 rotation: false,
                 opacity: true,
+                appearance: false,
                 reveal: false,
                 morph: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
+    }
+
+    #[test]
+    fn appearance_tracks_mark_only_appearance_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_appearance(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
+            .expect("valid appearance track");
+
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                appearance: true,
+                ..DynamicProperties::default()
+            }
+        );
     }
 
     #[test]
@@ -868,6 +891,7 @@ mod tests {
                 position: false,
                 rotation: false,
                 opacity: false,
+                appearance: false,
                 reveal: true,
                 morph: false,
             }
@@ -889,6 +913,7 @@ mod tests {
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         assert!(compiled.objects()[0].dynamic.morph);
         assert!(!compiled.objects()[0].dynamic.reveal);
+        assert!(!compiled.objects()[0].dynamic.appearance);
     }
 
     #[test]

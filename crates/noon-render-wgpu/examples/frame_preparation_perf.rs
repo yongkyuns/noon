@@ -98,6 +98,7 @@ fn build_frame(object_count: usize) -> FrameState {
                     ..Transform2D::IDENTITY
                 },
                 style: Style::default(),
+                appearance: 1.0,
             })
             .collect(),
         presences: vec![true; object_count],

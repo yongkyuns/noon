@@ -30,6 +30,7 @@ fn frame(geometry: GeometryRef, style: Style) -> FrameState {
             geometry,
             transform: Transform2D::IDENTITY,
             style,
+            appearance: 1.0,
         }],
         presences: vec![true],
         reveals: vec![1.0],
