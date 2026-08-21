@@ -100,6 +100,28 @@ def _lerp(from_: float, to: float, progress: float) -> float:
     return from_ + (to - from_) * progress
 
 
+def _matching_shape_signature(geometry: dict[str, Any]) -> tuple[Any, ...]:
+    if "circle" in geometry:
+        return ("circle",)
+    if "line" in geometry:
+        return ("line",)
+    if "rectangle" in geometry:
+        size = geometry["rectangle"]["size"]
+        width = float(size["x"])
+        height = float(size["y"])
+        ratio = min(width, height) / max(width, height)
+        return ("rectangle", round(ratio, 12))
+    if "vector_path" in geometry:
+        canonical = json.dumps(
+            geometry["vector_path"],
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return ("vector_path", canonical)
+    raise ValueError("matching shapes does not support this geometry")
+
+
 @dataclass(frozen=True, slots=True)
 class Color:
     red: float
@@ -307,6 +329,15 @@ class TransformFromCopy:
     key: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TransformMatchingShapes:
+    """Pair scene objects by deterministic shape signature, then replace them."""
+
+    sources: tuple[Object, ...] | list[Object]
+    targets: tuple[Object, ...] | list[Object]
+    key: str | None = None
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -452,7 +483,10 @@ class Scene:
 
     def play(
         self,
-        *animations: Transform | ReplacementTransform | TransformFromCopy,
+        *animations: Transform
+        | ReplacementTransform
+        | TransformFromCopy
+        | TransformMatchingShapes,
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
@@ -462,7 +496,14 @@ class Scene:
         checkpoint = self._authoring_checkpoint()
         try:
             for animation in animations:
-                if isinstance(animation, TransformFromCopy):
+                if isinstance(animation, TransformMatchingShapes):
+                    self._schedule_transform_matching_shapes(
+                        animation,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                elif isinstance(animation, TransformFromCopy):
                     self._schedule_transform_from_copy(
                         animation,
                         duration=duration,
@@ -485,7 +526,8 @@ class Scene:
                     )
                 else:
                     raise TypeError(
-                        "unsupported animation; expected Transform, ReplacementTransform, or TransformFromCopy"
+                        "unsupported animation; expected Transform, ReplacementTransform, "
+                        "TransformFromCopy, or TransformMatchingShapes"
                     )
         except Exception:
             self._restore_authoring_checkpoint(checkpoint)
@@ -560,6 +602,115 @@ class Scene:
         )
         self._scheduled_transform_targets[obj.id] = copy.deepcopy(target_snapshot)
         self._scheduled_transform_ends[obj.id] = start + run_duration
+
+    def _schedule_transform_matching_shapes(
+        self,
+        animation: TransformMatchingShapes,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        if not isinstance(animation.sources, (tuple, list)) or not isinstance(
+            animation.targets, (tuple, list)
+        ):
+            raise TypeError("matching sources and targets must be lists or tuples")
+        sources = list(animation.sources)
+        targets = list(animation.targets)
+        if not sources or not targets:
+            raise ValueError("matching sources and targets must be non-empty")
+
+        def validate_collection(objects: list[Object], label: str) -> list[int]:
+            ids: list[int] = []
+            for obj in objects:
+                if not isinstance(obj, Object) or obj._owner is not self._owner:
+                    raise ValueError(
+                        f"matching {label} objects must belong to this Scene"
+                    )
+                ids.append(obj.id)
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"matching {label} objects must be unique")
+            return ids
+
+        source_ids = validate_collection(sources, "source")
+        target_ids = validate_collection(targets, "target")
+        if set(source_ids) & set(target_ids):
+            raise ValueError("matching sources and targets must be disjoint")
+
+        start = _finite_number("start_time", start_time)
+        run_duration = _positive_number("duration", duration)
+        end = start + run_duration
+
+        source_signatures: list[tuple[Any, ...]] = []
+        for source in sources:
+            self._ensure_lifecycle_source_present(source, start, "matching source")
+            self._ensure_snapshot_representable(source, end, "matching source")
+            self._ensure_replacement_source_unoverridden(source, end)
+            try:
+                snapshot = self._snapshot_for_object_at(source, start)
+            except ValueError as error:
+                raise ValueError(
+                    f"matching source cannot be snapshotted: {error}"
+                ) from error
+            source_signatures.append(
+                _matching_shape_signature(snapshot["geometry"])
+            )
+
+        target_signatures: list[tuple[Any, ...]] = []
+        for target in targets:
+            self._ensure_lifecycle_target_available(target, start, "matching")
+            self._ensure_snapshot_representable(target, end, "matching target")
+            try:
+                snapshot = self._snapshot_for_object_at(target, end)
+            except ValueError as error:
+                raise ValueError(
+                    f"matching target cannot be snapshotted at handoff: {error}"
+                ) from error
+            target_signatures.append(
+                _matching_shape_signature(snapshot["geometry"])
+            )
+
+        remaining_targets = list(zip(targets, target_signatures))
+        pairs: list[tuple[Object, Object]] = []
+        for source, signature in zip(sources, source_signatures):
+            match_index = next(
+                (
+                    index
+                    for index, (_, target_signature) in enumerate(remaining_targets)
+                    if target_signature == signature
+                ),
+                None,
+            )
+            if match_index is None:
+                raise ValueError(f"unmatched shape for source object {source.id}")
+            target, _ = remaining_targets.pop(match_index)
+            pairs.append((source, target))
+        if remaining_targets:
+            target, _ = remaining_targets[0]
+            raise ValueError(f"unmatched shape for target object {target.id}")
+
+        source_keys = [self._object_keys[source.id] for source in sources]
+        target_keys = [self._object_keys[target.id] for target in targets]
+        root_key = _authoring_key(
+            "key",
+            animation.key,
+            f"@matching:{'|'.join(source_keys)}->{'|'.join(target_keys)}",
+        )
+        pair_keys = [f"{root_key}.match:{index}" for index in range(len(pairs))]
+        existing_track_keys = set(self._track_keys.values())
+        collision = next(
+            (key for key in pair_keys if key in existing_track_keys), None
+        )
+        if collision is not None:
+            raise ValueError(f"duplicate track key: {collision}")
+
+        for index, (source, target) in enumerate(pairs):
+            self._schedule_replacement_transform(
+                ReplacementTransform(source, target, key=pair_keys[index]),
+                duration=run_duration,
+                start_time=start,
+                easing=easing,
+            )
 
     def _validate_lifecycle_target(
         self,
