@@ -24,11 +24,8 @@ jobs:
         with:
           ref: agent/browser-realtime-architecture
 
-      - name: Apply analytic primitive Transform implementation
-        run: |
-          python3 scripts/apply_analytic_transform.py
-          python3 scripts/fix_analytic_transform_dead_code.py
-          python3 scripts/add_analytic_transform_demo.py
+      - name: Apply analytic Transform playground example
+        run: python3 scripts/add_analytic_transform_demo.py
 
       - name: Use stable Rust
         run: |
@@ -80,21 +77,15 @@ jobs:
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
 
-      - name: Publish validated analytic primitive Transform implementation
+      - name: Publish validated analytic Transform playground example
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- \
-            crates/noon-compile/src/lib.rs \
-            crates/noon-compile/tests/generic_transform.rs \
-            crates/noon-compile/tests/analytic_transform.rs \
-            crates/noon-runtime/src/lib.rs \
-            crates/noon-runtime/tests/analytic_transform.rs \
             crates/noon-render-wgpu/tests/analytic_transform.rs \
-            web/python/test_analytic_transform.py \
             web/main.js
           if git diff --cached --quiet; then
-            echo "No analytic Transform changes to publish"
+            echo "No analytic Transform demo changes to publish"
           else
             git commit -m "Expose analytic primitive Transform example"
             git push origin HEAD:agent/browser-realtime-architecture
