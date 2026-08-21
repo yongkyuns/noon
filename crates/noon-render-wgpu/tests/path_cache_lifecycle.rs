@@ -65,7 +65,7 @@ fn path_cache_retains_recent_meshes_and_evicts_stale_entries() {
 }
 
 #[test]
-fn active_frame_geometry_can_exceed_retention_budget() {
+fn active_frame_geometry_can_exceed_retention_budget_without_retessellation() {
     let a = path(0.0);
     let b = path(10.0);
     let mut preparer = FramePreparer::new();
@@ -81,8 +81,8 @@ fn active_frame_geometry_can_exceed_retention_budget() {
     let prepared = preparer.prepare(scene.frame());
     assert_eq!(prepared.path_ids.len(), 2);
     assert_eq!(
-        prepared.stats.geometry_cache_misses, 1,
-        "pruning must happen before rebuild, never by evicting active-frame meshes"
+        prepared.stats.geometry_cache_misses, 0,
+        "incoming-frame meshes must be pinned before stale LRU eviction"
     );
     assert_eq!(preparer.cached_path_mesh_count(), 2);
 }
