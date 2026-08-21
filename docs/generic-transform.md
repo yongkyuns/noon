@@ -16,7 +16,7 @@ TrackValues::Object {
 
 An `ObjectSnapshot` contains geometry, transform, and style but no scene identity. The source `ObjectId` remains stable for the lifetime of the animation.
 
-The compiler now selects an explicit geometry strategy for every Transform:
+The compiler selects an explicit geometry strategy for every Transform:
 
 ```rust
 TransformGeometryPlan::Static
@@ -38,6 +38,8 @@ source = scene.path(
     fill=None,
     stroke=WHITE,
     stroke_width=0.1,
+    stroke_join="round",
+    stroke_cap="round",
 )
 
 target = Path(
@@ -48,6 +50,8 @@ target = Path(
     fill=None,
     stroke=BLUE,
     stroke_width=0.1,
+    stroke_join="round",
+    stroke_cap="round",
     opacity=0.6,
 )
 
@@ -57,6 +61,13 @@ scene.play(
     easing="ease_in_out_cubic",
 )
 ```
+
+Supported semantic stroke policies are:
+
+- joins: `round`, `miter`, `bevel`;
+- caps: `round`, `butt`, `square`.
+
+Round join/cap remain the default, preserving the previous static-Lyon appearance. The same style fields are available on Scene path constructors and style patches.
 
 `Transform(source, VectorPath(...))` remains a convenience form. It snapshots the current/source transform and style and replaces only the target geometry.
 
@@ -88,11 +99,23 @@ No Lyon tessellation, path cache entry, path geometry upload, or renderer-only m
 
 ### Vector path -> vector path
 
-Geometry-changing path Transforms use the existing deterministic path correspondence planner and fixed-topology dual-position mesh. Correspondence/tessellation work happens before steady playback. The renderer receives one prepared source/target geometry pair and a normalized morph parameter.
+Geometry-changing path Transforms use deterministic path correspondence and a fixed-topology dual-position stroke mesh. Correspondence/tessellation work happens before steady playback. The renderer receives one prepared source/target geometry pair and a normalized morph parameter.
+
+Stroke topology is now selected by semantic `StrokeJoin` and `StrokeCap` policy shared with static paths. Static paths lower those policies directly into Lyon. Morph paths use a deterministic fixed-topology segment/join/cap representation:
+
+- every centerline segment has an independent quad;
+- bevel and miter joins use fixed fan topology;
+- round joins use a fixed eight-segment arc fan;
+- round caps use a fixed eight-segment semicircle fan;
+- square caps extend the endpoint segment by half the stroke width;
+- both left and right join slots exist for every sampled join; the inactive side collapses to the center point.
+
+Keeping both side slots is important: source and target paths may change turn direction without changing vertex/index topology, so the GPU can continue interpolating fixed source/target positions.
 
 Current safety boundary:
 
 - path stroke width must remain constant across a geometry-changing Transform;
+- path stroke join and cap policy must remain constant across a geometry-changing Transform because they select mesh topology;
 - geometry-changing filled paths are rejected because the current fixed-topology morph mesh is stroke-only;
 - unsupported cross-kind geometry Transforms are rejected before runtime.
 
@@ -127,7 +150,9 @@ For an active geometry-changing path Transform:
 - correspondence is not recomputed per frame;
 - path tessellation is not rerun per frame;
 - geometry buffers are not re-uploaded per frame;
+- join/cap topology is prepared once with the morph mesh;
 - the fixed path mesh is cached;
+- the path cache key includes stroke width, join, and cap policy;
 - steady frames dirty only the path instance record;
 - semantic and renderer path allocations are reused across steady forward frames.
 
@@ -137,22 +162,25 @@ The runtime only clones semantic or prepared path geometry when the selected geo
 
 Coverage is split across independent layers:
 
-- Python: detached targets, snapshot-by-value behavior, stable source identity, multiple and sequential Transforms, overlap rejection, old VectorPath convenience syntax, and analytic detached targets;
-- IR: object-snapshot Transform round trips;
-- compiler: explicit `Static`/`Circle`/`Rectangle`/`Line`/`PathPair` geometry plans, unsupported cross-kind rejection, fill/stroke-width safety boundaries;
+- Python: detached targets, snapshot-by-value behavior, stable source identity, multiple and sequential Transforms, overlap rejection, old VectorPath convenience syntax, analytic detached targets, and stroke join/cap validation/serialization;
+- IR/core: object-snapshot Transform round trips and backward-compatible default deserialization of the new stroke style fields;
+- compiler: explicit `Static`/`Circle`/`Rectangle`/`Line`/`PathPair` plans, unsupported cross-kind rejection, fill/stroke-width safety boundaries, and rejection of join/cap topology changes during geometry-changing path Transform;
+- geometry: direct Lyon reference checks, theoretical cap extents and miter intersections, contour-start/winding invariance, fixed-topology formulas, active-triangle winding, plus static-vs-identity-morph endpoint bounds for all nine join/cap combinations;
 - runtime: exact analytic midpoints/endpoints, seek/forward parity, sequential boundary continuity, property precedence, reveal independence, and path allocation stability;
-- renderer: analytic instance-only dirty ranges with zero path work; path no-retessellation/cache-miss behavior and one-time prepared-geometry switches between sequential path pairs;
+- renderer: join/cap-aware path cache identity, analytic instance-only dirty ranges with zero path work, path no-retessellation/cache-miss behavior, prepared-geometry switches between sequential path pairs, and packed-`PathVertex` static-vs-morph endpoint parity for all nine join/cap combinations;
 - browser playground: separate path and analytic primitive Transform examples;
-- full CI: format, workspace compile, strict Clippy, geometry correctness, all workspace tests, WebGPU wasm compile, browser-runtime wasm compile, and browser package validation.
+- full CI: format, workspace compile, strict Clippy, both geometry correctness suites, all workspace tests, WebGPU wasm compile, browser-runtime wasm compile, and browser package validation.
 
 ## Current limitations / next work
 
-The completed generic Transform milestone supports same-kind analytic geometry (`Circle`, `Rectangle`, `Line`) plus stroke-only vector-path geometry changes. Remaining limitations include:
+The completed generic Transform and stroke-fidelity milestones support same-kind analytic geometry (`Circle`, `Rectangle`, `Line`) plus stroke-only vector-path geometry changes with shared round/miter/bevel joins and round/butt/square caps.
+
+Remaining limitations include:
 
 - cross-kind geometry interpolation;
 - filled path morphing;
 - path stroke-width interpolation across geometry-changing morphs;
-- shared round/miter/bevel join and cap semantics between static and morph paths;
+- changing join/cap topology during an active geometry-changing path Transform;
 - `ReplacementTransform`, `TransformFromCopy`, or matching-shape variants.
 
-The next rendering-fidelity slice is explicit stroke join/cap style shared by static Lyon paths and fixed-topology path Transform. It should include structural join/cap tests plus renderer-boundary endpoint visual-regression coverage, while preserving the fixed-topology/no-retessellation performance contract.
+The next geometry milestone should evaluate filled path Transform with a deliberately bounded first contract: compatible simple closed contours with a stable triangulation, explicit rejection of unsafe/self-crossing cases, and no per-frame tessellation. Richer Transform lifecycle/matching variants can then build on the same semantic `ObjectSnapshot` infrastructure.
