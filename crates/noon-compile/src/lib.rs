@@ -97,6 +97,10 @@ pub struct CompiledScene {
 pub enum CompileError {
     TooManyObjects(usize),
     UnknownObject(ObjectId),
+    DiscontinuousPresence {
+        previous: TrackId,
+        next: TrackId,
+    },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
@@ -111,6 +115,12 @@ impl std::fmt::Display for CompileError {
             Self::UnknownObject(id) => {
                 write!(formatter, "track references unknown object {}", id.get())
             }
+            Self::DiscontinuousPresence { previous, next } => write!(
+                formatter,
+                "presence track {} does not hand off continuously to track {}",
+                previous.get(),
+                next.get()
+            ),
             Self::UnsupportedTransformGeometry(id) => write!(
                 formatter,
                 "transform track {} uses unsupported geometry interpolation",
@@ -140,6 +150,10 @@ pub enum CompilePatchError {
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
     InvalidTrack(TimelineError),
+    DiscontinuousPresence {
+        previous: TrackId,
+        next: TrackId,
+    },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
@@ -156,6 +170,12 @@ impl std::fmt::Display for CompilePatchError {
             Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
             Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
             Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
+            Self::DiscontinuousPresence { previous, next } => write!(
+                formatter,
+                "presence track {} does not hand off continuously to track {}",
+                previous.get(),
+                next.get()
+            ),
             Self::UnsupportedTransformGeometry(id) => write!(
                 formatter,
                 "transform track {} uses unsupported geometry interpolation",
@@ -207,6 +227,9 @@ impl CompiledScene {
             );
         }
         sort_tracks(&mut tracks);
+        validate_presence_chains(&tracks).map_err(|(previous, next)| {
+            CompileError::DiscontinuousPresence { previous, next }
+        })?;
 
         Ok(Self {
             objects,
@@ -275,8 +298,13 @@ impl CompiledScene {
                     return Err(CompilePatchError::DuplicateTrack(track.id));
                 }
                 let compiled = self.compile_patch_track(track)?;
-                self.tracks.push(compiled);
-                sort_tracks(&mut self.tracks);
+                let mut tracks = self.tracks.clone();
+                tracks.push(compiled);
+                sort_tracks(&mut tracks);
+                validate_presence_chains(&tracks).map_err(|(previous, next)| {
+                    CompilePatchError::DiscontinuousPresence { previous, next }
+                })?;
+                self.tracks = tracks;
                 self.recompute_dynamic();
             }
             ScenePatch::ReplaceTrack(track) => {
@@ -286,8 +314,13 @@ impl CompiledScene {
                     .position(|existing| existing.id == track.id)
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
                 let compiled = self.compile_patch_track(track)?;
-                self.tracks[position] = compiled;
-                sort_tracks(&mut self.tracks);
+                let mut tracks = self.tracks.clone();
+                tracks[position] = compiled;
+                sort_tracks(&mut tracks);
+                validate_presence_chains(&tracks).map_err(|(previous, next)| {
+                    CompilePatchError::DiscontinuousPresence { previous, next }
+                })?;
+                self.tracks = tracks;
                 self.recompute_dynamic();
             }
             ScenePatch::RemoveTrack(id) => {
@@ -296,7 +329,12 @@ impl CompiledScene {
                     .iter()
                     .position(|track| track.id == *id)
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
-                self.tracks.remove(position);
+                let mut tracks = self.tracks.clone();
+                tracks.remove(position);
+                validate_presence_chains(&tracks).map_err(|(previous, next)| {
+                    CompilePatchError::DiscontinuousPresence { previous, next }
+                })?;
+                self.tracks = tracks;
                 self.recompute_dynamic();
             }
         }
@@ -503,6 +541,28 @@ fn sort_tracks(tracks: &mut [CompiledTrack]) {
     });
 }
 
+fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, TrackId)> {
+    let mut previous: Option<(u32, TrackId, bool)> = None;
+
+    for track in tracks
+        .iter()
+        .filter(|track| track.property == Property::Presence)
+    {
+        let TrackValues::Bool { from, to } = &track.values else {
+            unreachable!("validated Presence track must contain bool values");
+        };
+
+        if let Some((object_index, previous_id, previous_to)) = previous {
+            if object_index == track.object_index && previous_to != *from {
+                return Err((previous_id, track.id));
+            }
+        }
+        previous = Some((track.object_index, track.id, *to));
+    }
+
+    Ok(())
+}
+
 const fn property_rank(property: Property) -> u8 {
     match property {
         Property::Presence => 0,
@@ -707,6 +767,91 @@ mod tests {
             }
         );
         assert_eq!(compiled.tracks()[0].timing.duration, 0.0);
+    }
+
+    #[test]
+    fn continuous_presence_chain_compiles() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .set_presence_at(object, false, true, 1.0)
+            .expect("valid first presence event");
+        scene
+            .set_presence_at(object, true, false, 2.0)
+            .expect("valid second presence event");
+
+        CompiledScene::compile(&scene).expect("continuous presence chain must compile");
+    }
+
+    #[test]
+    fn discontinuous_presence_chain_is_rejected() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let previous = scene
+            .set_presence_at(object, false, true, 1.0)
+            .expect("valid first presence event");
+        let next = scene
+            .set_presence_at(object, false, true, 2.0)
+            .expect("each presence event is individually valid");
+
+        assert_eq!(
+            CompiledScene::compile(&scene),
+            Err(CompileError::DiscontinuousPresence { previous, next })
+        );
+    }
+
+    #[test]
+    fn patch_rejects_discontinuous_presence_without_mutating_tracks() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let previous = scene
+            .set_presence_at(object, false, true, 1.0)
+            .expect("valid first presence event");
+        let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        let before = compiled.tracks().to_vec();
+        let next = TrackId::new(9);
+
+        let track = TrackDefinition {
+            id: next,
+            object,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::new(2.0, 0.0, Easing::Linear),
+        };
+        assert_eq!(
+            compiled.apply_patch(&ScenePatch::AddTrack(track)),
+            Err(CompilePatchError::DiscontinuousPresence { previous, next })
+        );
+        assert_eq!(compiled.tracks(), before);
+    }
+
+    #[test]
+    fn patch_rejects_removing_required_presence_handoff_without_mutating_tracks() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let first = scene
+            .set_presence_at(object, false, true, 1.0)
+            .expect("valid first presence event");
+        let middle = scene
+            .set_presence_at(object, true, false, 2.0)
+            .expect("valid middle presence event");
+        let last = scene
+            .set_presence_at(object, false, true, 3.0)
+            .expect("valid last presence event");
+        let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        let before = compiled.tracks().to_vec();
+
+        assert_eq!(
+            compiled.apply_patch(&ScenePatch::RemoveTrack(middle)),
+            Err(CompilePatchError::DiscontinuousPresence {
+                previous: first,
+                next: last,
+            })
+        );
+        assert_eq!(compiled.tracks(), before);
     }
 
     #[test]
