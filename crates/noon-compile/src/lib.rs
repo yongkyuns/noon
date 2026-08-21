@@ -11,6 +11,7 @@ use noon_core::{
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
+    pub presence: bool,
     pub transform: bool,
     pub position: bool,
     pub rotation: bool,
@@ -22,6 +23,7 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
+            Property::Presence => self.presence = true,
             Property::Transform => self.transform = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
@@ -32,7 +34,8 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.transform
+        self.presence
+            || self.transform
             || self.position
             || self.rotation
             || self.opacity
@@ -312,7 +315,21 @@ impl CompiledScene {
                 TimelineError::InvalidStartTime(track.timing.start_time),
             ));
         }
-        if !track.timing.duration.is_finite() || track.timing.duration <= 0.0 {
+        if !track.timing.duration.is_finite() {
+            return Err(CompilePatchError::InvalidTrack(
+                TimelineError::InvalidDuration(track.timing.duration),
+            ));
+        }
+        if track.property.is_instant() {
+            if track.timing.duration != 0.0 {
+                return Err(CompilePatchError::InvalidTrack(
+                    TimelineError::InvalidInstantDuration {
+                        property: track.property,
+                        duration: track.timing.duration,
+                    },
+                ));
+            }
+        } else if track.timing.duration <= 0.0 {
             return Err(CompilePatchError::InvalidTrack(
                 TimelineError::InvalidDuration(track.timing.duration),
             ));
@@ -488,12 +505,13 @@ fn sort_tracks(tracks: &mut [CompiledTrack]) {
 
 const fn property_rank(property: Property) -> u8 {
     match property {
-        Property::Transform => 0,
-        Property::Position => 1,
-        Property::Rotation => 2,
-        Property::Opacity => 3,
-        Property::Reveal => 4,
-        Property::Morph => 5,
+        Property::Presence => 0,
+        Property::Transform => 1,
+        Property::Position => 2,
+        Property::Rotation => 3,
+        Property::Opacity => 4,
+        Property::Reveal => 5,
+        Property::Morph => 6,
     }
 }
 
@@ -660,6 +678,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
+                presence: false,
                 transform: false,
                 position: false,
                 rotation: false,
@@ -669,6 +688,25 @@ mod tests {
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
+    }
+
+    #[test]
+    fn presence_tracks_mark_only_presence_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .set_presence_at(object, false, true, 2.0)
+            .expect("valid presence event");
+
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                presence: true,
+                ..DynamicProperties::default()
+            }
+        );
+        assert_eq!(compiled.tracks()[0].timing.duration, 0.0);
     }
 
     #[test]
@@ -687,6 +725,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                presence: false,
                 transform: false,
                 position: false,
                 rotation: false,
