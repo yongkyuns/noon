@@ -5,16 +5,6 @@ AUTO_JOIN = "stroke_join: noon_core::StrokeJoin::Round,"
 AUTO_CAP = "stroke_cap: noon_core::StrokeCap::Round,"
 
 
-def strip_bad_auto_insertions(path: Path) -> None:
-    text = path.read_text()
-    if path.as_posix() != "crates/noon-core/src/lib.rs":
-        text = re.sub(r"\n\s*" + re.escape(AUTO_JOIN), "", text)
-        text = re.sub(r"\n\s*" + re.escape(AUTO_CAP), "", text)
-        # The first migration appended a comma before its injected fields.
-        text = text.replace(",,", ",")
-    path.write_text(text)
-
-
 def matching_brace(text: str, open_brace: int) -> int:
     depth = 0
     for pos in range(open_brace, len(text)):
@@ -25,6 +15,52 @@ def matching_brace(text: str, open_brace: int) -> int:
             if depth == 0:
                 return pos
     raise RuntimeError("unbalanced braces")
+
+
+def remove_trailing_comma_from_block_body(text: str, open_brace: int) -> str:
+    end = matching_brace(text, open_brace)
+    body = text[open_brace + 1:end]
+    stripped = body.rstrip()
+    if stripped.endswith(","):
+        comma = open_brace + 1 + len(stripped) - 1
+        text = text[:comma] + text[comma + 1:]
+    return text
+
+
+def strip_bad_auto_insertions(path: Path) -> None:
+    text = path.read_text()
+    if path.as_posix() != "crates/noon-core/src/lib.rs":
+        text = re.sub(r"\n\s*" + re.escape(AUTO_JOIN), "", text)
+        text = re.sub(r"\n\s*" + re.escape(AUTO_CAP), "", text)
+        # The first migration appended a comma before its injected fields.
+        text = text.replace(",,", ",")
+
+        # The broad first pass also interpreted `fn ... -> Style {` bodies as
+        # Style literals, leaving a comma after the real trailing Style value.
+        cursor = 0
+        style_return = re.compile(r"->\s*Style\s*\{")
+        while True:
+            match = style_return.search(text, cursor)
+            if not match:
+                break
+            open_brace = text.find("{", match.start(), match.end())
+            before = text
+            text = remove_trailing_comma_from_block_body(text, open_brace)
+            cursor = matching_brace(text, open_brace) + 1
+            if text == before:
+                continue
+
+        # Likewise `impl From<Style> for PackedStyle {` was matched at the
+        # `Style {` suffix of `PackedStyle`.
+        marker = "impl From<Style> for PackedStyle {"
+        start = text.find(marker)
+        if start >= 0:
+            open_brace = text.find("{", start, start + len(marker))
+            text = remove_trailing_comma_from_block_body(text, open_brace)
+
+        # Rust struct-update syntax never permits a comma after `..base`.
+        text = re.sub(r"(?m)^(\s*\.\.[A-Za-z_][A-Za-z0-9_\.]*)\s*,\s*$", r"\1", text)
+    path.write_text(text)
 
 
 def add_defaults_to_style_literals(path: Path) -> None:
@@ -40,8 +76,9 @@ def add_defaults_to_style_literals(path: Path) -> None:
         if index > 0 and (text[index - 1].isalnum() or text[index - 1] == "_"):
             cursor = index + len("Style {")
             continue
-        prefix = text[max(0, index - 32):index]
-        if "struct " in prefix:
+        prefix = text[max(0, index - 48):index]
+        # Skip type declarations and function return types (`-> Style {`).
+        if "struct " in prefix or re.search(r"->\s*$", prefix):
             cursor = index + len("Style {")
             continue
         open_brace = index + len("Style ")
