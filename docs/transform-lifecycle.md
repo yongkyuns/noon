@@ -4,7 +4,7 @@
 
 Noon models object lifetime independently from opacity. `Presence` is a first-class, renderer-independent boolean timeline property represented as a zero-duration event. This lets lifecycle animations preserve stable `ObjectId` values while arbitrary seek, forward playback, live reconciliation, and rendering all agree on whether an object exists in the visible scene at a given time.
 
-The first lifecycle animation built on this primitive is `ReplacementTransform`.
+The first lifecycle animation built on this primitive is `ReplacementTransform`. The geometry/interpolation contract it reuses is documented in [generic-transform.md](generic-transform.md).
 
 ## Presence contract
 
