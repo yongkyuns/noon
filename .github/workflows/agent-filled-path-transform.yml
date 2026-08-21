@@ -72,6 +72,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if [ "$status" -eq 0 ]; then
+            if git ls-files --error-unmatch filled_gate.log >/dev/null 2>&1; then
+              git rm -- filled_gate.log
+            else
+              rm -f filled_gate.log
+            fi
             git add -- \
               Cargo.lock \
               crates/noon-compile/Cargo.toml \
@@ -87,7 +92,6 @@ jobs:
               git commit -m "Add bounded filled path Transform"
               git push origin HEAD:agent/browser-realtime-architecture
             fi
-            rm -f filled_gate.log
           else
             echo "" >> filled_gate.log
             echo "GATE_STATUS=$status" >> filled_gate.log
