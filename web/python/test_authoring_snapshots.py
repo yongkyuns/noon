@@ -154,6 +154,55 @@ class EvaluatedAuthoringSnapshotTests(unittest.TestCase):
 
         self.assertEqual(scene.to_document(), before)
 
+    def test_replacement_rejects_source_narrow_track_before_handoff(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0)
+        target = scene.circle(2.0, position=(4.0, 0.0))
+        scene.animate_position(
+            source,
+            (0.0, 0.0),
+            (3.0, 0.0),
+            duration=1.0,
+            start_time=0.0,
+        )
+        before_document = scene.to_document()
+        before_identity = scene.identity_document()
+
+        with self.assertRaisesRegex(ValueError, "replacement source.*position"):
+            scene.play(
+                ReplacementTransform(source, target),
+                duration=1.0,
+                start_time=2.0,
+            )
+
+        self.assertEqual(scene.to_document(), before_document)
+        self.assertEqual(scene.identity_document(), before_identity)
+
+    def test_replacement_allows_source_narrow_track_after_handoff(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0)
+        target = scene.circle(2.0, position=(4.0, 0.0))
+        scene.animate_position(
+            source,
+            (0.0, 0.0),
+            (3.0, 0.0),
+            duration=1.0,
+            start_time=4.0,
+        )
+
+        scene.play(
+            ReplacementTransform(source, target),
+            duration=1.0,
+            start_time=1.0,
+        )
+
+        replacement = next(
+            track
+            for track in scene.to_document()["tracks"]
+            if track["property"] == "transform"
+        )
+        self.assertEqual(replacement["timing"]["start_time"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
