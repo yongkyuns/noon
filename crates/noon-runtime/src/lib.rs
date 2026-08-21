@@ -896,14 +896,13 @@ mod tests {
     fn appearance_and_semantic_opacity_are_independent() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
-        scene.object_mut(object).expect("object exists").style.opacity = 0.4;
         scene
-            .animate_appearance(
-                object,
-                1.0,
-                0.0,
-                TrackTiming::new(0.0, 2.0, Easing::Linear),
-            )
+            .object_mut(object)
+            .expect("object exists")
+            .style
+            .opacity = 0.4;
+        scene
+            .animate_appearance(object, 1.0, 0.0, TrackTiming::new(0.0, 2.0, Easing::Linear))
             .expect("valid appearance track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
