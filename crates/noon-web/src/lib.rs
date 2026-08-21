@@ -88,6 +88,7 @@ pub struct ScenePlayer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconcileOutcome {
     Incremental { patch_count: usize },
+    Rebuilt { patch_count: usize },
     Replaced,
 }
 
@@ -152,9 +153,14 @@ impl ScenePlayer {
             return Ok(ReconcileOutcome::Replaced);
         };
         let patch_count = patches.len();
+        let value_only = patches.iter().all(is_value_patch);
         self.apply_patches_transactionally(&patches)?;
         self.next_sequence = 0;
-        Ok(ReconcileOutcome::Incremental { patch_count })
+        Ok(if value_only {
+            ReconcileOutcome::Incremental { patch_count }
+        } else {
+            ReconcileOutcome::Rebuilt { patch_count }
+        })
     }
 
     fn apply_patches_transactionally(&mut self, patches: &[ScenePatch]) -> Result<(), PlayerError> {
@@ -181,12 +187,15 @@ impl ScenePlayer {
             return Ok(());
         }
 
+        let playhead = self.instance.frame().time;
         let mut definition = self.definition.clone();
-        let mut instance = self.instance.clone();
         for patch in patches {
             definition.apply_patch(patch.clone())?;
-            instance.apply_patch(patch)?;
         }
+        let compiled = CompiledScene::compile(&definition)?;
+        let mut instance = SceneInstance::new(compiled);
+        instance.seek(playhead)?;
+
         self.definition = definition;
         self.instance = instance;
         Ok(())
@@ -1151,7 +1160,11 @@ mod wasm {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectId, ScenePatch, Style, Transform2D, Vec2};
+    use noon_core::{
+        Easing, GeometryRef, ObjectDefinition, ObjectId, ObjectSnapshot, Property, ScenePatch,
+        StrokeCap, StrokeJoin, Style, TrackDefinition, TrackId, TrackTiming, TrackValues,
+        Transform2D, Vec2,
+    };
     use noon_ir::{encode_patch_batch, encode_scene, PatchBatch};
 
     use super::*;
@@ -1400,5 +1413,131 @@ mod tests {
             Some(noon_core::Color::rgba(1.0, 0.75, 0.2, 1.0))
         );
         assert_eq!(player.next_sequence(), 1);
+    }
+
+    fn grid_scene(columns: usize, rows: usize) -> SceneDefinition {
+        let mut scene = SceneDefinition::new();
+        for row in 0..rows {
+            for column in 0..columns {
+                let x = column as f32 * 0.1;
+                let y = row as f32 * 0.1;
+                let object = scene.add(GeometryRef::circle(0.05));
+                scene
+                    .object_mut(object)
+                    .expect("grid object exists")
+                    .transform
+                    .translation = Vec2::new(x, y);
+                scene
+                    .animate_position(
+                        object,
+                        Vec2::new(x, y),
+                        Vec2::new(x * 0.8 - y * 0.1, y * 0.8 + x * 0.1),
+                        TrackTiming::new(0.0, 3.0, Easing::EaseInOutCubic),
+                    )
+                    .expect("grid track must be valid");
+            }
+        }
+        scene
+    }
+
+    #[test]
+    fn dense_grid_edit_rebuilds_atomically_and_preserves_playhead() {
+        let initial = grid_scene(18, 10);
+        let json = encode_scene(&initial).expect("initial grid must serialize");
+        let mut player = ScenePlayer::from_scene_json(&json).expect("grid must load");
+        player.seek(1.75).expect("seek must succeed");
+
+        let desired = grid_scene(20, 10);
+        let json = encode_scene(&desired).expect("expanded grid must serialize");
+        let outcome = player
+            .reconcile_scene_json(&json)
+            .expect("grid reconciliation must succeed");
+
+        let ReconcileOutcome::Rebuilt { patch_count } = outcome else {
+            panic!("dense structural edit must use one atomic rebuild: {outcome:?}");
+        };
+        assert!(
+            patch_count > 180,
+            "grid edit should contain many semantic changes"
+        );
+        assert_eq!(player.object_count(), 200);
+        assert_eq!(player.frame().time, 1.75);
+        assert_eq!(player.next_sequence(), 0);
+    }
+
+    #[test]
+    fn no_op_scene_rerun_remains_incremental_without_mutation() {
+        let mut player = player();
+        player.seek(0.625).expect("seek must succeed");
+        let json = player.scene_json().expect("scene must serialize");
+        assert_eq!(
+            player
+                .reconcile_scene_json(&json)
+                .expect("no-op reconcile must succeed"),
+            ReconcileOutcome::Incremental { patch_count: 0 }
+        );
+        assert_eq!(player.frame().time, 0.625);
+    }
+
+    #[test]
+    fn join_and_cap_only_edit_uses_value_only_reconciliation() {
+        let mut player = player();
+        let mut desired = SceneDefinition::new();
+        let object = desired.add(GeometryRef::circle(1.0));
+        desired.object_mut(object).expect("object exists").style = Style {
+            stroke_join: StrokeJoin::Bevel,
+            stroke_cap: StrokeCap::Square,
+            ..Style::default()
+        };
+        let json = encode_scene(&desired).expect("scene must serialize");
+
+        assert_eq!(
+            player
+                .reconcile_scene_json(&json)
+                .expect("style reconcile must succeed"),
+            ReconcileOutcome::Incremental { patch_count: 1 }
+        );
+        assert_eq!(
+            player.frame().objects[0].style.stroke_join,
+            StrokeJoin::Bevel
+        );
+        assert_eq!(
+            player.frame().objects[0].style.stroke_cap,
+            StrokeCap::Square
+        );
+    }
+
+    fn transform_scene(target_x: f32) -> SceneDefinition {
+        let object = ObjectDefinition::new(ObjectId::new(0), GeometryRef::circle(1.0));
+        let from = ObjectSnapshot::new(GeometryRef::circle(1.0));
+        let mut to = ObjectSnapshot::new(GeometryRef::circle(1.0));
+        to.transform.translation = Vec2::new(target_x, 0.0);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(0),
+            property: Property::Transform,
+            values: TrackValues::Object { from, to },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        };
+        SceneDefinition::from_parts(vec![object], vec![track]).expect("transform scene is valid")
+    }
+
+    #[test]
+    fn generic_transform_target_edit_is_detected_by_rust_reconciliation() {
+        let initial = transform_scene(1.0);
+        let json = encode_scene(&initial).expect("scene must serialize");
+        let mut player = ScenePlayer::from_scene_json(&json).expect("scene must load");
+        player.seek(0.5).expect("seek must succeed");
+
+        let desired = transform_scene(3.0);
+        let json = encode_scene(&desired).expect("scene must serialize");
+        assert_eq!(
+            player
+                .reconcile_scene_json(&json)
+                .expect("transform edit must reconcile"),
+            ReconcileOutcome::Rebuilt { patch_count: 1 }
+        );
+        assert_eq!(player.frame().time, 0.5);
+        assert!((player.frame().objects[0].transform.translation.x - 0.75).abs() < 1.0e-6);
     }
 }

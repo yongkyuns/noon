@@ -8,6 +8,11 @@ columns = 18
 rows = 10
 spacing_x = 0.34
 spacing_y = 0.34
+if isinstance(columns, bool) or not isinstance(columns, int) or columns <= 0:
+    raise ValueError("columns must be a positive integer")
+if isinstance(rows, bool) or not isinstance(rows, int) or rows <= 0:
+    raise ValueError("rows must be a positive integer")
+color_denominator = max(rows + columns - 2, 1)
 
 # A dense analytic circle field. Every dot has the same geometry, while color
 # and transform vary per instance. The renderer should batch this into a tiny
@@ -24,7 +29,7 @@ for row in range(rows):
         tx = math.cos(angle) * target_radius
         ty = math.sin(angle) * target_radius
 
-        color_mix = (row + column) / (rows + columns - 2)
+        color_mix = (row + column) / color_denominator
         color = Color(
             0.32 + 0.58 * color_mix,
             0.78 - 0.30 * color_mix,
@@ -42,7 +47,7 @@ for row in range(rows):
             dot,
             (x, y),
             (tx, ty),
-            start_time=(index % 18) * 0.018,
+            start_time=(index % columns) * 0.018,
             duration=3.15,
             easing="ease_in_out_cubic",
             key=f"dot.{index}.position",

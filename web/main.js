@@ -1,6 +1,6 @@
 import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
-import { diffSceneDocuments, SceneIdentityMap } from "./scene-identity.js";
+import { SceneIdentityMap } from "./scene-identity.js";
 import { SampleWindow } from "./frame-metrics.js";
 
 const canvas = document.querySelector("#scene");
@@ -346,7 +346,6 @@ try {
   let paletteIndex = 0;
   let authoringClient = null;
   const sceneIdentities = new SceneIdentityMap();
-  let authoredScene = null;
   const PERF_SAMPLE_CAPACITY = 180;
   const PERF_WARMUP_FRAMES = 30;
   const perfSamples = {
@@ -445,7 +444,6 @@ try {
       selectedExample[kind] = index;
       if (kind === "scene") {
         sceneSourceEditor.value = source;
-        authoredScene = null;
       } else {
         sourceEditor.value = source;
       }
@@ -501,27 +499,10 @@ try {
         result.document,
         result.identities,
       );
-      const patches =
-        authoredScene === null
-          ? null
-          : diffSceneDocuments(authoredScene, stableDocument);
-      let operation;
-      if (patches === null) {
-        const incremental = player.reconcileScene(JSON.stringify(stableDocument));
-        operation = incremental ? "Scene reconciled" : "Scene replaced safely";
-      } else if (patches.length > 0) {
-        const sequence = Number(player.nextSequence());
-        if (!Number.isSafeInteger(sequence)) {
-          throw new Error("Patch sequence exceeds JavaScript's safe integer range");
-        }
-        player.applyPatchBatch(
-          JSON.stringify({ version: 1, sequence, patches }),
-        );
-        operation = `Scene reconciled with ${patches.length} patch${patches.length === 1 ? "" : "es"}`;
-      } else {
-        operation = "Scene already current";
-      }
-      authoredScene = stableDocument;
+      const incremental = player.reconcileScene(JSON.stringify(stableDocument));
+      const operation = incremental
+        ? "Scene updated incrementally"
+        : "Scene rebuilt atomically";
       resetPerformanceProfile();
 
       const preservedPlayhead = player.time();
@@ -580,7 +561,6 @@ try {
       patchStatus.dataset.sequence = String(nextSequence);
       patchStatus.dataset.theme = palette.name;
       paletteIndex = (paletteIndex + 1) % PALETTES.length;
-      authoredScene = null;
     } catch (error) {
       showPatchError(error);
     } finally {
