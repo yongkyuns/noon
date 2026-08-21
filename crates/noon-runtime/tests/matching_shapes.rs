@@ -1,7 +1,5 @@
 use noon_compile::CompiledScene;
-use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Vec2,
-};
+use noon_core::{Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Vec2};
 use noon_runtime::SceneInstance;
 
 fn matching_scene() -> CompiledScene {
@@ -11,8 +9,11 @@ fn matching_scene() -> CompiledScene {
     let target_circle = scene.add(GeometryRef::circle(2.0));
     let target_rectangle = scene.add(GeometryRef::rectangle(4.0, 2.0));
 
-    scene.object_mut(target_circle).expect("target circle exists").transform.translation =
-        Vec2::new(3.0, 1.0);
+    scene
+        .object_mut(target_circle)
+        .expect("target circle exists")
+        .transform
+        .translation = Vec2::new(3.0, 1.0);
     scene
         .object_mut(target_rectangle)
         .expect("target rectangle exists")
@@ -83,10 +84,7 @@ fn simultaneous_matches_keep_sources_until_atomic_handoff() {
     assert!(!middle.is_present(2));
     assert!(!middle.is_present(3));
     assert_eq!(middle.objects[0].geometry, GeometryRef::circle(1.5));
-    assert_eq!(
-        middle.objects[1].geometry,
-        GeometryRef::rectangle(3.0, 1.5)
-    );
+    assert_eq!(middle.objects[1].geometry, GeometryRef::rectangle(3.0, 1.5));
     assert_eq!(middle.objects[0].transform.translation, Vec2::new(1.5, 0.5));
     assert_eq!(
         middle.objects[1].transform.translation,
