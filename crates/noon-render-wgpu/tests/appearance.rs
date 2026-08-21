@@ -7,7 +7,11 @@ use noon_runtime::SceneInstance;
 fn appearance_multiplies_semantic_opacity_in_packed_instances() {
     let mut scene = SceneDefinition::new();
     let object = scene.add(GeometryRef::circle(1.0));
-    scene.object_mut(object).expect("object exists").style.opacity = 0.4;
+    scene
+        .object_mut(object)
+        .expect("object exists")
+        .style
+        .opacity = 0.4;
     scene
         .animate_scalar(
             object,
