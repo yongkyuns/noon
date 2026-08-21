@@ -1,6 +1,6 @@
 import unittest
 
-from noon import Color, ReplacementTransform, Scene
+from noon import Circle, Color, ReplacementTransform, Scene, Transform
 
 
 class ReplacementTransformTests(unittest.TestCase):
@@ -84,7 +84,7 @@ class ReplacementTransformTests(unittest.TestCase):
                 start_time=2.0,
             )
 
-    def test_replacement_rejects_target_with_overlapping_transform(self) -> None:
+    def test_replacement_rejects_target_property_state_before_handoff(self) -> None:
         scene = Scene()
         source = scene.circle(1.0)
         target = scene.circle(1.0)
@@ -95,12 +95,20 @@ class ReplacementTransformTests(unittest.TestCase):
             duration=3.0,
             start_time=0.0,
         )
-        # Property-specific tracks do not change the Transform snapshot scheduler,
-        # so they can coexist with a replacement. A generic Transform overlap is
-        # the one that must be rejected by the snapshot chaining rule.
-        from noon import Circle, Transform
 
+        with self.assertRaises(ValueError):
+            scene.play(
+                ReplacementTransform(source, target),
+                duration=1.0,
+                start_time=1.0,
+            )
+
+    def test_replacement_rejects_target_with_overlapping_transform(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0)
+        target = scene.circle(1.0)
         scene.play(Transform(target, Circle(2.0)), duration=3.0, start_time=0.0)
+
         with self.assertRaises(ValueError):
             scene.play(
                 ReplacementTransform(source, target),
