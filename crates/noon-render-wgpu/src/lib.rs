@@ -828,13 +828,19 @@ fn hash_vec2(value: noon_core::Vec2, hasher: &mut impl Hasher) {
     value.y.to_bits().hash(hasher);
 }
 
+fn pack_style(object: &FrameObjectState) -> PackedStyle {
+    let mut style: PackedStyle = object.style.into();
+    style.opacity *= object.appearance.clamp(0.0, 1.0);
+    style
+}
+
 fn pack_circle(object: &FrameObjectState) -> CircleInstance {
     let GeometryRef::Circle { radius } = &object.geometry else {
         unreachable!("circle slot must retain circle geometry")
     };
     CircleInstance {
         transform: object.transform.into(),
-        style: object.style.into(),
+        style: pack_style(object),
         radius: *radius,
         padding: [0.0; 3],
     }
@@ -846,7 +852,7 @@ fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
     };
     RectangleInstance {
         transform: object.transform.into(),
-        style: object.style.into(),
+        style: pack_style(object),
         size: [size.x, size.y],
         padding: [0.0; 2],
     }
@@ -858,7 +864,7 @@ fn pack_line(object: &FrameObjectState) -> LineInstance {
     };
     LineInstance {
         transform: object.transform.into(),
-        style: object.style.into(),
+        style: pack_style(object),
         start: [start.x, start.y],
         end: [end.x, end.y],
     }
@@ -868,7 +874,7 @@ fn pack_path(object: &FrameObjectState, reveal: f32, morph: f32) -> PathInstance
     debug_assert!(matches!(object.geometry, GeometryRef::VectorPath(_)));
     PathInstance {
         transform: object.transform.into(),
-        style: object.style.into(),
+        style: pack_style(object),
         path_params: [reveal.clamp(0.0, 1.0), morph.clamp(0.0, 1.0)],
     }
 }
@@ -938,6 +944,7 @@ mod tests {
             geometry,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
+            appearance: 1.0,
         }
     }
 
