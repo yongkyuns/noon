@@ -133,9 +133,10 @@ class ChainedLifecycleTests(unittest.TestCase):
             start_time=2.0,
         )
 
+        document = scene.to_document()
         events = [
             track
-            for track in scene.to_document()["tracks"]
+            for track in document["tracks"]
             if track["object"] == first.id and track["property"] == "presence"
         ]
         self.assertEqual(
@@ -147,6 +148,14 @@ class ChainedLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(
             [track["timing"]["start_time"] for track in events], [1.0, 3.0]
+        )
+
+        transforms = [
+            track for track in document["tracks"] if track["property"] == "transform"
+        ]
+        self.assertEqual(
+            transforms[-1]["values"]["object"]["to"]["geometry"],
+            {"circle": {"radius": 2.0}},
         )
 
 
