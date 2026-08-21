@@ -52,12 +52,7 @@ fn steady_generic_path_transform_updates_instance_without_retessellation() {
     let object = scene.add(from.geometry.clone());
     scene.object_mut(object).unwrap().style = from.style;
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
         .unwrap();
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
@@ -102,12 +97,7 @@ fn sequential_path_pair_transition_prepares_new_geometry_once() {
         )
         .unwrap();
     scene
-        .animate_transform(
-            object,
-            b,
-            c,
-            TrackTiming::new(1.0, 1.0, Easing::Linear),
-        )
+        .animate_transform(object, b, c, TrackTiming::new(1.0, 1.0, Easing::Linear))
         .unwrap();
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
