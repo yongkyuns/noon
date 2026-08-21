@@ -31,6 +31,22 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertGreater(len(document["objects"]), 0)
                 self.assertGreater(len(document["tracks"]), 0)
 
+    def test_instanced_field_survives_row_and_column_source_edits(self) -> None:
+        source_path = EXAMPLES_DIR / "instanced_field.py"
+        original = source_path.read_text()
+        for columns, rows in ((20, 10), (1, 1)):
+            with self.subTest(columns=columns, rows=rows):
+                source = original.replace("columns = 18", f"columns = {columns}", 1).replace(
+                    "rows = 10", f"rows = {rows}", 1
+                )
+                namespace: dict[str, object] = {}
+                exec(compile(source, str(source_path), "exec"), namespace)
+                result = namespace.get("result")
+                self.assertIsInstance(result, Scene)
+                document = result.to_document()
+                self.assertEqual(len(document["objects"]), columns * rows)
+                self.assertEqual(len(document["tracks"]), columns * rows * 2)
+
     def test_path_reveal_example_contains_reveal_tracks(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "path_reveal.py")
         result = namespace.get("result")
