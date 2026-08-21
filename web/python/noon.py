@@ -338,6 +338,22 @@ class TransformMatchingShapes:
     key: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class FadeIn:
+    """Make an object present and animate renderer appearance toward fully visible."""
+
+    target: Object
+    key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FadeOut:
+    """Animate renderer appearance to zero, then remove the object from the scene."""
+
+    target: Object
+    key: str | None = None
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -349,6 +365,7 @@ class Scene:
         self._track_keys: dict[int, str] = {}
         self._scheduled_transform_targets: dict[int, dict[str, Any]] = {}
         self._scheduled_transform_ends: dict[int, float] = {}
+        self._scheduled_fade_ends: dict[int, float] = {}
 
     def add(self, mobject: Mobject, *, key: str | None = None) -> Object:
         if not isinstance(mobject, Mobject):
@@ -486,7 +503,9 @@ class Scene:
         *animations: Transform
         | ReplacementTransform
         | TransformFromCopy
-        | TransformMatchingShapes,
+        | TransformMatchingShapes
+        | FadeIn
+        | FadeOut,
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
@@ -496,7 +515,25 @@ class Scene:
         checkpoint = self._authoring_checkpoint()
         try:
             for animation in animations:
-                if isinstance(animation, TransformMatchingShapes):
+                if isinstance(animation, FadeIn):
+                    self._schedule_fade(
+                        animation.target,
+                        fade_in=True,
+                        key=animation.key,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                elif isinstance(animation, FadeOut):
+                    self._schedule_fade(
+                        animation.target,
+                        fade_in=False,
+                        key=animation.key,
+                        duration=duration,
+                        start_time=start_time,
+                        easing=easing,
+                    )
+                elif isinstance(animation, TransformMatchingShapes):
                     self._schedule_transform_matching_shapes(
                         animation,
                         duration=duration,
@@ -527,7 +564,7 @@ class Scene:
                 else:
                     raise TypeError(
                         "unsupported animation; expected Transform, ReplacementTransform, "
-                        "TransformFromCopy, or TransformMatchingShapes"
+                        "TransformFromCopy, TransformMatchingShapes, FadeIn, or FadeOut"
                     )
         except Exception:
             self._restore_authoring_checkpoint(checkpoint)
@@ -540,6 +577,7 @@ class Scene:
             len(self._tracks),
             dict(self._scheduled_transform_targets),
             dict(self._scheduled_transform_ends),
+            dict(self._scheduled_fade_ends),
         )
 
     def _restore_authoring_checkpoint(self, checkpoint: tuple[Any, ...]) -> None:
@@ -548,6 +586,7 @@ class Scene:
             track_count,
             scheduled_transform_targets,
             scheduled_transform_ends,
+            scheduled_fade_ends,
         ) = checkpoint
         for object_id in range(object_count, len(self._objects)):
             self._object_keys.pop(object_id, None)
@@ -557,6 +596,7 @@ class Scene:
         del self._tracks[track_count:]
         self._scheduled_transform_targets = scheduled_transform_targets
         self._scheduled_transform_ends = scheduled_transform_ends
+        self._scheduled_fade_ends = scheduled_fade_ends
 
     def _schedule_transform(
         self,
@@ -652,9 +692,7 @@ class Scene:
                 raise ValueError(
                     f"matching source cannot be snapshotted: {error}"
                 ) from error
-            source_signatures.append(
-                _matching_shape_signature(snapshot["geometry"])
-            )
+            source_signatures.append(_matching_shape_signature(snapshot["geometry"]))
 
         target_signatures: list[tuple[Any, ...]] = []
         for target in targets:
@@ -666,9 +704,7 @@ class Scene:
                 raise ValueError(
                     f"matching target cannot be snapshotted at handoff: {error}"
                 ) from error
-            target_signatures.append(
-                _matching_shape_signature(snapshot["geometry"])
-            )
+            target_signatures.append(_matching_shape_signature(snapshot["geometry"]))
 
         remaining_targets = list(zip(targets, target_signatures))
         pairs: list[tuple[Object, Object]] = []
@@ -698,9 +734,7 @@ class Scene:
         )
         pair_keys = [f"{root_key}.match:{index}" for index in range(len(pairs))]
         existing_track_keys = set(self._track_keys.values())
-        collision = next(
-            (key for key in pair_keys if key in existing_track_keys), None
-        )
+        collision = next((key for key in pair_keys if key in existing_track_keys), None)
         if collision is not None:
             raise ValueError(f"duplicate track key: {collision}")
 
@@ -846,6 +880,70 @@ class Scene:
             key=f"{copy_key}.target-show",
         )
 
+    def _schedule_fade(
+        self,
+        obj: Object,
+        *,
+        fade_in: bool,
+        key: str | None,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        if not isinstance(obj, Object) or obj._owner is not self._owner:
+            raise ValueError("faded object must belong to this Scene")
+        start = _finite_number("start_time", start_time)
+        run_duration = _positive_number("duration", duration)
+        end = start + run_duration
+        previous_end = self._scheduled_fade_ends.get(obj.id)
+        if previous_end is not None and start < previous_end:
+            raise ValueError("fade animations for one object must not overlap")
+
+        tracks = self._ensure_lifecycle_timeline_available(obj, start, "fade target")
+        if fade_in:
+            if tracks and self._presence_at(obj, start):
+                raise ValueError("fade-in target must be absent at animation start")
+        elif not self._presence_at(obj, start):
+            raise ValueError("fade-out target must be present at animation start")
+
+        object_key = self._object_keys[obj.id]
+        direction = "in" if fade_in else "out"
+        root_key = _authoring_key(
+            "key", key, f"@fade-{direction}:{object_key}:{start:g}"
+        )
+        from_ = self._appearance_at(obj, start)
+        to = 1.0 if fade_in else 0.0
+
+        if fade_in:
+            self._add_presence_track(
+                obj,
+                False,
+                True,
+                start,
+                key=f"{root_key}.show",
+            )
+
+        self._add_scalar_track(
+            obj,
+            "appearance",
+            _unit_interval("appearance from", from_ if tracks else (0.0 if fade_in else from_)),
+            to,
+            start,
+            run_duration,
+            easing,
+            root_key,
+        )
+
+        if not fade_in:
+            self._add_presence_track(
+                obj,
+                True,
+                False,
+                end,
+                key=f"{root_key}.hide",
+            )
+        self._scheduled_fade_ends[obj.id] = end
+
     def _presence_tracks(self, obj: Object) -> list[dict[str, Any]]:
         return sorted(
             (
@@ -866,6 +964,14 @@ class Scene:
                 break
             state = track["values"]["bool"]["to"]
         return state
+
+    def _appearance_at(self, obj: Object, time: float) -> float:
+        track = self._latest_track_at(obj, "appearance", time)
+        if track is None:
+            return 1.0
+        progress = _track_progress(track["timing"], time)
+        values = track["values"]["scalar"]
+        return max(0.0, min(1.0, _lerp(values["from"], values["to"], progress)))
 
     def _ensure_lifecycle_timeline_available(
         self, obj: Object, start: float, label: str
@@ -971,6 +1077,29 @@ class Scene:
     ) -> Scene:
         self._add_scalar_track(
             obj, "opacity", from_, to, start_time, duration, easing, key
+        )
+        return self
+
+    def animate_appearance(
+        self,
+        obj: Object,
+        from_: float,
+        to: float,
+        *,
+        duration: float,
+        start_time: float = 0.0,
+        easing: str = "linear",
+        key: str | None = None,
+    ) -> Scene:
+        self._add_scalar_track(
+            obj,
+            "appearance",
+            _unit_interval("from", from_),
+            _unit_interval("to", to),
+            start_time,
+            duration,
+            easing,
+            key,
         )
         return self
 
@@ -1280,9 +1409,7 @@ class PatchBatch:
                     "style": {
                         "fill": None if fill is None else fill.to_ir(),
                         "stroke": None if stroke is None else stroke.to_ir(),
-                        "stroke_width": _finite_number(
-                            "stroke_width", stroke_width
-                        ),
+                        "stroke_width": _finite_number("stroke_width", stroke_width),
                         "stroke_join": _stroke_join(stroke_join),
                         "stroke_cap": _stroke_cap(stroke_cap),
                         "opacity": _finite_number("opacity", opacity),
