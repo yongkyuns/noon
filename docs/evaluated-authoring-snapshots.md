@@ -35,13 +35,15 @@ Until Transform progress itself becomes a first-class snapshot representation, N
 
 `ReplacementTransform` evaluates the target at the exact handoff time. `TransformFromCopy` evaluates the source at copy start and the target at handoff. This means Position, Rotation, and Opacity animation can compose naturally with lifecycle authoring instead of being rejected merely because those tracks already exist.
 
+There is one important asymmetry. `ReplacementTransform` runs the generic Transform on the original source object, so any source Position/Rotation/Opacity track that has started before the handoff would continue to override the replacement Transform at runtime. Noon therefore rejects such source tracks for `ReplacementTransform`; otherwise the source could approach a state different from the target and visibly jump at the presence handoff. A source narrow-property track that starts at or after the handoff is harmless because the source is already absent. `TransformFromCopy` does not have this restriction because the transient copy is a fresh object with no narrow-property tracks of its own.
+
 Lifecycle snapshots still reject channels that `ObjectSnapshot` does not encode, currently Presence, Reveal, and standalone Morph state. This is an explicit correctness boundary: the source/copy Transform endpoint must not claim to reproduce visual state it cannot carry.
 
 ## Generic Transform use
 
 Plain generic `Transform` also uses the evaluator for its `from` snapshot. This fixes continuity when a Transform begins after or during a narrow Position/Rotation/Opacity track. `Transform(source, VectorPath(...))` therefore preserves the actually evaluated transform/style state at its start while replacing only geometry.
 
-Narrow-property runtime precedence remains unchanged: Position, Rotation, and Opacity groups are applied after generic Transform, so tracks that remain active after Transform start continue to override those channels during playback.
+Narrow-property runtime precedence remains unchanged: Position, Rotation, and Opacity groups are applied after generic Transform, so tracks that remain active after Transform start continue to override those channels during playback. That precedence is valid for ordinary Transform composition; lifecycle handoffs impose the stricter source rule above because they require the disappearing source and appearing target to agree exactly at the boundary.
 
 ## Validation
 
@@ -53,4 +55,5 @@ Python regression coverage verifies:
 - completed generic Transform target state is available to later lifecycle handoffs;
 - a copy operation can occur before an already-authored future Transform on its source;
 - active generic Transform snapshots are rejected transactionally;
-- lifecycle state outside `ObjectSnapshot`, such as Reveal, is rejected transactionally.
+- lifecycle state outside `ObjectSnapshot`, such as Reveal, is rejected transactionally;
+- `ReplacementTransform` rejects source narrow-property overrides before handoff but allows tracks that begin after the source has disappeared.
