@@ -91,24 +91,33 @@ class ReplacementTransformTests(unittest.TestCase):
                 start_time=2.0,
             )
 
-    def test_replacement_rejects_target_property_state_before_handoff(self) -> None:
+    def test_replacement_evaluates_target_property_state_at_handoff(self) -> None:
         scene = Scene()
         source = scene.circle(1.0)
         target = scene.circle(1.0)
         scene.animate_position(
             target,
             (0.0, 0.0),
-            (1.0, 0.0),
+            (3.0, 0.0),
             duration=3.0,
             start_time=0.0,
         )
 
-        with self.assertRaises(ValueError):
-            scene.play(
-                ReplacementTransform(source, target),
-                duration=1.0,
-                start_time=1.0,
-            )
+        scene.play(
+            ReplacementTransform(source, target),
+            duration=1.0,
+            start_time=1.0,
+        )
+
+        transform = next(
+            track
+            for track in scene.to_document()["tracks"]
+            if track["property"] == "transform"
+        )
+        self.assertEqual(
+            transform["values"]["object"]["to"]["transform"]["translation"],
+            {"x": 2.0, "y": 0.0},
+        )
 
     def test_replacement_rejects_target_with_overlapping_transform(self) -> None:
         scene = Scene()
@@ -260,40 +269,44 @@ class TransformFromCopyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scene.play(TransformFromCopy(target, third), duration=1.0, start_time=2.0)
 
-    def test_transform_from_copy_rejects_ambiguous_source_or_target_state(self) -> None:
-        source_scene = Scene()
-        source = source_scene.circle(1.0)
-        target = source_scene.circle(2.0)
-        source_scene.animate_position(
+    def test_transform_from_copy_evaluates_source_and_target_property_state(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0)
+        target = scene.circle(2.0)
+        scene.animate_position(
             source,
             (0.0, 0.0),
-            (1.0, 0.0),
-            duration=1.0,
+            (2.0, 0.0),
+            duration=2.0,
             start_time=0.0,
         )
-        with self.assertRaises(ValueError):
-            source_scene.play(
-                TransformFromCopy(source, target),
-                duration=1.0,
-                start_time=1.0,
-            )
-
-        target_scene = Scene()
-        source = target_scene.circle(1.0)
-        target = target_scene.circle(2.0)
-        target_scene.animate_opacity(
+        scene.animate_opacity(
             target,
             1.0,
             0.5,
-            duration=1.0,
-            start_time=2.0,
+            duration=2.0,
+            start_time=1.0,
         )
-        with self.assertRaises(ValueError):
-            target_scene.play(
-                TransformFromCopy(source, target),
-                duration=1.0,
-                start_time=1.0,
-            )
+
+        scene.play(
+            TransformFromCopy(source, target),
+            duration=1.0,
+            start_time=1.0,
+        )
+
+        document = scene.to_document()
+        copy_snapshot = {
+            key: value for key, value in document["objects"][2].items() if key != "id"
+        }
+        self.assertEqual(
+            copy_snapshot["transform"]["translation"], {"x": 1.0, "y": 0.0}
+        )
+        transform = next(
+            track
+            for track in document["tracks"]
+            if track["property"] == "transform" and track["object"] == 2
+        )
+        self.assertEqual(transform["values"]["object"]["to"]["style"]["opacity"], 0.75)
 
     def test_transform_from_copy_rejects_overlapping_source_or_target_transform(self) -> None:
         source_scene = Scene()
