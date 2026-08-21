@@ -80,7 +80,10 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     let midpoint = instance.seek(1.0).unwrap().clone();
     assert_eq!(midpoint.objects[0].id, object);
     assert_eq!(midpoint.objects[0].geometry, from.geometry);
-    assert_eq!(midpoint.objects[0].transform.translation, Vec2::new(2.0, -1.0));
+    assert_eq!(
+        midpoint.objects[0].transform.translation,
+        Vec2::new(2.0, -1.0)
+    );
     assert_eq!(midpoint.objects[0].transform.rotation, 0.4);
     assert_eq!(midpoint.objects[0].transform.scale, Vec2::new(1.25, 0.75));
     assert_eq!(midpoint.objects[0].style.opacity, 1.0);
@@ -94,6 +97,53 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     assert_eq!(end.objects[0].style, to.style);
     assert_eq!(end.morph(0), 1.0);
     assert_ne!(end.render_geometry(0), &end.objects[0].geometry);
+}
+
+fn path_command_buffers(
+    frame: &noon_runtime::FrameState,
+) -> (
+    *const noon_core::PathCommand,
+    *const noon_core::PathCommand,
+    *const noon_core::PathCommand,
+) {
+    let GeometryRef::VectorPath(semantic) = &frame.objects[0].geometry else {
+        panic!("expected semantic path");
+    };
+    let GeometryRef::VectorPath(render) = frame.render_geometry(0) else {
+        panic!("expected prepared render path");
+    };
+    let target = render
+        .morph_target()
+        .expect("prepared path must carry target");
+    (
+        semantic.commands().as_ptr(),
+        render.commands().as_ptr(),
+        target.commands().as_ptr(),
+    )
+}
+
+#[test]
+fn steady_generic_transform_reuses_path_allocations() {
+    let style = stroke_style(Color::WHITE);
+    let from = snapshot(path_a(), Transform2D::IDENTITY, style);
+    let to = snapshot(path_b(), Transform2D::IDENTITY, style);
+    let mut scene = SceneDefinition::new();
+    let object = scene.add(from.geometry.clone());
+    scene.object_mut(object).unwrap().style = style;
+    scene
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
+        .unwrap();
+
+    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    instance.advance_to(0.25).unwrap();
+    let first = path_command_buffers(instance.frame());
+    instance.advance_to(0.50).unwrap();
+    let second = path_command_buffers(instance.frame());
+    instance.advance_to(0.75).unwrap();
+    let third = path_command_buffers(instance.frame());
+
+    assert_eq!(first, second);
+    assert_eq!(second, third);
 }
 
 #[test]
@@ -201,12 +251,7 @@ fn narrow_tracks_override_corresponding_generic_transform_channels() {
     to.transform.rotation = 1.0;
     to.style.opacity = 0.2;
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
         .unwrap();
     scene
         .animate_position(
@@ -242,20 +287,10 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
     let object = scene.add(from.geometry.clone());
     scene.object_mut(object).unwrap().style = style;
     scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
+        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
         .unwrap();
     scene
-        .animate_reveal(
-            object,
-            0.0,
-            1.0,
-            TrackTiming::new(0.0, 4.0, Easing::Linear),
-        )
+        .animate_reveal(object, 0.0, 1.0, TrackTiming::new(0.0, 4.0, Easing::Linear))
         .unwrap();
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());

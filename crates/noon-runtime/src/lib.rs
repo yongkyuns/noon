@@ -467,29 +467,70 @@ fn apply_transform_track(
         unreachable!("compiled Transform track must contain object snapshots");
     };
     let progress = track_progress(track, time);
-    let before_object = frame.objects[object_index].clone();
-    let before_morph = frame.morphs[object_index];
-    let before_render_geometry = frame.render_geometries[object_index].clone();
-
-    let object = &mut frame.objects[object_index];
-    object.geometry = if progress >= 1.0 {
-        to.geometry.clone()
+    let semantic_geometry = if progress >= 1.0 {
+        &to.geometry
     } else {
-        from.geometry.clone()
+        &from.geometry
     };
-    object.transform = interpolate_transform(from.transform, to.transform, progress);
-    object.style = interpolate_style(from.style, to.style, progress);
+    let next_transform = interpolate_transform(from.transform, to.transform, progress);
+    let next_style = interpolate_style(from.style, to.style, progress);
     let geometry_morphs = path_geometry_morphs(from, to);
-    frame.morphs[object_index] = if geometry_morphs { progress } else { 0.0 };
-    frame.render_geometries[object_index] = if geometry_morphs {
-        track.transform_geometry.clone()
+    let next_morph = if geometry_morphs { progress } else { 0.0 };
+    let next_render_geometry = if geometry_morphs {
+        track.transform_geometry.as_ref()
     } else {
         None
     };
 
-    frame.objects[object_index] != before_object
-        || frame.morphs[object_index] != before_morph
-        || frame.render_geometries[object_index] != before_render_geometry
+    let object = &mut frame.objects[object_index];
+    let mut changed = set_geometry_if_changed(&mut object.geometry, semantic_geometry);
+    if object.transform != next_transform {
+        object.transform = next_transform;
+        changed = true;
+    }
+    if object.style != next_style {
+        object.style = next_style;
+        changed = true;
+    }
+    if frame.morphs[object_index] != next_morph {
+        frame.morphs[object_index] = next_morph;
+        changed = true;
+    }
+    changed |= set_optional_geometry_if_changed(
+        &mut frame.render_geometries[object_index],
+        next_render_geometry,
+    );
+    changed
+}
+
+fn set_geometry_if_changed(current: &mut GeometryRef, next: &GeometryRef) -> bool {
+    if current == next {
+        return false;
+    }
+    current.clone_from(next);
+    true
+}
+
+fn set_optional_geometry_if_changed(
+    current: &mut Option<GeometryRef>,
+    next: Option<&GeometryRef>,
+) -> bool {
+    match next {
+        Some(next) if current.as_ref() == Some(next) => false,
+        Some(next) => {
+            if let Some(current) = current.as_mut() {
+                current.clone_from(next);
+            } else {
+                *current = Some(next.clone());
+            }
+            true
+        }
+        None if current.is_some() => {
+            *current = None;
+            true
+        }
+        None => false,
+    }
 }
 
 fn path_geometry_morphs(from: &ObjectSnapshot, to: &ObjectSnapshot) -> bool {
