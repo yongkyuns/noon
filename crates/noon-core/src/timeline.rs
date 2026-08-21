@@ -37,11 +37,9 @@ impl Property {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
             Self::Position => ValueKind::Vec2,
-            Self::Rotation
-            | Self::Opacity
-            | Self::Appearance
-            | Self::Reveal
-            | Self::Morph => ValueKind::Scalar,
+            Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
+                ValueKind::Scalar
+            }
         }
     }
 
