@@ -163,6 +163,7 @@ pub struct PreparedFrame<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedSlot {
+    Absent,
     Circle(usize),
     Rectangle(usize),
     Line(usize),
@@ -256,6 +257,7 @@ impl FramePreparer {
         for &object_index in changes.object_indices() {
             let object = &frame.objects[object_index];
             match self.slots[object_index] {
+                PreparedSlot::Absent => {}
                 PreparedSlot::Circle(index) => {
                     let packed = pack_circle(object);
                     instances_repacked += 1;
@@ -325,6 +327,10 @@ impl FramePreparer {
         let mut path_group_lookup = HashMap::<usize, usize>::new();
         let mut geometry_cache_misses = 0;
         for (object_index, object) in frame.objects.iter().enumerate() {
+            if !frame.is_present(object_index) {
+                self.slots.push(PreparedSlot::Absent);
+                continue;
+            }
             let render_geometry = frame.render_geometry(object_index);
             match render_geometry {
                 GeometryRef::Circle { .. } => {
@@ -527,21 +533,31 @@ impl FramePreparer {
         let Some(object) = frame.objects.get(object_index) else {
             return false;
         };
+        let Some(slot) = self.slots.get(object_index) else {
+            return false;
+        };
+        if !frame.is_present(object_index) {
+            return matches!(slot, PreparedSlot::Absent);
+        }
+        if matches!(slot, PreparedSlot::Absent) {
+            return false;
+        }
         let render_geometry = frame.render_geometry(object_index);
-        match self.slots.get(object_index) {
-            Some(PreparedSlot::Circle(index)) => {
+        match slot {
+            PreparedSlot::Absent => false,
+            PreparedSlot::Circle(index) => {
                 matches!(render_geometry, GeometryRef::Circle { .. })
                     && self.circle_ids.get(*index) == Some(&object.id)
             }
-            Some(PreparedSlot::Rectangle(index)) => {
+            PreparedSlot::Rectangle(index) => {
                 matches!(render_geometry, GeometryRef::Rectangle { .. })
                     && self.rectangle_ids.get(*index) == Some(&object.id)
             }
-            Some(PreparedSlot::Line(index)) => {
+            PreparedSlot::Line(index) => {
                 matches!(render_geometry, GeometryRef::Line { .. })
                     && self.line_ids.get(*index) == Some(&object.id)
             }
-            Some(PreparedSlot::Path { index, batch }) => {
+            PreparedSlot::Path { index, batch } => {
                 let GeometryRef::VectorPath(path) = render_geometry else {
                     return false;
                 };
@@ -556,11 +572,10 @@ impl FramePreparer {
                     && cache.stroke_cap == object.style.stroke_cap
                     && cache.fill_enabled == object.style.fill.is_some()
             }
-            Some(PreparedSlot::Unsupported(index)) => {
+            PreparedSlot::Unsupported(index) => {
                 matches!(render_geometry, GeometryRef::External(_))
                     && self.unsupported.get(*index) == Some(&object.id)
             }
-            None => false,
         }
     }
 
@@ -817,12 +832,14 @@ mod tests {
     }
 
     fn frame(objects: Vec<FrameObjectState>) -> FrameState {
+        let presences = vec![true; objects.len()];
         let reveals = vec![1.0; objects.len()];
         let morphs = vec![0.0; objects.len()];
         let render_geometries = vec![None; objects.len()];
         FrameState {
             time: 1.25,
             objects,
+            presences,
             reveals,
             morphs,
             render_geometries,
@@ -1242,6 +1259,27 @@ mod tests {
         assert_eq!(prepared.stats.instance_count, 0);
         assert_eq!(prepared.stats.unsupported_count, 1);
         assert_eq!(prepared.unsupported, &[ObjectId::new(42)]);
+    }
+
+    #[test]
+    fn absent_objects_keep_semantic_slots_without_gpu_instances() {
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::circle(2.0)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        assert_eq!(preparer.prepare(&frame).stats.instance_count, 2);
+
+        frame.presences[0] = false;
+        let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert_eq!(hidden.stats.instance_count, 1);
+        assert_eq!(hidden.circle_ids, &[ObjectId::new(2)]);
+        assert_eq!(hidden.stats.unsupported_count, 0);
+
+        frame.presences[0] = true;
+        let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert_eq!(restored.stats.instance_count, 2);
+        assert_eq!(restored.circle_ids, &[ObjectId::new(1), ObjectId::new(2)]);
     }
 
     #[test]
