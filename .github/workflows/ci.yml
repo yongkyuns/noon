@@ -84,6 +84,7 @@ jobs:
           git add -- \
             crates/noon-compile/src/lib.rs \
             crates/noon-runtime/src/lib.rs \
+            crates/noon-runtime/tests/generic_transform.rs \
             crates/noon-render-wgpu/src/lib.rs \
             crates/noon-render-wgpu/src/gpu.rs \
             crates/noon-render-wgpu/examples/frame_preparation_perf.rs \
@@ -91,7 +92,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No review deltas to publish"
           else
-            git commit -m "Separate generic Transform semantics from render geometry"
+            git commit -m "Avoid steady-state Transform geometry clones"
             git push origin HEAD:agent/browser-realtime-architecture
           fi
 
