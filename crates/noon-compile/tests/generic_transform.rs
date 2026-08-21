@@ -10,6 +10,8 @@ fn stroke_style() -> Style {
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,
         opacity: 1.0,
+        stroke_join: noon_core::StrokeJoin::Round,
+        stroke_cap: noon_core::StrokeCap::Round,
     }
 }
 
@@ -126,6 +128,8 @@ fn filled_geometry_changing_path_transform_is_rejected() {
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,
         opacity: 1.0,
+        stroke_join: noon_core::StrokeJoin::Round,
+        stroke_cap: noon_core::StrokeCap::Round,
     };
     let mut scene = SceneDefinition::new();
     let object = scene.add(GeometryRef::path(source_path()));
@@ -143,4 +147,36 @@ fn filled_geometry_changing_path_transform_is_rejected() {
         CompiledScene::compile(&scene),
         Err(CompileError::PathTransformRequiresRetessellation(_))
     ));
+}
+
+#[test]
+fn path_transform_rejects_join_or_cap_topology_changes() {
+    let source_path = VectorPath::new()
+        .move_to(Vec2::new(-1.0, 0.0))
+        .line_to(Vec2::new(1.0, 0.0));
+    let target_path = VectorPath::new()
+        .move_to(Vec2::new(0.0, -1.0))
+        .line_to(Vec2::new(0.0, 1.0));
+    for change_join in [true, false] {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::path(source_path.clone()));
+        let mut from = ObjectSnapshot::from(scene.object(object).unwrap());
+        from.style.fill = None;
+        from.style.stroke = Some(Color::WHITE);
+        from.style.stroke_width = 0.1;
+        let mut to = from.clone();
+        to.geometry = GeometryRef::path(target_path.clone());
+        if change_join {
+            to.style.stroke_join = noon_core::StrokeJoin::Bevel;
+        } else {
+            to.style.stroke_cap = noon_core::StrokeCap::Butt;
+        }
+        scene
+            .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
+            .unwrap();
+        assert!(matches!(
+            CompiledScene::compile(&scene),
+            Err(CompileError::PathTransformRequiresRetessellation(_))
+        ));
+    }
 }

@@ -371,7 +371,10 @@ fn compile_transform_geometry_plan(
 
     if let (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_)) = (&from.geometry, &to.geometry)
     {
-        if from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits() {
+        if from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits()
+            || from.style.stroke_join != to.style.stroke_join
+            || from.style.stroke_cap != to.style.stroke_cap
+        {
             return Err(TransformCompileFailure::RequiresRetessellation);
         }
     }

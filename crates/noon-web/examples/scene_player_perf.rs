@@ -79,6 +79,8 @@ fn benchmark_size(object_count: usize, config: Config) {
                     object: target,
                     style: Style {
                         opacity: if sequence % 2 == 0 { 0.75 } else { 1.0 },
+                        stroke_join: noon_core::StrokeJoin::Round,
+                        stroke_cap: noon_core::StrokeCap::Round,
                         ..Style::default()
                     },
                 }],

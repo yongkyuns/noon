@@ -206,6 +206,8 @@ mod tests {
                     object: ObjectId::new(8),
                     style: Style {
                         opacity: 0.25,
+                        stroke_join: noon_core::StrokeJoin::Round,
+                        stroke_cap: noon_core::StrokeCap::Round,
                         ..Style::default()
                     },
                 },

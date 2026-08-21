@@ -86,6 +86,25 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(document["tracks"][0]["property"], "position")
         self.assertEqual(document["tracks"][1]["values"]["scalar"]["from"], -0.7)
 
+    def test_stroke_join_and_cap_are_semantic_and_validated(self) -> None:
+        scene = Scene()
+        scene.path(
+            VectorPath().move_to((-1.0, 0.0)).line_to((1.0, 0.0)),
+            fill=None,
+            stroke=Color(1.0, 1.0, 1.0),
+            stroke_width=0.2,
+            stroke_join="bevel",
+            stroke_cap="square",
+        )
+        style = scene.to_document()["objects"][0]["style"]
+        self.assertEqual(style["stroke_join"], "bevel")
+        self.assertEqual(style["stroke_cap"], "square")
+
+        with self.assertRaises(ValueError):
+            Scene().path(VectorPath().move_to((0.0, 0.0)).line_to((1.0, 0.0)), stroke_join="sharp")
+        with self.assertRaises(ValueError):
+            Scene().path(VectorPath().move_to((0.0, 0.0)).line_to((1.0, 0.0)), stroke_cap="triangle")
+
     def test_path_reveal_serializes_as_normalized_scalar_track(self) -> None:
         scene = Scene()
         path = scene.path(

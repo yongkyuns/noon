@@ -11,6 +11,8 @@ fn stroke_style(color: Color) -> Style {
         stroke: Some(color),
         stroke_width: 0.1,
         opacity: 1.0,
+        stroke_join: noon_core::StrokeJoin::Round,
+        stroke_cap: noon_core::StrokeCap::Round,
     }
 }
 

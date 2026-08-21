@@ -113,11 +113,33 @@ impl Rect {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeJoin {
+    #[default]
+    Round,
+    Miter,
+    Bevel,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeCap {
+    #[default]
+    Round,
+    Butt,
+    Square,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    #[serde(default)]
+    pub stroke_join: StrokeJoin,
+    #[serde(default)]
+    pub stroke_cap: StrokeCap,
     pub opacity: f32,
 }
 
@@ -127,6 +149,8 @@ impl Default for Style {
             fill: Some(Color::WHITE),
             stroke: None,
             stroke_width: 1.0,
+            stroke_join: StrokeJoin::Round,
+            stroke_cap: StrokeCap::Round,
             opacity: 1.0,
         }
     }

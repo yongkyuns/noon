@@ -3,8 +3,10 @@ use lyon_tessellation::{
     BuffersBuilder, LineCap, LineJoin, StrokeOptions, StrokeTessellator, StrokeVertex,
     VertexBuffers,
 };
-use noon_core::{PathCommand, Vec2, VectorPath};
-use noon_geometry::{tessellate, GeometryError, MeshVertex, PathSurface, TessellatedPath};
+use noon_core::{PathCommand, StrokeCap, StrokeJoin, Vec2, VectorPath};
+use noon_geometry::{
+    tessellate, tessellate_styled, GeometryError, MeshVertex, PathSurface, TessellatedPath,
+};
 
 const EPS: f32 = 1.0e-5;
 const REFERENCE_TOLERANCE: f32 = 0.01;
@@ -47,10 +49,6 @@ fn normalized(value: Vec2) -> Vec2 {
     let length = magnitude(value);
     assert!(length > EPS, "test vector must be non-degenerate");
     scale(value, 1.0 / length)
-}
-
-fn midpoint(a: Vec2, b: Vec2) -> Vec2 {
-    scale(add(a, b), 0.5)
 }
 
 fn reflect_x(value: Vec2) -> Vec2 {
@@ -203,41 +201,52 @@ fn rounded_source() -> VectorPath {
         .close()
 }
 
-fn source_pairs(mesh: &TessellatedPath) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
+fn source_positions(mesh: &TessellatedPath) -> Vec<Vec2> {
     assert!(mesh.morphing);
-    mesh.vertices
-        .chunks_exact(2)
-        .map(|pair| (pair[0].position, pair[1].position))
+    mesh.vertices.iter().map(|vertex| vertex.position).collect()
 }
 
-fn target_pairs(mesh: &TessellatedPath) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
+fn target_positions(mesh: &TessellatedPath) -> Vec<Vec2> {
     assert!(mesh.morphing);
     mesh.vertices
-        .chunks_exact(2)
-        .map(|pair| (pair[0].target_position, pair[1].target_position))
+        .iter()
+        .map(|vertex| vertex.target_position)
+        .collect()
 }
 
-fn find_pair_at_center<I>(pairs: I, center: Vec2) -> (Vec2, Vec2)
-where
-    I: IntoIterator<Item = (Vec2, Vec2)>,
-{
-    pairs
+fn contains_point(points: &[Vec2], expected: Vec2, tolerance: f32) -> bool {
+    points
+        .iter()
+        .any(|point| magnitude(sub(*point, expected)) <= tolerance)
+}
+
+fn canonical_positions(points: impl IntoIterator<Item = Vec2>, tolerance: f32) -> Vec<(i64, i64)> {
+    let mut result: Vec<_> = points
         .into_iter()
-        .find(|(left, right)| magnitude(sub(midpoint(*left, *right), center)) < EPS)
-        .unwrap_or_else(|| panic!("no stroke pair centered at {center:?}"))
-}
-
-fn unordered_pair_matches(actual: (Vec2, Vec2), expected: (Vec2, Vec2), tolerance: f32) -> bool {
-    let direct = magnitude(sub(actual.0, expected.0)) <= tolerance
-        && magnitude(sub(actual.1, expected.1)) <= tolerance;
-    let swapped = magnitude(sub(actual.0, expected.1)) <= tolerance
-        && magnitude(sub(actual.1, expected.0)) <= tolerance;
-    direct || swapped
+        .map(|point| {
+            (
+                (point.x / tolerance).round() as i64,
+                (point.y / tolerance).round() as i64,
+            )
+        })
+        .collect();
+    result.sort_unstable();
+    result
 }
 
 fn self_morph(path: VectorPath, width: f32) -> TessellatedPath {
+    self_morph_styled(path, width, StrokeJoin::Round, StrokeCap::Round)
+}
+
+fn self_morph_styled(
+    path: VectorPath,
+    width: f32,
+    join: StrokeJoin,
+    cap: StrokeCap,
+) -> TessellatedPath {
     let target = path.clone();
-    tessellate(&path.with_morph_target(target), width).expect("valid self morph")
+    tessellate_styled(&path.with_morph_target(target), width, join, cap)
+        .expect("valid styled self morph")
 }
 
 #[test]
@@ -365,31 +374,70 @@ fn morph_open_stroke_ends_are_centered_perpendicular_and_full_width() {
     let end = Vec2::new(3.0, 4.0);
     let width = 0.6;
     let tangent = normalized(sub(end, start));
-    let mesh = self_morph(VectorPath::new().move_to(start).line_to(end), width);
-    let pairs: Vec<_> = source_pairs(&mesh).collect();
+    let normal = Vec2::new(-tangent.y, tangent.x);
+    let length = magnitude(sub(end, start));
+    let mesh = self_morph_styled(
+        VectorPath::new().move_to(start).line_to(end),
+        width,
+        StrokeJoin::Round,
+        StrokeCap::Butt,
+    );
+    let positions = source_positions(&mesh);
 
-    for (center, pair) in [(start, pairs[0]), (end, *pairs.last().unwrap())] {
-        assert_vec_close(midpoint(pair.0, pair.1), center, EPS);
-        assert_close(magnitude(sub(pair.0, pair.1)), width, EPS);
-        assert_close(dot(sub(pair.0, center), tangent), 0.0, EPS);
-        assert_close(dot(sub(pair.1, center), tangent), 0.0, EPS);
+    for (center, along_expected) in [(start, 0.0), (end, length)] {
+        let cross_section: Vec<_> = positions
+            .iter()
+            .copied()
+            .filter(|point| {
+                let relative = sub(*point, start);
+                (dot(relative, tangent) - along_expected).abs() < EPS
+                    && dot(sub(*point, center), normal).abs() > EPS
+            })
+            .collect();
+        assert!(cross_section.len() >= 2);
+        let min = cross_section
+            .iter()
+            .map(|point| dot(sub(*point, center), normal))
+            .fold(f32::INFINITY, f32::min);
+        let max = cross_section
+            .iter()
+            .map(|point| dot(sub(*point, center), normal))
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert_close(min, -width * 0.5, EPS);
+        assert_close(max, width * 0.5, EPS);
+        assert_close(max - min, width, EPS);
     }
 }
 
 #[test]
 fn morph_straight_authored_join_does_not_bulge_or_shrink() {
     let width = 0.4;
+    let half_width = width * 0.5;
     let middle = Vec2::new(1.0, 0.0);
     let path = VectorPath::new()
         .move_to(Vec2::new(0.0, 0.0))
         .line_to(middle)
         .line_to(Vec2::new(2.0, 0.0));
-    let mesh = self_morph(path, width);
-    let pair = find_pair_at_center(source_pairs(&mesh), middle);
-
-    assert_close(magnitude(sub(pair.0, pair.1)), width, EPS);
-    assert_close(pair.0.x, middle.x, EPS);
-    assert_close(pair.1.x, middle.x, EPS);
+    let mesh = self_morph_styled(path, width, StrokeJoin::Miter, StrokeCap::Butt);
+    let positions = source_positions(&mesh);
+    let at_middle: Vec<_> = positions
+        .iter()
+        .copied()
+        .filter(|point| (point.x - middle.x).abs() < EPS)
+        .collect();
+    assert!(contains_point(
+        &at_middle,
+        Vec2::new(middle.x, half_width),
+        EPS
+    ));
+    assert!(contains_point(
+        &at_middle,
+        Vec2::new(middle.x, -half_width),
+        EPS
+    ));
+    assert!(at_middle
+        .iter()
+        .all(|point| point.y.abs() <= half_width + EPS));
 }
 
 #[test]
@@ -401,13 +449,18 @@ fn morph_right_angle_miter_matches_closed_form_offset_intersection() {
         .move_to(Vec2::new(0.0, 0.0))
         .line_to(corner)
         .line_to(Vec2::new(1.0, 1.0));
-    let mesh = self_morph(path, width);
-    let actual = find_pair_at_center(source_pairs(&mesh), corner);
-    let offset = Vec2::new(-half_width, half_width);
-    let expected = (add(corner, offset), sub(corner, offset));
+    let mesh = self_morph_styled(path, width, StrokeJoin::Miter, StrokeCap::Butt);
+    let positions = source_positions(&mesh);
+    let inner = Vec2::new(corner.x - half_width, corner.y + half_width);
+    let outer = Vec2::new(corner.x + half_width, corner.y - half_width);
 
-    assert!(unordered_pair_matches(actual, expected, EPS));
-    assert_close(magnitude(offset), half_width * 2.0_f32.sqrt(), EPS);
+    assert!(contains_point(&positions, inner, EPS));
+    assert!(contains_point(&positions, outer, EPS));
+    assert_close(
+        magnitude(sub(outer, corner)),
+        half_width * 2.0_f32.sqrt(),
+        EPS,
+    );
 }
 
 #[test]
@@ -419,14 +472,23 @@ fn morph_miter_limit_bounds_near_reversal_spikes() {
         .move_to(Vec2::new(0.0, 0.0))
         .line_to(corner)
         .line_to(Vec2::new(0.001, 0.01));
-    let mesh = self_morph(path, width);
-    let pair = find_pair_at_center(source_pairs(&mesh), corner);
-
-    for edge in [pair.0, pair.1] {
-        let offset = sub(edge, corner);
-        assert!(offset.x.is_finite() && offset.y.is_finite());
-        assert_close(magnitude(offset), half_width * MORPH_MITER_LIMIT, EPS);
-    }
+    let mesh = self_morph_styled(path, width, StrokeJoin::Miter, StrokeCap::Butt);
+    let positions = source_positions(&mesh);
+    let nearby: Vec<_> = positions
+        .iter()
+        .copied()
+        .filter(|point| magnitude(sub(*point, corner)) <= half_width * MORPH_MITER_LIMIT + EPS)
+        .collect();
+    assert!(!nearby.is_empty());
+    assert!(nearby.iter().all(|point| {
+        let distance = magnitude(sub(*point, corner));
+        distance.is_finite() && distance <= half_width * MORPH_MITER_LIMIT + EPS
+    }));
+    // Lyon-style miter-limit fallback is bevel, so at least one outer endpoint
+    // remains exactly one half-width from the corner rather than forming a spike.
+    assert!(nearby
+        .iter()
+        .any(|point| { (magnitude(sub(*point, corner)) - half_width).abs() < EPS }));
 }
 
 #[test]
@@ -435,8 +497,14 @@ fn star_morph_target_miters_match_offset_line_theory_or_miter_limit() {
     let target = polygon_path(&points);
     let width = 0.16;
     let half_width = width * 0.5;
-    let mesh = tessellate(&rounded_source().with_morph_target(target), width)
-        .expect("valid star morph tessellation");
+    let mesh = tessellate_styled(
+        &rounded_source().with_morph_target(target),
+        width,
+        StrokeJoin::Miter,
+        StrokeCap::Round,
+    )
+    .expect("valid star morph tessellation");
+    let target_positions = target_positions(&mesh);
 
     for index in 0..points.len() {
         let point = points[index];
@@ -444,20 +512,29 @@ fn star_morph_target_miters_match_offset_line_theory_or_miter_limit() {
         let next = points[(index + 1) % points.len()];
         let incoming = normalized(sub(point, previous));
         let outgoing = normalized(sub(next, point));
-        let incoming_normal = Vec2::new(-incoming.y, incoming.x);
-        let outgoing_normal = Vec2::new(-outgoing.y, outgoing.x);
+        let turn = incoming.x * outgoing.y - incoming.y * outgoing.x;
+        let sign = if turn > 0.0 { -1.0 } else { 1.0 };
+        let incoming_normal = scale(Vec2::new(-incoming.y, incoming.x), sign);
+        let outgoing_normal = scale(Vec2::new(-outgoing.y, outgoing.x), sign);
         let summed = add(incoming_normal, outgoing_normal);
         let miter = normalized(summed);
         let alignment = dot(miter, outgoing_normal).abs();
         let theoretical_length = half_width / alignment;
-        let pair = find_pair_at_center(target_pairs(&mesh), point);
-        let offset = sub(pair.0, point);
 
         if theoretical_length <= half_width * MORPH_MITER_LIMIT {
-            assert_close(dot(offset, incoming_normal).abs(), half_width, EPS);
-            assert_close(dot(offset, outgoing_normal).abs(), half_width, EPS);
+            let expected = add(point, scale(miter, theoretical_length));
+            assert!(
+                contains_point(&target_positions, expected, 2.0 * EPS),
+                "missing theoretical miter at star vertex {index}: {expected:?}"
+            );
+            let offset = sub(expected, point);
+            assert_close(dot(offset, incoming_normal).abs(), half_width, 2.0 * EPS);
+            assert_close(dot(offset, outgoing_normal).abs(), half_width, 2.0 * EPS);
         } else {
-            assert_close(magnitude(offset), half_width * MORPH_MITER_LIMIT, EPS);
+            let outer_in = add(point, scale(incoming_normal, half_width));
+            let outer_out = add(point, scale(outgoing_normal, half_width));
+            assert!(contains_point(&target_positions, outer_in, 2.0 * EPS));
+            assert!(contains_point(&target_positions, outer_out, 2.0 * EPS));
         }
     }
 }
@@ -473,13 +550,11 @@ fn closed_morph_stroke_is_invariant_to_contour_start_index() {
     let baseline = self_morph(polygon_path(&points), 0.2);
     let shifted = [points[2], points[3], points[0], points[1]];
     let shifted = self_morph(polygon_path(&shifted), 0.2);
-    let shifted_pairs: Vec<_> = source_pairs(&shifted).collect();
 
-    for baseline_pair in source_pairs(&baseline) {
-        let center = midpoint(baseline_pair.0, baseline_pair.1);
-        let shifted_pair = find_pair_at_center(shifted_pairs.iter().copied(), center);
-        assert!(unordered_pair_matches(baseline_pair, shifted_pair, EPS));
-    }
+    assert_eq!(
+        canonical_positions(source_positions(&baseline), 5.0 * EPS),
+        canonical_positions(source_positions(&shifted), 5.0 * EPS)
+    );
 }
 
 #[test]
@@ -493,13 +568,11 @@ fn reversing_closed_morph_contour_preserves_geometry_and_swaps_sides_only() {
     let baseline = self_morph(polygon_path(&points), 0.2);
     let reversed = [points[3], points[2], points[1], points[0]];
     let reversed = self_morph(polygon_path(&reversed), 0.2);
-    let reversed_pairs: Vec<_> = source_pairs(&reversed).collect();
 
-    for baseline_pair in source_pairs(&baseline) {
-        let center = midpoint(baseline_pair.0, baseline_pair.1);
-        let reversed_pair = find_pair_at_center(reversed_pairs.iter().copied(), center);
-        assert!(unordered_pair_matches(baseline_pair, reversed_pair, EPS));
-    }
+    assert_eq!(
+        canonical_positions(source_positions(&baseline), 5.0 * EPS),
+        canonical_positions(source_positions(&reversed), 5.0 * EPS)
+    );
 }
 
 #[test]
@@ -508,15 +581,11 @@ fn morph_target_endpoint_mesh_contains_every_authored_star_vertex() {
     let target = polygon_path(&target_vertices);
     let mesh = tessellate(&rounded_source().with_morph_target(target), 0.16)
         .expect("valid star morph tessellation");
+    let positions = target_positions(&mesh);
 
-    let centers: Vec<Vec2> = target_pairs(&mesh)
-        .map(|(left, right)| midpoint(left, right))
-        .collect();
     for vertex in target_vertices {
         assert!(
-            centers
-                .iter()
-                .any(|center| magnitude(sub(*center, vertex)) < EPS),
+            contains_point(&positions, vertex, EPS),
             "authored target vertex {vertex:?} was lost during morph tessellation"
         );
     }
@@ -524,37 +593,45 @@ fn morph_target_endpoint_mesh_contains_every_authored_star_vertex() {
 
 #[test]
 fn symmetric_star_tip_taper_is_mirror_symmetric() {
-    let target_vertices = star_vertices();
-    let target = polygon_path(&target_vertices);
-    let mesh = tessellate(&rounded_source().with_morph_target(target), 0.16)
-        .expect("valid star morph tessellation");
+    let target = polygon_path(&star_vertices());
+    let mesh = tessellate_styled(
+        &rounded_source().with_morph_target(target),
+        0.16,
+        StrokeJoin::Miter,
+        StrokeCap::Round,
+    )
+    .expect("valid star morph tessellation");
+    let target = target_positions(&mesh);
+    let reflected = target.iter().copied().map(reflect_x).collect::<Vec<_>>();
 
-    let tip_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[0]);
-    assert_close(tip_pair.0.x, 0.0, EPS);
-    assert_close(tip_pair.1.x, 0.0, EPS);
-
-    for (right_index, left_index) in [(1, 9), (2, 8), (3, 7), (4, 6)] {
-        let right_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[right_index]);
-        let left_pair = find_pair_at_center(target_pairs(&mesh), target_vertices[left_index]);
-        let reflected_right = (reflect_x(right_pair.0), reflect_x(right_pair.1));
-        assert!(
-            unordered_pair_matches(left_pair, reflected_right, EPS),
-            "stroke corners at mirrored star vertices {right_index}/{left_index} are asymmetric"
-        );
-    }
+    assert_eq!(
+        canonical_positions(target, 5.0 * EPS),
+        canonical_positions(reflected, 5.0 * EPS),
+        "target stroke mesh must preserve the star's mirror symmetry"
+    );
 }
 
 #[test]
-fn morph_topology_matches_open_and_closed_strip_theory() {
+fn morph_topology_matches_fixed_segment_join_cap_theory() {
     let samples = 64;
+    let round_vertices = 8 + 2; // center + 9 arc points
+    let round_indices = 8 * 3;
     let open = self_morph(
         VectorPath::new()
             .move_to(Vec2::new(0.0, 0.0))
             .line_to(Vec2::new(4.0, 0.0)),
         0.2,
     );
-    assert_eq!(open.vertices.len(), samples * 2);
-    assert_eq!(open.indices.len(), (samples - 1) * 6);
+    let open_segments = samples - 1;
+    let open_joins = samples - 2;
+    assert_eq!(
+        open.vertices.len(),
+        open_segments * 4 + open_joins * 2 * round_vertices + 2 * round_vertices
+    );
+    assert_eq!(
+        open.indices.len(),
+        open_segments * 6 + open_joins * 2 * round_indices + 2 * round_indices
+    );
 
     let closed = self_morph(
         polygon_path(&[
@@ -565,21 +642,34 @@ fn morph_topology_matches_open_and_closed_strip_theory() {
         ]),
         0.2,
     );
-    assert_eq!(closed.vertices.len(), samples * 2);
-    assert_eq!(closed.indices.len(), samples * 6);
+    assert_eq!(
+        closed.vertices.len(),
+        samples * 4 + samples * 2 * round_vertices
+    );
+    assert_eq!(
+        closed.indices.len(),
+        samples * 6 + samples * 2 * round_indices
+    );
 }
 
 #[test]
-fn morph_strip_triangles_keep_winding_through_interpolation() {
+fn morph_active_triangles_keep_winding_through_interpolation() {
     let source = VectorPath::new()
         .move_to(Vec2::new(0.0, 0.0))
         .line_to(Vec2::new(4.0, 0.0));
     let target = VectorPath::new()
         .move_to(Vec2::new(0.0, 2.0))
         .line_to(Vec2::new(4.0, 2.0));
-    let mesh = tessellate(&source.with_morph_target(target), 0.2).expect("valid morph");
+    let mesh = tessellate_styled(
+        &source.with_morph_target(target),
+        0.2,
+        StrokeJoin::Miter,
+        StrokeCap::Butt,
+    )
+    .expect("valid morph");
 
     for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let mut active = 0;
         for triangle in mesh.indices.chunks_exact(3) {
             let position = |index: u32| {
                 let vertex = mesh.vertices[index as usize];
@@ -593,11 +683,18 @@ fn morph_strip_triangles_keep_winding_through_interpolation() {
                 position(triangle[1]),
                 position(triangle[2]),
             );
+            // Inactive join slots intentionally collapse to zero area so turn
+            // direction can change without changing topology.
+            if area.abs() <= EPS {
+                continue;
+            }
+            active += 1;
             assert!(
                 area > EPS,
-                "triangle inverted or collapsed at alpha={alpha}: {area}"
+                "active triangle inverted at alpha={alpha}: {area}"
             );
         }
+        assert!(active > 0, "morph must retain active stroke triangles");
     }
 }
 

@@ -3,10 +3,12 @@ use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
     StrokeTessellator, StrokeVertex, VertexBuffers,
 };
-use noon_core::{PathCommand, Rect, Vec2, VectorPath};
+use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
 
 const PATH_TESSELLATION_TOLERANCE: f32 = 0.01;
 const MORPH_MITER_LIMIT: f32 = 4.0;
+const ROUND_JOIN_SEGMENTS: usize = 8;
+const ROUND_CAP_SEGMENTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathSurface {
@@ -81,11 +83,20 @@ struct TessellationVertex {
 }
 
 pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPath, GeometryError> {
+    tessellate_styled(path, stroke_width, StrokeJoin::Round, StrokeCap::Round)
+}
+
+pub fn tessellate_styled(
+    path: &VectorPath,
+    stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> Result<TessellatedPath, GeometryError> {
     if !stroke_width.is_finite() || stroke_width < 0.0 {
         return Err(GeometryError::InvalidStrokeWidth(stroke_width));
     }
     if let Some(target) = path.morph_target() {
-        return tessellate_morph_path(path, target, stroke_width);
+        return tessellate_morph_path(path, target, stroke_width, stroke_join, stroke_cap);
     }
     let path = build_lyon_path(path)?;
     let mut buffers = VertexBuffers::new();
@@ -109,8 +120,9 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
                 &StrokeOptions::default()
                     .with_tolerance(PATH_TESSELLATION_TOLERANCE)
                     .with_line_width(stroke_width)
-                    .with_line_cap(LineCap::Round)
-                    .with_line_join(LineJoin::Round),
+                    .with_miter_limit(MORPH_MITER_LIMIT)
+                    .with_line_cap(lyon_line_cap(stroke_cap))
+                    .with_line_join(lyon_line_join(stroke_join)),
                 &mut BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
                     TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
@@ -172,10 +184,28 @@ pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPat
     })
 }
 
+fn lyon_line_join(join: StrokeJoin) -> LineJoin {
+    match join {
+        StrokeJoin::Round => LineJoin::Round,
+        StrokeJoin::Miter => LineJoin::Miter,
+        StrokeJoin::Bevel => LineJoin::Bevel,
+    }
+}
+
+fn lyon_line_cap(cap: StrokeCap) -> LineCap {
+    match cap {
+        StrokeCap::Round => LineCap::Round,
+        StrokeCap::Butt => LineCap::Butt,
+        StrokeCap::Square => LineCap::Square,
+    }
+}
+
 fn tessellate_morph_path(
     source: &VectorPath,
     target: &VectorPath,
     stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
 ) -> Result<TessellatedPath, GeometryError> {
     if stroke_width == 0.0 {
         return Ok(TessellatedPath {
@@ -186,54 +216,134 @@ fn tessellate_morph_path(
     let plan = crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
         .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
     let total_points = plan.point_count();
-    let mut vertices = Vec::with_capacity(total_points.saturating_mul(2));
+    let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let mut global_point = 0_usize;
     let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
+    let half_width = stroke_width * 0.5;
     let mut stroke_length = 0.0_f32;
 
     for contour in &plan.contours {
-        let source_edges = stroke_edges(&contour.source_points, contour.closed, stroke_width * 0.5);
-        let target_edges = stroke_edges(&contour.target_points, contour.closed, stroke_width * 0.5);
-        let vertex_start = u32::try_from(vertices.len())
-            .map_err(|_| GeometryError::Tessellation("morph vertex count exceeds u32".into()))?;
-        stroke_length += polyline_length(&contour.source_points, contour.closed);
-
-        for (index, ((source_left, source_right), (target_left, target_right))) in
-            source_edges.into_iter().zip(target_edges).enumerate()
-        {
-            let progress = (global_point + index) as f32 / progress_denominator;
-            for (position, target_position) in
-                [(source_left, target_left), (source_right, target_right)]
-            {
-                vertices.push(MeshVertex {
-                    position,
-                    target_position,
-                    surface: PathSurface::Stroke,
-                    path_distance: progress,
-                    path_progress: progress,
-                });
-            }
-        }
-
         let point_count = contour.source_points.len();
         let segment_count = if contour.closed {
             point_count
         } else {
             point_count - 1
         };
+        stroke_length += polyline_length(&contour.source_points, contour.closed);
+
+        // Independent segment quads establish exact butt faces. Join/cap
+        // primitives then fill only the area outside those faces. This keeps a
+        // fixed topology even when a morph changes turn direction.
         for segment in 0..segment_count {
             let next = if segment + 1 == point_count {
                 0
             } else {
                 segment + 1
             };
-            let a = vertex_start + u32::try_from(segment * 2).unwrap();
-            let b = a + 1;
-            let c = vertex_start + u32::try_from(next * 2).unwrap();
-            let d = c + 1;
-            indices.extend_from_slice(&[a, b, c, b, d, c]);
+            let source_quad = segment_quad(
+                &contour.source_points,
+                segment,
+                next,
+                contour.closed,
+                stroke_cap,
+                half_width,
+            );
+            let target_quad = segment_quad(
+                &contour.target_points,
+                segment,
+                next,
+                contour.closed,
+                stroke_cap,
+                half_width,
+            );
+            let start_progress = (global_point + segment) as f32 / progress_denominator;
+            let end_progress = (global_point + next) as f32 / progress_denominator;
+            add_paired_polygon(
+                &mut vertices,
+                &mut indices,
+                &source_quad,
+                &target_quad,
+                &[0, 1, 2, 1, 3, 2],
+                &[start_progress, start_progress, end_progress, end_progress],
+            )?;
         }
+
+        let join_range: Box<dyn Iterator<Item = usize>> = if contour.closed {
+            Box::new(0..point_count)
+        } else {
+            Box::new(1..point_count - 1)
+        };
+        for index in join_range {
+            let previous = if index == 0 {
+                point_count - 1
+            } else {
+                index - 1
+            };
+            let next = if index + 1 == point_count {
+                0
+            } else {
+                index + 1
+            };
+            let progress = (global_point + index) as f32 / progress_denominator;
+            for side in [StrokeSide::Left, StrokeSide::Right] {
+                let source_join = join_polygon(
+                    contour.source_points[previous],
+                    contour.source_points[index],
+                    contour.source_points[next],
+                    half_width,
+                    stroke_join,
+                    side,
+                );
+                let target_join = join_polygon(
+                    contour.target_points[previous],
+                    contour.target_points[index],
+                    contour.target_points[next],
+                    half_width,
+                    stroke_join,
+                    side,
+                );
+                debug_assert_eq!(source_join.points.len(), target_join.points.len());
+                debug_assert_eq!(source_join.indices, target_join.indices);
+                let progress_values = vec![progress; source_join.points.len()];
+                add_paired_polygon(
+                    &mut vertices,
+                    &mut indices,
+                    &source_join.points,
+                    &target_join.points,
+                    &source_join.indices,
+                    &progress_values,
+                )?;
+            }
+        }
+
+        if !contour.closed && stroke_cap == StrokeCap::Round {
+            let source_start = round_cap_polygon(&contour.source_points, true, half_width);
+            let target_start = round_cap_polygon(&contour.target_points, true, half_width);
+            let start_progress = (global_point as f32 / progress_denominator).clamp(0.0, 1.0);
+            add_paired_polygon(
+                &mut vertices,
+                &mut indices,
+                &source_start.points,
+                &target_start.points,
+                &source_start.indices,
+                &vec![start_progress; source_start.points.len()],
+            )?;
+
+            let source_end = round_cap_polygon(&contour.source_points, false, half_width);
+            let target_end = round_cap_polygon(&contour.target_points, false, half_width);
+            let end_progress =
+                ((global_point + point_count - 1) as f32 / progress_denominator).clamp(0.0, 1.0);
+            add_paired_polygon(
+                &mut vertices,
+                &mut indices,
+                &source_end.points,
+                &target_end.points,
+                &source_end.indices,
+                &vec![end_progress; source_end.points.len()],
+            )?;
+        }
+
         global_point += point_count;
     }
 
@@ -247,6 +357,266 @@ fn tessellate_morph_path(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StrokeSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug)]
+struct LocalPolygon {
+    points: Vec<Vec2>,
+    indices: Vec<u32>,
+}
+
+fn segment_quad(
+    points: &[Vec2],
+    segment: usize,
+    next: usize,
+    closed: bool,
+    cap: StrokeCap,
+    half_width: f32,
+) -> [Vec2; 4] {
+    let mut start = points[segment];
+    let mut end = points[next];
+    let tangent = normalized(Vec2::new(end.x - start.x, end.y - start.y));
+    if !closed && cap == StrokeCap::Square {
+        if segment == 0 {
+            start.x -= tangent.x * half_width;
+            start.y -= tangent.y * half_width;
+        }
+        if next + 1 == points.len() {
+            end.x += tangent.x * half_width;
+            end.y += tangent.y * half_width;
+        }
+    }
+    let normal = Vec2::new(-tangent.y * half_width, tangent.x * half_width);
+    [
+        Vec2::new(start.x + normal.x, start.y + normal.y),
+        Vec2::new(start.x - normal.x, start.y - normal.y),
+        Vec2::new(end.x + normal.x, end.y + normal.y),
+        Vec2::new(end.x - normal.x, end.y - normal.y),
+    ]
+}
+
+fn join_polygon(
+    previous: Vec2,
+    point: Vec2,
+    next: Vec2,
+    half_width: f32,
+    join: StrokeJoin,
+    side: StrokeSide,
+) -> LocalPolygon {
+    let incoming = normalized(Vec2::new(point.x - previous.x, point.y - previous.y));
+    let outgoing = normalized(Vec2::new(next.x - point.x, next.y - point.y));
+    let turn = cross(incoming, outgoing);
+    let side_is_outer = match side {
+        StrokeSide::Left => turn < -1.0e-6,
+        StrokeSide::Right => turn > 1.0e-6,
+    };
+    if !side_is_outer {
+        return collapsed_join(point, join);
+    }
+
+    let sign = if side == StrokeSide::Left { 1.0 } else { -1.0 };
+    let incoming_normal = Vec2::new(-incoming.y * sign, incoming.x * sign);
+    let outgoing_normal = Vec2::new(-outgoing.y * sign, outgoing.x * sign);
+    let outer_in = Vec2::new(
+        point.x + incoming_normal.x * half_width,
+        point.y + incoming_normal.y * half_width,
+    );
+    let outer_out = Vec2::new(
+        point.x + outgoing_normal.x * half_width,
+        point.y + outgoing_normal.y * half_width,
+    );
+
+    match join {
+        StrokeJoin::Bevel => LocalPolygon {
+            points: vec![point, outer_in, outer_out],
+            indices: vec![0, 1, 2],
+        },
+        StrokeJoin::Miter => {
+            let miter = miter_point(
+                point,
+                incoming,
+                outgoing,
+                incoming_normal,
+                outgoing_normal,
+                half_width,
+            )
+            .unwrap_or(outer_out);
+            LocalPolygon {
+                points: vec![point, outer_in, miter, outer_out],
+                indices: vec![0, 1, 2, 0, 2, 3],
+            }
+        }
+        StrokeJoin::Round => {
+            let start_angle = incoming_normal.y.atan2(incoming_normal.x);
+            let end_angle = outgoing_normal.y.atan2(outgoing_normal.x);
+            let mut delta = normalized_angle(end_angle - start_angle);
+            // The active side is the outside of the signed turn, so the short
+            // sweep must follow the same sign as that outer arc.
+            if side == StrokeSide::Left && delta > 0.0 {
+                delta -= std::f32::consts::TAU;
+            } else if side == StrokeSide::Right && delta < 0.0 {
+                delta += std::f32::consts::TAU;
+            }
+            let mut points = Vec::with_capacity(ROUND_JOIN_SEGMENTS + 2);
+            points.push(point);
+            for step in 0..=ROUND_JOIN_SEGMENTS {
+                let angle = start_angle + delta * step as f32 / ROUND_JOIN_SEGMENTS as f32;
+                points.push(Vec2::new(
+                    point.x + angle.cos() * half_width,
+                    point.y + angle.sin() * half_width,
+                ));
+            }
+            LocalPolygon {
+                points,
+                indices: fan_indices(ROUND_JOIN_SEGMENTS),
+            }
+        }
+    }
+}
+
+fn collapsed_join(point: Vec2, join: StrokeJoin) -> LocalPolygon {
+    let point_count = match join {
+        StrokeJoin::Bevel => 3,
+        StrokeJoin::Miter => 4,
+        StrokeJoin::Round => ROUND_JOIN_SEGMENTS + 2,
+    };
+    let indices = match join {
+        StrokeJoin::Bevel => vec![0, 1, 2],
+        StrokeJoin::Miter => vec![0, 1, 2, 0, 2, 3],
+        StrokeJoin::Round => fan_indices(ROUND_JOIN_SEGMENTS),
+    };
+    LocalPolygon {
+        points: vec![point; point_count],
+        indices,
+    }
+}
+
+fn miter_point(
+    point: Vec2,
+    incoming: Vec2,
+    outgoing: Vec2,
+    incoming_normal: Vec2,
+    outgoing_normal: Vec2,
+    half_width: f32,
+) -> Option<Vec2> {
+    let a = Vec2::new(
+        point.x + incoming_normal.x * half_width,
+        point.y + incoming_normal.y * half_width,
+    );
+    let b = Vec2::new(
+        point.x + outgoing_normal.x * half_width,
+        point.y + outgoing_normal.y * half_width,
+    );
+    let denominator = cross(incoming, outgoing);
+    if denominator.abs() <= f32::EPSILON {
+        return None;
+    }
+    let difference = Vec2::new(b.x - a.x, b.y - a.y);
+    let distance = cross(difference, outgoing) / denominator;
+    let intersection = Vec2::new(a.x + incoming.x * distance, a.y + incoming.y * distance);
+    if (intersection.x - point.x).hypot(intersection.y - point.y) > half_width * MORPH_MITER_LIMIT {
+        None
+    } else {
+        Some(intersection)
+    }
+}
+
+fn round_cap_polygon(points: &[Vec2], start: bool, half_width: f32) -> LocalPolygon {
+    let (center, tangent) = if start {
+        (
+            points[0],
+            normalized(Vec2::new(
+                points[1].x - points[0].x,
+                points[1].y - points[0].y,
+            )),
+        )
+    } else {
+        let last = points.len() - 1;
+        (
+            points[last],
+            normalized(Vec2::new(
+                points[last].x - points[last - 1].x,
+                points[last].y - points[last - 1].y,
+            )),
+        )
+    };
+    let outward_angle = tangent.y.atan2(tangent.x) + if start { std::f32::consts::PI } else { 0.0 };
+    let arc_start = outward_angle - std::f32::consts::FRAC_PI_2;
+    let mut result = Vec::with_capacity(ROUND_CAP_SEGMENTS + 2);
+    result.push(center);
+    for step in 0..=ROUND_CAP_SEGMENTS {
+        let angle = arc_start + std::f32::consts::PI * step as f32 / ROUND_CAP_SEGMENTS as f32;
+        result.push(Vec2::new(
+            center.x + angle.cos() * half_width,
+            center.y + angle.sin() * half_width,
+        ));
+    }
+    LocalPolygon {
+        points: result,
+        indices: fan_indices(ROUND_CAP_SEGMENTS),
+    }
+}
+
+fn fan_indices(segment_count: usize) -> Vec<u32> {
+    let mut indices = Vec::with_capacity(segment_count * 3);
+    for segment in 0..segment_count {
+        indices.extend_from_slice(&[0, (segment + 1) as u32, (segment + 2) as u32]);
+    }
+    indices
+}
+
+fn add_paired_polygon(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    source: &[Vec2],
+    target: &[Vec2],
+    local_indices: &[u32],
+    progress: &[f32],
+) -> Result<(), GeometryError> {
+    debug_assert_eq!(source.len(), target.len());
+    debug_assert_eq!(source.len(), progress.len());
+    let start = u32::try_from(vertices.len())
+        .map_err(|_| GeometryError::Tessellation("morph vertex count exceeds u32".into()))?;
+    for ((position, target_position), path_progress) in
+        source.iter().zip(target).zip(progress.iter().copied())
+    {
+        vertices.push(MeshVertex {
+            position: *position,
+            target_position: *target_position,
+            surface: PathSurface::Stroke,
+            path_distance: path_progress,
+            path_progress,
+        });
+    }
+    for index in local_indices {
+        indices.push(
+            start
+                .checked_add(*index)
+                .ok_or_else(|| GeometryError::Tessellation("morph index exceeds u32".into()))?,
+        );
+    }
+    Ok(())
+}
+
+fn cross(left: Vec2, right: Vec2) -> f32 {
+    left.x * right.y - left.y * right.x
+}
+
+fn normalized_angle(mut angle: f32) -> f32 {
+    while angle <= -std::f32::consts::PI {
+        angle += std::f32::consts::TAU;
+    }
+    while angle > std::f32::consts::PI {
+        angle -= std::f32::consts::TAU;
+    }
+    angle
+}
+
+#[cfg(test)]
 fn stroke_edges(points: &[Vec2], closed: bool, half_width: f32) -> Vec<(Vec2, Vec2)> {
     let mut result = Vec::with_capacity(points.len());
     for index in 0..points.len() {
@@ -265,13 +635,12 @@ fn stroke_edges(points: &[Vec2], closed: bool, half_width: f32) -> Vec<(Vec2, Ve
         } else {
             point
         };
-
         let offset = if !closed && index == 0 {
-            segment_normal(point, next, half_width)
+            test_segment_normal(point, next, half_width)
         } else if !closed && index + 1 == points.len() {
-            segment_normal(previous, point, half_width)
+            test_segment_normal(previous, point, half_width)
         } else {
-            miter_offset(previous, point, next, half_width)
+            test_miter_offset(previous, point, next, half_width)
         };
         result.push((
             Vec2::new(point.x + offset.x, point.y + offset.y),
@@ -281,12 +650,14 @@ fn stroke_edges(points: &[Vec2], closed: bool, half_width: f32) -> Vec<(Vec2, Ve
     result
 }
 
-fn segment_normal(from: Vec2, to: Vec2, half_width: f32) -> Vec2 {
+#[cfg(test)]
+fn test_segment_normal(from: Vec2, to: Vec2, half_width: f32) -> Vec2 {
     let tangent = normalized(Vec2::new(to.x - from.x, to.y - from.y));
     Vec2::new(-tangent.y * half_width, tangent.x * half_width)
 }
 
-fn miter_offset(previous: Vec2, point: Vec2, next: Vec2, half_width: f32) -> Vec2 {
+#[cfg(test)]
+fn test_miter_offset(previous: Vec2, point: Vec2, next: Vec2, half_width: f32) -> Vec2 {
     let incoming = normalized(Vec2::new(point.x - previous.x, point.y - previous.y));
     let outgoing = normalized(Vec2::new(next.x - point.x, next.y - point.y));
     let incoming_normal = Vec2::new(-incoming.y, incoming.x);
@@ -302,7 +673,6 @@ fn miter_offset(previous: Vec2, point: Vec2, next: Vec2, half_width: f32) -> Vec
             outgoing_normal.y * half_width,
         );
     }
-
     let miter = Vec2::new(summed.x / summed_length, summed.y / summed_length);
     let alignment = (miter.x * outgoing_normal.x + miter.y * outgoing_normal.y).abs();
     if alignment <= f32::EPSILON {
@@ -311,7 +681,6 @@ fn miter_offset(previous: Vec2, point: Vec2, next: Vec2, half_width: f32) -> Vec
             outgoing_normal.y * half_width,
         );
     }
-
     let length = (half_width / alignment).min(half_width * MORPH_MITER_LIMIT);
     Vec2::new(miter.x * length, miter.y * length)
 }

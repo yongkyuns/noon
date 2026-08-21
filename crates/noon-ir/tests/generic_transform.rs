@@ -21,6 +21,8 @@ fn detached_transform_snapshots_round_trip_without_scene_identity() {
             stroke: Some(Color::WHITE),
             stroke_width: 0.2,
             opacity: 0.6,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         },
     };
     scene

@@ -20,10 +20,14 @@ fn build_scene() -> SceneDefinition {
         stroke: None,
         stroke_width: 1.0,
         opacity: 1.0,
+        stroke_join: noon_core::StrokeJoin::Round,
+        stroke_cap: noon_core::StrokeCap::Round,
     };
     let style_b = Style {
         fill: Some(Color::rgb(0.8, 0.6, 0.4)),
         opacity: 0.5,
+        stroke_join: noon_core::StrokeJoin::Round,
+        stroke_cap: noon_core::StrokeCap::Round,
         ..style_a
     };
     let transform_a = Transform2D::IDENTITY;

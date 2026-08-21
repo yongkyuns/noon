@@ -55,6 +55,22 @@ def _unit_interval(name: str, value: Any) -> float:
     return result
 
 
+def _stroke_join(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("stroke_join must be a string")
+    if value not in {"round", "miter", "bevel"}:
+        raise ValueError("stroke_join must be round, miter, or bevel")
+    return value
+
+
+def _stroke_cap(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("stroke_cap must be a string")
+    if value not in {"round", "butt", "square"}:
+        raise ValueError("stroke_cap must be round, butt, or square")
+    return value
+
+
 def _authoring_key(name: str, value: str | None, fallback: str) -> str:
     if value is None:
         return fallback
@@ -174,6 +190,8 @@ def _make_mobject(
     fill: Color | None = Color(1.0, 1.0, 1.0),
     stroke: Color | None = None,
     stroke_width: float = 1.0,
+    stroke_join: str = "round",
+    stroke_cap: str = "round",
     opacity: float = 1.0,
 ) -> Mobject:
     if fill is not None and not isinstance(fill, Color):
@@ -194,6 +212,8 @@ def _make_mobject(
             "fill": None if fill is None else fill.to_ir(),
             "stroke": None if stroke is None else stroke.to_ir(),
             "stroke_width": width,
+            "stroke_join": _stroke_join(stroke_join),
+            "stroke_cap": _stroke_cap(stroke_cap),
             "opacity": _finite_number("opacity", opacity),
         },
     )
@@ -277,6 +297,8 @@ class Scene:
         fill: Color | None = Color(1.0, 1.0, 1.0),
         stroke: Color | None = None,
         stroke_width: float = 1.0,
+        stroke_join: str = "round",
+        stroke_cap: str = "round",
         opacity: float = 1.0,
         key: str | None = None,
     ) -> Object:
@@ -288,6 +310,8 @@ class Scene:
             fill=fill,
             stroke=stroke,
             stroke_width=stroke_width,
+            stroke_join=stroke_join,
+            stroke_cap=stroke_cap,
             opacity=opacity,
             key=key,
         )
@@ -303,6 +327,8 @@ class Scene:
         fill: Color | None = Color(1.0, 1.0, 1.0),
         stroke: Color | None = None,
         stroke_width: float = 1.0,
+        stroke_join: str = "round",
+        stroke_cap: str = "round",
         opacity: float = 1.0,
         key: str | None = None,
     ) -> Object:
@@ -321,6 +347,8 @@ class Scene:
             fill=fill,
             stroke=stroke,
             stroke_width=stroke_width,
+            stroke_join=stroke_join,
+            stroke_cap=stroke_cap,
             opacity=opacity,
             key=key,
         )
@@ -335,6 +363,8 @@ class Scene:
         scale: tuple[float, float] = (1.0, 1.0),
         stroke: Color | None = Color(1.0, 1.0, 1.0),
         stroke_width: float = 0.1,
+        stroke_join: str = "round",
+        stroke_cap: str = "round",
         opacity: float = 1.0,
         key: str | None = None,
     ) -> Object:
@@ -346,6 +376,8 @@ class Scene:
             fill=None,
             stroke=stroke,
             stroke_width=stroke_width,
+            stroke_join=stroke_join,
+            stroke_cap=stroke_cap,
             opacity=opacity,
             key=key,
         )
@@ -360,6 +392,8 @@ class Scene:
         fill: Color | None = Color(1.0, 1.0, 1.0),
         stroke: Color | None = None,
         stroke_width: float = 0.1,
+        stroke_join: str = "round",
+        stroke_cap: str = "round",
         opacity: float = 1.0,
         key: str | None = None,
     ) -> Object:
@@ -373,6 +407,8 @@ class Scene:
             fill=fill,
             stroke=stroke,
             stroke_width=stroke_width,
+            stroke_join=stroke_join,
+            stroke_cap=stroke_cap,
             opacity=opacity,
             key=key,
         )
@@ -569,6 +605,8 @@ class Scene:
         fill: Color | None,
         stroke: Color | None,
         stroke_width: float,
+        stroke_join: str,
+        stroke_cap: str,
         opacity: float,
         key: str | None,
     ) -> Object:
@@ -592,6 +630,8 @@ class Scene:
                     "fill": None if fill is None else fill.to_ir(),
                     "stroke": None if stroke is None else stroke.to_ir(),
                     "stroke_width": width,
+                    "stroke_join": _stroke_join(stroke_join),
+                    "stroke_cap": _stroke_cap(stroke_cap),
                     "opacity": _finite_number("opacity", opacity),
                 },
             },
@@ -697,6 +737,8 @@ class PatchBatch:
         fill: Color | None,
         stroke: Color | None,
         stroke_width: float,
+        stroke_join: str = "round",
+        stroke_cap: str = "round",
         opacity: float = 1.0,
     ) -> PatchBatch:
         self._patches.append(
@@ -709,6 +751,8 @@ class PatchBatch:
                         "stroke_width": _finite_number(
                             "stroke_width", stroke_width
                         ),
+                        "stroke_join": _stroke_join(stroke_join),
+                        "stroke_cap": _stroke_cap(stroke_cap),
                         "opacity": _finite_number("opacity", opacity),
                     },
                 }

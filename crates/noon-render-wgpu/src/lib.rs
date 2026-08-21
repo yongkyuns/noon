@@ -11,7 +11,10 @@ mod gpu;
 pub use gpu::*;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::{Color, GeometryRef, ObjectId, PathCommand, Style, Transform2D, VectorPath};
+use noon_core::{
+    Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, Style, Transform2D,
+    VectorPath,
+};
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use std::{
@@ -171,12 +174,16 @@ enum PreparedSlot {
 struct PathMeshKey {
     path_hash: u64,
     stroke_width_bits: u32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
 }
 
 #[derive(Clone, Debug)]
 struct CachedPathMesh {
     path: VectorPath,
     stroke_width_bits: u32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
     mesh: TessellatedPath,
 }
 
@@ -335,7 +342,7 @@ impl FramePreparer {
                     self.lines.push(pack_line(object));
                 }
                 GeometryRef::VectorPath(path) => {
-                    let cache_index = match self.cache_path_mesh(path, object.style.stroke_width) {
+                    let cache_index = match self.cache_path_mesh(path, object.style) {
                         Ok((index, cache_miss)) => {
                             geometry_cache_misses += usize::from(cache_miss);
                             index
@@ -543,6 +550,8 @@ impl FramePreparer {
                 self.path_ids.get(*index) == Some(&object.id)
                     && cache.path == *path
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
+                    && cache.stroke_join == object.style.stroke_join
+                    && cache.stroke_cap == object.style.stroke_cap
             }
             Some(PreparedSlot::Unsupported(index)) => {
                 matches!(render_geometry, GeometryRef::External(_))
@@ -580,24 +589,34 @@ impl FramePreparer {
     fn cache_path_mesh(
         &mut self,
         path: &VectorPath,
-        stroke_width: f32,
+        style: Style,
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
-        let stroke_width_bits = stroke_width.to_bits();
-        let key = path_mesh_key(path, stroke_width_bits);
+        let stroke_width_bits = style.stroke_width.to_bits();
+        let key = path_mesh_key(path, stroke_width_bits, style.stroke_join, style.stroke_cap);
         if let Some(candidates) = self.path_mesh_lookup.get(&key) {
             if let Some(index) = candidates.iter().copied().find(|&index| {
                 let entry = &self.path_mesh_cache[index];
-                entry.path == *path && entry.stroke_width_bits == stroke_width_bits
+                entry.path == *path
+                    && entry.stroke_width_bits == stroke_width_bits
+                    && entry.stroke_join == style.stroke_join
+                    && entry.stroke_cap == style.stroke_cap
             }) {
                 return Ok((index, false));
             }
         }
 
-        let mesh = noon_geometry::tessellate(path, stroke_width)?;
+        let mesh = noon_geometry::tessellate_styled(
+            path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+        )?;
         let index = self.path_mesh_cache.len();
         self.path_mesh_cache.push(CachedPathMesh {
             path: path.clone(),
             stroke_width_bits,
+            stroke_join: style.stroke_join,
+            stroke_cap: style.stroke_cap,
             mesh,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
@@ -609,12 +628,19 @@ impl FramePreparer {
     }
 }
 
-fn path_mesh_key(path: &VectorPath, stroke_width_bits: u32) -> PathMeshKey {
+fn path_mesh_key(
+    path: &VectorPath,
+    stroke_width_bits: u32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> PathMeshKey {
     let mut hasher = DefaultHasher::new();
     hash_vector_path(path, &mut hasher);
     PathMeshKey {
         path_hash: hasher.finish(),
         stroke_width_bits,
+        stroke_join,
+        stroke_cap,
     }
 }
 
@@ -1048,6 +1074,8 @@ mod tests {
             stroke: Some(Color::rgb(0.8, 0.7, 0.6)),
             stroke_width: 3.0,
             opacity: 0.5,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();
@@ -1091,6 +1119,8 @@ mod tests {
             stroke: Some(Color::rgb(0.2, 0.8, 0.4)),
             stroke_width: 0.125,
             opacity: 0.75,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         let frame = frame(vec![state]);
         let mut preparer = FramePreparer::new();

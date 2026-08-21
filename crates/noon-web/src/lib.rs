@@ -1038,12 +1038,16 @@ mod wasm {
             stroke: Some(Color::WHITE),
             stroke_width: 0.04,
             opacity: 1.0,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         scene.object_mut(rectangle).expect("rectangle exists").style = Style {
             fill: Some(Color::rgb(0.27, 0.65, 0.96)),
             stroke: Some(Color::WHITE),
             stroke_width: 0.04,
             opacity: 1.0,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         scene
             .object_mut(rectangle)
@@ -1057,6 +1061,8 @@ mod wasm {
             stroke: Some(Color::rgb(0.30, 0.88, 0.57)),
             stroke_width: 0.10,
             opacity: 1.0,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         scene.object_mut(line).expect("line exists").transform = Transform2D {
             translation: Vec2::new(0.0, -1.55),
@@ -1068,6 +1074,8 @@ mod wasm {
             stroke: Some(Color::WHITE),
             stroke_width: 0.06,
             opacity: 0.95,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
         };
         scene.object_mut(path).expect("path exists").transform = Transform2D {
             translation: Vec2::new(0.0, 1.45),
@@ -1321,6 +1329,8 @@ mod tests {
                     object: ObjectId::new(0),
                     style: Style {
                         opacity: 0.25,
+                        stroke_join: noon_core::StrokeJoin::Round,
+                        stroke_cap: noon_core::StrokeCap::Round,
                         ..Style::default()
                     },
                 },

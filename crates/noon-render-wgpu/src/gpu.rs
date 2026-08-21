@@ -1118,6 +1118,8 @@ mod tests {
                     style: Style {
                         stroke: Some(noon_core::Color::WHITE),
                         stroke_width: 0.1,
+                        stroke_join: noon_core::StrokeJoin::Round,
+                        stroke_cap: noon_core::StrokeCap::Round,
                         ..Style::default()
                     },
                 },

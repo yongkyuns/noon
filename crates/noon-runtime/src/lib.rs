@@ -631,6 +631,16 @@ fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
         fill: interpolate_optional_color(from.fill, to.fill, progress),
         stroke: interpolate_optional_color(from.stroke, to.stroke, progress),
         stroke_width: lerp(from.stroke_width, to.stroke_width, progress),
+        stroke_join: if progress >= 1.0 {
+            to.stroke_join
+        } else {
+            from.stroke_join
+        },
+        stroke_cap: if progress >= 1.0 {
+            to.stroke_cap
+        } else {
+            from.stroke_cap
+        },
         opacity: lerp(from.opacity, to.opacity, progress),
     }
 }
@@ -922,6 +932,8 @@ mod tests {
             object,
             style: Style {
                 opacity: 0.75,
+                stroke_join: noon_core::StrokeJoin::Round,
+                stroke_cap: noon_core::StrokeCap::Round,
                 ..Style::default()
             },
         };
@@ -990,6 +1002,8 @@ mod tests {
                 style: Style {
                     fill: Some(Color::rgb(0.2, 0.4, 0.8)),
                     opacity: 0.9,
+                    stroke_join: noon_core::StrokeJoin::Round,
+                    stroke_cap: noon_core::StrokeCap::Round,
                     ..Style::default()
                 },
             })
@@ -1038,6 +1052,8 @@ mod tests {
                 object: patched,
                 style: Style {
                     opacity: 0.5,
+                    stroke_join: noon_core::StrokeJoin::Round,
+                    stroke_cap: noon_core::StrokeCap::Round,
                     ..Style::default()
                 },
             })
