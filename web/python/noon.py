@@ -602,6 +602,7 @@ class Scene:
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
+        self._ensure_snapshot_representable(source, end, "replacement source")
         self._ensure_replacement_source_unoverridden(source, end)
         target_snapshot = self._validate_lifecycle_target(
             target, end=end, label="replacement"
