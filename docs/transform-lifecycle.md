@@ -4,7 +4,7 @@
 
 Noon models object lifetime independently from opacity. `Presence` is a first-class, renderer-independent boolean timeline property represented as a zero-duration event. This lets lifecycle animations preserve stable `ObjectId` values while arbitrary seek, forward playback, live reconciliation, and rendering all agree on whether an object exists in the visible scene at a given time.
 
-The first lifecycle animation built on this primitive is `ReplacementTransform`. The geometry/interpolation contract it reuses is documented in [generic-transform.md](generic-transform.md).
+The lifecycle animations built on this primitive are `ReplacementTransform` and `TransformFromCopy`. The geometry/interpolation contract they reuse is documented in [generic-transform.md](generic-transform.md), while authoring-time state evaluation is documented in [evaluated-authoring-snapshots.md](evaluated-authoring-snapshots.md).
 
 ## Presence contract
 
@@ -22,7 +22,7 @@ The first event's `from` value defines the object's pre-event presence state. On
 
 ## ReplacementTransform
 
-The initial authoring API is deliberately bounded:
+The authoring API is:
 
 ```python
 source = scene.circle(1.0, key="source")
@@ -37,22 +37,31 @@ Both `source` and `target` are stable scene-owned objects with distinct IDs. The
 
 The authoring frontend lowers one replacement into three normal language-neutral tracks:
 
-1. a generic `Transform` on the source from the source snapshot to the target snapshot;
+1. a generic `Transform` on the source from the source state evaluated at the transform start to the target state evaluated at the handoff time;
 2. `Presence(source, true -> false)` at the exact transform end time;
 3. `Presence(target, false -> true)` at the same time.
 
-Before the handoff, only the source renders. During the interval, the source identity carries the normal generic Transform interpolation. At the exact end time the source becomes absent and the target becomes present in its own exact semantic state. Neither object is created or destroyed during playback.
+Before the handoff, only the source renders. During the interval, the source identity carries the normal generic Transform interpolation. At the exact end time the source becomes absent and the target becomes present in the same Position/Rotation/Opacity state used as the Transform destination. Neither object is created or destroyed during playback.
 
 This contract makes direct seek and sequential playback equivalent. Seeking backward before the handoff restores source presence and hides the target without reconstructing identities or replaying authoring code.
 
+## Evaluated handoff state
+
+Python authoring evaluates snapshot-representable timeline state at the relevant lifecycle time instead of requiring the object to have no prior narrow-property animation.
+
+For `ReplacementTransform`, target `Position`, `Rotation`, and `Opacity` use their runtime-equivalent values at the exact handoff. Completed generic Transforms are also reflected in the snapshot. A generic Transform that is still active at the snapshot time remains rejected because an arbitrary in-progress path morph cannot be represented faithfully by one `ObjectSnapshot`.
+
+Channels that are independent of `ObjectSnapshot`, such as `Presence`, `Reveal`, and standalone `Morph` state, remain explicit safety boundaries for lifecycle snapshots. Noon rejects them rather than pretending the Transform endpoint captures state it does not encode.
+
 ## Current safety boundaries
 
-The first `ReplacementTransform` contract rejects cases whose handoff state would otherwise be ambiguous:
+Lifecycle composition remains deliberately bounded where exact semantics are not yet defined:
 
 - source and target must be different objects owned by the same `Scene`;
-- an object may participate in only one lifecycle replacement in this initial slice;
-- overlapping generic Transform state on the target is rejected;
-- target narrow-property state (`Position`, `Rotation`, `Opacity`, reveal/morph, etc.) at or before the handoff is rejected because it is not represented by the target object snapshot the source transforms toward.
+- an object may participate in only one lifecycle animation in the current composition model;
+- a lifecycle snapshot cannot be taken inside an active generic Transform;
+- lifecycle snapshot state that is not representable by `ObjectSnapshot` is rejected;
+- narrow `Position`, `Rotation`, and `Opacity` tracks are evaluated with the same latest-started-track precedence and easing rules as runtime playback.
 
 These are explicit authoring restrictions, not renderer fallbacks. Noon should not silently produce a discontinuous handoff.
 
@@ -62,11 +71,11 @@ Coverage spans the semantic pipeline:
 
 - core: zero-duration boolean presence validation and deterministic IDs;
 - IR: human-readable presence/bool JSON round trip;
-- compiler: presence dynamic classification and patch validation;
+- compiler: presence dynamic classification, chain continuity, and patch validation;
 - runtime: direct seek, forward playback, rewind, and live-patch presence parity;
 - renderer: absent objects keep semantic slots but create no GPU instances; toggling presence rebuilds the prepared slot layout;
-- Python: `ReplacementTransform` lowers to Transform plus the atomic two-object presence handoff, with foreign/self/reused/ambiguous targets rejected.
+- Python: lifecycle lowering, evaluated Position/Rotation/Opacity snapshots, deterministic transient-copy identity, transactional rollback, and rejection of active/unrepresentable snapshot state.
 
 ## Next work
 
-`TransformFromCopy` should reuse the same presence machinery without changing source identity: a dedicated copy object is present only for the animation interval, the original source remains visible, and the destination lifecycle is explicit. After that, lifecycle composition restrictions can be relaxed deliberately, with tests for chained replacements and matching-shape transforms rather than by weakening the current deterministic contract.
+The next lifecycle composition step is to support repeated/chained lifecycle operations with explicit state-machine semantics rather than the current one-lifecycle-animation-per-object guard. Matching-shape transforms can then build on the same evaluated snapshot and stable-identity machinery.
