@@ -319,5 +319,72 @@ class TransformFromCopyTests(unittest.TestCase):
             )
 
 
+class TransactionalPlayTests(unittest.TestCase):
+    def test_transform_from_copy_failure_rolls_back_transient_object_and_ids(self) -> None:
+        scene = Scene()
+        source = scene.circle(1.0, key="source")
+        target = scene.circle(2.0, key="target")
+        scene.animate_opacity(
+            source,
+            1.0,
+            0.5,
+            duration=1.0,
+            start_time=5.0,
+            key="copy-to-target",
+        )
+        before_document = scene.to_document()
+        before_identity = scene.identity_document()
+
+        with self.assertRaises(ValueError):
+            scene.play(
+                TransformFromCopy(source, target, key="copy-to-target"),
+                duration=1.0,
+            )
+
+        self.assertEqual(scene.to_document(), before_document)
+        self.assertEqual(scene.identity_document(), before_identity)
+
+        scene.play(
+            TransformFromCopy(source, target, key="valid-copy"),
+            duration=1.0,
+        )
+        identities = scene.identity_document()
+        self.assertEqual(identities["objects"][-1], {"id": 2, "key": "valid-copy.copy"})
+        self.assertEqual(identities["tracks"][1], {"id": 1, "key": "valid-copy"})
+
+    def test_multi_animation_play_rolls_back_tracks_and_scheduled_snapshots(self) -> None:
+        scene = Scene()
+        first = scene.circle(1.0, key="first")
+        second = scene.circle(1.5, key="second")
+        scene.animate_opacity(
+            second,
+            1.0,
+            0.5,
+            duration=1.0,
+            start_time=5.0,
+            key="taken",
+        )
+        before_document = scene.to_document()
+        before_identity = scene.identity_document()
+
+        with self.assertRaises(ValueError):
+            scene.play(
+                Transform(first, Circle(2.0), key="would-leak"),
+                Transform(second, Circle(3.0), key="taken"),
+                duration=1.0,
+            )
+
+        self.assertEqual(scene.to_document(), before_document)
+        self.assertEqual(scene.identity_document(), before_identity)
+
+        scene.play(Transform(first, Circle(4.0), key="after"), duration=1.0)
+        transform = scene.to_document()["tracks"][1]
+        self.assertEqual(
+            transform["values"]["object"]["from"]["geometry"],
+            {"circle": {"radius": 1.0}},
+        )
+        self.assertEqual(scene.identity_document()["tracks"][1]["key"], "after")
+
+
 if __name__ == "__main__":
     unittest.main()
