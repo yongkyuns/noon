@@ -602,6 +602,7 @@ class Scene:
         start = _finite_number("start_time", start_time)
         run_duration = _positive_number("duration", duration)
         end = start + run_duration
+        self._ensure_replacement_source_unoverridden(source, end)
         target_snapshot = self._validate_lifecycle_target(
             target, end=end, label="replacement"
         )
@@ -899,6 +900,23 @@ class Scene:
             properties = ", ".join(sorted(set(unsupported)))
             raise ValueError(
                 f"{label} has state not represented by ObjectSnapshot: {properties}"
+            )
+
+    def _ensure_replacement_source_unoverridden(
+        self, source: Object, end: float
+    ) -> None:
+        blocking = [
+            track["property"]
+            for track in self._tracks
+            if track["object"] == source.id
+            and track["property"] in {"position", "rotation", "opacity"}
+            and track["timing"]["start_time"] < end
+        ]
+        if blocking:
+            properties = ", ".join(sorted(set(blocking)))
+            raise ValueError(
+                "replacement source has narrow-property state that overrides "
+                f"Transform before handoff: {properties}"
             )
 
     def _append_snapshot(
