@@ -67,7 +67,7 @@ Supported semantic stroke policies are:
 - joins: `round`, `miter`, `bevel`;
 - caps: `round`, `butt`, `square`.
 
-Round join/cap remain the default, preserving the previous static-Lyon appearance. The same style fields are available on Scene path constructors and style patches.
+Round join/cap remain the default, preserving the previous static-Lyon appearance. The same style fields are available on Scene path constructors and style patches. Rust/IR deserialization uses serde defaults for both new fields, so older serialized `Style` payloads that omit them continue to deserialize as round/round.
 
 `Transform(source, VectorPath(...))` remains a convenience form. It snapshots the current/source transform and style and replaces only the target geometry.
 
@@ -101,7 +101,7 @@ No Lyon tessellation, path cache entry, path geometry upload, or renderer-only m
 
 Geometry-changing path Transforms use deterministic path correspondence and a fixed-topology dual-position stroke mesh. Correspondence/tessellation work happens before steady playback. The renderer receives one prepared source/target geometry pair and a normalized morph parameter.
 
-Stroke topology is now selected by semantic `StrokeJoin` and `StrokeCap` policy shared with static paths. Static paths lower those policies directly into Lyon. Morph paths use a deterministic fixed-topology segment/join/cap representation:
+Stroke topology is selected by semantic `StrokeJoin` and `StrokeCap` policy shared with static paths. Static paths lower those policies directly into Lyon. Morph paths use a deterministic fixed-topology segment/join/cap representation:
 
 - every centerline segment has an independent quad;
 - bevel and miter joins use fixed fan topology;
@@ -163,7 +163,7 @@ The runtime only clones semantic or prepared path geometry when the selected geo
 Coverage is split across independent layers:
 
 - Python: detached targets, snapshot-by-value behavior, stable source identity, multiple and sequential Transforms, overlap rejection, old VectorPath convenience syntax, analytic detached targets, and stroke join/cap validation/serialization;
-- IR/core: object-snapshot Transform round trips and backward-compatible default deserialization of the new stroke style fields;
+- IR/core: object-snapshot Transform round trips; the new stroke fields are serde-defaulted for backward compatibility;
 - compiler: explicit `Static`/`Circle`/`Rectangle`/`Line`/`PathPair` plans, unsupported cross-kind rejection, fill/stroke-width safety boundaries, and rejection of join/cap topology changes during geometry-changing path Transform;
 - geometry: direct Lyon reference checks, theoretical cap extents and miter intersections, contour-start/winding invariance, fixed-topology formulas, active-triangle winding, plus static-vs-identity-morph endpoint bounds for all nine join/cap combinations;
 - runtime: exact analytic midpoints/endpoints, seek/forward parity, sequential boundary continuity, property precedence, reveal independence, and path allocation stability;
