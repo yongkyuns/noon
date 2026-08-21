@@ -97,10 +97,7 @@ pub struct CompiledScene {
 pub enum CompileError {
     TooManyObjects(usize),
     UnknownObject(ObjectId),
-    DiscontinuousPresence {
-        previous: TrackId,
-        next: TrackId,
-    },
+    DiscontinuousPresence { previous: TrackId, next: TrackId },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
@@ -150,10 +147,7 @@ pub enum CompilePatchError {
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
     InvalidTrack(TimelineError),
-    DiscontinuousPresence {
-        previous: TrackId,
-        next: TrackId,
-    },
+    DiscontinuousPresence { previous: TrackId, next: TrackId },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
@@ -227,9 +221,8 @@ impl CompiledScene {
             );
         }
         sort_tracks(&mut tracks);
-        validate_presence_chains(&tracks).map_err(|(previous, next)| {
-            CompileError::DiscontinuousPresence { previous, next }
-        })?;
+        validate_presence_chains(&tracks)
+            .map_err(|(previous, next)| CompileError::DiscontinuousPresence { previous, next })?;
 
         Ok(Self {
             objects,
