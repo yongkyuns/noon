@@ -18,6 +18,7 @@ pub enum Property {
     Position,
     Rotation,
     Opacity,
+    Appearance,
     Reveal,
     Morph,
 }
@@ -36,7 +37,11 @@ impl Property {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
             Self::Position => ValueKind::Vec2,
-            Self::Rotation | Self::Opacity | Self::Reveal | Self::Morph => ValueKind::Scalar,
+            Self::Rotation
+            | Self::Opacity
+            | Self::Appearance
+            | Self::Reveal
+            | Self::Morph => ValueKind::Scalar,
         }
     }
 
@@ -266,6 +271,16 @@ impl SceneDefinition {
         self.add_track(object, property, TrackValues::Scalar { from, to }, timing)
     }
 
+    pub fn animate_appearance(
+        &mut self,
+        object: ObjectId,
+        from: f32,
+        to: f32,
+        timing: TrackTiming,
+    ) -> Result<TrackId, TimelineError> {
+        self.animate_scalar(object, Property::Appearance, from, to, timing)
+    }
+
     pub fn animate_reveal(
         &mut self,
         object: ObjectId,
@@ -377,6 +392,22 @@ mod tests {
             ),
             Err(TimelineError::InvalidDuration(0.0))
         ));
+    }
+
+    #[test]
+    fn appearance_is_a_distinct_scalar_timeline_property() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let track = scene
+            .animate_appearance(object, 0.0, 1.0, timing())
+            .expect("valid appearance track");
+
+        assert_eq!(track, TrackId::new(0));
+        assert_eq!(scene.tracks()[0].property, Property::Appearance);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
     }
 
     #[test]
