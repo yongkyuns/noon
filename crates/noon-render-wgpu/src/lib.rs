@@ -311,7 +311,7 @@ impl FramePreparer {
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
-        self.prune_path_mesh_cache();
+        self.prune_path_mesh_cache(frame);
         let capacities_before = self.capacities();
 
         self.circle_ids.clear();
@@ -670,22 +670,59 @@ impl FramePreparer {
         self.path_mesh_cache[index].last_used = last_used;
     }
 
-    fn prune_path_mesh_cache(&mut self) {
+    fn prune_path_mesh_cache(&mut self, frame: &FrameState) {
         let limit = self.path_mesh_cache_limit();
         if self.path_mesh_cache.len() <= limit {
             return;
         }
 
-        let mut order: Vec<usize> = (0..self.path_mesh_cache.len()).collect();
+        let mut keep = vec![false; self.path_mesh_cache.len()];
+        for (object_index, object) in frame.objects.iter().enumerate() {
+            if !frame.is_present(object_index) {
+                continue;
+            }
+            let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
+                continue;
+            };
+            let stroke_width_bits = object.style.stroke_width.to_bits();
+            let fill_enabled = object.style.fill.is_some();
+            let key = path_mesh_key(
+                path,
+                stroke_width_bits,
+                object.style.stroke_join,
+                object.style.stroke_cap,
+                fill_enabled,
+            );
+            if let Some(candidates) = self.path_mesh_lookup.get(&key) {
+                if let Some(index) = candidates.iter().copied().find(|&index| {
+                    let entry = &self.path_mesh_cache[index];
+                    entry.path == *path
+                        && entry.stroke_width_bits == stroke_width_bits
+                        && entry.stroke_join == object.style.stroke_join
+                        && entry.stroke_cap == object.style.stroke_cap
+                        && entry.fill_enabled == fill_enabled
+                }) {
+                    keep[index] = true;
+                }
+            }
+        }
+
+        let pinned_count = keep.iter().filter(|&&pinned| pinned).count();
+        let stale_budget = limit.saturating_sub(pinned_count);
+        let mut order: Vec<usize> = (0..self.path_mesh_cache.len())
+            .filter(|&index| !keep[index])
+            .collect();
         order.sort_unstable_by(|&left, &right| {
             self.path_mesh_cache[right]
                 .last_used
                 .cmp(&self.path_mesh_cache[left].last_used)
                 .then_with(|| right.cmp(&left))
         });
-        let mut keep = vec![false; self.path_mesh_cache.len()];
-        for index in order.into_iter().take(limit) {
+        for index in order.into_iter().take(stale_budget) {
             keep[index] = true;
+        }
+        if keep.iter().all(|&retained| retained) {
+            return;
         }
 
         let old_cache = std::mem::take(&mut self.path_mesh_cache);
@@ -703,15 +740,18 @@ impl FramePreparer {
             );
             let new_index = self.path_mesh_cache.len();
             self.path_mesh_cache.push(entry);
-            self.path_mesh_lookup.entry(key).or_default().push(new_index);
+            self.path_mesh_lookup
+                .entry(key)
+                .or_default()
+                .push(new_index);
         }
     }
 
-    /// Sets the number of recently used path meshes retained between full rebuilds.
+    /// Sets the target number of path meshes retained across full rebuilds.
     ///
-    /// The limit is applied at the next full rebuild boundary. A prepared frame may
-    /// temporarily contain more meshes than this limit because meshes created while
-    /// rebuilding are never evicted out from under that frame's batch indices.
+    /// Incoming-frame meshes are pinned before stale LRU eviction, so a prepared
+    /// frame may contain more meshes than this limit without forcing retessellation
+    /// or invalidating its path-batch cache indices.
     pub fn set_path_mesh_cache_limit(&mut self, limit: usize) {
         self.path_mesh_cache_limit = Some(limit);
     }
