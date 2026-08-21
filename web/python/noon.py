@@ -270,6 +270,15 @@ class Transform:
     key: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ReplacementTransform:
+    """Transform a source into another stable scene object, then swap presence."""
+
+    source: Object
+    target: Object
+    key: str | None = None
+
+
 class Scene:
     """Complete, versioned Noon scene document."""
 
@@ -281,6 +290,7 @@ class Scene:
         self._track_keys: dict[int, str] = {}
         self._scheduled_transform_targets: dict[int, dict[str, Any]] = {}
         self._scheduled_transform_ends: dict[int, float] = {}
+        self._lifecycle_objects: set[int] = set()
 
     def add(self, mobject: Mobject, *, key: str | None = None) -> Object:
         if not isinstance(mobject, Mobject):
@@ -415,7 +425,7 @@ class Scene:
 
     def play(
         self,
-        *animations: Transform,
+        *animations: Transform | ReplacementTransform,
         duration: float,
         start_time: float = 0.0,
         easing: str = "linear",
@@ -423,14 +433,24 @@ class Scene:
         if not animations:
             raise ValueError("play requires at least one animation")
         for animation in animations:
-            if not isinstance(animation, Transform):
-                raise TypeError("unsupported animation; expected Transform")
-            self._schedule_transform(
-                animation,
-                duration=duration,
-                start_time=start_time,
-                easing=easing,
-            )
+            if isinstance(animation, ReplacementTransform):
+                self._schedule_replacement_transform(
+                    animation,
+                    duration=duration,
+                    start_time=start_time,
+                    easing=easing,
+                )
+            elif isinstance(animation, Transform):
+                self._schedule_transform(
+                    animation,
+                    duration=duration,
+                    start_time=start_time,
+                    easing=easing,
+                )
+            else:
+                raise TypeError(
+                    "unsupported animation; expected Transform or ReplacementTransform"
+                )
         return self
 
     def _schedule_transform(
@@ -479,6 +499,65 @@ class Scene:
         )
         self._scheduled_transform_targets[obj.id] = copy.deepcopy(target_snapshot)
         self._scheduled_transform_ends[obj.id] = start + run_duration
+
+    def _schedule_replacement_transform(
+        self,
+        animation: ReplacementTransform,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        source = animation.source
+        target = animation.target
+        if not isinstance(source, Object) or source._owner is not self._owner:
+            raise ValueError("replacement source must belong to this Scene")
+        if not isinstance(target, Object) or target._owner is not self._owner:
+            raise ValueError("replacement target must belong to this Scene")
+        if source.id == target.id:
+            raise ValueError("replacement source and target must be different objects")
+        if source.id in self._lifecycle_objects or target.id in self._lifecycle_objects:
+            raise ValueError("an object may participate in only one lifecycle replacement")
+
+        start = _finite_number("start_time", start_time)
+        run_duration = _positive_number("duration", duration)
+        target_previous_end = self._scheduled_transform_ends.get(target.id)
+        if target_previous_end is not None and start < target_previous_end:
+            raise ValueError("replacement target has an overlapping Transform track")
+        target_snapshot = copy.deepcopy(
+            self._scheduled_transform_targets.get(
+                target.id, self._snapshot_for_object(target)
+            )
+        )
+        detached_target = Mobject(
+            geometry=target_snapshot["geometry"],
+            transform=target_snapshot["transform"],
+            style=target_snapshot["style"],
+        )
+        self._schedule_transform(
+            Transform(source, detached_target, key=animation.key),
+            duration=run_duration,
+            start_time=start,
+            easing=easing,
+        )
+
+        end = start + run_duration
+        self._add_presence_track(source, True, False, end)
+        self._add_presence_track(target, False, True, end)
+        self._lifecycle_objects.update((source.id, target.id))
+
+    def _add_presence_track(
+        self, obj: Object, from_: bool, to: bool, time: float
+    ) -> None:
+        self._add_track(
+            obj,
+            "presence",
+            {"bool": {"from": from_, "to": to}},
+            time,
+            0.0,
+            "linear",
+            None,
+        )
 
     def animate_position(
         self,
@@ -681,6 +760,12 @@ class Scene:
         start = _finite_number("start_time", start_time)
         if start < 0.0:
             raise ValueError("start_time must be non-negative")
+        run_duration = _finite_number("duration", duration)
+        if property_name == "presence":
+            if run_duration != 0.0:
+                raise ValueError("presence events require zero duration")
+        elif run_duration <= 0.0:
+            raise ValueError("duration must be positive")
         track_id = len(self._tracks)
         authoring_key = _authoring_key("key", key, f"@track:{track_id}")
         if authoring_key in self._track_keys.values():
@@ -694,7 +779,7 @@ class Scene:
                 "values": values,
                 "timing": {
                     "start_time": start,
-                    "duration": _positive_number("duration", duration),
+                    "duration": run_duration,
                     "easing": easing,
                 },
             }
