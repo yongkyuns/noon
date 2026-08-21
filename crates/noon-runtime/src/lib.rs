@@ -20,6 +20,10 @@ pub struct FrameObjectState {
 pub struct FrameState {
     pub time: f64,
     pub objects: Vec<FrameObjectState>,
+    /// Whether each semantic object is currently present in the scene. Objects
+    /// retain stable identity while absent and therefore remain seekable and
+    /// patchable without overloading style opacity as lifecycle state.
+    pub presences: Vec<bool>,
     /// Normalized per-object reveal state. Renderers may ignore it for
     /// geometry types that do not support reveal yet.
     pub reveals: Vec<f32>,
@@ -31,6 +35,10 @@ pub struct FrameState {
 }
 
 impl FrameState {
+    pub fn is_present(&self, object_index: usize) -> bool {
+        self.presences[object_index]
+    }
+
     pub fn reveal(&self, object_index: usize) -> f32 {
         self.reveals[object_index]
     }
@@ -326,11 +334,38 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .collect();
     FrameState {
         time,
+        presences: initial_bool_property(compiled, objects.len(), Property::Presence, true),
         reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
         morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
         render_geometries: vec![None; objects.len()],
         objects,
     }
+}
+
+fn initial_bool_property(
+    compiled: &CompiledScene,
+    object_count: usize,
+    property: Property,
+    default: bool,
+) -> Vec<bool> {
+    let mut values = vec![default; object_count];
+    let mut initialized = vec![false; object_count];
+    for track in compiled
+        .tracks()
+        .iter()
+        .filter(|track| track.property == property)
+    {
+        let index = track.object_index as usize;
+        if initialized[index] {
+            continue;
+        }
+        let TrackValues::Bool { from, .. } = &track.values else {
+            unreachable!("compiled bool property must contain bool values");
+        };
+        values[index] = *from;
+        initialized[index] = true;
+    }
+    values
 }
 
 fn initial_scalar_property(
@@ -411,6 +446,14 @@ fn apply_group(
         return false;
     }
     let track = &tracks[group.cursor - 1];
+    if group.property == Property::Presence {
+        let TrackValues::Bool { to, .. } = &track.values else {
+            unreachable!("compiled Presence track must contain bool values");
+        };
+        let changed = frame.presences[group.object_index] != *to;
+        frame.presences[group.object_index] = *to;
+        return changed;
+    }
     if group.property == Property::Transform {
         return apply_transform_track(frame, group.object_index, track, time);
     }
@@ -682,6 +725,7 @@ fn interpolate_color(from: Color, to: Color, progress: f32) -> Color {
 }
 
 fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
+    debug_assert!(!track.property.is_instant());
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
     apply_easing(track.timing.easing, raw)
 }
@@ -694,6 +738,9 @@ fn interpolate(track: &CompiledTrack, time: f64) -> EvaluatedValue {
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
         )),
+        TrackValues::Bool { .. } => {
+            unreachable!("Presence tracks are evaluated as discrete events")
+        }
         TrackValues::Object { .. } => {
             unreachable!("Transform tracks are evaluated atomically")
         }
@@ -768,6 +815,38 @@ mod tests {
                 .translation,
             Vec2::new(10.0, 0.0)
         );
+    }
+
+    #[test]
+    fn presence_events_are_discrete_and_direct_seek_matches_forward_playback() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .set_presence_at(object, false, true, 1.0)
+            .expect("valid create event");
+        scene
+            .set_presence_at(object, true, false, 3.0)
+            .expect("valid remove event");
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        let mut sequential = SceneInstance::new(compiled.clone());
+        let mut direct = SceneInstance::new(compiled);
+
+        assert!(!sequential.frame().is_present(0));
+        sequential.advance_to(0.999).expect("valid time");
+        assert!(!sequential.frame().is_present(0));
+        sequential.advance_to(1.0).expect("valid time");
+        assert!(sequential.frame().is_present(0));
+        sequential.advance_to(2.0).expect("valid time");
+        assert!(sequential.frame().is_present(0));
+        sequential.advance_to(3.0).expect("valid time");
+        assert!(!sequential.frame().is_present(0));
+
+        direct.seek(3.0).expect("valid time");
+        assert_eq!(sequential.frame(), direct.frame());
+        direct.seek(2.0).expect("valid time");
+        assert!(direct.frame().is_present(0));
+        direct.seek(0.0).expect("valid time");
+        assert!(!direct.frame().is_present(0));
     }
 
     #[test]
@@ -953,6 +1032,38 @@ mod tests {
         expected.seek(2.0).expect("valid time");
 
         assert_eq!(live.frame(), expected.frame());
+    }
+
+    #[test]
+    fn adding_presence_event_live_reconciles_at_current_time() {
+        let mut definition = SceneDefinition::new();
+        let object = definition.add(GeometryRef::circle(1.0));
+        let mut live = SceneInstance::new(
+            CompiledScene::compile(&definition).expect("scene must compile"),
+        );
+        live.seek(2.0).expect("valid time");
+        assert!(live.frame().is_present(0));
+
+        let presence = TrackDefinition {
+            id: noon_core::TrackId::new(7),
+            object,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: true,
+                to: false,
+            },
+            timing: TrackTiming::instant(1.0),
+        };
+        let patch = ScenePatch::AddTrack(presence);
+        live.apply_patch(&patch).expect("presence patch must apply");
+        definition.apply_patch(patch).expect("definition patch must apply");
+
+        let mut expected = SceneInstance::new(
+            CompiledScene::compile(&definition).expect("scene must compile after patch"),
+        );
+        expected.seek(2.0).expect("valid time");
+        assert_eq!(live.frame(), expected.frame());
+        assert!(!live.frame().is_present(0));
     }
 
     #[test]
