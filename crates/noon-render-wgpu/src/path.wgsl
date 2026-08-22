@@ -29,8 +29,16 @@ struct PathVertexOutput {
 
 @vertex
 fn vs_path(input: PathVertexInput) -> PathVertexOutput {
+    let c = cos(input.rotation);
+    let s = sin(input.rotation);
+    let scaled = input.local * input.scale;
+    let world = vec2<f32>(
+        c * scaled.x - s * scaled.y,
+        s * scaled.x + c * scaled.y,
+    ) + input.translation;
+
     var output: PathVertexOutput;
-    output.position = vec4<f32>((input.local - camera.center) * camera.clip_scale, 0.0, 1.0);
+    output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
     output.color = vec4<f32>(1.0, 0.0, 1.0, 1.0);
     return output;
 }
