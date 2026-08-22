@@ -1,72 +1,52 @@
-from noon import Circle, Color, Line, Rectangle, Scene, Transform
-from noon_layout import LEFT, RIGHT, UP, arrange
+from noon import (
+    BLUE,
+    PURPLE,
+    WHITE,
+    LEFT,
+    RIGHT,
+    UP,
+    Circle,
+    Line,
+    Rectangle,
+    Scene,
+    Transform,
+    VGroup,
+)
 
 scene = Scene()
 
 # One idea only: analytic geometry stays analytic while Transform interpolates
 # circle radius, rectangle size, and line endpoints directly.
-SOURCE = Color(0.34, 0.68, 0.96)
-TARGET = Color(0.72, 0.42, 0.96)
-OUTLINE = Color(0.92, 0.96, 1.0)
+circle = Circle(0.35, color=BLUE).set_stroke(WHITE, 0.06)
+rectangle = Rectangle(0.85, 0.5, color=BLUE).set_stroke(WHITE, 0.06)
+line = Line(LEFT * 0.45, RIGHT * 0.45, color=BLUE).set_stroke(BLUE, 0.12)
+VGroup(circle, rectangle, line).arrange(RIGHT, buff=1.1)
 
-circle_slot, rectangle_slot, line_slot = arrange(3, spacing=2.25)
+scene.add(circle, key="analytic-circle")
+scene.add(rectangle, key="analytic-rectangle")
+scene.add(line, key="analytic-line")
 
-circle = scene.add(
-    Circle(0.35, position=circle_slot, fill=SOURCE, stroke=OUTLINE, stroke_width=0.06),
-    key="analytic-circle",
+circle_target = (
+    Circle(0.8, color=PURPLE)
+    .set_stroke(WHITE, 0.1)
+    .move_to(circle.get_center())
 )
-rectangle = scene.add(
-    Rectangle(
-        0.85,
-        0.5,
-        position=rectangle_slot,
-        fill=SOURCE,
-        stroke=OUTLINE,
-        stroke_width=0.06,
-    ),
-    key="analytic-rectangle",
+rectangle_target = (
+    Rectangle(1.55, 0.95, color=PURPLE)
+    .set_stroke(WHITE, 0.1)
+    .move_to(rectangle.get_center())
 )
-line = scene.add(
-    Line(
-        LEFT * 0.45,
-        RIGHT * 0.45,
-        position=line_slot,
-        stroke=SOURCE,
-        stroke_width=0.12,
-    ),
-    key="analytic-line",
+line_target = (
+    Line(LEFT * 0.75 + UP * 0.55, RIGHT * 0.75 - UP * 0.55, color=PURPLE)
+    .set_stroke(PURPLE, 0.2)
+    .move_to(line.get_center())
 )
 
 scene.play(
-    Transform(
-        circle,
-        Circle(0.8, position=circle_slot, fill=TARGET, stroke=OUTLINE, stroke_width=0.1),
-        key="analytic-circle.transform",
-    ),
-    Transform(
-        rectangle,
-        Rectangle(
-            1.55,
-            0.95,
-            position=rectangle_slot,
-            fill=TARGET,
-            stroke=OUTLINE,
-            stroke_width=0.1,
-        ),
-        key="analytic-rectangle.transform",
-    ),
-    Transform(
-        line,
-        Line(
-            LEFT * 0.75 + UP * 0.55,
-            RIGHT * 0.75 - UP * 0.55,
-            position=line_slot,
-            stroke=TARGET,
-            stroke_width=0.2,
-        ),
-        key="analytic-line.transform",
-    ),
-    duration=3.2,
+    Transform(circle, circle_target, key="analytic-circle.transform"),
+    Transform(rectangle, rectangle_target, key="analytic-rectangle.transform"),
+    Transform(line, line_target, key="analytic-line.transform"),
+    run_time=3.2,
     easing="ease_in_out_cubic",
 )
 

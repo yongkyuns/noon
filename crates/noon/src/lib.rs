@@ -1,0 +1,764 @@
+//! Ergonomic Rust authoring facade for Noon.
+//!
+//! This crate deliberately does not introduce another scene representation.
+//! [`Scene`] owns one canonical [`noon_core::SceneDefinition`]; the extra maps
+//! here are transient authoring state used only to resolve fluent operations
+//! such as `mobject.animate().shift(...)` into deterministic core tracks.
+
+#![forbid(unsafe_code)]
+
+use std::collections::BTreeMap;
+
+pub use noon_core;
+pub use noon_core::*;
+
+/// Common imports for normal Noon authoring.
+pub mod prelude {
+    pub use crate::{
+        Animate, AuthoringError, Circle, FadeIn, FadeOut, Line, Mobject, MobjectEditor, Path,
+        Rectangle, Scene, Square, Transform,
+    };
+    pub use noon_core::{
+        Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Style, Vec2, VectorPath, BLACK, BLUE,
+        BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+        DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREY,
+        LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI,
+        PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C,
+        RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP,
+        UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
+    };
+}
+
+/// Something that can be inserted into the canonical semantic scene.
+pub trait IntoSnapshot {
+    fn into_snapshot(self) -> ObjectSnapshot;
+}
+
+impl IntoSnapshot for ObjectSnapshot {
+    fn into_snapshot(self) -> ObjectSnapshot {
+        self
+    }
+}
+
+macro_rules! define_shape {
+    ($name:ident) => {
+        #[derive(Clone, Debug, PartialEq)]
+        pub struct $name(ObjectSnapshot);
+
+        impl $name {
+            pub fn color(mut self, color: Color) -> Self {
+                self.0 = self.0.set_color(color);
+                self
+            }
+
+            pub fn shift(mut self, offset: Vec2) -> Self {
+                self.0 = self.0.shift(offset);
+                self
+            }
+
+            pub fn move_to(mut self, point: Vec2) -> Self {
+                self.0 = self.0.move_to(point);
+                self
+            }
+
+            pub fn scale(mut self, factor: f32) -> Self {
+                self.0 = self.0.scale_by(factor);
+                self
+            }
+
+            pub fn scale_xy(mut self, factor: Vec2) -> Self {
+                self.0 = self.0.scale_xy(factor);
+                self
+            }
+
+            pub fn rotate(mut self, angle: f32) -> Self {
+                self.0 = self.0.rotate_by(angle);
+                self
+            }
+
+            pub fn set_fill(mut self, color: Option<Color>, opacity: Option<f32>) -> Self {
+                self.0 = self.0.set_fill(color, opacity);
+                self
+            }
+
+            pub fn set_stroke(mut self, color: Option<Color>, width: Option<f32>) -> Self {
+                self.0 = self.0.set_stroke(color, width);
+                self
+            }
+
+            pub fn set_opacity(mut self, opacity: f32) -> Self {
+                self.0 = self.0.set_opacity(opacity);
+                self
+            }
+
+            pub fn snapshot(&self) -> &ObjectSnapshot {
+                &self.0
+            }
+        }
+
+        impl IntoSnapshot for $name {
+            fn into_snapshot(self) -> ObjectSnapshot {
+                self.0
+            }
+        }
+    };
+}
+
+define_shape!(Circle);
+define_shape!(Rectangle);
+define_shape!(Square);
+define_shape!(Line);
+define_shape!(Path);
+
+impl Circle {
+    pub fn new(radius: f32) -> Self {
+        Self(ObjectSnapshot::new(GeometryRef::circle(radius)))
+    }
+}
+
+impl Default for Circle {
+    fn default() -> Self {
+        Self::new(1.0)
+    }
+}
+
+impl Rectangle {
+    pub fn new(width: f32, height: f32) -> Self {
+        Self(ObjectSnapshot::new(GeometryRef::rectangle(width, height)))
+    }
+}
+
+impl Square {
+    pub fn new(side_length: f32) -> Self {
+        Self(ObjectSnapshot::new(GeometryRef::square(side_length)))
+    }
+}
+
+impl Default for Square {
+    fn default() -> Self {
+        Self::new(2.0)
+    }
+}
+
+impl Line {
+    pub fn new(start: Vec2, end: Vec2) -> Self {
+        let snapshot = ObjectSnapshot::new(GeometryRef::line(start, end))
+            .set_fill(None, None)
+            .set_stroke(Some(WHITE), Some(0.04));
+        Self(snapshot)
+    }
+}
+
+impl Default for Line {
+    fn default() -> Self {
+        Self::new(LEFT, RIGHT)
+    }
+}
+
+impl Path {
+    pub fn new(path: VectorPath) -> Self {
+        Self(ObjectSnapshot::new(GeometryRef::path(path)))
+    }
+}
+
+/// Stable handle to a semantic object in a [`Scene`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Mobject {
+    id: ObjectId,
+}
+
+impl Mobject {
+    pub const fn id(self) -> ObjectId {
+        self.id
+    }
+
+    /// Build a transient target-state animation. No runtime callback is created.
+    pub fn animate(self) -> Animate {
+        Animate {
+            object: self,
+            operations: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Operation {
+    Shift(Vec2),
+    MoveTo(Vec2),
+    Scale(f32),
+    ScaleXY(Vec2),
+    Rotate(f32),
+    SetColor(Color),
+    SetFill(Option<Color>, Option<f32>),
+    SetStroke(Option<Color>, Option<f32>),
+    SetOpacity(f32),
+}
+
+/// Transient target-state builder returned by [`Mobject::animate`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animate {
+    object: Mobject,
+    operations: Vec<Operation>,
+}
+
+impl Animate {
+    pub fn shift(mut self, offset: Vec2) -> Self {
+        self.operations.push(Operation::Shift(offset));
+        self
+    }
+
+    pub fn move_to(mut self, point: Vec2) -> Self {
+        self.operations.push(Operation::MoveTo(point));
+        self
+    }
+
+    pub fn scale(mut self, factor: f32) -> Self {
+        self.operations.push(Operation::Scale(factor));
+        self
+    }
+
+    pub fn scale_xy(mut self, factor: Vec2) -> Self {
+        self.operations.push(Operation::ScaleXY(factor));
+        self
+    }
+
+    pub fn rotate(mut self, angle: f32) -> Self {
+        self.operations.push(Operation::Rotate(angle));
+        self
+    }
+
+    pub fn set_color(mut self, color: Color) -> Self {
+        self.operations.push(Operation::SetColor(color));
+        self
+    }
+
+    pub fn set_fill(mut self, color: Option<Color>, opacity: Option<f32>) -> Self {
+        self.operations.push(Operation::SetFill(color, opacity));
+        self
+    }
+
+    pub fn set_stroke(mut self, color: Option<Color>, width: Option<f32>) -> Self {
+        self.operations.push(Operation::SetStroke(color, width));
+        self
+    }
+
+    pub fn set_opacity(mut self, opacity: f32) -> Self {
+        self.operations.push(Operation::SetOpacity(opacity));
+        self
+    }
+}
+
+/// Explicit transformation to a detached target snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transform {
+    source: Mobject,
+    target: ObjectSnapshot,
+}
+
+impl Transform {
+    pub fn new<T: IntoSnapshot>(source: Mobject, target: T) -> Self {
+        Self {
+            source,
+            target: target.into_snapshot(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FadeOut(pub Mobject);
+
+impl FadeOut {
+    pub const fn new(object: Mobject) -> Self {
+        Self(object)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FadeIn(pub Mobject);
+
+impl FadeIn {
+    pub const fn new(object: Mobject) -> Self {
+        Self(object)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Animation {
+    Animate(Animate),
+    Transform(Transform),
+    FadeOut(FadeOut),
+    FadeIn(FadeIn),
+}
+
+impl From<Animate> for Animation {
+    fn from(value: Animate) -> Self {
+        Self::Animate(value)
+    }
+}
+
+impl From<Transform> for Animation {
+    fn from(value: Transform) -> Self {
+        Self::Transform(value)
+    }
+}
+
+impl From<FadeOut> for Animation {
+    fn from(value: FadeOut) -> Self {
+        Self::FadeOut(value)
+    }
+}
+
+impl From<FadeIn> for Animation {
+    fn from(value: FadeIn) -> Self {
+        Self::FadeIn(value)
+    }
+}
+
+pub trait IntoAnimations {
+    fn into_animations(self) -> Vec<Animation>;
+}
+
+impl<T> IntoAnimations for T
+where
+    T: Into<Animation>,
+{
+    fn into_animations(self) -> Vec<Animation> {
+        vec![self.into()]
+    }
+}
+
+macro_rules! tuple_animations {
+    ($($name:ident),+ $(,)?) => {
+        impl<$($name),+> IntoAnimations for ($($name,)+)
+        where
+            $($name: Into<Animation>,)+
+        {
+            #[allow(non_snake_case)]
+            fn into_animations(self) -> Vec<Animation> {
+                let ($($name,)+) = self;
+                vec![$($name.into(),)+]
+            }
+        }
+    };
+}
+
+tuple_animations!(A, B);
+tuple_animations!(A, B, C);
+tuple_animations!(A, B, C, D);
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AuthoringError {
+    UnknownObject(ObjectId),
+    InvalidDuration(f64),
+    StaticMutationAfterAnimation(ObjectId),
+    FadeInRequiresAbsent(ObjectId),
+    FadeOutRequiresPresent(ObjectId),
+    Timeline(TimelineError),
+}
+
+impl std::fmt::Display for AuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
+            Self::InvalidDuration(value) => write!(formatter, "invalid animation duration {value}"),
+            Self::StaticMutationAfterAnimation(id) => write!(
+                formatter,
+                "object {} already has authored animation; use .animate for later changes",
+                id.get()
+            ),
+            Self::FadeInRequiresAbsent(id) => {
+                write!(formatter, "FadeIn requires absent object {}", id.get())
+            }
+            Self::FadeOutRequiresPresent(id) => {
+                write!(formatter, "FadeOut requires present object {}", id.get())
+            }
+            Self::Timeline(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for AuthoringError {}
+
+impl From<TimelineError> for AuthoringError {
+    fn from(value: TimelineError) -> Self {
+        Self::Timeline(value)
+    }
+}
+
+/// High-level authoring facade over one canonical [`SceneDefinition`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Scene {
+    definition: SceneDefinition,
+    cursor: f64,
+    authored: BTreeMap<ObjectId, ObjectSnapshot>,
+    presence: BTreeMap<ObjectId, bool>,
+}
+
+impl Scene {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn time(&self) -> f64 {
+        self.cursor
+    }
+
+    pub fn definition(&self) -> &SceneDefinition {
+        &self.definition
+    }
+
+    pub fn into_definition(self) -> SceneDefinition {
+        self.definition
+    }
+
+    pub fn add<T: IntoSnapshot>(&mut self, object: T) -> Mobject {
+        let snapshot = object.into_snapshot();
+        let id = self.definition.add_snapshot(snapshot.clone());
+        self.authored.insert(id, snapshot);
+        self.presence.insert(id, true);
+        Mobject { id }
+    }
+
+    pub fn snapshot(&self, object: Mobject) -> Result<&ObjectSnapshot, AuthoringError> {
+        self.authored
+            .get(&object.id)
+            .ok_or(AuthoringError::UnknownObject(object.id))
+    }
+
+    /// Edit a static object's semantic snapshot before it is animated.
+    pub fn edit(&mut self, object: Mobject) -> Result<MobjectEditor<'_>, AuthoringError> {
+        if self
+            .definition
+            .tracks()
+            .iter()
+            .any(|track| track.object == object.id)
+        {
+            return Err(AuthoringError::StaticMutationAfterAnimation(object.id));
+        }
+        if !self.authored.contains_key(&object.id) {
+            return Err(AuthoringError::UnknownObject(object.id));
+        }
+        Ok(MobjectEditor {
+            scene: self,
+            object,
+        })
+    }
+
+    pub fn play<A: IntoAnimations>(&mut self, animations: A) -> Play<'_> {
+        Play {
+            scene: self,
+            animations: animations.into_animations(),
+            easing: Easing::Linear,
+        }
+    }
+
+    pub fn wait(&mut self, duration: f64) -> Result<&mut Self, AuthoringError> {
+        if !duration.is_finite() || duration < 0.0 {
+            return Err(AuthoringError::InvalidDuration(duration));
+        }
+        self.cursor += duration;
+        Ok(self)
+    }
+
+    fn apply_static(
+        &mut self,
+        object: Mobject,
+        snapshot: ObjectSnapshot,
+    ) -> Result<(), AuthoringError> {
+        if !self.definition.set_snapshot(object.id, snapshot.clone()) {
+            return Err(AuthoringError::UnknownObject(object.id));
+        }
+        self.authored.insert(object.id, snapshot);
+        Ok(())
+    }
+
+    fn schedule(
+        &mut self,
+        animations: Vec<Animation>,
+        duration: f64,
+        easing: Easing,
+    ) -> Result<(), AuthoringError> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(AuthoringError::InvalidDuration(duration));
+        }
+        let start = self.cursor;
+        let end = start + duration;
+        let timing = TrackTiming::new(start, duration, easing);
+
+        for animation in animations {
+            match animation {
+                Animation::Animate(animation) => {
+                    let from = self.snapshot(animation.object)?.clone();
+                    let mut to = from.clone();
+                    for operation in animation.operations {
+                        to = apply_operation(to, operation);
+                    }
+                    self.definition.animate_transform(
+                        animation.object.id,
+                        from,
+                        to.clone(),
+                        timing,
+                    )?;
+                    self.authored.insert(animation.object.id, to);
+                }
+                Animation::Transform(animation) => {
+                    let from = self.snapshot(animation.source)?.clone();
+                    self.definition.animate_transform(
+                        animation.source.id,
+                        from,
+                        animation.target.clone(),
+                        timing,
+                    )?;
+                    self.authored.insert(animation.source.id, animation.target);
+                }
+                Animation::FadeOut(FadeOut(object)) => {
+                    let is_present = self
+                        .presence
+                        .get(&object.id)
+                        .copied()
+                        .ok_or(AuthoringError::UnknownObject(object.id))?;
+                    if !is_present {
+                        return Err(AuthoringError::FadeOutRequiresPresent(object.id));
+                    }
+                    self.definition
+                        .animate_appearance(object.id, 1.0, 0.0, timing)?;
+                    self.definition
+                        .set_presence_at(object.id, true, false, end)?;
+                    self.presence.insert(object.id, false);
+                }
+                Animation::FadeIn(FadeIn(object)) => {
+                    let is_present = self
+                        .presence
+                        .get(&object.id)
+                        .copied()
+                        .ok_or(AuthoringError::UnknownObject(object.id))?;
+                    if is_present {
+                        return Err(AuthoringError::FadeInRequiresAbsent(object.id));
+                    }
+                    self.definition
+                        .set_presence_at(object.id, false, true, start)?;
+                    self.definition
+                        .animate_appearance(object.id, 0.0, 1.0, timing)?;
+                    self.presence.insert(object.id, true);
+                }
+            }
+        }
+
+        self.cursor = end;
+        Ok(())
+    }
+}
+
+fn apply_operation(snapshot: ObjectSnapshot, operation: Operation) -> ObjectSnapshot {
+    match operation {
+        Operation::Shift(value) => snapshot.shift(value),
+        Operation::MoveTo(value) => snapshot.move_to(value),
+        Operation::Scale(value) => snapshot.scale_by(value),
+        Operation::ScaleXY(value) => snapshot.scale_xy(value),
+        Operation::Rotate(value) => snapshot.rotate_by(value),
+        Operation::SetColor(value) => snapshot.set_color(value),
+        Operation::SetFill(color, opacity) => snapshot.set_fill(color, opacity),
+        Operation::SetStroke(color, width) => snapshot.set_stroke(color, width),
+        Operation::SetOpacity(value) => snapshot.set_opacity(value),
+    }
+}
+
+/// Mutable semantic accessor for pre-animation object layout/style.
+pub struct MobjectEditor<'a> {
+    scene: &'a mut Scene,
+    object: Mobject,
+}
+
+impl MobjectEditor<'_> {
+    fn map(
+        &mut self,
+        operation: impl FnOnce(ObjectSnapshot) -> ObjectSnapshot,
+    ) -> Result<&mut Self, AuthoringError> {
+        let current = self.scene.snapshot(self.object)?.clone();
+        self.scene.apply_static(self.object, operation(current))?;
+        Ok(self)
+    }
+
+    pub fn shift(&mut self, offset: Vec2) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.shift(offset))
+    }
+
+    pub fn move_to(&mut self, point: Vec2) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.move_to(point))
+    }
+
+    pub fn scale(&mut self, factor: f32) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.scale_by(factor))
+    }
+
+    pub fn rotate(&mut self, angle: f32) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.rotate_by(angle))
+    }
+
+    pub fn set_color(&mut self, color: Color) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.set_color(color))
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.set_opacity(opacity))
+    }
+
+    pub fn next_to(
+        &mut self,
+        target: Mobject,
+        direction: Vec2,
+        buff: f32,
+    ) -> Result<&mut Self, AuthoringError> {
+        let target_snapshot = self.scene.snapshot(target)?.clone();
+        self.map(|snapshot| snapshot.next_to(&target_snapshot, direction, buff))
+    }
+
+    pub fn align_to(
+        &mut self,
+        target: Mobject,
+        direction: Vec2,
+    ) -> Result<&mut Self, AuthoringError> {
+        let target_snapshot = self.scene.snapshot(target)?.clone();
+        self.map(|snapshot| snapshot.align_to(&target_snapshot, direction))
+    }
+
+    pub fn to_edge(&mut self, direction: Vec2, buff: f32) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.to_edge(direction, buff))
+    }
+
+    pub fn to_corner(&mut self, direction: Vec2, buff: f32) -> Result<&mut Self, AuthoringError> {
+        self.map(|snapshot| snapshot.to_corner(direction, buff))
+    }
+}
+
+/// Pending parallel `Scene::play` call. Timing is transient; applying it writes
+/// ordinary explicit tracks to the canonical [`SceneDefinition`].
+pub struct Play<'a> {
+    scene: &'a mut Scene,
+    animations: Vec<Animation>,
+    easing: Easing,
+}
+
+impl Play<'_> {
+    pub fn with_easing(mut self, easing: Easing) -> Self {
+        self.easing = easing;
+        self
+    }
+
+    pub fn run_time(self, duration: f64) -> Result<(), AuthoringError> {
+        self.scene.schedule(self.animations, duration, self.easing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facade_uses_core_named_vocabulary_without_new_scene_model() {
+        let mut scene = Scene::new();
+        let circle = scene.add(Circle::new(0.5).color(BLUE).shift(LEFT));
+        let square = scene.add(Square::new(1.0).color(PINK));
+        scene
+            .edit(square)
+            .unwrap()
+            .next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)
+            .unwrap();
+
+        assert_eq!(scene.definition().objects().len(), 2);
+        let circle_snapshot = scene.snapshot(circle).unwrap();
+        assert_eq!(circle_snapshot.style.fill, Some(BLUE));
+        let square_snapshot = scene.snapshot(square).unwrap();
+        let gap = square_snapshot.world_bounds().unwrap().min.x
+            - circle_snapshot.world_bounds().unwrap().max.x;
+        assert!((gap - DEFAULT_MOBJECT_TO_MOBJECT_BUFFER).abs() < 1e-6);
+    }
+
+    #[test]
+    fn animate_builder_lowers_directly_to_transform_track_and_chains_targets() {
+        let mut scene = Scene::new();
+        let circle = scene.add(Circle::new(0.5).color(BLUE));
+
+        scene
+            .play(circle.animate().shift(RIGHT).set_color(PURPLE))
+            .with_easing(Easing::EaseInOutCubic)
+            .run_time(1.5)
+            .unwrap();
+        scene
+            .play(circle.animate().shift(UP).rotate(90.0 * DEGREES))
+            .run_time(0.5)
+            .unwrap();
+
+        assert_eq!(scene.time(), 2.0);
+        assert_eq!(scene.definition().tracks().len(), 2);
+        assert_eq!(scene.definition().tracks()[0].property, Property::Transform);
+        assert_eq!(scene.definition().tracks()[1].property, Property::Transform);
+        let target = scene.snapshot(circle).unwrap();
+        assert_eq!(target.transform.translation, RIGHT + UP);
+        assert_eq!(target.style.fill, Some(PURPLE));
+        assert!((target.transform.rotation - PI / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parallel_play_shares_start_and_advances_cursor_once() {
+        let mut scene = Scene::new();
+        let left = scene.add(Circle::new(0.4).shift(LEFT));
+        let right = scene.add(Square::new(0.8).shift(RIGHT));
+
+        scene
+            .play((left.animate().shift(UP), right.animate().shift(DOWN)))
+            .run_time(2.0)
+            .unwrap();
+
+        assert_eq!(scene.definition().tracks().len(), 2);
+        assert_eq!(scene.definition().tracks()[0].timing.start_time, 0.0);
+        assert_eq!(scene.definition().tracks()[1].timing.start_time, 0.0);
+        assert_eq!(scene.time(), 2.0);
+    }
+
+    #[test]
+    fn fade_uses_appearance_without_rewriting_semantic_opacity() {
+        let mut scene = Scene::new();
+        let circle = scene.add(Circle::new(0.5).color(BLUE).set_opacity(0.42));
+
+        scene.play(FadeOut::new(circle)).run_time(0.5).unwrap();
+        scene.wait(0.25).unwrap();
+        scene.play(FadeIn::new(circle)).run_time(0.5).unwrap();
+
+        assert_eq!(scene.snapshot(circle).unwrap().style.opacity, 0.42);
+        let properties: Vec<_> = scene
+            .definition()
+            .tracks()
+            .iter()
+            .map(|track| track.property)
+            .collect();
+        assert_eq!(
+            properties
+                .iter()
+                .filter(|&&p| p == Property::Appearance)
+                .count(),
+            2
+        );
+        assert_eq!(
+            properties
+                .iter()
+                .filter(|&&p| p == Property::Presence)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn direct_mutation_after_animation_is_rejected() {
+        let mut scene = Scene::new();
+        let circle = scene.add(Circle::new(0.5));
+        scene
+            .play(circle.animate().shift(RIGHT))
+            .run_time(1.0)
+            .unwrap();
+        assert!(matches!(
+            scene.edit(circle),
+            Err(AuthoringError::StaticMutationAfterAnimation(_))
+        ));
+    }
+}

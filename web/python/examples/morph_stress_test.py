@@ -1,14 +1,36 @@
 import math
 
-from noon import Color, Scene, Transform, VectorPath
-from noon_layout import DOWN, LEFT, RIGHT, UP, Vec2, grid
+from noon import (
+    BLUE,
+    GREEN,
+    ORANGE,
+    PINK,
+    PURPLE,
+    RED,
+    TEAL,
+    YELLOW,
+    DOWN,
+    LEFT,
+    RIGHT,
+    UP,
+    Path,
+    Scene,
+    Transform,
+    VGroup,
+    Vec2,
+    VectorPath,
+)
 
 scene = Scene()
 
 # Dense by design: this is the one gallery entry whose purpose is scale. The
 # picker uses one representative count; context can still drive larger profiling.
 authoring_context = globals().get("context", {})
-requested_count = authoring_context.get("object_count", 600) if isinstance(authoring_context, dict) else 600
+requested_count = (
+    authoring_context.get("object_count", 600)
+    if isinstance(authoring_context, dict)
+    else 600
+)
 if isinstance(requested_count, bool) or not isinstance(requested_count, int):
     raise TypeError("object_count must be an integer")
 if requested_count <= 0 or requested_count > 10_000:
@@ -21,9 +43,9 @@ columns = math.ceil(math.sqrt(object_count * aspect))
 rows = math.ceil(object_count / columns)
 spacing_x = 5.8 / max(columns - 1, 1)
 spacing_y = 3.8 / max(rows - 1, 1)
-positions = grid(rows, columns, spacing=(spacing_x, spacing_y))
 source_radius = min(spacing_x, spacing_y) * 0.37
 stroke_width = max(source_radius * 0.24, 0.0025)
+PALETTE = (BLUE, TEAL, GREEN, YELLOW, ORANGE, RED, PINK, PURPLE)
 
 
 def rounded_source(radius: float) -> VectorPath:
@@ -58,42 +80,33 @@ def star_target(variant: int) -> VectorPath:
 
 source = rounded_source(source_radius)
 targets = [star_target(variant) for variant in range(variant_count)]
-
-for index in range(object_count):
-    row, column = divmod(index, columns)
-    variant = index % variant_count
-    position = positions[index]
-    phase = (row * 0.19 + column * 0.13) % math.tau
-
-    color_t = variant / (variant_count - 1)
-    shape = scene.path(
+shapes = [
+    Path(
         source,
-        position=position,
-        rotation=phase * 0.18,
         fill=None,
-        stroke=Color(
-            0.34 + 0.58 * color_t,
-            0.80 - 0.34 * color_t,
-            0.98 - 0.18 * math.sin(variant * 0.7) ** 2,
-            0.92,
-        ),
+        stroke=PALETTE[index % len(PALETTE)],
         stroke_width=stroke_width,
-        key=f"stress.{index}",
     )
-    scene.play(
-        Transform(shape, targets[variant], key=f"stress.{index}.morph"),
-        duration=3.4,
-        start_time=0.25,
-        easing="ease_in_out_cubic",
-    )
-    scene.animate_rotation(
-        shape,
-        phase * 0.18,
-        phase * 0.18 + (0.75 if (row + column) % 2 == 0 else -0.75),
-        duration=3.4,
-        start_time=0.25,
-        easing="ease_in_out_cubic",
-        key=f"stress.{index}.rotation",
-    )
+    for index in range(object_count)
+]
+
+# The workload still derives its dimensions from object count/aspect, but object
+# placement is delegated to the same bounds-aware group layout used by normal scenes.
+VGroup(*shapes).arrange_in_grid(
+    rows=rows,
+    cols=columns,
+    buff=(max(spacing_x - 2 * source_radius, 0.0), max(spacing_y - 2 * source_radius, 0.0)),
+)
+for index, shape in enumerate(shapes):
+    scene.add(shape, key=f"stress.{index}")
+
+scene.play(
+    *(
+        Transform(shape, targets[index % variant_count], key=f"stress.{index}.morph")
+        for index, shape in enumerate(shapes)
+    ),
+    run_time=3.4,
+    easing="ease_in_out_cubic",
+)
 
 result = scene

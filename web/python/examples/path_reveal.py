@@ -1,13 +1,12 @@
-from noon import Color, Scene, VectorPath
-from noon_layout import DOWN, LEFT, ORIGIN, RIGHT, UP
+from noon import BLUE, DOWN, LEFT, ORIGIN, RIGHT, UP, Scene, VectorPath
 
 scene = Scene()
 
-# A single multi-contour path demonstrates the reveal domain. There are no
-# concurrent transforms here, so the visible effect maps directly to Reveal.
+# A single multi-contour path demonstrates the reveal domain. Geometry numbers
+# here define the path itself; layout and styling use Noon semantic vocabulary.
 WIDTH = 2.7
 ARCH_HEIGHT = 0.95
-LOWER_ROW = DOWN * 1.0
+LOWER_ROW = DOWN
 
 path = (
     VectorPath()
@@ -25,14 +24,13 @@ path = (
 stroke = scene.path(
     path,
     fill=None,
-    stroke=Color(0.48, 0.68, 1.0),
+    stroke=BLUE,
     stroke_width=0.11,
     key="reveal-path",
 )
 scene.animate_reveal(
     stroke,
     duration=3.2,
-    start_time=0.35,
     easing="ease_in_out_cubic",
     key="reveal-path.draw",
 )

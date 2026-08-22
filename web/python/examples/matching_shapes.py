@@ -1,66 +1,45 @@
-from noon import Color, Scene, TransformMatchingShapes
-from noon_layout import DOWN, UP, arrange
+from noon import (
+    BLUE,
+    GREEN,
+    ORANGE,
+    PINK,
+    PURPLE,
+    RED,
+    WHITE,
+    DOWN,
+    RIGHT,
+    UP,
+    Circle,
+    Rectangle,
+    Scene,
+    TransformMatchingShapes,
+    VGroup,
+)
 
 scene = Scene()
 
-# Source and target rows are intentionally authored in different orders.
-# TransformMatchingShapes pairs by semantic geometry signature, not list index.
-source_slots = arrange(3, spacing=1.9, center=UP * 0.9)
-target_slots = arrange(3, spacing=1.9, center=DOWN * 0.9)
-OUTLINE = Color(0.94, 0.97, 1.0)
+# Source and target rows are authored in different orders. Matching is by
+# semantic geometry signature, not by list position.
+source_circle_a = Circle(0.30, color=ORANGE).set_stroke(WHITE, 0.06)
+source_rectangle = Rectangle(0.80, 0.48, color=RED).set_stroke(WHITE, 0.06)
+source_circle_b = Circle(0.44, color=PINK).set_stroke(WHITE, 0.06)
+VGroup(source_circle_a, source_rectangle, source_circle_b).arrange(RIGHT, buff=0.9).shift(UP)
 
-source_circle_a = scene.circle(
-    0.30,
-    position=source_slots[0],
-    fill=Color(0.98, 0.66, 0.22),
-    stroke=OUTLINE,
-    stroke_width=0.06,
-    key="source-circle-a",
-)
-source_rectangle = scene.rectangle(
-    0.80,
-    0.48,
-    position=source_slots[1],
-    fill=Color(0.94, 0.46, 0.32),
-    stroke=OUTLINE,
-    stroke_width=0.06,
-    key="source-rectangle",
-)
-source_circle_b = scene.circle(
-    0.44,
-    position=source_slots[2],
-    fill=Color(0.90, 0.34, 0.64),
-    stroke=OUTLINE,
-    stroke_width=0.06,
-    key="source-circle-b",
-)
+# Rectangle aspect ratio is preserved so its matching signature remains stable.
+target_rectangle = Rectangle(1.40, 0.84, color=BLUE).set_stroke(WHITE, 0.08)
+target_circle_a = Circle(0.50, color=GREEN).set_stroke(WHITE, 0.08)
+target_circle_b = Circle(0.68, color=PURPLE).set_stroke(WHITE, 0.08)
+VGroup(target_rectangle, target_circle_a, target_circle_b).arrange(RIGHT, buff=0.9).shift(DOWN)
 
-# Rectangle aspect ratio is preserved exactly so its signature stays stable.
-target_rectangle = scene.rectangle(
-    1.40,
-    0.84,
-    position=target_slots[0],
-    fill=Color(0.42, 0.62, 0.98),
-    stroke=OUTLINE,
-    stroke_width=0.08,
-    key="target-rectangle",
-)
-target_circle_a = scene.circle(
-    0.50,
-    position=target_slots[1],
-    fill=Color(0.36, 0.86, 0.72),
-    stroke=OUTLINE,
-    stroke_width=0.08,
-    key="target-circle-a",
-)
-target_circle_b = scene.circle(
-    0.68,
-    position=target_slots[2],
-    fill=Color(0.62, 0.48, 0.98),
-    stroke=OUTLINE,
-    stroke_width=0.08,
-    key="target-circle-b",
-)
+for key, mobject in (
+    ("source-circle-a", source_circle_a),
+    ("source-rectangle", source_rectangle),
+    ("source-circle-b", source_circle_b),
+    ("target-rectangle", target_rectangle),
+    ("target-circle-a", target_circle_a),
+    ("target-circle-b", target_circle_b),
+):
+    scene.add(mobject, key=key)
 
 scene.play(
     TransformMatchingShapes(
@@ -68,8 +47,7 @@ scene.play(
         [target_rectangle, target_circle_a, target_circle_b],
         key="matching.rearrange",
     ),
-    duration=2.8,
-    start_time=0.35,
+    run_time=2.8,
     easing="ease_in_out_cubic",
 )
 

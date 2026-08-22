@@ -1,7 +1,7 @@
 use noon_compile::{CompileError, CompiledScene, TransformGeometryPlan};
 use noon_core::{
     Color, Easing, GeometryRef, ObjectSnapshot, Property, SceneDefinition, Style, TrackTiming,
-    Transform2D, Vec2, VectorPath,
+    TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 fn stroke_style() -> Style {
@@ -87,11 +87,60 @@ fn identical_geometry_transform_needs_no_render_geometry_override() {
 }
 
 #[test]
-fn unsupported_cross_geometry_transform_is_rejected_before_runtime() {
+fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
     let mut scene = SceneDefinition::new();
     let object = scene.add(GeometryRef::circle(1.0));
     let from = ObjectSnapshot::from(scene.object(object).unwrap());
-    let to = snapshot(GeometryRef::rectangle(2.0, 2.0), Style::default());
+    let mut to = from.clone();
+    to.geometry = GeometryRef::rectangle(2.0, 2.0);
+    let track = scene
+        .animate_transform(
+            object,
+            from.clone(),
+            to.clone(),
+            TrackTiming::new(0.0, 1.0, Easing::Linear),
+        )
+        .unwrap();
+
+    let compiled = CompiledScene::compile(&scene).expect("closed analytic shapes should morph");
+    let compiled_track = compiled
+        .tracks()
+        .iter()
+        .find(|candidate| candidate.id == track)
+        .unwrap();
+    let Some(TransformGeometryPlan::PathPair(GeometryRef::VectorPath(prepared))) =
+        compiled_track.transform_geometry_plan.as_ref()
+    else {
+        panic!("cross-kind closed analytic Transform must use a prepared path pair");
+    };
+    assert!(!prepared.commands().is_empty());
+    assert!(prepared.morph_target().is_some());
+
+    let TrackValues::Object {
+        from: compiled_from,
+        to: compiled_to,
+    } = &compiled_track.values
+    else {
+        panic!("Transform must retain semantic object snapshots");
+    };
+    assert_eq!(compiled_from, &from);
+    assert_eq!(compiled_to, &to);
+    assert!(matches!(compiled_from.geometry, GeometryRef::Circle { .. }));
+    assert!(matches!(
+        compiled_to.geometry,
+        GeometryRef::Rectangle { .. }
+    ));
+}
+
+#[test]
+fn unsupported_open_closed_cross_geometry_transform_is_rejected_before_runtime() {
+    let mut scene = SceneDefinition::new();
+    let object = scene.add(GeometryRef::circle(1.0));
+    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let to = snapshot(
+        GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+        Style::default(),
+    );
     scene
         .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
         .unwrap();

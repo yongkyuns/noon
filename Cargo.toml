@@ -1,5 +1,6 @@
 [workspace]
 members = [
+	"crates/noon",
 	"crates/noon-core",
 	"crates/noon-geometry",
 	"crates/noon-ir",
@@ -7,9 +8,5 @@ members = [
 	"crates/noon-runtime",
 	"crates/noon-render-wgpu",
 	"crates/noon-web",
-]
-exclude = [
-	"noon",
-	"examples",
 ]
 resolver = "2"

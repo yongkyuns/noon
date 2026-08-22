@@ -1,250 +1,143 @@
-# noon
-Experimental animation library with high-level APIs for vector graphics animation.
+# Noon
 
-> [!NOTE]
-> This project was developed for experimental purposes and is no longer actively maintained.
-  
-![Alt Text](./assets/shapes.gif)
+Noon is a high-performance 2D animation system with **Manim-inspired authoring ergonomics** and a deterministic Rust/WebGPU execution core.
 
-## Motivation
-noon is an animation library that allows you to draw 2D objects and animate them with high-level commands. This project draws inspiration from [manim](https://github.com/3b1b/manim), which is used to create [educational videos about math](https://www.youtube.com/c/3blue1brown). While Python is a great language for end-users, it would be
-interesting to explore similar implementation in a compiled language and the possibilities that it would enable, such as real-time interactions and deploying to the web. Along the way, I became interested in Rust and tried to apply it for my learning in this project.
+The project is built around a language-neutral semantic model so Python, Rust, and future frontends share one set of animation semantics without putting Python on the frame-critical path.
 
 ## Architecture
-Noon is designed as a thin animation-wrapper on top of an awesome existing library called
-[nannou](https://github.com/nannou-org/nannou). Nannou and it's dependent crate [lyon](https://github.com/nical/lyon) makes drawing custom shapes rendered in GPU much easier than it would otherwise be using Rust. 
 
-To use nannou's per-frame drawing API with noon's animation commands, we cache the user commands in order to interpolate them during animation run-time. Since each animation attributes (e.g. position, size, etc.) are usually independent from one another and we can have many shapes in a scene, noon uses [Bevy ECS](https://github.com/bevyengine/bevy) to keep track of independent animation attributes. This also allows us bypass some tricky ownership-related issues that could arise when dealing with multiple references.
-
-## Examples
-The following examples demonstrate the current status of this project.
-  
-![Alt Text](./assets/hello_world.gif)
-```rust
-// cargo run --release --example hello_world
-
-fn scene(win_rect: Rect) -> Scene {
-	// Make a blank scene
-    let mut scene = Scene::new(win_rect);
-
-	// Instantiate a rectangle with builder pattern
-    let rect = scene
-        .rectangle()
-        .with_position(2.0, 0.0)
-        .with_color(Color::random())
-        .make();
-
-	// Make a circle
-    let circle = scene
-        .circle()
-        .with_position(-2.0, 0.0)
-        .with_color(Color::random())
-        .make();
-
-	// Wait for a second
-    scene.wait();
-	// Show animation for creating the rectangle with builder animation attributes
-    scene.play(rect.show_creation()).run_time(1.5);
-    scene.play(circle.show_creation()).run_time(1.5);
-	// Morph circle into rectangle
-    scene.play(circle.morph(rect)).run_time(1.5);
-
-    scene
-}
-```
-  
-![Alt Text](./assets/morph.gif)
-```rust
-// cargo run --release --example morph
-
-fn scene(win_rect: Rect) -> Scene {
-    let mut scene = Scene::new(win_rect);
-
-	// Make a text object
-    let text = scene.text().with_font_size(50).with_text("Hello!").make();
-    let rectangle = scene.rectangle().with_position(2.0, 0.0).make();
-    let circle = scene.circle().with_position(-2.0, 0.0).make();
-	// Make a line object
-    let line = scene.line().from(-2.0, -2.0).to(2.0, 2.0).make();
-
-	// Scene::play can receive multiple animation commands in a Vec
-    scene
-        .play(vec![
-            line.show_creation(),
-            circle.show_creation(),
-            rectangle.show_creation(),
-            text.show_creation(),
-        ])
-        .lag(1.0); // lag specifies the time delay between each animation
-
-	// run_time specifies the duration of each animation
-    scene
-        .play(vec![
-            line.morph(circle),
-            circle.morph(rectangle),
-            rectangle.morph(text),
-        ])
-        .run_time(2.0)
-        .lag(2.0);
-
-    scene
-}
-```
-  
-![Alt Text](./assets/morph_text.gif)
-```rust
-// cargo run --release --example morph_text
-
-fn scene(win_rect: Rect) -> Scene {
-    let mut scene = Scene::new(win_rect);
-
-	// Create an empty Vec to contain multiple animations
-    let mut morph = Vec::new();
-    let mut show = Vec::new();
-
-	// Each animation can be added in a for-loop
-    for _ in 0..3 {
-        let text2 = random_text(&mut scene, "This example shows shape transfrom");
-        show.push(text2.show_creation());
-
-        let text = random_text(&mut scene, "Hello World! This is some text");
-        show.push(text.show_creation());
-
-        morph.push(text.morph(text2));
-        morph.push(text2.fade_out());
-    }
-
-    scene.play(show).run_time(3.0);
-    scene.wait_for(0.5);
-    scene.play(morph).run_time(3.0);
-
-    scene
-}
-```
-  
-![Alt Text](./assets/easing.gif)
-```rust
-// cargo run --release --example easing
-
-fn scene(win_rect: Rect) -> Scene {
-    let mut scene = Scene::new(win_rect);
-
-    let mut circles = Vec::new();
-    let mut show = Vec::new();
-    let mut to_right = Vec::new();
-
-    for i in 0..8 {
-        let c = scene
-            .circle()
-            .with_position(-4.0, 2.0 - i as f32 * 0.5)
-            .with_radius(0.2)
-            .with_color(Color::random())
-            .make();
-
-        circles.push(c);
-        show.push(c.fade_in());
-        to_right.push(c.move_by(8.0, 0.0));
-    }
-
-    scene.wait();
-    scene.play(show).lag(0.2);
-
-	// These easing functions are available for all animation attributes,
-	// e.g. position, color, path, angle, scale, etc.
-    let easing = [
-        EaseType::Linear,
-        EaseType::Quad,
-        EaseType::Quint,
-        EaseType::Expo,
-        EaseType::Sine,
-        EaseType::Back,
-        EaseType::Bounce,
-        EaseType::Elastic,
-    ];
-    for i in 0..8 {
-        scene
-            .play(to_right[i].clone())
-            .lag(0.5)
-            .rate_func(easing[i]);
-    }
-
-    scene
-}
-```
-  
-![Alt Text](./assets/shapes.gif)
-```rust
-// cargo run --release --example shapes
-
-fn scene(win_rect: Rect) -> Scene {
-    let mut scene = Scene::new(win_rect);
-
-    let mut animations = Vec::new();
-    let mut show = Vec::new();
-    let mut move_down = Vec::new();
-
-    for _ in 0..1000 {
-        if noon::rand::random::<bool>() {
-            let (x, y, w, _h, ang, color) = gen_random_values();
-            let circle = scene
-                .circle()
-                .with_position(x, y)
-                .with_angle(ang)
-                .with_color(color)
-                .with_thin_stroke()
-                .with_radius(w / 2.0)
-                .make();
-
-            show.push(circle.show_creation());
-            move_down.push(circle.to_edge(Direction::Down));
-
-            let (x, y, w, _h, _ang, color) = gen_random_values();
-            animations.extend(vec![
-                circle.set_color(color),
-                circle.move_to(x, y),
-                circle.set_radius(w / 2.0),
-            ]);
-        } else {
-            let (x, y, w, h, ang, color) = gen_random_values();
-            let rect = scene
-                .rectangle()
-                .with_position(x, y)
-                .with_angle(ang)
-                .with_color(color)
-                .with_thin_stroke()
-                .with_size(w, h)
-                .make();
-
-            show.push(rect.show_creation());
-            move_down.push(rect.to_edge(Direction::Down));
-
-            let (x, y, w, _h, ang, color) = gen_random_values();
-            animations.extend(vec![
-                rect.set_color(color),
-                rect.move_to(x, y),
-                rect.set_size(w, h),
-                rect.rotate(ang),
-            ]);
-        }
-    }
-
-    scene.wait_for(0.5);
-    scene.play(show).run_time(1.0).lag(0.001);
-
-    scene
-        .play(animations)
-        .run_time(3.0)
-        .lag(0.0001)
-        .rate_func(EaseType::Quint);
-
-    scene
-        .play(move_down)
-        .run_time(1.0)
-        .rate_func(EaseType::BounceOut)
-        .lag(0.001);
-
-    scene
-}
+```text
+Python / Rust / future frontends
+              |
+              v
+      noon-core semantics
+              |
+              v
+ SceneDefinition / ScenePatch
+              |
+              v
+         noon-compile
+              |
+              v
+        noon-runtime
+              |
+              v
+      noon-render-wgpu
 ```
 
+Key invariants:
 
+- `noon-core` is renderer- and language-independent.
+- `SceneDefinition` is the canonical semantic scene representation.
+- `SceneDocument` is a versioned wire format, not a second scene model.
+- playback is deterministic and supports arbitrary seek/rewind.
+- Python can author or patch scenes, but compiled playback does not require Python.
+- same-kind analytic transforms stay analytic; supported cross-kind transforms use compiler-only prepared geometry without changing semantic endpoints.
+- static/prepared geometry is cached; steady transform/style animation does not retessellate it.
+- WebGPU rendering is optimized around analytic primitives, instancing, cached vector geometry, and compact dynamic state.
+
+See [`docs/architecture-plan.md`](docs/architecture-plan.md), [`docs/implementation-plan.md`](docs/implementation-plan.md), and [`docs/manim-aligned-authoring-plan.md`](docs/manim-aligned-authoring-plan.md).
+
+## Authoring
+
+Noon reuses familiar Manim vocabulary where the semantics fit:
+
+```python
+from noon import *
+
+scene = Scene()
+
+circle = Circle(radius=0.6, color=BLUE).shift(LEFT * 2)
+square = Square(side_length=1.2, color=PINK)
+square.next_to(circle, RIGHT)
+
+scene.add(circle, square)
+scene.play(
+    circle.animate.shift(RIGHT * 2),
+    square.animate.rotate(45 * DEGREES),
+    run_time=2,
+)
+scene.play(Transform(circle, Square(1.4, color=PURPLE)), run_time=1.5)
+scene.wait(0.5)
+```
+
+Equivalent Rust authoring is exposed by the user-facing facade:
+
+```rust
+use noon::prelude::*;
+
+let mut scene = Scene::new();
+let circle = scene.add(Circle::new(0.6).color(BLUE).shift(LEFT * 2.0));
+let square = scene.add(Square::new(1.2).color(PINK));
+scene.edit(square)?.next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)?;
+
+scene
+    .play((circle.animate().shift(RIGHT * 2.0), square.animate().rotate(45.0 * DEGREES)))
+    .run_time(2.0)?;
+scene
+    .play(Transform::new(circle, Square::new(1.4).color(PURPLE)))
+    .run_time(1.5)?;
+```
+
+The important distinction from Manim is implementation: Noon does not execute arbitrary Python callbacks every frame. High-level authoring lowers to deterministic semantic tracks evaluated by Rust/WASM. `Circle -> Circle`, `Rectangle -> Rectangle`, and `Line -> Line` transforms keep analytic fast paths. `Circle <-> Rectangle/Square` is canonicalized by the compiler to temporary fixed path geometry only while the cross-kind transform is active; the serialized scene and semantic endpoints stay analytic.
+
+## Browser playground
+
+The browser demo combines:
+
+- Rust/WASM scene compilation and evaluation;
+- WebGPU rendering;
+- a Pyodide worker for interactive Python authoring;
+- semantic live scene reconciliation;
+- runtime and GPU profiling counters.
+
+Build it from the repository root:
+
+```bash
+bash scripts/build-web-demo.sh
+python3 -m http.server --directory web 8080
+```
+
+Then open `http://localhost:8080` in a WebGPU-capable browser.
+
+Every scene exposed by the playground picker is executed by Python and compiled through the native Rust `ScenePlayer` in CI before deployment.
+
+## Workspace
+
+The active implementation lives entirely under `crates/`:
+
+- `noon` — user-facing Rust authoring facade and prelude
+- `noon-core` — renderer-independent semantic objects, styles, transforms, timeline and patches
+- `noon-ir` — versioned scene/patch serialization
+- `noon-compile` — semantic scene compilation and transform strategy selection
+- `noon-runtime` — deterministic frame evaluation
+- `noon-geometry` — vector tessellation, reveal and morph planning
+- `noon-render-wgpu` — WebGPU renderer
+- `noon-web` — WASM/browser runtime
+
+## Development
+
+The required CI gate runs:
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+bash scripts/build-web-demo.sh
+```
+
+It also checks geometry correctness, browser-target compilation, Python playground execution, and native compilation of all picker scenes.
+
+## Design priorities
+
+In order:
+
+1. ergonomic authoring;
+2. deterministic correctness and direct-seek semantics;
+3. high realtime performance;
+4. language-neutral core behavior;
+5. live/interpreted authoring without moving frame-critical work into Python;
+6. compatibility with familiar Manim concepts where it improves usability.
+
+Strict Manim API compatibility is not a goal. Matching its vocabulary and mental model is preferred when doing so does not weaken Noon's architecture.
