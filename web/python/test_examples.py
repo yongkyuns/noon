@@ -8,13 +8,12 @@ from noon import PatchBatch, Scene
 
 EXAMPLES_DIR = Path(__file__).with_name("examples")
 SCENE_EXAMPLES = (
+    "lifecycle_handoffs.py",
+    "fade_appearance.py",
+    "matching_shapes.py",
     "staggered_choreography.py",
-    "vector_path_garden.py",
     "instanced_field.py",
-    "kinetic_lines.py",
-    "mixed_geometry.py",
     "path_reveal.py",
-    "path_morph_transform.py",
     "filled_path_transform.py",
     "morph_stress_test.py",
 )
@@ -48,12 +47,30 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertEqual(len(document["objects"]), columns * rows)
                 self.assertEqual(len(document["tracks"]), columns * rows * 2)
 
-    def test_path_reveal_example_contains_reveal_tracks(self) -> None:
+    def test_path_reveal_example_is_only_about_reveal(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "path_reveal.py")
         result = namespace.get("result")
         self.assertIsInstance(result, Scene)
         properties = [track["property"] for track in result.to_document()["tracks"]]
-        self.assertGreaterEqual(properties.count("reveal"), 2)
+        self.assertEqual(properties, ["reveal"])
+
+    def test_fade_example_preserves_semantic_opacity(self) -> None:
+        namespace = runpy.run_path(EXAMPLES_DIR / "fade_appearance.py")
+        result = namespace.get("result")
+        self.assertIsInstance(result, Scene)
+        document = result.to_document()
+        self.assertEqual(document["objects"][1]["style"]["opacity"], 0.42)
+        properties = [track["property"] for track in document["tracks"]]
+        self.assertEqual(properties.count("appearance"), 2)
+        self.assertEqual(properties.count("presence"), 2)
+
+    def test_matching_shapes_example_lowers_to_three_handoffs(self) -> None:
+        namespace = runpy.run_path(EXAMPLES_DIR / "matching_shapes.py")
+        result = namespace.get("result")
+        self.assertIsInstance(result, Scene)
+        properties = [track["property"] for track in result.to_document()["tracks"]]
+        self.assertEqual(properties.count("transform"), 3)
+        self.assertEqual(properties.count("presence"), 6)
 
     def test_morph_stress_example_exercises_reuse_and_many_active_tracks(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "morph_stress_test.py")
