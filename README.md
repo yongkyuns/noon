@@ -2,7 +2,7 @@
 
 Noon is a high-performance 2D animation system with **Manim-inspired authoring ergonomics** and a deterministic Rust/WebGPU execution core.
 
-The project is being rebuilt around a language-neutral semantic model so Python, Rust, and future frontends can share one set of animation semantics without putting Python on the frame-critical path.
+The project is built around a language-neutral semantic model so Python, Rust, and future frontends share one set of animation semantics without putting Python on the frame-critical path.
 
 ## Architecture
 
@@ -32,14 +32,15 @@ Key invariants:
 - `SceneDocument` is a versioned wire format, not a second scene model.
 - playback is deterministic and supports arbitrary seek/rewind.
 - Python can author or patch scenes, but compiled playback does not require Python.
-- static geometry is cached; transform/style animation does not retessellate it.
+- same-kind analytic transforms stay analytic; supported cross-kind transforms use compiler-only prepared geometry without changing semantic endpoints.
+- static/prepared geometry is cached; steady transform/style animation does not retessellate it.
 - WebGPU rendering is optimized around analytic primitives, instancing, cached vector geometry, and compact dynamic state.
 
 See [`docs/architecture-plan.md`](docs/architecture-plan.md), [`docs/implementation-plan.md`](docs/implementation-plan.md), and [`docs/manim-aligned-authoring-plan.md`](docs/manim-aligned-authoring-plan.md).
 
-## Authoring direction
+## Authoring
 
-Noon intentionally reuses familiar Manim vocabulary where the semantics fit:
+Noon reuses familiar Manim vocabulary where the semantics fit:
 
 ```python
 from noon import *
@@ -56,13 +57,29 @@ scene.play(
     square.animate.rotate(45 * DEGREES),
     run_time=2,
 )
-scene.play(FadeOut(circle))
+scene.play(Transform(circle, Square(1.4, color=PURPLE)), run_time=1.5)
 scene.wait(0.5)
 ```
 
-This is the target ergonomic surface. The migration is being implemented incrementally while preserving the existing deterministic `SceneDefinition`/timeline architecture.
+Equivalent Rust authoring is exposed by the user-facing facade:
 
-The important distinction from Manim is implementation: Noon does not intend to execute arbitrary Python callbacks every frame. High-level authoring lowers to deterministic semantic tracks evaluated by Rust/WASM.
+```rust
+use noon::prelude::*;
+
+let mut scene = Scene::new();
+let circle = scene.add(Circle::new(0.6).color(BLUE).shift(LEFT * 2.0));
+let square = scene.add(Square::new(1.2).color(PINK));
+scene.edit(square)?.next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)?;
+
+scene
+    .play((circle.animate().shift(RIGHT * 2.0), square.animate().rotate(45.0 * DEGREES)))
+    .run_time(2.0)?;
+scene
+    .play(Transform::new(circle, Square::new(1.4).color(PURPLE)))
+    .run_time(1.5)?;
+```
+
+The important distinction from Manim is implementation: Noon does not execute arbitrary Python callbacks every frame. High-level authoring lowers to deterministic semantic tracks evaluated by Rust/WASM. `Circle -> Circle`, `Rectangle -> Rectangle`, and `Line -> Line` transforms keep analytic fast paths. `Circle <-> Rectangle/Square` is canonicalized by the compiler to temporary fixed path geometry only while the cross-kind transform is active; the serialized scene and semantic endpoints stay analytic.
 
 ## Browser playground
 
@@ -89,9 +106,10 @@ Every scene exposed by the playground picker is executed by Python and compiled 
 
 The active implementation lives entirely under `crates/`:
 
+- `noon` — user-facing Rust authoring facade and prelude
 - `noon-core` — renderer-independent semantic objects, styles, transforms, timeline and patches
 - `noon-ir` — versioned scene/patch serialization
-- `noon-compile` — semantic scene compilation
+- `noon-compile` — semantic scene compilation and transform strategy selection
 - `noon-runtime` — deterministic frame evaluation
 - `noon-geometry` — vector tessellation, reveal and morph planning
 - `noon-render-wgpu` — WebGPU renderer
