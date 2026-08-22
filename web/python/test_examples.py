@@ -13,6 +13,7 @@ SCENE_EXAMPLES = (
     "matching_shapes.py",
     "staggered_choreography.py",
     "instanced_field.py",
+    "create_shapes.py",
     "path_reveal.py",
     "filled_path_transform.py",
     "morph_stress_test.py",
@@ -59,6 +60,19 @@ class PlaygroundExampleTests(unittest.TestCase):
                     {track["property"] for track in document["tracks"]},
                     {"position"},
                 )
+
+    def test_create_shapes_example_keeps_analytic_geometry_semantic(self) -> None:
+        namespace = runpy.run_path(EXAMPLES_DIR / "create_shapes.py")
+        result = namespace.get("result")
+        self.assertIsInstance(result, Scene)
+        document = result.to_document()
+        properties = [track["property"] for track in document["tracks"]]
+        self.assertEqual(properties.count("presence"), 4)
+        self.assertEqual(properties.count("reveal"), 4)
+        self.assertIn("circle", document["objects"][0]["geometry"])
+        self.assertIn("rectangle", document["objects"][1]["geometry"])
+        self.assertIn("line", document["objects"][2]["geometry"])
+        self.assertIn("vector_path", document["objects"][3]["geometry"])
 
     def test_path_reveal_example_is_only_about_reveal(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "path_reveal.py")
