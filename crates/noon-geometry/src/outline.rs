@@ -9,11 +9,7 @@ pub fn canonical_outline_path(geometry: &GeometryRef) -> Option<VectorPath> {
     match geometry {
         GeometryRef::Circle { radius } => Some(circle_path(*radius)),
         GeometryRef::Rectangle { size } => Some(rectangle_path(*size)),
-        GeometryRef::Line { start, end } => Some(
-            VectorPath::new()
-                .move_to(*start)
-                .line_to(*end),
-        ),
+        GeometryRef::Line { start, end } => Some(VectorPath::new().move_to(*start).line_to(*end)),
         GeometryRef::VectorPath(path) => Some(path.clone()),
         GeometryRef::External(_) => None,
     }
@@ -66,6 +62,8 @@ fn rectangle_path(size: Vec2) -> VectorPath {
 
 #[cfg(test)]
 mod tests {
+    use noon_core::GeometryId;
+
     use super::*;
 
     #[test]
@@ -95,6 +93,6 @@ mod tests {
 
     #[test]
     fn external_geometry_has_no_implicit_outline() {
-        assert!(canonical_outline_path(&GeometryRef::external(7)).is_none());
+        assert!(canonical_outline_path(&GeometryRef::External(GeometryId::new(7))).is_none());
     }
 }
