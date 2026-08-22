@@ -343,14 +343,16 @@ impl FramePreparer {
                 continue;
             }
             let render_geometry = frame.render_geometry(object_index);
-            let temporary_reveal = temporary_reveal_path(render_geometry, frame.reveal(object_index));
-            let path = temporary_reveal
-                .as_ref()
-                .map(|(_, path)| path)
-                .or_else(|| match render_geometry {
-                    GeometryRef::VectorPath(path) => Some(path),
-                    _ => None,
-                });
+            let temporary_reveal =
+                temporary_reveal_path(render_geometry, frame.reveal(object_index));
+            let path =
+                temporary_reveal
+                    .as_ref()
+                    .map(|(_, path)| path)
+                    .or_else(|| match render_geometry {
+                        GeometryRef::VectorPath(path) => Some(path),
+                        _ => None,
+                    });
             if let Some(path) = path {
                 let cache_index = match self.cache_path_mesh(path, object.style) {
                     Ok((index, cache_miss)) => {
@@ -1216,7 +1218,10 @@ mod tests {
         assert_eq!(cold.paths.len(), 1);
         assert_eq!(cold.paths[0].path_params[0], 0.25);
         assert_eq!(cold.stats.geometry_cache_misses, 1);
-        assert!(matches!(frame.objects[0].geometry, GeometryRef::Circle { .. }));
+        assert!(matches!(
+            frame.objects[0].geometry,
+            GeometryRef::Circle { .. }
+        ));
         let vertices = cold.path_vertices.to_vec();
         let indices = cold.path_indices.to_vec();
 
@@ -1236,7 +1241,10 @@ mod tests {
         assert_eq!(complete.circles.len(), 1);
         assert!(complete.paths.is_empty());
         assert_eq!(complete.stats.instance_count, 1);
-        assert!(matches!(frame.objects[0].geometry, GeometryRef::Circle { .. }));
+        assert!(matches!(
+            frame.objects[0].geometry,
+            GeometryRef::Circle { .. }
+        ));
     }
 
     #[test]
