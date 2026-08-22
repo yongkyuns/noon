@@ -76,25 +76,18 @@ fn generated_paths_tessellate_deterministically_and_remain_index_safe() {
     for seed in 0..128_u64 {
         let point_count = 8 + (seed as usize % 41);
         let path = generated_path(seed ^ 0x5eed_1234, point_count, seed % 2 == 0);
-        let first = tessellate_styled_with_fill(
-            &path,
-            0.08,
-            StrokeJoin::Round,
-            StrokeCap::Round,
-            false,
-        )
-        .expect("generated finite path should tessellate");
-        let second = tessellate_styled_with_fill(
-            &path,
-            0.08,
-            StrokeJoin::Round,
-            StrokeCap::Round,
-            false,
-        )
-        .expect("same generated path should tessellate twice");
+        let first =
+            tessellate_styled_with_fill(&path, 0.08, StrokeJoin::Round, StrokeCap::Round, false)
+                .expect("generated finite path should tessellate");
+        let second =
+            tessellate_styled_with_fill(&path, 0.08, StrokeJoin::Round, StrokeCap::Round, false)
+                .expect("same generated path should tessellate twice");
 
         assert_eq!(first, second, "tessellation changed for seed {seed}");
-        assert!(!first.vertices.is_empty(), "seed {seed} produced no vertices");
+        assert!(
+            !first.vertices.is_empty(),
+            "seed {seed} produced no vertices"
+        );
         assert!(!first.indices.is_empty(), "seed {seed} produced no indices");
         for vertex in &first.vertices {
             assert_finite(vertex.position);
@@ -166,14 +159,9 @@ fn generated_morph_plans_keep_exact_endpoints_and_finite_intermediates() {
 fn reveal_length_is_monotonic_and_clamped_across_generated_paths() {
     for seed in 0..32_u64 {
         let path = generated_path(seed ^ 0xc33e_7003, 32, false);
-        let mesh = tessellate_styled_with_fill(
-            &path,
-            0.1,
-            StrokeJoin::Round,
-            StrokeCap::Round,
-            false,
-        )
-        .expect("generated path should tessellate");
+        let mesh =
+            tessellate_styled_with_fill(&path, 0.1, StrokeJoin::Round, StrokeCap::Round, false)
+                .expect("generated path should tessellate");
         assert!(mesh.stroke_length > 0.0);
 
         let mut previous = 0.0;
@@ -208,14 +196,8 @@ fn malformed_paths_fail_without_emitting_partial_nonfinite_geometry() {
 
     for path in malformed {
         assert!(
-            tessellate_styled_with_fill(
-                &path,
-                0.1,
-                StrokeJoin::Round,
-                StrokeCap::Round,
-                false,
-            )
-            .is_err(),
+            tessellate_styled_with_fill(&path, 0.1, StrokeJoin::Round, StrokeCap::Round, false,)
+                .is_err(),
             "malformed path unexpectedly tessellated: {path:?}"
         );
     }
