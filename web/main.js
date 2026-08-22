@@ -37,6 +37,13 @@ const SCENE_EXAMPLES = [
     features: "primitives · path morph · timeline",
   },
   {
+    name: "Lifecycle · matching · Fade",
+    path: "./python/examples/feature_showcase.py",
+    summary:
+      "Replacement chains, TransformFromCopy, matching-shape handoffs, and Fade appearance composition on one timeline.",
+    features: "ReplacementTransform · TransformFromCopy · matching · FadeIn/FadeOut",
+  },
+  {
     name: "Analytic primitive Transform",
     path: "./python/examples/analytic_transform.py",
     summary:

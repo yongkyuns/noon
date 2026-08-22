@@ -11,6 +11,8 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
+The **Example** picker includes **Lifecycle · matching · Fade**, an executable showcase of chained `ReplacementTransform`, `TransformFromCopy`, `TransformMatchingShapes`, and `FadeIn`/`FadeOut`. Its Fade lane uses a semantically translucent object to demonstrate that renderer Appearance modulates authored opacity without rewriting it. The showcase completes within the playground's four-second loop so every advertised handoff is visible during normal playback.
+
 Open **Python scene source** and click **Run Python scene** to build a complete versioned `SceneDocument`. Explicit object and track `key` values retain runtime identity across Python reruns. Compatible style, transform, and timeline edits reconcile into semantic patches; unsafe geometry or draw-order changes fall back to transactional replacement. Both paths preserve the playhead and existing canvas/GPU resources and restart ordered patch sequencing at zero. **Run Python patch** then sends an incremental `PatchBatch` to that persistent runtime. The first Python action lazily downloads the pinned Pyodide runtime; playback continues while Python loads or runs, and deployed scenes still work without Pyodide when the authoring controls are unused.
 
 The worker loads Pyodide `314.0.5` from the official jsDelivr distribution, so the Python control requires network access. The render/runtime wasm package remains local under `web/pkg/`.
