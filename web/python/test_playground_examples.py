@@ -17,6 +17,16 @@ class PlaygroundExampleTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsInstance(run_scene_example(relative_path, context), Scene)
 
+    def test_every_registered_scene_fits_the_four_second_loop(self) -> None:
+        for name, relative_path, context in PLAYGROUND_SCENE_EXAMPLES:
+            with self.subTest(name=name):
+                document = run_scene_example(relative_path, context).to_document()
+                latest_end = max(
+                    track["timing"]["start_time"] + track["timing"]["duration"]
+                    for track in document["tracks"]
+                )
+                self.assertLess(latest_end, 4.0)
+
     def test_every_registered_patch_executes(self) -> None:
         for name, relative_path, context in PLAYGROUND_PATCH_EXAMPLES:
             with self.subTest(name=name):
