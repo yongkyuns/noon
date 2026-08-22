@@ -27,6 +27,24 @@ Python / Rust / future frontends
 
 `SceneDefinition` remains the single canonical semantic scene model. `SceneDocument` remains only its versioned wire representation. There is no additional AuthoringDocument or frontend-specific semantic IR.
 
+## Execution status — 2026-08-22
+
+PR #20 implements the planned migration through the generic-Transform phase while preserving the single-model architecture.
+
+Completed on the branch:
+
+- Phase 0: legacy implementation and legacy CI lane removed; one canonical `CI` gate remains.
+- Phase 1: shared vector/constants vocabulary, Manim Community palette, Python parity, and removal of `noon_layout.py`.
+- Phase 2: semantic bounds, object operations, relative layout, `Square`, and lightweight `Group`/`VGroup` authoring.
+- Phase 3: transient scene cursor, parallel `play`, `run_time`, `wait`, and curated timing cleanup.
+- Phase 4: Python `.animate`, a user-facing Rust `noon` facade/prelude, and semantic-time chaining of sequential animations.
+- Phase 5: same-kind analytic Transform fast paths retained; `Circle <-> Rectangle/Square` now lowers through compiler-only fixed path geometry while keeping exact analytic semantic endpoints. Open/closed cross-kind transitions such as `Circle -> Line` remain explicitly unsupported.
+- Phase 6: curated examples and root/playground/Transform docs have been rewritten around the final vocabulary; low-level timeline APIs remain as explicit escape hatches rather than the normal teaching path.
+
+Validation before this final status-only commit passed the single canonical CI gate end-to-end, including format, workspace compile, strict Clippy, geometry correctness suites, all Rust workspace tests, native compilation of every picker scene, both browser/WebGPU WASM targets, Python authoring tests, and the browser package build. Cross-kind Transform has dedicated Python, Rust-facade, compiler, and runtime regression coverage.
+
+Remaining work is intentionally outside this migration's acceptance boundary: broader open/closed cross-kind policies, more general filled-polygon topology, text/MathTex architecture, richer animation composition primitives, and other future feature expansion.
+
 ## Design rules
 
 1. **One semantic authority.** Layout, bounds, style mutation, lifecycle, transform behavior, timing rules, and other authoring semantics belong in Rust core/shared lowering rather than being independently reimplemented in each frontend.
@@ -37,7 +55,7 @@ Python / Rust / future frontends
 6. **Explicit low-level escape hatches remain.** Direct tracks, explicit start times, raw colors, and raw `SceneDefinition` mutation remain available for advanced/internal use but are not the normal examples/API path.
 7. **Cross-language parity is tested.** Equivalent Python and Rust authoring must normalize to equivalent `SceneDefinition` semantics.
 
-## Current problems
+## Current problems at plan creation
 
 ### Repository / CI
 
@@ -90,17 +108,18 @@ use noon::prelude::*;
 
 let mut scene = Scene::new();
 let circle = scene.add(Circle::new(0.6).color(BLUE).shift(LEFT * 2.0));
-let square = scene.add(Square::new(1.2).color(PINK).next_to(&circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER));
+let square = scene.add(Square::new(1.2).color(PINK));
+scene.edit(square)?.next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)?;
 
 scene.play((
     circle.animate().shift(RIGHT * 2.0),
     square.animate().rotate(45.0 * DEGREES),
 )).run_time(2.0)?;
-scene.play(FadeOut::new(circle))?;
-scene.wait(0.5);
+scene.play(FadeOut::new(circle)).run_time(1.0)?;
+scene.wait(0.5)?;
 ```
 
-Exact Rust syntax may differ where ownership/type-system constraints make literal parity awkward, but concepts and names should match.
+Exact Rust syntax differs where ownership/type-system constraints make literal parity awkward, but concepts and names match.
 
 ## Canonical vocabulary
 
@@ -133,7 +152,7 @@ Expose directly from Noon rather than a separate layout module:
 Provide Manim-style named colors and shade families where useful:
 
 - base names: `WHITE`, `BLACK`, `RED`, `GREEN`, `BLUE`, `YELLOW`, `PURPLE`, `PINK`, `ORANGE`, `TEAL`, `GRAY`/`GREY`
-- common shade variants such as `BLUE_A` .. `BLUE_E`, etc., if we adopt Manim's palette values
+- common shade variants such as `BLUE_A` .. `BLUE_E`, etc., using Manim's palette values
 - ergonomic custom color parsing from hex while preserving raw float constructors for low-level use
 
 Color definitions must have one canonical source of truth so Python and Rust cannot drift.
@@ -219,7 +238,7 @@ target ObjectSnapshot
 existing Transform/timeline lowering
 ```
 
-Python and Rust can expose different implementation syntax while sharing snapshot semantics.
+Python and Rust expose idiomatic syntax while sharing snapshot semantics. Bound Python objects evaluate their current snapshot at the scene cursor so sequential `.animate` calls compose from exact prior endpoints.
 
 ## Transform semantics
 
@@ -230,7 +249,9 @@ Keep optimized interpolation when source and target geometry are naturally compa
 - Line -> Line: analytic
 - compatible Path -> Path: precomputed path morph
 
-To align with Manim expectations, later support cross-geometry `Transform` by canonicalizing the transition through temporary vector geometry when necessary while allowing the steady-state objects to remain analytic before/after the transition.
+Cross-geometry `Circle <-> Rectangle/Square` is implemented by canonicalizing only the active transition through temporary vector geometry while steady-state objects remain analytic before and after the transition. The compiler's prepared `PathPair` is renderer-only; `TrackValues::Object` retains the exact analytic source/target snapshots.
+
+Open/closed topology changes such as Circle -> Line remain intentionally unsupported until Noon has an explicit semantic policy for that collapse/expansion.
 
 This is a compiler/geometry enhancement, not a reason to convert every object to paths permanently.
 
@@ -238,21 +259,21 @@ This is a compiler/geometry enhancement, not a reason to convert every object to
 
 ### Short term browser Python
 
-The current dependency-free Python module can remain while the core API is being enriched, but new semantics should not be added only there. Every new operation needs a Rust semantic reference implementation and parity tests.
+The dependency-free Python module remains a thin public facade while shared semantic rules are mirrored by Rust reference behavior and parity tests. New persistent semantic concepts must not be invented only in Python.
 
 ### Native Python direction
 
-Long term, PyO3/maturin should expose the Rust semantic layer directly for native Python.
+Long term, PyO3/maturin can expose the Rust semantic layer directly for native Python.
 
 ### Browser Python direction
 
-Pyodide should eventually call Rust/WASM semantic operations through a thin bridge for complex shared semantics. Pure Python wrappers may remain for constructor ergonomics and transient builders.
+Pyodide can eventually call Rust/WASM semantic operations through a thin bridge for complex shared semantics. Pure Python wrappers may remain for constructor ergonomics and transient builders.
 
 ## CI and validation
 
 After legacy removal, there is one required CI job named `CI`.
 
-It must continue to run:
+It runs:
 
 - `cargo fmt --all -- --check`
 - `cargo check --workspace --all-targets --all-features`
@@ -264,15 +285,16 @@ It must continue to run:
 - playground Python execution
 - every picker `SceneDocument` compiled by native `ScenePlayer`
 
-Add authoring-specific validation:
+Authoring-specific validation includes:
 
 - named color/constants parity
-- bounds property tests
-- layout relation tests (`next_to`, `align_to`, edge/corner placement)
+- bounds/layout tests
 - scene cursor/timing determinism
-- Python/Rust equivalent scenes lower to equivalent normalized scene documents
+- semantic-time chained `.animate` regression
+- Python/Rust semantic cross-kind Transform parity
+- compiler and runtime cross-kind Transform endpoint/seek tests
 - curated examples contain no raw RGB literals unless the example is specifically about custom colors
-- curated examples minimize absolute positions; exceptions should be intentional and tested/documented
+- curated examples minimize absolute positions; exceptions are intentional
 
 ## Delivery sequence
 
@@ -338,7 +360,7 @@ Acceptance:
 
 - sequential play timing is deterministic
 - direct seek behavior remains unchanged
-- gallery examples contain no manually chained `start_time` arithmetic
+- gallery examples contain no manually chained `start_time` arithmetic except where staggered timing itself is the feature
 
 ### Phase 4 - `.animate` and Rust facade
 
@@ -346,12 +368,13 @@ Changes:
 
 - add transient target snapshot builder
 - Python `obj.animate.<ops>` syntax
-- create/rename a user-facing Rust facade crate if necessary so `use noon::prelude::*` exposes ergonomic authoring while low-level crates remain available
-- provide equivalent Rust example(s)
+- create a user-facing Rust facade crate so `use noon::prelude::*` exposes ergonomic authoring while low-level crates remain available
+- provide equivalent Rust behavior/tests
 
 Acceptance:
 
-- Python and Rust reference scenes normalize to equivalent objects/tracks
+- Python and Rust reference scenes normalize to equivalent object/track semantics
+- sequential `.animate` starts from the prior semantic endpoint
 - `.animate` creates no runtime Python callback dependency
 
 ### Phase 5 - generic Transform parity
@@ -360,22 +383,24 @@ Changes:
 
 - add compiler-selected cross-geometry transform strategy
 - preserve analytic fast paths when possible
-- canonical temporary path morph for incompatible analytic geometry
+- canonical temporary path morph for supported incompatible analytic geometry
 
 Acceptance:
 
 - canonical Circle <-> Square/Rectangle transform works
 - endpoints are exact
+- direct seek matches forward playback
 - no permanent path conversion for static analytic objects
+- open/closed topology changes remain explicit compile-time errors
 
 ### Phase 6 - final gallery/docs/API cleanup
 
 Changes:
 
-- rewrite all curated examples with the final vocabulary
+- rewrite curated examples with the final vocabulary
 - make each example intentionally demonstrate one feature
 - update README/docs with matched Python/Rust examples
-- remove obsolete low-level authoring examples or clearly label them as internals
+- remove obsolete low-level authoring examples or clearly label low-level methods as internals/escape hatches
 
 Acceptance:
 
@@ -394,6 +419,6 @@ Acceptance:
 - replacing deterministic tracks with imperative frame callbacks
 - creating a second serialized authoring representation
 
-## Immediate execution order on this branch
+## Historical execution order
 
-Implement Phases 0-3 first because they remove repository debt and eliminate most hardcoded demo values/timing without depending on cross-geometry Transform. Then implement Phase 4 where it can be done cleanly on the existing snapshot model. Treat Phase 5 as the first larger compiler/geometry slice and do not destabilize already-green runtime behavior merely to imitate Manim syntax.
+The branch deliberately implemented Phases 0-3 first because they removed repository debt and eliminated most hardcoded demo values/timing without depending on cross-geometry Transform. Phase 4 then added transient ergonomic frontends over the existing snapshot model. Phase 5 was taken only after the ergonomic baseline was green, and reused the existing `PathPair` runtime/render path instead of adding a new semantic layer. Phase 6 documentation/parity cleanup completed the migration.
