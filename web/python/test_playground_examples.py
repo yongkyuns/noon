@@ -22,6 +22,13 @@ class PlaygroundExampleTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsInstance(run_patch_example(relative_path, context), PatchBatch)
 
+    def test_scene_catalog_is_curated_without_duplicate_sources(self) -> None:
+        names = [name for name, _, _ in PLAYGROUND_SCENE_EXAMPLES]
+        paths = [path for _, path, _ in PLAYGROUND_SCENE_EXAMPLES]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(paths), len(set(paths)))
+        self.assertLessEqual(len(paths), 10)
+
     def test_python_catalog_matches_javascript_picker(self) -> None:
         main_js = (Path(__file__).parents[1] / "main.js").read_text(encoding="utf-8")
         scene_block = main_js.split("const SCENE_EXAMPLES = [", 1)[1].split("\n];", 1)[0]
