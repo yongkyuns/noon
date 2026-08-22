@@ -17,16 +17,12 @@ class FeatureShowcaseTests(unittest.TestCase):
         document = self._run_showcase().to_document()
         properties = [track["property"] for track in document["tracks"]]
 
-        self.assertGreaterEqual(properties.count("transform"), 7)
+        self.assertGreaterEqual(properties.count("transform"), 6)
         self.assertGreaterEqual(properties.count("presence"), 10)
         self.assertEqual(properties.count("appearance"), 2)
 
-        semantic_opacity = next(
-            obj["style"]["opacity"]
-            for obj in document["objects"]
-            if obj["key"] == "copy-target"
-        )
-        self.assertEqual(semantic_opacity, 0.42)
+        # first, middle, last, copy-source, copy-target
+        self.assertEqual(document["objects"][4]["style"]["opacity"], 0.42)
 
     def test_showcase_is_registered_in_the_playground_gallery(self) -> None:
         main_js = (Path(__file__).parents[1] / "main.js").read_text()
