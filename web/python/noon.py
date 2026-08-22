@@ -718,7 +718,7 @@ class Scene(_ir.Scene):
         return value
 
     def _raw_snapshot(self, obj: _ir.Object) -> _ir.Mobject:
-        snapshot = self._snapshot_for_object(obj)
+        snapshot = self._snapshot_for_object_at(obj, self._cursor)
         return _ir.Mobject(
             geometry=snapshot["geometry"],
             transform=snapshot["transform"],
