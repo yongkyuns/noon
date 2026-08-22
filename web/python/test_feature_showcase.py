@@ -24,6 +24,12 @@ class FeatureShowcaseTests(unittest.TestCase):
         # first, middle, last, copy-source, copy-target
         self.assertEqual(document["objects"][4]["style"]["opacity"], 0.42)
 
+        latest_end = max(
+            track["timing"]["start_time"] + track["timing"]["duration"]
+            for track in document["tracks"]
+        )
+        self.assertLess(latest_end, 4.0)
+
     def test_showcase_is_registered_in_the_playground_gallery(self) -> None:
         main_js = (Path(__file__).parents[1] / "main.js").read_text()
         self.assertIn("./python/examples/feature_showcase.py", main_js)
