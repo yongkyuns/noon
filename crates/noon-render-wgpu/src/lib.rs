@@ -345,12 +345,13 @@ impl FramePreparer {
             let render_geometry = frame.render_geometry(object_index);
             let temporary_reveal =
                 temporary_reveal_path(render_geometry, frame.reveal(object_index));
-            let path = temporary_reveal.as_ref().map(|(_, path)| path).or(
-                match render_geometry {
+            let path = temporary_reveal
+                .as_ref()
+                .map(|(_, path)| path)
+                .or(match render_geometry {
                     GeometryRef::VectorPath(path) => Some(path),
                     _ => None,
-                },
-            );
+                });
             if let Some(path) = path {
                 let cache_index = match self.cache_path_mesh(path, object.style) {
                     Ok((index, cache_miss)) => {
