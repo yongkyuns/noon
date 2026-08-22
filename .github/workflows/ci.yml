@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  architecture:
-    name: Fast architecture gate
+  ci:
+    name: CI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,9 +35,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-noon-arch-${{ hashFiles('crates/**/Cargo.toml') }}
+          key: ${{ runner.os }}-noon-${{ hashFiles('crates/**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-noon-arch-
+            ${{ runner.os }}-noon-
 
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -45,13 +45,13 @@ jobs:
           tool: wasm-pack@0.15.0
           fallback: none
 
-      - name: Format architecture workspace
+      - name: Format workspace
         run: cargo fmt --all -- --check
 
-      - name: Compile architecture workspace
+      - name: Compile workspace
         run: cargo check --workspace --all-targets --all-features
 
-      - name: Clippy architecture workspace
+      - name: Clippy workspace
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test geometry correctness invariants
@@ -61,7 +61,7 @@ jobs:
           cargo test -p noon-geometry --test filled_morph
           cargo test -p noon-geometry --test filled_morph_interval
 
-      - name: Test architecture workspace
+      - name: Test workspace
         run: cargo test --workspace --all-features
 
       - name: Compile WebGPU renderer for browser
@@ -72,50 +72,3 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
-
-  legacy-compat:
-    name: Full legacy compatibility
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Use stable Rust
-        run: |
-          rustup default stable
-          rustup component add rustfmt clippy
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            noon/target
-            examples/target
-          key: ${{ runner.os }}-noon-legacy-${{ hashFiles('noon/Cargo.toml', 'examples/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-noon-legacy-
-
-      - name: Format legacy crates
-        run: |
-          cargo fmt --manifest-path noon/Cargo.toml -- --check
-          cargo fmt --manifest-path examples/Cargo.toml -- --check
-
-      - name: Compile legacy crates
-        run: |
-          cargo check --manifest-path noon/Cargo.toml --all-targets --all-features
-          cargo check --manifest-path examples/Cargo.toml --all-targets --all-features
-
-      - name: Clippy legacy crates
-        run: |
-          cargo clippy --manifest-path noon/Cargo.toml --all-targets --all-features -- --cap-lints warn
-          cargo clippy --manifest-path examples/Cargo.toml --all-targets --all-features -- --cap-lints warn
-
-      - name: Test legacy crate
-        # `path::tests::partial_path` is a known legacy test bug: it replays
-        # already-closed text glyph path events and then calls `builder.close()`
-        # again, which current Lyon correctly rejects. The legacy path subsystem
-        # is being replaced; all other legacy tests remain mandatory.
-        run: cargo test --manifest-path noon/Cargo.toml --all-features -- --skip path::tests::partial_path
