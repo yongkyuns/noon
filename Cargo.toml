@@ -8,8 +8,4 @@ members = [
 	"crates/noon-render-wgpu",
 	"crates/noon-web",
 ]
-exclude = [
-	"noon",
-	"examples",
-]
 resolver = "2"
