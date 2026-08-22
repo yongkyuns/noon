@@ -15,6 +15,7 @@ PLAYGROUND_SCENE_EXAMPLES = (
     ("Lifecycle handoffs", "python/examples/lifecycle_handoffs.py", {}),
     ("Fade & appearance", "python/examples/fade_appearance.py", {}),
     ("Matching shapes", "python/examples/matching_shapes.py", {}),
+    ("Create shapes", "python/examples/create_shapes.py", {}),
     ("Path reveal", "python/examples/path_reveal.py", {}),
     ("Filled path Transform", "python/examples/filled_path_transform.py", {}),
     ("Staggered timing", "python/examples/staggered_choreography.py", {}),
