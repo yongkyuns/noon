@@ -72,3 +72,26 @@ jobs:
 
       - name: Build and validate browser package
         run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+
+      - name: Test browser WebGPU rendering
+        run: node scripts/browser-smoke.mjs
+
+      - name: Upload browser smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-screenshots
+          path: browser-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
