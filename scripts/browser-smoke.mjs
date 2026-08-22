@@ -91,16 +91,16 @@ async function waitForServer() {
   throw new Error(`Browser smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function artifactName(index, name) {
+function artifactName(index, name, checkpoint) {
   const slug = name
     .normalize("NFKD")
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .toLowerCase();
-  return `${String(index).padStart(2, "0")}-${slug || "scene"}.png`;
+  return `${String(index).padStart(2, "0")}-${slug || "scene"}-${checkpoint}.png`;
 }
 
-function assertVisiblePixels(buffer, name) {
+function assertVisiblePixels(buffer, name, time) {
   const png = PNG.sync.read(buffer);
   assert.ok(png.width >= 320 && png.height >= 180, `${name}: canvas screenshot is too small`);
 
@@ -119,9 +119,24 @@ function assertVisiblePixels(buffer, name) {
 
   assert.ok(
     changedPixels >= 100,
-    `${name}: captured canvas appears blank (${changedPixels} non-background pixels)`,
+    `${name}: canvas appears blank at t=${time.toFixed(3)}s (${changedPixels} non-background pixels)`,
   );
   return changedPixels;
+}
+
+function latestSceneEnd(document) {
+  assert.ok(document.tracks.length > 0, "playground scene must contain at least one track");
+  return Math.max(
+    ...document.tracks.map(
+      (track) => track.timing.start_time + track.timing.duration,
+    ),
+  );
+}
+
+function sampleTimes(latestEnd) {
+  assert.ok(Number.isFinite(latestEnd) && latestEnd > 0, "scene timeline must have positive duration");
+  assert.ok(latestEnd < 4.0, "scene timeline must fit the four-second playground loop");
+  return [0.35, 0.60, 0.85].map((fraction) => latestEnd * fraction);
 }
 
 let browser = null;
@@ -168,6 +183,7 @@ try {
     const sceneJson = await readFile(example.file, "utf8");
     const document = JSON.parse(sceneJson);
     const expectedObjects = document.objects.length;
+    const latestEnd = latestSceneEnd(document);
     assert.ok(expectedObjects > 0, `${example.name}: scene has no semantic objects`);
 
     const loaded = await page.evaluate(
@@ -180,43 +196,37 @@ try {
       `${example.name}: browser object count after load`,
     );
 
-    await page.waitForFunction(
-      ({ revision, objectCount }) => {
-        const metrics = window.noonSmoke.metrics();
-        if (metrics.error) {
-          throw new Error(metrics.error);
-        }
-        return (
-          metrics.revision === revision &&
-          metrics.objectCount === objectCount &&
-          metrics.framesSinceLoad >= 4 &&
-          metrics.time >= 0.45 &&
-          metrics.drawCalls > 0 &&
-          metrics.instances > 0
-        );
-      },
-      { revision: loaded.revision, objectCount: expectedObjects },
-      { timeout: 20_000 },
-    );
+    for (const [checkpointIndex, time] of sampleTimes(latestEnd).entries()) {
+      const metrics = await page.evaluate(
+        (sceneTime) => window.noonSmoke.renderAt(sceneTime),
+        time,
+      );
+      assert.equal(metrics.error, null, `${example.name}: browser runtime error`);
+      assert.equal(metrics.revision, loaded.revision, `${example.name}: scene revision drifted`);
+      assert.equal(metrics.objectCount, expectedObjects, `${example.name}: object count drifted`);
+      assert.ok(Math.abs(metrics.time - time) < 1e-6, `${example.name}: deterministic seek time drifted`);
+      assert.ok(metrics.drawCalls > 0, `${example.name}: renderer emitted no draw calls at t=${time}`);
+      assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 
-    const metrics = await page.evaluate(() => window.noonSmoke.metrics());
-    assert.equal(metrics.error, null, `${example.name}: browser runtime error`);
-    assert.equal(metrics.objectCount, expectedObjects, `${example.name}: object count drifted`);
-    assert.ok(metrics.drawCalls > 0, `${example.name}: renderer emitted no draw calls`);
-    assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances`);
+      // Let Chromium composite the just-presented WebGPU surface before capture.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+      const screenshotPath = path.join(
+        artifactDir,
+        artifactName(index, example.name, checkpointIndex + 1),
+      );
+      const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
+      const visiblePixels = assertVisiblePixels(screenshot, example.name, time);
 
-    const screenshotPath = path.join(artifactDir, artifactName(index, example.name));
-    const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
-    const visiblePixels = assertVisiblePixels(screenshot, example.name);
-
-    console.log(
-      `✓ ${example.name}: ${metrics.objectCount} objects, ${metrics.drawCalls} draws, ` +
-        `${metrics.instances} instances, ${visiblePixels} visible pixels`,
-    );
+      console.log(
+        `✓ ${example.name} @ ${time.toFixed(3)}s: ${metrics.objectCount} objects, ` +
+          `${metrics.drawCalls} draws, ${metrics.instances} instances, ` +
+          `${visiblePixels} visible pixels`,
+      );
+    }
   }
 
   assert.deepEqual(browserErrors, [], `browser emitted errors:\n${browserErrors.join("\n")}`);
-  console.log(`Browser WebGPU smoke passed for ${examples.length} picker scenes.`);
+  console.log(`Browser WebGPU smoke passed for ${examples.length} picker scenes at three semantic checkpoints each.`);
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
