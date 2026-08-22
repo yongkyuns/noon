@@ -17,10 +17,27 @@ class PlaygroundExampleTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsInstance(run_scene_example(relative_path, context), Scene)
 
+    def test_every_registered_scene_fits_the_four_second_loop(self) -> None:
+        for name, relative_path, context in PLAYGROUND_SCENE_EXAMPLES:
+            with self.subTest(name=name):
+                document = run_scene_example(relative_path, context).to_document()
+                latest_end = max(
+                    track["timing"]["start_time"] + track["timing"]["duration"]
+                    for track in document["tracks"]
+                )
+                self.assertLess(latest_end, 4.0)
+
     def test_every_registered_patch_executes(self) -> None:
         for name, relative_path, context in PLAYGROUND_PATCH_EXAMPLES:
             with self.subTest(name=name):
                 self.assertIsInstance(run_patch_example(relative_path, context), PatchBatch)
+
+    def test_scene_catalog_is_curated_without_duplicate_sources(self) -> None:
+        names = [name for name, _, _ in PLAYGROUND_SCENE_EXAMPLES]
+        paths = [path for _, path, _ in PLAYGROUND_SCENE_EXAMPLES]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(paths), len(set(paths)))
+        self.assertLessEqual(len(paths), 10)
 
     def test_python_catalog_matches_javascript_picker(self) -> None:
         main_js = (Path(__file__).parents[1] / "main.js").read_text(encoding="utf-8")

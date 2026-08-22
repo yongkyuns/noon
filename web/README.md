@@ -11,7 +11,41 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
-The **Example** picker includes **Lifecycle · matching · Fade**, an executable showcase of chained `ReplacementTransform`, `TransformFromCopy`, `TransformMatchingShapes`, and `FadeIn`/`FadeOut`. Its Fade lane uses a semantically translucent object to demonstrate that renderer Appearance modulates authored opacity without rewriting it. The showcase completes within the playground's four-second loop so every advertised handoff is visible during normal playback.
+## Curated examples
+
+The **Example** picker is intentionally a teaching sequence rather than a feature dump. Each scene has one primary purpose and one unique source file:
+
+1. **Getting started** — primitives plus position, rotation, and opacity tracks.
+2. **Analytic Transform** — circle radius, rectangle size, and line endpoint interpolation.
+3. **Lifecycle handoffs** — `ReplacementTransform` versus `TransformFromCopy` presence semantics.
+4. **Fade & appearance** — `FadeOut`/`FadeIn` while preserving authored semantic opacity.
+5. **Matching shapes** — deterministic `TransformMatchingShapes` pairing by shape signature.
+6. **Path reveal** — one multi-contour path over the ordered reveal domain.
+7. **Filled path Transform** — validated fixed-topology interpolation from a rounded loop to a star.
+8. **Staggered timing** — identical motion with only `start_time` varied.
+9. **Instanced field · 180** — analytic batching and dirty instance uploads on a semantic grid.
+10. **Morph stress · 1,000** — one deliberately dense profiling scene with twelve reusable morph targets.
+
+All picker scenes must execute through the Python authoring layer, compile through the native Rust `ScenePlayer`, and finish before the playground's four-second loop. The same validation runs in CI and in the Pages build.
+
+Examples use the small `noon_layout` module to express layout without repeating raw coordinates. `Vec2` remains tuple-compatible with the existing Noon API, so helpers do not introduce another scene graph or renderer abstraction:
+
+```python
+from noon import Scene
+from noon_layout import DOWN, UP, arrange
+
+scene = Scene()
+left, center, right = arrange(3, spacing=2.0)
+dot = scene.circle(0.4, position=left + DOWN * 0.5)
+scene.animate_position(
+    dot,
+    left + DOWN * 0.5,
+    left + UP * 0.5,
+    duration=2.0,
+)
+```
+
+`noon_layout` currently provides `Vec2`, `ORIGIN`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `arrange`, `grid`, and `polar`. These are authoring conveniences only; the serialized IR still contains ordinary renderer-independent vector values.
 
 Open **Python scene source** and click **Run Python scene** to build a complete versioned `SceneDocument`. Explicit object and track `key` values retain runtime identity across Python reruns. Compatible style, transform, and timeline edits reconcile into semantic patches; unsafe geometry or draw-order changes fall back to transactional replacement. Both paths preserve the playhead and existing canvas/GPU resources and restart ordered patch sequencing at zero. **Run Python patch** then sends an incremental `PatchBatch` to that persistent runtime. The first Python action lazily downloads the pinned Pyodide runtime; playback continues while Python loads or runs, and deployed scenes still work without Pyodide when the authoring controls are unused.
 

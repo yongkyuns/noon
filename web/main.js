@@ -33,95 +33,73 @@ const SCENE_EXAMPLES = [
   {
     name: "Getting started",
     path: "./python/demo_scene.py",
-    summary: "Circles, rectangles, lines and a cubic path morph on one 4 s timeline.",
-    features: "primitives · path morph · timeline",
-  },
-  {
-    name: "Lifecycle · matching · Fade",
-    path: "./python/examples/feature_showcase.py",
     summary:
-      "Replacement chains, TransformFromCopy, matching-shape handoffs, and Fade appearance composition on one timeline.",
-    features: "ReplacementTransform · TransformFromCopy · matching · FadeIn/FadeOut",
+      "Three primitives introduce position, rotation, and opacity tracks with semantic layout helpers.",
+    features: "primitives · position · rotation · opacity",
   },
   {
-    name: "Analytic primitive Transform",
+    name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
-      "Circle radius, rectangle size and line endpoints interpolate directly without path conversion or tessellation.",
+      "Circle radius, rectangle size, and line endpoints interpolate directly without path conversion.",
     features: "Transform · analytic geometry · zero tessellation",
+  },
+  {
+    name: "Lifecycle handoffs",
+    path: "./python/examples/lifecycle_handoffs.py",
+    summary:
+      "ReplacementTransform swaps stable scene identity while TransformFromCopy keeps its source present.",
+    features: "ReplacementTransform · TransformFromCopy · Presence",
+  },
+  {
+    name: "Fade & appearance",
+    path: "./python/examples/fade_appearance.py",
+    summary:
+      "A semitransparent object fades out and back in while authored semantic opacity stays unchanged.",
+    features: "FadeOut · FadeIn · Appearance · semantic opacity",
+  },
+  {
+    name: "Matching shapes",
+    path: "./python/examples/matching_shapes.py",
+    summary:
+      "Two reordered rows pair circles and a rectangle by semantic shape signature rather than list position.",
+    features: "TransformMatchingShapes · signatures · stable pairing",
+  },
+  {
+    name: "Path reveal",
+    path: "./python/examples/path_reveal.py",
+    summary:
+      "One multi-contour vector path draws progressively over its deterministic ordered arc-length domain.",
+    features: "VectorPath · Reveal · multi-contour ordering",
   },
   {
     name: "Filled path Transform",
     path: "./python/examples/filled_path_transform.py",
     summary:
-      "A filled rounded loop morphs into a concave star using one validated fixed triangle topology.",
-    features: "Transform · fixed fill topology · fill + stroke",
+      "A parameterized rounded loop morphs into a five-point star using validated fixed fill topology.",
+    features: "Transform · filled path · fixed topology",
   },
   {
-    name: "Path morph / Transform",
-    path: "./python/examples/path_morph_transform.py",
+    name: "Staggered timing",
+    path: "./python/examples/staggered_choreography.py",
     summary:
-      "A rounded closed loop transforms into a sharp star using Scene.play(Transform(...)).",
-    features: "Transform · path morph · GPU interpolation",
+      "Seven identical circles share one motion while start_time alone creates a readable stagger.",
+    features: "start_time · easing · timeline composition",
   },
   {
-    name: "Morph stress · 600",
-    path: "./python/examples/morph_stress_test.py",
-    context: { object_count: 600 },
+    name: "Instanced field · 180",
+    path: "./python/examples/instanced_field.py",
     summary:
-      "Six hundred simultaneous path morphs reuse twelve cached meshes with live CPU/GPU percentile profiling.",
-    features: "600 morphs · 12 meshes · CPU/GPU profile",
+      "A semantic 18×10 grid exercises analytic instancing, batching, and dirty-range uploads.",
+    features: "180 circles · instancing · GPU batching",
   },
   {
     name: "Morph stress · 1,000",
     path: "./python/examples/morph_stress_test.py",
     context: { object_count: 1000 },
     summary:
-      "One thousand simultaneous path morphs reuse twelve cached meshes with live CPU/GPU percentile profiling.",
+      "One thousand simultaneous path morphs reuse twelve target geometries for focused stress profiling.",
     features: "1,000 morphs · 12 meshes · CPU/GPU profile",
-  },
-  {
-    name: "Morph stress · 3,000",
-    path: "./python/examples/morph_stress_test.py",
-    context: { object_count: 3000 },
-    summary:
-      "Three thousand simultaneous path morphs reuse twelve cached meshes to expose CPU preparation and GPU limits.",
-    features: "3,000 morphs · 12 meshes · CPU/GPU profile",
-  },
-  {
-    name: "Staggered choreography",
-    path: "./python/examples/staggered_choreography.py",
-    summary:
-      "Seventeen independent objects with staggered position, rotation and opacity tracks.",
-    features: "staggering · easing · track composition",
-  },
-  {
-    name: "Vector path garden",
-    path: "./python/examples/vector_path_garden.py",
-    summary:
-      "Repeated cubic and quadratic paths demonstrate semantic path authoring and cached mesh reuse.",
-    features: "cubic paths · quadratic paths · geometry cache",
-  },
-  {
-    name: "180-dot instanced field",
-    path: "./python/examples/instanced_field.py",
-    summary:
-      "A dense animated circle field designed to show batching, instancing and dirty-range uploads.",
-    features: "180 objects · instancing · GPU batching",
-  },
-  {
-    name: "Kinetic lines",
-    path: "./python/examples/kinetic_lines.py",
-    summary:
-      "Thirty-two independently animated analytic lines plus outlined circles in a rotating fan.",
-    features: "analytic lines · batching · opacity",
-  },
-  {
-    name: "Mixed geometry",
-    path: "./python/examples/mixed_geometry.py",
-    summary:
-      "Analytic circles and rectangles animate around a cached cubic vector mesh without retessellation.",
-    features: "mixed geometry · cache reuse · live tracks",
   },
 ];
 

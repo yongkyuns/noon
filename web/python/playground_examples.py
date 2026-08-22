@@ -7,20 +7,19 @@ from noon import PatchBatch, Scene
 
 WEB_ROOT = Path(__file__).parents[1]
 
+# Ordered from basic authoring toward specialized renderer/performance behavior.
+# Each picker entry has one primary teaching purpose and one source file.
 PLAYGROUND_SCENE_EXAMPLES = (
     ("Getting started", "python/demo_scene.py", {}),
-    ("Lifecycle · matching · Fade", "python/examples/feature_showcase.py", {}),
-    ("Analytic primitive Transform", "python/examples/analytic_transform.py", {}),
+    ("Analytic Transform", "python/examples/analytic_transform.py", {}),
+    ("Lifecycle handoffs", "python/examples/lifecycle_handoffs.py", {}),
+    ("Fade & appearance", "python/examples/fade_appearance.py", {}),
+    ("Matching shapes", "python/examples/matching_shapes.py", {}),
+    ("Path reveal", "python/examples/path_reveal.py", {}),
     ("Filled path Transform", "python/examples/filled_path_transform.py", {}),
-    ("Path morph / Transform", "python/examples/path_morph_transform.py", {}),
-    ("Morph stress · 600", "python/examples/morph_stress_test.py", {"object_count": 600}),
+    ("Staggered timing", "python/examples/staggered_choreography.py", {}),
+    ("Instanced field · 180", "python/examples/instanced_field.py", {}),
     ("Morph stress · 1,000", "python/examples/morph_stress_test.py", {"object_count": 1000}),
-    ("Morph stress · 3,000", "python/examples/morph_stress_test.py", {"object_count": 3000}),
-    ("Staggered choreography", "python/examples/staggered_choreography.py", {}),
-    ("Vector path garden", "python/examples/vector_path_garden.py", {}),
-    ("180-dot instanced field", "python/examples/instanced_field.py", {}),
-    ("Kinetic lines", "python/examples/kinetic_lines.py", {}),
-    ("Mixed geometry", "python/examples/mixed_geometry.py", {}),
 )
 
 PLAYGROUND_PATCH_EXAMPLES = (

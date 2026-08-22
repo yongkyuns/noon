@@ -3,6 +3,7 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 4;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
+const PYTHON_LAYOUT_MODULE_PATH = "/tmp/noon_layout.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -17,13 +18,23 @@ self.addEventListener("message", (event) => {
 
 async function initializePyodide() {
   const pyodide = await loadPyodide();
-  const moduleUrl = new URL("./python/noon.py", import.meta.url);
-  const response = await fetch(moduleUrl);
-  if (!response.ok) {
-    throw new Error(`Unable to load Noon Python API: HTTP ${response.status}`);
+  const [apiResponse, layoutResponse] = await Promise.all([
+    fetch(new URL("./python/noon.py", import.meta.url)),
+    fetch(new URL("./python/noon_layout.py", import.meta.url)),
+  ]);
+  if (!apiResponse.ok) {
+    throw new Error(`Unable to load Noon Python API: HTTP ${apiResponse.status}`);
+  }
+  if (!layoutResponse.ok) {
+    throw new Error(
+      `Unable to load Noon Python layout helpers: HTTP ${layoutResponse.status}`,
+    );
   }
 
-  pyodide.FS.writeFile(PYTHON_MODULE_PATH, await response.text(), {
+  pyodide.FS.writeFile(PYTHON_MODULE_PATH, await apiResponse.text(), {
+    encoding: "utf8",
+  });
+  pyodide.FS.writeFile(PYTHON_LAYOUT_MODULE_PATH, await layoutResponse.text(), {
     encoding: "utf8",
   });
   pyodide.runPython("import sys; sys.path.insert(0, '/tmp')");
