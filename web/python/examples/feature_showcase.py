@@ -12,6 +12,9 @@ from noon import (
 
 scene = Scene()
 
+# The playground loops at four seconds, so every lane completes before the
+# clock wraps and leaves a short hold on its final state.
+
 # Top lane: one stable semantic object hands off through two lifecycle targets.
 # Exact-boundary chaining exercises Presence continuity while the visible shape
 # moves and changes geometry.
@@ -49,13 +52,13 @@ last = scene.add(
 )
 scene.play(
     ReplacementTransform(first, middle, key="lifecycle.first-to-middle"),
-    duration=2.0,
+    duration=1.2,
     easing="ease_in_out_cubic",
 )
 scene.play(
     ReplacementTransform(middle, last, key="lifecycle.middle-to-last"),
-    duration=2.0,
-    start_time=2.0,
+    duration=1.2,
+    start_time=1.2,
     easing="ease_in_out_cubic",
 )
 
@@ -85,19 +88,19 @@ copy_target = scene.add(
 )
 scene.play(
     TransformFromCopy(copy_source, copy_target, key="copy.spawn"),
-    duration=2.0,
+    duration=1.2,
     easing="ease_in_out_cubic",
 )
 scene.play(
     FadeOut(copy_target, key="copy.fade-out"),
-    duration=1.25,
-    start_time=2.5,
+    duration=0.6,
+    start_time=1.5,
     easing="ease_in_out_cubic",
 )
 scene.play(
     FadeIn(copy_target, key="copy.fade-in"),
-    duration=1.25,
-    start_time=4.25,
+    duration=0.6,
+    start_time=2.5,
     easing="ease_in_out_cubic",
 )
 
@@ -152,8 +155,8 @@ scene.play(
         [target_rectangle, target_circle_a, target_circle_b],
         key="matching.rearrange",
     ),
-    duration=2.0,
-    start_time=4.0,
+    duration=1.5,
+    start_time=2.0,
     easing="ease_in_out_cubic",
 )
 
