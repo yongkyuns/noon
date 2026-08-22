@@ -128,6 +128,7 @@ let browser = null;
 try {
   await waitForServer();
   browser = await chromium.launch({
+    channel: "chromium",
     headless: true,
     args: [
       "--enable-unsafe-webgpu",
