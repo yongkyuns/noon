@@ -27,6 +27,7 @@ rectangle = scene.rectangle(
     0.8,
     key="rectangle",
     position=rectangle_slot,
+    rotation=-math.pi / 4.0,
     fill=RECTANGLE_COLOR,
     stroke=OUTLINE,
     stroke_width=0.05,
