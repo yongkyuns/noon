@@ -1,0 +1,9 @@
+[package]
+name = "noon"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Ergonomic language-neutral authoring facade for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
