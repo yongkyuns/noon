@@ -549,11 +549,9 @@ impl Scene {
                     ) {
                         return Err(AuthoringError::CreateUnsupportedGeometry(object.id));
                     }
-                    let has_presence_track = self
-                        .definition
-                        .tracks()
-                        .iter()
-                        .any(|track| track.object == object.id && track.property == Property::Presence);
+                    let has_presence_track = self.definition.tracks().iter().any(|track| {
+                        track.object == object.id && track.property == Property::Presence
+                    });
                     let is_present = self
                         .presence
                         .get(&object.id)
@@ -820,10 +818,7 @@ mod tests {
         assert_eq!(tracks[1].property, Property::Reveal);
         assert_eq!(tracks[1].timing.start_time, 0.0);
         assert_eq!(tracks[1].timing.duration, 2.0);
-        assert_eq!(
-            tracks[1].values,
-            TrackValues::Scalar { from: 0.0, to: 1.0 }
-        );
+        assert_eq!(tracks[1].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
         assert_eq!(scene.time(), 2.0);
     }
 
