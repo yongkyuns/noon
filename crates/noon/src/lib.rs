@@ -541,7 +541,7 @@ impl Scene {
                 Animation::Create(Create(object)) => {
                     let snapshot = self.snapshot(object)?;
                     if !matches!(
-                        snapshot.geometry,
+                        &snapshot.geometry,
                         GeometryRef::Circle { .. }
                             | GeometryRef::Rectangle { .. }
                             | GeometryRef::Line { .. }
@@ -564,10 +564,29 @@ impl Scene {
                     if has_presence_track && is_present {
                         return Err(AuthoringError::CreateRequiresAbsent(object.id));
                     }
+                    let appearance = self
+                        .definition
+                        .tracks()
+                        .iter()
+                        .rev()
+                        .find_map(|track| {
+                            if track.object != object.id || track.property != Property::Appearance {
+                                return None;
+                            }
+                            match &track.values {
+                                TrackValues::Scalar { to, .. } => Some(*to),
+                                _ => None,
+                            }
+                        })
+                        .unwrap_or(1.0);
                     self.definition
                         .set_presence_at(object.id, false, true, start)?;
                     self.definition
                         .animate_reveal(object.id, 0.0, 1.0, timing)?;
+                    if appearance != 1.0 {
+                        self.definition
+                            .animate_appearance(object.id, 1.0, 1.0, timing)?;
+                    }
                     self.presence.insert(object.id, true);
                 }
                 Animation::FadeOut(FadeOut(object)) => {
@@ -791,8 +810,8 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            scene.snapshot(circle).unwrap().geometry,
-            GeometryRef::Circle { radius } if radius == 0.75
+            &scene.snapshot(circle).unwrap().geometry,
+            GeometryRef::Circle { radius } if *radius == 0.75
         ));
         let tracks = scene.definition().tracks();
         assert_eq!(tracks.len(), 2);
@@ -826,6 +845,15 @@ mod tests {
                 .tracks()
                 .iter()
                 .filter(|track| track.property == Property::Reveal)
+                .count(),
+            2
+        );
+        assert_eq!(
+            scene
+                .definition()
+                .tracks()
+                .iter()
+                .filter(|track| track.property == Property::Appearance)
                 .count(),
             2
         );
