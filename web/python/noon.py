@@ -58,7 +58,7 @@ class Vec2(tuple):
         divisor = float(scalar)
         if divisor == 0.0:
             raise ZeroDivisionError("cannot divide Vec2 by zero")
-        return Vec2(self.x / divisor, self.y / divisor)
+        return self / divisor
 
     def length(self) -> float:
         return math.hypot(self.x, self.y)
@@ -637,6 +637,14 @@ class TransformMatchingShapes:
 
 
 @dataclass(frozen=True, slots=True)
+class Create:
+    """Progressively draw a shape without changing its steady-state geometry."""
+
+    target: Mobject | _ir.Object
+    key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class FadeIn:
     target: Mobject | _ir.Object
     key: str | None = None
@@ -783,6 +791,75 @@ class Scene(_ir.Scene):
     ) -> Mobject:
         return self.add(Path(path, **kwargs), key=key)  # type: ignore[return-value]
 
+    def _schedule_create(
+        self,
+        animation: Create,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        obj = self._raw_object(animation.target)
+        start = float(start_time)
+        run_duration = float(duration)
+        if not math.isfinite(start) or start < 0.0:
+            raise ValueError("start_time must be finite and non-negative")
+        if not math.isfinite(run_duration) or run_duration <= 0.0:
+            raise ValueError("duration must be finite and positive")
+        end = start + run_duration
+
+        snapshot = self._snapshot_for_object_at(obj, start)
+        geometry = snapshot["geometry"]
+        if not any(name in geometry for name in ("circle", "rectangle", "line", "vector_path")):
+            raise ValueError("Create supports Circle, Rectangle/Square, Line, and VectorPath")
+
+        presence_tracks = self._ensure_lifecycle_timeline_available(obj, start, "Create target")
+        if presence_tracks and self._presence_at(obj, start):
+            raise ValueError("Create target must be absent at animation start")
+
+        for track in self._tracks:
+            if track["object"] != obj.id or track["property"] != "reveal":
+                continue
+            track_start = track["timing"]["start_time"]
+            track_end = track_start + track["timing"]["duration"]
+            if track_start < end and start < track_end:
+                raise ValueError("Create/reveal animations for one object must not overlap")
+
+        object_key = self._object_keys[obj.id]
+        root_key = animation.key or f"@create:{object_key}:{start:g}"
+        self._add_presence_track(
+            obj,
+            False,
+            True,
+            start,
+            key=f"{root_key}.show",
+        )
+        self._add_scalar_track(
+            obj,
+            "reveal",
+            0.0,
+            1.0,
+            start,
+            run_duration,
+            easing,
+            root_key,
+        )
+
+        # Re-creating an object after FadeOut should not inherit appearance=0.
+        # Switching to a new track at the Create start is an intentional exact
+        # reset; ordinary first-time Create needs no appearance track at all.
+        if self._appearance_at(obj, start) != 1.0:
+            self._add_scalar_track(
+                obj,
+                "appearance",
+                1.0,
+                1.0,
+                start,
+                run_duration,
+                "linear",
+                f"{root_key}.appearance",
+            )
+
     def play(
         self,
         *animations: Any,
@@ -791,6 +868,8 @@ class Scene(_ir.Scene):
         start_time: float | None = None,
         easing: str = "linear",
     ) -> Scene:
+        if not animations:
+            raise ValueError("play requires at least one animation")
         if duration is not None and run_time is not None:
             raise ValueError("use either duration or run_time, not both")
         actual_duration = 1.0 if duration is None and run_time is None else (
@@ -798,6 +877,7 @@ class Scene(_ir.Scene):
         )
         actual_start = self._cursor if start_time is None else float(start_time)
         lowered: list[Any] = []
+        creates: list[Create] = []
         for animation in animations:
             if isinstance(animation, _AnimationBuilder):
                 lowered.append(
@@ -838,6 +918,8 @@ class Scene(_ir.Scene):
                         animation.key,
                     )
                 )
+            elif isinstance(animation, Create):
+                creates.append(animation)
             elif isinstance(animation, FadeIn):
                 lowered.append(_ir.FadeIn(self._raw_object(animation.target), animation.key))
             elif isinstance(animation, FadeOut):
@@ -845,12 +927,27 @@ class Scene(_ir.Scene):
             else:
                 # Keep the existing low-level escape hatch available.
                 lowered.append(animation)
-        super().play(
-            *lowered,
-            duration=actual_duration,
-            start_time=actual_start,
-            easing=easing,
-        )
+
+        checkpoint = self._authoring_checkpoint()
+        try:
+            if lowered:
+                super().play(
+                    *lowered,
+                    duration=actual_duration,
+                    start_time=actual_start,
+                    easing=easing,
+                )
+            for animation in creates:
+                self._schedule_create(
+                    animation,
+                    duration=actual_duration,
+                    start_time=actual_start,
+                    easing=easing,
+                )
+        except Exception:
+            self._restore_authoring_checkpoint(checkpoint)
+            raise
+
         self._cursor = max(self._cursor, actual_start + actual_duration)
         return self
 
@@ -900,6 +997,7 @@ __all__ = [
     "BLUE_E",
     "Circle",
     "Color",
+    "Create",
     "DEGREES",
     "DEFAULT_FRAME_HEIGHT",
     "DEFAULT_FRAME_WIDTH",
