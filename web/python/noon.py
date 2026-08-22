@@ -58,7 +58,7 @@ class Vec2(tuple):
         divisor = float(scalar)
         if divisor == 0.0:
             raise ZeroDivisionError("cannot divide Vec2 by zero")
-        return self / divisor
+        return Vec2(self.x / divisor, self.y / divisor)
 
     def length(self) -> float:
         return math.hypot(self.x, self.y)
