@@ -4,10 +4,8 @@ use std::{fs, path::PathBuf, process::Command};
 #[test]
 fn every_playground_scene_executes_and_compiles() {
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output_dir = std::env::temp_dir().join(format!(
-        "noon-playground-scenes-{}",
-        std::process::id()
-    ));
+    let output_dir =
+        std::env::temp_dir().join(format!("noon-playground-scenes-{}", std::process::id()));
     let _ = fs::remove_dir_all(&output_dir);
     fs::create_dir_all(&output_dir).expect("temporary playground scene directory is writable");
 
@@ -39,6 +37,9 @@ fn every_playground_scene_executes_and_compiles() {
         compiled += 1;
     }
 
-    assert_eq!(compiled, 13, "every registered playground scene was compiled");
+    assert_eq!(
+        compiled, 13,
+        "every registered playground scene was compiled"
+    );
     fs::remove_dir_all(&output_dir).expect("temporary playground scene directory is removable");
 }
