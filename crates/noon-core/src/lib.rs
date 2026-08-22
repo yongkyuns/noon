@@ -655,11 +655,12 @@ impl ObjectSnapshot {
     }
 
     pub fn move_to(mut self, point: Vec2) -> Self {
-        self.transform.translation += point - self.center();
+        let center = self.center();
+        self.transform.translation += point - center;
         self
     }
 
-    pub fn center(self) -> Vec2 {
+    pub fn center(&self) -> Vec2 {
         self.world_bounds()
             .map(Rect::center)
             .unwrap_or(self.transform.translation)
