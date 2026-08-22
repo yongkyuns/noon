@@ -6,7 +6,6 @@ const state = {
   error: null,
   revision: 0,
   frames: 0,
-  framesSinceLoad: 0,
 };
 
 let player = null;
@@ -16,13 +15,15 @@ window.noonSmoke = {
   loadScene() {
     throw new Error("Noon browser smoke harness is not ready");
   },
+  renderAt() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
   metrics() {
     return {
       ready: state.ready,
       error: state.error,
       revision: state.revision,
       frames: state.frames,
-      framesSinceLoad: state.framesSinceLoad,
     };
   },
 };
@@ -33,7 +34,6 @@ function metrics() {
     error: state.error,
     revision: state.revision,
     frames: state.frames,
-    framesSinceLoad: state.framesSinceLoad,
     time: player?.time() ?? Number.NaN,
     objectCount: player?.objectCount() ?? 0,
     drawCalls: player?.lastDrawCalls() ?? 0,
@@ -41,6 +41,25 @@ function metrics() {
     uploadBytes: player?.lastBytesUploaded() ?? 0,
     geometryCacheMisses: player?.lastGeometryCacheMisses() ?? 0,
   };
+}
+
+function presentAt(timeSeconds) {
+  const time = Number(timeSeconds);
+  if (!Number.isFinite(time) || time < 0 || time >= 4.0) {
+    throw new RangeError("smoke render time must be finite and in [0, 4)");
+  }
+
+  // PlaybackClock treats the first timestamp after reset as semantic time zero.
+  // A second controlled timestamp therefore renders the requested semantic time
+  // through the exact production renderFrame path without depending on RAF speed.
+  player.resetClock();
+  if (player.renderFrame(0)) {
+    state.frames += 1;
+  }
+  if (player.renderFrame(time * 1000)) {
+    state.frames += 1;
+  }
+  return metrics();
 }
 
 async function start() {
@@ -57,9 +76,7 @@ async function start() {
       throw new TypeError("sceneJson must be a string");
     }
     const incremental = player.reconcileScene(sceneJson);
-    player.resetClock();
     state.revision += 1;
-    state.framesSinceLoad = 0;
     state.error = null;
     return {
       incremental,
@@ -67,23 +84,9 @@ async function start() {
       objectCount: player.objectCount(),
     };
   };
+  window.noonSmoke.renderAt = presentAt;
   window.noonSmoke.metrics = metrics;
   state.ready = true;
-
-  function frame(timestamp) {
-    try {
-      if (player.renderFrame(timestamp)) {
-        state.frames += 1;
-        state.framesSinceLoad += 1;
-      }
-      requestAnimationFrame(frame);
-    } catch (error) {
-      state.error = String(error);
-      console.error(error);
-    }
-  }
-
-  requestAnimationFrame(frame);
 }
 
 start().catch((error) => {
