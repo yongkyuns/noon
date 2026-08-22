@@ -569,6 +569,12 @@ fn squared_distance(a: Vec2, b: Vec2) -> f32 {
 }
 
 fn lerp_vec2(from: Vec2, to: Vec2, progress: f32) -> Vec2 {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
     Vec2::new(
         from.x + (to.x - from.x) * progress,
         from.y + (to.y - from.y) * progress,
