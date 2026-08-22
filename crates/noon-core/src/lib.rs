@@ -1004,8 +1004,14 @@ mod tests {
         let snapshot = ObjectSnapshot::new(GeometryRef::square(1.0))
             .to_corner(UR, DEFAULT_MOBJECT_TO_EDGE_BUFFER);
         let bounds = snapshot.world_bounds().unwrap();
-        assert!((bounds.max.x - (DEFAULT_FRAME_WIDTH * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs() < 1e-5);
-        assert!((bounds.max.y - (DEFAULT_FRAME_HEIGHT * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs() < 1e-5);
+        assert!(
+            (bounds.max.x - (DEFAULT_FRAME_WIDTH * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs()
+                < 1e-5
+        );
+        assert!(
+            (bounds.max.y - (DEFAULT_FRAME_HEIGHT * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs()
+                < 1e-5
+        );
     }
 
     #[test]
