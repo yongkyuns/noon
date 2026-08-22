@@ -1,5 +1,6 @@
 [workspace]
 members = [
+	"crates/noon",
 	"crates/noon-core",
 	"crates/noon-geometry",
 	"crates/noon-ir",
