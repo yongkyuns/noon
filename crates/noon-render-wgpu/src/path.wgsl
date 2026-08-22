@@ -61,6 +61,10 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
 
 @fragment
 fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
+    // Fragment derivatives must execute in uniform control flow. `reveal` is an
+    // interpolated input, so evaluate fwidth before any branch that depends on it.
+    let edge = max(fwidth(input.path_progress), 0.00001);
+
     if input.reveal <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -68,7 +72,6 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
         return input.color;
     }
 
-    let edge = max(fwidth(input.path_progress), 0.00001);
     let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
     return input.color * coverage;
 }
