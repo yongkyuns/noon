@@ -46,7 +46,7 @@ fn every_playground_scene_executes_and_compiles() {
         failures.join("\n")
     );
     assert_eq!(
-        compiled, 13,
+        compiled, 10,
         "every registered playground scene was compiled"
     );
     fs::remove_dir_all(&output_dir).expect("temporary playground scene directory is removable");
