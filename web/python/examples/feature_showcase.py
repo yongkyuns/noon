@@ -3,7 +3,6 @@ from noon import (
     Color,
     FadeIn,
     FadeOut,
-    Rectangle,
     ReplacementTransform,
     Scene,
     TransformFromCopy,
@@ -16,8 +15,9 @@ scene = Scene()
 # clock wraps and leaves a short hold on its final state.
 
 # Top lane: one stable semantic object hands off through two lifecycle targets.
-# Exact-boundary chaining exercises Presence continuity while the visible shape
-# moves and changes geometry.
+# ReplacementTransform currently requires renderer-supported interpolation, so
+# this lane stays on analytic circles while still exercising exact Presence
+# handoffs, position/style changes, and snapshot chaining.
 first = scene.add(
     Circle(
         0.42,
@@ -29,11 +29,10 @@ first = scene.add(
     key="lifecycle-first",
 )
 middle = scene.add(
-    Rectangle(
-        1.05,
-        0.72,
+    Circle(
+        0.58,
         position=(0.0, 1.25),
-        rotation=0.25,
+        scale=(1.2, 0.78),
         fill=Color(0.36, 0.64, 0.98),
         stroke=Color(0.78, 0.9, 1.0),
         stroke_width=0.07,
