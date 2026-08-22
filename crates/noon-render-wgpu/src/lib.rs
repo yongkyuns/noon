@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod reveal;
 
 pub use gpu::*;
 
@@ -17,6 +18,7 @@ use noon_core::{
 };
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use reveal::{analytic_reveal_key, temporary_reveal_path, AnalyticRevealKey};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
@@ -168,7 +170,11 @@ enum PreparedSlot {
     Circle(usize),
     Rectangle(usize),
     Line(usize),
-    Path { index: usize, batch: usize },
+    Path {
+        index: usize,
+        batch: usize,
+        analytic_reveal: Option<AnalyticRevealKey>,
+    },
     Unsupported(usize),
 }
 
@@ -337,6 +343,55 @@ impl FramePreparer {
                 continue;
             }
             let render_geometry = frame.render_geometry(object_index);
+            let temporary_reveal = temporary_reveal_path(render_geometry, frame.reveal(object_index));
+            let path = temporary_reveal
+                .as_ref()
+                .map(|(_, path)| path)
+                .or_else(|| match render_geometry {
+                    GeometryRef::VectorPath(path) => Some(path),
+                    _ => None,
+                });
+            if let Some(path) = path {
+                let cache_index = match self.cache_path_mesh(path, object.style) {
+                    Ok((index, cache_miss)) => {
+                        geometry_cache_misses += usize::from(cache_miss);
+                        index
+                    }
+                    Err(_) => {
+                        self.slots
+                            .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                        self.unsupported.push(object.id);
+                        continue;
+                    }
+                };
+                let batch = match path_group_lookup.get(&cache_index).copied() {
+                    Some(batch) => batch,
+                    None => {
+                        let batch = path_groups.len();
+                        path_groups.push(PathGroup {
+                            cache_index,
+                            ids: Vec::new(),
+                            instances: Vec::new(),
+                        });
+                        path_group_lookup.insert(cache_index, batch);
+                        batch
+                    }
+                };
+                let index = path_groups[batch].instances.len();
+                path_groups[batch].ids.push(object.id);
+                path_groups[batch].instances.push(pack_path(
+                    object,
+                    frame.reveal(object_index),
+                    frame.morph(object_index),
+                ));
+                self.slots.push(PreparedSlot::Path {
+                    index,
+                    batch,
+                    analytic_reveal: temporary_reveal.as_ref().map(|(key, _)| *key),
+                });
+                continue;
+            }
+
             match render_geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
@@ -354,40 +409,8 @@ impl FramePreparer {
                     self.line_ids.push(object.id);
                     self.lines.push(pack_line(object));
                 }
-                GeometryRef::VectorPath(path) => {
-                    let cache_index = match self.cache_path_mesh(path, object.style) {
-                        Ok((index, cache_miss)) => {
-                            geometry_cache_misses += usize::from(cache_miss);
-                            index
-                        }
-                        Err(_) => {
-                            self.slots
-                                .push(PreparedSlot::Unsupported(self.unsupported.len()));
-                            self.unsupported.push(object.id);
-                            continue;
-                        }
-                    };
-                    let batch = match path_group_lookup.get(&cache_index).copied() {
-                        Some(batch) => batch,
-                        None => {
-                            let batch = path_groups.len();
-                            path_groups.push(PathGroup {
-                                cache_index,
-                                ids: Vec::new(),
-                                instances: Vec::new(),
-                            });
-                            path_group_lookup.insert(cache_index, batch);
-                            batch
-                        }
-                    };
-                    let index = path_groups[batch].instances.len();
-                    path_groups[batch].ids.push(object.id);
-                    path_groups[batch].instances.push(pack_path(
-                        object,
-                        frame.reveal(object_index),
-                        frame.morph(object_index),
-                    ));
-                    self.slots.push(PreparedSlot::Path { index, batch });
+                GeometryRef::VectorPath(_) => {
+                    unreachable!("vector path must enter the path preparation branch")
                 }
                 GeometryRef::External(_) => {
                     self.slots
@@ -434,7 +457,7 @@ impl FramePreparer {
             self.path_batch_cache_indices.push(group.cache_index);
         }
         for slot in &mut self.slots {
-            if let PreparedSlot::Path { index, batch } = slot {
+            if let PreparedSlot::Path { index, batch, .. } = slot {
                 *index += group_offsets[*batch];
             }
         }
@@ -562,16 +585,29 @@ impl FramePreparer {
                 matches!(render_geometry, GeometryRef::Line { .. })
                     && self.line_ids.get(*index) == Some(&object.id)
             }
-            PreparedSlot::Path { index, batch } => {
-                let GeometryRef::VectorPath(path) = render_geometry else {
-                    return false;
-                };
+            PreparedSlot::Path {
+                index,
+                batch,
+                analytic_reveal,
+            } => {
                 let Some(cache_index) = self.path_batch_cache_indices.get(*batch) else {
                     return false;
                 };
                 let cache = &self.path_mesh_cache[*cache_index];
+                let geometry_matches = match analytic_reveal {
+                    Some(expected) => {
+                        frame.reveal(object_index) < 1.0
+                            && analytic_reveal_key(render_geometry) == Some(*expected)
+                    }
+                    None => {
+                        let GeometryRef::VectorPath(path) = render_geometry else {
+                            return false;
+                        };
+                        cache.path == *path
+                    }
+                };
                 self.path_ids.get(*index) == Some(&object.id)
-                    && cache.path == *path
+                    && geometry_matches
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
@@ -871,7 +907,6 @@ fn pack_line(object: &FrameObjectState) -> LineInstance {
 }
 
 fn pack_path(object: &FrameObjectState, reveal: f32, morph: f32) -> PathInstance {
-    debug_assert!(matches!(object.geometry, GeometryRef::VectorPath(_)));
     PathInstance {
         transform: object.transform.into(),
         style: pack_style(object),
@@ -1164,6 +1199,70 @@ mod tests {
         assert_eq!(prepared.path_dirty_ranges[0], 0..1);
         assert_eq!(prepared.paths[0].path_params[0], 0.35);
         assert_eq!(preparer.cached_path_mesh_count(), 1);
+    }
+
+    #[test]
+    fn analytic_reveal_uses_cached_path_until_completion_then_returns_to_fast_path() {
+        let mut state = object(7, GeometryRef::circle(1.25));
+        state.style.fill = None;
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.08;
+        let mut frame = frame(vec![state]);
+        frame.reveals[0] = 0.25;
+        let mut preparer = FramePreparer::new();
+
+        let cold = preparer.prepare(&frame);
+        assert!(cold.circles.is_empty());
+        assert_eq!(cold.paths.len(), 1);
+        assert_eq!(cold.paths[0].path_params[0], 0.25);
+        assert_eq!(cold.stats.geometry_cache_misses, 1);
+        assert!(matches!(frame.objects[0].geometry, GeometryRef::Circle { .. }));
+        let vertices = cold.path_vertices.to_vec();
+        let indices = cold.path_indices.to_vec();
+
+        frame.reveals[0] = 0.6;
+        let steady = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert!(steady.circles.is_empty());
+        assert_eq!(steady.paths.len(), 1);
+        assert_eq!(steady.paths[0].path_params[0], 0.6);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert_eq!(steady.stats.instances_repacked, 1);
+        assert!(!steady.path_geometry_dirty);
+        assert_eq!(steady.path_vertices, vertices);
+        assert_eq!(steady.path_indices, indices);
+
+        frame.reveals[0] = 1.0;
+        let complete = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        assert_eq!(complete.circles.len(), 1);
+        assert!(complete.paths.is_empty());
+        assert_eq!(complete.stats.instance_count, 1);
+        assert!(matches!(frame.objects[0].geometry, GeometryRef::Circle { .. }));
+    }
+
+    #[test]
+    fn every_analytic_shape_uses_path_pipeline_for_partial_reveal() {
+        let mut circle = object(1, GeometryRef::circle(1.0));
+        let mut rectangle = object(2, GeometryRef::rectangle(2.0, 1.0));
+        let mut line = object(
+            3,
+            GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+        );
+        for state in [&mut circle, &mut rectangle, &mut line] {
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.05;
+        }
+        let mut frame = frame(vec![circle, rectangle, line]);
+        frame.reveals.fill(0.5);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        assert!(prepared.circles.is_empty());
+        assert!(prepared.rectangles.is_empty());
+        assert!(prepared.lines.is_empty());
+        assert_eq!(prepared.paths.len(), 3);
+        assert_eq!(prepared.stats.instance_count, 3);
+        assert_eq!(prepared.stats.unsupported_count, 0);
     }
 
     #[test]
