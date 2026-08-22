@@ -1,68 +1,46 @@
-import math
-
-from noon import Color, Scene
-from noon_layout import DOWN, LEFT, RIGHT, UP, arrange
+from noon import (
+    BLUE,
+    GREEN,
+    RED,
+    WHITE,
+    DEGREES,
+    DOWN,
+    LEFT,
+    RIGHT,
+    UP,
+    Circle,
+    Line,
+    Rectangle,
+    Scene,
+    VGroup,
+)
 
 scene = Scene()
 
-# Keep the first example intentionally small: three primitive types and three
-# narrow timeline properties. Later examples introduce Transform and lifecycle.
-CIRCLE_COLOR = Color(0.98, 0.38, 0.36)
-RECTANGLE_COLOR = Color(0.27, 0.65, 0.96)
-LINE_COLOR = Color(0.30, 0.88, 0.57)
-OUTLINE = Color(1.0, 1.0, 1.0)
+# Three primitives, three semantic operations. Layout is expressed through the
+# objects themselves rather than precomputed coordinate slots.
+circle = Circle(0.55, color=RED).set_stroke(WHITE, 0.05)
+rectangle = (
+    Rectangle(1.25, 0.8, color=BLUE)
+    .set_stroke(WHITE, 0.05)
+    .rotate(-45 * DEGREES)
+)
+line = Line(LEFT * 0.7, RIGHT * 0.7, color=GREEN).set_stroke(GREEN, 0.12)
+line.set_opacity(0.25)
 
-circle_slot, rectangle_slot, line_slot = arrange(3, spacing=2.25)
+VGroup(circle, rectangle, line).arrange(RIGHT, buff=0.9)
+circle.shift(DOWN * 0.65)
 
-circle = scene.circle(
-    0.55,
-    key="circle",
-    position=circle_slot + DOWN * 0.65,
-    fill=CIRCLE_COLOR,
-    stroke=OUTLINE,
-    stroke_width=0.05,
-)
-rectangle = scene.rectangle(
-    1.25,
-    0.8,
-    key="rectangle",
-    position=rectangle_slot,
-    rotation=-math.pi / 4.0,
-    fill=RECTANGLE_COLOR,
-    stroke=OUTLINE,
-    stroke_width=0.05,
-)
-line = scene.line(
-    LEFT * 0.7,
-    RIGHT * 0.7,
-    key="line",
-    position=line_slot,
-    stroke=LINE_COLOR,
-    stroke_width=0.12,
-    opacity=0.25,
-)
+scene.add(circle, key="circle")
+scene.add(rectangle, key="rectangle")
+scene.add(line, key="line")
 
-TIMING = {"duration": 3.2, "easing": "ease_in_out_cubic"}
-scene.animate_position(
-    circle,
-    circle_slot + DOWN * 0.65,
-    circle_slot + UP * 0.65,
-    key="circle.move",
-    **TIMING,
-)
-scene.animate_rotation(
-    rectangle,
-    -math.pi / 4.0,
-    math.pi / 4.0,
-    key="rectangle.rotate",
-    **TIMING,
-)
-scene.animate_opacity(
-    line,
-    0.25,
-    1.0,
-    key="line.appear",
-    **TIMING,
+scene.play(
+    circle.animate.shift(UP * 1.3),
+    rectangle.animate.rotate(90 * DEGREES),
+    line.animate.set_opacity(1.0),
+    run_time=3.2,
+    easing="ease_in_out_cubic",
 )
 
 result = scene
