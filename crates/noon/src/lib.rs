@@ -15,18 +15,17 @@ pub use noon_core::*;
 /// Common imports for normal Noon authoring.
 pub mod prelude {
     pub use crate::{
-        Animate, AuthoringError, Circle, FadeIn, FadeOut, Line, Mobject, MobjectEditor,
-        Path, Rectangle, Scene, Square, Transform,
+        Animate, AuthoringError, Circle, FadeIn, FadeOut, Line, Mobject, MobjectEditor, Path,
+        Rectangle, Scene, Square, Transform,
     };
     pub use noon_core::{
-        Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Style, Vec2, VectorPath, BLACK,
-        BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEGREES,
-        DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DL, DOWN, DR, GOLD,
-        GRAY, GREEN, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
-        MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C,
-        PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU,
-        TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A,
-        YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
+        Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Style, Vec2, VectorPath, BLACK, BLUE,
+        BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+        DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREY,
+        LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI,
+        PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C,
+        RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP,
+        UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
     };
 }
 
@@ -523,7 +522,8 @@ impl Scene {
                     }
                     self.definition
                         .animate_appearance(object.id, 1.0, 0.0, timing)?;
-                    self.definition.set_presence_at(object.id, true, false, end)?;
+                    self.definition
+                        .set_presence_at(object.id, true, false, end)?;
                     self.presence.insert(object.id, false);
                 }
                 Animation::FadeIn(FadeIn(object)) => {
@@ -626,11 +626,7 @@ impl MobjectEditor<'_> {
         self.map(|snapshot| snapshot.to_edge(direction, buff))
     }
 
-    pub fn to_corner(
-        &mut self,
-        direction: Vec2,
-        buff: f32,
-    ) -> Result<&mut Self, AuthoringError> {
+    pub fn to_corner(&mut self, direction: Vec2, buff: f32) -> Result<&mut Self, AuthoringError> {
         self.map(|snapshot| snapshot.to_corner(direction, buff))
     }
 }
@@ -736,8 +732,20 @@ mod tests {
             .iter()
             .map(|track| track.property)
             .collect();
-        assert_eq!(properties.iter().filter(|&&p| p == Property::Appearance).count(), 2);
-        assert_eq!(properties.iter().filter(|&&p| p == Property::Presence).count(), 2);
+        assert_eq!(
+            properties
+                .iter()
+                .filter(|&&p| p == Property::Appearance)
+                .count(),
+            2
+        );
+        assert_eq!(
+            properties
+                .iter()
+                .filter(|&&p| p == Property::Presence)
+                .count(),
+            2
+        );
     }
 
     #[test]
