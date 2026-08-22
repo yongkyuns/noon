@@ -51,10 +51,7 @@ fn circle_to_rectangle_keeps_semantic_endpoints_and_renderer_only_morph() {
         end.objects[0].geometry,
         GeometryRef::Rectangle { .. }
     ));
-    assert!(matches!(
-        end.render_geometry(0),
-        GeometryRef::VectorPath(_)
-    ));
+    assert!(matches!(end.render_geometry(0), GeometryRef::VectorPath(_)));
     assert_eq!(end.morph(0), 1.0);
 
     let mut sequential = SceneInstance::new(compiled);
