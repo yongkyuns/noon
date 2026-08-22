@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use noon_core::{
     GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -435,10 +435,7 @@ fn compile_transform_geometry_plan(
 
     if let (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_)) = (&from.geometry, &to.geometry)
     {
-        if from.style.stroke_width.to_bits() != to.style.stroke_width.to_bits()
-            || from.style.stroke_join != to.style.stroke_join
-            || from.style.stroke_cap != to.style.stroke_cap
-        {
+        if path_style_requires_retessellation(from.style, to.style) {
             return Err(TransformCompileFailure::RequiresRetessellation);
         }
     }
@@ -479,26 +476,101 @@ fn compile_transform_geometry_plan(
             to_end: *to_end,
         },
         (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
-            if from.style.fill.is_some() != to.style.fill.is_some() {
-                return Err(TransformCompileFailure::RequiresRetessellation);
-            }
-            if from.style.fill.is_some()
-                && noon_geometry::plan_filled_morph(
-                    source,
-                    target,
-                    noon_geometry::MorphOptions::DEFAULT,
-                )
-                .is_err()
-            {
-                return Err(TransformCompileFailure::UnsafeFilledPath);
-            }
-            TransformGeometryPlan::PathPair(GeometryRef::path(
-                source.clone().with_morph_target(target.clone()),
-            ))
+            compile_path_pair(from, to, source.clone(), target.clone())?
+        }
+        (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
+        | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {
+            let source = closed_analytic_path(&from.geometry)
+                .expect("closed analytic source geometry must convert to a path");
+            let target = closed_analytic_path(&to.geometry)
+                .expect("closed analytic target geometry must convert to a path");
+            compile_path_pair(from, to, source, target)?
         }
         _ => return Err(TransformCompileFailure::UnsupportedGeometry),
     };
     Ok(Some(plan))
+}
+
+fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
+    from.stroke_width.to_bits() != to.stroke_width.to_bits()
+        || from.stroke_join != to.stroke_join
+        || from.stroke_cap != to.stroke_cap
+        || from.fill.is_some() != to.fill.is_some()
+}
+
+fn compile_path_pair(
+    from: &noon_core::ObjectSnapshot,
+    to: &noon_core::ObjectSnapshot,
+    source: VectorPath,
+    target: VectorPath,
+) -> Result<TransformGeometryPlan, TransformCompileFailure> {
+    if path_style_requires_retessellation(from.style, to.style) {
+        return Err(TransformCompileFailure::RequiresRetessellation);
+    }
+    if from.style.fill.is_some()
+        && noon_geometry::plan_filled_morph(&source, &target, noon_geometry::MorphOptions::DEFAULT)
+            .is_err()
+    {
+        return Err(TransformCompileFailure::UnsafeFilledPath);
+    }
+    Ok(TransformGeometryPlan::PathPair(GeometryRef::path(
+        source.with_morph_target(target),
+    )))
+}
+
+fn closed_analytic_path(geometry: &GeometryRef) -> Option<VectorPath> {
+    match geometry {
+        GeometryRef::Circle { radius } => Some(circle_path(*radius)),
+        GeometryRef::Rectangle { size } => Some(rectangle_path(*size)),
+        _ => None,
+    }
+}
+
+fn circle_path(radius: f32) -> VectorPath {
+    // Standard four-cubic approximation. Cross-kind transforms intentionally
+    // use path rendering only while active; same-kind Circle transforms retain
+    // the exact analytic fast path.
+    let handle = radius * 0.552_284_8;
+    VectorPath::new()
+        .move_to(Vec2::new(radius, 0.0))
+        .cubic_to(
+            Vec2::new(radius, handle),
+            Vec2::new(handle, radius),
+            Vec2::new(0.0, radius),
+        )
+        .cubic_to(
+            Vec2::new(-handle, radius),
+            Vec2::new(-radius, handle),
+            Vec2::new(-radius, 0.0),
+        )
+        .cubic_to(
+            Vec2::new(-radius, -handle),
+            Vec2::new(-handle, -radius),
+            Vec2::new(0.0, -radius),
+        )
+        .cubic_to(
+            Vec2::new(handle, -radius),
+            Vec2::new(radius, -handle),
+            Vec2::new(radius, 0.0),
+        )
+        .close()
+}
+
+fn rectangle_path(size: Vec2) -> VectorPath {
+    let half = size * 0.5;
+    // Start at the right midpoint and include side midpoints so deterministic
+    // correspondence lines up the rectangle's cardinal directions with the
+    // circle's four cubic endpoints.
+    VectorPath::new()
+        .move_to(Vec2::new(half.x, 0.0))
+        .line_to(Vec2::new(half.x, half.y))
+        .line_to(Vec2::new(0.0, half.y))
+        .line_to(Vec2::new(-half.x, half.y))
+        .line_to(Vec2::new(-half.x, 0.0))
+        .line_to(Vec2::new(-half.x, -half.y))
+        .line_to(Vec2::new(0.0, -half.y))
+        .line_to(Vec2::new(half.x, -half.y))
+        .close()
 }
 
 fn compile_error(id: TrackId, error: TransformCompileFailure) -> CompileError {
