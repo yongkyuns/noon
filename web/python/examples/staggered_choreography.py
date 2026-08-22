@@ -1,33 +1,39 @@
-from noon import Color, Scene
-from noon_layout import DOWN, UP, arrange
+from noon import (
+    BLUE,
+    GREEN,
+    ORANGE,
+    PINK,
+    PURPLE,
+    RED,
+    TEAL,
+    WHITE,
+    DOWN,
+    RIGHT,
+    UP,
+    Circle,
+    Scene,
+    VGroup,
+)
 
 scene = Scene()
 
-# Seven identical objects make timing the only changing variable. Each starts a
-# little later than its neighbor, making start_time composition easy to read.
-COUNT = 7
-BASE_POSITIONS = arrange(COUNT, spacing=0.82)
-TRAVEL = UP * 1.35
+# Seven identical objects make timing the only changing variable. Explicit
+# start_time is intentional here because stagger composition is the feature.
+COLORS = (BLUE, TEAL, GREEN, ORANGE, RED, PINK, PURPLE)
 STAGGER = 0.24
 RUN_TIME = 1.45
+TRAVEL = UP * 1.35
 
-for index, base in enumerate(BASE_POSITIONS):
-    progress = index / (COUNT - 1)
-    color = Color(0.30 + 0.58 * progress, 0.78 - 0.28 * progress, 0.96)
-    start = base + DOWN * 0.68
-    end = start + TRAVEL
-    dot = scene.circle(
-        0.24,
-        position=start,
-        fill=color,
-        stroke=Color(0.94, 0.97, 1.0),
-        stroke_width=0.04,
-        key=f"dot.{index}",
-    )
+dots = [Circle(0.24, color=color).set_stroke(WHITE, 0.04) for color in COLORS]
+VGroup(*dots).arrange(RIGHT, buff=0.34).shift(DOWN * 0.68)
+
+for index, dot in enumerate(dots):
+    scene.add(dot, key=f"dot.{index}")
+    start = dot.get_center()
     scene.animate_position(
         dot,
         start,
-        end,
+        start + TRAVEL,
         start_time=index * STAGGER,
         duration=RUN_TIME,
         easing="ease_in_out_cubic",
