@@ -126,7 +126,10 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
     assert_eq!(compiled_from, &from);
     assert_eq!(compiled_to, &to);
     assert!(matches!(compiled_from.geometry, GeometryRef::Circle { .. }));
-    assert!(matches!(compiled_to.geometry, GeometryRef::Rectangle { .. }));
+    assert!(matches!(
+        compiled_to.geometry,
+        GeometryRef::Rectangle { .. }
+    ));
 }
 
 #[test]
