@@ -76,7 +76,7 @@ mod tests {
             let first = canonical_outline_path(&geometry).expect("supported geometry");
             let second = canonical_outline_path(&geometry).expect("supported geometry");
             assert_eq!(first, second);
-            assert!(!first.commands.is_empty());
+            assert!(!first.commands().is_empty());
         }
     }
 
