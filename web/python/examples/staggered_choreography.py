@@ -1,94 +1,37 @@
-import math
-
 from noon import Color, Scene
+from noon_layout import DOWN, UP, arrange
 
 scene = Scene()
 
-colors = [
-    Color(0.55, 0.43, 1.00),
-    Color(0.20, 0.78, 0.98),
-    Color(0.23, 0.88, 0.63),
-    Color(1.00, 0.69, 0.25),
-    Color(0.98, 0.38, 0.49),
-]
+# Seven identical objects make timing the only changing variable. Each starts a
+# little later than its neighbor, making start_time composition easy to read.
+COUNT = 7
+BASE_POSITIONS = arrange(COUNT, spacing=0.82)
+TRAVEL = UP * 1.35
+STAGGER = 0.24
+RUN_TIME = 1.45
 
-# A staggered choreography of analytic primitives. Each object owns independent
-# position/rotation/opacity tracks, but the Rust runtime evaluates one timeline.
-for row in range(3):
-    for column in range(5):
-        index = row * 5 + column
-        x0 = -2.65 + column * 1.32
-        y0 = 1.20 - row * 1.20
-        delay = index * 0.09
-        color = colors[(row + column) % len(colors)]
-
-        if (row + column) % 2 == 0:
-            obj = scene.circle(
-                0.24 + 0.025 * row,
-                key=f"dot.{index}",
-                position=(x0, y0),
-                fill=color,
-                stroke=Color(1.0, 1.0, 1.0, 0.72),
-                stroke_width=0.025,
-            )
-        else:
-            obj = scene.rectangle(
-                0.52,
-                0.52,
-                key=f"tile.{index}",
-                position=(x0, y0),
-                rotation=-0.35,
-                fill=color,
-                stroke=Color(1.0, 1.0, 1.0, 0.70),
-                stroke_width=0.025,
-            )
-            scene.animate_rotation(
-                obj,
-                -0.35,
-                math.tau - 0.35,
-                start_time=delay,
-                duration=2.15,
-                easing="ease_in_out_cubic",
-                key=f"tile.{index}.rotation",
-            )
-
-        scene.animate_position(
-            obj,
-            (x0, y0),
-            (-x0 * 0.84, -y0 * 0.72),
-            start_time=delay,
-            duration=2.20,
-            easing="ease_in_out_cubic",
-            key=f"shape.{index}.position",
-        )
-        scene.animate_opacity(
-            obj,
-            0.28,
-            1.0,
-            start_time=delay,
-            duration=0.72,
-            easing="ease_in_out_cubic",
-            key=f"shape.{index}.opacity",
-        )
-
-# Two long analytic lines cross behind the choreography and rotate continuously.
-for index, angle in enumerate((0.0, math.pi / 2.0)):
-    line = scene.line(
-        (-3.2, 0.0),
-        (3.2, 0.0),
-        key=f"guide.{index}",
-        rotation=angle,
-        stroke=Color(0.48, 0.55, 0.78, 0.30),
-        stroke_width=0.025,
-        opacity=0.55,
+for index, base in enumerate(BASE_POSITIONS):
+    progress = index / (COUNT - 1)
+    color = Color(0.30 + 0.58 * progress, 0.78 - 0.28 * progress, 0.96)
+    start = base + DOWN * 0.68
+    end = start + TRAVEL
+    dot = scene.circle(
+        0.24,
+        position=start,
+        fill=color,
+        stroke=Color(0.94, 0.97, 1.0),
+        stroke_width=0.04,
+        key=f"dot.{index}",
     )
-    scene.animate_rotation(
-        line,
-        angle,
-        angle + math.pi,
-        duration=4.0,
+    scene.animate_position(
+        dot,
+        start,
+        end,
+        start_time=index * STAGGER,
+        duration=RUN_TIME,
         easing="ease_in_out_cubic",
-        key=f"guide.{index}.rotation",
+        key=f"dot.{index}.rise",
     )
 
 result = scene
