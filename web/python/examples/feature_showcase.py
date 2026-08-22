@@ -124,10 +124,12 @@ source_circle_b = scene.circle(
     key="match-source-circle-b",
 )
 
+# Matching rectangles preserve normalized aspect ratio; this target is exactly
+# 2x the source dimensions while still changing position, rotation, and style.
 target_rectangle = scene.rectangle(
-    1.08,
-    0.62,
-    position=(0.45, -1.35),
+    1.56,
+    0.92,
+    position=(0.35, -1.35),
     rotation=0.28,
     fill=Color(0.42, 0.62, 0.98),
     key="match-target-rectangle",
