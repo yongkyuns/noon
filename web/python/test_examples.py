@@ -31,13 +31,22 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertGreater(len(document["objects"]), 0)
                 self.assertGreater(len(document["tracks"]), 0)
 
+    def test_gallery_uses_public_semantic_vocabulary(self) -> None:
+        paths = [Path(__file__).with_name("demo_scene.py")]
+        paths.extend(EXAMPLES_DIR / filename for filename in SCENE_EXAMPLES)
+        for path in paths:
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("from noon_layout", source)
+                self.assertNotIn("Color(", source)
+
     def test_instanced_field_survives_row_and_column_source_edits(self) -> None:
         source_path = EXAMPLES_DIR / "instanced_field.py"
         original = source_path.read_text()
         for columns, rows in ((20, 10), (1, 1)):
             with self.subTest(columns=columns, rows=rows):
-                source = original.replace("columns = 18", f"columns = {columns}", 1).replace(
-                    "rows = 10", f"rows = {rows}", 1
+                source = original.replace("COLUMNS = 18", f"COLUMNS = {columns}", 1).replace(
+                    "ROWS = 10", f"ROWS = {rows}", 1
                 )
                 namespace: dict[str, object] = {}
                 exec(compile(source, str(source_path), "exec"), namespace)
@@ -45,7 +54,11 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertIsInstance(result, Scene)
                 document = result.to_document()
                 self.assertEqual(len(document["objects"]), columns * rows)
-                self.assertEqual(len(document["tracks"]), columns * rows * 2)
+                self.assertEqual(len(document["tracks"]), columns * rows)
+                self.assertEqual(
+                    {track["property"] for track in document["tracks"]},
+                    {"position"},
+                )
 
     def test_path_reveal_example_is_only_about_reveal(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "path_reveal.py")
@@ -72,7 +85,7 @@ class PlaygroundExampleTests(unittest.TestCase):
         self.assertEqual(properties.count("transform"), 3)
         self.assertEqual(properties.count("presence"), 6)
 
-    def test_morph_stress_example_exercises_reuse_and_many_active_tracks(self) -> None:
+    def test_morph_stress_example_is_focused_on_morph_reuse(self) -> None:
         namespace = runpy.run_path(EXAMPLES_DIR / "morph_stress_test.py")
         result = namespace.get("result")
         self.assertIsInstance(result, Scene)
@@ -80,8 +93,7 @@ class PlaygroundExampleTests(unittest.TestCase):
 
         self.assertEqual(len(document["objects"]), 600)
         properties = [track["property"] for track in document["tracks"]]
-        self.assertEqual(properties.count("transform"), 600)
-        self.assertEqual(properties.count("rotation"), 600)
+        self.assertEqual(properties, ["transform"] * 600)
 
         morph_geometries = {
             json.dumps(
@@ -90,7 +102,6 @@ class PlaygroundExampleTests(unittest.TestCase):
                 separators=(",", ":"),
             )
             for track in document["tracks"]
-            if track["property"] == "transform"
         }
         self.assertEqual(len(morph_geometries), 12)
 
@@ -107,8 +118,7 @@ class PlaygroundExampleTests(unittest.TestCase):
                 self.assertEqual(len(document["objects"]), object_count)
 
                 properties = [track["property"] for track in document["tracks"]]
-                self.assertEqual(properties.count("transform"), object_count)
-                self.assertEqual(properties.count("rotation"), object_count)
+                self.assertEqual(properties, ["transform"] * object_count)
 
                 morph_geometries = {
                     json.dumps(
@@ -117,7 +127,6 @@ class PlaygroundExampleTests(unittest.TestCase):
                         separators=(",", ":"),
                     )
                     for track in document["tracks"]
-                    if track["property"] == "transform"
                 }
                 self.assertEqual(len(morph_geometries), 12)
 
