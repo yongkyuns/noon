@@ -100,7 +100,7 @@ function artifactName(index, name, checkpoint) {
   return `${String(index).padStart(2, "0")}-${slug || "scene"}-${checkpoint}.png`;
 }
 
-function assertVisiblePixels(buffer, name, time) {
+function visiblePixelCount(buffer, name) {
   const png = PNG.sync.read(buffer);
   assert.ok(png.width >= 320 && png.height >= 180, `${name}: canvas screenshot is too small`);
 
@@ -116,11 +116,6 @@ function assertVisiblePixels(buffer, name, time) {
       changedPixels += 1;
     }
   }
-
-  assert.ok(
-    changedPixels >= 100,
-    `${name}: canvas appears blank at t=${time.toFixed(3)}s (${changedPixels} non-background pixels)`,
-  );
   return changedPixels;
 }
 
@@ -136,7 +131,7 @@ function latestSceneEnd(document) {
 function sampleTimes(latestEnd) {
   assert.ok(Number.isFinite(latestEnd) && latestEnd > 0, "scene timeline must have positive duration");
   assert.ok(latestEnd < 4.0, "scene timeline must fit the four-second playground loop");
-  return [0.35, 0.60, 0.85].map((fraction) => latestEnd * fraction);
+  return [0.35, 0.60, 0.85, 1.0].map((fraction) => latestEnd * fraction);
 }
 
 let browser = null;
@@ -162,6 +157,7 @@ try {
 
   const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
   const browserErrors = [];
+  const visualFailures = [];
   page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -215,18 +211,33 @@ try {
         artifactName(index, example.name, checkpointIndex + 1),
       );
       const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
-      const visiblePixels = assertVisiblePixels(screenshot, example.name, time);
+      const visiblePixels = visiblePixelCount(screenshot, example.name);
 
-      console.log(
-        `✓ ${example.name} @ ${time.toFixed(3)}s: ${metrics.objectCount} objects, ` +
-          `${metrics.drawCalls} draws, ${metrics.instances} instances, ` +
-          `${visiblePixels} visible pixels`,
-      );
+      if (visiblePixels < 100) {
+        visualFailures.push(
+          `${example.name} @ ${time.toFixed(3)}s: ${visiblePixels} non-background pixels`,
+        );
+        console.log(
+          `✗ ${example.name} @ ${time.toFixed(3)}s: ${metrics.drawCalls} draws, ` +
+            `${metrics.instances} instances, ${visiblePixels} visible pixels`,
+        );
+      } else {
+        console.log(
+          `✓ ${example.name} @ ${time.toFixed(3)}s: ${metrics.objectCount} objects, ` +
+            `${metrics.drawCalls} draws, ${metrics.instances} instances, ` +
+            `${visiblePixels} visible pixels`,
+        );
+      }
     }
   }
 
   assert.deepEqual(browserErrors, [], `browser emitted errors:\n${browserErrors.join("\n")}`);
-  console.log(`Browser WebGPU smoke passed for ${examples.length} picker scenes at three semantic checkpoints each.`);
+  assert.deepEqual(
+    visualFailures,
+    [],
+    `browser visual smoke failures:\n${visualFailures.join("\n")}`,
+  );
+  console.log(`Browser WebGPU smoke passed for ${examples.length} picker scenes at four semantic checkpoints each.`);
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
