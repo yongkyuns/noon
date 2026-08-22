@@ -26,17 +26,25 @@ fn every_playground_scene_executes_and_compiles() {
 
     let manifest = String::from_utf8(output.stdout).expect("playground manifest is UTF-8");
     let mut compiled = 0usize;
+    let mut failures = Vec::new();
     for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
         let (name, document_path) = line
             .split_once('\t')
             .expect("playground manifest line contains a name and JSON path");
-        let document = fs::read_to_string(document_path)
-            .unwrap_or_else(|error| panic!("failed to read {name} document: {error}"));
-        ScenePlayer::from_scene_json(&document)
-            .unwrap_or_else(|error| panic!("playground scene {name:?} failed to compile: {error}"));
-        compiled += 1;
+        match fs::read_to_string(document_path) {
+            Ok(document) => match ScenePlayer::from_scene_json(&document) {
+                Ok(_) => compiled += 1,
+                Err(error) => failures.push(format!("{name}: {error}")),
+            },
+            Err(error) => failures.push(format!("{name}: failed to read document: {error}")),
+        }
     }
 
+    assert!(
+        failures.is_empty(),
+        "playground scenes failed to compile:\n{}",
+        failures.join("\n")
+    );
     assert_eq!(
         compiled, 13,
         "every registered playground scene was compiled"
