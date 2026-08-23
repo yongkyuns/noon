@@ -1299,8 +1299,10 @@ mod tests {
         assert_eq!(prepared.stats.instances_repacked, 2);
         assert_eq!(prepared.stats.dirty_instance_count, 2);
         assert!(!prepared.path_geometry_dirty);
-        assert_eq!(prepared.path_dirty_ranges, &[0..1]);
-        assert_eq!(prepared.line_dirty_ranges, &[0..1]);
+        assert_eq!(prepared.path_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_dirty_ranges[0], 0..1);
+        assert_eq!(prepared.line_dirty_ranges.len(), 1);
+        assert_eq!(prepared.line_dirty_ranges[0], 0..1);
         assert_eq!(prepared.paths[0].path_params[0], 0.35);
         assert_ne!(prepared.lines[0].start, head_before);
         assert_eq!(prepared.lines[0].start, prepared.lines[0].end);
@@ -1374,7 +1376,8 @@ mod tests {
         assert_eq!(advanced.lines[1].transform.padding, 0.8);
         assert_eq!(advanced.stats.geometry_cache_misses, 0);
         assert_eq!(advanced.stats.instances_repacked, 1);
-        assert_eq!(advanced.line_dirty_ranges, &[1..2]);
+        assert_eq!(advanced.line_dirty_ranges.len(), 1);
+        assert_eq!(advanced.line_dirty_ranges[0], 1..2);
         assert!(!advanced.path_geometry_dirty);
     }
 
