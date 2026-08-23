@@ -25,6 +25,10 @@ fn every_playground_scene_executes_and_compiles() {
     }
 
     let manifest = String::from_utf8(output.stdout).expect("playground manifest is UTF-8");
+    let registered = manifest
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
     let mut compiled = 0usize;
     let mut failures = Vec::new();
     for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
@@ -40,13 +44,14 @@ fn every_playground_scene_executes_and_compiles() {
         }
     }
 
+    assert!(registered > 0, "playground registers at least one scene");
     assert!(
         failures.is_empty(),
         "playground scenes failed to compile:\n{}",
         failures.join("\n")
     );
     assert_eq!(
-        compiled, 10,
+        compiled, registered,
         "every registered playground scene was compiled"
     );
     fs::remove_dir_all(&output_dir).expect("temporary playground scene directory is removable");

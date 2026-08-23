@@ -39,6 +39,7 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let encoded_progress = input.surface_and_progress >> 1u;
     let path_progress = f32(encoded_progress) / 16777215.0;
     let morph = clamp(input.path_params.y, 0.0, 1.0);
+    let reveal = clamp(input.path_params.x, 0.0, 1.0);
     let local = mix(input.local, input.target_local, morph);
 
     let c = cos(input.rotation);
@@ -51,11 +52,18 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
 
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
-    let enabled = select(input.flags.x != 0u, input.flags.y != 0u, is_stroke);
-    let color = select(input.fill, input.stroke, is_stroke);
+
+    // A fill-only path has no visible stroke to reveal. During a partial reveal,
+    // derive the creation outline from the fill color while suppressing the fill
+    // surface. At reveal == 1 the authored fill/stroke style is restored exactly.
+    let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;
+    let authored_enabled = select(input.flags.x != 0u, input.flags.y != 0u, is_stroke);
+    let enabled = select(authored_enabled, is_stroke, derive_creation_stroke);
+    let authored_color = select(input.fill, input.stroke, is_stroke);
+    let color = select(authored_color, input.fill, derive_creation_stroke);
     output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
     output.path_progress = path_progress;
-    output.reveal = clamp(input.path_params.x, 0.0, 1.0);
+    output.reveal = reveal;
     return output;
 }
 

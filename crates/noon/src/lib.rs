@@ -15,8 +15,8 @@ pub use noon_core::*;
 /// Common imports for normal Noon authoring.
 pub mod prelude {
     pub use crate::{
-        Animate, AuthoringError, Circle, FadeIn, FadeOut, Line, Mobject, MobjectEditor, Path,
-        Rectangle, Scene, Square, Transform,
+        Animate, AuthoringError, Circle, Create, FadeIn, FadeOut, Line, Mobject, MobjectEditor,
+        Path, Rectangle, Scene, Square, Transform,
     };
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Style, Vec2, VectorPath, BLACK, BLUE,
@@ -264,6 +264,16 @@ impl Transform {
     }
 }
 
+/// Progressively draw a shape while preserving its steady-state semantic geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Create(pub Mobject);
+
+impl Create {
+    pub const fn new(object: Mobject) -> Self {
+        Self(object)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FadeOut(pub Mobject);
 
@@ -286,6 +296,7 @@ impl FadeIn {
 pub enum Animation {
     Animate(Animate),
     Transform(Transform),
+    Create(Create),
     FadeOut(FadeOut),
     FadeIn(FadeIn),
 }
@@ -299,6 +310,12 @@ impl From<Animate> for Animation {
 impl From<Transform> for Animation {
     fn from(value: Transform) -> Self {
         Self::Transform(value)
+    }
+}
+
+impl From<Create> for Animation {
+    fn from(value: Create) -> Self {
+        Self::Create(value)
     }
 }
 
@@ -351,6 +368,8 @@ pub enum AuthoringError {
     UnknownObject(ObjectId),
     InvalidDuration(f64),
     StaticMutationAfterAnimation(ObjectId),
+    CreateRequiresAbsent(ObjectId),
+    CreateUnsupportedGeometry(ObjectId),
     FadeInRequiresAbsent(ObjectId),
     FadeOutRequiresPresent(ObjectId),
     Timeline(TimelineError),
@@ -364,6 +383,14 @@ impl std::fmt::Display for AuthoringError {
             Self::StaticMutationAfterAnimation(id) => write!(
                 formatter,
                 "object {} already has authored animation; use .animate for later changes",
+                id.get()
+            ),
+            Self::CreateRequiresAbsent(id) => {
+                write!(formatter, "Create requires absent object {}", id.get())
+            }
+            Self::CreateUnsupportedGeometry(id) => write!(
+                formatter,
+                "Create does not support geometry for object {}",
                 id.get()
             ),
             Self::FadeInRequiresAbsent(id) => {
@@ -510,6 +537,55 @@ impl Scene {
                         timing,
                     )?;
                     self.authored.insert(animation.source.id, animation.target);
+                }
+                Animation::Create(Create(object)) => {
+                    let snapshot = self.snapshot(object)?;
+                    if !matches!(
+                        &snapshot.geometry,
+                        GeometryRef::Circle { .. }
+                            | GeometryRef::Rectangle { .. }
+                            | GeometryRef::Line { .. }
+                            | GeometryRef::VectorPath(_)
+                    ) {
+                        return Err(AuthoringError::CreateUnsupportedGeometry(object.id));
+                    }
+                    let has_presence_track = self.definition.tracks().iter().any(|track| {
+                        track.object == object.id && track.property == Property::Presence
+                    });
+                    let is_present = self
+                        .presence
+                        .get(&object.id)
+                        .copied()
+                        .ok_or(AuthoringError::UnknownObject(object.id))?;
+                    // A newly added object has no lifecycle tracks yet, so Create
+                    // may establish its initial absent -> present lifecycle.
+                    if has_presence_track && is_present {
+                        return Err(AuthoringError::CreateRequiresAbsent(object.id));
+                    }
+                    let appearance = self
+                        .definition
+                        .tracks()
+                        .iter()
+                        .rev()
+                        .find_map(|track| {
+                            if track.object != object.id || track.property != Property::Appearance {
+                                return None;
+                            }
+                            match &track.values {
+                                TrackValues::Scalar { to, .. } => Some(*to),
+                                _ => None,
+                            }
+                        })
+                        .unwrap_or(1.0);
+                    self.definition
+                        .set_presence_at(object.id, false, true, start)?;
+                    self.definition
+                        .animate_reveal(object.id, 0.0, 1.0, timing)?;
+                    if appearance != 1.0 {
+                        self.definition
+                            .animate_appearance(object.id, 1.0, 1.0, timing)?;
+                    }
+                    self.presence.insert(object.id, true);
                 }
                 Animation::FadeOut(FadeOut(object)) => {
                     let is_present = self
@@ -714,6 +790,68 @@ mod tests {
         assert_eq!(scene.definition().tracks()[0].timing.start_time, 0.0);
         assert_eq!(scene.definition().tracks()[1].timing.start_time, 0.0);
         assert_eq!(scene.time(), 2.0);
+    }
+
+    #[test]
+    fn create_lowers_to_presence_and_reveal_without_rewriting_geometry() {
+        let mut scene = Scene::new();
+        let circle = scene.add(
+            Circle::new(0.75)
+                .set_fill(None, None)
+                .set_stroke(Some(BLUE), Some(0.08)),
+        );
+
+        scene
+            .play(Create::new(circle))
+            .with_easing(Easing::EaseInOutCubic)
+            .run_time(2.0)
+            .unwrap();
+
+        assert!(matches!(
+            &scene.snapshot(circle).unwrap().geometry,
+            GeometryRef::Circle { radius } if *radius == 0.75
+        ));
+        let tracks = scene.definition().tracks();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].property, Property::Presence);
+        assert_eq!(tracks[0].timing.start_time, 0.0);
+        assert_eq!(tracks[1].property, Property::Reveal);
+        assert_eq!(tracks[1].timing.start_time, 0.0);
+        assert_eq!(tracks[1].timing.duration, 2.0);
+        assert_eq!(tracks[1].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+        assert_eq!(scene.time(), 2.0);
+    }
+
+    #[test]
+    fn create_can_reintroduce_an_absent_object_but_not_redraw_a_present_one() {
+        let mut scene = Scene::new();
+        let line = scene.add(Line::default());
+        scene.play(Create::new(line)).run_time(0.5).unwrap();
+        assert!(matches!(
+            scene.play(Create::new(line)).run_time(0.5),
+            Err(AuthoringError::CreateRequiresAbsent(_))
+        ));
+
+        scene.play(FadeOut::new(line)).run_time(0.5).unwrap();
+        scene.play(Create::new(line)).run_time(0.5).unwrap();
+        assert_eq!(
+            scene
+                .definition()
+                .tracks()
+                .iter()
+                .filter(|track| track.property == Property::Reveal)
+                .count(),
+            2
+        );
+        assert_eq!(
+            scene
+                .definition()
+                .tracks()
+                .iter()
+                .filter(|track| track.property == Property::Appearance)
+                .count(),
+            2
+        );
     }
 
     #[test]

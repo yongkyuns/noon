@@ -66,6 +66,13 @@ const SCENE_EXAMPLES = [
     features: "TransformMatchingShapes · signatures · stable pairing",
   },
   {
+    name: "Create shapes",
+    path: "./python/examples/create_shapes.py",
+    summary:
+      "Circle, square, line, and arbitrary vector path draw progressively while analytic shapes return to their fast paths at completion.",
+    features: "Create · analytic outlines · cached reveal",
+  },
+  {
     name: "Path reveal",
     path: "./python/examples/path_reveal.py",
     summary:
