@@ -56,7 +56,18 @@ const examples = generated.stdout
     };
   });
 
-assert.equal(examples.length, 10, "browser smoke must cover every picker scene");
+const pickerSource = await readFile(path.join(repoRoot, "web/main.js"), "utf8");
+const scenePickerBlock = pickerSource
+  .split("const SCENE_EXAMPLES = [", 2)[1]
+  ?.split("\n];", 1)[0];
+assert.ok(scenePickerBlock, "browser picker must declare SCENE_EXAMPLES");
+const pickerSceneCount =
+  scenePickerBlock.match(/path:\s*"\.\/python\/[^\"]+\.py"/g)?.length ?? 0;
+assert.equal(
+  examples.length,
+  pickerSceneCount,
+  "browser smoke must cover every picker scene",
+);
 
 let serverOutput = "";
 const server = spawn(
