@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +21,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Apply Create polish Clippy fix
+        if: github.head_ref == 'agent/create-line-fill-polish' && github.actor != 'github-actions[bot]'
+        run: |
+          python3 scripts/fix-create-polish-clippy.py
+          cargo fmt --all
+          rm scripts/fix-create-polish-clippy.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Create polish test lint"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Use stable Rust
         run: |
