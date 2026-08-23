@@ -40,7 +40,7 @@ async function enhancePythonEditors() {
         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       lineHeight: "1.58",
     },
-    ".cm-content": { padding: "1rem 0 1.4rem" },
+    ".cm-content": { padding: "0.35rem 0" },
     ".cm-gutters": {
       backgroundColor: "#0b0f18",
       borderRight: "1px solid #171f2e",
@@ -110,6 +110,20 @@ async function enhancePythonEditors() {
     }
     .python-code-editor .cm-editor { height: 100%; }
     .python-code-editor .cm-focused { outline: 2px solid #aa9cff; outline-offset: -2px; }
+    @media (min-width: 68.01rem) {
+      .canvas-wrap {
+        padding: 0 !important;
+        place-items: stretch !important;
+      }
+      .canvas-wrap > canvas {
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        aspect-ratio: auto;
+        border: 0;
+        border-radius: 0;
+      }
+    }
     @media (max-width: 44rem) {
       .python-code-editor { min-height: 25rem; }
       .python-code-editor .cm-editor { font-size: 0.76rem; }
