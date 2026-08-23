@@ -35,7 +35,7 @@ async function waitForServer() {
   throw new Error(`Manim compatibility smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-const source = `
+const foundationSource = `
 from noon import *
 
 class Demo(Scene):
@@ -60,6 +60,47 @@ class Demo(Scene):
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 `;
 
+const phaseBSource = `
+from noon import *
+
+class GroupAndSceneMembership(Scene):
+    def construct(self):
+        left = Circle(radius=0.35, color=BLUE)
+        right = Square(side_length=0.7, color=PINK)
+        pair = VGroup(left, right).arrange(RIGHT, buff=0.4)
+
+        assert isinstance(pair, Mobject)
+        assert isinstance(pair, Group)
+        self.add(pair)
+        assert len(self.mobjects) == 1 and self.mobjects[0] is pair
+
+        self.play(pair.animate.shift(UP).scale(0.8), run_time=0.5, rate_func=smooth)
+        self.remove(pair)
+        assert self.mobjects == []
+
+        self.wait(0.1)
+        self.add(pair)
+        assert len(self.mobjects) == 1 and self.mobjects[0] is pair
+
+        replacement = Circle(radius=0.2, color=GREEN)
+        self.replace(pair, replacement)
+        assert len(self.mobjects) == 1 and self.mobjects[0] is replacement
+
+        # set_y is intentionally not one of Noon's old fixed animation-builder methods.
+        self.play(replacement.animate.set_y(1.5), run_time=0.4, rate_func=linear)
+        self.clear()
+        assert self.mobjects == []
+
+        intro = VGroup(
+            Circle(radius=0.18, color=BLUE),
+            Square(side_length=0.36, color=PINK),
+        ).arrange(RIGHT, buff=0.2)
+        self.play(FadeIn(intro), run_time=0.25)
+        assert len(self.mobjects) == 1 and self.mobjects[0] is intro
+        self.play(FadeOut(intro), run_time=0.25)
+        assert self.mobjects == []
+`;
+
 let browser = null;
 try {
   await waitForServer();
@@ -79,22 +120,43 @@ try {
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonManimCompat.ready());
 
-  const result = await page.evaluate((pythonSource) => window.noonManimCompat.run(pythonSource), source);
-  assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 3, "introducer animations should auto-bind objects");
+  const foundation = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    foundationSource,
+  );
+  assert.equal(foundation.kind, "scene_document");
+  assert.equal(foundation.document.objects.length, 3, "introducer animations should auto-bind objects");
 
-  const properties = result.document.tracks.map((track) => track.property);
-  assert.equal(properties.filter((property) => property === "presence").length, 3);
-  assert.equal(properties.filter((property) => property === "reveal").length, 2);
-  assert.ok(properties.includes("transform"), "animate.shift should lower to transform");
+  const foundationProperties = foundation.document.tracks.map((track) => track.property);
+  assert.equal(foundationProperties.filter((property) => property === "presence").length, 3);
+  assert.equal(foundationProperties.filter((property) => property === "reveal").length, 2);
+  assert.ok(foundationProperties.includes("transform"), "animate.shift should lower to transform");
 
-  const revealTracks = result.document.tracks.filter((track) => track.property === "reveal");
+  const revealTracks = foundation.document.tracks.filter((track) => track.property === "reveal");
   assert.ok(
     revealTracks.every((track) => track.timing.easing === "ease_in_out_cubic"),
     "rate_func=smooth should lower to deterministic ease_in_out_cubic",
   );
-  const transform = result.document.tracks.find((track) => track.property === "transform");
+  const transform = foundation.document.tracks.find((track) => track.property === "transform");
   assert.equal(transform.timing.easing, "linear");
+
+  const phaseB = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    phaseBSource,
+  );
+  assert.equal(phaseB.kind, "scene_document");
+  assert.equal(phaseB.document.objects.length, 5, "groups should lower to flat runtime member objects");
+  const phaseBProperties = phaseB.document.tracks.map((track) => track.property);
+  assert.equal(
+    phaseBProperties.filter((property) => property === "transform").length,
+    3,
+    "group animate should lower to member transforms and generic set_y should lower once",
+  );
+  assert.equal(
+    phaseBProperties.filter((property) => property === "presence").length,
+    12,
+    "scene membership and grouped fades should lower to deterministic presence events",
+  );
 
   let zError = null;
   try {
@@ -109,7 +171,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: Scene.construct discovery, real shape classes, detached introducers, z=0 vectors, and rate_func lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene membership, group lowering, generic animate proxying, z=0 vectors, and rate_func lowering.",
   );
 } finally {
   await browser?.close();
