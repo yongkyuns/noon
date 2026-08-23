@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import noon as _base
 
@@ -71,6 +71,37 @@ def _easing_from_rate_func(rate_func: object) -> str:
         "Noon currently supports deterministic rate_func=linear and rate_func=smooth; "
         "arbitrary Python per-frame rate functions are intentionally unsupported"
     )
+
+
+class _CompatAnimationBuilder:
+    """Generic Manim-style ``mobject.animate`` target-state proxy.
+
+    The proxy runs authoring-time mutator methods on a detached copy, then Noon lowers
+    the final source/target pair to one deterministic Transform track.
+    """
+
+    def __init__(self, source: _BaseMobject) -> None:
+        if source._scene is None or source._object is None:
+            raise ValueError("animate requires a Mobject that belongs to a Scene")
+        self.source = source
+        self.target = source.copy()
+
+    def __getattr__(self, name: str) -> Callable[..., _CompatAnimationBuilder]:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        target_attribute = getattr(self.target, name)
+        if not callable(target_attribute):
+            raise AttributeError(f"{name} is not an animatable method")
+
+        def invoke(*args: Any, **kwargs: Any) -> _CompatAnimationBuilder:
+            result = target_attribute(*args, **kwargs)
+            if result is not None and result is not self.target:
+                raise TypeError(
+                    f"animate.{name} must be a mutating Mobject method returning self or None"
+                )
+            return self
+
+        return invoke
 
 
 class VMobject(_BaseMobject):
@@ -159,8 +190,333 @@ class Path(VMobject):
             self.set_color(color)
 
 
+def _leaf_mobjects(value: object) -> list[_BaseMobject]:
+    if isinstance(value, Group):
+        leaves: list[_BaseMobject] = []
+        for member in value.submobjects:
+            leaves.extend(_leaf_mobjects(member))
+        return leaves
+    if isinstance(value, _BaseMobject):
+        return [value]
+    raise TypeError("expected a Mobject or Group")
+
+
+def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
+    leaves = _leaf_mobjects(value)
+    bounds = [_base._bounds(member._current_raw()) for member in leaves]
+    present = [bound for bound in bounds if bound is not None]
+    if not present:
+        return None
+    return (
+        _base.Vec2(
+            min(bound[0].x for bound in present),
+            min(bound[0].y for bound in present),
+        ),
+        _base.Vec2(
+            max(bound[1].x for bound in present),
+            max(bound[1].y for bound in present),
+        ),
+    )
+
+
+def _critical_for(value: object, direction: _base.Vec2) -> _base.Vec2:
+    bounds = _bounds_for(value)
+    if bounds is None:
+        return _base.ORIGIN
+    minimum, maximum = bounds
+    center = (minimum + maximum) * 0.5
+    return _base.Vec2(
+        minimum.x if direction.x < 0 else maximum.x if direction.x > 0 else center.x,
+        minimum.y if direction.y < 0 else maximum.y if direction.y > 0 else center.y,
+    )
+
+
+class _GroupAnimationBuilder:
+    def __init__(self, source: Group) -> None:
+        leaves = _leaf_mobjects(source)
+        if any(member._scene is None or member._object is None for member in leaves):
+            raise ValueError("animate requires a Group that belongs to a Scene")
+        self.source = source
+        self.target = source.copy()
+
+    def __getattr__(self, name: str) -> Callable[..., _GroupAnimationBuilder]:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        target_attribute = getattr(self.target, name)
+        if not callable(target_attribute):
+            raise AttributeError(f"{name} is not an animatable method")
+
+        def invoke(*args: Any, **kwargs: Any) -> _GroupAnimationBuilder:
+            result = target_attribute(*args, **kwargs)
+            if result is not None and result is not self.target:
+                raise TypeError(
+                    f"animate.{name} must be a mutating Group method returning self or None"
+                )
+            return self
+
+        return invoke
+
+
+class Group(_base.Group, _BaseMobject):
+    """Authoring-time Mobject-family group lowered to operations on member objects.
+
+    Noon intentionally keeps runtime hierarchy flat. The group therefore has no single
+    serialized object ID; its transforms and animations lower to its leaf members.
+    """
+
+    def __init__(self, *mobjects: object) -> None:
+        self.submobjects: list[object] = []
+        self.add(*mobjects)
+
+    @property
+    def id(self) -> int:
+        raise AttributeError("Group has no single runtime object id in Noon")
+
+    @property
+    def geometry(self) -> dict[str, Any]:
+        raise AttributeError("Group has no single runtime geometry in Noon")
+
+    @property
+    def transform(self) -> dict[str, Any]:
+        raise AttributeError("Group has no single runtime transform in Noon")
+
+    @property
+    def style(self) -> dict[str, Any]:
+        raise AttributeError("Group has no single runtime style in Noon")
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(self.submobjects)
+
+    def __len__(self) -> int:
+        return len(self.submobjects)
+
+    def __getitem__(self, index: int) -> object:
+        return self.submobjects[index]
+
+    def add(self, *mobjects: object) -> Group:
+        for mobject in mobjects:
+            if not isinstance(mobject, (_BaseMobject, Group)):
+                raise TypeError("Group members must be Mobjects or Groups")
+            if mobject is self:
+                raise ValueError("Group cannot contain itself")
+            self.submobjects.append(mobject)
+        return self
+
+    def remove(self, *mobjects: object) -> Group:
+        identities = {id(mobject) for mobject in mobjects}
+        self.submobjects = [
+            mobject for mobject in self.submobjects if id(mobject) not in identities
+        ]
+        return self
+
+    def copy(self) -> Group:
+        return type(self)(*(mobject.copy() for mobject in self.submobjects))
+
+    def get_center(self) -> _base.Vec2:
+        bounds = _bounds_for(self)
+        if bounds is None:
+            return _base.ORIGIN
+        return (bounds[0] + bounds[1]) * 0.5
+
+    @property
+    def width(self) -> float:
+        bounds = _bounds_for(self)
+        return 0.0 if bounds is None else bounds[1].x - bounds[0].x
+
+    @property
+    def height(self) -> float:
+        bounds = _bounds_for(self)
+        return 0.0 if bounds is None else bounds[1].y - bounds[0].y
+
+    def shift(self, direction: object) -> Group:
+        offset = _as_vec2(direction)
+        for member in self.submobjects:
+            member.shift(offset)
+        return self
+
+    def move_to(self, point: object) -> Group:
+        return self.shift(_as_vec2(point) - self.get_center())
+
+    def center(self) -> Group:
+        return self.move_to(_base.ORIGIN)
+
+    def set_x(self, x: float) -> Group:
+        center = self.get_center()
+        return self.shift(_base.Vec2(float(x) - center.x, 0.0))
+
+    def set_y(self, y: float) -> Group:
+        center = self.get_center()
+        return self.shift(_base.Vec2(0.0, float(y) - center.y))
+
+    def scale(self, factor: float | tuple[float, float]) -> Group:
+        if isinstance(factor, (tuple, list, _base.Vec2)):
+            scale = _as_vec2(factor)
+        else:
+            scale = _base.Vec2(float(factor), float(factor))
+        center = self.get_center()
+        for member in self.submobjects:
+            member_center = member.get_center()
+            relative = member_center - center
+            member.scale(scale)
+            member.move_to(
+                center + _base.Vec2(relative.x * scale.x, relative.y * scale.y)
+            )
+        return self
+
+    def rotate(self, angle: float) -> Group:
+        angle = float(angle)
+        center = self.get_center()
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        for member in self.submobjects:
+            member_center = member.get_center()
+            relative = member_center - center
+            member.rotate(angle)
+            member.move_to(
+                center
+                + _base.Vec2(
+                    relative.x * cosine - relative.y * sine,
+                    relative.x * sine + relative.y * cosine,
+                )
+            )
+        return self
+
+    def set_color(self, color: _base.Color) -> Group:
+        for member in self.submobjects:
+            member.set_color(color)
+        return self
+
+    def set_fill(
+        self, color: _base.Color | None = None, opacity: float | None = None
+    ) -> Group:
+        for member in self.submobjects:
+            member.set_fill(color, opacity)
+        return self
+
+    def set_stroke(
+        self, color: _base.Color | None = None, width: float | None = None
+    ) -> Group:
+        for member in self.submobjects:
+            member.set_stroke(color, width)
+        return self
+
+    def set_opacity(self, opacity: float) -> Group:
+        for member in self.submobjects:
+            member.set_opacity(opacity)
+        return self
+
+    def next_to(
+        self,
+        other: object,
+        direction: object = None,
+        buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    ) -> Group:
+        axis = _as_vec2(_base.RIGHT if direction is None else direction).normalized()
+        self_point = _critical_for(self, -axis)
+        target_point = _critical_for(other, axis) if isinstance(other, (_BaseMobject, Group)) else _as_vec2(other)
+        return self.shift(target_point - self_point + axis * float(buff))
+
+    def align_to(self, other: object, direction: object = None) -> Group:
+        axis = _as_vec2(_base.ORIGIN if direction is None else direction)
+        delta = _critical_for(other, axis) - _critical_for(self, axis)
+        return self.shift(
+            _base.Vec2(delta.x if axis.x else 0.0, delta.y if axis.y else 0.0)
+        )
+
+    def to_edge(
+        self,
+        edge: object = None,
+        buff: float = _base.DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    ) -> Group:
+        return self._align_on_frame(_as_vec2(_base.LEFT if edge is None else edge), float(buff))
+
+    def to_corner(
+        self,
+        corner: object = None,
+        buff: float = _base.DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    ) -> Group:
+        return self._align_on_frame(_as_vec2(_base.DL if corner is None else corner), float(buff))
+
+    def _align_on_frame(self, direction: _base.Vec2, buff: float) -> Group:
+        point = _critical_for(self, direction)
+        target = _base.Vec2(
+            math.copysign(_base.DEFAULT_FRAME_WIDTH / 2.0, direction.x)
+            if direction.x
+            else point.x,
+            math.copysign(_base.DEFAULT_FRAME_HEIGHT / 2.0, direction.y)
+            if direction.y
+            else point.y,
+        )
+        return self.shift(
+            _base.Vec2(
+                target.x - point.x - (direction.x * buff if direction.x else 0.0),
+                target.y - point.y - (direction.y * buff if direction.y else 0.0),
+            )
+        )
+
+    def arrange(
+        self,
+        direction: object = None,
+        buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+        center: bool = True,
+    ) -> Group:
+        if not self.submobjects:
+            return self
+        axis = _as_vec2(_base.RIGHT if direction is None else direction)
+        for previous, current in zip(self.submobjects, self.submobjects[1:]):
+            current.next_to(previous, axis, buff)
+        if center:
+            self.shift(-self.get_center())
+        return self
+
+    def arrange_in_grid(
+        self,
+        rows: int | None = None,
+        cols: int | None = None,
+        buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
+    ) -> Group:
+        count = len(self.submobjects)
+        if count == 0:
+            return self
+        if rows is None and cols is None:
+            cols = math.ceil(math.sqrt(count))
+            rows = math.ceil(count / cols)
+        elif rows is None:
+            assert cols is not None
+            rows = math.ceil(count / cols)
+        elif cols is None:
+            cols = math.ceil(count / rows)
+        if rows <= 0 or cols <= 0:
+            raise ValueError("rows and cols must be positive")
+        gap = _as_vec2(buff) if isinstance(buff, (tuple, list, _base.Vec2)) else _base.Vec2(float(buff), float(buff))
+        cell_width = max((member.width for member in self.submobjects), default=0.0) + gap.x
+        cell_height = max((member.height for member in self.submobjects), default=0.0) + gap.y
+        for index, member in enumerate(self.submobjects):
+            row = index // cols
+            col = index % cols
+            member.move_to(
+                _base.Vec2(
+                    (col - (cols - 1) / 2.0) * cell_width,
+                    ((rows - 1) / 2.0 - row) * cell_height,
+                )
+            )
+        return self
+
+    @property
+    def animate(self) -> _GroupAnimationBuilder:
+        return _GroupAnimationBuilder(self)
+
+
+class VGroup(Group):
+    pass
+
+
 class Scene(_BaseScene):
     """Manim-style Scene facade while retaining Noon's compiled scene document."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._compat_top_level: list[object] = []
 
     def setup(self) -> None:
         pass
@@ -171,10 +527,154 @@ class Scene(_BaseScene):
     def tear_down(self) -> None:
         pass
 
+    def _register_top_level(self, value: object) -> None:
+        if not any(existing is value for existing in self._compat_top_level):
+            self._compat_top_level.append(value)
+
+    def _is_present(self, value: object) -> bool:
+        leaves = _leaf_mobjects(value)
+        if not leaves:
+            return False
+        return any(
+            member._scene is self
+            and member._object is not None
+            and self._presence_at(member._object, self._cursor)
+            for member in leaves
+        )
+
+    @property
+    def mobjects(self) -> list[object]:
+        return [value for value in self._compat_top_level if self._is_present(value)]
+
+    def add(self, *mobjects: object, key: str | None = None) -> _BaseMobject | Scene:
+        if not mobjects:
+            return self
+        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        if key is not None and len(leaves) != 1:
+            raise ValueError("an explicit key can only be used when adding one Mobject")
+
+        for index, member in enumerate(leaves):
+            newly_bound = member._scene is None
+            if newly_bound:
+                raw_object = super().add(
+                    member._current_raw(), key=key if index == 0 else None
+                )
+                member._bind(self, raw_object)
+            elif member._scene is not self:
+                raise ValueError("Mobject already belongs to another Scene")
+
+            assert member._object is not None
+            tracks = self._ensure_lifecycle_timeline_available(
+                member._object, self._cursor, "Scene.add target"
+            )
+            if newly_bound and self._cursor > 0.0:
+                self._add_presence_track(
+                    member._object,
+                    False,
+                    True,
+                    self._cursor,
+                    key=f"@scene-add:{member._object.id}:{self._cursor:g}",
+                )
+            elif tracks and not self._presence_at(member._object, self._cursor):
+                self._add_presence_track(
+                    member._object,
+                    False,
+                    True,
+                    self._cursor,
+                    key=f"@scene-add:{member._object.id}:{self._cursor:g}",
+                )
+
+        for value in mobjects:
+            self._register_top_level(value)
+
+        # Preserve Noon's established one-object return as a backwards-compatible
+        # extension. Typical Manim source ignores Scene.add's return value.
+        return leaves[0] if len(leaves) == 1 else self
+
+    def remove(self, *mobjects: object) -> Scene:
+        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        for member in leaves:
+            if member._scene is not self or member._object is None:
+                continue
+            self._ensure_lifecycle_timeline_available(
+                member._object, self._cursor, "Scene.remove target"
+            )
+            if self._presence_at(member._object, self._cursor):
+                self._add_presence_track(
+                    member._object,
+                    True,
+                    False,
+                    self._cursor,
+                    key=f"@scene-remove:{member._object.id}:{self._cursor:g}",
+                )
+        identities = {id(value) for value in mobjects}
+        self._compat_top_level = [
+            value for value in self._compat_top_level if id(value) not in identities
+        ]
+        return self
+
+    def clear(self) -> Scene:
+        return self.remove(*list(self._compat_top_level))
+
+    def replace(self, old_mobject: object, new_mobject: object) -> Scene:
+        old_index = next(
+            (
+                index
+                for index, value in enumerate(self._compat_top_level)
+                if value is old_mobject
+            ),
+            None,
+        )
+        self.remove(old_mobject)
+        self.add(new_mobject)
+        if old_index is not None:
+            self._compat_top_level = [
+                value for value in self._compat_top_level if value is not new_mobject
+            ]
+            self._compat_top_level.insert(old_index, new_mobject)
+        return self
+
     def _bind_introducer_target(self, target: object) -> None:
-        if isinstance(target, _BaseMobject) and target._scene is None:
-            # Use the inherited Noon add path so the object gets a stable identity.
-            super().add(target)
+        if isinstance(target, Group):
+            for member in _leaf_mobjects(target):
+                if member._scene is None:
+                    raw_object = super().add(member._current_raw())
+                    member._bind(self, raw_object)
+                elif member._scene is not self:
+                    raise ValueError("Mobject already belongs to another Scene")
+            self._register_top_level(target)
+            return
+        if isinstance(target, _BaseMobject):
+            if target._scene is None:
+                raw_object = super().add(target._current_raw())
+                target._bind(self, raw_object)
+            elif target._scene is not self:
+                raise ValueError("Mobject already belongs to another Scene")
+            self._register_top_level(target)
+
+    def _expand_animation(self, animation: object) -> list[object]:
+        if isinstance(animation, _GroupAnimationBuilder):
+            sources = _leaf_mobjects(animation.source)
+            targets = _leaf_mobjects(animation.target)
+            if len(sources) != len(targets):
+                raise ValueError("group animation must preserve leaf membership")
+            return [
+                _base.Transform(source, target)
+                for source, target in zip(sources, targets)
+            ]
+
+        if isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut)) and isinstance(
+            animation.target, Group
+        ):
+            leaves = _leaf_mobjects(animation.target)
+            return [
+                type(animation)(
+                    member,
+                    None if animation.key is None else f"{animation.key}.{index}",
+                )
+                for index, member in enumerate(leaves)
+            ]
+        return [animation]
 
     def play(
         self,
@@ -203,8 +703,13 @@ class Scene(_BaseScene):
             if isinstance(animation, (_base.Create, _base.FadeIn)):
                 self._bind_introducer_target(animation.target)
 
+        expanded = [
+            lowered
+            for animation in animations
+            for lowered in self._expand_animation(animation)
+        ]
         return super().play(
-            *animations,
+            *expanded,
             duration=duration,
             run_time=run_time,
             start_time=start_time,
@@ -223,6 +728,7 @@ def install() -> None:
     # Existing Mobject methods resolve _as_vec2 dynamically from noon.py globals,
     # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
     _base._as_vec2 = _as_vec2
+    _BaseMobject.animate = property(lambda self: _CompatAnimationBuilder(self))
 
     public = {
         "VMobject": VMobject,
@@ -231,6 +737,8 @@ def install() -> None:
         "Square": Square,
         "Line": Line,
         "Path": Path,
+        "Group": Group,
+        "VGroup": VGroup,
         "Scene": Scene,
         "linear": linear,
         "smooth": smooth,
