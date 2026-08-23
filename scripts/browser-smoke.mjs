@@ -147,6 +147,32 @@ function visiblePixelStats(buffer, name) {
   return { changedPixels, bounds: { minX, minY, maxX, maxY } };
 }
 
+function differingPixelCount(beforeBuffer, afterBuffer, region) {
+  const before = PNG.sync.read(beforeBuffer);
+  const after = PNG.sync.read(afterBuffer);
+  assert.equal(before.width, after.width, "pixel diff width mismatch");
+  assert.equal(before.height, after.height, "pixel diff height mismatch");
+  let differing = 0;
+  const minX = Math.max(0, Math.floor(region.minX * before.width));
+  const maxX = Math.min(before.width - 1, Math.ceil(region.maxX * before.width));
+  const minY = Math.max(0, Math.floor(region.minY * before.height));
+  const maxY = Math.min(before.height - 1, Math.ceil(region.maxY * before.height));
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const offset = (y * before.width + x) * 4;
+      const distance =
+        Math.abs(before.data[offset] - after.data[offset]) +
+        Math.abs(before.data[offset + 1] - after.data[offset + 1]) +
+        Math.abs(before.data[offset + 2] - after.data[offset + 2]) +
+        Math.abs(before.data[offset + 3] - after.data[offset + 3]);
+      if (distance >= 32) {
+        differing += 1;
+      }
+    }
+  }
+  return differing;
+}
+
 function latestSceneEnd(document) {
   assert.ok(document.tracks.length > 0, "playground scene must contain at least one track");
   return Math.max(
@@ -307,6 +333,29 @@ try {
         `${example.name}: Create-to-analytic visible bounds jumped by ${boundDelta}px`,
       );
       console.log(`✓ ${example.name}: Create-to-analytic bounds continuous within ${boundDelta}px`);
+
+      const lineBeforePath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "line-end-before"),
+      );
+      const lineEndPath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "line-end-final"),
+      );
+      const lineBefore = await renderAndCapture(page, latestEnd - 0.04, lineBeforePath);
+      const lineEnd = await renderAndCapture(page, latestEnd, lineEndPath);
+      const lineEndpointDiff = differingPixelCount(
+        lineBefore.screenshot,
+        lineEnd.screenshot,
+        { minX: 0.64, maxX: 0.98, minY: 0.12, maxY: 0.48 },
+      );
+      assert.ok(
+        lineEndpointDiff <= 24,
+        `${example.name}: line endpoint changed across ${lineEndpointDiff} pixels near completion`,
+      );
+      console.log(
+        `✓ ${example.name}: line endpoint continuous near completion (${lineEndpointDiff} changed pixels)`,
+      );
     }
   }
 

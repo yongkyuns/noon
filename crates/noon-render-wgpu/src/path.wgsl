@@ -27,6 +27,7 @@ struct PathVertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) path_progress: f32,
     @location(2) reveal: f32,
+    @location(3) is_stroke: f32,
 };
 
 fn premultiplied(color: vec4<f32>) -> vec4<f32> {
@@ -53,24 +54,32 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
 
-    // A fill-only path has no visible stroke to reveal. During a partial reveal,
-    // derive the creation outline from the fill color while suppressing the fill
-    // surface. At reveal == 1 the authored fill/stroke style is restored exactly.
-    let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;
-    let authored_enabled = select(input.flags.x != 0u, input.flags.y != 0u, is_stroke);
-    let enabled = select(authored_enabled, is_stroke, derive_creation_stroke);
+    let fill_enabled = input.flags.x != 0u;
+    let stroke_enabled = input.flags.y != 0u;
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
+    let authored_enabled = select(fill_enabled, stroke_enabled, is_stroke);
+    let enabled = authored_enabled || (is_stroke && derive_creation_stroke);
     let authored_color = select(input.fill, input.stroke, is_stroke);
-    let color = select(authored_color, input.fill, derive_creation_stroke);
-    output.color = select(vec4<f32>(0.0), premultiplied(color) * input.metrics.y, enabled);
+    let color = select(authored_color, input.fill, is_stroke && derive_creation_stroke);
+    var creation_outline_alpha = 1.0;
+    if is_stroke && derive_creation_stroke {
+        creation_outline_alpha = 1.0 - smoothstep(0.75, 1.0, reveal);
+    }
+    output.color = select(
+        vec4<f32>(0.0),
+        premultiplied(color) * (input.metrics.y * creation_outline_alpha),
+        enabled,
+    );
     output.path_progress = path_progress;
     output.reveal = reveal;
+    output.is_stroke = select(0.0, 1.0, is_stroke);
     return output;
 }
 
 @fragment
 fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
     // Fragment derivatives must execute in uniform control flow. `reveal` is an
-    // interpolated input, so evaluate fwidth before any branch that depends on it.
+    // interpolated input, so evaluate fwidth before any reveal-dependent branch.
     let edge = max(fwidth(input.path_progress), 0.00001);
 
     if input.reveal <= 0.0 {
@@ -78,6 +87,13 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
     }
     if input.reveal >= 1.0 {
         return input.color;
+    }
+
+    if input.is_stroke < 0.5 {
+        // Manim-like Create polish: reveal the border while smoothly bringing in
+        // the authored fill instead of popping the complete fill on the last frame.
+        let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
+        return input.color * fill_alpha;
     }
 
     let coverage = 1.0 - smoothstep(input.reveal, input.reveal + edge, input.path_progress);
