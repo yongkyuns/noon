@@ -40,6 +40,7 @@ function metrics() {
     instances: player?.lastInstancesDrawn() ?? 0,
     uploadBytes: player?.lastBytesUploaded() ?? 0,
     geometryCacheMisses: player?.lastGeometryCacheMisses() ?? 0,
+    rendererBackend: player?.rendererBackend() ?? null,
   };
 }
 
@@ -63,10 +64,6 @@ function presentAt(timeSeconds) {
 }
 
 async function start() {
-  if (!navigator.gpu) {
-    throw new Error("This browser does not expose WebGPU");
-  }
-
   await init();
   player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
   player.resize(canvas.width, canvas.height);

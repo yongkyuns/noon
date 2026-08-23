@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Noon Playground: author mathematical animation in Python and run it in a persistent Rust/WebGPU runtime."
+      content="Noon Playground: author mathematical animation in Python and run it in a persistent Rust/WASM GPU runtime with WebGPU and WebGL2 fallback."
     />
     <link rel="icon" href="data:," />
-    <title>Noon Playground · Python + WebGPU</title>
+    <title>Noon Playground · Python + GPU</title>
     <style>
       :root {
         color-scheme: dark;
@@ -595,12 +595,12 @@
           <div class="mark" aria-hidden="true">N</div>
           <div>
             <h1>Noon Playground</h1>
-            <p class="subtitle">Write Python. Keep the animation loop in Rust + WebGPU.</p>
+            <p class="subtitle">Write Python. Keep the animation loop in Rust + GPU.</p>
           </div>
         </div>
         <output id="status" class="runtime-status" aria-live="polite">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="status-text">Starting WebGPU…</span>
+          <span id="status-text">Starting GPU renderer…</span>
         </output>
       </header>
 
@@ -666,13 +666,13 @@
           </footer>
         </section>
 
-        <section class="preview-pane" aria-label="WebGPU preview">
+        <section class="preview-pane" aria-label="GPU preview">
           <div class="preview-head">
             <span class="preview-title">Live preview</span>
             <div class="badges" aria-label="Runtime technologies">
               <span class="badge">Pyodide worker</span>
               <span class="badge">Rust/WASM</span>
-              <span class="badge">WebGPU</span>
+              <span class="badge">WebGPU / WebGL2</span>
             </div>
           </div>
           <div class="canvas-wrap">

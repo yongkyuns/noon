@@ -19,4 +19,4 @@ noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, fea
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Performance", "Window"] }
-wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "webgpu"] }
+wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"] }

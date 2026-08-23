@@ -20,6 +20,12 @@ const artifactDir = path.resolve(
 );
 const port = Number(process.env.NOON_BROWSER_SMOKE_PORT ?? "4173");
 const baseUrl = `http://127.0.0.1:${port}`;
+const backendMode = process.env.NOON_BROWSER_SMOKE_BACKEND ?? "webgpu";
+assert.ok(
+  backendMode === "webgpu" || backendMode === "webgl",
+  `unknown browser smoke backend: ${backendMode}`,
+);
+const expectedRendererBackend = backendMode === "webgpu" ? "WebGPU" : "WebGL2";
 
 await mkdir(artifactDir, { recursive: true });
 
@@ -169,22 +175,34 @@ async function renderAndCapture(page, time, screenshotPath) {
 let browser = null;
 try {
   await waitForServer();
+  const browserArgs =
+    backendMode === "webgpu"
+      ? [
+          "--enable-unsafe-webgpu",
+          "--enable-unsafe-swiftshader",
+          "--use-webgpu-adapter=swiftshader",
+          "--use-gpu-in-tests",
+          "--ignore-gpu-blocklist",
+          "--enable-features=Vulkan",
+          "--use-gl=angle",
+          "--use-angle=swiftshader",
+          "--use-vulkan=swiftshader",
+          "--disable-gpu-sandbox",
+          "--disable-dev-shm-usage",
+        ]
+      : [
+          "--disable-features=WebGPU",
+          "--enable-unsafe-swiftshader",
+          "--ignore-gpu-blocklist",
+          "--use-gl=angle",
+          "--use-angle=swiftshader",
+          "--disable-gpu-sandbox",
+          "--disable-dev-shm-usage",
+        ];
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: [
-      "--enable-unsafe-webgpu",
-      "--enable-unsafe-swiftshader",
-      "--use-webgpu-adapter=swiftshader",
-      "--use-gpu-in-tests",
-      "--ignore-gpu-blocklist",
-      "--enable-features=Vulkan",
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--use-vulkan=swiftshader",
-      "--disable-gpu-sandbox",
-      "--disable-dev-shm-usage",
-    ],
+    args: browserArgs,
   });
 
   const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
@@ -204,8 +222,13 @@ try {
 
   const initial = await page.evaluate(() => window.noonSmoke.metrics());
   if (initial.error) {
-    throw new Error(`WebGPU harness failed to initialize: ${initial.error}`);
+    throw new Error(`${expectedRendererBackend} harness failed to initialize: ${initial.error}`);
   }
+  assert.equal(
+    initial.rendererBackend,
+    expectedRendererBackend,
+    `browser smoke selected ${initial.rendererBackend}; expected ${expectedRendererBackend}`,
+  );
 
   for (const [index, example] of examples.entries()) {
     const sceneJson = await readFile(example.file, "utf8");
@@ -293,7 +316,9 @@ try {
     [],
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
-  console.log(`Browser WebGPU smoke passed for ${examples.length} picker scenes at four semantic checkpoints each.`);
+  console.log(
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} picker scenes at four semantic checkpoints each.`,
+  );
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

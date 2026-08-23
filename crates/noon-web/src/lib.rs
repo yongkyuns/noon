@@ -593,13 +593,14 @@ mod wasm {
         }
     }
 
-    /// Persistent browser player that connects the deterministic runtime to a WebGPU canvas.
+    /// Persistent browser player that connects the deterministic runtime to a GPU canvas.
     #[wasm_bindgen(js_name = NoonCanvasPlayer)]
     pub struct WasmCanvasPlayer {
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         device: wgpu::Device,
         queue: wgpu::Queue,
+        backend: wgpu::Backend,
         canvas: HtmlCanvasElement,
         config: wgpu::SurfaceConfiguration,
         drawable: bool,
@@ -635,8 +636,9 @@ mod wasm {
             let clock = PlaybackClock::looping(loop_duration_seconds).map_err(js_error)?;
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
-            let instance = wgpu::Instance::new(instance_descriptor);
+            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+            let instance =
+                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
             let surface = create_surface(&instance, &canvas)?;
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -646,6 +648,7 @@ mod wasm {
                 })
                 .await
                 .map_err(js_error)?;
+            let backend = adapter.get_info().backend;
             let timestamp_queries_supported =
                 adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
             let required_features = if timestamp_queries_supported {
@@ -653,10 +656,16 @@ mod wasm {
             } else {
                 wgpu::Features::empty()
             };
+            let required_limits = if backend == wgpu::Backend::Gl {
+                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+            } else {
+                wgpu::Limits::default()
+            };
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("Noon WebGPU device"),
+                    label: Some("Noon browser GPU device"),
                     required_features,
+                    required_limits,
                     ..Default::default()
                 })
                 .await
@@ -666,7 +675,7 @@ mod wasm {
             let height = canvas.height().max(1);
             let config = surface
                 .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_message("WebGPU adapter cannot present to this canvas"))?;
+                .ok_or_else(|| js_message("GPU adapter cannot present to this canvas"))?;
             surface.configure(&device, &config);
             let renderer = GpuRenderer::new(&device, config.format);
             let gpu_profiler =
@@ -677,6 +686,7 @@ mod wasm {
                 surface,
                 device,
                 queue,
+                backend,
                 canvas,
                 config,
                 drawable: true,
@@ -793,6 +803,15 @@ mod wasm {
         #[wasm_bindgen(js_name = nextSequence)]
         pub fn next_sequence(&self) -> u64 {
             self.player.next_sequence()
+        }
+
+        #[wasm_bindgen(js_name = rendererBackend)]
+        pub fn renderer_backend(&self) -> String {
+            match self.backend {
+                wgpu::Backend::BrowserWebGpu => "WebGPU".to_owned(),
+                wgpu::Backend::Gl => "WebGL2".to_owned(),
+                other => format!("{other:?}"),
+            }
         }
 
         #[wasm_bindgen(js_name = lastDrawCalls)]
@@ -963,7 +982,9 @@ mod wasm {
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
-                        return Err(js_message("WebGPU rejected the canvas surface texture"));
+                        return Err(js_message(
+                            "GPU backend rejected the canvas surface texture",
+                        ));
                     }
                 };
             let view = surface_texture

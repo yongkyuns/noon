@@ -7,7 +7,7 @@ license = "MIT"
 [features]
 default = ["native", "ci-noop"]
 native = ["wgpu/dx12", "wgpu/metal", "wgpu/gles", "wgpu/vulkan"]
-web = ["wgpu/webgpu"]
+web = ["wgpu/webgpu", "wgpu/webgl"]
 ci-noop = ["wgpu/noop"]
 
 [dependencies]
