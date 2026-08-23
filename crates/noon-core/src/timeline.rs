@@ -5,9 +5,8 @@ use crate::{ObjectId, ObjectSnapshot, SceneDefinition, TrackId, Vec2};
 /// Language-neutral animation rate functions shared by every authoring frontend.
 ///
 /// The Manim-compatible variants reproduce Manim Community's deterministic
-/// built-ins without requiring a Python callback during playback. The existing
-/// Noon cubic easing remains available as an explicit low-level option while
-/// timeline tracks are migrated from [`Easing`] to this semantic type.
+/// built-ins without requiring a Python callback during playback. Noon's previous
+/// cubic easing remains available as an explicit low-level compatibility option.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RateFunction {
@@ -61,22 +60,13 @@ fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value).exp())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Easing {
-    #[default]
-    Linear,
-    EaseInOutCubic,
-}
-
-impl From<Easing> for RateFunction {
-    fn from(value: Easing) -> Self {
-        match value {
-            Easing::Linear => Self::Linear,
-            Easing::EaseInOutCubic => Self::EaseInOutCubic,
-        }
-    }
-}
+/// Backwards-compatible Rust name for the pre-consolidation timing API.
+///
+/// Existing `Easing::Linear` / `Easing::EaseInOutCubic` source continues to
+/// compile, while new authoring code can use the Manim-aligned `RateFunction`
+/// vocabulary. The serialized `TrackTiming.easing` field is intentionally kept
+/// stable during this migration.
+pub type Easing = RateFunction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,11 +142,11 @@ impl TrackValues {
 pub struct TrackTiming {
     pub start_time: f64,
     pub duration: f64,
-    pub easing: Easing,
+    pub easing: RateFunction,
 }
 
 impl TrackTiming {
-    pub const fn new(start_time: f64, duration: f64, easing: Easing) -> Self {
+    pub const fn new(start_time: f64, duration: f64, easing: RateFunction) -> Self {
         Self {
             start_time,
             duration,
@@ -165,7 +155,7 @@ impl TrackTiming {
     }
 
     pub const fn instant(start_time: f64) -> Self {
-        Self::new(start_time, 0.0, Easing::Linear)
+        Self::new(start_time, 0.0, RateFunction::Linear)
     }
 }
 
@@ -378,7 +368,7 @@ mod tests {
     use crate::GeometryRef;
 
     fn timing() -> TrackTiming {
-        TrackTiming::new(1.0, 2.0, Easing::Linear)
+        TrackTiming::new(1.0, 2.0, RateFunction::Linear)
     }
 
     fn assert_close(actual: f32, expected: f32) {
@@ -420,12 +410,24 @@ mod tests {
     }
 
     #[test]
-    fn legacy_easing_maps_to_shared_rate_function() {
-        assert_eq!(RateFunction::from(Easing::Linear), RateFunction::Linear);
-        assert_eq!(
-            RateFunction::from(Easing::EaseInOutCubic),
-            RateFunction::EaseInOutCubic
-        );
+    fn legacy_easing_name_is_a_source_compatible_alias() {
+        assert_eq!(Easing::Linear, RateFunction::Linear);
+        assert_eq!(Easing::EaseInOutCubic, RateFunction::EaseInOutCubic);
+    }
+
+    #[test]
+    fn track_timing_serializes_new_and_legacy_rate_function_names() {
+        let smooth = serde_json::to_string(&TrackTiming::new(0.0, 1.0, RateFunction::Smooth))
+            .expect("timing must serialize");
+        let cubic = serde_json::to_string(&TrackTiming::new(
+            0.0,
+            1.0,
+            Easing::EaseInOutCubic,
+        ))
+        .expect("timing must serialize");
+
+        assert!(smooth.contains("\"easing\":\"smooth\""));
+        assert!(cubic.contains("\"easing\":\"ease_in_out_cubic\""));
     }
 
     #[test]
@@ -488,7 +490,7 @@ mod tests {
                     from: true,
                     to: false,
                 },
-                TrackTiming::new(1.0, 0.5, Easing::Linear),
+                TrackTiming::new(1.0, 0.5, RateFunction::Linear),
             ),
             Err(TimelineError::InvalidInstantDuration {
                 property: Property::Presence,
@@ -583,7 +585,7 @@ mod tests {
                     object,
                     Vec2::ZERO,
                     Vec2::ONE,
-                    TrackTiming::new(0.0, duration, Easing::Linear),
+                    TrackTiming::new(0.0, duration, RateFunction::Linear),
                 )
                 .expect_err("invalid duration must fail");
             assert!(matches!(error, TimelineError::InvalidDuration(_)));
@@ -594,7 +596,7 @@ mod tests {
                 object,
                 Vec2::ZERO,
                 Vec2::ONE,
-                TrackTiming::new(f64::NAN, 1.0, Easing::Linear),
+                TrackTiming::new(f64::NAN, 1.0, RateFunction::Linear),
             )
             .expect_err("invalid start time must fail");
         assert!(matches!(error, TimelineError::InvalidStartTime(_)));
