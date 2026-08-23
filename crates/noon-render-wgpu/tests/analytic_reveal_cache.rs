@@ -3,10 +3,12 @@ use noon_render_wgpu::FramePreparer;
 use noon_runtime::{FrameObjectState, FrameState};
 
 fn circle(id: u64, radius: f32) -> FrameObjectState {
-    let mut style = Style::default();
-    style.fill = None;
-    style.stroke = Some(Color::WHITE);
-    style.stroke_width = 0.08;
+    let style = Style {
+        fill: None,
+        stroke: Some(Color::WHITE),
+        stroke_width: 0.08,
+        ..Style::default()
+    };
     FrameObjectState {
         id: ObjectId::new(id),
         geometry: GeometryRef::circle(radius),
