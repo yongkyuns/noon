@@ -1286,11 +1286,11 @@ mod tests {
         frame.reveals[0] = 0.2;
         let mut preparer = FramePreparer::new();
         let cold = preparer.prepare(&frame);
-        assert_eq!(preparer.cached_path_mesh_count(), 1);
         assert_eq!(cold.paths.len(), 1);
         assert_eq!(cold.lines.len(), 1);
         assert_eq!(cold.lines[0].start, cold.lines[0].end);
         let head_before = cold.lines[0].start;
+        assert_eq!(preparer.cached_path_mesh_count(), 1);
 
         frame.reveals[0] = 0.35;
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
