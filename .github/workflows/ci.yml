@@ -27,7 +27,7 @@ jobs:
       - name: Apply WebGL2 fallback patch
         if: github.head_ref == 'agent/webgl2-browser-fallback' && github.actor != 'github-actions[bot]'
         run: |
-          python3 scripts/apply-webgl2-fallback.py
+          python3 scripts/apply-webgl2-source-only.py
           cargo fmt --all
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
