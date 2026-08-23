@@ -52,7 +52,7 @@ try {
     ],
   });
 
-  const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
@@ -77,6 +77,41 @@ try {
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
 
+  await page.waitForFunction(
+    () => document.querySelector("#status")?.dataset.state === "running",
+    null,
+    { timeout: 30_000 },
+  );
+  const layout = await page.evaluate(() => {
+    const scroller = document
+      .querySelector("#scene-editor-panel .cm-scroller")
+      .getBoundingClientRect();
+    const content = document
+      .querySelector("#scene-editor-panel .cm-content")
+      .getBoundingClientRect();
+    const wrap = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    const canvas = document.querySelector("#scene").getBoundingClientRect();
+    return {
+      editorTopInset: content.top - scroller.top,
+      canvasTopGap: canvas.top - wrap.top,
+      canvasBottomGap: wrap.bottom - canvas.bottom,
+      canvasLeftGap: canvas.left - wrap.left,
+      canvasRightGap: wrap.right - canvas.right,
+    };
+  });
+  assert.ok(
+    layout.editorTopInset <= 8,
+    `CodeMirror should start near the top of its pane; got ${layout.editorTopInset}px`,
+  );
+  for (const [name, gap] of Object.entries({
+    canvasTopGap: layout.canvasTopGap,
+    canvasBottomGap: layout.canvasBottomGap,
+    canvasLeftGap: layout.canvasLeftGap,
+    canvasRightGap: layout.canvasRightGap,
+  })) {
+    assert.ok(Math.abs(gap) <= 2, `desktop preview should fill its pane; ${name}=${gap}px`);
+  }
+
   await page.evaluate(() => {
     document.querySelector("#python-scene-source").value =
       "import os\n\ndef broken():\n    return missing_name\n";
@@ -89,7 +124,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   console.log(
-    `Python editor smoke passed: 2 CodeMirror editors, syntax highlighting, ${lintRanges} Ruff diagnostics.`,
+    `Python editor smoke passed: tight desktop layout, 2 CodeMirror editors, syntax highlighting, ${lintRanges} Ruff diagnostics.`,
   );
 } finally {
   await browser?.close();
