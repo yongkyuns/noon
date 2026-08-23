@@ -419,12 +419,8 @@ mod tests {
     fn track_timing_serializes_new_and_legacy_rate_function_names() {
         let smooth = serde_json::to_string(&TrackTiming::new(0.0, 1.0, RateFunction::Smooth))
             .expect("timing must serialize");
-        let cubic = serde_json::to_string(&TrackTiming::new(
-            0.0,
-            1.0,
-            Easing::EaseInOutCubic,
-        ))
-        .expect("timing must serialize");
+        let cubic = serde_json::to_string(&TrackTiming::new(0.0, 1.0, Easing::EaseInOutCubic))
+            .expect("timing must serialize");
 
         assert!(smooth.contains("\"easing\":\"smooth\""));
         assert!(cubic.contains("\"easing\":\"ease_in_out_cubic\""));
