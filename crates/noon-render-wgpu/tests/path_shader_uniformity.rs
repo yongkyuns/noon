@@ -23,10 +23,9 @@ fn fill_only_partial_reveal_derives_a_visible_outline() {
     assert!(shader.contains(
         "let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;"
     ));
-    assert!(shader.contains(
-        "let enabled = select(authored_enabled, is_stroke, derive_creation_stroke);"
-    ));
-    assert!(shader.contains(
-        "let color = select(authored_color, input.fill, derive_creation_stroke);"
-    ));
+    assert!(shader
+        .contains("let enabled = select(authored_enabled, is_stroke, derive_creation_stroke);"));
+    assert!(
+        shader.contains("let color = select(authored_color, input.fill, derive_creation_stroke);")
+    );
 }
