@@ -64,7 +64,7 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --all-features
 
-      - name: Compile WebGPU renderer for browser
+      - name: Compile browser renderer
         run: cargo check -p noon-render-wgpu --target wasm32-unknown-unknown --no-default-features --features web
 
       - name: Compile browser runtime
@@ -85,6 +85,15 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Test browser WebGPU rendering
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
+        run: node scripts/browser-smoke.mjs
+
+      - name: Test browser WebGL2 fallback
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgl
         run: node scripts/browser-smoke.mjs
 
       - name: Upload browser smoke screenshots

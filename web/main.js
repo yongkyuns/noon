@@ -323,12 +323,10 @@ async function loadDemoAuthoringSource(path) {
 }
 
 try {
-  if (!navigator.gpu) {
-    throw new Error("This browser does not expose WebGPU");
-  }
-
   await init();
   const player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
+  const rendererBackend = player.rendererBackend();
+  status.dataset.rendererBackend = rendererBackend;
   const gpuProfilingSupported = player.gpuProfilingSupported();
   player.setGpuProfilingEnabled(gpuProfilingSupported);
 
@@ -608,7 +606,7 @@ try {
         const uploadBytes = player.lastBytesUploaded();
         const playhead = player.time();
 
-        setRuntimeStatus(`${objectCount} objects · WebGPU live`, "running");
+        setRuntimeStatus(`${objectCount} objects · ${rendererBackend} live`, "running");
         metricObjects.value = String(objectCount);
         metricDraws.value = String(drawCalls);
         metricUpload.value = formatBytes(uploadBytes);
