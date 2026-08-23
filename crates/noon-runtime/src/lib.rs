@@ -4,7 +4,7 @@
 
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
     Transform2D, Vec2,
 };
 
@@ -750,7 +750,7 @@ fn interpolate_color(from: Color, to: Color, progress: f32) -> Color {
 fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
     debug_assert!(!track.property.is_instant());
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
-    apply_easing(track.timing.easing, raw)
+    track.timing.easing.evaluate(raw)
 }
 
 fn interpolate(track: &CompiledTrack, time: f64) -> EvaluatedValue {
@@ -774,24 +774,12 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
     from + (to - from) * progress
 }
 
-fn apply_easing(easing: Easing, progress: f32) -> f32 {
-    match easing {
-        Easing::Linear => progress,
-        Easing::EaseInOutCubic => {
-            if progress < 0.5 {
-                4.0 * progress * progress * progress
-            } else {
-                1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use noon_compile::CompiledScene;
     use noon_core::{
-        Color, Easing, GeometryRef, Property, SceneDefinition, Style, TrackDefinition, TrackTiming,
+        Color, Easing, GeometryRef, Property, RateFunction, SceneDefinition, Style,
+        TrackDefinition, TrackTiming,
     };
 
     use super::*;
@@ -837,6 +825,35 @@ mod tests {
                 .transform
                 .translation,
             Vec2::new(10.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn manim_smooth_rate_function_is_evaluated_by_runtime() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_position(
+                object,
+                Vec2::ZERO,
+                Vec2::new(10.0, 0.0),
+                TrackTiming::new(0.0, 2.0, RateFunction::Smooth),
+            )
+            .expect("valid track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+
+        let quarter = instance.seek(0.5).expect("valid time").objects[0]
+            .transform
+            .translation
+            .x;
+        assert!((quarter - 0.7010372).abs() < 1e-5);
+        assert_eq!(
+            instance.seek(1.0).expect("valid time").objects[0]
+                .transform
+                .translation
+                .x,
+            5.0
         );
     }
 

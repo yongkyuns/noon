@@ -2,13 +2,71 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ObjectId, ObjectSnapshot, SceneDefinition, TrackId, Vec2};
 
+/// Language-neutral animation rate functions shared by every authoring frontend.
+///
+/// The Manim-compatible variants reproduce Manim Community's deterministic
+/// built-ins without requiring a Python callback during playback. Noon's previous
+/// cubic easing remains available as an explicit low-level compatibility option.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Easing {
-    #[default]
+pub enum RateFunction {
     Linear,
+    #[default]
+    Smooth,
+    RushInto,
+    RushFrom,
+    ThereAndBack,
     EaseInOutCubic,
 }
+
+impl RateFunction {
+    /// Evaluate a normalized animation progress value.
+    ///
+    /// Input is clamped to `[0, 1]`, matching the interval behavior of the
+    /// corresponding Manim built-ins used here.
+    pub fn evaluate(self, progress: f32) -> f32 {
+        let progress = progress.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => progress,
+            Self::Smooth => manim_smooth(progress),
+            Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
+            Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
+            Self::ThereAndBack => {
+                let mirrored = if progress < 0.5 {
+                    2.0 * progress
+                } else {
+                    2.0 * (1.0 - progress)
+                };
+                manim_smooth(mirrored)
+            }
+            Self::EaseInOutCubic => {
+                if progress < 0.5 {
+                    4.0 * progress * progress * progress
+                } else {
+                    1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+                }
+            }
+        }
+    }
+}
+
+fn manim_smooth(progress: f32) -> f32 {
+    const INFLECTION: f32 = 10.0;
+    let error = sigmoid(-INFLECTION / 2.0);
+    ((sigmoid(INFLECTION * (progress - 0.5)) - error) / (1.0 - 2.0 * error)).clamp(0.0, 1.0)
+}
+
+fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value).exp())
+}
+
+/// Backwards-compatible Rust name for the pre-consolidation timing API.
+///
+/// Existing `Easing::Linear` / `Easing::EaseInOutCubic` source continues to
+/// compile, while new authoring code can use the Manim-aligned `RateFunction`
+/// vocabulary. The serialized `TrackTiming.easing` field is intentionally kept
+/// stable during this migration.
+pub type Easing = RateFunction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,11 +142,11 @@ impl TrackValues {
 pub struct TrackTiming {
     pub start_time: f64,
     pub duration: f64,
-    pub easing: Easing,
+    pub easing: RateFunction,
 }
 
 impl TrackTiming {
-    pub const fn new(start_time: f64, duration: f64, easing: Easing) -> Self {
+    pub const fn new(start_time: f64, duration: f64, easing: RateFunction) -> Self {
         Self {
             start_time,
             duration,
@@ -97,7 +155,7 @@ impl TrackTiming {
     }
 
     pub const fn instant(start_time: f64) -> Self {
-        Self::new(start_time, 0.0, Easing::Linear)
+        Self::new(start_time, 0.0, RateFunction::Linear)
     }
 }
 
@@ -310,7 +368,51 @@ mod tests {
     use crate::GeometryRef;
 
     fn timing() -> TrackTiming {
-        TrackTiming::new(1.0, 2.0, Easing::Linear)
+        TrackTiming::new(1.0, 2.0, RateFunction::Linear)
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn manim_rate_functions_have_exact_endpoints_and_reference_values() {
+        assert_eq!(RateFunction::Linear.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::Linear.evaluate(1.0), 1.0);
+        assert_eq!(RateFunction::Smooth.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::Smooth.evaluate(1.0), 1.0);
+        assert_close(RateFunction::Smooth.evaluate(0.25), 0.07010372);
+        assert_close(RateFunction::Smooth.evaluate(0.5), 0.5);
+        assert_close(RateFunction::Smooth.evaluate(0.75), 0.9298963);
+
+        assert_close(
+            RateFunction::RushInto.evaluate(0.5),
+            2.0 * RateFunction::Smooth.evaluate(0.25),
+        );
+        assert_close(
+            RateFunction::RushFrom.evaluate(0.5),
+            2.0 * RateFunction::Smooth.evaluate(0.75) - 1.0,
+        );
+        assert_eq!(RateFunction::ThereAndBack.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::ThereAndBack.evaluate(0.5), 1.0);
+        assert_eq!(RateFunction::ThereAndBack.evaluate(1.0), 0.0);
+    }
+
+    #[test]
+    fn rate_functions_clamp_normalized_input() {
+        assert_eq!(RateFunction::Linear.evaluate(-1.0), 0.0);
+        assert_eq!(RateFunction::Linear.evaluate(2.0), 1.0);
+        assert_eq!(RateFunction::Smooth.evaluate(-1.0), 0.0);
+        assert_eq!(RateFunction::Smooth.evaluate(2.0), 1.0);
+    }
+
+    #[test]
+    fn legacy_easing_name_is_a_source_compatible_alias() {
+        assert_eq!(Easing::Linear, RateFunction::Linear);
+        assert_eq!(Easing::EaseInOutCubic, RateFunction::EaseInOutCubic);
     }
 
     #[test]
@@ -373,7 +475,7 @@ mod tests {
                     from: true,
                     to: false,
                 },
-                TrackTiming::new(1.0, 0.5, Easing::Linear),
+                TrackTiming::new(1.0, 0.5, RateFunction::Linear),
             ),
             Err(TimelineError::InvalidInstantDuration {
                 property: Property::Presence,
@@ -468,7 +570,7 @@ mod tests {
                     object,
                     Vec2::ZERO,
                     Vec2::ONE,
-                    TrackTiming::new(0.0, duration, Easing::Linear),
+                    TrackTiming::new(0.0, duration, RateFunction::Linear),
                 )
                 .expect_err("invalid duration must fail");
             assert!(matches!(error, TimelineError::InvalidDuration(_)));
@@ -479,7 +581,7 @@ mod tests {
                 object,
                 Vec2::ZERO,
                 Vec2::ONE,
-                TrackTiming::new(f64::NAN, 1.0, Easing::Linear),
+                TrackTiming::new(f64::NAN, 1.0, RateFunction::Linear),
             )
             .expect_err("invalid start time must fail");
         assert!(matches!(error, TimelineError::InvalidStartTime(_)));
