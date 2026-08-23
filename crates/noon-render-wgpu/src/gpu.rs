@@ -65,7 +65,7 @@ const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     },
 ];
 
-const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
+const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -110,6 +110,11 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 9] = [
         format: wgpu::VertexFormat::Float32x2,
         offset: 80,
         shader_location: 9,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 20,
+        shader_location: 10,
     },
 ];
 

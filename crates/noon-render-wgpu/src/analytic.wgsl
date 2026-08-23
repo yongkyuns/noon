@@ -31,6 +31,7 @@ struct LineVertexInput {
     @location(7) metrics: vec2<f32>,
     @location(8) flags: vec2<u32>,
     @location(9) end: vec2<f32>,
+    @location(10) reveal: f32,
 };
 
 struct VertexOutput {
@@ -118,14 +119,16 @@ fn vs_rectangle(input: VertexInput) -> VertexOutput {
 
 @vertex
 fn vs_line(input: LineVertexInput) -> VertexOutput {
-    let delta = input.end - input.start;
+    let reveal = clamp(input.reveal, 0.0, 1.0);
+    let revealed_end = mix(input.start, input.end, reveal);
+    let delta = revealed_end - input.start;
     let segment_length = length(delta);
     var tangent = vec2<f32>(1.0, 0.0);
     if segment_length > 0.000001 {
         tangent = delta / segment_length;
     }
     let normal = vec2<f32>(-tangent.y, tangent.x);
-    let width = max(input.metrics.x, 0.0);
+    let width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
     let half_width = width * 0.5;
     let tangent_padding = local_units_per_pixel(tangent, input.scale, input.rotation);
     let normal_padding = local_units_per_pixel(normal, input.scale, input.rotation);
@@ -134,7 +137,7 @@ fn vs_line(input: LineVertexInput) -> VertexOutput {
         half_width + normal_padding,
     );
     let shape_position = input.unit * proxy_half_size;
-    let center = (input.start + input.end) * 0.5;
+    let center = (input.start + revealed_end) * 0.5;
     let local = center + tangent * shape_position.x + normal * shape_position.y;
 
     var output: VertexOutput;

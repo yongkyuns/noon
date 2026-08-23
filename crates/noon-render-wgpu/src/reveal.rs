@@ -4,7 +4,6 @@ use noon_core::{GeometryRef, VectorPath};
 pub(crate) enum AnalyticRevealKey {
     Circle(u32),
     Rectangle(u32, u32),
-    Line(u32, u32, u32, u32),
 }
 
 pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {
@@ -14,13 +13,7 @@ pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticReve
             size.x.to_bits(),
             size.y.to_bits(),
         )),
-        GeometryRef::Line { start, end } => Some(AnalyticRevealKey::Line(
-            start.x.to_bits(),
-            start.y.to_bits(),
-            end.x.to_bits(),
-            end.y.to_bits(),
-        )),
-        GeometryRef::VectorPath(_) | GeometryRef::External(_) => None,
+        GeometryRef::Line { .. } | GeometryRef::VectorPath(_) | GeometryRef::External(_) => None,
     }
 }
 

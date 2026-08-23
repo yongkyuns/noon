@@ -285,7 +285,7 @@ impl FramePreparer {
                     }
                 }
                 PreparedSlot::Line(index) => {
-                    let packed = pack_line(object);
+                    let packed = pack_line(object, frame.reveal(object_index));
                     instances_repacked += 1;
                     if self.lines[index] != packed {
                         self.lines[index] = packed;
@@ -408,7 +408,8 @@ impl FramePreparer {
                 GeometryRef::Line { .. } => {
                     self.slots.push(PreparedSlot::Line(self.lines.len()));
                     self.line_ids.push(object.id);
-                    self.lines.push(pack_line(object));
+                    self.lines
+                        .push(pack_line(object, frame.reveal(object_index)));
                 }
                 GeometryRef::VectorPath(_) => {
                     unreachable!("vector path must enter the path preparation branch")
@@ -907,12 +908,14 @@ fn pack_rectangle(object: &FrameObjectState) -> RectangleInstance {
     }
 }
 
-fn pack_line(object: &FrameObjectState) -> LineInstance {
+fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
     let GeometryRef::Line { start, end } = &object.geometry else {
         unreachable!("line slot must retain line geometry")
     };
+    let mut transform: PackedTransform = object.transform.into();
+    transform.padding = reveal.clamp(0.0, 1.0);
     LineInstance {
-        transform: object.transform.into(),
+        transform,
         style: pack_style(object),
         start: [start.x, start.y],
         end: [end.x, end.y],
@@ -1259,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn every_analytic_shape_uses_path_pipeline_for_partial_reveal() {
+    fn closed_analytic_create_uses_paths_while_line_reveal_stays_analytic() {
         let mut circle = object(1, GeometryRef::circle(1.0));
         let mut rectangle = object(2, GeometryRef::rectangle(2.0, 1.0));
         let mut line = object(
@@ -1278,10 +1281,21 @@ mod tests {
         let prepared = preparer.prepare(&frame);
         assert!(prepared.circles.is_empty());
         assert!(prepared.rectangles.is_empty());
-        assert!(prepared.lines.is_empty());
-        assert_eq!(prepared.paths.len(), 3);
+        assert_eq!(prepared.lines.len(), 1);
+        assert_eq!(prepared.lines[0].transform.padding, 0.5);
+        assert_eq!(prepared.paths.len(), 2);
         assert_eq!(prepared.stats.instance_count, 3);
         assert_eq!(prepared.stats.unsupported_count, 0);
+        assert_eq!(prepared.stats.geometry_cache_misses, 2);
+
+        frame.reveals[2] = 0.8;
+        let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));
+        assert_eq!(advanced.lines.len(), 1);
+        assert_eq!(advanced.lines[0].transform.padding, 0.8);
+        assert_eq!(advanced.stats.geometry_cache_misses, 0);
+        assert_eq!(advanced.stats.instances_repacked, 1);
+        assert_eq!(advanced.line_dirty_ranges, &[0..1]);
+        assert!(!advanced.path_geometry_dirty);
     }
 
     #[test]
@@ -1478,6 +1492,7 @@ mod tests {
         assert_eq!(prepared.line_ids, &[ObjectId::new(8)]);
         assert_eq!(instance.start, [-2.0, 1.5]);
         assert_eq!(instance.end, [3.0, -0.5]);
+        assert_eq!(instance.transform.padding, 1.0);
         assert_eq!(instance.style.stroke, [0.2, 0.8, 0.4, 1.0]);
         assert_eq!(instance.style.stroke_enabled, 1);
         assert_eq!(instance.style.stroke_width, 0.125);
