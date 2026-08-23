@@ -329,7 +329,10 @@ def _aligned_scene_play(
                 lag_ratio=item_lag_ratio,
             )
             for lowered, child_start, child_duration, child_easing in schedule:
-                _base.Scene.play(
+                # `noon.Scene` has already been replaced by the compatibility class
+                # during install, so use the original captured facade explicitly to
+                # avoid recursively re-entering this compatibility scheduler.
+                _compat._BaseScene.play(
                     self,
                     lowered,
                     run_time=child_duration,
