@@ -5,7 +5,7 @@ Kept separate from the compatibility surface while Phase B is under active devel
 
 from __future__ import annotations
 
-from typing import Any
+import copy
 
 import noon as _base
 import _manim_compat as _compat
@@ -105,3 +105,161 @@ def _bind_introducer_target(self: _compat.Scene, target: object) -> None:
 
 _compat.Scene.add = _scene_add
 _compat.Scene._bind_introducer_target = _bind_introducer_target
+
+
+# Independent fill/stroke opacity does not require another serialized style field:
+# Noon colors already carry alpha independently for fill and stroke. The overall
+# style opacity remains available as a low-level multiplier for fades/compositing.
+_ORIGINAL_MAKE_MOBJECT = _base._ir._make_mobject
+_MISSING = object()
+
+
+def _opacity(name: str, value: object) -> float:
+    return _base._ir._unit_interval(name, value)
+
+
+def _with_alpha(color: _base.Color, alpha: float) -> _base.Color:
+    return _base.Color(color.red, color.green, color.blue, alpha)
+
+
+def _compat_make_mobject(
+    geometry: dict[str, object],
+    **kwargs: object,
+):
+    fill_color = kwargs.pop("fill_color", _MISSING)
+    stroke_color = kwargs.pop("stroke_color", _MISSING)
+    fill_opacity = kwargs.pop("fill_opacity", None)
+    stroke_opacity = kwargs.pop("stroke_opacity", None)
+
+    if fill_color is not _MISSING:
+        kwargs["fill"] = fill_color
+    if stroke_color is not _MISSING:
+        kwargs["stroke"] = stroke_color
+
+    raw = _ORIGINAL_MAKE_MOBJECT(geometry, **kwargs)
+    style = raw.style
+
+    if fill_opacity is not None:
+        alpha = _opacity("fill_opacity", fill_opacity)
+        fill = style["fill"]
+        if fill is None:
+            fill = _base.WHITE.to_ir()
+            style["fill"] = fill
+        fill["alpha"] = alpha
+
+    if stroke_opacity is not None:
+        alpha = _opacity("stroke_opacity", stroke_opacity)
+        stroke = style["stroke"]
+        if stroke is None:
+            stroke = _base.WHITE.to_ir()
+            style["stroke"] = stroke
+        stroke["alpha"] = alpha
+
+    return raw
+
+
+_base._ir._make_mobject = _compat_make_mobject
+
+
+def _vmobject_set_fill(
+    self: _compat.VMobject,
+    color: _base.Color | None = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _compat.VMobject:
+    del family  # Leaf VMobjects have no Python submobjects in the current facade.
+    raw = _base._raw_mobject(self._current_raw())
+
+    # Hybrid compatibility rule: Manim's set_fill(opacity=...) preserves color,
+    # while historical Noon set_fill(None) disables fill. Both remain useful.
+    if color is not None:
+        if not isinstance(color, _base.Color):
+            raise TypeError("fill color must be a Color or None")
+        previous_alpha = (
+            raw.style["fill"]["alpha"] if raw.style["fill"] is not None else color.alpha
+        )
+        raw.style["fill"] = color.to_ir()
+        raw.style["fill"]["alpha"] = previous_alpha
+    elif opacity is None:
+        raw.style["fill"] = None
+
+    if opacity is not None:
+        alpha = _opacity("fill opacity", opacity)
+        if raw.style["fill"] is None:
+            raw.style["fill"] = _with_alpha(_base.WHITE, alpha).to_ir()
+        else:
+            raw.style["fill"]["alpha"] = alpha
+    return self._apply(raw)
+
+
+def _vmobject_set_stroke(
+    self: _compat.VMobject,
+    color: _base.Color | None = None,
+    width: float | None = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _compat.VMobject:
+    del family
+    raw = _base._raw_mobject(self._current_raw())
+
+    # As with fill, an entirely empty call preserves Noon's explicit-disable escape
+    # hatch; Manim-style width=/opacity= calls preserve the current stroke color.
+    if color is not None:
+        if not isinstance(color, _base.Color):
+            raise TypeError("stroke color must be a Color or None")
+        previous_alpha = (
+            raw.style["stroke"]["alpha"]
+            if raw.style["stroke"] is not None
+            else color.alpha
+        )
+        raw.style["stroke"] = color.to_ir()
+        raw.style["stroke"]["alpha"] = previous_alpha
+    elif width is None and opacity is None:
+        raw.style["stroke"] = None
+
+    if width is not None:
+        value = _base._ir._finite_number("stroke width", width)
+        if value < 0.0:
+            raise ValueError("stroke width must be non-negative")
+        raw.style["stroke_width"] = value
+        if raw.style["stroke"] is None:
+            raw.style["stroke"] = _base.WHITE.to_ir()
+
+    if opacity is not None:
+        alpha = _opacity("stroke opacity", opacity)
+        if raw.style["stroke"] is None:
+            raw.style["stroke"] = _with_alpha(_base.WHITE, alpha).to_ir()
+        else:
+            raw.style["stroke"]["alpha"] = alpha
+    return self._apply(raw)
+
+
+def _vmobject_set_opacity(
+    self: _compat.VMobject,
+    opacity: float,
+    family: bool = True,
+) -> _compat.VMobject:
+    del family
+    alpha = _opacity("opacity", opacity)
+    raw = _base._raw_mobject(self._current_raw())
+    for channel in ("fill", "stroke"):
+        if raw.style[channel] is not None:
+            raw.style[channel]["alpha"] = alpha
+    return self._apply(raw)
+
+
+def _vmobject_get_fill_opacity(self: _compat.VMobject) -> float:
+    fill = self._current_raw().style["fill"]
+    return 0.0 if fill is None else float(fill["alpha"])
+
+
+def _vmobject_get_stroke_opacity(self: _compat.VMobject) -> float:
+    stroke = self._current_raw().style["stroke"]
+    return 0.0 if stroke is None else float(stroke["alpha"])
+
+
+_compat.VMobject.set_fill = _vmobject_set_fill
+_compat.VMobject.set_stroke = _vmobject_set_stroke
+_compat.VMobject.set_opacity = _vmobject_set_opacity
+_compat.VMobject.get_fill_opacity = _vmobject_get_fill_opacity
+_compat.VMobject.get_stroke_opacity = _vmobject_get_stroke_opacity
