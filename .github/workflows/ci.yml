@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +21,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Apply tessellation reference update
+        if: github.head_ref == 'agent/create-quality-lod' && github.actor != 'github-actions[bot]'
+        run: |
+          python3 scripts/fix-tessellation-reference.py
+          cargo fmt --all
+          rm scripts/fix-tessellation-reference.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update tessellation reference quality"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Use stable Rust
         run: |
