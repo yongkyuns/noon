@@ -1,424 +1,321 @@
-# Manim-aligned, language-neutral authoring plan
+# ManimCE source-compatibility plan
 
 ## Goal
 
-Make Noon pleasant to author from Python, Rust, and future frontends without making the core language-bound and without adding a second semantic scene representation.
+Noon's Python authoring surface should target **source compatibility with the common 2D Manim Community API**, while keeping Noon's own deterministic semantic model, compiled Rust/WASM runtime, analytic primitives, retained geometry caches, WebGPU/WebGL2 renderers, and live patching architecture.
 
-The target is **Manim-like authoring ergonomics over Noon's existing deterministic semantic/runtime architecture**:
+The practical target is:
 
-```text
-Python / Rust / future frontends
-              |
-              v
-      noon-core semantic API
-              |
-              v
- SceneDefinition / ScenePatch
-              |
-              v
-          compiler
-              |
-              v
-           runtime
-              |
-              v
-            WebGPU
+```python
+# Typical ManimCE source
+from manim import *
+
+class Demo(Scene):
+    def construct(self):
+        circle = Circle(color=BLUE)
+        square = Square().set_fill(PINK, opacity=0.5)
+        square.next_to(circle, RIGHT)
+
+        self.play(Create(circle))
+        self.play(Create(square))
+        self.play(
+            circle.animate.shift(UP),
+            square.animate.rotate(PI / 4),
+            run_time=2,
+            rate_func=smooth,
+        )
 ```
 
-`SceneDefinition` remains the single canonical semantic scene model. `SceneDocument` remains only its versioned wire representation. There is no additional AuthoringDocument or frontend-specific semantic IR.
+should require, wherever Noon supports the involved feature, only the import change:
 
-## Execution status — 2026-08-22
+```python
+from noon import *
+```
 
-PR #20 implements the planned migration through the generic-Transform phase while preserving the single-model architecture.
+The compatibility reference is **Manim Community v0.21.x**. Compatibility means public names, constructor shapes, method names, common defaults, lifecycle behavior, and observable authoring semantics. It does **not** mean copying Manim's Cairo/OpenGL implementation or storing every object as a Manim-style point cloud.
 
-Completed on the branch:
+## Architecture invariant
 
-- Phase 0: legacy implementation and legacy CI lane removed; one canonical `CI` gate remains.
-- Phase 1: shared vector/constants vocabulary, Manim Community palette, Python parity, and removal of `noon_layout.py`.
-- Phase 2: semantic bounds, object operations, relative layout, `Square`, and lightweight `Group`/`VGroup` authoring.
-- Phase 3: transient scene cursor, parallel `play`, `run_time`, `wait`, and curated timing cleanup.
-- Phase 4: Python `.animate`, a user-facing Rust `noon` facade/prelude, and semantic-time chaining of sequential animations.
-- Phase 5: same-kind analytic Transform fast paths retained; `Circle <-> Rectangle/Square` now lowers through compiler-only fixed path geometry while keeping exact analytic semantic endpoints. Open/closed cross-kind transitions such as `Circle -> Line` remain explicitly unsupported.
-- Phase 6: curated examples and root/playground/Transform docs have been rewritten around the final vocabulary; low-level timeline APIs remain as explicit escape hatches rather than the normal teaching path.
+Compatibility is a frontend contract:
 
-Validation before this final status-only commit passed the single canonical CI gate end-to-end, including format, workspace compile, strict Clippy, geometry correctness suites, all Rust workspace tests, native compilation of every picker scene, both browser/WebGPU WASM targets, Python authoring tests, and the browser package build. Cross-kind Transform has dedicated Python, Rust-facade, compiler, and runtime regression coverage.
+```text
+Manim-compatible Python authoring
+              |
+              v
+      Noon semantic snapshots
+              |
+              v
+    SceneDefinition / ScenePatch
+              |
+              v
+        compiler / tracks
+              |
+              v
+       Rust/WASM runtime
+              |
+              v
+      WebGPU / WebGL2
+```
 
-Remaining work is intentionally outside this migration's acceptance boundary: broader open/closed cross-kind policies, more general filled-polygon topology, text/MathTex architecture, richer animation composition primitives, and other future feature expansion.
+Examples:
 
-## Design rules
+- `Circle` may be a Python `VMobject` subclass while still lowering to Noon's analytic `GeometryRef::Circle`.
+- `VGroup.animate.shift(RIGHT)` may lower to parallel member tracks without introducing runtime hierarchy.
+- `rate_func=smooth` may lower to a known deterministic easing representation rather than execute Python every frame.
+- `Create(Circle())` may auto-bind the detached object during authoring while preserving the same canonical lifecycle/reveal tracks.
 
-1. **One semantic authority.** Layout, bounds, style mutation, lifecycle, transform behavior, timing rules, and other authoring semantics belong in Rust core/shared lowering rather than being independently reimplemented in each frontend.
-2. **Thin frontends.** Python and Rust may provide idiomatic syntax, but they should use the same names, concepts, defaults, and semantic rules wherever practical.
-3. **No unnecessary persistent abstractions.** Transient builders are acceptable for ergonomics; new serialized semantic layers are not.
-4. **Manim vocabulary where it fits.** Reuse familiar names such as `Circle`, `Rectangle`, `Square`, `Group`, `VGroup`, `shift`, `move_to`, `next_to`, `arrange`, `FadeIn`, `Transform`, `run_time`, `UP`, `RIGHT`, `BLUE`, `DEGREES` when Noon can support the same mental model.
-5. **Do not copy implementation constraints.** Noon keeps deterministic tracks, compiled playback, Rust/WASM execution, WebGPU rendering, live patching, and renderer-independent semantics.
-6. **Explicit low-level escape hatches remain.** Direct tracks, explicit start times, raw colors, and raw `SceneDefinition` mutation remain available for advanced/internal use but are not the normal examples/API path.
-7. **Cross-language parity is tested.** Equivalent Python and Rust authoring must normalize to equivalent `SceneDefinition` semantics.
+The compatibility effort must not introduce a second serialized scene model or require Python callbacks during steady-state playback.
 
-## Current problems at plan creation
+## Current compatibility assessment
 
-### Repository / CI
+Noon already has substantial vocabulary compatibility:
 
-- The old `noon/` and `examples/` trees are excluded from the current workspace but still retained and separately tested by `Full legacy compatibility`.
-- CI naming still distinguishes `Fast architecture gate` and legacy even though the new architecture is now the project.
-- The root README still describes the old nannou/Bevy implementation and says the project is no longer actively maintained.
+- `Scene`, `Mobject`, `Group`, `VGroup`
+- `Circle`, `Rectangle`, `Square`, `Line`, `Path`
+- `Create`, `FadeIn`, `FadeOut`
+- `Transform`, `ReplacementTransform`, `TransformFromCopy`, `TransformMatchingShapes`
+- `.animate`
+- `shift`, `move_to`, `scale`, `rotate`
+- `next_to`, `align_to`, `to_edge`, `to_corner`
+- `set_color`, `set_fill`, `set_stroke`, `set_opacity`
+- direction constants, angle constants, layout buffers, and much of the Manim color palette
+- `Scene.play(..., run_time=...)` and `Scene.wait(...)`
 
-### Python authoring
+However, Noon is currently **Manim-inspired rather than Manim-source-compatible**. The largest mismatches are structural:
 
-- Many examples use raw RGB tuples such as `Color(0.34, 0.68, 0.96)`.
-- Layout helpers currently live in a browser-only `noon_layout.py` side module rather than the public Noon vocabulary.
-- Objects are often created through `scene.circle(...)` and `scene.rectangle(...)` rather than reusable object constructors with familiar methods.
-- Animation frequently exposes `from`, `to`, `start_time`, and `duration`, which are closer to timeline IR than user intent.
-- Some lifecycle/animation semantics are implemented directly in Python and therefore risk diverging from a Rust frontend.
+1. the playground historically required an explicit `result = Scene()` style instead of normal `class Foo(Scene): construct()` authoring;
+2. shape constructors are functions returning a generic `Mobject`, so class identity/subclassing does not match Manim;
+3. introducer animations such as `Create(Circle())` historically require pre-binding the object to a scene;
+4. Noon exposes string `easing=` while Manim users expect `rate_func=` and named rate functions;
+5. Noon vectors are 2-tuples while Manim commonly uses 3-component vectors with `z == 0` for 2D;
+6. `Group`/`VGroup` are authoring collections rather than full Mobject-family objects;
+7. style storage currently has one overall opacity rather than independent fill/stroke opacity;
+8. text/MathTex, animation composition, axes/plotting, and much of VMobject are not yet present;
+9. arbitrary Python per-frame updaters conflict with Noon's compiled playback model.
 
-### Rust semantic API
+## Compatibility levels
 
-- `noon-core` currently exposes useful renderer-independent primitives but is intentionally low level: `ObjectId`, `GeometryRef`, `ObjectSnapshot`, `TrackTiming`, and explicit `animate_position(from, to, timing)`.
-- It lacks the ergonomic semantic vocabulary users need: named colors, vector arithmetic/constants, object transformations, bounds, relative layout, implicit scene timing, groups, and high-level animation helpers.
+### Level 1 — core 2D Manim syntax
 
-## Target user experience
+Target near-source-compatibility for the most common scene-building surface:
 
-### Python
+- scene model: `Scene`, `construct`, `setup`, `tear_down`, `add`, `remove`, `clear`, `mobjects`, `play`, `wait`
+- object model: `Mobject`, `VMobject`, `Group`, `VGroup`
+- shapes: `Circle`, `Rectangle`, `Square`, `Line`, `Dot`, `Ellipse`, `Arc`, `Polygon`, `RegularPolygon`, `Triangle`, `Arrow`, `Vector`
+- creation/fading/transforms: `Create`, `Uncreate`, `FadeIn`, `FadeOut`, `Transform`, `ReplacementTransform`, `TransformFromCopy`
+- object operations: `move_to`, `shift`, `scale`, `rotate`, `next_to`, `align_to`, `to_edge`, `to_corner`, `set_x`, `set_y`, style setters and bounds queries
+- `.animate`
+- direction/color/angle/buffer constants
+- named rate functions and `rate_func=`
+
+### Level 2 — typical mathematical animation
+
+Add the APIs needed by a large share of educational Manim scenes:
+
+- `Text`, `MarkupText`, `Tex`, `MathTex`
+- `Write`, `Unwrite`, `DrawBorderThenFill`
+- `AnimationGroup`, `Succession`, `LaggedStart`
+- `Axes`, `NumberPlane`, `NumberLine`, `FunctionGraph`, `ParametricFunction`
+- `ValueTracker`, `DecimalNumber`
+- `Brace`, `SurroundingRectangle`, `DashedLine`
+
+Text should use Noon's intended semantic architecture: shaped glyph runs/atlas for normal steady-state text, with vector outlines when path-level animation requires them.
+
+### Level 3 — rich vector authoring
+
+Add broader VMobject/source compatibility:
+
+- `VMobject.start_new_path`
+- `add_line_to`
+- `add_cubic_bezier_curve_to`
+- `set_points_as_corners`
+- `point_from_proportion`
+- `SVGMobject`, `ImageMobject`
+- richer matching transforms including text-aware matching
+
+### Level 4 — intentionally difficult compatibility
+
+These APIs depend on imperative per-frame Python execution in Manim:
+
+- `Mobject.add_updater(lambda m, dt: ...)`
+- arbitrary `Scene.add_updater`
+- arbitrary Python `rate_func`
+- `always_redraw` backed by arbitrary Python
+- `UpdateFromFunc` and similar callback animations
+- camera internals and 3D scene behavior
+
+Do not weaken Noon's architecture just to report these as supported. Prefer deterministic compiled equivalents where possible (`ValueTracker`, declarative expressions, known rate functions), and otherwise raise a precise unsupported-feature error.
+
+## Compatibility rules
+
+1. **Match syntax where semantics fit.** Use Manim names, positional/keyword argument conventions, and lifecycle behavior when Noon can represent them faithfully.
+2. **Keep analytic/render fast paths.** Python inheritance must not force analytic shapes into generic paths.
+3. **Use one semantic authority.** Python compatibility wrappers lower into the same canonical snapshots/tracks used by Rust and other frontends.
+4. **Prefer explicit unsupported errors over silent semantic drift.** A Manim call that Noon cannot represent should fail clearly.
+5. **Preserve low-level Noon escape hatches.** Explicit track timing, raw paths, scene patches, and renderer diagnostics remain available outside the normal Manim-compatible surface.
+6. **Test source compatibility, not only Noon-specific examples.** CI should contain small programs whose body is valid ManimCE code and differs only in the import line.
+7. **Treat compatibility as versioned.** The matrix is anchored to ManimCE 0.21.x and should record intentional deviations.
+
+## High-priority semantic mismatches
+
+### Scene authoring
+
+Support canonical Manim form:
+
+```python
+class Example(Scene):
+    def construct(self):
+        self.play(Create(Circle()))
+```
+
+The browser runner should discover scene subclasses, instantiate one deterministically, call `setup()`, `construct()`, and `tear_down()`, then compile the resulting Noon scene. Existing explicit `result = scene` scripts remain supported as a low-level/backwards-compatible mode.
+
+### Real shape classes
+
+Move from constructor functions returning a generic object to a public hierarchy resembling:
+
+```text
+Mobject
+  └─ VMobject
+      ├─ Circle
+      ├─ Rectangle
+      │   └─ Square
+      ├─ Line
+      └─ Path
+```
+
+This is required for `isinstance`, subclassing, copy/type preservation, discoverability, typing, and future shape-specific methods. It does not imply Manim's internal point representation.
+
+### Introducer lifecycle
+
+`Create`, `FadeIn`, and future introducing animations should accept detached objects. Authoring should bind them to the scene automatically when the animation is played.
+
+### Vectors
+
+Keep a compact 2D semantic representation internally, but accept common Manim/Python inputs:
+
+- `(x, y)`
+- `(x, y, 0)`
+- lists with the same forms
+- NumPy-like indexable vectors when available
+
+A nonzero Z component should produce a clear 3D-not-supported error until Noon gains 3D semantics.
+
+### Rate functions
+
+Expose Manim vocabulary such as `linear`, `smooth`, `rush_into`, `rush_from`, `there_and_back`, and common easing names. Known functions lower to deterministic runtime easing identifiers/curves. `Scene.play(..., rate_func=smooth)` is the public form; `easing=` remains a low-level/backwards-compatible alias.
+
+### Style model
+
+Move the canonical style toward separate:
+
+```text
+fill_color
+fill_opacity
+stroke_color
+stroke_opacity
+stroke_width
+stroke_join
+stroke_cap
+overall_opacity (optional multiplier)
+```
+
+so `set_fill(..., opacity=...)` does not alter stroke opacity. This requires coordinated IR/compiler/runtime migration and should be done as its own compatibility milestone.
+
+### Groups
+
+`Group` and `VGroup` should participate in Mobject-family authoring semantics while remaining cheap authoring-time collections if runtime hierarchy is unnecessary. Group transforms and animations can lower to member operations/tracks.
+
+## Delivery sequence
+
+### Compatibility Phase A — source-compatible foundation
+
+Implement first:
+
+- canonical `Scene.construct()` execution in the browser runner;
+- real public `VMobject` and shape classes without changing renderer representation;
+- detached-object `Create` / `FadeIn` introduction;
+- 2D acceptance of 3-component Manim vectors;
+- `rate_func=` plus common named deterministic rate functions;
+- compatibility regression scripts using normal Manim-style scene bodies.
+
+Acceptance:
+
+- a representative `class Demo(Scene): construct()` script runs in the playground without assigning `result`;
+- `isinstance(Circle(), Circle)` and `isinstance(Circle(), VMobject)` are true;
+- `self.play(Create(Circle()))` works;
+- `RIGHT + UP` and `(1, 2, 0)` inputs work while nonzero Z is rejected clearly;
+- `self.play(..., rate_func=smooth)` lowers to deterministic easing;
+- all existing Noon Python examples and both WebGPU/WebGL2 browser suites remain green.
+
+### Compatibility Phase B — scene/group/style parity
+
+- Manim-style `Scene.add/remove/clear/mobjects` behavior;
+- `Group`/`VGroup` as full authoring Mobjects;
+- split fill/stroke opacity and align style keyword/default behavior;
+- generalize `.animate` method proxying;
+- add `Animation` base metadata and common per-animation options.
+
+### Compatibility Phase C — animation composition and core shape breadth
+
+- `AnimationGroup`, `Succession`, `LaggedStart`;
+- `Uncreate`, `Write` groundwork, growing/indication basics where deterministic;
+- `Dot`, `Ellipse`, `Arc`, `Polygon`, `RegularPolygon`, `Triangle`, `Arrow`, `Vector`, `DashedLine`.
+
+### Compatibility Phase D — text and mathematical authoring
+
+- `Text`, `MarkupText`, `Tex`, `MathTex`;
+- glyph shaping/cache/atlas steady-state path;
+- outline extraction for `Create`/`Write`/matching transforms;
+- `TransformMatchingTex`.
+
+### Compatibility Phase E — plotting and values
+
+- axes/number lines/planes;
+- graphs and parametric functions;
+- trackers and declarative value-driven expressions;
+- braces, labels, decimal numbers.
+
+### Compatibility Phase F — advanced VMobject/import surface
+
+- public path-building VMobject APIs;
+- SVG/image import;
+- broader compatibility corpus and documented intentional gaps.
+
+## CI compatibility corpus
+
+Add a dedicated compatibility suite. Each fixture should look like ordinary Manim source except for the import:
 
 ```python
 from noon import *
 
-scene = Scene()
-
-circle = Circle(radius=0.6, color=BLUE).shift(LEFT * 2)
-square = Square(side_length=1.2, color=PINK)
-square.next_to(circle, RIGHT)
-
-scene.add(circle, square)
-scene.play(
-    circle.animate.shift(RIGHT * 2),
-    square.animate.rotate(45 * DEGREES),
-    run_time=2,
-)
-scene.play(FadeOut(circle))
-scene.wait(0.5)
-
-result = scene
+class BasicCreate(Scene):
+    def construct(self):
+        circle = Circle(color=BLUE)
+        square = Square().next_to(circle, RIGHT)
+        self.play(Create(circle), Create(square))
+        self.play(circle.animate.shift(UP), run_time=2, rate_func=smooth)
 ```
 
-### Rust
+Tests should check:
 
-```rust
-use noon::prelude::*;
+- source executes successfully;
+- semantic object/track counts and lifecycle are correct;
+- final state matches expected geometry/style;
+- direct seek agrees with forward playback;
+- browser visual smoke remains valid on WebGPU and WebGL2;
+- unsupported features fail with stable, specific messages.
 
-let mut scene = Scene::new();
-let circle = scene.add(Circle::new(0.6).color(BLUE).shift(LEFT * 2.0));
-let square = scene.add(Square::new(1.2).color(PINK));
-scene.edit(square)?.next_to(circle, RIGHT, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER)?;
+## Execution status
 
-scene.play((
-    circle.animate().shift(RIGHT * 2.0),
-    square.animate().rotate(45.0 * DEGREES),
-)).run_time(2.0)?;
-scene.play(FadeOut::new(circle)).run_time(1.0)?;
-scene.wait(0.5)?;
-```
+The original Manim-aligned migration (legacy cleanup, semantic layout, scene cursor, `.animate`, generic Transform, and gallery cleanup) is complete and remains the architectural baseline.
 
-Exact Rust syntax differs where ownership/type-system constraints make literal parity awkward, but concepts and names match.
+**Compatibility Phase A is now the active implementation milestone.** Subsequent sections of this document should be updated with concrete PRs/commits and any deliberate deviations as they land.
 
-## Canonical vocabulary
+## Non-goals
 
-### Geometry / objects
-
-Initial aligned set:
-
-- `Circle`
-- `Rectangle`
-- `Square`
-- `Line`
-- `Path` / `VectorPath`
-- `Group`
-- `VGroup`
-
-Text is intentionally deferred until the text architecture exists.
-
-### Constants
-
-Expose directly from Noon rather than a separate layout module:
-
-- `ORIGIN`, `UP`, `DOWN`, `LEFT`, `RIGHT`
-- `UL`, `UR`, `DL`, `DR`
-- `PI`, `TAU`, `DEGREES`
-- `DEFAULT_MOBJECT_TO_EDGE_BUFFER`
-- `DEFAULT_MOBJECT_TO_MOBJECT_BUFFER`
-
-### Colors
-
-Provide Manim-style named colors and shade families where useful:
-
-- base names: `WHITE`, `BLACK`, `RED`, `GREEN`, `BLUE`, `YELLOW`, `PURPLE`, `PINK`, `ORANGE`, `TEAL`, `GRAY`/`GREY`
-- common shade variants such as `BLUE_A` .. `BLUE_E`, etc., using Manim's palette values
-- ergonomic custom color parsing from hex while preserving raw float constructors for low-level use
-
-Color definitions must have one canonical source of truth so Python and Rust cannot drift.
-
-### Object semantic methods
-
-Implement in shared semantics / core where geometry permits:
-
-- position: `move_to`, `shift`, `set_x`, `set_y`, `center`
-- transform: `scale`, `rotate`
-- style: `set_color`, `set_fill`, `set_stroke`, `set_opacity`
-- layout: `next_to`, `align_to`, `to_edge`, `to_corner`
-- queries: center/bounds/width/height
-
-These operations mutate or derive `ObjectSnapshot` / object state; they do not create another scene model.
-
-### Groups
-
-Start with lightweight authoring collections of stable object handles/IDs. Do **not** add runtime hierarchy unless a concrete semantic or performance need requires it.
-
-Group operations apply semantic operations to members. `arrange` and `arrange_in_grid` use bounds and buffers, not hardcoded coordinates.
-
-## Bounds and layout
-
-Correct Manim-style layout requires real semantic bounds.
-
-Implement renderer-independent local/world bounds for currently supported geometry:
-
-- circle
-- rectangle/square
-- line
-- vector path
-
-World bounds include translation, rotation, and scale. Group bounds are the union of member bounds.
-
-Relative layout rules are then deterministic functions over these bounds:
-
-```text
-next_to(a, b, direction, buff)
-align_to(a, b, direction)
-to_edge(a, direction, buff)
-to_corner(a, corner, buff)
-arrange(group, direction, buff)
-arrange_in_grid(group, rows/cols, buff)
-```
-
-Frame-edge helpers require one canonical logical frame size/aspect definition in core/config rather than browser-specific magic values.
-
-## Scene timing
-
-Add an authoring cursor to the high-level scene API, but keep it transient/non-serialized. The serialized scene still contains explicit tracks.
-
-Rules:
-
-- `scene.play(...)` schedules animations at the current cursor.
-- animations in one `play` are parallel by default.
-- cursor advances by the play's effective duration.
-- `scene.wait(t)` advances the cursor.
-- explicit `start_time` remains a low-level override/escape hatch.
-- use Manim-style `run_time` in user-facing APIs; internally it maps to track duration.
-
-Composition primitives can follow later in this order:
-
-1. parallel `play`
-2. `Succession`
-3. `AnimationGroup`
-4. `LaggedStart`
-
-## `.animate`
-
-`.animate` is a transient target-state builder, not a persistent semantic layer.
-
-Conceptually:
-
-```text
-current ObjectSnapshot
-      |
-      | apply shift / rotate / style operations once
-      v
-target ObjectSnapshot
-      |
-      v
-existing Transform/timeline lowering
-```
-
-Python and Rust expose idiomatic syntax while sharing snapshot semantics. Bound Python objects evaluate their current snapshot at the scene cursor so sequential `.animate` calls compose from exact prior endpoints.
-
-## Transform semantics
-
-Keep optimized interpolation when source and target geometry are naturally compatible:
-
-- Circle -> Circle: analytic
-- Rectangle -> Rectangle: analytic
-- Line -> Line: analytic
-- compatible Path -> Path: precomputed path morph
-
-Cross-geometry `Circle <-> Rectangle/Square` is implemented by canonicalizing only the active transition through temporary vector geometry while steady-state objects remain analytic before and after the transition. The compiler's prepared `PathPair` is renderer-only; `TrackValues::Object` retains the exact analytic source/target snapshots.
-
-Open/closed topology changes such as Circle -> Line remain intentionally unsupported until Noon has an explicit semantic policy for that collapse/expansion.
-
-This is a compiler/geometry enhancement, not a reason to convert every object to paths permanently.
-
-## Frontend ownership of semantics
-
-### Short term browser Python
-
-The dependency-free Python module remains a thin public facade while shared semantic rules are mirrored by Rust reference behavior and parity tests. New persistent semantic concepts must not be invented only in Python.
-
-### Native Python direction
-
-Long term, PyO3/maturin can expose the Rust semantic layer directly for native Python.
-
-### Browser Python direction
-
-Pyodide can eventually call Rust/WASM semantic operations through a thin bridge for complex shared semantics. Pure Python wrappers may remain for constructor ergonomics and transient builders.
-
-## CI and validation
-
-After legacy removal, there is one required CI job named `CI`.
-
-It runs:
-
-- `cargo fmt --all -- --check`
-- `cargo check --workspace --all-targets --all-features`
-- strict workspace clippy
-- geometry correctness tests
-- full workspace tests
-- wasm/WebGPU checks
-- browser package build
-- playground Python execution
-- every picker `SceneDocument` compiled by native `ScenePlayer`
-
-Authoring-specific validation includes:
-
-- named color/constants parity
-- bounds/layout tests
-- scene cursor/timing determinism
-- semantic-time chained `.animate` regression
-- Python/Rust semantic cross-kind Transform parity
-- compiler and runtime cross-kind Transform endpoint/seek tests
-- curated examples contain no raw RGB literals unless the example is specifically about custom colors
-- curated examples minimize absolute positions; exceptions are intentional
-
-## Delivery sequence
-
-### Phase 0 - remove legacy and reset project identity
-
-Changes:
-
-- remove `legacy-compat` CI job
-- rename `Fast architecture gate` to `CI`
-- remove legacy `noon/` and root `examples/` trees after checking that useful API concepts are captured by this plan/tests
-- remove workspace `exclude` entries
-- replace obsolete root README with current architecture, playground, and API direction
-- update stale planning docs that still describe legacy compatibility as mandatory
-
-Acceptance:
-
-- one CI job is green
-- no nannou/Bevy legacy crate remains in the active repository tree
-- README describes current Noon accurately
-
-### Phase 1 - canonical math, constants, and colors
-
-Changes:
-
-- extend core `Vec2` arithmetic and direction/corner constants
-- add angle and layout buffer constants
-- add canonical named color palette and hex parsing
-- expose equivalent Python constants from `noon`
-- absorb `noon_layout.py` functionality into `noon.py`, then delete the side module/worker loading path
-- rewrite examples away from raw RGB constants where a named color communicates intent
-
-Acceptance:
-
-- Python and Rust color/constants parity tests
-- no normal gallery example contains `Color(r, g, b...)` literals
-
-### Phase 2 - semantic object operations and bounds
-
-Changes:
-
-- implement geometry/world bounds
-- implement object snapshot/state helpers for move/shift/scale/rotate/style operations
-- add relative layout functions in core
-- expose thin Python methods with Manim-aligned names
-- add `Square`
-- introduce lightweight group collections and arrange/grid layout
-
-Acceptance:
-
-- numerical bounds/layout tests
-- layout examples do not calculate slots manually
-
-### Phase 3 - high-level scene timing and animations
-
-Changes:
-
-- add transient scene authoring cursor
-- expose `play(..., run_time=...)`, `wait(...)`
-- make explicit start time a low-level path
-- centralize Fade/Transform/ReplacementTransform/TransformFromCopy/TransformMatchingShapes scheduling semantics as far into Rust/shared logic as practical without changing the canonical scene format
-
-Acceptance:
-
-- sequential play timing is deterministic
-- direct seek behavior remains unchanged
-- gallery examples contain no manually chained `start_time` arithmetic except where staggered timing itself is the feature
-
-### Phase 4 - `.animate` and Rust facade
-
-Changes:
-
-- add transient target snapshot builder
-- Python `obj.animate.<ops>` syntax
-- create a user-facing Rust facade crate so `use noon::prelude::*` exposes ergonomic authoring while low-level crates remain available
-- provide equivalent Rust behavior/tests
-
-Acceptance:
-
-- Python and Rust reference scenes normalize to equivalent object/track semantics
-- sequential `.animate` starts from the prior semantic endpoint
-- `.animate` creates no runtime Python callback dependency
-
-### Phase 5 - generic Transform parity
-
-Changes:
-
-- add compiler-selected cross-geometry transform strategy
-- preserve analytic fast paths when possible
-- canonical temporary path morph for supported incompatible analytic geometry
-
-Acceptance:
-
-- canonical Circle <-> Square/Rectangle transform works
-- endpoints are exact
-- direct seek matches forward playback
-- no permanent path conversion for static analytic objects
-- open/closed topology changes remain explicit compile-time errors
-
-### Phase 6 - final gallery/docs/API cleanup
-
-Changes:
-
-- rewrite curated examples with the final vocabulary
-- make each example intentionally demonstrate one feature
-- update README/docs with matched Python/Rust examples
-- remove obsolete low-level authoring examples or clearly label low-level methods as internals/escape hatches
-
-Acceptance:
-
-- gallery is copyable and semantic
-- minimal magic values
-- Python/Rust terminology matches
-- all picker examples execute, compile, and fit the playground loop
-
-## Non-goals for this migration
-
-- exact Manim API compatibility
-- arbitrary Python per-frame updater callbacks
-- full Manim class coverage
-- 3D
-- text/MathTex parity before Noon's text architecture
-- replacing deterministic tracks with imperative frame callbacks
-- creating a second serialized authoring representation
-
-## Historical execution order
-
-The branch deliberately implemented Phases 0-3 first because they removed repository debt and eliminated most hardcoded demo values/timing without depending on cross-geometry Transform. Phase 4 then added transient ergonomic frontends over the existing snapshot model. Phase 5 was taken only after the ergonomic baseline was green, and reused the existing `PathPair` runtime/render path instead of adding a new semantic layer. Phase 6 documentation/parity cleanup completed the migration.
+- copying Manim's renderer or scene internals;
+- replacing analytic primitives with generic paths solely for API compatibility;
+- running arbitrary Python every frame in the normal playback path;
+- claiming unsupported 3D/camera/updater behavior works;
+- creating a second persistent authoring IR.
