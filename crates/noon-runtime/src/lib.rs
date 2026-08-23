@@ -840,9 +840,8 @@ mod tests {
                 TrackTiming::new(0.0, 2.0, RateFunction::Smooth),
             )
             .expect("valid track");
-        let mut instance = SceneInstance::new(
-            CompiledScene::compile(&scene).expect("scene must compile"),
-        );
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
 
         let quarter = instance.seek(0.5).expect("valid time").objects[0]
             .transform
