@@ -1184,10 +1184,12 @@ mod tests {
 
         let line_layout = line_instance_layout();
         assert_eq!(line_layout.array_stride, 88);
-        assert_eq!(line_layout.attributes.len(), 9);
+        assert_eq!(line_layout.attributes.len(), 10);
         assert_eq!(line_layout.attributes[3].offset, 72);
         assert_eq!(line_layout.attributes[8].offset, 80);
         assert_eq!(line_layout.attributes[8].shader_location, 9);
+        assert_eq!(line_layout.attributes[9].offset, 20);
+        assert_eq!(line_layout.attributes[9].shader_location, 10);
 
         let path_vertex_layout = path_vertex_layout();
         assert_eq!(path_vertex_layout.array_stride, 20);
