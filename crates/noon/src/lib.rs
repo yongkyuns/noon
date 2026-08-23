@@ -19,8 +19,8 @@ pub mod prelude {
         Path, Rectangle, Scene, Square, Transform,
     };
     pub use noon_core::{
-        Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, Style, Vec2, VectorPath, BLACK, BLUE,
-        BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+        Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2, VectorPath,
+        BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
         DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREY,
         LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI,
         PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C,
@@ -475,7 +475,7 @@ impl Scene {
         Play {
             scene: self,
             animations: animations.into_animations(),
-            easing: Easing::Linear,
+            rate_func: RateFunction::Smooth,
         }
     }
 
@@ -503,14 +503,14 @@ impl Scene {
         &mut self,
         animations: Vec<Animation>,
         duration: f64,
-        easing: Easing,
+        rate_func: RateFunction,
     ) -> Result<(), AuthoringError> {
         if !duration.is_finite() || duration <= 0.0 {
             return Err(AuthoringError::InvalidDuration(duration));
         }
         let start = self.cursor;
         let end = start + duration;
-        let timing = TrackTiming::new(start, duration, easing);
+        let timing = TrackTiming::new(start, duration, rate_func);
 
         for animation in animations {
             match animation {
@@ -712,17 +712,24 @@ impl MobjectEditor<'_> {
 pub struct Play<'a> {
     scene: &'a mut Scene,
     animations: Vec<Animation>,
-    easing: Easing,
+    rate_func: RateFunction,
 }
 
 impl Play<'_> {
-    pub fn with_easing(mut self, easing: Easing) -> Self {
-        self.easing = easing;
+    /// Set the Manim-compatible rate function for this play call.
+    pub fn rate_func(mut self, rate_func: RateFunction) -> Self {
+        self.rate_func = rate_func;
         self
     }
 
+    /// Backwards-compatible spelling for older Noon Rust authoring code.
+    pub fn with_easing(self, easing: Easing) -> Self {
+        self.rate_func(easing)
+    }
+
     pub fn run_time(self, duration: f64) -> Result<(), AuthoringError> {
-        self.scene.schedule(self.animations, duration, self.easing)
+        self.scene
+            .schedule(self.animations, duration, self.rate_func)
     }
 }
 
@@ -757,7 +764,7 @@ mod tests {
 
         scene
             .play(circle.animate().shift(RIGHT).set_color(PURPLE))
-            .with_easing(Easing::EaseInOutCubic)
+            .rate_func(RateFunction::EaseInOutCubic)
             .run_time(1.5)
             .unwrap();
         scene
@@ -768,11 +775,36 @@ mod tests {
         assert_eq!(scene.time(), 2.0);
         assert_eq!(scene.definition().tracks().len(), 2);
         assert_eq!(scene.definition().tracks()[0].property, Property::Transform);
+        assert_eq!(
+            scene.definition().tracks()[0].timing.easing,
+            RateFunction::EaseInOutCubic
+        );
         assert_eq!(scene.definition().tracks()[1].property, Property::Transform);
+        assert_eq!(
+            scene.definition().tracks()[1].timing.easing,
+            RateFunction::Smooth
+        );
         let target = scene.snapshot(circle).unwrap();
         assert_eq!(target.transform.translation, RIGHT + UP);
         assert_eq!(target.style.fill, Some(PURPLE));
         assert!((target.transform.rotation - PI / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legacy_with_easing_spelling_still_selects_the_same_rate_function() {
+        let mut scene = Scene::new();
+        let circle = scene.add(Circle::new(0.5));
+
+        scene
+            .play(circle.animate().shift(RIGHT))
+            .with_easing(Easing::EaseInOutCubic)
+            .run_time(1.0)
+            .unwrap();
+
+        assert_eq!(
+            scene.definition().tracks()[0].timing.easing,
+            RateFunction::EaseInOutCubic
+        );
     }
 
     #[test]
@@ -803,7 +835,7 @@ mod tests {
 
         scene
             .play(Create::new(circle))
-            .with_easing(Easing::EaseInOutCubic)
+            .rate_func(RateFunction::EaseInOutCubic)
             .run_time(2.0)
             .unwrap();
 
@@ -818,6 +850,7 @@ mod tests {
         assert_eq!(tracks[1].property, Property::Reveal);
         assert_eq!(tracks[1].timing.start_time, 0.0);
         assert_eq!(tracks[1].timing.duration, 2.0);
+        assert_eq!(tracks[1].timing.easing, RateFunction::EaseInOutCubic);
         assert_eq!(tracks[1].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
         assert_eq!(scene.time(), 2.0);
     }
