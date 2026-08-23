@@ -112,7 +112,8 @@ fn ensure_version(version: u32) -> Result<(), IrError> {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Easing, GeometryRef, ObjectId, Style, TrackTiming, Transform2D, Vec2, VectorPath,
+        Easing, GeometryRef, ObjectId, RateFunction, Style, TrackTiming, Transform2D, Vec2,
+        VectorPath,
     };
 
     use super::*;
@@ -144,6 +145,34 @@ mod tests {
         assert_eq!(decoded.objects(), scene.objects());
         assert_eq!(decoded.tracks(), scene.tracks());
         assert_eq!(decoded.add(GeometryRef::circle(1.0)), ObjectId::new(1));
+    }
+
+    #[test]
+    fn rate_functions_extend_existing_easing_wire_values_without_format_bump() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_position(
+                object,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, RateFunction::Smooth),
+            )
+            .expect("smooth track must be valid");
+
+        let json = encode_scene(&scene).expect("scene must serialize");
+        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"easing\":\"smooth\""));
+        let decoded = decode_scene(&json).expect("smooth scene must deserialize");
+        assert_eq!(decoded.tracks()[0].timing.easing, RateFunction::Smooth);
+
+        let legacy_json = encode_scene(&sample_scene()).expect("legacy scene must serialize");
+        assert!(legacy_json.contains("\"easing\":\"ease_in_out_cubic\""));
+        let legacy = decode_scene(&legacy_json).expect("legacy easing must deserialize");
+        assert_eq!(
+            legacy.tracks()[0].timing.easing,
+            RateFunction::EaseInOutCubic
+        );
     }
 
     #[test]
