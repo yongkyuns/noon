@@ -242,16 +242,38 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let fill_enabled = input.flags.x > 0.5;
     let stroke_enabled = input.flags.y > 0.5;
 
+    // All derivative-dependent coverage is evaluated before reveal-dependent
+    // control flow. `reveal` is interpolated, so WebGPU requires derivatives to
+    // stay in uniform control flow even though each instance supplies one value.
+    let final_color = styled_shape_color(
+        input.fill,
+        input.stroke,
+        input.metrics.y,
+        fill_enabled,
+        stroke_enabled,
+        signed_distance,
+        stroke_width,
+    );
+    let tau = 6.283185307179586;
+    var angle = atan2(input.local.y, input.local.x);
+    if angle < 0.0 {
+        angle += tau;
+    }
+    let progress = angle / tau;
+    let progress_edge = max(fwidth(progress), 0.00001);
+    let half_stroke_width = stroke_width * 0.5;
+    let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
+    let inner_coverage = outside_coverage(signed_distance + half_stroke_width);
+    let ring_coverage = outer_coverage * inner_coverage;
+    let fill_coverage = inside_coverage(signed_distance);
+    let head_angle = reveal * tau;
+    let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
+    let start_center = vec2<f32>(radius, 0.0);
+    let head_cap = inside_coverage(length(input.local - head_center) - half_stroke_width);
+    let start_cap = inside_coverage(length(input.local - start_center) - half_stroke_width);
+
     if reveal >= 1.0 {
-        return styled_shape_color(
-            input.fill,
-            input.stroke,
-            input.metrics.y,
-            fill_enabled,
-            stroke_enabled,
-            signed_distance,
-            stroke_width,
-        );
+        return final_color;
     }
     if reveal <= 0.0 {
         return vec4<f32>(0.0);
@@ -260,24 +282,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     // Circle Create remains entirely analytic. The SDF gives an exact circle;
     // angular progress reveals its outline and an analytic disk supplies the
     // moving round head, so there is no faceted temporary mesh or endpoint pop.
-    let tau = 6.283185307179586;
-    var angle = atan2(input.local.y, input.local.x);
-    if angle < 0.0 {
-        angle += tau;
-    }
-    let progress = angle / tau;
-    let progress_edge = max(fwidth(progress), 0.00001);
     let body_reveal = 1.0 - smoothstep(reveal, reveal + progress_edge, progress);
-    let half_stroke_width = stroke_width * 0.5;
-    let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
-    let inner_coverage = outside_coverage(signed_distance + half_stroke_width);
-    let ring_coverage = outer_coverage * inner_coverage;
-
-    let head_angle = reveal * tau;
-    let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
-    let start_center = vec2<f32>(radius, 0.0);
-    let head_cap = inside_coverage(length(input.local - head_center) - half_stroke_width);
-    let start_cap = inside_coverage(length(input.local - start_center) - half_stroke_width);
     let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
     let stroke_coverage = select(
         0.0,
@@ -288,7 +293,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let fill_alpha = smoothstep(0.0, 1.0, reveal);
     let fill_layer = select(
         vec4<f32>(0.0),
-        covered_color(input.fill, input.metrics.y * fill_alpha, inside_coverage(signed_distance)),
+        covered_color(input.fill, input.metrics.y * fill_alpha, fill_coverage),
         fill_enabled,
     );
     let derive_creation_stroke = fill_enabled && !stroke_enabled;
