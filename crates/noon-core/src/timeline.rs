@@ -2,12 +2,80 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ObjectId, ObjectSnapshot, SceneDefinition, TrackId, Vec2};
 
+/// Language-neutral animation rate functions shared by every authoring frontend.
+///
+/// The Manim-compatible variants reproduce Manim Community's deterministic
+/// built-ins without requiring a Python callback during playback. The existing
+/// Noon cubic easing remains available as an explicit low-level option while
+/// timeline tracks are migrated from [`Easing`] to this semantic type.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateFunction {
+    Linear,
+    #[default]
+    Smooth,
+    RushInto,
+    RushFrom,
+    ThereAndBack,
+    EaseInOutCubic,
+}
+
+impl RateFunction {
+    /// Evaluate a normalized animation progress value.
+    ///
+    /// Input is clamped to `[0, 1]`, matching the interval behavior of the
+    /// corresponding Manim built-ins used here.
+    pub fn evaluate(self, progress: f32) -> f32 {
+        let progress = progress.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => progress,
+            Self::Smooth => manim_smooth(progress),
+            Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
+            Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
+            Self::ThereAndBack => {
+                let mirrored = if progress < 0.5 {
+                    2.0 * progress
+                } else {
+                    2.0 * (1.0 - progress)
+                };
+                manim_smooth(mirrored)
+            }
+            Self::EaseInOutCubic => {
+                if progress < 0.5 {
+                    4.0 * progress * progress * progress
+                } else {
+                    1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+                }
+            }
+        }
+    }
+}
+
+fn manim_smooth(progress: f32) -> f32 {
+    const INFLECTION: f32 = 10.0;
+    let error = sigmoid(-INFLECTION / 2.0);
+    ((sigmoid(INFLECTION * (progress - 0.5)) - error) / (1.0 - 2.0 * error)).clamp(0.0, 1.0)
+}
+
+fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value).exp())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Easing {
     #[default]
     Linear,
     EaseInOutCubic,
+}
+
+impl From<Easing> for RateFunction {
+    fn from(value: Easing) -> Self {
+        match value {
+            Easing::Linear => Self::Linear,
+            Easing::EaseInOutCubic => Self::EaseInOutCubic,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +379,53 @@ mod tests {
 
     fn timing() -> TrackTiming {
         TrackTiming::new(1.0, 2.0, Easing::Linear)
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn manim_rate_functions_have_exact_endpoints_and_reference_values() {
+        assert_eq!(RateFunction::Linear.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::Linear.evaluate(1.0), 1.0);
+        assert_eq!(RateFunction::Smooth.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::Smooth.evaluate(1.0), 1.0);
+        assert_close(RateFunction::Smooth.evaluate(0.25), 0.07010372);
+        assert_close(RateFunction::Smooth.evaluate(0.5), 0.5);
+        assert_close(RateFunction::Smooth.evaluate(0.75), 0.9298963);
+
+        assert_close(
+            RateFunction::RushInto.evaluate(0.5),
+            2.0 * RateFunction::Smooth.evaluate(0.25),
+        );
+        assert_close(
+            RateFunction::RushFrom.evaluate(0.5),
+            2.0 * RateFunction::Smooth.evaluate(0.75) - 1.0,
+        );
+        assert_eq!(RateFunction::ThereAndBack.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::ThereAndBack.evaluate(0.5), 1.0);
+        assert_eq!(RateFunction::ThereAndBack.evaluate(1.0), 0.0);
+    }
+
+    #[test]
+    fn rate_functions_clamp_normalized_input() {
+        assert_eq!(RateFunction::Linear.evaluate(-1.0), 0.0);
+        assert_eq!(RateFunction::Linear.evaluate(2.0), 1.0);
+        assert_eq!(RateFunction::Smooth.evaluate(-1.0), 0.0);
+        assert_eq!(RateFunction::Smooth.evaluate(2.0), 1.0);
+    }
+
+    #[test]
+    fn legacy_easing_maps_to_shared_rate_function() {
+        assert_eq!(RateFunction::from(Easing::Linear), RateFunction::Linear);
+        assert_eq!(
+            RateFunction::from(Easing::EaseInOutCubic),
+            RateFunction::EaseInOutCubic
+        );
     }
 
     #[test]
