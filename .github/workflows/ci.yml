@@ -84,6 +84,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
 
+      - name: Test Python editor highlighting and linting
+        run: node scripts/python-editor-smoke.mjs
+
       - name: Test browser WebGPU rendering
         env:
           NOON_BROWSER_SMOKE_BACKEND: webgpu
