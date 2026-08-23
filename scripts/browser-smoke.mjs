@@ -356,6 +356,29 @@ try {
       console.log(
         `✓ ${example.name}: line endpoint continuous near completion (${lineEndpointDiff} changed pixels)`,
       );
+
+      const waveBeforePath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "wave-end-before"),
+      );
+      const waveEndPath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "wave-end-final"),
+      );
+      const waveBefore = await renderAndCapture(page, latestEnd - 0.001, waveBeforePath);
+      const waveEnd = await renderAndCapture(page, latestEnd, waveEndPath);
+      const waveEndpointDiff = differingPixelCount(
+        waveBefore.screenshot,
+        waveEnd.screenshot,
+        { minX: 0.58, maxX: 0.84, minY: 0.55, maxY: 0.96 },
+      );
+      assert.ok(
+        waveEndpointDiff <= 20,
+        `${example.name}: wave endpoint jumped across ${waveEndpointDiff} pixels at completion`,
+      );
+      console.log(
+        `✓ ${example.name}: wave endpoint continuous at completion (${waveEndpointDiff} changed pixels)`,
+      );
     }
   }
 

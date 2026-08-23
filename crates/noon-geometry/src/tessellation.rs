@@ -5,7 +5,7 @@ use lyon_tessellation::{
 };
 use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
 
-const PATH_TESSELLATION_TOLERANCE: f32 = 0.01;
+const PATH_TESSELLATION_TOLERANCE: f32 = 0.002;
 const MORPH_MITER_LIMIT: f32 = 4.0;
 const ROUND_JOIN_SEGMENTS: usize = 8;
 const ROUND_CAP_SEGMENTS: usize = 8;
@@ -38,6 +38,9 @@ pub struct TessellatedPath {
     pub stroke_length: f32,
     /// True when vertices contain distinct source/target morph endpoints.
     pub morphing: bool,
+    // Cached centerline measure used to place a procedural Create reveal head.
+    // It is built only when geometry is tessellated, never per animation frame.
+    reveal_points: Vec<RevealPoint>,
 }
 
 impl TessellatedPath {
@@ -46,6 +49,44 @@ impl TessellatedPath {
             return 0.0;
         }
         self.stroke_length * reveal.clamp(0.0, 1.0)
+    }
+
+    /// Returns the local-space centerline position for normalized path progress.
+    ///
+    /// The lookup is O(log N) over a centerline measure cached with the mesh, so
+    /// repeated Create frames do not flatten or tessellate the path again.
+    pub fn reveal_head_position(&self, reveal: f32) -> Option<Vec2> {
+        let first = *self.reveal_points.first()?;
+        let last = *self.reveal_points.last()?;
+        let reveal = if reveal.is_finite() {
+            reveal.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if last.distance <= 0.0 {
+            return Some(first.position);
+        }
+        let target = last.distance * reveal;
+        let upper = self
+            .reveal_points
+            .partition_point(|point| point.distance < target);
+        if upper == 0 {
+            return Some(first.position);
+        }
+        if upper >= self.reveal_points.len() {
+            return Some(last.position);
+        }
+        let left = self.reveal_points[upper - 1];
+        let right = self.reveal_points[upper];
+        let span = right.distance - left.distance;
+        if span <= f32::EPSILON {
+            return Some(right.position);
+        }
+        let t = ((target - left.distance) / span).clamp(0.0, 1.0);
+        Some(Vec2::new(
+            left.position.x + (right.position.x - left.position.x) * t,
+            left.position.y + (right.position.y - left.position.y) * t,
+        ))
     }
 }
 
@@ -74,6 +115,12 @@ impl std::fmt::Display for GeometryError {
 }
 
 impl std::error::Error for GeometryError {}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RevealPoint {
+    distance: f32,
+    position: Vec2,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TessellationVertex {
@@ -119,6 +166,7 @@ pub fn tessellate_styled_with_fill(
             fill_enabled,
         );
     }
+    let reveal_points = build_reveal_points(path)?;
     let path = build_lyon_path(path)?;
     let mut buffers = VertexBuffers::new();
 
@@ -206,7 +254,148 @@ pub fn tessellate_styled_with_fill(
         bounds,
         stroke_length,
         morphing: false,
+        reveal_points,
     })
+}
+
+fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryError> {
+    let mut points = Vec::new();
+    let mut current = None;
+    let mut contour_start = None;
+    let mut distance = 0.0_f32;
+
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo { to } => {
+                ensure_finite_point(to)?;
+                points.push(RevealPoint {
+                    distance,
+                    position: to,
+                });
+                current = Some(to);
+                contour_start = Some(to);
+            }
+            PathCommand::LineTo { to } => {
+                ensure_finite_point(to)?;
+                let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
+                append_reveal_segment(&mut points, &mut distance, from, to);
+                current = Some(to);
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                ensure_finite_point(control)?;
+                ensure_finite_point(to)?;
+                let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
+                flatten_quadratic_reveal(&mut points, &mut distance, from, control, to, 0);
+                current = Some(to);
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                ensure_finite_point(control1)?;
+                ensure_finite_point(control2)?;
+                ensure_finite_point(to)?;
+                let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
+                flatten_cubic_reveal(&mut points, &mut distance, from, control1, control2, to, 0);
+                current = Some(to);
+            }
+            PathCommand::Close => {
+                let from = current.ok_or(GeometryError::CloseBeforeMove)?;
+                let to = contour_start.ok_or(GeometryError::CloseBeforeMove)?;
+                append_reveal_segment(&mut points, &mut distance, from, to);
+                current = Some(to);
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn ensure_finite_point(point: Vec2) -> Result<(), GeometryError> {
+    if point.x.is_finite() && point.y.is_finite() {
+        Ok(())
+    } else {
+        Err(GeometryError::NonFinitePoint)
+    }
+}
+
+fn append_reveal_segment(points: &mut Vec<RevealPoint>, distance: &mut f32, from: Vec2, to: Vec2) {
+    if points.is_empty() {
+        points.push(RevealPoint {
+            distance: *distance,
+            position: from,
+        });
+    }
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length > 0.0 {
+        *distance += length;
+        points.push(RevealPoint {
+            distance: *distance,
+            position: to,
+        });
+    }
+}
+
+fn midpoint(a: Vec2, b: Vec2) -> Vec2 {
+    Vec2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
+}
+
+fn point_line_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let denominator = (dx * dx + dy * dy).sqrt();
+    if denominator <= f32::EPSILON {
+        let px = point.x - start.x;
+        let py = point.y - start.y;
+        return (px * px + py * py).sqrt();
+    }
+    ((dx * (start.y - point.y) - (start.x - point.x) * dy).abs()) / denominator
+}
+
+fn flatten_quadratic_reveal(
+    points: &mut Vec<RevealPoint>,
+    distance: &mut f32,
+    start: Vec2,
+    control: Vec2,
+    end: Vec2,
+    depth: u8,
+) {
+    if depth >= 16 || point_line_distance(control, start, end) <= PATH_TESSELLATION_TOLERANCE {
+        append_reveal_segment(points, distance, start, end);
+        return;
+    }
+    let start_control = midpoint(start, control);
+    let control_end = midpoint(control, end);
+    let center = midpoint(start_control, control_end);
+    flatten_quadratic_reveal(points, distance, start, start_control, center, depth + 1);
+    flatten_quadratic_reveal(points, distance, center, control_end, end, depth + 1);
+}
+
+fn flatten_cubic_reveal(
+    points: &mut Vec<RevealPoint>,
+    distance: &mut f32,
+    start: Vec2,
+    control1: Vec2,
+    control2: Vec2,
+    end: Vec2,
+    depth: u8,
+) {
+    let flatness =
+        point_line_distance(control1, start, end).max(point_line_distance(control2, start, end));
+    if depth >= 16 || flatness <= PATH_TESSELLATION_TOLERANCE {
+        append_reveal_segment(points, distance, start, end);
+        return;
+    }
+    let a = midpoint(start, control1);
+    let b = midpoint(control1, control2);
+    let c = midpoint(control2, end);
+    let d = midpoint(a, b);
+    let e = midpoint(b, c);
+    let center = midpoint(d, e);
+    flatten_cubic_reveal(points, distance, start, a, d, center, depth + 1);
+    flatten_cubic_reveal(points, distance, center, e, c, end, depth + 1);
 }
 
 fn lyon_line_join(join: StrokeJoin) -> LineJoin {
@@ -235,6 +424,7 @@ fn tessellate_morph_path(
 ) -> Result<TessellatedPath, GeometryError> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
+    let reveal_points = build_reveal_points(source)?;
 
     if fill_enabled {
         let fill = crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT).map_err(
@@ -279,6 +469,7 @@ fn tessellate_morph_path(
             bounds,
             stroke_length: 0.0,
             morphing: true,
+            reveal_points,
         });
     }
 
@@ -421,6 +612,7 @@ fn tessellate_morph_path(
         bounds,
         stroke_length,
         morphing: true,
+        reveal_points,
     })
 }
 

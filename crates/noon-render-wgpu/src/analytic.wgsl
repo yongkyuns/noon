@@ -104,7 +104,14 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
     let radius = max(abs(input.geometry.x), 0.000001);
     let padding = local_axis_padding(input.scale, input.rotation);
     let stroke_padding = stroke_half_width(input.metrics, input.flags);
-    let local = input.unit * (vec2<f32>(radius + stroke_padding) + padding);
+    let reveal = clamp(input.geometry.y, 0.0, 1.0);
+    let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;
+    let creation_padding = select(
+        stroke_padding,
+        max(input.metrics.x, 0.0) * 0.5,
+        derive_creation_stroke,
+    );
+    let local = input.unit * (vec2<f32>(radius + creation_padding) + padding);
     return make_output(input, local);
 }
 
@@ -229,17 +236,74 @@ fn capsule_signed_distance(position: vec2<f32>, half_length: f32, radius: f32) -
 @fragment
 fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let radius = max(abs(input.geometry.x), 0.000001);
+    let reveal = clamp(input.geometry.y, 0.0, 1.0);
     let signed_distance = length(input.local) - radius;
     let stroke_width = max(input.metrics.x, 0.0);
-    return styled_shape_color(
-        input.fill,
-        input.stroke,
-        input.metrics.y,
-        input.flags.x > 0.5,
-        input.flags.y > 0.5,
-        signed_distance,
-        stroke_width,
+    let fill_enabled = input.flags.x > 0.5;
+    let stroke_enabled = input.flags.y > 0.5;
+
+    if reveal >= 1.0 {
+        return styled_shape_color(
+            input.fill,
+            input.stroke,
+            input.metrics.y,
+            fill_enabled,
+            stroke_enabled,
+            signed_distance,
+            stroke_width,
+        );
+    }
+    if reveal <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+
+    // Circle Create remains entirely analytic. The SDF gives an exact circle;
+    // angular progress reveals its outline and an analytic disk supplies the
+    // moving round head, so there is no faceted temporary mesh or endpoint pop.
+    let tau = 6.283185307179586;
+    var angle = atan2(input.local.y, input.local.x);
+    if angle < 0.0 {
+        angle += tau;
+    }
+    let progress = angle / tau;
+    let progress_edge = max(fwidth(progress), 0.00001);
+    let body_reveal = 1.0 - smoothstep(reveal, reveal + progress_edge, progress);
+    let half_stroke_width = stroke_width * 0.5;
+    let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
+    let inner_coverage = outside_coverage(signed_distance + half_stroke_width);
+    let ring_coverage = outer_coverage * inner_coverage;
+
+    let head_angle = reveal * tau;
+    let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
+    let start_center = vec2<f32>(radius, 0.0);
+    let head_cap = inside_coverage(length(input.local - head_center) - half_stroke_width);
+    let start_cap = inside_coverage(length(input.local - start_center) - half_stroke_width);
+    let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
+    let stroke_coverage = select(
+        0.0,
+        max(ring_coverage * body_reveal, max(head_cap, start_cap)),
+        has_creation_stroke,
     );
+
+    let fill_alpha = smoothstep(0.0, 1.0, reveal);
+    let fill_layer = select(
+        vec4<f32>(0.0),
+        covered_color(input.fill, input.metrics.y * fill_alpha, inside_coverage(signed_distance)),
+        fill_enabled,
+    );
+    let derive_creation_stroke = fill_enabled && !stroke_enabled;
+    let creation_outline_alpha = select(
+        1.0,
+        1.0 - smoothstep(0.75, 1.0, reveal),
+        derive_creation_stroke,
+    );
+    let stroke_color = select(input.stroke, input.fill, derive_creation_stroke);
+    let stroke_layer = covered_color(
+        stroke_color,
+        input.metrics.y * creation_outline_alpha,
+        stroke_coverage,
+    );
+    return stroke_layer + fill_layer * (1.0 - stroke_layer.a);
 }
 
 @fragment
