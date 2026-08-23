@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +21,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Apply WebGL2 fallback patch
+        if: github.head_ref == 'agent/webgl2-browser-fallback' && github.actor != 'github-actions[bot]'
+        run: |
+          python3 scripts/apply-webgl2-fallback.py
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add automatic WebGL2 browser fallback"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Use stable Rust
         run: |
