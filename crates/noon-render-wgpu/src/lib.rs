@@ -713,6 +713,18 @@ impl FramePreparer {
             return;
         }
 
+        // Analytic Create uses temporary path meshes that are not represented by
+        // `frame.render_geometry`. Defer eviction while any such outline is active
+        // so a full rebuild cannot evict and immediately retessellate visible work.
+        // Once all analytic reveals complete, normal bounded LRU pruning resumes.
+        if frame.objects.iter().enumerate().any(|(object_index, _)| {
+            frame.is_present(object_index)
+                && frame.reveal(object_index) < 1.0
+                && analytic_reveal_key(frame.render_geometry(object_index)).is_some()
+        }) {
+            return;
+        }
+
         let mut keep = vec![false; self.path_mesh_cache.len()];
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
