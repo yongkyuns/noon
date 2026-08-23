@@ -9,7 +9,7 @@ use noon_geometry::{
 };
 
 const EPS: f32 = 1.0e-5;
-const REFERENCE_TOLERANCE: f32 = 0.01;
+const REFERENCE_TOLERANCE: f32 = 0.002;
 const TESSELLATION_EPS: f32 = REFERENCE_TOLERANCE * 1.5;
 const MORPH_MITER_LIMIT: f32 = 4.0;
 
