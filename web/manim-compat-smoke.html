@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Noon Manim compatibility smoke</title>
+  </head>
+  <body>
+    <script type="module">
+      import { PythonAuthoringClient } from "./authoring-client.js";
+
+      const client = new PythonAuthoringClient();
+      window.noonManimCompat = {
+        ready: () => client.ready(),
+        run: (source) => client.run(source),
+      };
+    </script>
+  </body>
+</html>
