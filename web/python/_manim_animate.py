@@ -64,9 +64,7 @@ class _AnimateBuilderMixin:
         return invoke
 
 
-class _AlignedAnimationBuilder(_AnimateBuilderMixin, _base._AnimationBuilder):
-    """Mobject builder recognizable by Noon's existing Transform lowerer."""
-
+class _AlignedAnimationBuilder(_AnimateBuilderMixin):
     def __init__(self, source: _base.Mobject) -> None:
         # Unlike the old Noon builder, Manim allows ``self.play(Circle().animate...)``.
         # Binding happens when Scene.play compiles the animation.
@@ -221,7 +219,10 @@ def _expanded_schedule(
     easing: str,
     lag_ratio: float,
 ) -> list[tuple[object, float, float, str]]:
-    expanded = scene._expand_animation(animation)
+    if isinstance(animation, _AlignedAnimationBuilder):
+        expanded = [_base.Transform(animation.source, animation.target)]
+    else:
+        expanded = scene._expand_animation(animation)
     if not expanded:
         return []
 
