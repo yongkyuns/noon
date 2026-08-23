@@ -17,7 +17,10 @@ node --check scripts/manim-compat-smoke.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
-PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile web/python/_manim_compat.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  web/python/_manim_compat.py \
+  web/python/_manim_phase_b.py \
+  web/python/_manim_animate.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
 cargo test -p noon-web --test playground_examples

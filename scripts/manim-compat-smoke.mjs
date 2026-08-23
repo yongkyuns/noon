@@ -134,6 +134,54 @@ class IndependentStyleOpacity(Scene):
         self.play(Transform(square, target), run_time=0.4, rate_func=linear)
 `;
 
+const animateParitySource = `
+from noon import *
+
+class AnimateParity(Scene):
+    def construct(self):
+        detached = Circle(radius=0.25, color=BLUE)
+        self.play(
+            detached.animate(run_time=2.0, rate_func=linear)
+                .shift(RIGHT)
+                .set_y(1.0)
+        )
+        assert len(self.mobjects) == 1 and self.mobjects[0] is detached
+
+        square = Square(side_length=0.4, color=PINK)
+        self.play(
+            square.animate(run_time=2.0).shift(UP),
+            detached.animate(run_time=0.5, rate_func=linear).shift(LEFT),
+        )
+
+        pair = VGroup(
+            Circle(radius=0.15, color=GREEN),
+            Square(side_length=0.3, color=RED),
+        ).arrange(RIGHT, buff=0.15)
+        self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
+
+        override = Circle(radius=0.2, color=PURPLE)
+        self.play(
+            override.animate(run_time=3.0, rate_func=linear).shift(RIGHT),
+            run_time=0.4,
+            rate_func=smooth,
+        )
+
+        late_args = Circle().animate
+        late_args.shift(RIGHT)
+        try:
+            late_args(run_time=2.0)
+            raise AssertionError("animation kwargs after method access must fail")
+        except ValueError as error:
+            assert "before accessing methods" in str(error)
+
+        duplicate_args = Circle().animate(run_time=1.0)
+        try:
+            duplicate_args(rate_func=linear)
+            raise AssertionError("animation kwargs can only be passed once")
+        except ValueError as error:
+            assert "only be passed once" in str(error)
+`;
+
 let browser = null;
 try {
   await waitForServer();
@@ -205,6 +253,48 @@ try {
   assert.equal(styleTransform.values.object.to.style.fill.alpha, 0.8);
   assert.equal(styleTransform.values.object.to.style.stroke.alpha, 0.3);
 
+  const animateParity = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    animateParitySource,
+  );
+  assert.equal(animateParity.kind, "scene_document");
+  assert.equal(animateParity.document.objects.length, 5, "detached animate and groups should auto-bind flat objects");
+  const animateTracks = animateParity.document.tracks.filter((track) => track.property === "transform");
+  assert.equal(animateTracks.length, 6);
+
+  const byObject = new Map();
+  for (const track of animateTracks) {
+    const list = byObject.get(track.object) ?? [];
+    list.push(track);
+    byObject.set(track.object, list);
+  }
+  assert.equal(byObject.get(0)[0].timing.start_time, 0);
+  assert.equal(byObject.get(0)[0].timing.duration, 2);
+  assert.equal(byObject.get(0)[0].timing.easing, "linear");
+  assert.equal(byObject.get(0)[1].timing.start_time, 2);
+  assert.equal(byObject.get(0)[1].timing.duration, 0.5);
+  assert.equal(byObject.get(1)[0].timing.start_time, 2);
+  assert.equal(byObject.get(1)[0].timing.duration, 2);
+  assert.equal(byObject.get(1)[0].timing.easing, "ease_in_out_cubic");
+
+  const groupFirst = byObject.get(2)[0];
+  const groupSecond = byObject.get(3)[0];
+  assert.ok(Math.abs(groupFirst.timing.start_time - 4.0) < 1e-9);
+  assert.ok(Math.abs(groupFirst.timing.duration - 0.8) < 1e-9);
+  assert.ok(Math.abs(groupSecond.timing.start_time - 4.4) < 1e-9);
+  assert.ok(Math.abs(groupSecond.timing.duration - 0.8) < 1e-9);
+  assert.equal(groupFirst.timing.easing, "ease_in_out_cubic");
+  assert.equal(groupSecond.timing.easing, "ease_in_out_cubic");
+
+  const overridden = byObject.get(4)[0];
+  assert.ok(Math.abs(overridden.timing.start_time - 5.2) < 1e-9);
+  assert.ok(Math.abs(overridden.timing.duration - 0.4) < 1e-9);
+  assert.equal(
+    overridden.timing.easing,
+    "ease_in_out_cubic",
+    "Scene.play kwargs should override builder animation kwargs",
+  );
+
   let zError = null;
   try {
     await page.evaluate(
@@ -218,7 +308,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene membership, group lowering, generic animate proxying, independent fill/stroke opacity, z=0 vectors, and rate_func lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, z=0 vectors, and deterministic rate_func lowering.",
   );
 } finally {
   await browser?.close();
