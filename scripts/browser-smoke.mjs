@@ -111,12 +111,16 @@ function artifactName(index, name, checkpoint) {
   return `${String(index).padStart(2, "0")}-${slug || "scene"}-${checkpoint}.png`;
 }
 
-function visiblePixelCount(buffer, name) {
+function visiblePixelStats(buffer, name) {
   const png = PNG.sync.read(buffer);
   assert.ok(png.width >= 320 && png.height >= 180, `${name}: canvas screenshot is too small`);
 
   const background = [png.data[0], png.data[1], png.data[2], png.data[3]];
   let changedPixels = 0;
+  let minX = png.width;
+  let minY = png.height;
+  let maxX = -1;
+  let maxY = -1;
   for (let offset = 0; offset < png.data.length; offset += 4) {
     const distance =
       Math.abs(png.data[offset] - background[0]) +
@@ -125,9 +129,16 @@ function visiblePixelCount(buffer, name) {
       Math.abs(png.data[offset + 3] - background[3]);
     if (distance >= 32) {
       changedPixels += 1;
+      const pixel = offset / 4;
+      const x = pixel % png.width;
+      const y = Math.floor(pixel / png.width);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
     }
   }
-  return changedPixels;
+  return { changedPixels, bounds: { minX, minY, maxX, maxY } };
 }
 
 function latestSceneEnd(document) {
@@ -143,6 +154,16 @@ function sampleTimes(latestEnd) {
   assert.ok(Number.isFinite(latestEnd) && latestEnd > 0, "scene timeline must have positive duration");
   assert.ok(latestEnd < 4.0, "scene timeline must fit the four-second playground loop");
   return [0.35, 0.60, 0.85, 1.0].map((fraction) => latestEnd * fraction);
+}
+
+async function renderAndCapture(page, time, screenshotPath) {
+  const metrics = await page.evaluate(
+    (sceneTime) => window.noonSmoke.renderAt(sceneTime),
+    time,
+  );
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+  const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
+  return { metrics, screenshot };
 }
 
 let browser = null;
@@ -204,10 +225,11 @@ try {
     );
 
     for (const [checkpointIndex, time] of sampleTimes(latestEnd).entries()) {
-      const metrics = await page.evaluate(
-        (sceneTime) => window.noonSmoke.renderAt(sceneTime),
-        time,
+      const screenshotPath = path.join(
+        artifactDir,
+        artifactName(index, example.name, checkpointIndex + 1),
       );
+      const { metrics, screenshot } = await renderAndCapture(page, time, screenshotPath);
       assert.equal(metrics.error, null, `${example.name}: browser runtime error`);
       assert.equal(metrics.revision, loaded.revision, `${example.name}: scene revision drifted`);
       assert.equal(metrics.objectCount, expectedObjects, `${example.name}: object count drifted`);
@@ -215,14 +237,7 @@ try {
       assert.ok(metrics.drawCalls > 0, `${example.name}: renderer emitted no draw calls at t=${time}`);
       assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 
-      // Let Chromium composite the just-presented WebGPU surface before capture.
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
-      const screenshotPath = path.join(
-        artifactDir,
-        artifactName(index, example.name, checkpointIndex + 1),
-      );
-      const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
-      const visiblePixels = visiblePixelCount(screenshot, example.name);
+      const { changedPixels: visiblePixels } = visiblePixelStats(screenshot, example.name);
 
       if (visiblePixels < 100) {
         visualFailures.push(
@@ -239,6 +254,36 @@ try {
             `${visiblePixels} visible pixels`,
         );
       }
+    }
+
+    if (example.name === "Create shapes") {
+      const beforeTime = latestEnd - 0.001;
+      const beforePath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "continuity-before"),
+      );
+      const afterPath = path.join(
+        artifactDir,
+        artifactName(index, example.name, "continuity-after"),
+      );
+      const before = await renderAndCapture(page, beforeTime, beforePath);
+      const after = await renderAndCapture(page, latestEnd, afterPath);
+      assert.equal(before.metrics.error, null, `${example.name}: pre-completion runtime error`);
+      assert.equal(after.metrics.error, null, `${example.name}: completion runtime error`);
+
+      const beforeStats = visiblePixelStats(before.screenshot, `${example.name} before completion`);
+      const afterStats = visiblePixelStats(after.screenshot, `${example.name} at completion`);
+      const boundDelta = Math.max(
+        Math.abs(beforeStats.bounds.minX - afterStats.bounds.minX),
+        Math.abs(beforeStats.bounds.minY - afterStats.bounds.minY),
+        Math.abs(beforeStats.bounds.maxX - afterStats.bounds.maxX),
+        Math.abs(beforeStats.bounds.maxY - afterStats.bounds.maxY),
+      );
+      assert.ok(
+        boundDelta <= 1,
+        `${example.name}: Create-to-analytic visible bounds jumped by ${boundDelta}px`,
+      );
+      console.log(`✓ ${example.name}: Create-to-analytic bounds continuous within ${boundDelta}px`);
     }
   }
 

@@ -80,6 +80,10 @@ fn local_axis_padding(scale: vec2<f32>, rotation: f32) -> vec2<f32> {
     );
 }
 
+fn stroke_half_width(metrics: vec2<f32>, flags: vec2<u32>) -> f32 {
+    return select(0.0, max(metrics.x, 0.0) * 0.5, flags.y != 0u);
+}
+
 fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
     var output: VertexOutput;
     let world = transform_point(local, input.translation, input.scale, input.rotation);
@@ -98,7 +102,8 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
 fn vs_circle(input: VertexInput) -> VertexOutput {
     let radius = max(abs(input.geometry.x), 0.000001);
     let padding = local_axis_padding(input.scale, input.rotation);
-    let local = input.unit * (vec2<f32>(radius) + padding);
+    let stroke_padding = stroke_half_width(input.metrics, input.flags);
+    let local = input.unit * (vec2<f32>(radius + stroke_padding) + padding);
     return make_output(input, local);
 }
 
@@ -106,7 +111,8 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
 fn vs_rectangle(input: VertexInput) -> VertexOutput {
     let half_size = abs(input.geometry) * 0.5;
     let padding = local_axis_padding(input.scale, input.rotation);
-    let local = input.unit * (half_size + padding);
+    let stroke_padding = stroke_half_width(input.metrics, input.flags);
+    let local = input.unit * (half_size + vec2<f32>(stroke_padding) + padding);
     return make_output(input, local);
 }
 
@@ -172,11 +178,15 @@ fn styled_shape_color(
     opacity: f32,
     fill_enabled: bool,
     stroke_enabled: bool,
-    outer_signed_distance: f32,
+    signed_distance: f32,
     stroke_width: f32,
 ) -> vec4<f32> {
-    let outer_coverage = inside_coverage(outer_signed_distance);
-    let stroke_coverage = outside_coverage(outer_signed_distance + stroke_width);
+    // Match VectorPath/Lyon semantics: the authored outline is the stroke centerline.
+    // A stroke extends half its width outside and half inside the semantic boundary.
+    let half_stroke_width = max(stroke_width, 0.0) * 0.5;
+    let fill_coverage = inside_coverage(signed_distance);
+    let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
+    let stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
     let has_stroke = stroke_enabled && stroke_width > 0.0;
     if has_stroke {
         if fill_enabled {
@@ -187,7 +197,7 @@ fn styled_shape_color(
     }
 
     if fill_enabled {
-        return covered_color(fill, opacity, outer_coverage);
+        return covered_color(fill, opacity, fill_coverage);
     }
     return vec4<f32>(0.0);
 }
@@ -217,7 +227,7 @@ fn capsule_signed_distance(position: vec2<f32>, half_length: f32, radius: f32) -
 fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let radius = max(abs(input.geometry.x), 0.000001);
     let signed_distance = length(input.local) - radius;
-    let stroke_width = clamp(input.metrics.x, 0.0, radius);
+    let stroke_width = max(input.metrics.x, 0.0);
     return styled_shape_color(
         input.fill,
         input.stroke,
@@ -233,7 +243,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
-    let stroke_width = clamp(input.metrics.x, 0.0, min(half_size.x, half_size.y));
+    let stroke_width = max(input.metrics.x, 0.0);
     return styled_shape_color(
         input.fill,
         input.stroke,
