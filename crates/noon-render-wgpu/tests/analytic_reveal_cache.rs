@@ -2,7 +2,7 @@ use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D};
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::{FrameObjectState, FrameState};
 
-fn circle(id: u64, radius: f32) -> FrameObjectState {
+fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
     let style = Style {
         fill: None,
         stroke: Some(Color::WHITE),
@@ -11,7 +11,7 @@ fn circle(id: u64, radius: f32) -> FrameObjectState {
     };
     FrameObjectState {
         id: ObjectId::new(id),
-        geometry: GeometryRef::circle(radius),
+        geometry: GeometryRef::rectangle(width, height),
         transform: Transform2D::IDENTITY,
         style,
         appearance: 1.0,
@@ -20,7 +20,14 @@ fn circle(id: u64, radius: f32) -> FrameObjectState {
 
 #[test]
 fn active_analytic_reveal_meshes_survive_cache_pressure_on_full_rebuild() {
-    let objects = vec![circle(1, 0.7), circle(2, 0.9), circle(3, 1.1)];
+    // Circle Create is now fully analytic and intentionally allocates no path
+    // mesh. Rectangles still exercise the transient analytic->path reveal cache
+    // that this regression is intended to protect.
+    let objects = vec![
+        rectangle(1, 1.4, 1.0),
+        rectangle(2, 1.8, 1.2),
+        rectangle(3, 2.2, 1.4),
+    ];
     let frame = FrameState {
         time: 0.5,
         presences: vec![true; objects.len()],
