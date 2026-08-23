@@ -363,6 +363,15 @@ mod wasm {
     const GPU_PROFILE_SLOT_COUNT: usize = 4;
     const GPU_PROFILE_SAMPLE_CAPACITY: usize = 512;
 
+    #[derive(Debug)]
+    struct WebDisplaySource;
+
+    impl wgpu::rwh::HasDisplayHandle for WebDisplaySource {
+        fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+            Ok(wgpu::rwh::DisplayHandle::web())
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct GpuSampleToken {
         slot: usize,
@@ -637,6 +646,7 @@ mod wasm {
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+            instance_descriptor.display = Some(Box::new(WebDisplaySource));
             let instance =
                 wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
             let surface = create_surface(&instance, &canvas)?;
