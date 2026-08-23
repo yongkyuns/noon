@@ -84,6 +84,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
 
+      - name: Test Manim-style Python compatibility
+        run: node scripts/manim-compat-smoke.mjs
+
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs
 

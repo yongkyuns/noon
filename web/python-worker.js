@@ -4,6 +4,7 @@ const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 4;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
+const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -18,15 +19,19 @@ self.addEventListener("message", (event) => {
 
 async function initializePyodide() {
   const pyodide = await loadPyodide();
-  const [apiResponse, irResponse] = await Promise.all([
+  const [apiResponse, irResponse, compatResponse] = await Promise.all([
     fetch(new URL("./python/noon.py", import.meta.url)),
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
+    fetch(new URL("./python/_manim_compat.py", import.meta.url)),
   ]);
   if (!apiResponse.ok) {
     throw new Error(`Unable to load Noon Python API: HTTP ${apiResponse.status}`);
   }
   if (!irResponse.ok) {
     throw new Error(`Unable to load Noon Python IR emitter: HTTP ${irResponse.status}`);
+  }
+  if (!compatResponse.ok) {
+    throw new Error(`Unable to load Noon Manim compatibility layer: HTTP ${compatResponse.status}`);
   }
 
   pyodide.FS.writeFile(PYTHON_MODULE_PATH, await apiResponse.text(), {
@@ -35,7 +40,15 @@ async function initializePyodide() {
   pyodide.FS.writeFile(PYTHON_IR_MODULE_PATH, await irResponse.text(), {
     encoding: "utf8",
   });
-  pyodide.runPython("import sys; sys.path.insert(0, '/tmp')");
+  pyodide.FS.writeFile(MANIM_COMPAT_MODULE_PATH, await compatResponse.text(), {
+    encoding: "utf8",
+  });
+  pyodide.runPython(`
+import sys
+sys.path.insert(0, "/tmp")
+import _manim_compat
+_manim_compat.install()
+`);
   return pyodide;
 }
 
@@ -72,11 +85,40 @@ async function runAuthoringSource(pyodide, source, context) {
 import json
 from noon import PatchBatch, Scene
 
-__noon_namespace = {"context": json.loads(__noon_context_json)}
+__noon_namespace = {
+    "context": json.loads(__noon_context_json),
+    "__name__": "__main__",
+}
 exec(__noon_source, __noon_namespace)
-if "result" not in __noon_namespace:
-    raise RuntimeError("Python authoring source must assign a Scene or PatchBatch to result")
-__noon_result = __noon_namespace["result"]
+
+if "result" in __noon_namespace:
+    __noon_result = __noon_namespace["result"]
+else:
+    __noon_scene_classes = [
+        value
+        for value in __noon_namespace.values()
+        if isinstance(value, type)
+        and issubclass(value, Scene)
+        and value is not Scene
+        and getattr(value, "__module__", None) == "__main__"
+    ]
+    if not __noon_scene_classes:
+        raise RuntimeError(
+            "Python authoring source must either assign result or define one Scene subclass"
+        )
+    if len(__noon_scene_classes) != 1:
+        __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
+        raise RuntimeError(
+            "Python authoring source defines multiple Scene subclasses; "
+            f"select one explicitly via result = SceneClass(): {__noon_names}"
+        )
+    __noon_result = __noon_scene_classes[0]()
+    __noon_result.setup()
+    try:
+        __noon_result.construct()
+    finally:
+        __noon_result.tear_down()
+
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
     __noon_identities = __noon_result.identity_document()
