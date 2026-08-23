@@ -1294,7 +1294,8 @@ mod tests {
         assert_eq!(advanced.lines[0].transform.padding, 0.8);
         assert_eq!(advanced.stats.geometry_cache_misses, 0);
         assert_eq!(advanced.stats.instances_repacked, 1);
-        assert_eq!(advanced.line_dirty_ranges, &[0..1]);
+        assert_eq!(advanced.line_dirty_ranges.len(), 1);
+        assert_eq!(advanced.line_dirty_ranges[0], 0..1);
         assert!(!advanced.path_geometry_dirty);
     }
 
