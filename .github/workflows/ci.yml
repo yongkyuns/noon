@@ -140,6 +140,9 @@ jobs:
       - name: Test Manim composition authoring
         run: node scripts/composition-authoring-smoke.mjs
 
+      - name: Test executable Manim tutorial corpus
+        run: node scripts/manim-tutorial-smoke.mjs
+
   browser-reactive:
     name: Browser reactive and editor
     runs-on: ubuntu-latest

@@ -14,6 +14,7 @@ node --check web/morph-profile.js
 node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
+node --check scripts/manim-tutorial-smoke.mjs
 node --check scripts/composition-authoring-smoke.mjs
 node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
