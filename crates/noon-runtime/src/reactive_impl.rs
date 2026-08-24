@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
-    ObjectId, Property, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
-    ReactiveState, ReactiveValue, SemanticScene, SignalId,
+    ComputeProgram, ComputeState, ObjectId, Property, ReactiveBinding, ReactiveError,
+    ReactiveEvaluationStats, ReactiveValue, SemanticScene, SignalId,
 };
 
 use crate::{FrameState, SceneInstance};
@@ -59,7 +59,7 @@ struct ReactiveTarget {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReactiveRuntime {
-    state: ReactiveState,
+    state: ComputeState,
     targets: Vec<ReactiveTarget>,
     target_lookup: BTreeMap<(u64, u8), usize>,
     targets_by_object: Vec<Vec<usize>>,
@@ -69,7 +69,7 @@ impl ReactiveRuntime {
     fn new(
         compiled: &CompiledScene,
         bindings: &[ReactiveBinding],
-        program: ReactiveProgram,
+        program: ComputeProgram,
     ) -> Self {
         let mut targets = Vec::with_capacity(bindings.len());
         let mut target_lookup = BTreeMap::new();
@@ -111,12 +111,13 @@ impl SceneInstance {
     /// Compile a high-level semantic scene once and attach its validated native
     /// reactive program to this runtime instance.
     ///
-    /// Reactive bindings are lowered to dense frame object indices here. Later
-    /// input updates therefore do not rebuild `SceneDefinition`, recompile the
-    /// timeline, or scan unrelated objects.
+    /// Reactive expressions are flattened into typed compute kernels and bindings
+    /// are lowered to dense frame object indices here. Later input updates therefore
+    /// do not recurse through authoring ASTs, rebuild `SceneDefinition`, recompile
+    /// the timeline, or scan unrelated objects.
     pub fn from_semantic(scene: &SemanticScene) -> Result<Self, SceneBuildError> {
         let compiled = CompiledScene::compile(scene.definition())?;
-        let program = scene.compile_reactive()?;
+        let program = scene.compile_reactive()?.into_compute()?;
         let reactive = ReactiveRuntime::new(&compiled, scene.reactive().bindings(), program);
         let mut instance = Self::new(compiled);
         instance.reactive = Some(reactive);
