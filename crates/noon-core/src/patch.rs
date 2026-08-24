@@ -205,9 +205,8 @@ impl SceneDefinition {
         if transaction.impact() == Some(MutationImpact::Property) {
             for mutation in transaction.mutations() {
                 let object = match mutation {
-                    ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
-                        *object
-                    }
+                    ScenePatch::SetTransform { object, .. }
+                    | ScenePatch::SetStyle { object, .. } => *object,
                     _ => unreachable!("property transaction contains only property mutations"),
                 };
                 if self.object(object).is_none() {
@@ -1133,12 +1132,22 @@ impl std::fmt::Display for ReactiveError {
             Self::UnknownSignal(signal) => write!(formatter, "unknown signal {}", signal.get()),
             Self::UnknownObject(object) => write!(formatter, "unknown object {}", object.get()),
             Self::SignalIdExhausted => formatter.write_str("Noon signal ID space exhausted"),
-            Self::DependencyCycle => formatter.write_str("reactive dependency graph contains a cycle"),
+            Self::DependencyCycle => {
+                formatter.write_str("reactive dependency graph contains a cycle")
+            }
             Self::NonFiniteValue(signal) => {
-                write!(formatter, "signal {} evaluated to a non-finite value", signal.get())
+                write!(
+                    formatter,
+                    "signal {} evaluated to a non-finite value",
+                    signal.get()
+                )
             }
             Self::NotInputSignal(signal) => {
-                write!(formatter, "signal {} is derived and cannot be set directly", signal.get())
+                write!(
+                    formatter,
+                    "signal {} is derived and cannot be set directly",
+                    signal.get()
+                )
             }
             Self::InvalidExpression { signal, operation } => write!(
                 formatter,
