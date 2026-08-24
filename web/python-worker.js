@@ -1,4 +1,8 @@
-import initNoonWeb, { resolveAnimationOptions } from "./pkg/noon_web.js";
+import initNoonWeb, {
+  resolveAnimationOptions,
+  resolveLifecyclePlan,
+  validatePresenceTransition,
+} from "./pkg/noon_web.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
@@ -10,6 +14,7 @@ const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
+const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 
 const pyodidePromise = initializePyodide();
@@ -26,6 +31,8 @@ self.addEventListener("message", (event) => {
 async function initializePyodide() {
   await initNoonWeb();
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+  self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
+  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
 
   const pyodide = await loadPyodide();
   const [
@@ -36,6 +43,7 @@ async function initializePyodide() {
     phaseBResponse,
     animationOptionsResponse,
     animateResponse,
+    lifecycleResponse,
     reactiveResponse,
   ] = await Promise.all([
     fetch(new URL("./python/noon.py", import.meta.url)),
@@ -45,6 +53,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
   ]);
   if (!apiResponse.ok) {
@@ -71,6 +80,9 @@ async function initializePyodide() {
   }
   if (!animateResponse.ok) {
     throw new Error(`Unable to load Noon Manim animate layer: HTTP ${animateResponse.status}`);
+  }
+  if (!lifecycleResponse.ok) {
+    throw new Error(`Unable to load Noon Manim lifecycle layer: HTTP ${lifecycleResponse.status}`);
   }
   if (!reactiveResponse.ok) {
     throw new Error(`Unable to load Noon reactive compatibility layer: HTTP ${reactiveResponse.status}`);
@@ -101,6 +113,9 @@ async function initializePyodide() {
   pyodide.FS.writeFile(MANIM_ANIMATE_MODULE_PATH, await animateResponse.text(), {
     encoding: "utf8",
   });
+  pyodide.FS.writeFile(MANIM_LIFECYCLE_MODULE_PATH, await lifecycleResponse.text(), {
+    encoding: "utf8",
+  });
   pyodide.FS.writeFile(MANIM_REACTIVE_MODULE_PATH, await reactiveResponse.text(), {
     encoding: "utf8",
   });
@@ -113,6 +128,7 @@ import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_phase_b
 import _manim_animate
+import _manim_lifecycle
 import _manim_reactive
 `);
   return pyodide;
@@ -134,6 +150,31 @@ function resolveAnimationOptionsPlain(...args) {
   } finally {
     result.free();
   }
+}
+
+function lifecycleResultPlain(result) {
+  try {
+    return {
+      ok: result.ok,
+      bind: result.bind,
+      showNow: result.showNow,
+      hideNow: result.hideNow,
+      showAtStart: result.showAtStart,
+      hideAtEnd: result.hideAtEnd,
+      errorKind: result.errorKind ?? "",
+      message: result.message ?? "",
+    };
+  } finally {
+    result.free();
+  }
+}
+
+function resolveLifecyclePlanPlain(...args) {
+  return lifecycleResultPlain(resolveLifecyclePlan(...args));
+}
+
+function validatePresenceTransitionPlain(...args) {
+  return lifecycleResultPlain(validatePresenceTransition(...args));
 }
 
 async function handleRequest(request) {
