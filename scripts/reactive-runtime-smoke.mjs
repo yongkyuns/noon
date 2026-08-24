@@ -120,6 +120,11 @@ try {
     (pythonSource) => window.noonManimCompat.run(pythonSource),
     source,
   );
+  assert.deepEqual(
+    authored.document.native_inputs ?? [],
+    [],
+    "ordinary ValueTracker authoring must not declare native input ownership",
+  );
 
   const runtimeInfo = await page.evaluate(async (sceneDocument) => {
     const wasm = await import("./pkg/noon_web.js");

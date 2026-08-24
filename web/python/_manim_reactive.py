@@ -586,6 +586,13 @@ def bind_position(
     return scene
 
 
+public = {
+    "ValueTracker": ValueTracker,
+    "NativeVectorSignal": NativeVectorSignal,
+    "NativeBoolSignal": NativeBoolSignal,
+}
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
