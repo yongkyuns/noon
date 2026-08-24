@@ -33,9 +33,14 @@ impl std::fmt::Display for HostPlayerError {
             Self::Commit(error) => error.fmt(formatter),
             Self::CallbackJson(message) => formatter.write_str(message),
             Self::Sequence { expected, actual } => {
-                write!(formatter, "expected callback patch sequence {expected}, got {actual}")
+                write!(
+                    formatter,
+                    "expected callback patch sequence {expected}, got {actual}"
+                )
             }
-            Self::SequenceExhausted => formatter.write_str("callback patch sequence space exhausted"),
+            Self::SequenceExhausted => {
+                formatter.write_str("callback patch sequence space exhausted")
+            }
         }
     }
 }
@@ -183,23 +188,23 @@ fn decode_callback_registry(json_text: &str) -> Result<HostCallbackRegistry, Hos
         .ok_or_else(|| HostPlayerError::CallbackJson("callback slots must be an array".into()))?;
     let mut decoded = Vec::with_capacity(slots.len());
     for slot in slots {
-        let record = slot
-            .as_object()
-            .ok_or_else(|| HostPlayerError::CallbackJson("callback slot must be an object".into()))?;
-        let id = record
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| HostPlayerError::CallbackJson("callback slot id must be an integer".into()))?;
+        let record = slot.as_object().ok_or_else(|| {
+            HostPlayerError::CallbackJson("callback slot must be an object".into())
+        })?;
+        let id = record.get("id").and_then(Value::as_u64).ok_or_else(|| {
+            HostPlayerError::CallbackJson("callback slot id must be an integer".into())
+        })?;
         let objects = record
             .get("objects")
             .and_then(Value::as_array)
-            .ok_or_else(|| HostPlayerError::CallbackJson("callback slot objects must be an array".into()))?
+            .ok_or_else(|| {
+                HostPlayerError::CallbackJson("callback slot objects must be an array".into())
+            })?
             .iter()
             .map(|value| {
-                value
-                    .as_u64()
-                    .map(ObjectId::new)
-                    .ok_or_else(|| HostPlayerError::CallbackJson("callback object id must be an integer".into()))
+                value.as_u64().map(ObjectId::new).ok_or_else(|| {
+                    HostPlayerError::CallbackJson("callback object id must be an integer".into())
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         decoded.push(HostCallbackSlot {
