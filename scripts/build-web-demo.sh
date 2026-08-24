@@ -25,6 +25,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_phase_b.py \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
+  web/python/_manim_lifecycle.py \
   web/python/_manim_reactive.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
