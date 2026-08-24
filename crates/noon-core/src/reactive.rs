@@ -14,6 +14,10 @@ pub use host_callbacks::*;
 mod lifecycle;
 pub use lifecycle::*;
 
+#[path = "semantic_store.rs"]
+mod semantic_store;
+pub use semantic_store::*;
+
 include!("reactive_impl.rs");
 
 mod compute_ir;
