@@ -1,7 +1,8 @@
 use noon_compile::{CompilePatchError, CompiledScene};
 use noon_core::{
-    Easing, GeometryRef, ObjectDefinition, ObjectId, Property, SceneDefinition, ScenePatch,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    CompositionTimeMap, Easing, GeometryRef, ObjectDefinition, ObjectId, Property,
+    SceneDefinition, ScenePatch, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -47,6 +48,7 @@ fn create_add_track_and_remove_match_full_recompile() {
             to: Vec2::new(6.0, 3.0),
         },
         timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
     };
     let add_track = ScenePatch::AddTrack(track);
     live.apply_patch(&add_track)
@@ -83,6 +85,7 @@ fn rejected_patch_is_transactional() {
         property: Property::Opacity,
         values: TrackValues::Scalar { from: 1.0, to: 0.0 },
         timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
     });
 
     assert_eq!(
@@ -118,6 +121,7 @@ fn replacing_track_preserves_unrelated_object_identity_and_time() {
             to: Vec2::new(8.0, 2.0),
         },
         timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
     });
     live.apply_patch(&patch).expect("live patch must succeed");
     definition
