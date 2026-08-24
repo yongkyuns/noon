@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>Noon updater callback smoke</title>
+  </head>
+  <body>
+    <script type="module">
+      import initNoonWeb, { HostScenePlayer } from "./pkg/noon_web.js";
+      import { PythonAuthoringClient } from "./authoring-client.js";
+
+      const client = new PythonAuthoringClient();
+      const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
+
+      window.noonUpdaterSmoke = {
+        ready: () => readyPromise,
+        run: async (source, times) => {
+          await readyPromise;
+          const result = await client.run(source);
+          if (result.kind !== "scene_document") {
+            throw new Error("updater smoke requires a scene document");
+          }
+          if (result.callbacks === null) {
+            throw new Error("updater smoke scene did not register host callbacks");
+          }
+          const player = new HostScenePlayer(
+            JSON.stringify(result.document),
+            JSON.stringify(result.callbacks.slots),
+          );
+          const phases = [];
+          try {
+            for (const time of times) {
+              player.advanceTo(time);
+              const frame = JSON.parse(player.callbackFrameJson());
+              const sequence = Number(player.nextSequence());
+              const batch = await client.runCallbackPhase(
+                result.callbacks.session_id,
+                frame,
+                sequence,
+              );
+              player.commitPatchBatch(JSON.stringify(batch));
+              phases.push({ frame, batch });
+            }
+            const finalFrame = JSON.parse(player.callbackFrameJson());
+            return {
+              result,
+              phases,
+              finalFrame,
+              nextSequence: Number(player.nextSequence()),
+            };
+          } finally {
+            player.free();
+          }
+        },
+      };
+    </script>
+  </body>
+</html>

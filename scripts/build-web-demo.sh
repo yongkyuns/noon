@@ -17,6 +17,7 @@ node --check scripts/manim-compat-smoke.mjs
 node --check scripts/composition-authoring-smoke.mjs
 node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
+node --check scripts/updater-callback-smoke.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
@@ -28,7 +29,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_animate.py \
   web/python/_manim_composition.py \
   web/python/_manim_lifecycle.py \
-  web/python/_manim_reactive.py
+  web/python/_manim_reactive.py \
+  web/python/_manim_updaters.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
 cargo test -p noon-web --test playground_examples

@@ -99,6 +99,9 @@ jobs:
       - name: Test native reactive browser runtime
         run: node scripts/reactive-runtime-smoke.mjs
 
+      - name: Test Python updater callback bridge
+        run: node scripts/updater-callback-smoke.mjs
+
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs
 
