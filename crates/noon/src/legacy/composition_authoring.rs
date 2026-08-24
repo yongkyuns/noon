@@ -1,7 +1,7 @@
 use super::{Animation, AuthoringError, IntoAnimations, Scene};
 use noon_core::{
-    resolve_composition_schedule, CompositionTimeMap, CompositionTimeMapStep, Property, RateFunction,
-    TrackId, TrackTiming,
+    resolve_composition_schedule, CompositionTimeMap, CompositionTimeMapStep, Property,
+    RateFunction, TrackId, TrackTiming,
 };
 
 pub const DEFAULT_LAGGED_START_LAG_RATIO: f64 = 0.05;
@@ -191,12 +191,10 @@ fn intrinsic_run_time(animation: &Animation) -> Result<f64, AuthoringError> {
                 .iter()
                 .map(intrinsic_run_time)
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(resolve_composition_schedule(
-                &child_run_times,
-                group.lag_ratio,
-                group.run_time,
-            )?
-            .run_time)
+            Ok(
+                resolve_composition_schedule(&child_run_times, group.lag_ratio, group.run_time)?
+                    .run_time,
+            )
         }
         _ => Ok(1.0),
     }
@@ -215,7 +213,10 @@ fn schedule_leaf(
     scene.cursor = start;
     scene.schedule(vec![animation], duration, None)?;
 
-    if !path.iter().any(|step| step.rate_func != RateFunction::Linear) {
+    if !path
+        .iter()
+        .any(|step| step.rate_func != RateFunction::Linear)
+    {
         return Ok(());
     }
 
@@ -292,7 +293,10 @@ mod tests {
         }
         assert!((tracks[0].time_map.steps[0].start - 0.0).abs() < 1e-12);
         assert!((tracks[1].time_map.steps[0].start - 0.5).abs() < 1e-12);
-        assert_eq!(scene.snapshot(circle).unwrap().transform.translation, RIGHT + UP);
+        assert_eq!(
+            scene.snapshot(circle).unwrap().transform.translation,
+            RIGHT + UP
+        );
         assert_eq!(scene.time(), 2.0);
     }
 
@@ -330,7 +334,10 @@ mod tests {
         let first = scene.add(Circle::new(0.4));
         let second = scene.add(Square::new(0.8));
         scene
-            .play(LaggedStart::new((first.animate().shift(UP), second.animate().shift(UP))))
+            .play(LaggedStart::new((
+                first.animate().shift(UP),
+                second.animate().shift(UP),
+            )))
             .run_time(2.1)
             .unwrap();
 
