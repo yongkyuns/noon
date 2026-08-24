@@ -1,0 +1,72 @@
+{
+  "reference": {
+    "package": "manim",
+    "version": "0.21.0"
+  },
+  "statuses": [
+    "supported",
+    "partial",
+    "blocked",
+    "deferred",
+    "intentional-divergence",
+    "missing"
+  ],
+  "overrides": {
+    "Mobject": {"status": "partial", "category": "core-object", "dependency": "#74", "reason": "Common transform/style/layout methods exist; full family/state/query parity is pending."},
+    "VMobject": {"status": "partial", "category": "core-object", "dependency": "#74/#78", "reason": "Vector object facade exists; full path-building/query semantics are pending."},
+    "Group": {"status": "partial", "category": "core-object", "dependency": "#51/#74", "reason": "Authoring group exists but retained semantic family identity is still being migrated."},
+    "VGroup": {"status": "partial", "category": "core-object", "dependency": "#51/#74", "reason": "Authoring group exists but retained semantic family identity is still being migrated."},
+    "Scene": {"status": "partial", "category": "scene", "dependency": "#89", "reason": "Core add/remove/play/wait lifecycle exists; ordering/camera/section breadth is pending."},
+    "Circle": {"status": "supported", "category": "geometry", "evidence": "#57"},
+    "Rectangle": {"status": "supported", "category": "geometry", "evidence": "#57"},
+    "Square": {"status": "supported", "category": "geometry", "evidence": "#57"},
+    "Line": {"status": "supported", "category": "geometry", "evidence": "#57"},
+    "Create": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
+    "FadeIn": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
+    "FadeOut": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
+    "Transform": {"status": "supported", "category": "animation", "evidence": "generic transform tests"},
+    "ReplacementTransform": {"status": "supported", "category": "animation", "evidence": "lifecycle tests"},
+    "TransformFromCopy": {"status": "supported", "category": "animation", "evidence": "transform-from-copy tests"},
+    "TransformMatchingShapes": {"status": "supported", "category": "animation", "evidence": "matching-shapes tests"},
+    "AnimationGroup": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
+    "LaggedStart": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
+    "Succession": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
+    "ValueTracker": {"status": "supported", "category": "reactive", "evidence": "reactive authoring/runtime tests"},
+    "linear": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
+    "smooth": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
+    "rush_into": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
+    "rush_from": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
+    "there_and_back": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"}
+  },
+  "module_rules": [
+    {"prefix": "manim.mobject.text", "status": "blocked", "category": "text-math", "dependency": "#65/#83"},
+    {"prefix": "manim.mobject.graph", "status": "blocked", "category": "graph-network", "dependency": "#87"},
+    {"prefix": "manim.mobject.matrix", "status": "blocked", "category": "matrix-table", "dependency": "#84"},
+    {"prefix": "manim.mobject.table", "status": "blocked", "category": "matrix-table", "dependency": "#84"},
+    {"prefix": "manim.mobject.coordinate_systems", "status": "blocked", "category": "plotting", "dependency": "#85"},
+    {"prefix": "manim.mobject.functions", "status": "blocked", "category": "plotting", "dependency": "#85"},
+    {"prefix": "manim.mobject.number_line", "status": "blocked", "category": "plotting", "dependency": "#85"},
+    {"prefix": "manim.mobject.probability", "status": "blocked", "category": "visualization", "dependency": "#88"},
+    {"prefix": "manim.mobject.vector_field", "status": "blocked", "category": "visualization", "dependency": "#88"},
+    {"prefix": "manim.mobject.svg", "status": "blocked", "category": "asset-import", "dependency": "#79"},
+    {"prefix": "manim.mobject.three_d", "status": "deferred", "category": "3d", "dependency": "#90"},
+    {"prefix": "manim.scene.three_d_scene", "status": "deferred", "category": "3d", "dependency": "#90"},
+    {"prefix": "manim.scene.vector_space_scene", "status": "deferred", "category": "vector-space-scene", "dependency": "#90"},
+    {"prefix": "manim.scene.moving_camera_scene", "status": "blocked", "category": "scene-camera", "dependency": "#89"},
+    {"prefix": "manim.scene.zoomed_scene", "status": "blocked", "category": "scene-camera", "dependency": "#89"},
+    {"prefix": "manim.animation.transform_matching_parts", "status": "blocked", "category": "animation-transform", "dependency": "#82/#83"},
+    {"prefix": "manim.animation.transform", "status": "missing", "category": "animation-transform", "dependency": "#82"},
+    {"prefix": "manim.animation.indication", "status": "missing", "category": "animation-indication", "dependency": "#81"},
+    {"prefix": "manim.animation.changing", "status": "missing", "category": "animation-dynamic", "dependency": "#81"},
+    {"prefix": "manim.animation.updaters", "status": "missing", "category": "animation-dynamic", "dependency": "#81/#70"},
+    {"prefix": "manim.animation", "status": "missing", "category": "animation", "dependency": "#80/#81/#82"},
+    {"prefix": "manim.mobject.geometry", "status": "missing", "category": "geometry", "dependency": "#76/#77"},
+    {"prefix": "manim.mobject.types.vectorized_mobject", "status": "missing", "category": "vector-path", "dependency": "#74/#78"},
+    {"prefix": "manim.scene", "status": "missing", "category": "scene", "dependency": "#89"}
+  ],
+  "default": {
+    "status": "missing",
+    "category": "other-public-api",
+    "reason": "Public in ManimCE v0.21.0 and not yet classified as supported by Noon."
+  }
+}
