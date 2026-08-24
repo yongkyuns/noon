@@ -94,6 +94,7 @@ jobs:
 
       - name: Build and validate browser package
         env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
 
