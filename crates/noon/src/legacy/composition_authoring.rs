@@ -163,15 +163,9 @@ fn schedule_group_inner(
         ));
 
         match child {
-            Animation::Group(group) => schedule_group_inner(
-                scene,
-                group,
-                child_start,
-                child_duration,
-                None,
-                root,
-                path,
-            )?,
+            Animation::Group(group) => {
+                schedule_group_inner(scene, group, child_start, child_duration, None, root, path)?
+            }
             leaf => schedule_leaf(scene, leaf, child_start, child_duration, root, path)?,
         }
         path.pop();
