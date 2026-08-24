@@ -84,6 +84,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
 
+      - name: Test Rust/Python semantic parity
+        run: node scripts/cross-language-parity.mjs
+
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
 
