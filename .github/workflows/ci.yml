@@ -87,6 +87,9 @@ jobs:
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
 
+      - name: Test Manim composition authoring
+        run: node scripts/composition-authoring-smoke.mjs
+
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
 
