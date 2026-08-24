@@ -1,6 +1,10 @@
 name: Fuzz
 
 on:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
   workflow_dispatch:
   schedule:
     - cron: "23 4 * * 0"
@@ -9,8 +13,27 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    name: Build fuzz targets
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Compile all fuzz targets
+        run: |
+          cd fuzz
+          cargo fuzz build scene_decode
+          cargo fuzz build patch_transaction
+          cargo fuzz build tessellation
+          cargo fuzz build morph
+
   fuzz:
     name: ${{ matrix.target }}
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
