@@ -3,6 +3,9 @@ pub use time_map::*;
 
 use serde::{Deserialize, Serialize};
 
+use crate::timeline::validate_track_definition;
+use crate::{SceneDefinition, TimelineError, TrackId, TrackTiming};
+
 /// One child's interval within a resolved animation composition.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompositionInterval {
@@ -143,9 +146,35 @@ pub fn resolve_uniform_composition_schedule(
     resolve_composition_schedule(&child_run_times, lag_ratio, Some(run_time))
 }
 
+impl SceneDefinition {
+    /// Atomically retime one existing non-instant track and attach a validated
+    /// root-to-leaf composition time map.
+    ///
+    /// This is an authoring-time lowering primitive. It preserves stable track
+    /// identity and keeps the persisted scene as ordinary tracks rather than
+    /// introducing a second composition graph into the runtime document.
+    pub fn remap_track_for_composition(
+        &mut self,
+        id: TrackId,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> Result<bool, TimelineError> {
+        let Some(index) = self.tracks.iter().position(|track| track.id == id) else {
+            return Ok(false);
+        };
+        let mut candidate = self.tracks[index].clone();
+        candidate.timing = timing;
+        candidate.time_map = time_map;
+        validate_track_definition(&candidate)?;
+        self.tracks[index] = candidate;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
 
     #[test]
     fn parallel_children_start_together_and_keep_longest_runtime() {
@@ -231,6 +260,44 @@ mod tests {
         assert_eq!(
             resolve_composition_schedule(&[1.0], 0.0, Some(0.0)),
             Err(CompositionError::InvalidRunTime(0.0))
+        );
+    }
+
+    #[test]
+    fn remap_track_preserves_identity_and_validates_time_map() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let id = scene
+            .animate_position(
+                object,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.5, 0.5, RateFunction::Linear),
+            )
+            .unwrap();
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+
+        assert!(scene
+            .remap_track_for_composition(
+                id,
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                map.clone(),
+            )
+            .unwrap());
+        let track = &scene.tracks()[0];
+        assert_eq!(track.id, id);
+        assert_eq!(track.time_map, map);
+        assert_eq!(track.property, Property::Position);
+        assert_eq!(
+            track.values,
+            TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::ONE,
+            }
         );
     }
 }
