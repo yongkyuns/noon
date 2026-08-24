@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "objects": [{
+    "id": 0,
+    "geometry": {"circle": {"radius": 1.0}},
+    "transform": {"translation": {"x": 0.0, "y": 0.0}, "rotation": 0.0, "scale": {"x": 1.0, "y": 1.0}},
+    "style": {"fill": null, "stroke": null, "stroke_width": 1.0, "stroke_join": "round", "stroke_cap": "round", "opacity": 1.0}
+  }],
+  "tracks": [],
+  "reactive": {"signals": [{"id": 0, "source": {"input": {"scalar": 1.5}}}], "bindings": [{"signal": 0, "object": 0, "property": "rotation"}]}
+}
