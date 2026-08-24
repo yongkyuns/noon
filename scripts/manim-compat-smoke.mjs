@@ -40,6 +40,13 @@ from noon import *
 
 class Demo(Scene):
     def construct(self):
+        assert abs(smooth(0.25) - 0.07010372) < 1e-7
+        assert abs(smooth(0.5) - 0.5) < 1e-12
+        assert abs(smooth(0.75) - 0.92989628) < 1e-7
+        assert abs(rush_into(0.5) - 2.0 * smooth(0.25)) < 1e-12
+        assert abs(rush_from(0.5) - (2.0 * smooth(0.75) - 1.0)) < 1e-12
+        assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
+
         circle = Circle(radius=0.6, color=BLUE)
         square = Square(side_length=1.0, color=PINK).next_to(circle, RIGHT)
         assert isinstance(circle, Circle)
@@ -182,6 +189,19 @@ class AnimateParity(Scene):
             assert "only be passed once" in str(error)
 `;
 
+const rateFunctionSource = `
+from noon import *
+
+class SharedRateFunctions(Scene):
+    def construct(self):
+        circle = Circle(radius=0.2, color=BLUE)
+        self.add(circle)
+        self.play(circle.animate.shift(RIGHT), run_time=0.2)
+        self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=rush_into)
+        self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rush_from)
+        self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
+`;
+
 let browser = null;
 try {
   await waitForServer();
@@ -215,8 +235,8 @@ try {
 
   const revealTracks = foundation.document.tracks.filter((track) => track.property === "reveal");
   assert.ok(
-    revealTracks.every((track) => track.timing.easing === "ease_in_out_cubic"),
-    "rate_func=smooth should lower to deterministic ease_in_out_cubic",
+    revealTracks.every((track) => track.timing.easing === "smooth"),
+    "rate_func=smooth should lower to the shared smooth semantic ID",
   );
   const transform = foundation.document.tracks.find((track) => track.property === "transform");
   assert.equal(transform.timing.easing, "linear");
@@ -275,7 +295,7 @@ try {
   assert.equal(byObject.get(0)[1].timing.duration, 0.5);
   assert.equal(byObject.get(1)[0].timing.start_time, 2);
   assert.equal(byObject.get(1)[0].timing.duration, 2);
-  assert.equal(byObject.get(1)[0].timing.easing, "ease_in_out_cubic");
+  assert.equal(byObject.get(1)[0].timing.easing, "smooth");
 
   const groupFirst = byObject.get(2)[0];
   const groupSecond = byObject.get(3)[0];
@@ -283,16 +303,29 @@ try {
   assert.ok(Math.abs(groupFirst.timing.duration - 0.8) < 1e-9);
   assert.ok(Math.abs(groupSecond.timing.start_time - 4.4) < 1e-9);
   assert.ok(Math.abs(groupSecond.timing.duration - 0.8) < 1e-9);
-  assert.equal(groupFirst.timing.easing, "ease_in_out_cubic");
-  assert.equal(groupSecond.timing.easing, "ease_in_out_cubic");
+  assert.equal(groupFirst.timing.easing, "smooth");
+  assert.equal(groupSecond.timing.easing, "smooth");
 
   const overridden = byObject.get(4)[0];
   assert.ok(Math.abs(overridden.timing.start_time - 5.2) < 1e-9);
   assert.ok(Math.abs(overridden.timing.duration - 0.4) < 1e-9);
   assert.equal(
     overridden.timing.easing,
-    "ease_in_out_cubic",
+    "smooth",
     "Scene.play kwargs should override builder animation kwargs",
+  );
+
+  const sharedRates = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    rateFunctionSource,
+  );
+  const rateTracks = sharedRates.document.tracks.filter(
+    (track) => track.property === "transform",
+  );
+  assert.deepEqual(
+    rateTracks.map((track) => track.timing.easing),
+    ["smooth", "rush_into", "rush_from", "there_and_back"],
+    "known Python callables should lower directly to shared Rust semantic IDs",
   );
 
   let zError = null;
@@ -308,7 +341,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, z=0 vectors, and deterministic rate_func lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
