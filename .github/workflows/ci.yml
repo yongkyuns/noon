@@ -168,6 +168,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Test playground viewport layout
+        run: node scripts/playground-layout-smoke.mjs
+
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
 
