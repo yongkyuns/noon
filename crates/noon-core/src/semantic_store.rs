@@ -160,8 +160,8 @@ impl SemanticStore {
             self.free_head = slot.next_free.take();
             (slot_index, slot.generation)
         } else {
-            let slot_index = u32::try_from(self.slots.len())
-                .expect("Noon semantic node slot space exhausted");
+            let slot_index =
+                u32::try_from(self.slots.len()).expect("Noon semantic node slot space exhausted");
             self.slots.push(SemanticSlot {
                 generation: 0,
                 node: None,
@@ -253,7 +253,10 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<(), SemanticStoreError> {
-        if !matches!(self.node(family).map(SemanticNode::kind), Some(SemanticNodeKind::Family)) {
+        if !matches!(
+            self.node(family).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Family)
+        ) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -301,7 +304,10 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<bool, SemanticStoreError> {
-        if !matches!(self.node(family).map(SemanticNode::kind), Some(SemanticNodeKind::Family)) {
+        if !matches!(
+            self.node(family).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Family)
+        ) {
             return Err(SemanticStoreError::NotFamily(family));
         }
         if self.node(member).is_none() {
@@ -497,7 +503,10 @@ mod tests {
         let child = store.insert_object(object(1));
         store.add_member(first_family, child).unwrap();
         store.add_member(second_family, child).unwrap();
-        assert_eq!(store.node(child).unwrap().parents(), &[first_family, second_family]);
+        assert_eq!(
+            store.node(child).unwrap().parents(),
+            &[first_family, second_family]
+        );
         assert_eq!(store.node(first_family).unwrap().members(), &[child]);
         assert_eq!(store.node(second_family).unwrap().members(), &[child]);
     }
@@ -520,7 +529,9 @@ mod tests {
         let first = store.insert_object(object(1));
         let second = store.insert_object(object(2));
         let source = SourceIdentity::ExplicitKey("hero".into());
-        store.set_source_identity(first, Some(source.clone())).unwrap();
+        store
+            .set_source_identity(first, Some(source.clone()))
+            .unwrap();
         assert_eq!(store.node_for_source(&source), Some(first));
         assert!(matches!(
             store.set_source_identity(second, Some(source)),
