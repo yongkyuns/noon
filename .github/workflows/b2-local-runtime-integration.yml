@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: b2-local-timeline-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integrate:
     if: github.actor != 'github-actions[bot]'
@@ -16,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: arch/b2-slot-storage
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Apply local timeline migration
         run: |
