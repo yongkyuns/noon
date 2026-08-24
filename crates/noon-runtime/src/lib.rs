@@ -2,8 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod execution_slots;
 mod reactive;
 
+pub use execution_slots::*;
 pub use reactive::*;
 
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
@@ -148,6 +150,7 @@ pub struct SceneInstance {
     compiled: CompiledScene,
     frame: FrameState,
     groups: Vec<TrackGroup>,
+    timeline_scheduler: TimelineEventScheduler,
     last_stats: EvaluationStats,
     changes: FrameChanges,
     reactive: Option<ReactiveRuntime>,
@@ -158,10 +161,12 @@ impl SceneInstance {
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
         let groups = build_groups(compiled.tracks());
+        let timeline_scheduler = TimelineEventScheduler::new(compiled.tracks());
         let mut instance = Self {
             compiled,
             frame,
             groups,
+            timeline_scheduler,
             last_stats: EvaluationStats::default(),
             changes: FrameChanges::all(),
             reactive: None,
@@ -230,6 +235,7 @@ impl SceneInstance {
         let current_time = self.frame.time;
         self.compiled.apply_patch(patch)?;
         self.groups = build_groups(self.compiled.tracks());
+        self.timeline_scheduler = TimelineEventScheduler::new(self.compiled.tracks());
         self.seek_unchecked(current_time);
         Ok(&self.frame)
     }
@@ -296,6 +302,7 @@ impl SceneInstance {
             apply_group(&mut self.frame, slice, group, time);
             stats.groups_evaluated += 1;
         }
+        self.timeline_scheduler.seek(time);
 
         self.reapply_reactive();
         self.last_stats = stats;
@@ -303,11 +310,13 @@ impl SceneInstance {
 
     fn advance_unchecked(&mut self, time: f64) {
         self.frame.time = time;
+        let requested = self.timeline_scheduler.advance(time).to_vec();
         let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
         let changes = &mut self.changes;
 
-        for group in &mut self.groups {
+        for group_index in requested {
+            let group = &mut self.groups[group_index];
             let slice = &tracks[group.start..group.end];
             while group.cursor < slice.len() && slice[group.cursor].timing.start_time <= time {
                 group.cursor += 1;

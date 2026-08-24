@@ -6,6 +6,9 @@ use crate::{
     TrackDefinition, TrackId, Transform2D,
 };
 
+mod transaction_preflight;
+pub use transaction_preflight::*;
+
 /// Coarse invalidation class for a semantic scene mutation.
 ///
 /// The ordering is intentional: a transaction's impact is the maximum impact
@@ -209,11 +212,11 @@ impl SceneDefinition {
             return Ok(());
         }
 
-        let mut staged = self.clone();
+        preflight_transaction(self, transaction)?;
         for mutation in transaction.mutations() {
-            staged.apply_patch(mutation.clone())?;
+            self.apply_patch(mutation.clone())
+                .expect("transaction was fully preflighted");
         }
-        *self = staged;
         Ok(())
     }
 
