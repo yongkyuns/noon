@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    validate_track_timing, Property, ReactiveGraphDefinition, ReactiveValue, SemanticScene,
-    SignalId, SignalSource, TimelineError, TrackTiming,
+    validate_track_timing, NativeInputDefinition, NativeInputError, Property,
+    ReactiveGraphDefinition, ReactiveValue, SemanticScene, SignalId, SignalSource, TimelineError,
+    TrackTiming,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -135,6 +136,7 @@ impl SignalTimelineDefinition {
 pub struct TimedSemanticScene {
     scene: SemanticScene,
     signal_timeline: SignalTimelineDefinition,
+    native_inputs: NativeInputDefinition,
 }
 
 impl TimedSemanticScene {
@@ -142,6 +144,7 @@ impl TimedSemanticScene {
         Self {
             scene,
             signal_timeline: SignalTimelineDefinition::new(),
+            native_inputs: NativeInputDefinition::new(),
         }
     }
 
@@ -149,13 +152,30 @@ impl TimedSemanticScene {
         scene: SemanticScene,
         signal_timeline: SignalTimelineDefinition,
     ) -> Result<Self, SignalTimelineError> {
+        Self::from_parts_with_native_inputs(scene, signal_timeline, NativeInputDefinition::new())
+    }
+
+    pub fn from_parts_with_native_inputs(
+        scene: SemanticScene,
+        signal_timeline: SignalTimelineDefinition,
+        native_inputs: NativeInputDefinition,
+    ) -> Result<Self, SignalTimelineError> {
         let validated = SignalTimelineDefinition::from_parts(
             scene.reactive(),
             signal_timeline.tracks().to_vec(),
         )?;
+        native_inputs.validate(scene.reactive())?;
+        if let Some(track) = validated
+            .tracks()
+            .iter()
+            .find(|track| native_inputs.drives(track.signal))
+        {
+            return Err(SignalTimelineError::ExternallyDrivenSignal(track.signal));
+        }
         Ok(Self {
             scene,
             signal_timeline: validated,
+            native_inputs,
         })
     }
 
@@ -175,14 +195,33 @@ impl TimedSemanticScene {
         &mut self.signal_timeline
     }
 
+    pub fn native_inputs(&self) -> &NativeInputDefinition {
+        &self.native_inputs
+    }
+
+    pub fn native_inputs_mut(&mut self) -> &mut NativeInputDefinition {
+        &mut self.native_inputs
+    }
+
     pub fn into_parts(self) -> (SemanticScene, SignalTimelineDefinition) {
         (self.scene, self.signal_timeline)
+    }
+
+    pub fn into_all_parts(
+        self,
+    ) -> (
+        SemanticScene,
+        SignalTimelineDefinition,
+        NativeInputDefinition,
+    ) {
+        (self.scene, self.signal_timeline, self.native_inputs)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SignalTimelineError {
     Timeline(TimelineError),
+    NativeInput(NativeInputError),
     UnknownSignal(SignalId),
     NotInputSignal(SignalId),
     NonScalarSignal(SignalId),
@@ -207,6 +246,7 @@ impl std::fmt::Display for SignalTimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeline(error) => error.fmt(formatter),
+            Self::NativeInput(error) => write!(formatter, "invalid native input binding: {error}"),
             Self::UnknownSignal(signal) => write!(formatter, "unknown signal id {}", signal.get()),
             Self::NotInputSignal(signal) => write!(
                 formatter,
@@ -243,7 +283,7 @@ impl std::fmt::Display for SignalTimelineError {
             ),
             Self::ExternallyDrivenSignal(signal) => write!(
                 formatter,
-                "signal {} is timeline-driven and cannot also be mutated as an external input",
+                "signal {} is timeline-driven and cannot also be driven by an external/native input",
                 signal.get()
             ),
         }
@@ -258,9 +298,17 @@ impl From<TimelineError> for SignalTimelineError {
     }
 }
 
+impl From<NativeInputError> for SignalTimelineError {
+    fn from(value: NativeInputError) -> Self {
+        Self::NativeInput(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{GeometryRef, RateFunction, TrackTiming};
+    use crate::{
+        GeometryRef, NativeEventSource, NativeStateSource, RateFunction, TrackTiming, Vec2,
+    };
 
     use super::*;
 
@@ -323,6 +371,45 @@ mod tests {
                 TrackTiming::new(1.0, 1.0, RateFunction::Linear),
             ),
             Err(SignalTimelineError::DiscontinuousTrack { .. })
+        ));
+    }
+
+    #[test]
+    fn timed_scene_validates_native_input_types_and_timeline_ownership() {
+        let mut scene = SemanticScene::new();
+        let pointer = scene.add_input(Vec2::ZERO);
+        let clicks = scene.add_input(0.0_f32);
+        let mut inputs = NativeInputDefinition::new();
+        inputs
+            .bind_state(NativeStateSource::PointerPosition, pointer)
+            .bind_event(NativeEventSource::PointerDown { button: 0 }, clicks);
+        let timed = TimedSemanticScene::from_parts_with_native_inputs(
+            scene.clone(),
+            SignalTimelineDefinition::new(),
+            inputs,
+        )
+        .unwrap();
+        assert_eq!(timed.native_inputs().bindings().len(), 2);
+
+        let mut conflicting_inputs = NativeInputDefinition::new();
+        conflicting_inputs.bind_event(NativeEventSource::Wheel, clicks);
+        let mut timeline = SignalTimelineDefinition::new();
+        timeline
+            .add_scalar_track(
+                scene.reactive(),
+                clicks,
+                0.0,
+                1.0,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            )
+            .unwrap();
+        assert!(matches!(
+            TimedSemanticScene::from_parts_with_native_inputs(
+                scene,
+                timeline,
+                conflicting_inputs,
+            ),
+            Err(SignalTimelineError::ExternallyDrivenSignal(signal)) if signal == clicks
         ));
     }
 }

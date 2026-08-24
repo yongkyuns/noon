@@ -1,8 +1,9 @@
-"""Thin Manim-style tracker adapters for Noon's native reactive graph.
+"""Thin Manim-style tracker and native-input adapters for Noon's reactive graph.
 
 This module never evaluates dependencies or mutates rendered objects per frame. It records
-signal declarations, deterministic signal tracks, and property bindings in the language-neutral
-semantic document; Rust validates, lowers, evaluates, and invalidates runtime state.
+signal declarations, deterministic signal tracks, native input bindings, and property bindings
+in the language-neutral semantic document; Rust validates, lowers, evaluates, and invalidates
+runtime state.
 """
 
 from __future__ import annotations
@@ -32,6 +33,22 @@ def _finite_scalar(name: str, value: object) -> float:
 def _vec2_ir(value: object) -> dict[str, float]:
     vector = _base._as_vec2(value)
     return {"x": float(vector.x), "y": float(vector.y)}
+
+
+def _nonempty_string(name: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
+    if not value.strip():
+        raise ValueError(f"{name} must not be empty")
+    return value
+
+
+def _button(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("button must be an integer")
+    if value < 0 or value > 255:
+        raise ValueError("button must be in the range 0..255")
+    return value
 
 
 class _ValueAnimationBuilder:
@@ -75,6 +92,10 @@ class ValueTracker:
     def set_value(self, value: float) -> ValueTracker:
         value = _finite_scalar("value", value)
         if self._scene is not None and self._signal_id is not None:
+            if _native_drives_signal(self._scene, self._signal_id):
+                raise ValueError(
+                    "native input-owned ValueTracker cannot be set directly after authoring"
+                )
             if any(
                 track["signal"] == self._signal_id
                 for track in getattr(self._scene, "_reactive_signal_tracks", [])
@@ -103,11 +124,30 @@ class ValueTracker:
         return _ValueAnimationBuilder(self)
 
 
+class _NativeSignal:
+    def __init__(self, scene: _ir.Scene, signal_id: int) -> None:
+        self._scene = scene
+        self._signal_id = signal_id
+
+    @property
+    def signal_id(self) -> int:
+        return self._signal_id
+
+
+class NativeVectorSignal(_NativeSignal):
+    """Thin handle for a native Vec2-valued input signal."""
+
+
+class NativeBoolSignal(_NativeSignal):
+    """Thin handle for a native bool-valued input signal."""
+
+
 def _scene_init(self: _ir.Scene) -> None:
     _ORIGINAL_SCENE_INIT(self)
     self._reactive_signals: list[dict[str, Any]] = []
     self._reactive_bindings: list[dict[str, Any]] = []
     self._reactive_signal_tracks: list[dict[str, Any]] = []
+    self._native_inputs: list[dict[str, Any]] = []
 
 
 def _to_document(self: _ir.Scene) -> dict[str, Any]:
@@ -115,6 +155,7 @@ def _to_document(self: _ir.Scene) -> dict[str, Any]:
     signals = getattr(self, "_reactive_signals", [])
     bindings = getattr(self, "_reactive_bindings", [])
     signal_tracks = getattr(self, "_reactive_signal_tracks", [])
+    native_inputs = getattr(self, "_native_inputs", [])
     if signals or bindings:
         document["reactive"] = {
             "signals": list(signals),
@@ -122,7 +163,17 @@ def _to_document(self: _ir.Scene) -> dict[str, Any]:
         }
     if signal_tracks:
         document["signal_tracks"] = list(signal_tracks)
+    if native_inputs:
+        document["native_inputs"] = list(native_inputs)
     return document
+
+
+def _append_input(scene: _ir.Scene, value: dict[str, Any]) -> int:
+    signal_id = len(scene._reactive_signals)
+    scene._reactive_signals.append(
+        {"id": signal_id, "source": {"input": value}}
+    )
+    return signal_id
 
 
 def _attach_tracker(scene: _ir.Scene, tracker: ValueTracker) -> int:
@@ -131,15 +182,8 @@ def _attach_tracker(scene: _ir.Scene, tracker: ValueTracker) -> int:
     if tracker._scene is not None and tracker._scene is not scene:
         raise ValueError("ValueTracker already belongs to another Scene")
     if tracker._signal_id is None:
-        signal_id = len(scene._reactive_signals)
-        scene._reactive_signals.append(
-            {
-                "id": signal_id,
-                "source": {"input": {"scalar": tracker.get_value()}},
-            }
-        )
+        tracker._signal_id = _append_input(scene, {"scalar": tracker.get_value()})
         tracker._scene = scene
-        tracker._signal_id = signal_id
     return tracker._signal_id
 
 
@@ -166,6 +210,58 @@ def _bind(scene: _base.Scene, signal_id: int, mobject: object, property_name: st
     )
 
 
+def _native_drives_signal(scene: _ir.Scene, signal_id: int) -> bool:
+    for binding in getattr(scene, "_native_inputs", []):
+        payload = binding.get("state") or binding.get("event")
+        if payload is not None and payload.get("signal") == signal_id:
+            return True
+    return False
+
+
+def _register_native_state(
+    scene: _ir.Scene, source: dict[str, Any], signal_id: int
+) -> None:
+    if _native_drives_signal(scene, signal_id):
+        raise ValueError(f"signal {signal_id} already has a native input driver")
+    scene._native_inputs.append(
+        {"state": {"source": source, "signal": signal_id}}
+    )
+
+
+def _register_native_event(
+    scene: _ir.Scene, source: dict[str, Any], signal_id: int
+) -> None:
+    if _native_drives_signal(scene, signal_id):
+        raise ValueError(f"signal {signal_id} already has a native input driver")
+    scene._native_inputs.append(
+        {"event": {"source": source, "signal": signal_id}}
+    )
+
+
+def _native_vector_signal(
+    scene: _ir.Scene, source: dict[str, Any]
+) -> NativeVectorSignal:
+    signal_id = _append_input(scene, {"vec2": {"x": 0.0, "y": 0.0}})
+    _register_native_state(scene, source, signal_id)
+    return NativeVectorSignal(scene, signal_id)
+
+
+def _native_bool_signal(
+    scene: _ir.Scene, source: dict[str, Any], initial: bool
+) -> NativeBoolSignal:
+    if not isinstance(initial, bool):
+        raise TypeError("initial must be a bool")
+    signal_id = _append_input(scene, {"bool": initial})
+    _register_native_state(scene, source, signal_id)
+    return NativeBoolSignal(scene, signal_id)
+
+
+def _native_event_tracker(scene: _ir.Scene, source: dict[str, Any]) -> ValueTracker:
+    tracker = value_tracker(scene, 0.0)
+    _register_native_event(scene, source, tracker.signal_id)
+    return tracker
+
+
 def _initial_scalar(scene: _ir.Scene, signal_id: int) -> float:
     source = scene._reactive_signals[signal_id]["source"]
     if "input" not in source or "scalar" not in source["input"]:
@@ -184,6 +280,10 @@ def _schedule_value_builder(
     if builder.target_value is None:
         raise ValueError("ValueTracker.animate must call set_value or increment_value")
     signal_id = _attach_tracker(scene, builder.tracker)
+    if _native_drives_signal(scene, signal_id):
+        raise ValueError(
+            "native input-owned ValueTracker cannot also be timeline-driven"
+        )
     previous = next(
         (
             track
@@ -310,6 +410,101 @@ def value_tracker(scene: _base.Scene, value: float = 0.0) -> ValueTracker:
     return tracker
 
 
+def pointer_position_signal(scene: _base.Scene) -> NativeVectorSignal:
+    return _native_vector_signal(scene, {"kind": "pointer_position"})
+
+
+def pointer_button_signal(
+    scene: _base.Scene, button: int = 0, initial: bool = False
+) -> NativeBoolSignal:
+    return _native_bool_signal(
+        scene,
+        {"kind": "pointer_button", "button": _button(button)},
+        initial,
+    )
+
+
+def key_state_signal(
+    scene: _base.Scene, code: str, initial: bool = False
+) -> NativeBoolSignal:
+    return _native_bool_signal(
+        scene,
+        {"kind": "key", "code": _nonempty_string("code", code)},
+        initial,
+    )
+
+
+def viewport_size_signal(scene: _base.Scene) -> NativeVectorSignal:
+    return _native_vector_signal(scene, {"kind": "viewport_size"})
+
+
+def wheel_delta_signal(scene: _base.Scene) -> NativeVectorSignal:
+    return _native_vector_signal(scene, {"kind": "wheel_delta"})
+
+
+def gesture_delta_signal(scene: _base.Scene, name: str) -> NativeVectorSignal:
+    return _native_vector_signal(
+        scene,
+        {"kind": "gesture_delta", "name": _nonempty_string("name", name)},
+    )
+
+
+def control_signal(
+    scene: _base.Scene, name: str, value: float = 0.0
+) -> ValueTracker:
+    tracker = value_tracker(scene, value)
+    _register_native_state(
+        scene,
+        {"kind": "control", "name": _nonempty_string("name", name)},
+        tracker.signal_id,
+    )
+    return tracker
+
+
+def pointer_down_events(scene: _base.Scene, button: int = 0) -> ValueTracker:
+    return _native_event_tracker(
+        scene, {"kind": "pointer_down", "button": _button(button)}
+    )
+
+
+def pointer_up_events(scene: _base.Scene, button: int = 0) -> ValueTracker:
+    return _native_event_tracker(
+        scene, {"kind": "pointer_up", "button": _button(button)}
+    )
+
+
+def key_press_events(scene: _base.Scene, code: str) -> ValueTracker:
+    return _native_event_tracker(
+        scene,
+        {"kind": "key_press", "code": _nonempty_string("code", code)},
+    )
+
+
+def key_release_events(scene: _base.Scene, code: str) -> ValueTracker:
+    return _native_event_tracker(
+        scene,
+        {"kind": "key_release", "code": _nonempty_string("code", code)},
+    )
+
+
+def wheel_events(scene: _base.Scene) -> ValueTracker:
+    return _native_event_tracker(scene, {"kind": "wheel"})
+
+
+def gesture_events(scene: _base.Scene, name: str) -> ValueTracker:
+    return _native_event_tracker(
+        scene,
+        {"kind": "gesture", "name": _nonempty_string("name", name)},
+    )
+
+
+def control_commit_events(scene: _base.Scene, name: str) -> ValueTracker:
+    return _native_event_tracker(
+        scene,
+        {"kind": "control_commit", "name": _nonempty_string("name", name)},
+    )
+
+
 def bind_rotation(
     scene: _base.Scene, mobject: object, tracker: ValueTracker
 ) -> _base.Scene:
@@ -345,13 +540,33 @@ def bind_morph(
     return scene
 
 
+def bind_presence(
+    scene: _base.Scene, mobject: object, signal: NativeBoolSignal
+) -> _base.Scene:
+    if not isinstance(signal, NativeBoolSignal) or signal._scene is not scene:
+        raise TypeError("bind_presence expects a NativeBoolSignal from this Scene")
+    _bind(scene, signal.signal_id, mobject, "presence")
+    return scene
+
+
 def bind_position(
     scene: _base.Scene,
     mobject: object,
-    tracker: ValueTracker,
+    tracker: object,
     direction: object = None,
     offset: object = None,
 ) -> _base.Scene:
+    if isinstance(tracker, NativeVectorSignal):
+        if tracker._scene is not scene:
+            raise ValueError("NativeVectorSignal belongs to another Scene")
+        if direction is not None or offset is not None:
+            raise ValueError(
+                "direction/offset are only valid for ValueTracker-derived positions"
+            )
+        _bind(scene, tracker.signal_id, mobject, "position")
+        return scene
+    if not isinstance(tracker, ValueTracker):
+        raise TypeError("bind_position expects a ValueTracker or NativeVectorSignal")
     tracker_id = _attach_tracker(scene, tracker)
     direction_ir = _vec2_ir(_base.RIGHT if direction is None else direction)
     offset_ir = _vec2_ir(_base.ORIGIN if offset is None else offset)
@@ -371,6 +586,13 @@ def bind_position(
     return scene
 
 
+public = {
+    "ValueTracker": ValueTracker,
+    "NativeVectorSignal": NativeVectorSignal,
+    "NativeBoolSignal": NativeBoolSignal,
+}
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -383,16 +605,34 @@ def install() -> None:
     # `_base.Scene` is the compatibility Scene after `_manim_compat.install()`.
     _base.Scene.play = _scene_play
     _base.Scene.value_tracker = value_tracker
+    _base.Scene.pointer_position_signal = pointer_position_signal
+    _base.Scene.pointer_button_signal = pointer_button_signal
+    _base.Scene.key_state_signal = key_state_signal
+    _base.Scene.viewport_size_signal = viewport_size_signal
+    _base.Scene.wheel_delta_signal = wheel_delta_signal
+    _base.Scene.gesture_delta_signal = gesture_delta_signal
+    _base.Scene.control_signal = control_signal
+    _base.Scene.pointer_down_events = pointer_down_events
+    _base.Scene.pointer_up_events = pointer_up_events
+    _base.Scene.key_press_events = key_press_events
+    _base.Scene.key_release_events = key_release_events
+    _base.Scene.wheel_events = wheel_events
+    _base.Scene.gesture_events = gesture_events
+    _base.Scene.control_commit_events = control_commit_events
     _base.Scene.bind_rotation = bind_rotation
     _base.Scene.bind_opacity = bind_opacity
     _base.Scene.bind_appearance = bind_appearance
     _base.Scene.bind_reveal = bind_reveal
     _base.Scene.bind_morph = bind_morph
+    _base.Scene.bind_presence = bind_presence
     _base.Scene.bind_position = bind_position
     _base.ValueTracker = ValueTracker
+    _base.NativeVectorSignal = NativeVectorSignal
+    _base.NativeBoolSignal = NativeBoolSignal
 
-    if "ValueTracker" not in _base.__all__:
-        _base.__all__.append("ValueTracker")
+    for name in ("ValueTracker", "NativeVectorSignal", "NativeBoolSignal"):
+        if name not in _base.__all__:
+            _base.__all__.append(name)
 
 
 install()

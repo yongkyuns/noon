@@ -1,6 +1,11 @@
-use noon_core::{ReactiveValue, SignalId, TimedSemanticScene};
+use noon_core::{
+    NativeEventSource, NativeStateSource, ReactiveValue, SignalId, TimedSemanticScene,
+};
 use noon_ir::{decode_timed_semantic_scene, encode_timed_semantic_scene, TimedSemanticIrError};
-use noon_runtime::{FrameChanges, FrameState, TimedSceneInstance, TimedSceneRuntimeError};
+use noon_runtime::{
+    FrameChanges, FrameState, NativeInputRouter, NativeInputStats, TimedSceneInstance,
+    TimedSceneRuntimeError,
+};
 
 #[derive(Debug)]
 pub enum TimedPlayerError {
@@ -35,13 +40,20 @@ impl From<TimedSceneRuntimeError> for TimedPlayerError {
 pub struct TimedScenePlayer {
     scene: TimedSemanticScene,
     instance: TimedSceneInstance,
+    native_inputs: NativeInputRouter,
 }
 
 impl TimedScenePlayer {
     pub fn from_scene_json(json: &str) -> Result<Self, TimedPlayerError> {
         let scene = decode_timed_semantic_scene(json)?;
         let instance = TimedSceneInstance::from_timed(&scene)?;
-        Ok(Self { scene, instance })
+        let native_inputs =
+            NativeInputRouter::from_scene(&scene).map_err(TimedSceneRuntimeError::from)?;
+        Ok(Self {
+            scene,
+            instance,
+            native_inputs,
+        })
     }
 
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, TimedPlayerError> {
@@ -58,6 +70,47 @@ impl TimedScenePlayer {
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, TimedPlayerError> {
         Ok(self.instance.set_reactive_input(signal, value)?)
+    }
+
+    pub fn has_native_state_source(&self, source: &NativeStateSource) -> bool {
+        self.native_inputs.has_state_source(source)
+    }
+
+    pub fn has_native_event_source(&self, source: &NativeEventSource) -> bool {
+        self.native_inputs.has_event_source(source)
+    }
+
+    pub fn dispatch_native_state(
+        &mut self,
+        source: &NativeStateSource,
+        value: impl Into<ReactiveValue>,
+    ) -> Result<bool, TimedPlayerError> {
+        let Self {
+            instance,
+            native_inputs,
+            ..
+        } = self;
+        Ok(native_inputs.dispatch_state(instance, source, value)?)
+    }
+
+    pub fn emit_native_event(
+        &mut self,
+        source: &NativeEventSource,
+    ) -> Result<bool, TimedPlayerError> {
+        let Self {
+            instance,
+            native_inputs,
+            ..
+        } = self;
+        Ok(native_inputs.emit_event(instance, source)?)
+    }
+
+    pub const fn native_input_stats(&self) -> NativeInputStats {
+        self.native_inputs.stats()
+    }
+
+    pub fn reset_native_input_stats(&mut self) {
+        self.native_inputs.reset_stats();
     }
 
     pub fn frame(&self) -> &FrameState {
@@ -79,7 +132,7 @@ impl TimedScenePlayer {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use noon_core::{SignalId, Vec2};
+    use noon_core::{NativeEventSource, NativeStateSource, SignalId, Vec2};
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
     use wasm_bindgen::prelude::*;
     use web_sys::HtmlCanvasElement;
@@ -140,9 +193,9 @@ mod wasm {
 
     /// GPU canvas host for semantic scenes with native reactive inputs and signal tracks.
     ///
-    /// This intentionally keeps the same rendering architecture as `NoonCanvasPlayer` while
-    /// leaving legacy patch/reconcile and profiling APIs on that class until those operations
-    /// become reactive-graph-aware.
+    /// Native browser input dispatch mutates only declared reactive input signals. Rendering
+    /// remains on the normal animation/presentation loop, so event handlers do not encode or
+    /// submit GPU frames and remain compatible with the future engine/render-worker split.
     #[wasm_bindgen(js_name = ReactiveCanvasPlayer)]
     pub struct WasmReactiveCanvasPlayer {
         instance: wgpu::Instance,
@@ -234,6 +287,7 @@ mod wasm {
                 },
             };
             result.update_camera()?;
+            result.dispatch_viewport_size(width as f32, height as f32)?;
             Ok(result)
         }
 
@@ -241,6 +295,7 @@ mod wasm {
             self.canvas.set_width(width);
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
+            self.dispatch_viewport_size(width as f32, height as f32)?;
             if !self.drawable {
                 return Ok(());
             }
@@ -287,6 +342,172 @@ mod wasm {
             Ok(())
         }
 
+        #[wasm_bindgen(js_name = dispatchPointerPosition)]
+        pub fn dispatch_pointer_position(
+            &mut self,
+            normalized_x: f32,
+            normalized_y: f32,
+        ) -> Result<bool, JsValue> {
+            if !normalized_x.is_finite() || !normalized_y.is_finite() {
+                return Err(js_message("pointer coordinates must be finite"));
+            }
+            let source = NativeStateSource::PointerPosition;
+            if !self.player.has_native_state_source(&source) {
+                return Ok(false);
+            }
+            let world = self.pointer_world_position(normalized_x, normalized_y);
+            self.player
+                .dispatch_native_state(&source, world)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = dispatchPointerButton)]
+        pub fn dispatch_pointer_button(
+            &mut self,
+            button: u8,
+            pressed: bool,
+        ) -> Result<bool, JsValue> {
+            let state_source = NativeStateSource::PointerButton { button };
+            let event_source = if pressed {
+                NativeEventSource::PointerDown { button }
+            } else {
+                NativeEventSource::PointerUp { button }
+            };
+            let mut handled = false;
+            if self.player.has_native_state_source(&state_source) {
+                self.player
+                    .dispatch_native_state(&state_source, pressed)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            if self.player.has_native_event_source(&event_source) {
+                self.player
+                    .emit_native_event(&event_source)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            Ok(handled)
+        }
+
+        #[wasm_bindgen(js_name = dispatchKey)]
+        pub fn dispatch_key(&mut self, code: String, pressed: bool) -> Result<bool, JsValue> {
+            validate_name("key code", &code)?;
+            let state_source = NativeStateSource::Key { code: code.clone() };
+            let event_source = if pressed {
+                NativeEventSource::KeyPress { code }
+            } else {
+                NativeEventSource::KeyRelease { code }
+            };
+            let mut handled = false;
+            if self.player.has_native_state_source(&state_source) {
+                self.player
+                    .dispatch_native_state(&state_source, pressed)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            if self.player.has_native_event_source(&event_source) {
+                self.player
+                    .emit_native_event(&event_source)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            Ok(handled)
+        }
+
+        #[wasm_bindgen(js_name = dispatchWheel)]
+        pub fn dispatch_wheel(&mut self, delta_x: f32, delta_y: f32) -> Result<bool, JsValue> {
+            let delta = finite_vec2("wheel delta", delta_x, delta_y)?;
+            let state_source = NativeStateSource::WheelDelta;
+            let event_source = NativeEventSource::Wheel;
+            let mut handled = false;
+            if self.player.has_native_state_source(&state_source) {
+                self.player
+                    .dispatch_native_state(&state_source, delta)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            if self.player.has_native_event_source(&event_source) {
+                self.player
+                    .emit_native_event(&event_source)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            Ok(handled)
+        }
+
+        #[wasm_bindgen(js_name = dispatchGesture)]
+        pub fn dispatch_gesture(
+            &mut self,
+            name: String,
+            delta_x: f32,
+            delta_y: f32,
+        ) -> Result<bool, JsValue> {
+            validate_name("gesture name", &name)?;
+            let delta = finite_vec2("gesture delta", delta_x, delta_y)?;
+            let state_source = NativeStateSource::GestureDelta { name: name.clone() };
+            let event_source = NativeEventSource::Gesture { name };
+            let mut handled = false;
+            if self.player.has_native_state_source(&state_source) {
+                self.player
+                    .dispatch_native_state(&state_source, delta)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            if self.player.has_native_event_source(&event_source) {
+                self.player
+                    .emit_native_event(&event_source)
+                    .map_err(js_error)?;
+                handled = true;
+            }
+            Ok(handled)
+        }
+
+        #[wasm_bindgen(js_name = dispatchControl)]
+        pub fn dispatch_control(&mut self, name: String, value: f32) -> Result<bool, JsValue> {
+            validate_name("control name", &name)?;
+            if !value.is_finite() {
+                return Err(js_message("control value must be finite"));
+            }
+            let source = NativeStateSource::Control { name };
+            if !self.player.has_native_state_source(&source) {
+                return Ok(false);
+            }
+            self.player
+                .dispatch_native_state(&source, value)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = dispatchControlCommit)]
+        pub fn dispatch_control_commit(&mut self, name: String) -> Result<bool, JsValue> {
+            validate_name("control name", &name)?;
+            let source = NativeEventSource::ControlCommit { name };
+            if !self.player.has_native_event_source(&source) {
+                return Ok(false);
+            }
+            self.player.emit_native_event(&source).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = nativeInputStatsJson)]
+        pub fn native_input_stats_json(&self) -> String {
+            let stats = self.player.native_input_stats();
+            format!(
+                "{{\"state_samples_received\":{},\"state_samples_coalesced\":{},\"state_dispatches_dropped\":{},\"events_received\":{},\"event_dispatches_dropped\":{},\"reactive_updates\":{},\"derived_signals_evaluated\":{},\"bindings_invalidated\":{}}}",
+                stats.state_samples_received,
+                stats.state_samples_coalesced,
+                stats.state_dispatches_dropped,
+                stats.events_received,
+                stats.event_dispatches_dropped,
+                stats.reactive_updates,
+                stats.derived_signals_evaluated,
+                stats.bindings_invalidated,
+            )
+        }
+
+        #[wasm_bindgen(js_name = resetNativeInputStats)]
+        pub fn reset_native_input_stats(&mut self) {
+            self.player.reset_native_input_stats();
+        }
+
         #[wasm_bindgen(js_name = resetClock)]
         pub fn reset_clock(&mut self) {
             self.clock.reset();
@@ -312,6 +533,27 @@ mod wasm {
     }
 
     impl WasmReactiveCanvasPlayer {
+        fn dispatch_viewport_size(&mut self, width: f32, height: f32) -> Result<(), JsValue> {
+            let source = NativeStateSource::ViewportSize;
+            if self.player.has_native_state_source(&source) {
+                self.player
+                    .dispatch_native_state(&source, finite_vec2("viewport size", width, height)?)
+                    .map_err(js_error)?;
+            }
+            Ok(())
+        }
+
+        fn pointer_world_position(&self, normalized_x: f32, normalized_y: f32) -> Vec2 {
+            let x = normalized_x.clamp(0.0, 1.0);
+            let y = normalized_y.clamp(0.0, 1.0);
+            let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+            let world_width = self.camera_height * aspect;
+            Vec2::new(
+                self.camera_center.x + (x - 0.5) * world_width,
+                self.camera_center.y + (0.5 - y) * self.camera_height,
+            )
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable {
                 return Ok(());
@@ -382,6 +624,22 @@ mod wasm {
         }
     }
 
+    fn finite_vec2(name: &str, x: f32, y: f32) -> Result<Vec2, JsValue> {
+        if x.is_finite() && y.is_finite() {
+            Ok(Vec2::new(x, y))
+        } else {
+            Err(js_message(&format!("{name} must be finite")))
+        }
+    }
+
+    fn validate_name(name: &str, value: &str) -> Result<(), JsValue> {
+        if value.trim().is_empty() {
+            Err(js_message(&format!("{name} must not be empty")))
+        } else {
+            Ok(())
+        }
+    }
+
     fn create_surface(
         instance: &wgpu::Instance,
         canvas: &HtmlCanvasElement,
@@ -403,8 +661,8 @@ mod wasm {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, Property, RateFunction, SignalTimelineDefinition, TimedSemanticScene,
-        TrackTiming,
+        GeometryRef, NativeEventSource, NativeInputDefinition, NativeStateSource, Property,
+        RateFunction, SignalTimelineDefinition, TimedSemanticScene, TrackTiming, Vec2,
     };
     use noon_ir::encode_timed_semantic_scene;
 
@@ -437,5 +695,41 @@ mod tests {
         player.set_reactive_input(live, 0.4_f32).unwrap();
         assert_eq!(player.frame().objects[0].style.opacity, 0.4);
         assert!(player.set_reactive_input(animated, 0.5_f32).is_err());
+    }
+
+    #[test]
+    fn timed_player_dispatches_native_inputs_by_semantic_source() {
+        let mut semantic = noon_core::SemanticScene::new();
+        let object = semantic.add(GeometryRef::circle(0.5));
+        let pointer = semantic.add_input(Vec2::ZERO);
+        semantic.bind(pointer, object, Property::Position);
+        let clicks = semantic.add_input(0.0_f32);
+        semantic.bind(clicks, object, Property::Rotation);
+        let mut inputs = NativeInputDefinition::new();
+        inputs
+            .bind_state(NativeStateSource::PointerPosition, pointer)
+            .bind_event(NativeEventSource::PointerDown { button: 0 }, clicks);
+        let scene = TimedSemanticScene::from_parts_with_native_inputs(
+            semantic,
+            SignalTimelineDefinition::new(),
+            inputs,
+        )
+        .unwrap();
+        let json = encode_timed_semantic_scene(&scene).unwrap();
+        let mut player = TimedScenePlayer::from_scene_json(&json).unwrap();
+
+        player
+            .dispatch_native_state(&NativeStateSource::PointerPosition, Vec2::new(1.5, -0.5))
+            .unwrap();
+        player
+            .emit_native_event(&NativeEventSource::PointerDown { button: 0 })
+            .unwrap();
+        assert_eq!(
+            player.frame().objects[0].transform.translation,
+            Vec2::new(1.5, -0.5)
+        );
+        assert_eq!(player.frame().objects[0].transform.rotation, 1.0);
+        assert_eq!(player.native_input_stats().state_samples_received, 1);
+        assert_eq!(player.native_input_stats().events_received, 1);
     }
 }

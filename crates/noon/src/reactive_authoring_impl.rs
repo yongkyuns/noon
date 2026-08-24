@@ -31,6 +31,18 @@ impl VectorSignal {
     }
 }
 
+/// Stable handle for a boolean reactive signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BoolSignal {
+    signal: SignalId,
+}
+
+impl BoolSignal {
+    pub const fn signal_id(self) -> SignalId {
+        self.signal
+    }
+}
+
 /// Reactive-capable authoring facade that preserves the existing [`Scene`] API.
 ///
 /// `ReactiveScene` owns the established deterministic `Scene` plus one native
@@ -56,6 +68,12 @@ impl ReactiveScene {
 
     pub fn vector_signal(&mut self, value: Vec2) -> VectorSignal {
         VectorSignal {
+            signal: self.reactive.add_input(value),
+        }
+    }
+
+    pub fn bool_signal(&mut self, value: bool) -> BoolSignal {
+        BoolSignal {
             signal: self.reactive.add_input(value),
         }
     }
@@ -114,6 +132,12 @@ impl ReactiveScene {
     pub fn bind_position(&mut self, object: Mobject, signal: VectorSignal) -> &mut Self {
         self.reactive
             .bind(signal.signal, object.id(), Property::Position);
+        self
+    }
+
+    pub fn bind_presence(&mut self, object: Mobject, signal: BoolSignal) -> &mut Self {
+        self.reactive
+            .bind(signal.signal, object.id(), Property::Presence);
         self
     }
 
@@ -235,5 +259,20 @@ mod tests {
             state.value(position.signal_id()),
             Some(&ReactiveValue::Vec2(Vec2::new(2.0, 1.0)))
         );
+    }
+
+    #[test]
+    fn boolean_signal_can_drive_presence() {
+        let mut scene = ReactiveScene::new();
+        let circle = scene.add(Circle::new(0.5));
+        let visible = scene.bool_signal(false);
+        scene.bind_presence(circle, visible);
+        let semantic = scene.semantic_scene();
+        let state = semantic.compile_reactive().unwrap().instantiate();
+        assert_eq!(
+            state.value(visible.signal_id()),
+            Some(&ReactiveValue::Bool(false))
+        );
+        assert_eq!(semantic.reactive().bindings()[0].property, Property::Presence);
     }
 }
