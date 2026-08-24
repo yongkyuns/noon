@@ -10,6 +10,9 @@ pub use composition::*;
 mod host_callbacks;
 pub use host_callbacks::*;
 
+mod host_semantics;
+pub use host_semantics::*;
+
 #[path = "lifecycle.rs"]
 mod lifecycle;
 pub use lifecycle::*;
