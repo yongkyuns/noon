@@ -42,8 +42,10 @@ fn python_style_scene_json() -> &'static str {
 
 #[test]
 fn python_document_is_lowered_by_native_runtime() {
-    let semantic = decode_semantic_scene(python_style_scene_json()).expect("wire graph must decode");
-    let mut instance = SceneInstance::from_semantic(&semantic).expect("semantic scene must compile");
+    let semantic =
+        decode_semantic_scene(python_style_scene_json()).expect("wire graph must decode");
+    let mut instance =
+        SceneInstance::from_semantic(&semantic).expect("semantic scene must compile");
 
     assert_eq!(instance.frame().objects[0].transform.rotation, 1.5);
     assert_eq!(
