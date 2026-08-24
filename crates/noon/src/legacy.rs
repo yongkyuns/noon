@@ -12,11 +12,14 @@ use std::collections::BTreeMap;
 pub use noon_core;
 pub use noon_core::*;
 
+mod composition_authoring;
+pub use composition_authoring::{AnimationGroup, LaggedStart, Succession};
+
 /// Common imports for normal Noon authoring.
 pub mod prelude {
     pub use crate::{
-        Animate, AuthoringError, Circle, Create, FadeIn, FadeOut, Line, Mobject, MobjectEditor,
-        Path, Rectangle, Scene, Square, Transform,
+        Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
+        Line, Mobject, MobjectEditor, Path, Rectangle, Scene, Square, Succession, Transform,
     };
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
@@ -300,6 +303,7 @@ pub enum Animation {
     Create(Create),
     FadeOut(FadeOut),
     FadeIn(FadeIn),
+    Group(AnimationGroup),
 }
 
 impl From<Animate> for Animation {
@@ -373,6 +377,7 @@ pub enum AuthoringError {
     CreateUnsupportedGeometry(ObjectId),
     FadeInRequiresAbsent(ObjectId),
     FadeOutRequiresPresent(ObjectId),
+    Composition(CompositionError),
     Timeline(TimelineError),
 }
 
@@ -400,12 +405,19 @@ impl std::fmt::Display for AuthoringError {
             Self::FadeOutRequiresPresent(id) => {
                 write!(formatter, "FadeOut requires present object {}", id.get())
             }
+            Self::Composition(error) => error.fmt(formatter),
             Self::Timeline(error) => error.fmt(formatter),
         }
     }
 }
 
 impl std::error::Error for AuthoringError {}
+
+impl From<CompositionError> for AuthoringError {
+    fn from(value: CompositionError) -> Self {
+        Self::Composition(value)
+    }
+}
 
 impl From<TimelineError> for AuthoringError {
     fn from(value: TimelineError) -> Self {
@@ -476,7 +488,7 @@ impl Scene {
         Play {
             scene: self,
             animations: animations.into_animations(),
-            rate_func: RateFunction::Smooth,
+            rate_func: None,
         }
     }
 
@@ -504,14 +516,15 @@ impl Scene {
         &mut self,
         animations: Vec<Animation>,
         duration: f64,
-        rate_func: RateFunction,
+        rate_func: Option<RateFunction>,
     ) -> Result<(), AuthoringError> {
         if !duration.is_finite() || duration <= 0.0 {
             return Err(AuthoringError::InvalidDuration(duration));
         }
         let start = self.cursor;
         let end = start + duration;
-        let timing = TrackTiming::new(start, duration, rate_func);
+        let leaf_rate_func = rate_func.unwrap_or(RateFunction::Smooth);
+        let timing = TrackTiming::new(start, duration, leaf_rate_func);
 
         for animation in animations {
             match animation {
@@ -618,6 +631,15 @@ impl Scene {
                         .animate_appearance(object.id, 0.0, 1.0, timing)?;
                     self.presence.insert(object.id, true);
                 }
+                Animation::Group(group) => {
+                    composition_authoring::schedule_group(
+                        self,
+                        group,
+                        start,
+                        duration,
+                        rate_func,
+                    )?;
+                }
             }
         }
 
@@ -713,13 +735,13 @@ impl MobjectEditor<'_> {
 pub struct Play<'a> {
     scene: &'a mut Scene,
     animations: Vec<Animation>,
-    rate_func: RateFunction,
+    rate_func: Option<RateFunction>,
 }
 
 impl Play<'_> {
     /// Set the Manim-compatible rate function for this play call.
     pub fn rate_func(mut self, rate_func: RateFunction) -> Self {
-        self.rate_func = rate_func;
+        self.rate_func = Some(rate_func);
         self
     }
 
@@ -729,8 +751,14 @@ impl Play<'_> {
     }
 
     pub fn run_time(self, duration: f64) -> Result<(), AuthoringError> {
-        self.scene
-            .schedule(self.animations, duration, self.rate_func)
+        let checkpoint = self.scene.clone();
+        match self.scene.schedule(self.animations, duration, self.rate_func) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                *self.scene = checkpoint;
+                Err(error)
+            }
+        }
     }
 }
 
