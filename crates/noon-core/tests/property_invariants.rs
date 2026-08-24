@@ -158,7 +158,7 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
 
             match rng.next() % 7 {
                 0 | 1 if nodes.len() < 180 => {
-                    let family = rng.next() % 4 == 0;
+                    let family = rng.next().is_multiple_of(4);
                     let id = if family {
                         store.insert_family()
                     } else {
@@ -270,7 +270,7 @@ fn generated_property_patches(seed: u64, object_ids: &[ObjectId]) -> Vec<ScenePa
     let mut patches = Vec::new();
     for _ in 0..96 {
         let object = object_ids[rng.index(object_ids.len())];
-        if rng.next() % 2 == 0 {
+        if rng.next().is_multiple_of(2) {
             patches.push(ScenePatch::SetTransform {
                 object,
                 transform: Transform2D {
@@ -450,7 +450,7 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
             }
             let index = rng.index(live.len());
             let id = live[index];
-            if rng.next() % 5 == 0 {
+            if rng.next().is_multiple_of(5) {
                 let old = store.node(id).unwrap().source_identity().cloned();
                 store.set_source_identity(id, None).unwrap();
                 if let Some(SourceIdentity::ExplicitKey(key)) = old {
