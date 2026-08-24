@@ -3,6 +3,7 @@
 mod authoring_options;
 mod composition;
 mod determinism;
+mod execution_canvas;
 mod execution_transport;
 mod host_player;
 #[path = "legacy.rs"]
@@ -13,6 +14,7 @@ mod reactive_player;
 pub use authoring_options::*;
 pub use composition::*;
 pub use determinism::*;
+pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use host_player::*;
 pub use legacy::*;
