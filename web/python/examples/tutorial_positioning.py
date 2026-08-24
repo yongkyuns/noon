@@ -6,7 +6,7 @@ square = Square(side_length=0.9, color=PINK)
 line = Line(color=GREEN)
 row = VGroup(circle, square, line).arrange(RIGHT, buff=0.55).to_edge(UP, buff=0.8)
 scene.add(row)
-scene.play(*(member.animate.shift(UP * -1.4) for member in row), run_time=1.0)
+scene.play(row.animate.shift(UP * -1.4), run_time=1.0)
 scene.wait(0.2)
 
 result = scene
