@@ -29,12 +29,9 @@ fn nonlinear_composition() -> String {
     let mut scene = Scene::new();
     let circle = scene.add(Circle::new(0.4));
     let square = scene.add(Square::new(0.8));
-    let group = AnimationGroup::new((
-        circle.animate().shift(UP),
-        square.animate().shift(DOWN),
-    ))
-    .lag_ratio(0.5)
-    .rate_func(RateFunction::ThereAndBack);
+    let group = AnimationGroup::new((circle.animate().shift(UP), square.animate().shift(DOWN)))
+        .lag_ratio(0.5)
+        .rate_func(RateFunction::ThereAndBack);
     scene.play(group).run_time(3.0).unwrap();
     encode_scene(scene.definition()).unwrap()
 }
