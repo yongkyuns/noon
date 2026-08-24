@@ -1,7 +1,7 @@
 import "./python-editor.js";
 
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 4;
+export const AUTHORING_PROTOCOL_VERSION = 5;
 export const NOON_IR_VERSION = 1;
 
 export class PythonAuthoringClient {
@@ -37,25 +37,36 @@ export class PythonAuthoringClient {
     if (!isRecord(context)) {
       throw new TypeError("Python authoring context must be an object");
     }
-    if (this.#terminated) {
-      throw new Error("Python authoring client has been terminated");
-    }
-
-    await this.ready();
-    if (this.#terminated) {
-      throw new Error("Python authoring client has been terminated");
-    }
-    const requestId = this.#nextRequestId;
-    this.#nextRequestId += 1;
-
-    const result = new Promise((resolve, reject) => {
-      this.#pending.set(requestId, { resolve, reject });
-    });
+    const requestId = await this.#beginRequest();
+    const result = this.#resultFor(requestId);
     this.#worker.postMessage(
       envelope("run", {
         requestId,
         source,
         context,
+      }),
+    );
+    return result;
+  }
+
+  async runCallbackPhase(sessionId, frame, sequence) {
+    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
+      throw new TypeError("callback session ID must be a non-negative safe integer");
+    }
+    if (!isRecord(frame)) {
+      throw new TypeError("callback frame must be an object");
+    }
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new TypeError("callback patch sequence must be a non-negative safe integer");
+    }
+    const requestId = await this.#beginRequest();
+    const result = this.#resultFor(requestId);
+    this.#worker.postMessage(
+      envelope("callback_phase", {
+        requestId,
+        sessionId,
+        frame,
+        sequence,
       }),
     );
     return result;
@@ -68,6 +79,25 @@ export class PythonAuthoringClient {
     this.#terminated = true;
     this.#worker.terminate();
     this.#fail(new Error("Python authoring client was terminated"));
+  }
+
+  async #beginRequest() {
+    if (this.#terminated) {
+      throw new Error("Python authoring client has been terminated");
+    }
+    await this.ready();
+    if (this.#terminated) {
+      throw new Error("Python authoring client has been terminated");
+    }
+    const requestId = this.#nextRequestId;
+    this.#nextRequestId += 1;
+    return requestId;
+  }
+
+  #resultFor(requestId) {
+    return new Promise((resolve, reject) => {
+      this.#pending.set(requestId, { resolve, reject });
+    });
   }
 
   #handleMessage(message) {
@@ -94,6 +124,12 @@ export class PythonAuthoringClient {
       if (message.type === "result") {
         const result = parseAuthoringResult(message.resultJson);
         this.#settle(message.requestId, ({ resolve }) => resolve(result));
+        return;
+      }
+
+      if (message.type === "callback_result") {
+        const batch = parsePatchBatchJson(message.patchBatchJson);
+        this.#settle(message.requestId, ({ resolve }) => resolve(batch));
         return;
       }
 
@@ -155,9 +191,23 @@ export function parseAuthoringResult(resultJson) {
       kind: result.kind,
       document,
       identities: validateSceneIdentities(result.identities, document),
+      callbacks: validateCallbackSession(result.callbacks, document),
     };
   }
   throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
+}
+
+export function parsePatchBatchJson(json) {
+  if (typeof json !== "string") {
+    throw new Error("Python callback result must be encoded JSON");
+  }
+  let batch;
+  try {
+    batch = JSON.parse(json);
+  } catch (error) {
+    throw new Error(`Python callback returned invalid JSON: ${error.message}`);
+  }
+  return validatePatchBatch(batch);
 }
 
 export function validatePatchBatch(batch) {
@@ -199,6 +249,46 @@ export function validateSceneIdentities(identities, scene) {
   validateIdentityEntries("object", identities.objects, scene.objects);
   validateIdentityEntries("track", identities.tracks, scene.tracks);
   return identities;
+}
+
+export function validateCallbackSession(callbacks, scene) {
+  if (callbacks === null || callbacks === undefined) {
+    return null;
+  }
+  if (!isRecord(callbacks)) {
+    throw new Error("Python Scene callback session must be an object");
+  }
+  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
+    throw new Error("Python Scene callback session has an invalid session ID");
+  }
+  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
+    throw new Error("Python Scene callback session must contain callback slots");
+  }
+  const objectIds = new Set(scene.objects.map(({ id }) => id));
+  const callbackIds = new Set();
+  for (const slot of callbacks.slots) {
+    if (!isRecord(slot) || !Number.isSafeInteger(slot.id) || slot.id < 0) {
+      throw new Error("Python Scene has an invalid callback slot ID");
+    }
+    if (callbackIds.has(slot.id)) {
+      throw new Error("Python Scene has duplicate callback slot IDs");
+    }
+    callbackIds.add(slot.id);
+    if (!Array.isArray(slot.objects)) {
+      throw new Error("Python Scene callback slot objects must be an array");
+    }
+    const seen = new Set();
+    for (const object of slot.objects) {
+      if (!Number.isSafeInteger(object) || object < 0 || !objectIds.has(object)) {
+        throw new Error("Python Scene callback slot references an invalid object");
+      }
+      if (seen.has(object)) {
+        throw new Error("Python Scene callback slot contains duplicate objects");
+      }
+      seen.add(object);
+    }
+  }
+  return callbacks;
 }
 
 function validateIdentityEntries(kind, entries, definitions) {
