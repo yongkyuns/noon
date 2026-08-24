@@ -130,18 +130,24 @@ impl ExecutionSlotTable {
         &mut self,
         object: ObjectId,
     ) -> Result<ExecutionSlotId, ExecutionSlotError> {
-        let id = self
+        let id = *self
+            .object_slots
+            .get(&object)
+            .ok_or(ExecutionSlotError::UnknownObject(object))?;
+        let next_generation = self.slots[id.slot as usize]
+            .generation
+            .checked_add(1)
+            .ok_or(ExecutionSlotError::GenerationExhausted(id))?;
+        let removed = self
             .object_slots
             .remove(&object)
-            .ok_or(ExecutionSlotError::UnknownObject(object))?;
+            .expect("object existence was preflighted");
+        debug_assert_eq!(removed, id);
         let slot = &mut self.slots[id.slot as usize];
         debug_assert_eq!(slot.generation, id.generation);
         debug_assert_eq!(slot.object, Some(object));
         slot.object = None;
-        slot.generation = slot
-            .generation
-            .checked_add(1)
-            .ok_or(ExecutionSlotError::GenerationExhausted(id))?;
+        slot.generation = next_generation;
         slot.next_free = self.free_head;
         self.free_head = Some(id.slot);
         self.live_slots -= 1;
@@ -473,6 +479,24 @@ mod tests {
         assert_eq!(reused.generation(), removed.generation() + 1);
         assert_eq!(slots.object_for_slot(removed), None);
         assert_eq!(slots.object_for_slot(reused), Some(ObjectId::new(100_000)));
+    }
+
+    #[test]
+    fn generation_exhaustion_leaves_slot_table_unchanged() {
+        let mut slots = ExecutionSlotTable::new();
+        let object = ObjectId::new(7);
+        let initial = slots.insert_object(object).expect("unique object");
+        let exhausted = ExecutionSlotId::new(initial.slot(), u32::MAX);
+        slots.slots[initial.slot() as usize].generation = u32::MAX;
+        slots.object_slots.insert(object, exhausted);
+
+        assert_eq!(
+            slots.remove_object(object),
+            Err(ExecutionSlotError::GenerationExhausted(exhausted))
+        );
+        assert_eq!(slots.slot_for_object(object), Some(exhausted));
+        assert_eq!(slots.object_for_slot(exhausted), Some(object));
+        assert_eq!(slots.len(), 1);
     }
 
     #[test]
