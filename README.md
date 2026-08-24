@@ -2,46 +2,51 @@
 
 Noon is a high-performance 2D animation system targeting **Manim-compatible Python authoring** on top of a deterministic, language-neutral Rust/WebGPU execution core.
 
-The project treats Manim's common 2D authoring semantics as a cross-language contract: Python should be source-compatible where Noon can reproduce the behavior without a fundamental design or performance regression, while Rust and future frontends expose the same concepts and observable semantics idiomatically. Python adapters should normalize Python syntax and types, not implement a second animation engine.
+The project treats Manim's common 2D authoring semantics as a cross-language contract: Python should be source-compatible where Noon can reproduce the behavior without a fundamental design or performance regression, while Rust and future frontends expose the same concepts and observable semantics idiomatically. Python adapters normalize syntax and types; they do not implement a second animation engine.
 
 ## Architecture
+
+Noon exposes one expressive, mutable semantic scene and specializes it as aggressively as the program permits:
 
 ```text
 Manim-compatible Python     idiomatic Rust     future frontends
           \                     |                    /
            \                    |                   /
-            +------ shared authoring semantics ----+
-                           |
-                           v
-                 noon-core semantics
-                           |
-                           v
-              SceneDefinition / ScenePatch
-                           |
-                           v
-                    noon-compile
-                           |
-                           v
-                    noon-runtime
-                           |
-                           v
-                  noon-render-wgpu
+            +-------- shared semantic scene -------+
+                              |
+                       analysis / lowering
+                              |
+               +--------------+--------------+
+               |              |              |
+               v              v              v
+           static plan   reactive graph   host slots
+               |              |              |
+               +--------------+--------------+
+                              |
+                              v
+                       mutable runtime
+                              |
+                     incremental dirty work
+                              |
+                              v
+                         renderer
 ```
 
 Key invariants:
 
-- `noon-core` is renderer- and language-independent.
-- shared authoring semantics own lifecycle, animation defaults/options, composition, layout, style behavior, known rate functions, and lowering decisions used by every frontend.
-- Python compatibility code is a thin adaptation layer for Python class behavior, argument normalization, vector/array conversion, and callable identification.
-- `SceneDefinition` is the canonical semantic scene representation.
-- `SceneDocument` is a versioned wire format, not a second scene model.
-- playback is deterministic and supports arbitrary seek/rewind.
-- Python can author or patch scenes, but compiled playback does not require Python.
-- same-kind analytic transforms stay analytic; supported cross-kind transforms use compiler-only prepared geometry without changing semantic endpoints.
-- static/prepared geometry is cached; steady transform/style animation does not retessellate it.
+- high-level object, lifecycle, layout, animation, signal, updater, and interaction semantics are implemented once and shared by every frontend;
+- Python wrappers hold handles into shared semantic state rather than duplicating scene state, timing, layout, or scheduling logic;
+- `noon-core` is renderer- and language-independent execution data;
+- immutable and predetermined parts of a scene can be fully compiled and require no host interpreter during playback;
+- native reactive dependencies remain live but reevaluate only affected state;
+- arbitrary Python callbacks remain supported through explicit host callback slots and batched mutation transactions;
+- a small interactive region does not make unrelated static content dynamic;
+- playback is deterministic and supports arbitrary seek/rewind wherever the program semantics permit it;
+- same-kind analytic transforms stay analytic; supported cross-kind transforms use compiler-prepared geometry without changing semantic endpoints;
+- static/prepared geometry is cached; transform/style animation does not retessellate it;
 - WebGPU rendering is optimized around analytic primitives, instancing, cached vector geometry, and compact dynamic state.
 
-The authoritative compatibility roadmap is [`docs/manim-aligned-authoring-plan.md`](docs/manim-aligned-authoring-plan.md). The lower-level architecture is described in [`docs/architecture-plan.md`](docs/architecture-plan.md); [`docs/implementation-plan.md`](docs/implementation-plan.md) records the original core/runtime milestone sequence, and focused status documents record later completed slices.
+The authoritative architecture is [`docs/architecture-plan.md`](docs/architecture-plan.md). The Manim compatibility roadmap is [`docs/manim-aligned-authoring-plan.md`](docs/manim-aligned-authoring-plan.md). Existing historical implementation/status documents are not architectural constraints.
 
 ## Authoring
 
@@ -67,7 +72,7 @@ class Demo(Scene):
         self.wait(0.5)
 ```
 
-Equivalent Rust authoring is exposed by the user-facing facade with the same object, animation, timing, and layout model expressed idiomatically:
+Equivalent Rust authoring uses the same object, animation, timing, layout, signal, and interaction model expressed idiomatically:
 
 ```rust
 use noon::prelude::*;
@@ -85,9 +90,11 @@ scene
     .run_time(1.5)?;
 ```
 
-The important distinction from Manim is implementation, not ordinary authoring semantics. Noon does not make arbitrary Python callbacks its normal frame execution model. High-level authoring lowers to deterministic semantic tracks evaluated by Rust/WASM. `Circle -> Circle`, `Rectangle -> Rectangle`, and `Line -> Line` transforms keep analytic fast paths. `Circle <-> Rectangle/Square` is canonicalized by the compiler to temporary fixed path geometry only while the cross-kind transform is active; the serialized scene and semantic endpoints stay analytic.
+The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
 
-When exact Manim behavior would require a material architectural or performance regression, Noon should first look for a deterministic compiled equivalent. If none exists, the incompatibility must be explicit and documented rather than silently approximated.
+For example, an arbitrary Python updater should remain possible, but the engine should cross the host boundary once per callback phase/transaction rather than once for every getter/setter. If a scene contains no host-dynamic behavior, Python can disappear entirely after construction.
+
+When exact Manim behavior would require a material architectural or performance regression, Noon should first look for a deterministic or native-reactive equivalent. If none exists, the incompatibility must be explicit and documented rather than silently approximated.
 
 ## Browser playground
 
@@ -99,7 +106,9 @@ The browser demo combines:
 - semantic live scene reconciliation;
 - runtime and GPU profiling counters.
 
-Build it from the repository root:
+The target architecture keeps the shared semantic implementation beside Pyodide in the worker. Python wrappers call it synchronously through handles, while the render/runtime context receives compact scene or mutation transactions. Static playback requires no Pyodide participation.
+
+Build the current demo from the repository root:
 
 ```bash
 bash scripts/build-web-demo.sh
@@ -112,16 +121,18 @@ Every scene exposed by the playground picker is executed by Python and compiled 
 
 ## Workspace
 
-The active implementation lives entirely under `crates/`:
+The active implementation lives under `crates/`:
 
-- `noon` — user-facing Rust authoring facade and prelude
-- `noon-core` — renderer-independent semantic objects, styles, transforms, timeline and patches
-- `noon-ir` — versioned scene/patch serialization
-- `noon-compile` — semantic scene compilation and transform strategy selection
-- `noon-runtime` — deterministic frame evaluation
+- `noon` — user-facing Rust API and the intended home of shared semantic authoring behavior unless a real dependency boundary later justifies extraction
+- `noon-core` — renderer-independent normalized scene, timeline, property, identity, and mutation data
+- `noon-ir` — current versioned scene/patch serialization; the name/responsibility may be simplified as transport becomes a codec concern
+- `noon-compile` — semantic specialization, lowering, geometry preparation, and execution-plan construction
+- `noon-runtime` — deterministic mutable execution, reactive evaluation, and incremental updates
 - `noon-geometry` — vector tessellation, reveal and morph planning
 - `noon-render-wgpu` — WebGPU renderer
-- `noon-web` — WASM/browser runtime
+- `noon-web` — WASM/browser runtime integration
+
+Crates should correspond to real dependency or compilation boundaries. Noon does not add `noon-authoring` or `noon-wire` merely to mirror conceptual layers.
 
 ## Development
 
@@ -137,15 +148,17 @@ bash scripts/build-web-demo.sh
 
 It also checks geometry correctness, browser-target compilation, Python playground execution, Manim compatibility smoke scenes, and native compilation of picker scenes.
 
+The architecture reset adds additional required validation around mutation atomicity, reactive dirty propagation, cross-language semantic parity, host callback batching, and mixed static/dynamic performance.
+
 ## Design priorities
 
 In order:
 
 1. Manim-compatible Python ergonomics and semantics for the supported 2D surface;
-2. one shared language-neutral authoring model so Rust and other frontends have consistent capabilities;
-3. deterministic correctness and direct-seek semantics;
-4. high realtime performance;
-5. live/interpreted authoring without moving frame-critical work into Python;
+2. one shared semantic scene so Rust and other frontends have consistent capabilities;
+3. unrestricted interactivity and mutability without imposing dynamic overhead on static content;
+4. deterministic correctness and direct-seek semantics where semantically possible;
+5. automatic specialization for high realtime and offline-render performance;
 6. explicit, measured deviations only where exact Manim behavior has a fundamental design or performance blocker.
 
-Compatibility is an API/semantic goal, not an implementation constraint: Noon does not copy Manim's renderer, internal point-cloud representation, or Python-per-frame execution model.
+Compatibility is an API/semantic goal, not an implementation constraint: Noon does not copy Manim's renderer, internal point-cloud representation, Python-side scene engine, or Python-per-frame execution model.
