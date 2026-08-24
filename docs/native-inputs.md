@@ -8,7 +8,7 @@ Noon models common browser interaction as language-neutral reactive inputs rathe
 
 `NativeEventSource` represents discrete occurrences. Pointer down/up, key press/release, wheel, gesture, and control-commit events drive scalar event-sequence signals. Every event advances the sequence signal, so two identical clicks or key presses remain two observable reactive changes.
 
-A reactive signal has one external driver. A signal cannot be both native-input-driven and signal-timeline-driven.
+A reactive signal has one external driver. A signal cannot be both native-input-driven and signal-timeline-driven. Timeline-owned signals continue to reject external writes with the stable `timeline-driven` diagnostic used by existing callers and browser regression tests.
 
 ## Browser ordering
 
