@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    CompositionTimeMap, CompositionTimeMapStep, GeometryRef, MutationTransaction,
-    ObjectDefinition, ObjectId, RateFunction, SceneDefinition, ScenePatch, SemanticNodeId,
-    SemanticStore, SemanticStoreError, SourceIdentity, Style, Transform2D, Vec2,
+    CompositionTimeMap, CompositionTimeMapStep, GeometryRef, MutationTransaction, ObjectDefinition,
+    ObjectId, RateFunction, SceneDefinition, ScenePatch, SemanticNodeId, SemanticStore,
+    SemanticStoreError, SourceIdentity, Style, Transform2D, Vec2,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -210,8 +210,12 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
                     });
                     assert_eq!(removed, expected, "seed={seed} step={step}: remove result");
                     if expected {
-                        nodes[family_index].members.retain(|candidate| *candidate != member);
-                        nodes[member_index].parents.retain(|candidate| *candidate != family);
+                        nodes[family_index]
+                            .members
+                            .retain(|candidate| *candidate != member);
+                        nodes[member_index]
+                            .parents
+                            .retain(|candidate| *candidate != family);
                     }
                 }
                 4 if !live_indices.is_empty() => {
@@ -222,10 +226,8 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
                         node.live && node.source.as_deref() == Some(key.as_str()) && node.id != id
                     });
                     let before = nodes[index].source.clone();
-                    let result = store.set_source_identity(
-                        id,
-                        Some(SourceIdentity::ExplicitKey(key.clone())),
-                    );
+                    let result = store
+                        .set_source_identity(id, Some(SourceIdentity::ExplicitKey(key.clone())));
                     if owner.is_some() {
                         assert!(
                             matches!(result, Err(SemanticStoreError::DuplicateSourceIdentity(_))),
@@ -234,7 +236,9 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
                         assert_eq!(nodes[index].source, before);
                     } else {
                         result.unwrap_or_else(|error| {
-                            panic!("seed={seed} step={step}: unique source identity failed: {error}")
+                            panic!(
+                                "seed={seed} step={step}: unique source identity failed: {error}"
+                            )
                         });
                         nodes[index].source = Some(key);
                     }
@@ -406,7 +410,8 @@ fn generated_nested_composition_maps_match_simple_reference_evaluator() {
             ));
         }
         let map = CompositionTimeMap::from_steps(steps.clone());
-        map.validate().unwrap_or_else(|error| panic!("seed={seed}: invalid generated map: {error}"));
+        map.validate()
+            .unwrap_or_else(|error| panic!("seed={seed}: invalid generated map: {error}"));
 
         for sample_index in 0..=200 {
             let alpha = sample_index as f32 / 200.0;
@@ -470,10 +475,7 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
                             expected_owner.remove(&old);
                         }
                         store
-                            .set_source_identity(
-                                id,
-                                Some(SourceIdentity::ExplicitKey(key.clone())),
-                            )
+                            .set_source_identity(id, Some(SourceIdentity::ExplicitKey(key.clone())))
                             .unwrap();
                         expected_owner.insert(key, id);
                     }
@@ -490,7 +492,11 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
                 store.remove_node(removed).unwrap();
                 assert!(store.node(removed).is_none(), "seed={seed} step={step}");
                 let replacement = store.insert_object(object(20_000 + step));
-                assert_eq!(replacement.slot(), removed.slot(), "seed={seed} step={step}");
+                assert_eq!(
+                    replacement.slot(),
+                    removed.slot(),
+                    "seed={seed} step={step}"
+                );
                 assert_ne!(
                     replacement.generation(),
                     removed.generation(),
