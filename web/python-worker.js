@@ -8,7 +8,7 @@ import initNoonWeb, {
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 4;
+const AUTHORING_PROTOCOL_VERSION = 5;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
@@ -19,6 +19,7 @@ const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
 const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
 const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
+const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -51,6 +52,7 @@ async function initializePyodide() {
     compositionResponse,
     lifecycleResponse,
     reactiveResponse,
+    updatersResponse,
   ] = await Promise.all([
     fetch(new URL("./python/noon.py", import.meta.url)),
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
@@ -62,76 +64,44 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_composition.py", import.meta.url)),
     fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
+    fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
   ]);
-  if (!apiResponse.ok) {
-    throw new Error(`Unable to load Noon Python API: HTTP ${apiResponse.status}`);
-  }
-  if (!irResponse.ok) {
-    throw new Error(`Unable to load Noon Python IR emitter: HTTP ${irResponse.status}`);
-  }
-  if (!compatResponse.ok) {
-    throw new Error(`Unable to load Noon Manim compatibility layer: HTTP ${compatResponse.status}`);
-  }
-  if (!rateFunctionsResponse.ok) {
-    throw new Error(
-      `Unable to load Noon Manim rate functions: HTTP ${rateFunctionsResponse.status}`,
-    );
-  }
-  if (!phaseBResponse.ok) {
-    throw new Error(`Unable to load Noon Manim Phase B layer: HTTP ${phaseBResponse.status}`);
-  }
-  if (!animationOptionsResponse.ok) {
-    throw new Error(
-      `Unable to load Noon Manim animation options: HTTP ${animationOptionsResponse.status}`,
-    );
-  }
-  if (!animateResponse.ok) {
-    throw new Error(`Unable to load Noon Manim animate layer: HTTP ${animateResponse.status}`);
-  }
-  if (!compositionResponse.ok) {
-    throw new Error(`Unable to load Noon Manim composition layer: HTTP ${compositionResponse.status}`);
-  }
-  if (!lifecycleResponse.ok) {
-    throw new Error(`Unable to load Noon Manim lifecycle layer: HTTP ${lifecycleResponse.status}`);
-  }
-  if (!reactiveResponse.ok) {
-    throw new Error(`Unable to load Noon reactive compatibility layer: HTTP ${reactiveResponse.status}`);
+  const responses = [
+    [apiResponse, "Noon Python API"],
+    [irResponse, "Noon Python IR emitter"],
+    [compatResponse, "Noon Manim compatibility layer"],
+    [rateFunctionsResponse, "Noon Manim rate functions"],
+    [phaseBResponse, "Noon Manim Phase B layer"],
+    [animationOptionsResponse, "Noon Manim animation options"],
+    [animateResponse, "Noon Manim animate layer"],
+    [compositionResponse, "Noon Manim composition layer"],
+    [lifecycleResponse, "Noon Manim lifecycle layer"],
+    [reactiveResponse, "Noon reactive compatibility layer"],
+    [updatersResponse, "Noon Manim updater layer"],
+  ];
+  for (const [response, label] of responses) {
+    if (!response.ok) {
+      throw new Error(`Unable to load ${label}: HTTP ${response.status}`);
+    }
   }
 
-  pyodide.FS.writeFile(PYTHON_MODULE_PATH, await apiResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(PYTHON_IR_MODULE_PATH, await irResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(MANIM_COMPAT_MODULE_PATH, await compatResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(
-    MANIM_RATE_FUNCTIONS_MODULE_PATH,
-    await rateFunctionsResponse.text(),
-    { encoding: "utf8" },
-  );
-  pyodide.FS.writeFile(MANIM_PHASE_B_MODULE_PATH, await phaseBResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(
-    MANIM_ANIMATION_OPTIONS_MODULE_PATH,
-    await animationOptionsResponse.text(),
-    { encoding: "utf8" },
-  );
-  pyodide.FS.writeFile(MANIM_ANIMATE_MODULE_PATH, await animateResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(MANIM_COMPOSITION_MODULE_PATH, await compositionResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(MANIM_LIFECYCLE_MODULE_PATH, await lifecycleResponse.text(), {
-    encoding: "utf8",
-  });
-  pyodide.FS.writeFile(MANIM_REACTIVE_MODULE_PATH, await reactiveResponse.text(), {
-    encoding: "utf8",
-  });
+  const modules = [
+    [PYTHON_MODULE_PATH, apiResponse],
+    [PYTHON_IR_MODULE_PATH, irResponse],
+    [MANIM_COMPAT_MODULE_PATH, compatResponse],
+    [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
+    [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
+    [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
+    [MANIM_ANIMATE_MODULE_PATH, animateResponse],
+    [MANIM_COMPOSITION_MODULE_PATH, compositionResponse],
+    [MANIM_LIFECYCLE_MODULE_PATH, lifecycleResponse],
+    [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
+    [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
+  ];
+  for (const [path, response] of modules) {
+    pyodide.FS.writeFile(path, await response.text(), { encoding: "utf8" });
+  }
+
   pyodide.runPython(`
 import sys
 sys.path.insert(0, "/tmp")
@@ -145,6 +115,8 @@ import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
 import _manim_reactive
+import _manim_updaters
+_manim_updaters.install()
 `);
   return pyodide;
 }
@@ -235,15 +207,26 @@ async function handleRequest(request) {
     validateRequest(request);
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
-    const resultJson = await runAuthoringSource(
-      pyodide,
-      request.source,
-      request.context,
-    );
-    post("result", {
-      requestId,
-      resultJson,
-    });
+    if (request.type === "run") {
+      const resultJson = await runAuthoringSource(
+        pyodide,
+        request.source,
+        request.context,
+      );
+      post("result", { requestId, resultJson });
+      return;
+    }
+    if (request.type === "callback_phase") {
+      const patchBatchJson = await runCallbackPhase(
+        pyodide,
+        request.sessionId,
+        request.frame,
+        request.sequence,
+      );
+      post("callback_result", { requestId, patchBatchJson });
+      return;
+    }
+    throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
     postError(requestId, error);
   }
@@ -257,9 +240,10 @@ async function runAuthoringSource(pyodide, source, context) {
   globals.set("__noon_context_json", JSON.stringify(context));
 
   try {
-    const resultJson = await pyodide.runPythonAsync(
+    return await pyodide.runPythonAsync(
       `
 import json
+import _manim_updaters
 from noon import PatchBatch, Scene
 
 __noon_namespace = {
@@ -299,9 +283,11 @@ else:
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
     __noon_identities = __noon_result.identity_document()
+    __noon_callbacks = _manim_updaters.register_scene(__noon_result)
 elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
     __noon_identities = None
+    __noon_callbacks = None
 else:
     raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
 json.dumps(
@@ -309,6 +295,7 @@ json.dumps(
         "kind": __noon_kind,
         "document": __noon_result.to_document(),
         "identities": __noon_identities,
+        "callbacks": __noon_callbacks,
     },
     separators=(",", ":"),
     allow_nan=False,
@@ -316,7 +303,31 @@ json.dumps(
 `,
       { globals },
     );
-    return resultJson;
+  } finally {
+    globals.destroy();
+  }
+}
+
+async function runCallbackPhase(pyodide, sessionId, frame, sequence) {
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_callback_session", sessionId);
+  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
+  globals.set("__noon_callback_sequence", sequence);
+  try {
+    return await pyodide.runPythonAsync(
+      `
+import json
+import _manim_updaters
+_manim_updaters.run_callback_phase(
+    int(__noon_callback_session),
+    json.loads(__noon_callback_frame_json),
+    int(__noon_callback_sequence),
+)
+`,
+      { globals },
+    );
   } finally {
     globals.destroy();
   }
@@ -331,18 +342,31 @@ function validateRequest(request) {
       `Unsupported authoring protocol version ${request.protocolVersion}`,
     );
   }
-  if (request.type !== "run") {
-    throw new Error(`Unsupported Python authoring request: ${request.type}`);
-  }
   if (!Number.isSafeInteger(request.requestId) || request.requestId < 0) {
     throw new Error("Python authoring request has an invalid request ID");
   }
-  if (typeof request.source !== "string" || request.source.trim() === "") {
-    throw new Error("Python authoring source must be a non-empty string");
+  if (request.type === "run") {
+    if (typeof request.source !== "string" || request.source.trim() === "") {
+      throw new Error("Python authoring source must be a non-empty string");
+    }
+    if (!isRecord(request.context)) {
+      throw new Error("Python authoring context must be an object");
+    }
+    return;
   }
-  if (!isRecord(request.context)) {
-    throw new Error("Python authoring context must be an object");
+  if (request.type === "callback_phase") {
+    if (!Number.isSafeInteger(request.sessionId) || request.sessionId < 0) {
+      throw new Error("Python callback request has an invalid session ID");
+    }
+    if (!Number.isSafeInteger(request.sequence) || request.sequence < 0) {
+      throw new Error("Python callback request has an invalid patch sequence");
+    }
+    if (!isRecord(request.frame)) {
+      throw new Error("Python callback request must contain a frame object");
+    }
+    return;
   }
+  throw new Error(`Unsupported Python authoring request: ${request.type}`);
 }
 
 function post(type, payload = {}) {
