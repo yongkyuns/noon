@@ -1,4 +1,7 @@
-use noon_core::{SignalTimelineDefinition, SignalTimelineError, TimedSemanticScene};
+use noon_core::{
+    NativeInputBinding, NativeInputDefinition, SignalTimelineDefinition, SignalTimelineError,
+    TimedSemanticScene,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{ReactiveGraphDocument, SemanticIrError, SemanticSceneDocument};
@@ -9,6 +12,8 @@ pub struct TimedSemanticSceneDocument {
     pub scene: SemanticSceneDocument,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signal_tracks: Vec<noon_core::SignalTrackDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_inputs: Vec<NativeInputBinding>,
 }
 
 impl TimedSemanticSceneDocument {
@@ -16,6 +21,7 @@ impl TimedSemanticSceneDocument {
         Self {
             scene: SemanticSceneDocument::from_semantic(scene.semantic()),
             signal_tracks: scene.signal_timeline().tracks().to_vec(),
+            native_inputs: scene.native_inputs().bindings().to_vec(),
         }
     }
 
@@ -23,7 +29,13 @@ impl TimedSemanticSceneDocument {
         let semantic = self.scene.into_semantic()?;
         let timeline =
             SignalTimelineDefinition::from_parts(semantic.reactive(), self.signal_tracks)?;
-        Ok(TimedSemanticScene::from_parts(semantic, timeline)?)
+        let native_inputs = NativeInputDefinition::from_parts(semantic.reactive(), self.native_inputs)
+            .map_err(SignalTimelineError::from)?;
+        Ok(TimedSemanticScene::from_parts_with_native_inputs(
+            semantic,
+            timeline,
+            native_inputs,
+        )?)
     }
 }
 
@@ -38,7 +50,7 @@ impl std::fmt::Display for TimedSemanticIrError {
         match self {
             Self::Semantic(error) => error.fmt(formatter),
             Self::SignalTimeline(error) => {
-                write!(formatter, "invalid Noon signal timeline: {error}")
+                write!(formatter, "invalid Noon signal timeline/input document: {error}")
             }
         }
     }
@@ -75,6 +87,18 @@ pub fn encode_timed_semantic_scene(
         scene.semantic().reactive(),
         scene.signal_timeline().tracks().to_vec(),
     )?;
+    scene
+        .native_inputs()
+        .validate(scene.semantic().reactive())
+        .map_err(SignalTimelineError::from)?;
+    if let Some(track) = scene
+        .signal_timeline()
+        .tracks()
+        .iter()
+        .find(|track| scene.native_inputs().drives(track.signal))
+    {
+        return Err(SignalTimelineError::ExternallyDrivenSignal(track.signal).into());
+    }
     Ok(serde_json::to_string(
         &TimedSemanticSceneDocument::from_timed(scene),
     )?)
@@ -93,6 +117,24 @@ pub fn timed_document_from_parts(
     reactive: ReactiveGraphDocument,
     signal_tracks: Vec<noon_core::SignalTrackDefinition>,
 ) -> TimedSemanticSceneDocument {
+    timed_document_from_parts_with_native_inputs(
+        version,
+        objects,
+        tracks,
+        reactive,
+        signal_tracks,
+        Vec::new(),
+    )
+}
+
+pub fn timed_document_from_parts_with_native_inputs(
+    version: u32,
+    objects: Vec<noon_core::ObjectDefinition>,
+    tracks: Vec<noon_core::TrackDefinition>,
+    reactive: ReactiveGraphDocument,
+    signal_tracks: Vec<noon_core::SignalTrackDefinition>,
+    native_inputs: Vec<NativeInputBinding>,
+) -> TimedSemanticSceneDocument {
     TimedSemanticSceneDocument {
         scene: SemanticSceneDocument {
             version,
@@ -101,14 +143,15 @@ pub fn timed_document_from_parts(
             reactive,
         },
         signal_tracks,
+        native_inputs,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, Property, RateFunction, ReactiveExpr, SignalTimelineDefinition,
-        TimedSemanticScene, TrackTiming, Vec2,
+        GeometryRef, NativeEventSource, NativeStateSource, Property, RateFunction, ReactiveExpr,
+        SignalTimelineDefinition, TimedSemanticScene, TrackTiming, Vec2,
     };
 
     use super::*;
@@ -142,11 +185,35 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_semantic_json_decodes_as_timed_scene_without_signal_tracks() {
+    fn timed_semantic_round_trip_preserves_native_input_bindings() {
+        let mut semantic = noon_core::SemanticScene::new();
+        let pointer = semantic.add_input(Vec2::ZERO);
+        let clicks = semantic.add_input(0.0_f32);
+        let mut inputs = NativeInputDefinition::new();
+        inputs
+            .bind_state(NativeStateSource::PointerPosition, pointer)
+            .bind_event(NativeEventSource::PointerDown { button: 0 }, clicks);
+        let scene = TimedSemanticScene::from_parts_with_native_inputs(
+            semantic,
+            SignalTimelineDefinition::new(),
+            inputs,
+        )
+        .unwrap();
+
+        let json = encode_timed_semantic_scene(&scene).unwrap();
+        assert!(json.contains("\"native_inputs\""));
+        assert!(json.contains("pointer_position"));
+        assert!(json.contains("pointer_down"));
+        assert_eq!(decode_timed_semantic_scene(&json).unwrap(), scene);
+    }
+
+    #[test]
+    fn ordinary_semantic_json_decodes_as_timed_scene_without_signal_tracks_or_inputs() {
         let mut semantic = noon_core::SemanticScene::new();
         semantic.add(GeometryRef::circle(1.0));
         let json = super::super::encode_semantic_scene(&semantic).unwrap();
         let decoded = decode_timed_semantic_scene(&json).unwrap();
         assert!(decoded.signal_timeline().tracks().is_empty());
+        assert!(decoded.native_inputs().is_empty());
     }
 }
