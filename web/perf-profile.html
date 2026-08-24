@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Noon performance profiler</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #090c13;
+        color: #e9efff;
+      }
+      body {
+        width: min(96vw, 80rem);
+        margin: 1.5rem auto;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        max-height: 70vh;
+        border: 1px solid #29334b;
+        border-radius: 0.75rem;
+      }
+      output {
+        display: block;
+        margin-bottom: 1rem;
+        white-space: pre-wrap;
+      }
+      pre {
+        overflow: auto;
+        max-height: 28rem;
+        padding: 1rem;
+        border: 1px solid #29334b;
+        border-radius: 0.75rem;
+        background: #0d1220;
+      }
+    </style>
+  </head>
+  <body>
+    <output id="status" data-state="starting">Building performance workload…</output>
+    <canvas id="scene" width="960" height="540" aria-label="Noon performance profiling scene"></canvas>
+    <pre id="json" aria-label="Performance result JSON"></pre>
+    <script type="module" src="./perf-profile.js"></script>
+  </body>
+</html>
