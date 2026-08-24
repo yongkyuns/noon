@@ -97,7 +97,7 @@ try {
     source,
   );
 
-  await page.evaluate(async (document) => {
+  await page.evaluate(async (sceneDocument) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const canvas = document.createElement("canvas");
@@ -111,7 +111,7 @@ try {
 
     const player = await wasm.ReactiveCanvasPlayer.create(
       canvas,
-      JSON.stringify(document),
+      JSON.stringify(sceneDocument),
       4.0,
     );
     window.__reactivePlayer = player;
