@@ -7,3 +7,6 @@ description = "Ergonomic language-neutral authoring facade for Noon"
 
 [dependencies]
 noon-core = { path = "../noon-core" }
+
+[dev-dependencies]
+noon-ir = { path = "../noon-ir" }
