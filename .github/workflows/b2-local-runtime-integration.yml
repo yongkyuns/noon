@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply local timeline migration
-        run: python3 scripts/b2_local_runtime_integration.py
+        run: |
+          python3 scripts/b2_local_runtime_integration.py
+          python3 scripts/b2_local_runtime_test_fix.py
 
       - name: Format and validate runtime slice
         run: |
@@ -32,7 +34,7 @@ jobs:
 
       - name: Commit integrated source and remove helpers
         run: |
-          rm .github/workflows/b2-local-runtime-integration.yml scripts/b2_local_runtime_integration.py
+          rm .github/workflows/b2-local-runtime-integration.yml scripts/b2_local_runtime_integration.py scripts/b2_local_runtime_test_fix.py
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -A
