@@ -118,6 +118,13 @@ impl HostDrivenScene {
         scene: SceneInstance,
         registry: &HostCallbackRegistry,
     ) -> Result<Self, HostCallbackAttachError> {
+        let dense_index_by_object = scene
+            .frame()
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.id, index))
+            .collect::<BTreeMap<_, _>>();
         let mut watched_dense_indices = Vec::<usize>::new();
         let mut snapshot_index_by_object = BTreeMap::<ObjectId, u32>::new();
         let mut invocations = Vec::with_capacity(registry.slots().len());
@@ -125,15 +132,12 @@ impl HostDrivenScene {
         for slot in registry.slots() {
             let mut object_indices = Vec::with_capacity(slot.objects.len());
             for object in &slot.objects {
-                let dense_index = scene
-                    .frame()
-                    .objects
-                    .iter()
-                    .position(|candidate| candidate.id == *object)
-                    .ok_or(HostCallbackAttachError::UnknownObject {
+                let dense_index = *dense_index_by_object.get(object).ok_or(
+                    HostCallbackAttachError::UnknownObject {
                         callback: slot.id,
                         object: *object,
-                    })?;
+                    },
+                )?;
                 let snapshot_index = if let Some(index) = snapshot_index_by_object.get(object) {
                     *index
                 } else {
