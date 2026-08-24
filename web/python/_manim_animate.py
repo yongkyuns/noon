@@ -1,7 +1,8 @@
 """Manim-compatible ``.animate`` scheduling semantics.
 
-This layer keeps animation authoring in Python while lowering every supported operation
-to Noon's deterministic scene tracks. No Python callbacks run during playback.
+This layer keeps Python syntax adaptation while lowering supported operations to Noon's
+deterministic scene tracks. Animation option defaults, validation, and precedence are
+resolved by shared Rust authoring semantics; no Python callbacks run during playback.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import math
 from typing import Any, Callable
 
 import noon as _base
+import _manim_animation_options as _options
 import _manim_compat as _compat
 import _manim_phase_b as _phase_b
 
@@ -81,68 +83,15 @@ _compat._CompatAnimationBuilder = _AlignedAnimationBuilder
 _compat._GroupAnimationBuilder = _AlignedGroupAnimationBuilder
 
 
-_SUPPORTED_BUILDER_ARGS = {
-    "run_time",
-    "rate_func",
-    "lag_ratio",
-    "path_arc",
-    "reverse_rate_function",
-    "suspend_mobject_updating",
-    "name",
-}
-
-
-def _positive_duration(name: str, value: object) -> float:
-    result = float(value)
-    if not math.isfinite(result) or result <= 0.0:
-        raise ValueError(f"{name} must be finite and positive")
-    return result
-
-
-def _lag_ratio(value: object) -> float:
-    result = float(value)
-    if not math.isfinite(result) or result < 0.0:
-        raise ValueError("lag_ratio must be finite and non-negative")
-    return result
-
-
-def _validate_builder_args(builder: object) -> dict[str, Any]:
-    args = dict(getattr(builder, "anim_args", {}))
-    unsupported = sorted(set(args) - _SUPPORTED_BUILDER_ARGS)
-    if unsupported:
-        raise NotImplementedError(
-            "unsupported Manim .animate option(s): " + ", ".join(unsupported)
-        )
-
-    if "path_arc" in args:
-        path_arc = float(args["path_arc"])
-        if not math.isfinite(path_arc):
-            raise ValueError("path_arc must be finite")
-        if not math.isclose(path_arc, 0.0, abs_tol=1e-12):
-            raise NotImplementedError(
-                "non-zero .animate(path_arc=...) requires curved transform paths, "
-                "which are not yet represented by Noon's deterministic Transform track"
-            )
-
-    if bool(args.get("reverse_rate_function", False)):
-        raise NotImplementedError(
-            ".animate(reverse_rate_function=True) is not yet represented by Noon's easing IR"
-        )
-
-    if "run_time" in args:
-        args["run_time"] = _positive_duration("run_time", args["run_time"])
-    if "lag_ratio" in args:
-        args["lag_ratio"] = _lag_ratio(args["lag_ratio"])
-    return args
-
-
 def _builder_source(animation: object) -> object | None:
     if isinstance(animation, (_AlignedAnimationBuilder, _AlignedGroupAnimationBuilder)):
         return animation.source
     return None
 
 
-def _record_wrapper_state(value: object, states: dict[int, tuple[_base.Mobject, object, object]]) -> None:
+def _record_wrapper_state(
+    value: object, states: dict[int, tuple[_base.Mobject, object, object]]
+) -> None:
     if isinstance(value, _compat.Group):
         for member in _compat._leaf_mobjects(value):
             _record_wrapper_state(member, states)
@@ -193,23 +142,6 @@ def _default_lag_ratio(animation: object) -> float:
     return 0.0
 
 
-def _resolve_easing(
-    *,
-    builder_args: dict[str, Any],
-    play_easing: str | None,
-    play_rate_func: object | None,
-) -> str:
-    if play_easing is not None:
-        return play_easing
-    if play_rate_func is not None:
-        return _compat._easing_from_rate_func(play_rate_func)
-    if "rate_func" in builder_args:
-        return _compat._easing_from_rate_func(builder_args["rate_func"])
-    # Manim Animation defaults to rate_func=smooth. Noon currently lowers the
-    # known function to its deterministic ease-in-out easing representation.
-    return _compat._easing_from_rate_func(_compat.smooth)
-
-
 def _expanded_schedule(
     scene: _compat.Scene,
     animation: object,
@@ -233,8 +165,8 @@ def _expanded_schedule(
     if not is_family_animation or len(expanded) == 1:
         return [(item, start_time, run_time, easing) for item in expanded]
 
-    # This is Manim Animation.get_sub_alpha's timing geometry written directly as
-    # deterministic child intervals: full_length = 1 + (n-1)*lag_ratio.
+    # Group interval expansion remains here until A4. The lag ratio itself has
+    # already been resolved through the shared Rust AnimationOptions contract.
     full_length = 1.0 + (len(expanded) - 1) * lag_ratio
     child_duration = run_time / full_length
     offset = lag_ratio * child_duration
@@ -265,12 +197,11 @@ def _aligned_scene_play(
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
 
-    play_duration = None
-    if run_time is not None:
-        play_duration = _positive_duration("run_time", run_time)
-    elif duration is not None:
-        play_duration = _positive_duration("duration", duration)
-    play_lag_ratio = None if lag_ratio is None else _lag_ratio(lag_ratio)
+    play_run_time = run_time if run_time is not None else duration
+    if play_run_time is not None:
+        play_run_time = float(play_run_time)
+    if lag_ratio is not None:
+        lag_ratio = float(lag_ratio)
 
     base_start = self._cursor if start_time is None else float(start_time)
     if not math.isfinite(base_start) or base_start < 0.0:
@@ -301,32 +232,23 @@ def _aligned_scene_play(
                 _bind_for_animation(self, animation.target, start_time=base_start)
 
         for animation in animations:
-            builder_args = _validate_builder_args(animation)
-            item_duration = (
-                play_duration
-                if play_duration is not None
-                else builder_args.get("run_time", 1.0)
-            )
-            item_duration = _positive_duration("run_time", item_duration)
-            item_easing = _resolve_easing(
+            builder_args = _options.builder_args(animation)
+            resolved = _options.resolve(
                 builder_args=builder_args,
+                default_lag_ratio=_default_lag_ratio(animation),
+                play_run_time=play_run_time,
                 play_easing=easing,
                 play_rate_func=rate_func,
+                play_lag_ratio=lag_ratio,
             )
-            item_lag_ratio = (
-                play_lag_ratio
-                if play_lag_ratio is not None
-                else builder_args.get("lag_ratio", _default_lag_ratio(animation))
-            )
-            item_lag_ratio = _lag_ratio(item_lag_ratio)
 
             schedule = _expanded_schedule(
                 self,
                 animation,
                 start_time=base_start,
-                run_time=item_duration,
-                easing=item_easing,
-                lag_ratio=item_lag_ratio,
+                run_time=resolved.run_time,
+                easing=resolved.rate_func,
+                lag_ratio=resolved.lag_ratio,
             )
             for lowered, child_start, child_duration, child_easing in schedule:
                 # `noon.Scene` has already been replaced by the compatibility class
@@ -339,7 +261,7 @@ def _aligned_scene_play(
                     start_time=child_start,
                     easing=child_easing,
                 )
-            max_end = max(max_end, base_start + item_duration)
+            max_end = max(max_end, base_start + resolved.run_time)
 
         self._cursor = max(cursor_before, max_end)
         return self
