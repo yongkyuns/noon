@@ -14,9 +14,7 @@ mod wasm {
     struct WebDisplaySource;
 
     impl wgpu::rwh::HasDisplayHandle for WebDisplaySource {
-        fn display_handle(
-            &self,
-        ) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
             Ok(wgpu::rwh::DisplayHandle::web())
         }
     }
@@ -52,9 +50,8 @@ mod wasm {
             initial_delta_json: &str,
         ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
             let mut mirror = ExecutionFrameMirror::default();
-            let (outcome, pending_changes) = mirror
-                .apply_json(initial_delta_json)
-                .map_err(js_error)?;
+            let (outcome, pending_changes) =
+                mirror.apply_json(initial_delta_json).map_err(js_error)?;
             if outcome != TransportApplyOutcome::Applied || !pending_changes.is_all() {
                 return Err(js_message(
                     "execution renderer must start from an applied transport snapshot",

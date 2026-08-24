@@ -37,6 +37,7 @@ async function handleMainMessage(message) {
           operation: "replace_scene",
           time: player.time(),
           nextPatchSequence: String(player.nextPatchSequence()),
+          sceneJson: player.sceneJson(),
         });
         return;
       case "reconcile_scene": {
@@ -51,6 +52,7 @@ async function handleMainMessage(message) {
           incremental: result.incremental,
           time: player.time(),
           nextPatchSequence: String(player.nextPatchSequence()),
+          sceneJson: player.sceneJson(),
         });
         return;
       }
@@ -65,6 +67,7 @@ async function handleMainMessage(message) {
           operation: "apply_patch",
           time: player.time(),
           nextPatchSequence: String(player.nextPatchSequence()),
+          sceneJson: player.sceneJson(),
         });
         return;
       }

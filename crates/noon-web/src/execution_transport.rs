@@ -80,10 +80,15 @@ impl std::fmt::Display for ExecutionTransportError {
                 write!(formatter, "invalid execution transport channel {channel:?}")
             }
             Self::UnsupportedVersion(version) => {
-                write!(formatter, "unsupported execution transport version {version}")
+                write!(
+                    formatter,
+                    "unsupported execution transport version {version}"
+                )
             }
             Self::InvalidTime(time) => write!(formatter, "invalid execution delta time {time}"),
-            Self::SequenceExhausted => formatter.write_str("execution transport sequence exhausted"),
+            Self::SequenceExhausted => {
+                formatter.write_str("execution transport sequence exhausted")
+            }
             Self::SessionRequiresSnapshot { session, sequence } => write!(
                 formatter,
                 "execution session {session} must begin with snapshot sequence 0, got {sequence}"
@@ -92,9 +97,8 @@ impl std::fmt::Display for ExecutionTransportError {
                 formatter,
                 "execution delta sequence gap: expected {expected}, got {actual}"
             ),
-            Self::StructuralDeltaRequiresSnapshot => formatter.write_str(
-                "execution transport structural changes require a complete snapshot",
-            ),
+            Self::StructuralDeltaRequiresSnapshot => formatter
+                .write_str("execution transport structural changes require a complete snapshot"),
             Self::DuplicateSlot(slot) => write!(
                 formatter,
                 "duplicate execution transport slot {}:{}",
@@ -111,12 +115,21 @@ impl std::fmt::Display for ExecutionTransportError {
                 slot.slot, slot.generation
             ),
             Self::InvalidOrder(order) => {
-                write!(formatter, "invalid execution transport render order {order}")
+                write!(
+                    formatter,
+                    "invalid execution transport render order {order}"
+                )
             }
             Self::DuplicateObject(object) => {
-                write!(formatter, "duplicate execution transport object {}", object.get())
+                write!(
+                    formatter,
+                    "duplicate execution transport object {}",
+                    object.get()
+                )
             }
-            Self::SlotSpaceExhausted => formatter.write_str("execution transport slot space exhausted"),
+            Self::SlotSpaceExhausted => {
+                formatter.write_str("execution transport slot space exhausted")
+            }
             Self::SlotGenerationExhausted(slot) => write!(
                 formatter,
                 "execution transport slot {} generation exhausted at {}",
@@ -210,7 +223,8 @@ impl ExecutionDeltaEncoder {
         };
         let mut objects = Vec::with_capacity(indices.len());
         for index in indices {
-            let order = u32::try_from(index).map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
+            let order =
+                u32::try_from(index).map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
             objects.push(self.object_state(frame, index, order)?);
         }
         self.initialized = true;
@@ -238,14 +252,20 @@ impl ExecutionDeltaEncoder {
     }
 
     fn sync_slots(&mut self, frame: &FrameState) -> Result<bool, ExecutionTransportError> {
-        let order = frame.objects.iter().map(|object| object.id).collect::<Vec<_>>();
+        let order = frame
+            .objects
+            .iter()
+            .map(|object| object.id)
+            .collect::<Vec<_>>();
         let current = order.iter().copied().collect::<HashSet<_>>();
         if current.len() != order.len() {
-            if let Some(duplicate) = order
-                .iter()
-                .copied()
-                .find(|object| order.iter().filter(|candidate| **candidate == *object).count() > 1)
-            {
+            if let Some(duplicate) = order.iter().copied().find(|object| {
+                order
+                    .iter()
+                    .filter(|candidate| **candidate == *object)
+                    .count()
+                    > 1
+            }) {
                 return Err(ExecutionTransportError::DuplicateObject(duplicate));
             }
         }
@@ -397,12 +417,19 @@ impl ExecutionFrameMirror {
         Ok((TransportApplyOutcome::Applied, changes))
     }
 
-    fn validate_envelope(&self, delta: &ExecutionDeltaEnvelope) -> Result<(), ExecutionTransportError> {
+    fn validate_envelope(
+        &self,
+        delta: &ExecutionDeltaEnvelope,
+    ) -> Result<(), ExecutionTransportError> {
         if delta.channel != EXECUTION_TRANSPORT_CHANNEL {
-            return Err(ExecutionTransportError::InvalidChannel(delta.channel.clone()));
+            return Err(ExecutionTransportError::InvalidChannel(
+                delta.channel.clone(),
+            ));
         }
         if delta.protocol_version != EXECUTION_TRANSPORT_VERSION {
-            return Err(ExecutionTransportError::UnsupportedVersion(delta.protocol_version));
+            return Err(ExecutionTransportError::UnsupportedVersion(
+                delta.protocol_version,
+            ));
         }
         if !delta.time.is_finite() {
             return Err(ExecutionTransportError::InvalidTime(delta.time));
@@ -470,13 +497,13 @@ impl ExecutionFrameMirror {
         if !delta.removed.is_empty() {
             return Err(ExecutionTransportError::StructuralDeltaRequiresSnapshot);
         }
-        let frame = self
-            .frame
-            .as_mut()
-            .ok_or(ExecutionTransportError::SessionRequiresSnapshot {
-                session: delta.session,
-                sequence: delta.sequence,
-            })?;
+        let frame =
+            self.frame
+                .as_mut()
+                .ok_or(ExecutionTransportError::SessionRequiresSnapshot {
+                    session: delta.session,
+                    sequence: delta.sequence,
+                })?;
         frame.time = delta.time;
         let mut changed = Vec::with_capacity(delta.objects.len());
         let mut seen = HashSet::with_capacity(delta.objects.len());
@@ -591,6 +618,12 @@ impl EngineScenePlayer {
         Ok((outcome, delta))
     }
 
+    pub fn scene_json(&self) -> Result<String, ExecutionTransportError> {
+        self.player
+            .scene_json()
+            .map_err(ExecutionTransportError::from)
+    }
+
     pub const fn next_patch_sequence(&self) -> u64 {
         self.player.next_sequence()
     }
@@ -647,8 +680,13 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = applyPatchBatchDeltaJson)]
-        pub fn apply_patch_batch_delta_json(&mut self, json: &str) -> Result<Option<String>, JsValue> {
-            self.inner.apply_patch_batch_delta_json(json).map_err(js_error)
+        pub fn apply_patch_batch_delta_json(
+            &mut self,
+            json: &str,
+        ) -> Result<Option<String>, JsValue> {
+            self.inner
+                .apply_patch_batch_delta_json(json)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = replaceSceneDeltaJson)]
@@ -658,13 +696,21 @@ mod wasm {
 
         #[wasm_bindgen(js_name = reconcileSceneDeltaJson)]
         pub fn reconcile_scene_delta_json(&mut self, json: &str) -> Result<JsValue, JsValue> {
-            let (outcome, delta) = self.inner.reconcile_scene_delta_json(json).map_err(js_error)?;
+            let (outcome, delta) = self
+                .inner
+                .reconcile_scene_delta_json(json)
+                .map_err(js_error)?;
             let incremental = matches!(outcome, crate::ReconcileOutcome::Incremental { .. });
             let value = serde_json::json!({
                 "incremental": incremental,
                 "delta": delta,
             });
             Ok(JsValue::from_str(&value.to_string()))
+        }
+
+        #[wasm_bindgen(js_name = sceneJson)]
+        pub fn scene_json(&self) -> Result<String, JsValue> {
+            self.inner.scene_json().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = nextPatchSequence)]
@@ -682,12 +728,23 @@ mod wasm {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub use wasm::*;
+
 #[cfg(test)]
 mod tests {
     use noon_core::{GeometryRef, ObjectId, SceneDefinition, ScenePatch, TrackTiming, Vec2};
     use noon_ir::{encode_patch_batch, encode_scene, PatchBatch};
 
     use super::*;
+
+    fn encode_current(
+        encoder: &mut ExecutionDeltaEncoder,
+        player: &mut ScenePlayer,
+    ) -> ExecutionDeltaEnvelope {
+        let changes = player.take_frame_changes();
+        encoder.encode(player.frame(), &changes).unwrap().unwrap()
+    }
 
     fn scene_json() -> String {
         let mut scene = SceneDefinition::new();
@@ -736,20 +793,14 @@ mod tests {
     fn structural_change_forces_snapshot_and_preserves_surviving_slot() {
         let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
         let mut encoder = ExecutionDeltaEncoder::new(2);
-        let initial = encoder
-            .encode(player.frame(), &player.take_frame_changes())
-            .unwrap()
-            .unwrap();
+        let initial = encode_current(&mut encoder, &mut player);
         let surviving_slot = initial.objects[1].slot;
 
         let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ObjectId::new(0))]);
         player
             .apply_patch_batch_json(&encode_patch_batch(&batch).unwrap())
             .unwrap();
-        let delta = encoder
-            .encode(player.frame(), &player.take_frame_changes())
-            .unwrap()
-            .unwrap();
+        let delta = encode_current(&mut encoder, &mut player);
         assert!(delta.snapshot);
         assert_eq!(delta.objects.len(), 1);
         assert_eq!(delta.objects[0].slot, surviving_slot);
@@ -759,10 +810,7 @@ mod tests {
     fn stale_delta_is_dropped_and_gap_requires_snapshot() {
         let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
         let mut encoder = ExecutionDeltaEncoder::new(4);
-        let initial = encoder
-            .encode(player.frame(), &player.take_frame_changes())
-            .unwrap()
-            .unwrap();
+        let initial = encode_current(&mut encoder, &mut player);
         let mut mirror = ExecutionFrameMirror::default();
         mirror.apply(initial.clone()).unwrap();
         assert_eq!(
@@ -771,10 +819,7 @@ mod tests {
         );
 
         player.advance_to(0.25).unwrap();
-        let mut delta = encoder
-            .encode(player.frame(), &player.take_frame_changes())
-            .unwrap()
-            .unwrap();
+        let mut delta = encode_current(&mut encoder, &mut player);
         delta.sequence += 1;
         assert!(matches!(
             mirror.apply(delta),

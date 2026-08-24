@@ -14,6 +14,7 @@ mod reactive_player;
 pub use authoring_options::*;
 pub use composition::*;
 pub use determinism::*;
+#[cfg(target_arch = "wasm32")]
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use host_player::*;

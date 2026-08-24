@@ -82,6 +82,13 @@ export class SharedExecutionDeltaWriter {
     );
   }
 
+  canSend() {
+    return (
+      Atomics.load(this.#header, SLOT_STATE_0) === SLOT_FREE ||
+      Atomics.load(this.#header, SLOT_STATE_1) === SLOT_FREE
+    );
+  }
+
   send(json) {
     executionDeltaMetadata(json);
     const payload = encoder.encode(json);
@@ -190,6 +197,10 @@ export class TransferableExecutionDeltaSender {
     port.addEventListener?.("message", (event) => this.#handleMessage(event.data));
     port.on?.("message", (data) => this.#handleMessage(data));
     port.start?.();
+  }
+
+  canSend() {
+    return this.#inFlight < this.#maxInFlight;
   }
 
   send(json) {
