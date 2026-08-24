@@ -67,10 +67,7 @@ impl HostCallbackRegistry {
         })
     }
 
-    pub fn register(
-        &mut self,
-        objects: impl IntoIterator<Item = ObjectId>,
-    ) -> HostCallbackId {
+    pub fn register(&mut self, objects: impl IntoIterator<Item = ObjectId>) -> HostCallbackId {
         let id = HostCallbackId::new(self.next_callback_id);
         self.next_callback_id = self
             .next_callback_id
@@ -110,7 +107,9 @@ impl std::fmt::Display for HostCallbackRegistryError {
             Self::DuplicateCallback(id) => {
                 write!(formatter, "duplicate host callback id {}", id.get())
             }
-            Self::CallbackIdExhausted => formatter.write_str("Noon host callback ID space exhausted"),
+            Self::CallbackIdExhausted => {
+                formatter.write_str("Noon host callback ID space exhausted")
+            }
         }
     }
 }
@@ -126,7 +125,10 @@ mod tests {
         let mut registry = HostCallbackRegistry::new();
         let first = ObjectId::new(4);
         let second = ObjectId::new(7);
-        assert_eq!(registry.register([first, first, second]), HostCallbackId::new(0));
+        assert_eq!(
+            registry.register([first, first, second]),
+            HostCallbackId::new(0)
+        );
         assert_eq!(registry.register([]), HostCallbackId::new(1));
         assert_eq!(registry.slots()[0].objects, vec![first, second]);
     }
@@ -139,7 +141,9 @@ mod tests {
         };
         assert_eq!(
             HostCallbackRegistry::from_slots(vec![slot.clone(), slot]),
-            Err(HostCallbackRegistryError::DuplicateCallback(HostCallbackId::new(3)))
+            Err(HostCallbackRegistryError::DuplicateCallback(
+                HostCallbackId::new(3)
+            ))
         );
     }
 }
