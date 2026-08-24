@@ -134,6 +134,9 @@ jobs:
       - name: Test Rust/Python semantic parity
         run: node scripts/cross-language-parity.mjs
 
+      - name: Test deterministic seek/playback/rewind in WASM
+        run: node scripts/deterministic-replay-smoke.mjs
+
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
 
