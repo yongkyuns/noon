@@ -39,7 +39,9 @@ fn main() {
 
     println!("Noon timeline scheduler steady-forward benchmark");
     println!("warmups={warmups}, samples={samples}");
-    println!("total_groups,active_groups,p50_us,p95_us,p99_us,requested_groups");
+    println!(
+        "total_groups,active_groups,p50_us,p95_us,p99_us,requested_groups"
+    );
 
     for total in totals {
         for &active in &active_counts {
@@ -86,7 +88,10 @@ fn benchmark_case(total: usize, active: usize, warmups: usize, samples: usize) -
     timings.sort_by(f64::total_cmp);
 
     let stats = scheduler.last_stats();
-    assert_eq!(stats.events_crossed, 0, "steady case crossed an event boundary");
+    assert_eq!(
+        stats.events_crossed, 0,
+        "steady case crossed an event boundary"
+    );
     assert_eq!(stats.active_groups, active);
     assert_eq!(requested_groups, active);
 
