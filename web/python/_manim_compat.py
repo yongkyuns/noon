@@ -51,28 +51,6 @@ def _as_vec2(value: object) -> _base.Vec2:
     raise TypeError("expected a two- or three-component vector")
 
 
-def linear(t: float) -> float:
-    return float(t)
-
-
-def smooth(t: float) -> float:
-    # Public callable mirrors Manim ergonomics. Playback lowers this known function
-    # to Noon's deterministic ease_in_out_cubic track easing.
-    value = min(max(float(t), 0.0), 1.0)
-    return value * value * (3.0 - 2.0 * value)
-
-
-def _easing_from_rate_func(rate_func: object) -> str:
-    if rate_func is linear or rate_func == linear or getattr(rate_func, "__name__", None) == "linear":
-        return "linear"
-    if rate_func is smooth or rate_func == smooth or getattr(rate_func, "__name__", None) == "smooth":
-        return "ease_in_out_cubic"
-    raise NotImplementedError(
-        "Noon currently supports deterministic rate_func=linear and rate_func=smooth; "
-        "arbitrary Python per-frame rate functions are intentionally unsupported"
-    )
-
-
 class _CompatAnimationBuilder:
     """Generic Manim-style ``mobject.animate`` target-state proxy.
 
@@ -694,7 +672,7 @@ class Scene(_BaseScene):
         if rate_func is not None and easing is not None:
             raise ValueError("use either rate_func or the low-level easing alias, not both")
         actual_easing = easing or (
-            _easing_from_rate_func(rate_func) if rate_func is not None else "linear"
+            _easing_from_rate_func(rate_func) if rate_func is not None else "smooth"
         )
 
         # Manim introducing animations own the lifecycle transition; users do not
@@ -740,8 +718,6 @@ def install() -> None:
         "Group": Group,
         "VGroup": VGroup,
         "Scene": Scene,
-        "linear": linear,
-        "smooth": smooth,
     }
     for name, value in public.items():
         setattr(_base, name, value)
