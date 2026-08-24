@@ -19,8 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Use stable Rust
-        run: rustup default stable
+      - name: Use nightly Rust
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Compile all fuzz targets
@@ -45,8 +47,10 @@ jobs:
           - morph
     steps:
       - uses: actions/checkout@v4
-      - name: Use stable Rust
-        run: rustup default stable
+      - name: Use nightly Rust
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Run bounded libFuzzer target
