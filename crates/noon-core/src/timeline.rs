@@ -103,10 +103,22 @@ impl Property {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
-    Bool { from: bool, to: bool },
-    Scalar { from: f32, to: f32 },
-    Vec2 { from: Vec2, to: Vec2 },
-    Object { from: ObjectSnapshot, to: ObjectSnapshot },
+    Bool {
+        from: bool,
+        to: bool,
+    },
+    Scalar {
+        from: f32,
+        to: f32,
+    },
+    Vec2 {
+        from: Vec2,
+        to: Vec2,
+    },
+    Object {
+        from: ObjectSnapshot,
+        to: ObjectSnapshot,
+    },
 }
 
 impl TrackValues {
@@ -157,7 +169,10 @@ pub enum TimelineError {
     UnknownObject(ObjectId),
     InvalidStartTime(f64),
     InvalidDuration(f64),
-    InvalidInstantDuration { property: Property, duration: f64 },
+    InvalidInstantDuration {
+        property: Property,
+        duration: f64,
+    },
     ValueTypeMismatch {
         property: Property,
         expected: ValueKind,
@@ -221,7 +236,7 @@ pub(crate) fn validate_track_timing(
     Ok(())
 }
 
-pub(crate) fn validate_track_definition(track: &TrackDefinition) -> Result<(), TimelineError> {
+pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), TimelineError> {
     validate_track_timing(track.property, track.timing)?;
     let expected = track.property.value_kind();
     let actual = track.values.value_kind();
@@ -388,7 +403,10 @@ mod tests {
     }
 
     fn assert_close(actual: f32, expected: f32) {
-        assert!((actual - expected).abs() < 1e-6, "expected {expected}, got {actual}");
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
     }
 
     #[test]
@@ -487,7 +505,10 @@ mod tests {
         assert_eq!(scene.tracks()[0].property, Property::Presence);
         assert_eq!(
             scene.tracks()[0].values,
-            TrackValues::Bool { from: false, to: true }
+            TrackValues::Bool {
+                from: false,
+                to: true
+            }
         );
         assert_eq!(scene.tracks()[0].timing, TrackTiming::instant(1.25));
         assert!(scene.tracks()[0].time_map.is_identity());
@@ -501,7 +522,10 @@ mod tests {
             scene.add_track(
                 object,
                 Property::Presence,
-                TrackValues::Bool { from: true, to: false },
+                TrackValues::Bool {
+                    from: true,
+                    to: false
+                },
                 TrackTiming::new(1.0, 0.5, RateFunction::Linear),
             ),
             Err(TimelineError::InvalidInstantDuration {
@@ -530,34 +554,47 @@ mod tests {
             .expect("valid appearance track");
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Appearance);
-        assert_eq!(scene.tracks()[0].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
     }
 
     #[test]
     fn reveal_is_a_scalar_timeline_property() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::path(
-            crate::VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
         ));
         let track = scene
             .animate_reveal(object, 0.0, 1.0, timing())
             .expect("valid reveal track");
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Reveal);
-        assert_eq!(scene.tracks()[0].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
     }
 
     #[test]
     fn morph_is_a_distinct_scalar_timeline_property() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::path(
-            crate::VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE),
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
         ));
         scene
             .animate_morph(object, 0.0, 1.0, timing())
             .expect("valid morph track");
         assert_eq!(scene.tracks()[0].property, Property::Morph);
-        assert_eq!(scene.tracks()[0].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
+        );
     }
 
     #[test]
