@@ -3,7 +3,9 @@ use noon_core::{
     SignalTimelineError, TimedSemanticScene,
 };
 
-use crate::{EvaluationError, FrameChanges, FrameState, ReactiveRuntimeStats, SceneBuildError, SceneInstance};
+use crate::{
+    EvaluationError, FrameChanges, FrameState, ReactiveRuntimeStats, SceneBuildError, SceneInstance,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimedSceneRuntimeError {
@@ -236,21 +238,30 @@ mod tests {
         let mut instance = TimedSceneInstance::from_timed(&scene).unwrap();
 
         instance.seek(1.0).unwrap();
-        assert_eq!(instance.reactive_value(tracker), Some(&ReactiveValue::Scalar(0.5)));
+        assert_eq!(
+            instance.reactive_value(tracker),
+            Some(&ReactiveValue::Scalar(0.5))
+        );
         assert_eq!(
             instance.frame().objects[0].transform.translation,
             Vec2::new(1.0, 0.0)
         );
 
         instance.advance_to(2.0).unwrap();
-        assert_eq!(instance.reactive_value(tracker), Some(&ReactiveValue::Scalar(1.0)));
+        assert_eq!(
+            instance.reactive_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
         assert_eq!(
             instance.frame().objects[0].transform.translation,
             Vec2::new(2.0, 0.0)
         );
 
         instance.seek(0.5).unwrap();
-        assert_eq!(instance.reactive_value(tracker), Some(&ReactiveValue::Scalar(0.25)));
+        assert_eq!(
+            instance.reactive_value(tracker),
+            Some(&ReactiveValue::Scalar(0.25))
+        );
     }
 
     #[test]
@@ -280,7 +291,10 @@ mod tests {
         let scene = TimedSemanticScene::from_parts(semantic, timeline).unwrap();
         let mut instance = TimedSceneInstance::from_timed(&scene).unwrap();
         instance.seek(1.5).unwrap();
-        assert_eq!(instance.reactive_value(tracker), Some(&ReactiveValue::Scalar(1.0)));
+        assert_eq!(
+            instance.reactive_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
     }
 
     #[test]
