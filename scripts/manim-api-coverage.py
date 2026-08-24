@@ -2,7 +2,9 @@
 """Report Noon coverage of the pinned ManimCE public namespace.
 
 This intentionally measures API *presence/classification*, not behavioral parity.
-Behavioral equivalence belongs to scripts/manim-differential.py (#57).
+Behavioral equivalence belongs to scripts/manim-differential.py (#57). Tutorial
+and example coverage is read from the same manifest used by the executable browser
+corpus (#91) when that manifest is present.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PY_ROOT = ROOT / "web" / "python"
+TUTORIAL_MANIFEST = PY_ROOT / "examples" / "manim_tutorial_manifest.json"
 
 
 def _literal_strings(node: ast.AST) -> set[str]:
@@ -105,6 +108,53 @@ def classify(name: str, value: Any, noon_exports: set[str], policy: dict[str, An
     return result
 
 
+def load_tutorial_examples() -> list[dict[str, Any]]:
+    if not TUTORIAL_MANIFEST.exists():
+        return []
+    payload = json.loads(TUTORIAL_MANIFEST.read_text(encoding="utf-8"))
+    entries = payload.get("entries", [])
+    if not isinstance(entries, list):
+        raise ValueError("tutorial manifest entries must be an array")
+    return entries
+
+
+def validate_tutorial_examples(entries: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    allowed_statuses = {"ready", "blocked", "deferred"}
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        prefix = f"tutorial entry {index}"
+        if not isinstance(entry, dict):
+            errors.append(f"{prefix}: must be an object")
+            continue
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, str) or not entry_id:
+            errors.append(f"{prefix}: missing non-empty id")
+            continue
+        prefix = f"tutorial {entry_id!r}"
+        if entry_id in seen:
+            errors.append(f"{prefix}: duplicate id")
+        seen.add(entry_id)
+        status = entry.get("status")
+        if status not in allowed_statuses:
+            errors.append(f"{prefix}: invalid status {status!r}")
+            continue
+        if status == "ready":
+            relative_path = entry.get("path")
+            if not isinstance(relative_path, str) or not relative_path:
+                errors.append(f"{prefix}: ready entry requires path")
+            elif not (ROOT / "web" / relative_path).is_file():
+                errors.append(f"{prefix}: missing fixture web/{relative_path}")
+            for field in ("upstream", "reuse"):
+                if not entry.get(field):
+                    errors.append(f"{prefix}: ready entry requires {field}")
+        else:
+            dependency = entry.get("dependency")
+            if not isinstance(dependency, str) or not dependency.startswith("#"):
+                errors.append(f"{prefix}: {status} entry requires issue dependency")
+    return errors
+
+
 def validate(policy: dict[str, Any], manim: Any, rows: dict[str, dict[str, Any]]) -> list[str]:
     errors: list[str] = []
     expected_version = policy["reference"]["version"]
@@ -128,7 +178,11 @@ def validate(policy: dict[str, Any], manim: Any, rows: dict[str, dict[str, Any]]
     return errors
 
 
-def render_markdown(version: str, rows: dict[str, dict[str, Any]]) -> str:
+def render_markdown(
+    version: str,
+    rows: dict[str, dict[str, Any]],
+    tutorial_examples: list[dict[str, Any]],
+) -> str:
     status_counts = Counter(row["status"] for row in rows.values())
     category_counts: dict[str, Counter[str]] = defaultdict(Counter)
     for row in rows.values():
@@ -145,13 +199,40 @@ def render_markdown(version: str, rows: dict[str, dict[str, Any]]) -> str:
     for status in sorted(status_counts):
         lines.append(f"| {status} | {status_counts[status]} |")
 
-    lines.extend(["", "## By category", "", "| Category | supported | partial | blocked | deferred | missing | intentional-divergence |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"])
+    lines.extend([
+        "",
+        "## By category",
+        "",
+        "| Category | supported | partial | blocked | deferred | missing | intentional-divergence |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for category in sorted(category_counts):
         counts = category_counts[category]
         lines.append(
             f"| {category} | {counts['supported']} | {counts['partial']} | {counts['blocked']} | "
             f"{counts['deferred']} | {counts['missing']} | {counts['intentional-divergence']} |"
         )
+
+    lines.extend(["", "## Tutorial/example coverage", ""])
+    if tutorial_examples:
+        example_counts = Counter(entry["status"] for entry in tutorial_examples)
+        lines.extend([
+            f"Tracked tutorial/example entries: **{len(tutorial_examples)}**",
+            "",
+            "| Status | Count |",
+            "| --- | ---: |",
+        ])
+        for status in ("ready", "blocked", "deferred"):
+            lines.append(f"| {status} | {example_counts[status]} |")
+        lines.extend(["", "Unready tutorial/example entries:", ""])
+        for entry in tutorial_examples:
+            if entry["status"] == "ready":
+                continue
+            lines.append(
+                f"- `{entry['id']}` — **{entry['status']}** — {entry.get('dependency', 'unclassified')}"
+            )
+    else:
+        lines.append("No executable tutorial manifest is present on this ref yet.")
 
     lines.extend(["", "## Missing / blocked / deferred symbols", ""])
     for name in sorted(rows):
@@ -184,23 +265,29 @@ def main() -> int:
     noon_exports = noon_public_exports()
     names = manim_public_exports(manim)
     rows = {name: classify(name, getattr(manim, name), noon_exports, policy) for name in names}
+    tutorial_examples = load_tutorial_examples()
     errors = validate(policy, manim, rows)
+    errors.extend(validate_tutorial_examples(tutorial_examples))
 
     payload = {
         "manim_version": manim.__version__,
         "noon_public_exports": sorted(noon_exports),
         "symbols": rows,
+        "tutorial_examples": tutorial_examples,
         "errors": errors,
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(render_markdown(str(manim.__version__), rows))
+        print(render_markdown(str(manim.__version__), rows, tutorial_examples))
 
     if args.write_markdown:
         output = ROOT / args.write_markdown
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(render_markdown(str(manim.__version__), rows), encoding="utf-8")
+        output.write_text(
+            render_markdown(str(manim.__version__), rows, tutorial_examples),
+            encoding="utf-8",
+        )
 
     if errors:
         for error in errors:
