@@ -195,11 +195,8 @@ impl ComputeProgram {
                     rhs,
                     kind,
                 } => {
-                    registers[dst.index()] = binary_add(
-                        &registers[lhs.index()],
-                        &registers[rhs.index()],
-                        *kind,
-                    )?;
+                    registers[dst.index()] =
+                        binary_add(&registers[lhs.index()], &registers[rhs.index()], *kind)?;
                 }
                 ComputeInstruction::Sub {
                     dst,
@@ -207,11 +204,8 @@ impl ComputeProgram {
                     rhs,
                     kind,
                 } => {
-                    registers[dst.index()] = binary_sub(
-                        &registers[lhs.index()],
-                        &registers[rhs.index()],
-                        *kind,
-                    )?;
+                    registers[dst.index()] =
+                        binary_sub(&registers[lhs.index()], &registers[rhs.index()], *kind)?;
                 }
                 ComputeInstruction::Mul {
                     dst,
@@ -298,12 +292,11 @@ impl ComputeBuilder<'_> {
                     .signal_kinds
                     .get(index)
                     .ok_or(ReactiveError::UnknownSignal(*signal))?;
-                let signal_index = u32::try_from(index).map_err(|_| {
-                    ReactiveError::InvalidExpression {
+                let signal_index =
+                    u32::try_from(index).map_err(|_| ReactiveError::InvalidExpression {
                         signal: self.owner,
                         operation: "signal_space_exhausted",
-                    }
-                })?;
+                    })?;
                 let dst = self.allocate(kind)?;
                 self.instructions.push(ComputeInstruction::LoadSignal {
                     dst,
@@ -349,8 +342,9 @@ impl ComputeBuilder<'_> {
                 let (rhs, rhs_kind) = self.lower(rhs)?;
                 let result_kind = match (lhs_kind, rhs_kind) {
                     (ValueKind::Scalar, ValueKind::Scalar) => ValueKind::Scalar,
-                    (ValueKind::Scalar, ValueKind::Vec2)
-                    | (ValueKind::Vec2, ValueKind::Scalar) => ValueKind::Vec2,
+                    (ValueKind::Scalar, ValueKind::Vec2) | (ValueKind::Vec2, ValueKind::Scalar) => {
+                        ValueKind::Vec2
+                    }
                     _ => return self.invalid("mul"),
                 };
                 let dst = self.allocate(result_kind)?;
@@ -469,7 +463,10 @@ impl std::fmt::Display for ComputeVmError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingSignal(index) => {
-                write!(formatter, "compute program references missing dense signal {index}")
+                write!(
+                    formatter,
+                    "compute program references missing dense signal {index}"
+                )
             }
             Self::SignalTypeMismatch {
                 signal_index,
