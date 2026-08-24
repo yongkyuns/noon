@@ -16,6 +16,8 @@ use noon_core::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    /// Stable compiled slot liveness. Tombstoned slots remain addressable but are never rendered.
+    pub live: bool,
     pub id: ObjectId,
     pub geometry: GeometryRef,
     pub transform: Transform2D,
@@ -35,7 +37,15 @@ pub struct FrameState {
 
 impl FrameState {
     pub fn is_present(&self, object_index: usize) -> bool {
-        self.presences[object_index]
+        self.objects[object_index].live && self.presences[object_index]
+    }
+
+    pub fn is_live(&self, object_index: usize) -> bool {
+        self.objects[object_index].live
+    }
+
+    pub fn live_object_count(&self) -> usize {
+        self.objects.iter().filter(|object| object.live).count()
     }
 
     pub fn appearance(&self, object_index: usize) -> f32 {
@@ -344,6 +354,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            live: object.live,
             id: object.id,
             geometry: object.geometry.clone(),
             transform: object.base_transform,

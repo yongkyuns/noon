@@ -214,7 +214,7 @@ impl ScenePlayer {
     }
 
     pub fn object_count(&self) -> usize {
-        self.instance.frame().objects.len()
+        self.instance.frame().live_object_count()
     }
 }
 

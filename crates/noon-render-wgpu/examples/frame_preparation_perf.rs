@@ -91,6 +91,7 @@ fn build_frame(object_count: usize) -> FrameState {
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {
+                live: true,
                 id: ObjectId::new(index as u64),
                 geometry: GeometryRef::circle(0.5),
                 transform: Transform2D {

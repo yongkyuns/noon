@@ -14,7 +14,40 @@ fn assert_live_matches_definition(
     let mut expected = SceneInstance::new(compiled);
     expected.seek(time).expect("valid seek");
     live.seek(time).expect("valid seek");
-    assert_eq!(live.frame(), expected.frame());
+    let live_objects = live
+        .frame()
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| live.frame().is_live(*index))
+        .map(|(index, object)| {
+            (
+                object.clone(),
+                live.frame().presences[index],
+                live.frame().reveals[index],
+                live.frame().morphs[index],
+                live.frame().render_geometries[index].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected_objects = expected
+        .frame()
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| expected.frame().is_live(*index))
+        .map(|(index, object)| {
+            (
+                object.clone(),
+                expected.frame().presences[index],
+                expected.frame().reveals[index],
+                expected.frame().morphs[index],
+                expected.frame().render_geometries[index].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(live.frame().time, expected.frame().time);
+    assert_eq!(live_objects, expected_objects);
 }
 
 #[test]
@@ -65,8 +98,14 @@ fn create_add_track_and_remove_match_full_recompile() {
         .expect("definition remove must succeed");
 
     assert_live_matches_definition(&mut live, &definition, time);
-    assert_eq!(live.frame().objects.len(), 1);
-    assert_eq!(live.frame().objects[0].id, created);
+    assert_eq!(live.frame().live_object_count(), 1);
+    let created_index = live
+        .frame()
+        .objects
+        .iter()
+        .position(|object| object.live && object.id == created)
+        .expect("created object stays live");
+    assert_eq!(live.frame().objects[created_index].id, created);
 }
 
 #[test]
