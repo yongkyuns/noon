@@ -134,7 +134,7 @@ try {
       signal: 1,
       from: 0,
       to: 2,
-      timing: { start_time: 2, duration: 1, easing: "smooth" },
+      timing: { start_time: 2, duration: 1, easing: "ease_in_out_cubic" },
     },
   ]);
 
@@ -144,7 +144,7 @@ try {
   assert.ok(transform, "mixed tracker/object play should preserve object animation");
   assert.equal(transform.timing.start_time, 2);
   assert.equal(transform.timing.duration, 1);
-  assert.equal(transform.timing.easing, "smooth");
+  assert.equal(transform.timing.easing, "ease_in_out_cubic");
 
   console.log("reactive authoring smoke test passed");
 } finally {
