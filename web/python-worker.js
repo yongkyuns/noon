@@ -7,6 +7,7 @@ const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
+const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -21,14 +22,21 @@ self.addEventListener("message", (event) => {
 
 async function initializePyodide() {
   const pyodide = await loadPyodide();
-  const [apiResponse, irResponse, compatResponse, phaseBResponse, animateResponse] =
-    await Promise.all([
-      fetch(new URL("./python/noon.py", import.meta.url)),
-      fetch(new URL("./python/_noon_ir.py", import.meta.url)),
-      fetch(new URL("./python/_manim_compat.py", import.meta.url)),
-      fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
-      fetch(new URL("./python/_manim_animate.py", import.meta.url)),
-    ]);
+  const [
+    apiResponse,
+    irResponse,
+    compatResponse,
+    phaseBResponse,
+    animateResponse,
+    reactiveResponse,
+  ] = await Promise.all([
+    fetch(new URL("./python/noon.py", import.meta.url)),
+    fetch(new URL("./python/_noon_ir.py", import.meta.url)),
+    fetch(new URL("./python/_manim_compat.py", import.meta.url)),
+    fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
+    fetch(new URL("./python/_manim_animate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
+  ]);
   if (!apiResponse.ok) {
     throw new Error(`Unable to load Noon Python API: HTTP ${apiResponse.status}`);
   }
@@ -43,6 +51,9 @@ async function initializePyodide() {
   }
   if (!animateResponse.ok) {
     throw new Error(`Unable to load Noon Manim animate layer: HTTP ${animateResponse.status}`);
+  }
+  if (!reactiveResponse.ok) {
+    throw new Error(`Unable to load Noon reactive compatibility layer: HTTP ${reactiveResponse.status}`);
   }
 
   pyodide.FS.writeFile(PYTHON_MODULE_PATH, await apiResponse.text(), {
@@ -60,6 +71,9 @@ async function initializePyodide() {
   pyodide.FS.writeFile(MANIM_ANIMATE_MODULE_PATH, await animateResponse.text(), {
     encoding: "utf8",
   });
+  pyodide.FS.writeFile(MANIM_REACTIVE_MODULE_PATH, await reactiveResponse.text(), {
+    encoding: "utf8",
+  });
   pyodide.runPython(`
 import sys
 sys.path.insert(0, "/tmp")
@@ -67,6 +81,7 @@ import _manim_compat
 _manim_compat.install()
 import _manim_phase_b
 import _manim_animate
+import _manim_reactive
 `);
   return pyodide;
 }
