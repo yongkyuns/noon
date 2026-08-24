@@ -18,6 +18,7 @@ PLAYGROUND_SCENE_EXAMPLES = (
     ("Create shapes", "python/examples/create_shapes.py", {}),
     ("Path reveal", "python/examples/path_reveal.py", {}),
     ("Filled path Transform", "python/examples/filled_path_transform.py", {}),
+    ("Painter order overlap", "python/examples/painter_order_overlap.py", {}),
     ("Staggered timing", "python/examples/staggered_choreography.py", {}),
     ("Instanced field · 180", "python/examples/instanced_field.py", {}),
     ("Morph stress · 1,000", "python/examples/morph_stress_test.py", {"object_count": 1000}),
