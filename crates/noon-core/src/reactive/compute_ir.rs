@@ -63,7 +63,7 @@ impl ComputeRegister {
 ///
 /// Operands are validated while lowering `ReactiveExpr`, so execution does not
 /// recursively inspect the authoring AST or rediscover operand types every frame.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputeInstruction {
     ConstantBool {
@@ -292,7 +292,7 @@ impl ComputeProgram {
 /// Scheduling uses a dense adjacency table, a reusable queued-bitset, and a
 /// vector-backed min-heap keyed by topological rank. It performs no recursive AST
 /// evaluation and uses no ordered maps/sets to schedule dirty work.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ComputeState {
     program: ComputeProgram,
     values: Vec<ReactiveValue>,
@@ -344,9 +344,12 @@ impl ComputeState {
 
         self.values[index] = value.clone();
         let mut changed = vec![index];
-        for &dependent in &self.program.reference.dependents[index] {
-            self.enqueue(dependent);
-        }
+        enqueue_dependents(
+            &self.program.reference.dependents[index],
+            &self.program.reference.topological_rank,
+            &mut self.queued,
+            &mut self.pending,
+        );
 
         let mut stats = ReactiveEvaluationStats::default();
         while let Some(Reverse((rank, current))) = self.pending.pop() {
@@ -364,9 +367,12 @@ impl ComputeState {
             }
             self.values[current] = next;
             changed.push(current);
-            for &dependent in &self.program.reference.dependents[current] {
-                self.enqueue(dependent);
-            }
+            enqueue_dependents(
+                &self.program.reference.dependents[current],
+                &self.program.reference.topological_rank,
+                &mut self.queued,
+                &mut self.pending,
+            );
         }
 
         changed.sort_by_key(|index| self.program.reference.topological_rank[*index]);
@@ -394,16 +400,20 @@ impl ComputeState {
             stats,
         })
     }
+}
 
-    fn enqueue(&mut self, signal_index: usize) {
-        if self.queued[signal_index] {
-            return;
+fn enqueue_dependents(
+    dependents: &[usize],
+    topological_rank: &[usize],
+    queued: &mut [bool],
+    pending: &mut BinaryHeap<Reverse<(usize, usize)>>,
+) {
+    for &signal_index in dependents {
+        if queued[signal_index] {
+            continue;
         }
-        self.queued[signal_index] = true;
-        self.pending.push(Reverse((
-            self.program.reference.topological_rank[signal_index],
-            signal_index,
-        )));
+        queued[signal_index] = true;
+        pending.push(Reverse((topological_rank[signal_index], signal_index)));
     }
 }
 
