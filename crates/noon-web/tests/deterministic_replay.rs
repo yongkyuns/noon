@@ -3,7 +3,8 @@ use noon_core::{
 };
 use noon_ir::encode_scene;
 use noon_web::{
-    normalized_frame_json, playback_snapshot_json, scene_snapshot_json, ReconcileOutcome, ScenePlayer,
+    normalized_frame_json, playback_snapshot_json, scene_snapshot_json, ReconcileOutcome,
+    ScenePlayer,
 };
 
 fn build_scene() -> SceneDefinition {
@@ -43,17 +44,9 @@ fn build_scene() -> SceneDefinition {
         )
         .unwrap();
 
-    let line = scene.add(GeometryRef::line(
-        Vec2::new(-1.0, 0.0),
-        Vec2::new(1.0, 0.0),
-    ));
+    let line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
     scene
-        .animate_reveal(
-            line,
-            0.0,
-            1.0,
-            TrackTiming::new(0.0, 1.2, Easing::Linear),
-        )
+        .animate_reveal(line, 0.0, 1.0, TrackTiming::new(0.0, 1.2, Easing::Linear))
         .unwrap();
 
     scene
@@ -171,8 +164,9 @@ fn reconcile_and_full_replacement_match_fresh_compile_at_the_same_playhead() {
 #[test]
 fn normalized_snapshot_omits_execution_bookkeeping_but_preserves_render_observables() {
     let json = scene_json(&build_scene());
-    let snapshot: serde_json::Value = serde_json::from_str(&scene_snapshot_json(&json, 1.2).unwrap())
-        .expect("snapshot is valid JSON");
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&scene_snapshot_json(&json, 1.2).unwrap())
+            .expect("snapshot is valid JSON");
 
     assert_eq!(snapshot["time"], 1.2);
     let objects = snapshot["objects"].as_array().expect("objects array");
