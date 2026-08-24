@@ -99,7 +99,9 @@ try {
   assert.equal(firstTransform.object, 1);
   assert.equal(firstTransform.transform.translation.x, 2);
   assert.equal(firstTransform.transform.translation.y, 0.25);
-  assert.equal(output.phases[0].batch.patches[1].set_style.style.opacity, 0.75);
+  const firstStyle = output.phases[0].batch.patches[1].set_style.style;
+  assert.equal(firstStyle.opacity, 1);
+  assert.equal(firstStyle.fill.alpha, 0.75);
 
   assert.equal(output.phases[1].frame.time, 0.75);
   assert.equal(output.phases[1].frame.delta_time, 0.5);
@@ -109,12 +111,15 @@ try {
   const secondTransform = output.phases[1].batch.patches[0].set_transform;
   assert.equal(secondTransform.transform.translation.x, 2);
   assert.equal(secondTransform.transform.translation.y, 0.5);
-  assert.equal(output.phases[1].batch.patches[1].set_style.style.opacity, 1);
+  const secondStyle = output.phases[1].batch.patches[1].set_style.style;
+  assert.equal(secondStyle.opacity, 1);
+  assert.equal(secondStyle.fill.alpha, 1);
 
   assert.equal(output.finalFrame.time, 0.75);
   assert.equal(output.finalFrame.objects[1].transform.translation.x, 2);
   assert.equal(output.finalFrame.objects[1].transform.translation.y, 0.5);
   assert.equal(output.finalFrame.objects[1].style.opacity, 1);
+  assert.equal(output.finalFrame.objects[1].style.fill.alpha, 1);
 
   console.log("Python updater callback smoke test passed");
 } finally {
