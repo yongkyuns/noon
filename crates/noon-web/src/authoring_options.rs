@@ -1,6 +1,6 @@
 use noon_core::{
-    resolve_animation_options as resolve_core_animation_options, AnimationDefaults, AnimationOptions,
-    AnimationOptionsError, RateFunction, ResolvedAnimationOptions,
+    resolve_animation_options as resolve_core_animation_options, AnimationDefaults,
+    AnimationOptions, AnimationOptionsError, RateFunction, ResolvedAnimationOptions,
 };
 
 #[derive(Clone, Debug, PartialEq)]
