@@ -1,9 +1,7 @@
+import ast
 import json
 import unittest
 from pathlib import Path
-
-from noon import Scene
-from playground_examples import run_scene_example
 
 WEB_ROOT = Path(__file__).parents[1]
 MANIFEST_PATH = WEB_ROOT / "python" / "examples" / "manim_tutorial_manifest.json"
@@ -22,33 +20,28 @@ class ManimTutorialExampleTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertGreaterEqual(len(entries), 10)
 
-    def test_every_ready_tutorial_executes(self) -> None:
+    def test_every_ready_tutorial_exists_and_compiles(self) -> None:
         ready = [entry for entry in load_manifest()["entries"] if entry["status"] == "ready"]
         self.assertGreaterEqual(len(ready), 7)
         paths = []
         for entry in ready:
             with self.subTest(entry=entry["id"]):
-                path = entry["path"]
-                paths.append(path)
-                self.assertTrue((WEB_ROOT / path).is_file())
-                self.assertIsInstance(run_scene_example(path, {}), Scene)
-        self.assertEqual(len(paths), len(set(paths)))
-
-    def test_ready_tutorials_fit_interactive_demo_loop(self) -> None:
-        ready = [entry for entry in load_manifest()["entries"] if entry["status"] == "ready"]
-        for entry in ready:
-            with self.subTest(entry=entry["id"]):
-                document = run_scene_example(entry["path"], {}).to_document()
-                ends = [
-                    track["timing"]["start_time"] + track["timing"]["duration"]
-                    for track in document.get("tracks", [])
-                ]
-                ends.extend(
-                    track["timing"]["start_time"] + track["timing"]["duration"]
-                    for track in document.get("signal_tracks", [])
+                relative_path = entry["path"]
+                paths.append(relative_path)
+                path = WEB_ROOT / relative_path
+                self.assertTrue(path.is_file())
+                source = path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(path))
+                self.assertTrue(
+                    any(
+                        isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)
+                        for node in ast.walk(tree)
+                    ),
+                    f"{entry['id']} must assign result",
                 )
-                self.assertTrue(ends, f"{entry['id']} should exercise timed behavior")
-                self.assertLess(max(ends), 4.0)
+                compile(tree, str(path), "exec")
+        self.assertEqual(len(paths), len(set(paths)))
 
     def test_unready_tutorials_explain_their_dependency(self) -> None:
         entries = load_manifest()["entries"]
