@@ -16,6 +16,7 @@ const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
+const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
 const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 
@@ -47,6 +48,7 @@ async function initializePyodide() {
     phaseBResponse,
     animationOptionsResponse,
     animateResponse,
+    compositionResponse,
     lifecycleResponse,
     reactiveResponse,
   ] = await Promise.all([
@@ -57,6 +59,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_composition.py", import.meta.url)),
     fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
   ]);
@@ -84,6 +87,9 @@ async function initializePyodide() {
   }
   if (!animateResponse.ok) {
     throw new Error(`Unable to load Noon Manim animate layer: HTTP ${animateResponse.status}`);
+  }
+  if (!compositionResponse.ok) {
+    throw new Error(`Unable to load Noon Manim composition layer: HTTP ${compositionResponse.status}`);
   }
   if (!lifecycleResponse.ok) {
     throw new Error(`Unable to load Noon Manim lifecycle layer: HTTP ${lifecycleResponse.status}`);
@@ -117,6 +123,9 @@ async function initializePyodide() {
   pyodide.FS.writeFile(MANIM_ANIMATE_MODULE_PATH, await animateResponse.text(), {
     encoding: "utf8",
   });
+  pyodide.FS.writeFile(MANIM_COMPOSITION_MODULE_PATH, await compositionResponse.text(), {
+    encoding: "utf8",
+  });
   pyodide.FS.writeFile(MANIM_LIFECYCLE_MODULE_PATH, await lifecycleResponse.text(), {
     encoding: "utf8",
   });
@@ -132,6 +141,8 @@ import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_phase_b
 import _manim_animate
+import _manim_composition
+_manim_composition.install()
 import _manim_lifecycle
 import _manim_reactive
 `);

@@ -14,6 +14,7 @@ node --check web/morph-profile.js
 node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
+node --check scripts/composition-authoring-smoke.mjs
 node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
 node --test web/authoring-client.test.mjs
@@ -25,6 +26,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_phase_b.py \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
+  web/python/_manim_composition.py \
   web/python/_manim_lifecycle.py \
   web/python/_manim_reactive.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
