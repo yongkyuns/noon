@@ -15,6 +15,7 @@ node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
 node --check scripts/reactive-authoring-smoke.mjs
+node --check scripts/reactive-runtime-smoke.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
