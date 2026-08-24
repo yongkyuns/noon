@@ -70,6 +70,14 @@ impl NativeInputRouter {
         self.stats = NativeInputStats::default();
     }
 
+    pub fn has_state_source(&self, source: &NativeStateSource) -> bool {
+        self.state.contains_key(source)
+    }
+
+    pub fn has_event_source(&self, source: &NativeEventSource) -> bool {
+        self.events.contains_key(source)
+    }
+
     pub fn dispatch_state(
         &mut self,
         instance: &mut TimedSceneInstance,
