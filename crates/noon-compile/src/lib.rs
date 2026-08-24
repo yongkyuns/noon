@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    validate_track_definition, CompositionTimeMap, GeometryRef, ObjectId, Property,
+    SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,7 +74,6 @@ pub enum TransformGeometryPlan {
         to_start: noon_core::Vec2,
         to_end: noon_core::Vec2,
     },
-    /// Fixed source/target topology prepared once for the path renderer.
     PathPair(GeometryRef),
 }
 
@@ -84,8 +84,7 @@ pub struct CompiledTrack {
     pub property: Property,
     pub values: TrackValues,
     pub timing: TrackTiming,
-    /// Compiler-selected geometry interpolation strategy for an atomic Transform.
-    /// Non-Transform tracks carry `None`.
+    pub time_map: CompositionTimeMap,
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
@@ -344,41 +343,7 @@ impl CompiledScene {
         let object_index = self
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
-        if !track.timing.start_time.is_finite() {
-            return Err(CompilePatchError::InvalidTrack(
-                TimelineError::InvalidStartTime(track.timing.start_time),
-            ));
-        }
-        if !track.timing.duration.is_finite() {
-            return Err(CompilePatchError::InvalidTrack(
-                TimelineError::InvalidDuration(track.timing.duration),
-            ));
-        }
-        if track.property.is_instant() {
-            if track.timing.duration != 0.0 {
-                return Err(CompilePatchError::InvalidTrack(
-                    TimelineError::InvalidInstantDuration {
-                        property: track.property,
-                        duration: track.timing.duration,
-                    },
-                ));
-            }
-        } else if track.timing.duration <= 0.0 {
-            return Err(CompilePatchError::InvalidTrack(
-                TimelineError::InvalidDuration(track.timing.duration),
-            ));
-        }
-        let expected = track.property.value_kind();
-        let actual = track.values.value_kind();
-        if expected != actual {
-            return Err(CompilePatchError::InvalidTrack(
-                TimelineError::ValueTypeMismatch {
-                    property: track.property,
-                    expected,
-                    actual,
-                },
-            ));
-        }
+        validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
         compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
     }
 
@@ -419,6 +384,7 @@ fn compile_track(
         property: track.property,
         values: track.values.clone(),
         timing: track.timing,
+        time_map: track.time_map.clone(),
         transform_geometry_plan: compile_transform_geometry_plan(track)?,
     })
 }
@@ -527,9 +493,6 @@ fn closed_analytic_path(geometry: &GeometryRef) -> Option<VectorPath> {
 }
 
 fn circle_path(radius: f32) -> VectorPath {
-    // Standard four-cubic approximation. Cross-kind transforms intentionally
-    // use path rendering only while active; same-kind Circle transforms retain
-    // the exact analytic fast path.
     let handle = radius * 0.552_284_8;
     VectorPath::new()
         .move_to(Vec2::new(radius, 0.0))
@@ -558,9 +521,6 @@ fn circle_path(radius: f32) -> VectorPath {
 
 fn rectangle_path(size: Vec2) -> VectorPath {
     let half = size * 0.5;
-    // Start at the right midpoint and include side midpoints so deterministic
-    // correspondence lines up the rectangle's cardinal directions with the
-    // circle's four cubic endpoints.
     VectorPath::new()
         .move_to(Vec2::new(half.x, 0.0))
         .line_to(Vec2::new(half.x, half.y))
@@ -611,7 +571,6 @@ fn sort_tracks(tracks: &mut [CompiledTrack]) {
 
 fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, TrackId)> {
     let mut previous: Option<(u32, TrackId, bool)> = None;
-
     for track in tracks
         .iter()
         .filter(|track| track.property == Property::Presence)
@@ -619,7 +578,6 @@ fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, Tr
         let TrackValues::Bool { from, to } = &track.values else {
             unreachable!("validated Presence track must contain bool values");
         };
-
         if let Some((object_index, previous_id, previous_to)) = previous {
             if object_index == track.object_index && previous_to != *from {
                 return Err((previous_id, track.id));
@@ -627,7 +585,6 @@ fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, Tr
         }
         previous = Some((track.object_index, track.id, *to));
     }
-
     Ok(())
 }
 
@@ -647,7 +604,8 @@ const fn property_rank(property: Property) -> u8 {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Easing, GeometryRef, ObjectDefinition, Property, ScenePatch, TrackTiming, TrackValues, Vec2,
+        CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, ObjectDefinition,
+        Property, RateFunction, ScenePatch, TrackTiming, TrackValues, Vec2,
     };
 
     use super::*;
@@ -709,7 +667,6 @@ mod tests {
                 TrackTiming::new(0.0, 2.0, Easing::Linear),
             )
             .expect("safe filled Transform track must be valid");
-
         let compiled = CompiledScene::compile(&scene).expect("safe filled path must compile");
         assert!(matches!(
             compiled.tracks()[0].transform_geometry_plan,
@@ -745,9 +702,7 @@ mod tests {
         let mut scene = SceneDefinition::new();
         let circle = scene.add(GeometryRef::circle(1.0));
         let rectangle = scene.add(GeometryRef::rectangle(2.0, 3.0));
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
-
         assert_eq!(compiled.object_index(circle), Some(0));
         assert_eq!(compiled.object_index(rectangle), Some(1));
         assert_eq!(compiled.objects()[0].id, circle);
@@ -774,15 +729,38 @@ mod tests {
                 TrackTiming::new(1.0, 1.0, Easing::Linear),
             )
             .expect("valid track");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let starts: Vec<f64> = compiled
             .tracks()
             .iter()
             .map(|track| track.timing.start_time)
             .collect();
-
         assert_eq!(starts, vec![1.0, 5.0]);
+    }
+
+    #[test]
+    fn composition_time_map_is_preserved_in_compiled_track() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        scene
+            .add_track_with_time_map(
+                object,
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                map.clone(),
+            )
+            .unwrap();
+        let compiled = CompiledScene::compile(&scene).unwrap();
+        assert_eq!(compiled.tracks()[0].time_map, map);
     }
 
     #[test]
@@ -799,11 +777,9 @@ mod tests {
                 TrackTiming::new(0.0, 1.0, Easing::Linear),
             )
             .expect("valid track");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let animated_index = compiled.object_index(animated).expect("known object") as usize;
         let static_index = compiled.object_index(static_object).expect("known object") as usize;
-
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
@@ -827,7 +803,6 @@ mod tests {
         scene
             .animate_appearance(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
             .expect("valid appearance track");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         assert_eq!(
             compiled.objects()[0].dynamic,
@@ -845,7 +820,6 @@ mod tests {
         scene
             .set_presence_at(object, false, true, 2.0)
             .expect("valid presence event");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         assert_eq!(
             compiled.objects()[0].dynamic,
@@ -867,7 +841,6 @@ mod tests {
         scene
             .set_presence_at(object, true, false, 2.0)
             .expect("valid second presence event");
-
         CompiledScene::compile(&scene).expect("continuous presence chain must compile");
     }
 
@@ -881,7 +854,6 @@ mod tests {
         let next = scene
             .set_presence_at(object, false, true, 2.0)
             .expect("each presence event is individually valid");
-
         assert_eq!(
             CompiledScene::compile(&scene),
             Err(CompileError::DiscontinuousPresence { previous, next })
@@ -898,7 +870,6 @@ mod tests {
         let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let before = compiled.tracks().to_vec();
         let next = TrackId::new(9);
-
         let track = TrackDefinition {
             id: next,
             object,
@@ -908,6 +879,7 @@ mod tests {
                 to: true,
             },
             timing: TrackTiming::new(2.0, 0.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
         };
         assert_eq!(
             compiled.apply_patch(&ScenePatch::AddTrack(track)),
@@ -931,7 +903,6 @@ mod tests {
             .expect("valid last presence event");
         let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let before = compiled.tracks().to_vec();
-
         assert_eq!(
             compiled.apply_patch(&ScenePatch::RemoveTrack(middle)),
             Err(CompilePatchError::DiscontinuousPresence {
@@ -953,7 +924,6 @@ mod tests {
         scene
             .animate_reveal(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
             .expect("valid reveal track");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         assert_eq!(
             compiled.objects()[0].dynamic,
@@ -981,7 +951,6 @@ mod tests {
         scene
             .animate_morph(object, 0.0, 1.0, TrackTiming::new(0.0, 1.0, Easing::Linear))
             .expect("valid morph track");
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         assert!(compiled.objects()[0].dynamic.morph);
         assert!(!compiled.objects()[0].dynamic.reveal);
@@ -1003,7 +972,6 @@ mod tests {
                 .expect("valid track");
             scene
         }
-
         assert_eq!(
             CompiledScene::compile(&build()).expect("scene must compile"),
             CompiledScene::compile(&build()).expect("scene must compile")
@@ -1016,7 +984,6 @@ mod tests {
         let first = scene.add(GeometryRef::circle(1.0));
         let second = scene.add(GeometryRef::rectangle(2.0, 2.0));
         let mut compiled = CompiledScene::compile(&scene).expect("scene must compile");
-
         compiled
             .apply_patch(&ScenePatch::CreateObject(ObjectDefinition::new(
                 ObjectId::new(7),
@@ -1026,13 +993,13 @@ mod tests {
         assert_eq!(compiled.object_index(first), Some(0));
         assert_eq!(compiled.object_index(second), Some(1));
         assert_eq!(compiled.object_index(ObjectId::new(7)), Some(2));
-
         let track = TrackDefinition {
             id: TrackId::new(9),
             object: second,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
             timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
         };
         compiled
             .apply_patch(&ScenePatch::AddTrack(track))

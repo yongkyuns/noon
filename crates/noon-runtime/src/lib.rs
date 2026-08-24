@@ -18,9 +18,6 @@ pub struct FrameObjectState {
     pub geometry: GeometryRef,
     pub transform: Transform2D,
     pub style: Style,
-    /// Normalized renderer-only visibility modulation. Unlike semantic style
-    /// opacity, appearance survives Transform/style changes and is composed by
-    /// the renderer rather than written back into `Style`.
     pub appearance: f32,
 }
 
@@ -28,17 +25,9 @@ pub struct FrameObjectState {
 pub struct FrameState {
     pub time: f64,
     pub objects: Vec<FrameObjectState>,
-    /// Whether each semantic object is currently present in the scene. Objects
-    /// retain stable identity while absent and therefore remain seekable and
-    /// patchable without overloading style opacity as lifecycle state.
     pub presences: Vec<bool>,
-    /// Normalized per-object reveal state. Renderers may ignore it for
-    /// geometry types that do not support reveal yet.
     pub reveals: Vec<f32>,
-    /// Normalized per-object morph progress, independent from reveal.
     pub morphs: Vec<f32>,
-    /// Optional compiler-prepared geometry used only by the renderer. Semantic
-    /// object geometry remains in `objects` and reaches exact Transform endpoints.
     pub render_geometries: Vec<Option<GeometryRef>>,
 }
 
@@ -66,11 +55,6 @@ impl FrameState {
     }
 }
 
-/// Object-level changes accumulated since the renderer last consumed them.
-///
-/// A full invalidation is used after seeks and structural edits. Forward
-/// evaluation and value-only patches retain a compact, deduplicated list of
-/// changed object indices instead.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameChanges {
     all: bool,
@@ -156,6 +140,7 @@ struct TrackGroup {
     start: usize,
     end: usize,
     cursor: usize,
+    mapped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -194,7 +179,6 @@ impl SceneInstance {
         self.last_stats
     }
 
-    /// Drains changes accumulated by evaluation and live patches.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.changes)
     }
@@ -235,11 +219,6 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
-    /// Applies a low-level patch to the compiled timeline/object program.
-    ///
-    /// Reactive semantic scenes currently support value-only patches on this path.
-    /// Structural/timeline mutations must be revalidated and rebuilt from the
-    /// `SemanticScene` until reactive-aware transactional lowering is implemented.
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
         if matches!(
             patch,
@@ -439,12 +418,16 @@ fn build_groups(tracks: &[CompiledTrack]) -> Vec<TrackGroup> {
         {
             end += 1;
         }
+        let mapped = tracks[start..end]
+            .iter()
+            .any(|track| !track.time_map.is_identity());
         groups.push(TrackGroup {
             object_index,
             property,
             start,
             end,
             cursor: 0,
+            mapped,
         });
         start = end;
     }
@@ -476,8 +459,8 @@ fn apply_group(
     if group.cursor == 0 {
         return false;
     }
-    let track = &tracks[group.cursor - 1];
     if group.property == Property::Presence {
+        let track = &tracks[group.cursor - 1];
         let TrackValues::Bool { to, .. } = &track.values else {
             unreachable!("compiled Presence track must contain bool values");
         };
@@ -485,45 +468,67 @@ fn apply_group(
         frame.presences[group.object_index] = *to;
         return changed;
     }
-    if group.property == Property::Transform {
-        return apply_transform_track(frame, group.object_index, track, time);
-    }
-    let value = interpolate(track, time);
 
-    match (group.property, value) {
+    let selected = if group.mapped {
+        tracks[..group.cursor]
+            .iter()
+            .rev()
+            .find_map(|track| mapped_track_progress(track, time).map(|progress| (track, progress)))
+    } else {
+        let track = &tracks[group.cursor - 1];
+        Some((track, track_progress(track, time)))
+    };
+    let Some((track, progress)) = selected else {
+        return false;
+    };
+
+    if group.property == Property::Transform {
+        return apply_transform_track(frame, group.object_index, track, progress);
+    }
+    let value = interpolate(track, progress);
+    apply_evaluated_value(frame, group.object_index, group.property, value)
+}
+
+fn apply_evaluated_value(
+    frame: &mut FrameState,
+    object_index: usize,
+    property: Property,
+    value: EvaluatedValue,
+) -> bool {
+    match (property, value) {
         (Property::Appearance, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let object = &mut frame.objects[group.object_index];
+            let object = &mut frame.objects[object_index];
             let changed = object.appearance != value;
             object.appearance = value;
             changed
         }
         (Property::Reveal, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.reveals[group.object_index] != value;
-            frame.reveals[group.object_index] = value;
+            let changed = frame.reveals[object_index] != value;
+            frame.reveals[object_index] = value;
             changed
         }
         (Property::Morph, EvaluatedValue::Scalar(value)) => {
             let value = value.clamp(0.0, 1.0);
-            let changed = frame.morphs[group.object_index] != value;
-            frame.morphs[group.object_index] = value;
+            let changed = frame.morphs[object_index] != value;
+            frame.morphs[object_index] = value;
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
-            let object = &mut frame.objects[group.object_index];
+            let object = &mut frame.objects[object_index];
             let changed = object.transform.translation != value;
             object.transform.translation = value;
             changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
-            let object = &mut frame.objects[group.object_index];
+            let object = &mut frame.objects[object_index];
             let changed = object.transform.rotation != value;
             object.transform.rotation = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
-            let object = &mut frame.objects[group.object_index];
+            let object = &mut frame.objects[object_index];
             let changed = object.style.opacity != value;
             object.style.opacity = value;
             changed
@@ -542,12 +547,11 @@ fn apply_transform_track(
     frame: &mut FrameState,
     object_index: usize,
     track: &CompiledTrack,
-    time: f64,
+    progress: f32,
 ) -> bool {
     let TrackValues::Object { from, to } = &track.values else {
         unreachable!("compiled Transform track must contain object snapshots");
     };
-    let progress = track_progress(track, time);
     let plan = track
         .transform_geometry_plan
         .as_ref()
@@ -768,8 +772,29 @@ fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
     track.timing.easing.evaluate(raw)
 }
 
-fn interpolate(track: &CompiledTrack, time: f64) -> EvaluatedValue {
-    let progress = track_progress(track, time);
+fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
+    debug_assert!(!track.property.is_instant());
+    if time < track.timing.start_time {
+        return None;
+    }
+    let end = track.timing.start_time + track.timing.duration;
+    // Scene state is defined after animation finish/cleanup at the exact endpoint.
+    // This intentionally settles reversing group rates to the authored target,
+    // matching Manim's `finish()` semantics and Noon's deterministic seek model.
+    if time >= end {
+        return Some(1.0);
+    }
+    let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
+    if track.time_map.is_identity() {
+        return Some(track.timing.easing.evaluate(raw));
+    }
+    let sample = track.time_map.evaluate(raw);
+    sample
+        .begun
+        .then(|| track.timing.easing.evaluate(sample.alpha))
+}
+
+fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
     match &track.values {
         TrackValues::Scalar { from, to } => EvaluatedValue::Scalar(lerp(*from, *to, progress)),
         TrackValues::Vec2 { from, to } => EvaluatedValue::Vec2(Vec2::new(
@@ -793,8 +818,8 @@ const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
 mod tests {
     use noon_compile::CompiledScene;
     use noon_core::{
-        Color, Easing, GeometryRef, Property, RateFunction, SceneDefinition, Style,
-        TrackDefinition, TrackTiming,
+        Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
+        RateFunction, SceneDefinition, Style, TrackDefinition, TrackTiming,
     };
 
     use super::*;
@@ -816,7 +841,6 @@ mod tests {
     #[test]
     fn timeline_endpoints_and_midpoint_are_exact() {
         let mut instance = SceneInstance::new(compile_linear_scene());
-
         assert_eq!(
             instance.seek(0.0).expect("valid time").objects[0]
                 .transform
@@ -857,7 +881,6 @@ mod tests {
             .expect("valid track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
-
         let quarter = instance.seek(0.5).expect("valid time").objects[0]
             .transform
             .translation
@@ -869,6 +892,127 @@ mod tests {
                 .translation
                 .x,
             5.0
+        );
+    }
+
+    #[test]
+    fn nonlinear_composition_time_map_is_evaluated_before_leaf_rate() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .add_track_with_time_map(
+                object,
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::new(10.0, 0.0),
+                },
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                    0.0,
+                    1.0,
+                    RateFunction::Smooth,
+                )]),
+            )
+            .unwrap();
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        let quarter = instance.seek(0.5).unwrap().objects[0]
+            .transform
+            .translation
+            .x;
+        assert!((quarter - 0.7010372).abs() < 1e-5);
+    }
+
+    #[test]
+    fn mapped_succession_selects_latest_virtual_child() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        for (from, to, start) in [(0.0, 10.0, 0.0), (10.0, 20.0, 0.5)] {
+            scene
+                .add_track_with_time_map(
+                    object,
+                    Property::Position,
+                    TrackValues::Vec2 {
+                        from: Vec2::new(from, 0.0),
+                        to: Vec2::new(to, 0.0),
+                    },
+                    TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                    CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                        start,
+                        0.5,
+                        RateFunction::Linear,
+                    )]),
+                )
+                .unwrap();
+        }
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        assert_eq!(
+            instance.seek(0.5).unwrap().objects[0]
+                .transform
+                .translation
+                .x,
+            5.0
+        );
+        assert_eq!(
+            instance.seek(1.25).unwrap().objects[0]
+                .transform
+                .translation
+                .x,
+            12.5
+        );
+        assert_eq!(
+            instance.seek(2.0).unwrap().objects[0]
+                .transform
+                .translation
+                .x,
+            20.0
+        );
+    }
+
+    #[test]
+    fn reversing_composition_reopens_earlier_child_then_settles_at_finish() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        for (from, to, start) in [(0.0, 10.0, 0.0), (10.0, 20.0, 0.5)] {
+            scene
+                .add_track_with_time_map(
+                    object,
+                    Property::Position,
+                    TrackValues::Vec2 {
+                        from: Vec2::new(from, 0.0),
+                        to: Vec2::new(to, 0.0),
+                    },
+                    TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                    CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                        start,
+                        0.5,
+                        RateFunction::ThereAndBack,
+                    )]),
+                )
+                .unwrap();
+        }
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        assert_eq!(
+            instance.seek(1.0).unwrap().objects[0]
+                .transform
+                .translation
+                .x,
+            20.0
+        );
+        let reopened = instance.seek(1.6).unwrap().objects[0]
+            .transform
+            .translation
+            .x;
+        assert!(reopened > 0.0 && reopened < 10.0);
+        assert_eq!(
+            instance.seek(2.0).unwrap().objects[0]
+                .transform
+                .translation
+                .x,
+            20.0
         );
     }
 
@@ -885,7 +1029,6 @@ mod tests {
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let mut sequential = SceneInstance::new(compiled.clone());
         let mut direct = SceneInstance::new(compiled);
-
         assert!(!sequential.frame().is_present(0));
         sequential.advance_to(0.999).expect("valid time");
         assert!(!sequential.frame().is_present(0));
@@ -895,7 +1038,6 @@ mod tests {
         assert!(sequential.frame().is_present(0));
         sequential.advance_to(3.0).expect("valid time");
         assert!(!sequential.frame().is_present(0));
-
         direct.seek(3.0).expect("valid time");
         assert_eq!(sequential.frame(), direct.frame());
         direct.seek(2.0).expect("valid time");
@@ -917,7 +1059,6 @@ mod tests {
             .expect("valid reveal track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
-
         assert_eq!(instance.seek(0.0).expect("valid time").reveal(0), 0.0);
         assert_eq!(instance.seek(1.0).expect("valid time").reveal(0), 0.0);
         assert_eq!(instance.seek(2.0).expect("valid time").reveal(0), 0.5);
@@ -938,7 +1079,6 @@ mod tests {
             .expect("valid appearance track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
-
         let frame = instance.seek(1.0).expect("valid time");
         assert_eq!(frame.objects[0].style.opacity, 0.4);
         assert_eq!(frame.appearance(0), 0.5);
@@ -962,7 +1102,6 @@ mod tests {
             .expect("valid morph track");
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
-
         let frame = instance.seek(1.0).expect("valid time");
         assert_eq!(frame.reveal(0), 0.5);
         assert_eq!(frame.morph(0), 0.25);
@@ -975,7 +1114,6 @@ mod tests {
         instance.seek(3.0).expect("valid time");
         instance.seek(0.5).expect("valid time");
         let second = instance.seek(2.25).expect("valid time").objects[0].clone();
-
         assert_eq!(first, second);
     }
 
@@ -984,14 +1122,12 @@ mod tests {
         let compiled = compile_linear_scene();
         let mut sequential = SceneInstance::new(compiled.clone());
         let mut direct = SceneInstance::new(compiled);
-
         for step in 1..=25 {
             sequential
                 .advance_to(f64::from(step) * 0.1)
                 .expect("valid time");
         }
         direct.seek(2.5).expect("valid time");
-
         assert_eq!(sequential.frame(), direct.frame());
     }
 
@@ -1011,12 +1147,10 @@ mod tests {
                 )
                 .expect("valid track");
         }
-
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let mut instance = SceneInstance::new(compiled);
         instance.seek(999.25).expect("valid time");
         assert!(instance.last_stats().binary_search_steps < 20);
-
         instance.advance_to(999.30).expect("valid time");
         assert_eq!(instance.last_stats().tracks_advanced, 0);
         assert_eq!(instance.last_stats().binary_search_steps, 0);
@@ -1038,7 +1172,6 @@ mod tests {
             .expect("valid track");
         let compiled = CompiledScene::compile(&scene).expect("scene must compile");
         let mut instance = SceneInstance::new(compiled);
-
         let opacity = instance.seek(1.0).expect("valid time").objects[0]
             .style
             .opacity;
@@ -1066,11 +1199,9 @@ mod tests {
                 TrackTiming::new(0.0, 4.0, Easing::Linear),
             )
             .expect("valid track");
-
         let compiled = CompiledScene::compile(&definition).expect("scene must compile");
         let mut live = SceneInstance::new(compiled);
         live.seek(2.0).expect("valid time");
-
         let replacement = TrackDefinition {
             id: track_id,
             object,
@@ -1080,6 +1211,7 @@ mod tests {
                 to: Vec2::new(8.0, 2.0),
             },
             timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
         };
         let track_patch = ScenePatch::ReplaceTrack(replacement);
         let style_patch = ScenePatch::SetStyle {
@@ -1091,10 +1223,8 @@ mod tests {
                 ..Style::default()
             },
         };
-
         live.apply_patch(&track_patch).expect("valid patch");
         live.apply_patch(&style_patch).expect("valid patch");
-
         definition
             .apply_patch(track_patch)
             .expect("valid definition patch");
@@ -1105,7 +1235,6 @@ mod tests {
             CompiledScene::compile(&definition).expect("scene must compile after patches");
         let mut expected = SceneInstance::new(expected_compiled);
         expected.seek(2.0).expect("valid time");
-
         assert_eq!(live.frame(), expected.frame());
     }
 
@@ -1117,7 +1246,6 @@ mod tests {
             SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
         live.seek(2.0).expect("valid time");
         assert!(live.frame().is_present(0));
-
         let presence = TrackDefinition {
             id: noon_core::TrackId::new(7),
             object,
@@ -1127,13 +1255,13 @@ mod tests {
                 to: false,
             },
             timing: TrackTiming::instant(1.0),
+            time_map: CompositionTimeMap::identity(),
         };
         let patch = ScenePatch::AddTrack(presence);
         live.apply_patch(&patch).expect("presence patch must apply");
         definition
             .apply_patch(patch)
             .expect("definition patch must apply");
-
         let mut expected = SceneInstance::new(
             CompiledScene::compile(&definition).expect("scene must compile after patch"),
         );
@@ -1159,7 +1287,6 @@ mod tests {
         let mut instance = SceneInstance::new(compiled);
         instance.seek(1.0).expect("valid time");
         assert_eq!(instance.frame().objects[0].style.opacity, 0.5);
-
         instance
             .apply_patch(&ScenePatch::RemoveTrack(track_id))
             .expect("valid patch");
@@ -1182,7 +1309,6 @@ mod tests {
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
         instance.seek(1.0).expect("valid time");
-
         instance
             .apply_patch(&ScenePatch::SetStyle {
                 object,
@@ -1195,7 +1321,6 @@ mod tests {
                 },
             })
             .expect("style patch must apply");
-
         assert_eq!(
             instance.frame().objects[0].style.fill,
             Some(Color::rgb(0.2, 0.4, 0.8))
@@ -1210,7 +1335,6 @@ mod tests {
         scene.add(GeometryRef::circle(1.0));
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
-
         assert!(instance.take_frame_changes().is_all());
         instance.advance_to(0.5).expect("valid time");
         assert!(instance.take_frame_changes().is_empty());
@@ -1232,7 +1356,6 @@ mod tests {
         let mut instance =
             SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
         instance.take_frame_changes();
-
         instance.advance_to(0.5).expect("valid time");
         instance
             .apply_patch(&ScenePatch::SetStyle {
@@ -1246,7 +1369,6 @@ mod tests {
             })
             .expect("valid patch");
         instance.advance_to(0.75).expect("valid time");
-
         assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
         assert!(instance.take_frame_changes().is_empty());
     }

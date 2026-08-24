@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ObjectId, ObjectSnapshot, SceneDefinition, TrackId, Vec2};
+use crate::{
+    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, SceneDefinition,
+    TrackId, Vec2,
+};
 
 /// Language-neutral animation rate functions shared by every authoring frontend.
 ///
@@ -21,9 +24,6 @@ pub enum RateFunction {
 
 impl RateFunction {
     /// Evaluate a normalized animation progress value.
-    ///
-    /// Input is clamped to `[0, 1]`, matching the interval behavior of the
-    /// corresponding Manim built-ins used here.
     pub fn evaluate(self, progress: f32) -> f32 {
         let progress = progress.clamp(0.0, 1.0);
         match self {
@@ -60,12 +60,6 @@ fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value).exp())
 }
 
-/// Backwards-compatible Rust name for the pre-consolidation timing API.
-///
-/// Existing `Easing::Linear` / `Easing::EaseInOutCubic` source continues to
-/// compile, while new authoring code can use the Manim-aligned `RateFunction`
-/// vocabulary. The serialized `TrackTiming.easing` field is intentionally kept
-/// stable during this migration.
 pub type Easing = RateFunction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +160,8 @@ pub struct TrackDefinition {
     pub property: Property,
     pub values: TrackValues,
     pub timing: TrackTiming,
+    #[serde(default, skip_serializing_if = "CompositionTimeMap::is_identity")]
+    pub time_map: CompositionTimeMap,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,6 +178,8 @@ pub enum TimelineError {
         expected: ValueKind,
         actual: ValueKind,
     },
+    InvalidCompositionTimeMap(CompositionTimeMapError),
+    InstantTrackCannotUseTimeMap(Property),
     TrackIdExhausted,
 }
 
@@ -202,6 +200,11 @@ impl std::fmt::Display for TimelineError {
             } => write!(
                 formatter,
                 "value type mismatch for {property:?}: expected {expected:?}, got {actual:?}"
+            ),
+            Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
+            Self::InstantTrackCannotUseTimeMap(property) => write!(
+                formatter,
+                "instant {property:?} tracks cannot carry a composition time map"
             ),
             Self::TrackIdExhausted => formatter.write_str("Noon track ID space exhausted"),
         }
@@ -233,6 +236,26 @@ pub(crate) fn validate_track_timing(
     Ok(())
 }
 
+pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), TimelineError> {
+    validate_track_timing(track.property, track.timing)?;
+    let expected = track.property.value_kind();
+    let actual = track.values.value_kind();
+    if expected != actual {
+        return Err(TimelineError::ValueTypeMismatch {
+            property: track.property,
+            expected,
+            actual,
+        });
+    }
+    if track.property.is_instant() && !track.time_map.is_identity() {
+        return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
+    }
+    track
+        .time_map
+        .validate()
+        .map_err(TimelineError::InvalidCompositionTimeMap)
+}
+
 impl SceneDefinition {
     pub fn add_track(
         &mut self,
@@ -241,33 +264,41 @@ impl SceneDefinition {
         values: TrackValues,
         timing: TrackTiming,
     ) -> Result<TrackId, TimelineError> {
+        self.add_track_with_time_map(
+            object,
+            property,
+            values,
+            timing,
+            CompositionTimeMap::identity(),
+        )
+    }
+
+    pub fn add_track_with_time_map(
+        &mut self,
+        object: ObjectId,
+        property: Property,
+        values: TrackValues,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> Result<TrackId, TimelineError> {
         if self.object(object).is_none() {
             return Err(TimelineError::UnknownObject(object));
         }
-        validate_track_timing(property, timing)?;
-
-        let expected = property.value_kind();
-        let actual = values.value_kind();
-        if expected != actual {
-            return Err(TimelineError::ValueTypeMismatch {
-                property,
-                expected,
-                actual,
-            });
-        }
-
         let id = TrackId::new(self.next_track_id);
-        self.next_track_id = self
-            .next_track_id
-            .checked_add(1)
-            .ok_or(TimelineError::TrackIdExhausted)?;
-        self.tracks.push(TrackDefinition {
+        let track = TrackDefinition {
             id,
             object,
             property,
             values,
             timing,
-        });
+            time_map,
+        };
+        validate_track_definition(&track)?;
+        self.next_track_id = self
+            .next_track_id
+            .checked_add(1)
+            .ok_or(TimelineError::TrackIdExhausted)?;
+        self.tracks.push(track);
         Ok(id)
     }
 
@@ -365,7 +396,7 @@ impl SceneDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GeometryRef;
+    use crate::{CompositionTimeMapStep, GeometryRef};
 
     fn timing() -> TrackTiming {
         TrackTiming::new(1.0, 2.0, RateFunction::Linear)
@@ -387,7 +418,6 @@ mod tests {
         assert_close(RateFunction::Smooth.evaluate(0.25), 0.07010372);
         assert_close(RateFunction::Smooth.evaluate(0.5), 0.5);
         assert_close(RateFunction::Smooth.evaluate(0.75), 0.9298963);
-
         assert_close(
             RateFunction::RushInto.evaluate(0.5),
             2.0 * RateFunction::Smooth.evaluate(0.25),
@@ -421,7 +451,6 @@ mod tests {
         let mut second = SceneDefinition::new();
         let first_object = first.add(GeometryRef::circle(1.0));
         let second_object = second.add(GeometryRef::circle(1.0));
-
         let first_position = first
             .animate_position(first_object, Vec2::ZERO, Vec2::ONE, timing())
             .expect("valid track");
@@ -434,12 +463,35 @@ mod tests {
         let second_opacity = second
             .animate_scalar(second_object, Property::Opacity, 1.0, 0.0, timing())
             .expect("valid track");
-
         assert_eq!(first_position, TrackId::new(0));
         assert_eq!(first_opacity, TrackId::new(1));
         assert_eq!(first_position, second_position);
         assert_eq!(first_opacity, second_opacity);
         assert_eq!(first.tracks(), second.tracks());
+    }
+
+    #[test]
+    fn composed_track_carries_validated_time_map() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        scene
+            .add_track_with_time_map(
+                object,
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                map.clone(),
+            )
+            .unwrap();
+        assert_eq!(scene.tracks()[0].time_map, map);
     }
 
     #[test]
@@ -449,7 +501,6 @@ mod tests {
         let track = scene
             .set_presence_at(object, false, true, 1.25)
             .expect("valid presence event");
-
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Presence);
         assert_eq!(
@@ -460,20 +511,20 @@ mod tests {
             }
         );
         assert_eq!(scene.tracks()[0].timing, TrackTiming::instant(1.25));
+        assert!(scene.tracks()[0].time_map.is_identity());
     }
 
     #[test]
     fn presence_rejects_nonzero_duration_and_other_tracks_reject_zero_duration() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
-
         assert!(matches!(
             scene.add_track(
                 object,
                 Property::Presence,
                 TrackValues::Bool {
                     from: true,
-                    to: false,
+                    to: false
                 },
                 TrackTiming::new(1.0, 0.5, RateFunction::Linear),
             ),
@@ -501,7 +552,6 @@ mod tests {
         let track = scene
             .animate_appearance(object, 0.0, 1.0, timing())
             .expect("valid appearance track");
-
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Appearance);
         assert_eq!(
@@ -521,7 +571,6 @@ mod tests {
         let track = scene
             .animate_reveal(object, 0.0, 1.0, timing())
             .expect("valid reveal track");
-
         assert_eq!(track, TrackId::new(0));
         assert_eq!(scene.tracks()[0].property, Property::Reveal);
         assert_eq!(
@@ -541,7 +590,6 @@ mod tests {
         scene
             .animate_morph(object, 0.0, 1.0, timing())
             .expect("valid morph track");
-
         assert_eq!(scene.tracks()[0].property, Property::Morph);
         assert_eq!(
             scene.tracks()[0].values,
@@ -555,7 +603,6 @@ mod tests {
         let error = scene
             .animate_position(ObjectId::new(99), Vec2::ZERO, Vec2::ONE, timing())
             .expect_err("unknown object must fail");
-
         assert_eq!(error, TimelineError::UnknownObject(ObjectId::new(99)));
     }
 
@@ -563,7 +610,6 @@ mod tests {
     fn invalid_timing_is_rejected() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
-
         for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let error = scene
                 .animate_position(
@@ -575,7 +621,6 @@ mod tests {
                 .expect_err("invalid duration must fail");
             assert!(matches!(error, TimelineError::InvalidDuration(_)));
         }
-
         let error = scene
             .animate_position(
                 object,
@@ -599,7 +644,6 @@ mod tests {
                 timing(),
             )
             .expect_err("position requires Vec2 values");
-
         assert_eq!(
             error,
             TimelineError::ValueTypeMismatch {

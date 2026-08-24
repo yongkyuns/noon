@@ -2,16 +2,15 @@
 
 This module owns Python class/iterable adaptation only. Child interval geometry is
 resolved by ``noon_core::resolve_composition_schedule`` through the WASM bridge.
-Composition is recursively lowered to ordinary deterministic Noon tracks.
-
-The current normalized track model can represent an outer composition exactly when
-its rate function is linear. Nonlinear outer time warps require a runtime time-map
-representation, especially for overlapping/same-property children and reversing
-rate functions; those cases fail explicitly rather than being approximated.
+Composition is recursively lowered to ordinary deterministic Noon tracks. When a
+composition contains a nonlinear outer rate function, leaf tracks carry the shared
+core ``CompositionTimeMap`` representation instead of approximating the warp in
+Python or executing a frontend callback during playback.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from typing import Any, Iterable
@@ -144,25 +143,49 @@ def _record_composition_wrapper_state(
         _animate._record_wrapper_state(animation.target, states)
 
 
+def _normalized_time_map_step(interval: object, run_time: float, rate_id: str) -> dict[str, Any]:
+    if not math.isfinite(run_time) or run_time <= 0.0:
+        raise ValueError("composition run_time must be finite and positive")
+    return {
+        "start": float(interval.startTime) / run_time,
+        "duration": float(interval.duration) / run_time,
+        "rate_func": rate_id,
+    }
+
+
+def _path_requires_time_map(steps: list[dict[str, Any]]) -> bool:
+    return any(step["rate_func"] != "linear" for step in steps)
+
+
 def _play_leaf(
     scene: _compat.Scene,
     animation: object,
     *,
     start_time: float,
     run_time: float,
+    time_map_steps: list[dict[str, Any]],
+    pending_time_maps: list[tuple[int, int, list[dict[str, Any]]]],
 ) -> None:
-    # Explicit run_time here represents the parent composition's resolved child
-    # interval. Other animation-local options (including the child rate_func) are
-    # still resolved by the ordinary shared AnimationOptions path.
+    # Author the leaf first at its flattened interval. This preserves the existing
+    # deterministic target-state/lifecycle checks and lets successive animations of
+    # the same object build their `from` snapshots in virtual order. Once the full
+    # composition has been authored, nonlinear paths are rewritten to the root
+    # interval and tagged with the shared core time map.
+    track_start = len(scene._tracks)
     _ORIGINAL_SCENE_PLAY(
         scene,
         animation,
         run_time=run_time,
         start_time=start_time,
     )
+    track_end = len(scene._tracks)
+    if track_end > track_start and _path_requires_time_map(time_map_steps):
+        pending_time_maps.append(
+            (track_start, track_end, copy.deepcopy(time_map_steps))
+        )
 
 
-def _play_composition(
+def _schedule_composition(
     scene: _compat.Scene,
     animation: AnimationGroup,
     *,
@@ -171,6 +194,8 @@ def _play_composition(
     rate_func_override: object | None,
     easing_override: str | None,
     lag_ratio_override: float | None,
+    time_map_steps: list[dict[str, Any]],
+    pending_time_maps: list[tuple[int, int, list[dict[str, Any]]]],
 ) -> float:
     if not animation.animations:
         raise ValueError("animation composition requires at least one child")
@@ -181,13 +206,6 @@ def _play_composition(
         outer_rate_id = _compat._easing_from_rate_func(rate_func_override)
     else:
         outer_rate_id = _composition_local_rate_id(animation)
-
-    if outer_rate_id != "linear":
-        raise NotImplementedError(
-            "nonlinear outer AnimationGroup/LaggedStart/Succession rate_func requires "
-            "Noon's runtime composition time-map representation; refusing to flatten "
-            f"rate_func={outer_rate_id!r} approximately"
-        )
 
     lag_ratio = (
         animation.lag_ratio
@@ -201,14 +219,17 @@ def _play_composition(
         else animation.run_time
     )
     schedule = _resolve_schedule(child_run_times, lag_ratio, requested_run_time)
+    schedule_run_time = float(schedule.runTime)
 
     for child, interval in zip(animation.animations, schedule.intervals, strict=True):
         child_start = start_time + float(interval.startTime)
         child_duration = float(interval.duration)
+        child_steps = [
+            *time_map_steps,
+            _normalized_time_map_step(interval, schedule_run_time, outer_rate_id),
+        ]
         if isinstance(child, AnimationGroup):
-            # Parent interval rescaling becomes this nested composition's total
-            # runtime. Its own lag ratio/rate function still defines local timing.
-            _play_composition(
+            _schedule_composition(
                 scene,
                 child,
                 start_time=child_start,
@@ -216,6 +237,8 @@ def _play_composition(
                 rate_func_override=None,
                 easing_override=None,
                 lag_ratio_override=None,
+                time_map_steps=child_steps,
+                pending_time_maps=pending_time_maps,
             )
         else:
             _play_leaf(
@@ -223,9 +246,62 @@ def _play_composition(
                 child,
                 start_time=child_start,
                 run_time=child_duration,
+                time_map_steps=child_steps,
+                pending_time_maps=pending_time_maps,
             )
 
-    return start_time + float(schedule.runTime)
+    return schedule_run_time
+
+
+def _apply_pending_time_maps(
+    scene: _compat.Scene,
+    pending: list[tuple[int, int, list[dict[str, Any]]]],
+    *,
+    root_start: float,
+    root_run_time: float,
+) -> None:
+    for track_start, track_end, steps in pending:
+        time_map = {"steps": copy.deepcopy(steps)}
+        for track in scene._tracks[track_start:track_end]:
+            # Presence remains an instant lifecycle event and intentionally cannot
+            # carry a continuous time map. The animated leaf tracks are mapped;
+            # cleanup events continue to use the deterministic authored timeline.
+            if track["property"] == "presence":
+                continue
+            track["timing"]["start_time"] = root_start
+            track["timing"]["duration"] = root_run_time
+            track["time_map"] = copy.deepcopy(time_map)
+
+
+def _play_composition(
+    scene: _compat.Scene,
+    animation: AnimationGroup,
+    *,
+    start_time: float,
+    run_time_override: float | None,
+    rate_func_override: object | None,
+    easing_override: str | None,
+    lag_ratio_override: float | None,
+) -> float:
+    pending_time_maps: list[tuple[int, int, list[dict[str, Any]]]] = []
+    root_run_time = _schedule_composition(
+        scene,
+        animation,
+        start_time=start_time,
+        run_time_override=run_time_override,
+        rate_func_override=rate_func_override,
+        easing_override=easing_override,
+        lag_ratio_override=lag_ratio_override,
+        time_map_steps=[],
+        pending_time_maps=pending_time_maps,
+    )
+    _apply_pending_time_maps(
+        scene,
+        pending_time_maps,
+        root_start=start_time,
+        root_run_time=root_run_time,
+    )
+    return start_time + root_run_time
 
 
 def _composition_scene_play(
