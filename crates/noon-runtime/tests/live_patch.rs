@@ -1,8 +1,7 @@
 use noon_compile::{CompilePatchError, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectDefinition, ObjectId, Property,
-    SceneDefinition, ScenePatch, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
-    Vec2,
+    CompositionTimeMap, Easing, GeometryRef, ObjectDefinition, ObjectId, Property, SceneDefinition,
+    ScenePatch, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
