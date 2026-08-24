@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
@@ -53,7 +53,6 @@ pub struct ReactiveRuntimeStats {
 #[derive(Clone, Copy, Debug)]
 struct ReactiveTarget {
     signal: SignalId,
-    object: ObjectId,
     object_index: usize,
     property: Property,
 }
@@ -84,7 +83,6 @@ impl ReactiveRuntime {
             let target_index = targets.len();
             targets.push(ReactiveTarget {
                 signal: binding.signal,
-                object: binding.object,
                 object_index,
                 property: binding.property,
             });
@@ -149,7 +147,6 @@ impl SceneInstance {
             .set_input(signal, value)?;
         let evaluation = update.stats();
         let mut changed_targets = 0;
-        let mut changed_objects = BTreeSet::new();
 
         for change in update.property_changes() {
             let target = self
@@ -165,12 +162,11 @@ impl SceneInstance {
             ) {
                 self.changes.insert(target.object_index);
                 changed_targets += 1;
-                changed_objects.insert(target.object_index);
             }
         }
 
-        self.last_reactive_stats = runtime_stats(evaluation, update.property_changes().len(), changed_targets);
-        debug_assert!(changed_objects.len() <= changed_targets);
+        self.last_reactive_stats =
+            runtime_stats(evaluation, update.property_changes().len(), changed_targets);
         Ok(&self.frame)
     }
 
@@ -329,7 +325,8 @@ mod tests {
         ));
         scene.bind(doubled, target, Property::Rotation);
 
-        let mut instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         instance.take_frame_changes();
         instance
             .set_reactive_input(input, 2.0_f32)
@@ -367,13 +364,17 @@ mod tests {
         let rotation = scene.add_input(0.25_f32);
         scene.bind(rotation, object, Property::Rotation);
 
-        let mut instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         instance
             .set_reactive_input(rotation, 1.25_f32)
             .expect("input update must work");
         instance.seek(1.0).expect("seek must work");
 
-        assert_eq!(instance.frame().objects[0].transform.translation, Vec2::new(5.0, 0.0));
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(5.0, 0.0)
+        );
         assert_eq!(instance.frame().objects[0].transform.rotation, 1.25);
     }
 
@@ -395,7 +396,8 @@ mod tests {
         ));
         scene.bind(shifted, target, Property::Rotation);
 
-        let mut instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         instance.take_frame_changes();
         let timeline_stats_before = instance.last_stats();
         instance
