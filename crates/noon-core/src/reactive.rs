@@ -19,5 +19,8 @@ include!("reactive_impl.rs");
 mod compute_ir;
 pub use compute_ir::*;
 
+mod native_inputs;
+pub use native_inputs::*;
+
 mod signal_timeline;
 pub use signal_timeline::*;
