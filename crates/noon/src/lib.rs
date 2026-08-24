@@ -16,4 +16,8 @@ pub use reactive_authoring::*;
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{ReactiveScene, ReactiveTimelineScene, ValueTracker, VectorSignal};
+    pub use noon_core::{
+        resolve_animation_options, AnimationDefaults, AnimationOptions, AnimationOptionsError,
+        ResolvedAnimationOptions,
+    };
 }
