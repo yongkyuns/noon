@@ -5,11 +5,19 @@ use serde_json::{json, Value};
 
 use crate::{PlayerError, ScenePlayer};
 
+fn normalize_playhead(time: f64) -> f64 {
+    const SCALE: f64 = 1_000_000_000_000.0;
+    (time * SCALE).round() / SCALE
+}
+
 /// Normalize the observable runtime frame into a stable JSON value.
 ///
 /// Dense runtime indices and cache state are deliberately omitted. Object order,
 /// semantic IDs, evaluated geometry/properties, presence/reveal/morph state, and
 /// render geometry are retained because they affect user-visible scene behavior.
+/// The f64 playhead is rounded to picosecond precision so mathematically equivalent
+/// timestamp construction paths do not create false mismatches; evaluated scene
+/// properties remain unrounded.
 pub fn normalized_frame_value(frame: &FrameState) -> Value {
     let objects = frame
         .objects
@@ -30,7 +38,7 @@ pub fn normalized_frame_value(frame: &FrameState) -> Value {
         })
         .collect::<Vec<_>>();
     json!({
-        "time": frame.time,
+        "time": normalize_playhead(frame.time),
         "objects": objects,
     })
 }
