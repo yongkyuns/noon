@@ -5,3 +5,6 @@ pub use host_callbacks::*;
 
 mod signal_timeline;
 pub use signal_timeline::*;
+
+mod timeline_scheduler;
+pub use timeline_scheduler::*;
