@@ -33,6 +33,8 @@ const expectedJavascriptSurface = [
   "lastGeometryCacheMisses(",
   "export function demoSceneJson(",
   "export function resolveAnimationOptions(",
+  "export function resolveLifecyclePlan(",
+  "export function validatePresenceTransition(",
 ];
 const expectedTypeSurface = [
   "export class NoonCanvasPlayer",
@@ -54,6 +56,8 @@ const expectedTypeSurface = [
   "lastGeometryCacheMisses(): number",
   "export function demoSceneJson(): string",
   "export function resolveAnimationOptions(",
+  "export function resolveLifecyclePlan(",
+  "export function validatePresenceTransition(",
 ];
 
 for (const fragment of expectedJavascriptSurface) {
