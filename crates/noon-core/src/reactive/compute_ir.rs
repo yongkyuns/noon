@@ -1,12 +1,11 @@
-use std::collections::{BTreeMap, BinaryHeap};
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
+use std::fmt::Write;
 
-use serde::{Deserialize, Serialize};
-
-use crate::{ReactiveError, ReactiveExpr, ReactiveValue, SignalId, ValueKind, Vec2};
+use crate::{ReactiveError, ReactiveExpr, ReactiveValue, SignalId, ValueKind};
 
 /// Dense register index in the native compute program.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ComputeRegister(u32);
 
 impl ComputeRegister {
@@ -27,8 +26,7 @@ impl ComputeRegister {
 ///
 /// Signal references are lowered to dense signal indices. There is no recursive
 /// expression walking or semantic-ID map lookup while instructions execute.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ComputeInstruction {
     Constant {
         dst: ComputeRegister,
@@ -94,7 +92,7 @@ pub struct ComputeExecutionStats {
 
 /// One lowered expression. The format is intentionally small and deterministic
 /// so future SIMD and WGSL backends can consume the same typed program.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ComputeProgram {
     instructions: Vec<ComputeInstruction>,
     register_kinds: Vec<ValueKind>,
@@ -141,6 +139,22 @@ impl ComputeProgram {
         self.output_kind
     }
 
+    /// Deterministic backend/debug representation without making the internal
+    /// timeline `ValueKind` part of a persisted serde schema.
+    pub fn debug_text(&self) -> String {
+        let mut output = String::new();
+        for instruction in &self.instructions {
+            let _ = writeln!(&mut output, "{instruction:?}");
+        }
+        let _ = writeln!(
+            &mut output,
+            "output=r{} kind={:?}",
+            self.output.get(),
+            self.output_kind
+        );
+        output
+    }
+
     pub fn evaluate(&self, signals: &[ReactiveValue]) -> Result<ReactiveValue, ComputeVmError> {
         self.evaluate_with_stats(signals).map(|(value, _)| value)
     }
@@ -151,6 +165,7 @@ impl ComputeProgram {
     ) -> Result<(ReactiveValue, ComputeExecutionStats), ComputeVmError> {
         let mut registers = vec![ReactiveValue::Scalar(0.0); self.register_kinds.len()];
         let mut stats = ComputeExecutionStats::default();
+
         for instruction in &self.instructions {
             stats.instructions_executed += 1;
             match instruction {
@@ -174,14 +189,24 @@ impl ComputeProgram {
                     }
                     registers[dst.index()] = value.clone();
                 }
-                ComputeInstruction::Add { dst, lhs, rhs, kind } => {
+                ComputeInstruction::Add {
+                    dst,
+                    lhs,
+                    rhs,
+                    kind,
+                } => {
                     registers[dst.index()] = binary_add(
                         &registers[lhs.index()],
                         &registers[rhs.index()],
                         *kind,
                     )?;
                 }
-                ComputeInstruction::Sub { dst, lhs, rhs, kind } => {
+                ComputeInstruction::Sub {
+                    dst,
+                    lhs,
+                    rhs,
+                    kind,
+                } => {
                     registers[dst.index()] = binary_sub(
                         &registers[lhs.index()],
                         &registers[rhs.index()],
@@ -205,7 +230,9 @@ impl ComputeProgram {
                         (ReactiveValue::Scalar(value), ValueKind::Scalar) => {
                             ReactiveValue::Scalar(-value)
                         }
-                        (ReactiveValue::Vec2(value), ValueKind::Vec2) => ReactiveValue::Vec2(-*value),
+                        (ReactiveValue::Vec2(value), ValueKind::Vec2) => {
+                            ReactiveValue::Vec2(-*value)
+                        }
                         _ => return Err(ComputeVmError::InvalidTypedInstruction("neg")),
                     };
                 }
@@ -223,6 +250,7 @@ impl ComputeProgram {
                 }
             }
         }
+
         Ok((registers[self.output.index()].clone(), stats))
     }
 }
@@ -237,15 +265,20 @@ struct ComputeBuilder<'a> {
 
 impl ComputeBuilder<'_> {
     fn allocate(&mut self, kind: ValueKind) -> Result<ComputeRegister, ReactiveError> {
-        let raw = u32::try_from(self.register_kinds.len()).map_err(|_| ReactiveError::InvalidExpression {
-            signal: self.owner,
-            operation: "register_space_exhausted",
+        let raw = u32::try_from(self.register_kinds.len()).map_err(|_| {
+            ReactiveError::InvalidExpression {
+                signal: self.owner,
+                operation: "register_space_exhausted",
+            }
         })?;
         self.register_kinds.push(kind);
         Ok(ComputeRegister::new(raw))
     }
 
-    fn lower(&mut self, expression: &ReactiveExpr) -> Result<(ComputeRegister, ValueKind), ReactiveError> {
+    fn lower(
+        &mut self,
+        expression: &ReactiveExpr,
+    ) -> Result<(ComputeRegister, ValueKind), ReactiveError> {
         match expression {
             ReactiveExpr::Constant(value) => {
                 let kind = value.value_kind();
@@ -257,11 +290,19 @@ impl ComputeBuilder<'_> {
                 Ok((dst, kind))
             }
             ReactiveExpr::Signal(signal) => {
-                let index = *self.signal_indices.get(signal).ok_or(ReactiveError::UnknownSignal(*signal))?;
-                let kind = *self.signal_kinds.get(index).ok_or(ReactiveError::UnknownSignal(*signal))?;
-                let signal_index = u32::try_from(index).map_err(|_| ReactiveError::InvalidExpression {
-                    signal: self.owner,
-                    operation: "signal_space_exhausted",
+                let index = *self
+                    .signal_indices
+                    .get(signal)
+                    .ok_or(ReactiveError::UnknownSignal(*signal))?;
+                let kind = *self
+                    .signal_kinds
+                    .get(index)
+                    .ok_or(ReactiveError::UnknownSignal(*signal))?;
+                let signal_index = u32::try_from(index).map_err(|_| {
+                    ReactiveError::InvalidExpression {
+                        signal: self.owner,
+                        operation: "signal_space_exhausted",
+                    }
                 })?;
                 let dst = self.allocate(kind)?;
                 self.instructions.push(ComputeInstruction::LoadSignal {
@@ -274,21 +315,33 @@ impl ComputeBuilder<'_> {
             ReactiveExpr::Add(lhs, rhs) => {
                 let (lhs, lhs_kind) = self.lower(lhs)?;
                 let (rhs, rhs_kind) = self.lower(rhs)?;
-                if lhs_kind != rhs_kind || !matches!(lhs_kind, ValueKind::Scalar | ValueKind::Vec2) {
+                if lhs_kind != rhs_kind || !matches!(lhs_kind, ValueKind::Scalar | ValueKind::Vec2)
+                {
                     return self.invalid("add");
                 }
                 let dst = self.allocate(lhs_kind)?;
-                self.instructions.push(ComputeInstruction::Add { dst, lhs, rhs, kind: lhs_kind });
+                self.instructions.push(ComputeInstruction::Add {
+                    dst,
+                    lhs,
+                    rhs,
+                    kind: lhs_kind,
+                });
                 Ok((dst, lhs_kind))
             }
             ReactiveExpr::Sub(lhs, rhs) => {
                 let (lhs, lhs_kind) = self.lower(lhs)?;
                 let (rhs, rhs_kind) = self.lower(rhs)?;
-                if lhs_kind != rhs_kind || !matches!(lhs_kind, ValueKind::Scalar | ValueKind::Vec2) {
+                if lhs_kind != rhs_kind || !matches!(lhs_kind, ValueKind::Scalar | ValueKind::Vec2)
+                {
                     return self.invalid("sub");
                 }
                 let dst = self.allocate(lhs_kind)?;
-                self.instructions.push(ComputeInstruction::Sub { dst, lhs, rhs, kind: lhs_kind });
+                self.instructions.push(ComputeInstruction::Sub {
+                    dst,
+                    lhs,
+                    rhs,
+                    kind: lhs_kind,
+                });
                 Ok((dst, lhs_kind))
             }
             ReactiveExpr::Mul(lhs, rhs) => {
@@ -296,11 +349,17 @@ impl ComputeBuilder<'_> {
                 let (rhs, rhs_kind) = self.lower(rhs)?;
                 let result_kind = match (lhs_kind, rhs_kind) {
                     (ValueKind::Scalar, ValueKind::Scalar) => ValueKind::Scalar,
-                    (ValueKind::Scalar, ValueKind::Vec2) | (ValueKind::Vec2, ValueKind::Scalar) => ValueKind::Vec2,
+                    (ValueKind::Scalar, ValueKind::Vec2)
+                    | (ValueKind::Vec2, ValueKind::Scalar) => ValueKind::Vec2,
                     _ => return self.invalid("mul"),
                 };
                 let dst = self.allocate(result_kind)?;
-                self.instructions.push(ComputeInstruction::Mul { dst, lhs, rhs, result_kind });
+                self.instructions.push(ComputeInstruction::Mul {
+                    dst,
+                    lhs,
+                    rhs,
+                    result_kind,
+                });
                 Ok((dst, result_kind))
             }
             ReactiveExpr::Neg(value) => {
@@ -309,7 +368,8 @@ impl ComputeBuilder<'_> {
                     return self.invalid("neg");
                 }
                 let dst = self.allocate(kind)?;
-                self.instructions.push(ComputeInstruction::Neg { dst, value, kind });
+                self.instructions
+                    .push(ComputeInstruction::Neg { dst, value, kind });
                 Ok((dst, kind))
             }
             ReactiveExpr::Sin(value) => self.lower_unary_scalar(value, true),
@@ -343,27 +403,53 @@ impl ComputeBuilder<'_> {
     }
 }
 
-fn binary_add(lhs: &ReactiveValue, rhs: &ReactiveValue, kind: ValueKind) -> Result<ReactiveValue, ComputeVmError> {
+fn binary_add(
+    lhs: &ReactiveValue,
+    rhs: &ReactiveValue,
+    kind: ValueKind,
+) -> Result<ReactiveValue, ComputeVmError> {
     match (lhs, rhs, kind) {
-        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => Ok(ReactiveValue::Scalar(lhs + rhs)),
-        (ReactiveValue::Vec2(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => Ok(ReactiveValue::Vec2(*lhs + *rhs)),
+        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => {
+            Ok(ReactiveValue::Scalar(lhs + rhs))
+        }
+        (ReactiveValue::Vec2(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => {
+            Ok(ReactiveValue::Vec2(*lhs + *rhs))
+        }
         _ => Err(ComputeVmError::InvalidTypedInstruction("add")),
     }
 }
 
-fn binary_sub(lhs: &ReactiveValue, rhs: &ReactiveValue, kind: ValueKind) -> Result<ReactiveValue, ComputeVmError> {
+fn binary_sub(
+    lhs: &ReactiveValue,
+    rhs: &ReactiveValue,
+    kind: ValueKind,
+) -> Result<ReactiveValue, ComputeVmError> {
     match (lhs, rhs, kind) {
-        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => Ok(ReactiveValue::Scalar(lhs - rhs)),
-        (ReactiveValue::Vec2(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => Ok(ReactiveValue::Vec2(*lhs - *rhs)),
+        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => {
+            Ok(ReactiveValue::Scalar(lhs - rhs))
+        }
+        (ReactiveValue::Vec2(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => {
+            Ok(ReactiveValue::Vec2(*lhs - *rhs))
+        }
         _ => Err(ComputeVmError::InvalidTypedInstruction("sub")),
     }
 }
 
-fn binary_mul(lhs: &ReactiveValue, rhs: &ReactiveValue, result_kind: ValueKind) -> Result<ReactiveValue, ComputeVmError> {
+fn binary_mul(
+    lhs: &ReactiveValue,
+    rhs: &ReactiveValue,
+    result_kind: ValueKind,
+) -> Result<ReactiveValue, ComputeVmError> {
     match (lhs, rhs, result_kind) {
-        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => Ok(ReactiveValue::Scalar(lhs * rhs)),
-        (ReactiveValue::Scalar(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => Ok(ReactiveValue::Vec2(*lhs * *rhs)),
-        (ReactiveValue::Vec2(lhs), ReactiveValue::Scalar(rhs), ValueKind::Vec2) => Ok(ReactiveValue::Vec2(*lhs * *rhs)),
+        (ReactiveValue::Scalar(lhs), ReactiveValue::Scalar(rhs), ValueKind::Scalar) => {
+            Ok(ReactiveValue::Scalar(lhs * rhs))
+        }
+        (ReactiveValue::Scalar(lhs), ReactiveValue::Vec2(rhs), ValueKind::Vec2) => {
+            Ok(ReactiveValue::Vec2(*lhs * *rhs))
+        }
+        (ReactiveValue::Vec2(lhs), ReactiveValue::Scalar(rhs), ValueKind::Vec2) => {
+            Ok(ReactiveValue::Vec2(*lhs * *rhs))
+        }
         _ => Err(ComputeVmError::InvalidTypedInstruction("mul")),
     }
 }
@@ -382,12 +468,20 @@ pub enum ComputeVmError {
 impl std::fmt::Display for ComputeVmError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingSignal(index) => write!(formatter, "compute program references missing dense signal {index}"),
-            Self::SignalTypeMismatch { signal_index, expected, actual } => write!(
+            Self::MissingSignal(index) => {
+                write!(formatter, "compute program references missing dense signal {index}")
+            }
+            Self::SignalTypeMismatch {
+                signal_index,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "compute signal {signal_index} type mismatch: expected {expected:?}, got {actual:?}"
             ),
-            Self::InvalidTypedInstruction(operation) => write!(formatter, "invalid typed compute instruction {operation}"),
+            Self::InvalidTypedInstruction(operation) => {
+                write!(formatter, "invalid typed compute instruction {operation}")
+            }
         }
     }
 }
@@ -398,7 +492,7 @@ impl std::error::Error for ComputeVmError {}
 ///
 /// A bitset prevents duplicate queue entries while a compact min-heap preserves
 /// topological rank. Semantic IDs and ordered maps never participate in scheduling.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct DenseDirtyQueue {
     pending: Vec<bool>,
     heap: BinaryHeap<Reverse<(usize, usize)>>,
@@ -439,14 +533,22 @@ impl DenseDirtyQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Vec2;
 
-    fn signal_table() -> (BTreeMap<SignalId, usize>, Vec<ValueKind>, Vec<ReactiveValue>) {
+    fn signal_table() -> (
+        BTreeMap<SignalId, usize>,
+        Vec<ValueKind>,
+        Vec<ReactiveValue>,
+    ) {
         let a = SignalId::new(1);
         let b = SignalId::new(2);
         (
             BTreeMap::from([(a, 0), (b, 1)]),
             vec![ValueKind::Scalar, ValueKind::Vec2],
-            vec![ReactiveValue::Scalar(2.0), ReactiveValue::Vec2(Vec2::new(3.0, 4.0))],
+            vec![
+                ReactiveValue::Scalar(2.0),
+                ReactiveValue::Vec2(Vec2::new(3.0, 4.0)),
+            ],
         )
     }
 
@@ -460,15 +562,20 @@ mod tests {
             )),
             Box::new(ReactiveExpr::scalar(1.0)),
         );
-        let program = ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(9)).unwrap();
+        let program =
+            ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(9)).unwrap();
         assert_eq!(program.output_kind(), ValueKind::Scalar);
         assert!(program.instructions().iter().any(|instruction| matches!(
             instruction,
-            ComputeInstruction::LoadSignal { signal_index: 0, .. }
+            ComputeInstruction::LoadSignal {
+                signal_index: 0,
+                ..
+            }
         )));
         let (value, stats) = program.evaluate_with_stats(&values).unwrap();
         assert_eq!(value, ReactiveValue::Scalar(7.0));
         assert_eq!(stats.instructions_executed, program.instructions().len());
+        assert_eq!(program.debug_text(), program.debug_text());
     }
 
     #[test]
@@ -478,7 +585,8 @@ mod tests {
             Box::new(ReactiveExpr::signal(SignalId::new(1))),
             Box::new(ReactiveExpr::signal(SignalId::new(2))),
         );
-        let program = ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(9)).unwrap();
+        let program =
+            ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(9)).unwrap();
         assert_eq!(
             program.evaluate(&values).unwrap(),
             ReactiveValue::Vec2(Vec2::new(6.0, 8.0))
@@ -492,7 +600,10 @@ mod tests {
         let expression = ReactiveExpr::Sin(Box::new(ReactiveExpr::signal(SignalId::new(1))));
         assert!(matches!(
             ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(7)),
-            Err(ReactiveError::InvalidExpression { operation: "sin", .. })
+            Err(ReactiveError::InvalidExpression {
+                operation: "sin",
+                ..
+            })
         ));
     }
 
@@ -521,7 +632,8 @@ mod tests {
                 Box::new(ReactiveExpr::scalar(0.25)),
             )),
         );
-        let program = ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(8)).unwrap();
+        let program =
+            ComputeProgram::lower(&expression, &indices, &kinds, SignalId::new(8)).unwrap();
         for step in -100..=100 {
             let x = step as f32 * 0.03125;
             let actual = program.evaluate(&[ReactiveValue::Scalar(x)]).unwrap();
