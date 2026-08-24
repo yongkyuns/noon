@@ -112,8 +112,8 @@ fn ensure_version(version: u32) -> Result<(), IrError> {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Easing, GeometryRef, ObjectId, RateFunction, Style, TrackTiming, Transform2D, Vec2,
-        VectorPath,
+        CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, ObjectId, Property,
+        RateFunction, Style, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
     };
 
     use super::*;
@@ -173,6 +173,39 @@ mod tests {
             legacy.tracks()[0].timing.easing,
             RateFunction::EaseInOutCubic
         );
+    }
+
+    #[test]
+    fn composition_time_maps_are_additive_on_version_one_wire_format() {
+        let ordinary = encode_scene(&sample_scene()).expect("scene must serialize");
+        assert!(!ordinary.contains("time_map"));
+
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        scene
+            .add_track_with_time_map(
+                object,
+                Property::Position,
+                TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::ONE,
+                },
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                map.clone(),
+            )
+            .expect("mapped track must be valid");
+
+        let json = encode_scene(&scene).expect("mapped scene must serialize");
+        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"time_map\""));
+        assert!(json.contains("\"rate_func\":\"smooth\""));
+        let decoded = decode_scene(&json).expect("mapped scene must deserialize");
+        assert_eq!(decoded.tracks()[0].time_map, map);
     }
 
     #[test]
