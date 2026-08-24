@@ -21,10 +21,8 @@ impl TimedSemanticSceneDocument {
 
     pub fn into_timed(self) -> Result<TimedSemanticScene, TimedSemanticIrError> {
         let semantic = self.scene.into_semantic()?;
-        let timeline = SignalTimelineDefinition::from_parts(
-            semantic.reactive(),
-            self.signal_tracks,
-        )?;
+        let timeline =
+            SignalTimelineDefinition::from_parts(semantic.reactive(), self.signal_tracks)?;
         Ok(TimedSemanticScene::from_parts(semantic, timeline)?)
     }
 }
@@ -39,7 +37,9 @@ impl std::fmt::Display for TimedSemanticIrError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Semantic(error) => error.fmt(formatter),
-            Self::SignalTimeline(error) => write!(formatter, "invalid Noon signal timeline: {error}"),
+            Self::SignalTimeline(error) => {
+                write!(formatter, "invalid Noon signal timeline: {error}")
+            }
         }
     }
 }
@@ -72,9 +72,9 @@ pub fn encode_timed_semantic_scene(
         scene.semantic().reactive(),
         scene.signal_timeline().tracks().to_vec(),
     )?;
-    Ok(serde_json::to_string(&TimedSemanticSceneDocument::from_timed(
-        scene,
-    ))?)
+    Ok(serde_json::to_string(
+        &TimedSemanticSceneDocument::from_timed(scene),
+    )?)
 }
 
 pub fn decode_timed_semantic_scene(json: &str) -> Result<TimedSemanticScene, TimedSemanticIrError> {
