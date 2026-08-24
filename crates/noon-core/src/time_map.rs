@@ -16,7 +16,11 @@ pub struct CompositionTimeMapStep {
 
 impl CompositionTimeMapStep {
     pub const fn new(start: f64, duration: f64, rate_func: RateFunction) -> Self {
-        Self { start, duration, rate_func }
+        Self {
+            start,
+            duration,
+            rate_func,
+        }
     }
 
     fn evaluate(self, alpha: f32) -> CompositionTimeSample {
@@ -25,7 +29,11 @@ impl CompositionTimeMapStep {
             return CompositionTimeSample::before();
         }
         if self.duration <= 0.0 {
-            return CompositionTimeSample { alpha: 1.0, begun: true, finished: true };
+            return CompositionTimeSample {
+                alpha: 1.0,
+                begun: true,
+                finished: true,
+            };
         }
         CompositionTimeSample {
             alpha: ((warped - self.start) / self.duration).clamp(0.0, 1.0) as f32,
@@ -66,10 +74,16 @@ impl CompositionTimeMap {
     pub fn validate(&self) -> Result<(), CompositionTimeMapError> {
         for (index, step) in self.steps.iter().copied().enumerate() {
             if !step.start.is_finite() || step.start < 0.0 || step.start > 1.0 {
-                return Err(CompositionTimeMapError::InvalidStart { index, value: step.start });
+                return Err(CompositionTimeMapError::InvalidStart {
+                    index,
+                    value: step.start,
+                });
             }
             if !step.duration.is_finite() || step.duration <= 0.0 {
-                return Err(CompositionTimeMapError::InvalidDuration { index, value: step.duration });
+                return Err(CompositionTimeMapError::InvalidDuration {
+                    index,
+                    value: step.duration,
+                });
             }
             if step.start + step.duration > 1.0 + 1e-9 {
                 return Err(CompositionTimeMapError::IntervalOutsideParent { index });
@@ -103,7 +117,11 @@ pub struct CompositionTimeSample {
 
 impl CompositionTimeSample {
     const fn before() -> Self {
-        Self { alpha: 0.0, begun: false, finished: false }
+        Self {
+            alpha: 0.0,
+            begun: false,
+            finished: false,
+        }
     }
 }
 
@@ -117,9 +135,18 @@ pub enum CompositionTimeMapError {
 impl std::fmt::Display for CompositionTimeMapError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidStart { index, value } => write!(formatter, "composition time-map step {index} start must be finite and within [0, 1], got {value}"),
-            Self::InvalidDuration { index, value } => write!(formatter, "composition time-map step {index} duration must be finite and positive, got {value}"),
-            Self::IntervalOutsideParent { index } => write!(formatter, "composition time-map step {index} extends outside its parent interval"),
+            Self::InvalidStart { index, value } => write!(
+                formatter,
+                "composition time-map step {index} start must be finite and within [0, 1], got {value}"
+            ),
+            Self::InvalidDuration { index, value } => write!(
+                formatter,
+                "composition time-map step {index} duration must be finite and positive, got {value}"
+            ),
+            Self::IntervalOutsideParent { index } => write!(
+                formatter,
+                "composition time-map step {index} extends outside its parent interval"
+            ),
         }
     }
 }
@@ -132,7 +159,11 @@ mod tests {
 
     #[test]
     fn child_interval_maps_parent_alpha() {
-        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(0.25, 0.5, RateFunction::Linear)]);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Linear,
+        )]);
         assert!(!map.evaluate(0.2).begun);
         assert_eq!(map.evaluate(0.25).alpha, 0.0);
         assert_eq!(map.evaluate(0.5).alpha, 0.5);
@@ -142,13 +173,21 @@ mod tests {
 
     #[test]
     fn nonlinear_parent_rate_is_applied_before_interval_remap() {
-        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(0.0, 1.0, RateFunction::Smooth)]);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.0,
+            1.0,
+            RateFunction::Smooth,
+        )]);
         assert!((map.evaluate(0.25).alpha - RateFunction::Smooth.evaluate(0.25)).abs() < 1e-6);
     }
 
     #[test]
     fn reversing_parent_rate_reopens_earlier_child() {
-        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(0.0, 0.5, RateFunction::ThereAndBack)]);
+        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.0,
+            0.5,
+            RateFunction::ThereAndBack,
+        )]);
         assert_eq!(map.evaluate(0.25).alpha, 1.0);
         assert_eq!(map.evaluate(0.5).alpha, 1.0);
         assert!(map.evaluate(0.75).alpha < 1.0);
