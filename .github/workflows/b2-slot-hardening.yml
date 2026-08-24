@@ -1,0 +1,52 @@
+name: Harden B2 slot atomicity
+
+on:
+  push:
+    branches:
+      - arch/b2-execution-slots
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Make failed removal atomic
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-runtime/src/execution_slots.rs')
+          text = path.read_text()
+          old = '''        let id = self\n            .object_slots\n            .remove(&object)\n            .ok_or(ExecutionSlotError::UnknownObject(object))?;\n        let slot = &mut self.slots[id.slot as usize];\n        debug_assert_eq!(slot.generation, id.generation);\n        debug_assert_eq!(slot.object, Some(object));\n        slot.object = None;\n        slot.generation = slot\n            .generation\n            .checked_add(1)\n            .ok_or(ExecutionSlotError::GenerationExhausted(id))?;'''
+          new = '''        let id = *self\n            .object_slots\n            .get(&object)\n            .ok_or(ExecutionSlotError::UnknownObject(object))?;\n        let next_generation = self.slots[id.slot as usize]\n            .generation\n            .checked_add(1)\n            .ok_or(ExecutionSlotError::GenerationExhausted(id))?;\n        let removed = self\n            .object_slots\n            .remove(&object)\n            .expect("object existence was preflighted");\n        debug_assert_eq!(removed, id);\n        let slot = &mut self.slots[id.slot as usize];\n        debug_assert_eq!(slot.generation, id.generation);\n        debug_assert_eq!(slot.object, Some(object));\n        slot.object = None;\n        slot.generation = next_generation;'''
+          if old not in text:
+              raise SystemExit('slot removal block not found')
+          text = text.replace(old, new, 1)
+          marker = '''    #[test]\n    fn dense_compatibility_removal_does_not_change_execution_identity() {'''
+          test = '''    #[test]\n    fn generation_exhaustion_leaves_slot_table_unchanged() {\n        let mut slots = ExecutionSlotTable::new();\n        let object = ObjectId::new(7);\n        let initial = slots.insert_object(object).expect("unique object");\n        let exhausted = ExecutionSlotId::new(initial.slot(), u32::MAX);\n        slots.slots[initial.slot() as usize].generation = u32::MAX;\n        slots.object_slots.insert(object, exhausted);\n\n        assert_eq!(\n            slots.remove_object(object),\n            Err(ExecutionSlotError::GenerationExhausted(exhausted))\n        );\n        assert_eq!(slots.slot_for_object(object), Some(exhausted));\n        assert_eq!(slots.object_for_slot(exhausted), Some(object));\n        assert_eq!(slots.len(), 1);\n    }\n\n    #[test]\n    fn dense_compatibility_removal_does_not_change_execution_identity() {'''
+          if marker not in text:
+              raise SystemExit('test insertion marker not found')
+          path.write_text(text.replace(marker, test, 1))
+          PY
+      - name: Validate
+        run: |
+          cargo fmt --all
+          cargo test -p noon-runtime execution_slots
+          cargo clippy -p noon-runtime --all-targets -- -D warnings
+      - name: Commit
+        run: |
+          rm .github/workflows/b2-slot-hardening.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --all
+          git commit -m "Keep execution slot removal atomic on errors"
+          git push origin HEAD:${{ github.ref_name }}
