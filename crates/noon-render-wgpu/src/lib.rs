@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod render_order;
 mod reveal;
 
 pub use gpu::*;
+pub use render_order::*;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
@@ -155,6 +157,7 @@ pub struct PreparedFrame<'a> {
     pub path_vertices: &'a [PathVertex],
     pub path_indices: &'a [u32],
     pub path_batches: &'a [PathBatch],
+    pub render_batches: &'a [OrderedRenderBatch],
     pub unsupported: &'a [ObjectId],
     pub circle_dirty_ranges: &'a [Range<usize>],
     pub rectangle_dirty_ranges: &'a [Range<usize>],
@@ -219,6 +222,8 @@ pub struct FramePreparer {
     path_vertices: Vec<PathVertex>,
     path_indices: Vec<u32>,
     path_batches: Vec<PathBatch>,
+    render_batches: Vec<OrderedRenderBatch>,
+    render_order_keys: Vec<RenderOrderKey>,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
@@ -345,6 +350,7 @@ impl FramePreparer {
         self.path_ids.clear();
         self.paths.clear();
         self.path_batches.clear();
+        self.render_batches.clear();
         self.path_batch_cache_indices.clear();
         self.unsupported.clear();
         self.slots.clear();
@@ -494,6 +500,7 @@ impl FramePreparer {
                 *index += group_offsets[*batch];
             }
         }
+        self.rebuild_ordered_render_batches();
         self.path_geometry_dirty =
             self.path_vertices != next_vertices || self.path_indices != next_indices;
         self.path_vertices = next_vertices;
@@ -535,15 +542,7 @@ impl FramePreparer {
         instances_repacked: usize,
         geometry_cache_misses: usize,
     ) -> PreparedFrame<'_> {
-        let batch_count = usize::from(!self.circles.is_empty())
-            + usize::from(!self.rectangles.is_empty())
-            + usize::from(!self.lines.is_empty());
-        let batch_count = batch_count
-            + self
-                .path_batches
-                .iter()
-                .filter(|batch| !batch.index_range.is_empty())
-                .count();
+        let batch_count = self.render_batches.len();
         let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
             + dirty_len(&self.rectangle_dirty_ranges)
             + dirty_len(&self.line_dirty_ranges);
@@ -561,6 +560,7 @@ impl FramePreparer {
             path_vertices: &self.path_vertices,
             path_indices: &self.path_indices,
             path_batches: &self.path_batches,
+            render_batches: &self.render_batches,
             unsupported: &self.unsupported,
             circle_dirty_ranges: &self.circle_dirty_ranges,
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
@@ -1443,7 +1443,9 @@ mod tests {
         let prepared = preparer.prepare(&frame);
         assert_eq!(prepared.stats.instance_count, OBJECT_COUNT);
         assert_eq!(prepared.stats.geometry_cache_misses, VARIANT_COUNT);
-        assert_eq!(prepared.stats.batch_count, VARIANT_COUNT);
+        // Mesh/cache batching remains at 12 variants, while exact transparent painter order
+        // requires one ordered draw batch per alternating object until mega-mesh packing lands.
+        assert_eq!(prepared.stats.batch_count, OBJECT_COUNT);
         assert_eq!(prepared.path_batches.len(), VARIANT_COUNT);
         assert_eq!(prepared.paths.len(), OBJECT_COUNT);
         assert_eq!(preparer.cached_path_mesh_count(), VARIANT_COUNT);
