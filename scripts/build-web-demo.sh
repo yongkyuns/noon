@@ -12,6 +12,7 @@ node --check web/native-inputs.js
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
 node --check web/morph-profile.js
+node --check web/browser-jank.js
 node --check web/perf-profile.js
 node --check web/perf-workloads.js
 node --check web/browser-smoke.js
@@ -28,6 +29,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
+node --test web/browser-jank.test.mjs
 node --test web/perf-workloads.test.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_compat.py \
