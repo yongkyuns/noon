@@ -632,13 +632,7 @@ impl Scene {
                     self.presence.insert(object.id, true);
                 }
                 Animation::Group(group) => {
-                    composition_authoring::schedule_group(
-                        self,
-                        group,
-                        start,
-                        duration,
-                        rate_func,
-                    )?;
+                    composition_authoring::schedule_group(self, group, start, duration, rate_func)?;
                 }
             }
         }
@@ -752,7 +746,10 @@ impl Play<'_> {
 
     pub fn run_time(self, duration: f64) -> Result<(), AuthoringError> {
         let checkpoint = self.scene.clone();
-        match self.scene.schedule(self.animations, duration, self.rate_func) {
+        match self
+            .scene
+            .schedule(self.animations, duration, self.rate_func)
+        {
             Ok(()) => Ok(()),
             Err(error) => {
                 *self.scene = checkpoint;
