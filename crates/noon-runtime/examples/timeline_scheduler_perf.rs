@@ -49,10 +49,7 @@ fn main() {
             let result = benchmark_case(total, active, warmups, samples);
             println!(
                 "{total},{active},{:.6},{:.6},{:.6},{}",
-                result.p50_us,
-                result.p95_us,
-                result.p99_us,
-                result.requested_groups,
+                result.p50_us, result.p95_us, result.p99_us, result.requested_groups,
             );
         }
     }
@@ -86,7 +83,10 @@ fn benchmark_case(total: usize, active: usize, warmups: usize, samples: usize) -
     timings.sort_by(f64::total_cmp);
 
     let stats = scheduler.last_stats();
-    assert_eq!(stats.events_crossed, 0, "steady case crossed an event boundary");
+    assert_eq!(
+        stats.events_crossed, 0,
+        "steady case crossed an event boundary"
+    );
     assert_eq!(stats.active_groups, active);
     assert_eq!(requested_groups, active);
 
