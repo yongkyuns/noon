@@ -2,8 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod execution_slots;
 mod reactive;
 
+pub use execution_slots::*;
 pub use reactive::*;
 
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
