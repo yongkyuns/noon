@@ -1,14 +1,17 @@
 """Manim-compatible ``.animate`` scheduling semantics.
 
 This layer keeps Python syntax adaptation while lowering supported operations to Noon's
-deterministic scene tracks. Animation option defaults, validation, and precedence are
-resolved by shared Rust authoring semantics; no Python callbacks run during playback.
+deterministic scene tracks. Animation option defaults, validation, precedence, and
+composition timing are resolved by shared Rust authoring semantics; no Python callbacks
+run during playback.
 """
 
 from __future__ import annotations
 
 import math
 from typing import Any, Callable
+
+from js import noonResolveUniformCompositionSchedule as _resolve_uniform_composition_schedule
 
 import noon as _base
 import _manim_animation_options as _options
@@ -142,6 +145,27 @@ def _default_lag_ratio(animation: object) -> float:
     return 0.0
 
 
+def _shared_uniform_intervals(
+    child_count: int,
+    *,
+    lag_ratio: float,
+    run_time: float,
+) -> list[tuple[float, float]]:
+    result = _resolve_uniform_composition_schedule(
+        int(child_count), float(lag_ratio), float(run_time)
+    )
+    if not bool(result.ok):
+        raise ValueError(str(result.message))
+    intervals = result.intervals
+    return [
+        (
+            float(intervals[index].startTime),
+            float(intervals[index].duration),
+        )
+        for index in range(int(intervals.length))
+    ]
+
+
 def _expanded_schedule(
     scene: _compat.Scene,
     animation: object,
@@ -165,14 +189,12 @@ def _expanded_schedule(
     if not is_family_animation or len(expanded) == 1:
         return [(item, start_time, run_time, easing) for item in expanded]
 
-    # Group interval expansion remains here until A4. The lag ratio itself has
-    # already been resolved through the shared Rust AnimationOptions contract.
-    full_length = 1.0 + (len(expanded) - 1) * lag_ratio
-    child_duration = run_time / full_length
-    offset = lag_ratio * child_duration
+    intervals = _shared_uniform_intervals(
+        len(expanded), lag_ratio=lag_ratio, run_time=run_time
+    )
     return [
-        (item, start_time + index * offset, child_duration, easing)
-        for index, item in enumerate(expanded)
+        (item, start_time + child_start, child_duration, easing)
+        for item, (child_start, child_duration) in zip(expanded, intervals)
     ]
 
 
