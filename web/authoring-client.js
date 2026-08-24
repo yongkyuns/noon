@@ -37,7 +37,8 @@ export class PythonAuthoringClient {
     if (!isRecord(context)) {
       throw new TypeError("Python authoring context must be an object");
     }
-    const requestId = await this.#beginRequest();
+    await this.ready();
+    const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
     this.#worker.postMessage(
       envelope("run", {
@@ -59,7 +60,8 @@ export class PythonAuthoringClient {
     if (!Number.isSafeInteger(sequence) || sequence < 0) {
       throw new TypeError("callback patch sequence must be a non-negative safe integer");
     }
-    const requestId = await this.#beginRequest();
+    await this.ready();
+    const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
     this.#worker.postMessage(
       envelope("callback_phase", {
@@ -81,11 +83,7 @@ export class PythonAuthoringClient {
     this.#fail(new Error("Python authoring client was terminated"));
   }
 
-  async #beginRequest() {
-    if (this.#terminated) {
-      throw new Error("Python authoring client has been terminated");
-    }
-    await this.ready();
+  #beginRequest() {
     if (this.#terminated) {
       throw new Error("Python authoring client has been terminated");
     }
