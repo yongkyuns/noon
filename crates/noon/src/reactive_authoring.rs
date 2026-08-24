@@ -1,8 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use noon_core::{
-    Property, ReactiveExpr, ReactiveGraphDefinition, SemanticScene, SignalId, Vec2,
-};
+use noon_core::{Property, ReactiveExpr, ReactiveGraphDefinition, SemanticScene, SignalId, Vec2};
 
 use crate::{Mobject, Scene};
 
