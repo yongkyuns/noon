@@ -144,10 +144,7 @@ impl TimelineEventScheduler {
         if time < self.time {
             self.seek(time);
             self.begin_request_epoch();
-            let active = self.active_groups.clone();
-            for group in active {
-                self.request(group);
-            }
+            self.request_active_groups();
             self.last_stats.groups_requested = self.requested.len();
             return &self.requested;
         }
@@ -164,10 +161,7 @@ impl TimelineEventScheduler {
             self.event_cursor += 1;
         }
 
-        let active = self.active_groups.clone();
-        for group in active {
-            self.request(group);
-        }
+        self.request_active_groups();
         self.time = time;
         self.last_stats = TimelineSchedulerStats {
             events_crossed,
@@ -183,6 +177,17 @@ impl TimelineEventScheduler {
         if self.epoch == 0 {
             self.visit_epoch.fill(0);
             self.epoch = 1;
+        }
+    }
+
+    /// Request the current active set without cloning it. Indexing keeps the
+    /// immutable borrow of `active_groups` scoped to one statement, so
+    /// `request` can mutate the visit/request buffers without allocating a
+    /// per-frame snapshot proportional to the number of active groups.
+    fn request_active_groups(&mut self) {
+        for index in 0..self.active_groups.len() {
+            let group = self.active_groups[index];
+            self.request(group);
         }
     }
 
