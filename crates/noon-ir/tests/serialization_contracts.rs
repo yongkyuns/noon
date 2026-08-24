@@ -23,8 +23,21 @@ fn contract_manifest_inventories_current_cross_language_boundaries() {
     assert_eq!(manifest["noon_ir_version"], 1);
     assert_eq!(manifest["authoring_protocol"]["channel"], "noon.authoring");
     assert_eq!(manifest["authoring_protocol"]["version"], 5);
-    let names = manifest["contracts"].as_array().expect("contracts array").iter().map(|contract| contract["name"].as_str().expect("contract name")).collect::<BTreeSet<_>>();
-    for required in ["scene_document","semantic_scene_document","patch_batch","authoring_envelope","authoring_result","host_callback_slots","host_callback_frame"] {
+    let names = manifest["contracts"]
+        .as_array()
+        .expect("contracts array")
+        .iter()
+        .map(|contract| contract["name"].as_str().expect("contract name"))
+        .collect::<BTreeSet<_>>();
+    for required in [
+        "scene_document",
+        "semantic_scene_document",
+        "patch_batch",
+        "authoring_envelope",
+        "authoring_result",
+        "host_callback_slots",
+        "host_callback_frame",
+    ] {
         assert!(names.contains(required), "wire contract missing {required}");
     }
 }
@@ -50,13 +63,25 @@ fn additive_unknown_top_level_fields_are_ignored_by_v1_readers() {
 
 #[test]
 fn future_versions_win_over_unknown_future_payload_variants() {
-    assert!(matches!(decode_scene(FUTURE_SCENE), Err(IrError::UnsupportedVersion(2))));
-    assert!(matches!(decode_patch_batch(FUTURE_PATCH), Err(IrError::UnsupportedVersion(2))));
-    assert!(matches!(decode_semantic_scene(FUTURE_SCENE), Err(SemanticIrError::Scene(IrError::UnsupportedVersion(2)))));
+    assert!(matches!(
+        decode_scene(FUTURE_SCENE),
+        Err(IrError::UnsupportedVersion(2))
+    ));
+    assert!(matches!(
+        decode_patch_batch(FUTURE_PATCH),
+        Err(IrError::UnsupportedVersion(2))
+    ));
+    assert!(matches!(
+        decode_semantic_scene(FUTURE_SCENE),
+        Err(SemanticIrError::Scene(IrError::UnsupportedVersion(2)))
+    ));
 }
 
 #[test]
 fn missing_required_version_and_duplicate_ids_are_rejected() {
-    assert!(matches!(decode_scene(MISSING_VERSION), Err(IrError::Json(_))));
+    assert!(matches!(
+        decode_scene(MISSING_VERSION),
+        Err(IrError::Json(_))
+    ));
     assert!(decode_scene(DUPLICATE_OBJECT).is_err());
 }
