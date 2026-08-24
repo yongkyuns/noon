@@ -4,7 +4,10 @@ use noon_geometry::{plan_morph, tessellate_styled_with_fill, MorphOptions};
 fn assert_mesh_is_well_formed(path: &VectorPath, fill: bool) {
     let mesh = tessellate_styled_with_fill(path, 0.04, StrokeJoin::Round, StrokeCap::Round, fill)
         .expect("fixed regression geometry should tessellate");
-    assert!(mesh.indices.iter().all(|&index| (index as usize) < mesh.vertices.len()));
+    assert!(mesh
+        .indices
+        .iter()
+        .all(|&index| (index as usize) < mesh.vertices.len()));
     assert!(mesh.vertices.iter().all(|vertex| {
         vertex.position.x.is_finite()
             && vertex.position.y.is_finite()
@@ -33,13 +36,8 @@ fn fixed_degenerate_and_self_intersecting_path_corpus_stays_safe() {
         .close();
 
     for path in [&repeated, &collinear, &bow_tie] {
-        let result = tessellate_styled_with_fill(
-            path,
-            0.04,
-            StrokeJoin::Round,
-            StrokeCap::Round,
-            true,
-        );
+        let result =
+            tessellate_styled_with_fill(path, 0.04, StrokeJoin::Round, StrokeCap::Round, true);
         if result.is_ok() {
             assert_mesh_is_well_formed(path, true);
         }
@@ -62,9 +60,10 @@ fn fixed_morph_corpus_is_finite_or_rejected_cleanly() {
     if let Ok(plan) = plan_morph(&source, &target, MorphOptions::default()) {
         for progress in [0.0, 0.5, 1.0] {
             let frame = plan.interpolate(progress);
-            assert!(frame.contours.iter().all(|contour| contour.points.iter().all(|point| {
-                point.x.is_finite() && point.y.is_finite()
-            })));
+            assert!(frame.contours.iter().all(|contour| contour
+                .points
+                .iter()
+                .all(|point| { point.x.is_finite() && point.y.is_finite() })));
         }
     }
 }
