@@ -120,9 +120,9 @@ impl From<PatchError> for SemanticIrError {
 
 pub fn encode_semantic_scene(scene: &SemanticScene) -> Result<String, SemanticIrError> {
     scene.compile_reactive()?;
-    Ok(serde_json::to_string(&SemanticSceneDocument::from_semantic(
-        scene,
-    ))?)
+    Ok(serde_json::to_string(
+        &SemanticSceneDocument::from_semantic(scene),
+    )?)
 }
 
 pub fn decode_semantic_scene(json: &str) -> Result<SemanticScene, SemanticIrError> {
@@ -202,7 +202,10 @@ mod tests {
         let scene = decode_semantic_scene(json).expect("Python wire shape must decode");
         let program = scene.compile_reactive().expect("graph must compile");
         let state = program.instantiate();
-        assert_eq!(state.value(noon_core::SignalId::new(0)), Some(&ReactiveValue::Scalar(1.5)));
+        assert_eq!(
+            state.value(noon_core::SignalId::new(0)),
+            Some(&ReactiveValue::Scalar(1.5))
+        );
         assert_eq!(scene.reactive().bindings()[0].property, Property::Rotation);
     }
 }
