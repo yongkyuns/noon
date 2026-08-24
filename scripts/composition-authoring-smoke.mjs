@@ -80,15 +80,13 @@ class CompositionScene(Scene):
             run_time=2.0,
         ))
 
-        try:
-            self.play(AnimationGroup(
-                a.animate(rate_func=linear).shift(RIGHT),
-                b.animate(rate_func=linear).shift(LEFT),
-                rate_func=smooth,
-            ))
-            raise AssertionError("nonlinear outer composition rate must fail explicitly")
-        except NotImplementedError as error:
-            assert "runtime composition time-map" in str(error)
+        # Nonlinear outer timing is represented exactly by a shared root-to-leaf
+        # CompositionTimeMap carried by each affected leaf track.
+        self.play(AnimationGroup(
+            a.animate(rate_func=linear).shift(RIGHT),
+            b.animate(rate_func=linear).shift(LEFT),
+            rate_func=smooth,
+        ))
 `;
 
 let browser = null;
@@ -118,7 +116,7 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
 
   const transforms = result.document.tracks.filter((track) => track.property === "transform");
-  assert.equal(transforms.length, 10);
+  assert.equal(transforms.length, 12);
   const byObject = new Map();
   for (const track of transforms) {
     const list = byObject.get(track.object) ?? [];
@@ -131,6 +129,7 @@ try {
   assert.equal(byObject.get(0)[0].timing.duration, 2);
   assert.equal(byObject.get(1)[0].timing.start_time, 1);
   assert.equal(byObject.get(1)[0].timing.duration, 1);
+  assert.equal(byObject.get(0)[0].time_map, undefined);
 
   // LaggedStart default lag=.05, run_time=2.2 over virtual duration 1.1:
   // each child duration=2, starts 2.0, 2.1, 2.2.
@@ -153,6 +152,20 @@ try {
   assert.ok(Math.abs(byObject.get(0)[3].timing.duration - 1.0) < 1e-9);
   assert.ok(Math.abs(byObject.get(1)[2].timing.start_time - 5.7) < 1e-9);
   assert.ok(Math.abs(byObject.get(1)[2].timing.duration - 2.0) < 1e-9);
+
+  // The nonlinear group occupies [7.7, 8.7]. Its leaves retain linear local
+  // easing while the shared time map applies the outer smooth warp first.
+  const nonlinearA = byObject.get(0)[4];
+  const nonlinearB = byObject.get(1)[3];
+  for (const track of [nonlinearA, nonlinearB]) {
+    assert.ok(Math.abs(track.timing.start_time - 7.7) < 1e-9);
+    assert.ok(Math.abs(track.timing.duration - 1.0) < 1e-9);
+    assert.equal(track.timing.easing, "linear");
+    assert.equal(track.time_map.steps.length, 1);
+    assert.ok(Math.abs(track.time_map.steps[0].start) < 1e-12);
+    assert.ok(Math.abs(track.time_map.steps[0].duration - 1.0) < 1e-12);
+    assert.equal(track.time_map.steps[0].rate_func, "smooth");
+  }
 
   console.log("composition authoring smoke test passed");
 } finally {
