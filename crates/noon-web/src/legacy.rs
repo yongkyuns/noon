@@ -602,7 +602,6 @@ mod wasm {
         }
     }
 
-    /// Persistent browser player that connects the deterministic runtime to a GPU canvas.
     #[wasm_bindgen(js_name = NoonCanvasPlayer)]
     pub struct WasmCanvasPlayer {
         instance: wgpu::Instance,
@@ -634,7 +633,6 @@ mod wasm {
 
     #[wasm_bindgen(js_class = NoonCanvasPlayer)]
     impl WasmCanvasPlayer {
-        /// Creates the GPU device and canvas surface. JavaScript calls this as an async factory.
         #[wasm_bindgen(js_name = create)]
         pub async fn create(
             canvas: HtmlCanvasElement,
@@ -727,7 +725,6 @@ mod wasm {
             Ok(result)
         }
 
-        /// Resizes the physical canvas backing store. Zero-sized canvases are simply skipped.
         #[wasm_bindgen(js_name = resize)]
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
             self.canvas.set_width(width);
@@ -746,7 +743,6 @@ mod wasm {
             Ok(())
         }
 
-        /// Sets a center and vertical world span while preserving canvas aspect ratio.
         #[wasm_bindgen(js_name = setCamera)]
         pub fn set_camera(
             &mut self,
@@ -761,7 +757,6 @@ mod wasm {
             self.update_camera()
         }
 
-        /// Advances from a monotonic `requestAnimationFrame` timestamp and presents one frame.
         #[wasm_bindgen(js_name = renderFrame)]
         pub fn render_frame(&mut self, timestamp_ms: f64) -> Result<bool, JsValue> {
             let frame_started_ms = performance_now_ms();
@@ -780,14 +775,12 @@ mod wasm {
             Ok(())
         }
 
-        /// Atomically replaces semantic scene state while retaining the GPU and playback clock.
         #[wasm_bindgen(js_name = replaceScene)]
         pub fn replace_scene(&mut self, json: &str) -> Result<(), JsValue> {
             self.player.replace_scene_json(json).map_err(js_error)?;
             Ok(())
         }
 
-        /// Reconciles compatible semantic state and falls back to atomic replacement.
         #[wasm_bindgen(js_name = reconcileScene)]
         pub fn reconcile_scene(&mut self, json: &str) -> Result<bool, JsValue> {
             Ok(matches!(
@@ -1549,6 +1542,7 @@ mod tests {
             property: Property::Transform,
             values: TrackValues::Object { from, to },
             timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
         };
         SceneDefinition::from_parts(vec![object], vec![track]).expect("transform scene is valid")
     }
