@@ -168,7 +168,10 @@ pub fn resolve_animation_options(
     play: AnimationOptions,
 ) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
     ResolvedAnimationOptions {
-        run_time: play.run_time.or(animation.run_time).unwrap_or(defaults.run_time),
+        run_time: play
+            .run_time
+            .or(animation.run_time)
+            .unwrap_or(defaults.run_time),
         rate_func: play
             .rate_func
             .or(animation.rate_func)
@@ -185,7 +188,10 @@ pub fn resolve_animation_options(
             .reverse_rate_function
             .or(animation.reverse_rate_function)
             .unwrap_or(defaults.reverse_rate_function),
-        remover: play.remover.or(animation.remover).unwrap_or(defaults.remover),
+        remover: play
+            .remover
+            .or(animation.remover)
+            .unwrap_or(defaults.remover),
         introducer: play
             .introducer
             .or(animation.introducer)
@@ -205,7 +211,7 @@ impl ResolvedAnimationOptions {
         if !self.path_arc.is_finite() {
             return Err(AnimationOptionsError::InvalidPathArc(self.path_arc));
         }
-        if self.path_arc.abs() > f64::EPSILON {
+        if self.path_arc.abs() > 1e-12 {
             return Err(AnimationOptionsError::UnsupportedPathArc(self.path_arc));
         }
         if self.reverse_rate_function {
