@@ -33,7 +33,22 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_updaters.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
-cargo test -p noon-web --test playground_examples
 
-wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release
+if [[ "${NOON_SKIP_PLAYGROUND_TEST:-0}" != "1" ]]; then
+  cargo test -p noon-web --test playground_examples
+fi
+
+wasm_pack_args=(
+  build
+  crates/noon-web
+  --target web
+  --out-dir ../../web/pkg
+  --release
+)
+
+if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
+  wasm_pack_args+=(--no-opt)
+fi
+
+wasm-pack "${wasm_pack_args[@]}"
 node scripts/check-web-package.mjs
