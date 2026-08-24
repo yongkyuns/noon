@@ -116,9 +116,9 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = setReactiveInput)]
-        pub fn set_reactive_input(&mut self, signal: u64, value: f32) -> Result<(), JsValue> {
+        pub fn set_reactive_input(&mut self, signal: u32, value: f32) -> Result<(), JsValue> {
             self.inner
-                .set_reactive_input(SignalId::new(signal), value)
+                .set_reactive_input(SignalId::new(u64::from(signal)), value)
                 .map_err(js_error)?;
             Ok(())
         }
@@ -280,9 +280,9 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = setReactiveInput)]
-        pub fn set_reactive_input(&mut self, signal: u64, value: f32) -> Result<(), JsValue> {
+        pub fn set_reactive_input(&mut self, signal: u32, value: f32) -> Result<(), JsValue> {
             self.player
-                .set_reactive_input(SignalId::new(signal), value)
+                .set_reactive_input(SignalId::new(u64::from(signal)), value)
                 .map_err(js_error)?;
             Ok(())
         }
