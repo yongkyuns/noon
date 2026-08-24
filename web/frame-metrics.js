@@ -2,6 +2,14 @@ export class FrameMetrics {
   #lastTimestamp = null;
   #submissionMs = [];
   #intervalMs = [];
+  #targetHz;
+
+  constructor({ targetHz = 60 } = {}) {
+    if (!Number.isFinite(targetHz) || targetHz <= 0) {
+      throw new RangeError("targetHz must be a positive finite number");
+    }
+    this.#targetHz = targetHz;
+  }
 
   reset() {
     this.#lastTimestamp = null;
@@ -25,6 +33,7 @@ export class FrameMetrics {
       frames: this.#submissionMs.length,
       submission: summarizeSamples(this.#submissionMs),
       interval: summarizeSamples(this.#intervalMs),
+      cadence: summarizeCadence(this.#intervalMs, this.#targetHz),
     };
   }
 }
@@ -72,10 +81,47 @@ export function summarizeSamples(samples) {
     return null;
   }
   return {
+    min: sorted[0],
     p50: percentile(sorted, 0.5),
     p95: percentile(sorted, 0.95),
+    p99: percentile(sorted, 0.99),
     max: sorted.at(-1),
     mean: sorted.reduce((sum, value) => sum + value, 0) / sorted.length,
+  };
+}
+
+export function summarizeCadence(samples, targetHz = 60) {
+  if (!Number.isFinite(targetHz) || targetHz <= 0) {
+    throw new RangeError("targetHz must be a positive finite number");
+  }
+  const intervals = Array.isArray(samples)
+    ? samples.map(Number).filter((value) => Number.isFinite(value) && value >= 0)
+    : [];
+  if (intervals.length === 0) {
+    return null;
+  }
+
+  const targetFrameMs = 1000 / targetHz;
+  const totalMs = intervals.reduce((sum, value) => sum + value, 0);
+  const longFrameThresholdMs = targetFrameMs * 1.5;
+  const veryLongFrameThresholdMs = targetFrameMs * 2.5;
+  const longFrames = intervals.filter((value) => value >= longFrameThresholdMs).length;
+  const veryLongFrames = intervals.filter((value) => value >= veryLongFrameThresholdMs).length;
+  const missedVsyncs = intervals.reduce(
+    (sum, value) => sum + Math.max(0, Math.round(value / targetFrameMs) - 1),
+    0,
+  );
+
+  return {
+    targetHz,
+    targetFrameMs,
+    effectiveFps: totalMs > 0 ? (intervals.length * 1000) / totalMs : null,
+    longFrameThresholdMs,
+    longFrames,
+    longFrameRate: longFrames / intervals.length,
+    veryLongFrameThresholdMs,
+    veryLongFrames,
+    missedVsyncs,
   };
 }
 
