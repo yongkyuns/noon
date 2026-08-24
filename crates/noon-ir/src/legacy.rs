@@ -322,7 +322,10 @@ mod tests {
     fn future_versions_are_rejected_before_new_variants_are_decoded() {
         let scene = r#"{"version":2,"objects":[{"id":0,"geometry":{"future_shape":{}},"transform":{},"style":{}}],"tracks":[]}"#;
         let patches = r#"{"version":2,"sequence":0,"patches":[{"future_patch":{}}]}"#;
-        assert!(matches!(decode_scene(scene), Err(IrError::UnsupportedVersion(2))));
+        assert!(matches!(
+            decode_scene(scene),
+            Err(IrError::UnsupportedVersion(2))
+        ));
         assert!(matches!(
             decode_patch_batch(patches),
             Err(IrError::UnsupportedVersion(2))
