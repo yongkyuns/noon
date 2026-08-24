@@ -8,6 +8,14 @@ const AUTHORING_SAMPLES = 5;
 const WARMUP_FRAMES = 30;
 const MEASURED_FRAMES = 180;
 const GPU_SETTLE_TIMEOUT_MS = 2000;
+const parameters = new URLSearchParams(location.search);
+const targetVariantMode = parameters.get("variants") ?? "12";
+if (targetVariantMode !== "unique") {
+  const parsed = Number(targetVariantMode);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error("variants must be a positive integer or 'unique'");
+  }
+}
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -37,6 +45,7 @@ try {
   const importWarmupStarted = performance.now();
   const importWarmup = await authoringClient.run(source, {
     object_count: AUTHORING_IMPORT_WARMUP_OBJECTS,
+    target_variant_count: Math.min(12, AUTHORING_IMPORT_WARMUP_OBJECTS),
   });
   const importWarmupMs = performance.now() - importWarmupStarted;
   assertScene(importWarmup);
@@ -45,16 +54,22 @@ try {
     importWarmupMs,
     importWarmupObjects: AUTHORING_IMPORT_WARMUP_OBJECTS,
     measuredSamplesPerCase: AUTHORING_SAMPLES,
+    targetVariantMode,
   };
   setup.value =
     `One-time setup excluded from authoring rows · worker/Pyodide ${formatNumber(workerStartupMs)} ms · ` +
     `first Noon import/source ${formatNumber(importWarmupMs)} ms · ` +
-    `${AUTHORING_SAMPLES} measured authoring runs per case`;
+    `${AUTHORING_SAMPLES} measured authoring runs per case · targets ${targetVariantMode}`;
 
   for (const objectCount of CASES) {
-    status.value = `Priming ${objectCount.toLocaleString()}-object authoring path…`;
+    const targetVariantCount = variantsFor(objectCount);
+    status.value =
+      `Priming ${objectCount.toLocaleString()} objects / ${targetVariantCount.toLocaleString()} targets…`;
     const caseWarmupStarted = performance.now();
-    const caseWarmup = await authoringClient.run(source, { object_count: objectCount });
+    const caseWarmup = await authoringClient.run(source, {
+      object_count: objectCount,
+      target_variant_count: targetVariantCount,
+    });
     const caseWarmupMs = performance.now() - caseWarmupStarted;
     assertScene(caseWarmup);
     await nextAnimationFrame();
@@ -63,9 +78,13 @@ try {
     let authored = null;
     for (let sample = 0; sample < AUTHORING_SAMPLES; sample += 1) {
       status.value =
-        `Authoring ${objectCount.toLocaleString()} objects · sample ${sample + 1}/${AUTHORING_SAMPLES}…`;
+        `Authoring ${objectCount.toLocaleString()} objects / ${targetVariantCount.toLocaleString()} targets · ` +
+        `sample ${sample + 1}/${AUTHORING_SAMPLES}…`;
       const authoredAt = performance.now();
-      const candidate = await authoringClient.run(source, { object_count: objectCount });
+      const candidate = await authoringClient.run(source, {
+        object_count: objectCount,
+        target_variant_count: targetVariantCount,
+      });
       authoringSamples.record(performance.now() - authoredAt);
       assertScene(candidate);
       authored = candidate;
@@ -145,6 +164,8 @@ try {
 
     const result = {
       objects: objectCount,
+      targetVariants: targetVariantCount,
+      geometryReuse: targetVariantCount === objectCount ? "unique-target" : "shared-targets",
       authoring: {
         samples: AUTHORING_SAMPLES,
         warmupMs: caseWarmupMs,
@@ -196,6 +217,17 @@ try {
   status.dataset.state = "error";
 } finally {
   authoringClient?.terminate();
+}
+
+function variantsFor(objectCount) {
+  if (targetVariantMode === "unique") {
+    return objectCount;
+  }
+  const variants = Number(targetVariantMode);
+  if (variants > objectCount) {
+    throw new Error(`variants ${variants} exceeds object count ${objectCount}`);
+  }
+  return variants;
 }
 
 function buildReport(results) {
