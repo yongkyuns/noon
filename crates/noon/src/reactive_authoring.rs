@@ -182,7 +182,11 @@ mod tests {
         let mut scene = ReactiveScene::new();
         let circle = scene.add(Circle::new(0.5).shift(RIGHT));
         let square = scene.add(Square::new(1.0));
-        scene.edit(square).unwrap().next_to(circle, UP, 0.25).unwrap();
+        scene
+            .edit(square)
+            .unwrap()
+            .next_to(circle, UP, 0.25)
+            .unwrap();
 
         assert_eq!(scene.definition().objects().len(), 2);
         assert_eq!(scene.snapshot(circle).unwrap().transform.translation, RIGHT);
@@ -196,15 +200,23 @@ mod tests {
         scene.bind_rotation(square, angle);
 
         let semantic = scene.semantic_scene();
-        let program = semantic.compile_reactive().expect("reactive graph must compile");
+        let program = semantic
+            .compile_reactive()
+            .expect("reactive graph must compile");
         let state = program.instantiate();
 
-        assert_eq!(state.value(angle.signal_id()), Some(&ReactiveValue::Scalar(0.25)));
+        assert_eq!(
+            state.value(angle.signal_id()),
+            Some(&ReactiveValue::Scalar(0.25))
+        );
         assert_eq!(
             program.analysis().class_for(square.id()),
             Some(ObjectExecutionClass::Reactive)
         );
-        assert_eq!(semantic.reactive().bindings()[0].property, Property::Rotation);
+        assert_eq!(
+            semantic.reactive().bindings()[0].property,
+            Property::Rotation
+        );
     }
 
     #[test]
@@ -216,7 +228,9 @@ mod tests {
         scene.bind_position(circle, position);
 
         let semantic = scene.semantic_scene();
-        let program = semantic.compile_reactive().expect("reactive graph must compile");
+        let program = semantic
+            .compile_reactive()
+            .expect("reactive graph must compile");
         let state = program.instantiate();
 
         assert_eq!(
