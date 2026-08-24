@@ -11,8 +11,11 @@ node --check web/python-worker.js
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
 node --check web/morph-profile.js
+node --check web/perf-profile.js
+node --check web/perf-workloads.js
 node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
+node --check scripts/perf-profile.mjs
 node --check scripts/deterministic-replay-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
 node --check scripts/manim-tutorial-smoke.mjs
@@ -23,6 +26,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
+node --test web/perf-workloads.test.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_compat.py \
   web/python/_manim_rate_functions.py \
