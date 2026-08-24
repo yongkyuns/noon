@@ -2,6 +2,10 @@
 mod authoring;
 pub use authoring::*;
 
+#[path = "composition.rs"]
+mod composition;
+pub use composition::*;
+
 #[path = "lifecycle.rs"]
 mod lifecycle;
 pub use lifecycle::*;
