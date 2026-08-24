@@ -6,6 +6,12 @@ use noon_core::{
 
 pub const DEFAULT_LAGGED_START_LAG_RATIO: f64 = 0.05;
 
+#[derive(Clone, Copy, Debug)]
+struct RootInterval {
+    start: f64,
+    duration: f64,
+}
+
 /// Transient Rust authoring wrapper for Manim-compatible animation composition.
 ///
 /// The wrapper is not persisted. It lowers through Noon's shared composition
@@ -115,6 +121,7 @@ pub(super) fn schedule_group(
     duration: f64,
     rate_func_override: Option<RateFunction>,
 ) -> Result<(), AuthoringError> {
+    let root = RootInterval { start, duration };
     let mut path = Vec::new();
     schedule_group_inner(
         scene,
@@ -122,8 +129,7 @@ pub(super) fn schedule_group(
         start,
         duration,
         rate_func_override,
-        start,
-        duration,
+        root,
         &mut path,
     )?;
     scene.cursor = start + duration;
@@ -136,8 +142,7 @@ fn schedule_group_inner(
     start: f64,
     duration: f64,
     rate_func_override: Option<RateFunction>,
-    root_start: f64,
-    root_duration: f64,
+    root: RootInterval,
     path: &mut Vec<CompositionTimeMapStep>,
 ) -> Result<(), AuthoringError> {
     let child_run_times = group
@@ -164,19 +169,10 @@ fn schedule_group_inner(
                 child_start,
                 child_duration,
                 None,
-                root_start,
-                root_duration,
+                root,
                 path,
             )?,
-            leaf => schedule_leaf(
-                scene,
-                leaf,
-                child_start,
-                child_duration,
-                root_start,
-                root_duration,
-                path,
-            )?,
+            leaf => schedule_leaf(scene, leaf, child_start, child_duration, root, path)?,
         }
         path.pop();
     }
@@ -205,8 +201,7 @@ fn schedule_leaf(
     animation: Animation,
     start: f64,
     duration: f64,
-    root_start: f64,
-    root_duration: f64,
+    root: RootInterval,
     path: &[CompositionTimeMapStep],
 ) -> Result<(), AuthoringError> {
     let first_track = scene.definition.tracks().len();
@@ -229,7 +224,7 @@ fn schedule_leaf(
     for (track_id, leaf_rate_func) in tracks {
         let found = scene.definition.remap_track_for_composition(
             track_id,
-            TrackTiming::new(root_start, root_duration, leaf_rate_func),
+            TrackTiming::new(root.start, root.duration, leaf_rate_func),
             time_map.clone(),
         )?;
         debug_assert!(found, "newly authored track must remain addressable");
