@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ReactiveGraphDefinition, ReactiveValue, SignalId, SignalSource, ValueKind};
+use crate::{ReactiveGraphDefinition, SignalId, SignalSource, ValueKind};
 
 /// Sampled browser/runtime state that can feed Noon's native reactive graph.
 ///
@@ -248,10 +248,7 @@ mod tests {
                 },
                 pressed,
             )
-            .bind_event(
-                NativeEventSource::PointerDown { button: 0 },
-                clicks,
-            );
+            .bind_event(NativeEventSource::PointerDown { button: 0 }, clicks);
         inputs.validate(&graph).unwrap();
     }
 
