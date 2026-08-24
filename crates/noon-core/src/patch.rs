@@ -7,6 +7,20 @@ use crate::{
     Transform2D,
 };
 
+/// Coarse invalidation class for a semantic scene mutation.
+///
+/// The ordering is intentional: a transaction's impact is the maximum impact
+/// of any mutation it contains. Runtime layers may refine these classes, but a
+/// lower-impact mutation must never require more work merely because it arrived
+/// through an interactive callback rather than ordinary authoring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationImpact {
+    Property,
+    Timeline,
+    Structure,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScenePatch {
@@ -23,6 +37,58 @@ pub enum ScenePatch {
     AddTrack(TrackDefinition),
     ReplaceTrack(TrackDefinition),
     RemoveTrack(TrackId),
+}
+
+impl ScenePatch {
+    pub const fn impact(&self) -> MutationImpact {
+        match self {
+            Self::SetTransform { .. } | Self::SetStyle { .. } => MutationImpact::Property,
+            Self::AddTrack(_) | Self::ReplaceTrack(_) | Self::RemoveTrack(_) => {
+                MutationImpact::Timeline
+            }
+            Self::CreateObject(_) | Self::RemoveObject(_) => MutationImpact::Structure,
+        }
+    }
+}
+
+/// Atomic group of semantic mutations.
+///
+/// Host callbacks, live editor actions, and frontend-driven updates should
+/// converge on this transaction boundary. A transaction is validated against a
+/// staged scene and becomes visible only if every contained mutation succeeds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MutationTransaction {
+    mutations: Vec<ScenePatch>,
+}
+
+impl MutationTransaction {
+    pub const fn new() -> Self {
+        Self {
+            mutations: Vec::new(),
+        }
+    }
+
+    pub fn from_mutations(mutations: impl IntoIterator<Item = ScenePatch>) -> Self {
+        Self {
+            mutations: mutations.into_iter().collect(),
+        }
+    }
+
+    pub fn push(&mut self, mutation: ScenePatch) {
+        self.mutations.push(mutation);
+    }
+
+    pub fn mutations(&self) -> &[ScenePatch] {
+        &self.mutations
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mutations.is_empty()
+    }
+
+    pub fn impact(&self) -> Option<MutationImpact> {
+        self.mutations.iter().map(ScenePatch::impact).max()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,6 +187,26 @@ impl SceneDefinition {
         }
     }
 
+    /// Applies all mutations atomically.
+    ///
+    /// This is deliberately independent of transport sequencing: transactions
+    /// are a semantic/runtime concept, whereas sequencing is a protocol concern.
+    pub fn apply_transaction(
+        &mut self,
+        transaction: &MutationTransaction,
+    ) -> Result<(), PatchError> {
+        if transaction.is_empty() {
+            return Ok(());
+        }
+
+        let mut staged = self.clone();
+        for mutation in transaction.mutations() {
+            staged.apply_patch(mutation.clone())?;
+        }
+        *self = staged;
+        Ok(())
+    }
+
     fn insert_object(&mut self, object: ObjectDefinition) -> Result<(), PatchError> {
         if self.object(object.id).is_some() {
             return Err(PatchError::DuplicateObject(object.id));
@@ -204,7 +290,7 @@ impl SceneDefinition {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Easing, GeometryRef, Property, TrackTiming, TrackValues, Vec2};
+    use crate::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
 
     use super::*;
 
@@ -229,6 +315,92 @@ mod tests {
     }
 
     #[test]
+    fn mutation_impact_matches_required_execution_work() {
+        let object = ObjectId::new(1);
+        assert_eq!(
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D::IDENTITY,
+            }
+            .impact(),
+            MutationImpact::Property
+        );
+        assert_eq!(
+            ScenePatch::RemoveTrack(TrackId::new(2)).impact(),
+            MutationImpact::Timeline
+        );
+        assert_eq!(
+            ScenePatch::RemoveObject(object).impact(),
+            MutationImpact::Structure
+        );
+
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetStyle {
+                object,
+                style: Style::default(),
+            },
+            ScenePatch::RemoveTrack(TrackId::new(2)),
+        ]);
+        assert_eq!(transaction.impact(), Some(MutationImpact::Timeline));
+        assert_eq!(MutationTransaction::new().impact(), None);
+    }
+
+    #[test]
+    fn transaction_is_atomic_when_a_later_mutation_fails() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let before = scene.clone();
+
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(5.0, 2.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::RemoveObject(ObjectId::new(999)),
+        ]);
+
+        assert!(matches!(
+            scene.apply_transaction(&transaction),
+            Err(PatchError::UnknownObject(ObjectId(999)))
+        ));
+        assert_eq!(scene, before);
+    }
+
+    #[test]
+    fn transaction_commits_all_mutations_together() {
+        let mut scene = SceneDefinition::new();
+        let first = scene.add(GeometryRef::circle(1.0));
+        let second = scene.add(GeometryRef::rectangle(2.0, 2.0));
+
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object: first,
+                transform: Transform2D {
+                    translation: Vec2::new(2.0, 1.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::RemoveObject(second),
+        ]);
+        scene
+            .apply_transaction(&transaction)
+            .expect("transaction must commit");
+
+        assert_eq!(
+            scene
+                .object(first)
+                .expect("first object remains")
+                .transform
+                .translation,
+            Vec2::new(2.0, 1.0)
+        );
+        assert!(scene.object(second).is_none());
+    }
+
+    #[test]
     fn explicit_object_creation_advances_future_ids() {
         let mut scene = SceneDefinition::new();
         scene
@@ -250,7 +422,7 @@ mod tests {
                 object,
                 Vec2::ZERO,
                 Vec2::ONE,
-                TrackTiming::new(0.0, 1.0, Easing::Linear),
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             )
             .expect("valid track");
 
@@ -272,7 +444,7 @@ mod tests {
             object,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         };
 
         scene
@@ -309,7 +481,7 @@ mod tests {
             object: ObjectId::new(2),
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         }];
 
         let mut scene = SceneDefinition::from_parts(objects.clone(), tracks.clone())
@@ -325,7 +497,7 @@ mod tests {
                     Property::Opacity,
                     1.0,
                     0.0,
-                    TrackTiming::new(0.0, 1.0, Easing::Linear),
+                    TrackTiming::new(0.0, 1.0, RateFunction::Linear),
                 )
                 .expect("track must be valid"),
             TrackId::new(5)
@@ -364,7 +536,7 @@ mod tests {
             object: ObjectId::new(99),
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         };
         assert!(matches!(
             SceneDefinition::from_parts(Vec::new(), vec![dangling_track]),

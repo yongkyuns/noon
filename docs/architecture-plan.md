@@ -1,1200 +1,472 @@
-# Noon Architecture Plan
+# Noon Architecture
 
 ## Status
 
-This document captures the proposed direction for evolving Noon from its current experimental Nannou/Bevy-ECS implementation into a production-oriented, real-time, browser-capable mathematical and illustrative animation engine.
+This is the authoritative architecture for Noon. The implementation is being migrated toward it. Existing internal APIs, wire formats, Python implementation details, and compatibility aliases are not constraints and may be removed rather than preserved.
 
-The plan intentionally does **not** require strict compatibility with either the existing Noon API or Manim. User ergonomics and performance are the primary goals.
+Noon targets Manim-compatible Python authoring for supported common 2D behavior, while exposing the same semantic capabilities idiomatically from Rust and future frontends. Compatibility is a semantic/API goal, not an implementation constraint.
 
----
+## 1. Core principle
 
-## 1. Product goals
+> Noon exposes one expressive, mutable semantic scene and specializes it as aggressively as the program permits.
 
-Noon should provide a high-level animation environment with Python-class ergonomics while using a compiled graphics-engine execution model underneath.
+Interactivity is not a separate mode or a patch layered on top of a static animation compiler. A scene may contain immutable content, predetermined animation, native reactive dependencies, host callbacks, and live structural mutation at the same time.
 
-Primary goals:
-
-- excellent authoring ergonomics;
-- smooth real-time playback and interaction;
-- first-class browser deployment;
-- deterministic offline rendering using the same execution engine as real-time playback;
-- efficient rendering of very large numbers of objects;
-- a path to GPU-driven animation and computation;
-- low allocation and predictable frame-time behavior;
-- testability and correctness that do not depend primarily on visual inspection.
-
-Non-goals:
-
-- strict source compatibility with Manim;
-- strict compatibility with the current Noon API;
-- reproducing Manim's internal object/update semantics;
-- using Python as the frame-critical execution environment.
-
----
-
-## 2. Core design principle
-
-> **Python should be a primary authoring language, not the execution engine.**
-
-Noon should separate user-facing languages from its runtime representation:
+The engine determines which portions can be compiled away and which must remain live.
 
 ```text
-                 Frontends
-       +-----------+-----------+
-       |           |           |
-    Python       Rust      TypeScript
-       |           |           |
-       +-----------+-----------+
-                   |
-                   v
-             Authoring IR
-                   |
-               compile()
-                   |
-                   v
-            CompiledScene
-                   |
-             Runtime evaluator
-                   |
-          dirty / cull / batch
-                   |
-                   v
-                 wgpu
-          +--------+--------+
-          |                 |
-        native            browser
+                     language facades
+              Python      Rust      future
+                  \         |         /
+                   \        |        /
+                    v       v       v
+                semantic scene API
+                        |
+                 analysis / lowering
+                        |
+          +-------------+-------------+
+          |             |             |
+          v             v             v
+      static plan   reactive graph  host slots
+          |             |             |
+          +-------------+-------------+
+                        |
+                        v
+                  mutable runtime
+                        |
+              incremental dirty work
+                        |
+                        v
+                     renderer
 ```
 
-The important contract is the language-neutral scene representation, not any individual frontend API.
+The semantic API is dynamically expressive. The execution representation is specialized and data-oriented.
 
----
+## 2. One implementation of semantics
 
-## 3. Three scene representations
+High-level behavior must be implemented once.
 
-The architecture should explicitly distinguish authoring, compilation, and execution.
+The shared semantic implementation owns:
 
-### 3.1 `SceneDefinition`
+- object and group identity;
+- detached versus scene-owned objects;
+- scene membership and lifecycle;
+- transforms, styles, geometry and bounds;
+- layout operations;
+- animation construction and target-state semantics;
+- animation option precedence;
+- animation composition and scheduling;
+- known rate functions;
+- signals, trackers, bindings and derived values;
+- updater registration;
+- event handlers and interaction semantics;
+- lowering into executable state.
 
-Mutable, ergonomic, high-level representation used by frontends.
+Python must not maintain a second scene model, scheduler, timing evaluator, layout engine, or lifecycle implementation. Python-specific code may provide class hierarchy behavior, argument normalization, Python collection/vector conversion, callable identity, exceptions, and Scene subclass discovery.
 
-Responsibilities:
+The Rust API is the native expression of the same semantics rather than a separate implementation.
 
-- object creation;
-- hierarchy and grouping;
-- animation commands;
-- signals and constraints;
-- user-visible names and handles;
-- references between objects;
-- high-level geometry descriptions;
-- authoring metadata.
+Whether the semantic implementation ultimately occupies its own crate is a dependency-management decision, not an architectural requirement. We should not create a crate boundary unless a consumer genuinely needs one side without the other.
 
-This layer may use richer object structures and can prioritize ergonomics over runtime efficiency.
+## 3. Semantic scene versus execution scene
 
-### 3.2 `CompiledScene`
+The architecture needs a real abstraction boundary, but it is not "Python authoring versus Rust runtime." It is semantic intent versus specialized execution.
 
-Immutable or mostly immutable representation produced by the scene compiler.
+### 3.1 Semantic scene
 
-Compilation should resolve:
+The semantic scene is mutable, hierarchical and ergonomic. It can represent concepts that are useful to users even when they do not exist directly at runtime:
 
-- object IDs to dense runtime indices;
-- object references;
-- animation timing;
-- property tracks;
-- static versus dynamic state;
-- geometry assets;
-- path morph correspondence;
-- path-reveal metadata;
-- text shaping and/or glyph outlines;
-- instance batches;
-- culling metadata;
-- reactive expression graphs;
-- compiled CPU/GPU kernels where possible.
+- `Mobject` and groups;
+- detached objects;
+- `.animate` targets;
+- `AnimationGroup`, `Succession`, and `LaggedStart`;
+- animation options before inheritance/override resolution;
+- signals and bindings;
+- updater callbacks;
+- user events;
+- interactive controls.
 
-The compiled representation should be serializable and portable where practical.
+The semantic scene owns authoritative current authoring state. Language wrappers hold stable handles into it; they do not duplicate object state.
 
-A compiled `.noon` artifact could eventually contain:
+### 3.2 Specialized execution plan
 
-```text
-scene.noon
-+-- object table
-+-- hierarchy
-+-- property tracks
-+-- geometry assets
-+-- morph plans
-+-- text/glyph assets
-+-- signals
-+-- kernels
-+-- textures
-+-- metadata
-```
+Analysis/lowering converts the semantic scene into the cheapest representation that preserves behavior. It may contain:
 
-A browser should be able to play a compiled Noon scene without loading Python.
+- immutable object/geometry tables;
+- resolved timeline tracks;
+- precomputed morph/reveal plans;
+- native reactive dependency graphs;
+- mutable property slots;
+- host callback slots;
+- event subscriptions;
+- packed instance data;
+- invalidation metadata.
 
-### 3.3 `SceneInstance`
+The execution plan is not required to preserve authoring structure when doing so adds runtime cost.
 
-Mutable runtime state associated with one execution of a `CompiledScene`.
+### 3.3 Runtime instance
 
-Typical state:
+A runtime instance owns current execution state:
 
-- current time;
-- signal/parameter values;
-- active-track cursors;
-- current transforms;
-- current styles;
-- current bounds;
-- dirty bitsets;
-- culling state;
-- GPU buffer offsets;
-- interaction state;
-- event state.
+- playhead/time;
+- mutable property values;
+- signal values;
+- active timeline cursors;
+- dirty/invalidation sets;
+- bounds/culling state;
+- event/input state;
+- host callback requests;
+- GPU upload state.
 
-The same `CompiledScene` should support multiple independent `SceneInstance`s.
+Static content should disappear from ordinary per-frame CPU work.
 
----
+## 4. Execution classes
 
-## 4. API philosophy
+Every dependency should be classifiable by the optimizer.
 
-Noon should be declarative by default, while preserving imperative escape hatches.
+### Static
 
-Example canonical style:
-
-```python
-scene = Scene()
-
-circle = Circle(radius=0.5)
-scene.add(circle)
-
-scene.play(
-    circle.position.to((4, 0)),
-    circle.color.to(RED),
-    duration=2.0,
-)
-```
-
-Syntactic sugar can provide a more fluent form:
-
-```python
-scene.play(circle.animate.move_to(4, 0))
-```
-
-Both should lower to the same timeline representation.
-
-The API should not reproduce Manim semantics merely for compatibility. Familiar vocabulary may be retained when it improves usability, but Noon should use semantics appropriate for a compiled runtime.
-
----
-
-## 5. Signals and reactive animation
-
-Per-frame Python callbacks should not be the primary reactive-animation model.
-
-Prefer explicit signals and dependency graphs:
-
-```python
-theta = Signal(0.0)
-
-circle.position.bind(
-    vec2(cos(theta), sin(theta))
-)
-
-scene.play(theta.to(TAU), duration=3.0)
-```
-
-This exposes a dependency graph such as:
-
-```text
-       theta
-       /   \
-    cos     sin
-     |       |
-     x       y
-      \     /
-      position
-```
-
-That graph can be:
-
-- evaluated by a compact Rust runtime;
-- optimized;
-- vectorized;
-- lowered to WGSL;
-- executed for many instances on the GPU.
-
-Arbitrary Python callbacks may remain as a fallback, but they should be clearly classified as an interpreted slow path.
-
----
-
-## 6. Compiled Python kernels
-
-Noon should eventually support FastSim-like tracing for numerical animation functions.
-
-Example:
-
-```python
-@noon.kernel
-def orbit(t, radius, omega):
-    angle = omega * t
-    return vec2(
-        radius * cos(angle),
-        radius * sin(angle),
-    )
-```
-
-Conceptual lowering:
-
-```text
-Python function
-      |
-      v
-symbolic tracer
-      |
-      v
-expression / SSA IR
-      |
-  optimization
-      |
-      +----------+
-      |          |
-      v          v
- CPU tape      WGSL
-```
-
-The initial implementation should favor a simple expression IR and efficient Rust evaluator. WGSL lowering can follow after semantics are stable.
-
-Unsupported Python should fall back explicitly rather than silently changing semantics.
-
----
-
-## 7. Bulk and instanced objects
-
-High object counts must be first-class in the API.
-
-Do not require one Python object and one runtime entity per visual primitive for large datasets.
-
-Example:
-
-```python
-particles = CircleInstances(
-    positions=xy,
-    radius=0.01,
-    colors=rgba,
-)
-```
-
-or:
-
-```python
-particles = scene.instances(
-    Circle(radius=0.01),
-    positions=xy,
-    colors=rgba,
-)
-```
-
-This should map naturally to packed GPU instance buffers.
-
-The runtime should distinguish between:
-
-- individually addressable objects;
-- homogeneous instance collections;
-- arbitrary vector paths;
-- text/glyph runs;
-- GPU-driven particle/field data.
-
----
-
-## 8. Runtime representation
-
-Bevy ECS is useful during experimentation and may remain useful in authoring/editor layers, but the compiled runtime should be evaluated against a denser representation.
-
-A possible packed runtime layout:
-
-```text
-Transforms
-    x[]
-    y[]
-    scale_x[]
-    scale_y[]
-    rotation[]
-
-Styles
-    fill[]
-    stroke[]
-    stroke_width[]
-    opacity[]
-
-Geometry
-    geometry_id[]
-    geometry_kind[]
-
-Bounds
-    min_x[]
-    min_y[]
-    max_x[]
-    max_y[]
-
-Tracks
-    active_track_index[]
-```
-
-Advantages:
-
-- cache-friendly iteration;
-- straightforward SIMD opportunities;
-- compact WASM memory layout;
-- efficient GPU uploads;
-- predictable ownership;
-- easy serialization;
-- low runtime overhead.
-
-Stable `ObjectId`s can map to dense runtime indices during compilation.
-
----
-
-## 9. Timeline representation
-
-The current model of keeping vectors of historical animations on each component should be replaced in the compiled runtime with sorted property tracks.
-
-Example:
-
-```text
-Position.x
-  [0.0, 1.0]  0 -> 4
-  [4.0, 5.5]  4 -> -2
-  [8.0, 9.0] -2 -> 1
-```
-
-During real-time sequential playback, each track can maintain a cursor.
-
-During random-access seeking or timeline scrubbing, the runtime can binary-search the appropriate segment.
-
-Frame cost should scale with active/dirty state rather than total scene history.
-
----
-
-## 10. Geometry architecture
-
-Geometry should retain semantic information as long as possible rather than converting all shapes immediately into generic vector paths.
-
-Recommended representation:
-
-| Geometry | Compiled representation | Typical per-frame work |
-|---|---|---|
-| circle | analytic primitive | instance parameters only |
-| rectangle / rounded rectangle | analytic primitive | instance parameters only |
-| line | analytic primitive | endpoints/style |
-| static arbitrary path | cached tessellated mesh | transform only |
-| ordinary text | shaped glyph run / atlas | transform only |
-| outline text | cached vector outlines | transform/morph |
-| path morph | precomputed compatible topology | interpolate vertices |
-| path reveal | cached arc-length metadata | reveal parameter |
-
-### 10.1 Analytic primitives
-
-Circles, rectangles, rounded rectangles, and similar primitives should use analytic/SDF-style shaders where appropriate.
-
-Large homogeneous collections should render using instancing rather than separate path tessellation and draw calls.
-
-### 10.2 Arbitrary vector paths
-
-Use Lyon directly as a geometry/tessellation dependency rather than routing through Nannou.
-
-Static path geometry should be tessellated once and cached.
-
-Transform/color/opacity animation should not cause re-tessellation.
-
-### 10.3 Path morphing
-
-Expensive correspondence work should happen during scene compilation.
-
-Compilation should:
-
-1. flatten/resample source path;
-2. flatten/resample destination path;
-3. establish compatible topology/correspondence;
-4. cache source and destination vertices;
-5. emit a `MorphPlan`.
-
-Runtime work becomes approximately:
-
-```text
-p[i] = src[i] * (1 - t) + dst[i] * t
-```
-
-This can later move into a vertex or compute shader.
-
-### 10.4 Path reveal
-
-`Create`/`ShowCreation`-style effects should use cached arc-length metadata rather than rebuilding partial paths each frame.
-
----
-
-## 11. Text architecture
-
-Separate normal text rendering from outline/path text.
-
-```text
-Text
-+-- GlyphRun
-|   +-- shaping/layout
-|   +-- glyph atlas
-|   +-- fast regular labels
-|
-+-- OutlineText
-    +-- vector glyph outlines
-    +-- path animation
-    +-- morphing
-```
-
-Potential dependencies:
-
-- `cosmic-text` for shaping/layout;
-- `glyphon` for wgpu glyph rendering;
-- `skrifa`/Fontations or similar for glyph outlines.
-
-Converting all text into vector paths should not be the default.
-
----
-
-## 12. Rendering architecture
-
-Use `wgpu` directly as the production renderer foundation.
-
-Recommended initial stack:
-
-```text
-wgpu
- + analytic primitive shaders
- + Lyon tessellation
- + custom batching/instancing
-```
-
-`egui` should be optional editor/application UI, not the rendering abstraction.
-
-Possible editor structure:
-
-```text
-egui / web UI
-+-- object inspector
-+-- timeline
-+-- playback controls
-+-- profiler
-+-- viewport
-    +-- Noon custom wgpu renderer
-```
-
-Keep the renderer behind a clear internal interface so alternative vector renderers can be evaluated later.
-
----
-
-## 13. Native and browser Python
-
-### Native
-
-Use PyO3/maturin for the Python frontend while keeping frame-critical data and execution in Rust.
-
-### Browser
-
-Do not require Python and wgpu to live inside the same WASM module.
-
-Recommended browser architecture:
-
-```text
-Browser
-|
-+-- render/runtime context
-|     +-- noon-web.wasm
-|     +-- wasm-bindgen
-|     +-- wgpu/WebGPU
-|     +-- CompiledScene runtime
-|
-+-- Python worker
-      +-- Pyodide
-      +-- CPython
-      +-- Noon Python API
-```
-
-Communication should use scene definitions, scene patches, events, and transferable binary buffers.
-
-Python should not own:
-
-- frame scheduling;
-- GPU resources;
-- the canvas;
-- high-frequency pointer sampling;
-- the normal animation loop.
-
-Compiled scenes should play in the browser without Pyodide.
-
----
-
-## 14. Interaction model
-
-High-frequency interactions should remain native when possible.
+No runtime mutation is possible after lowering.
 
 Examples:
 
-- drag constraints;
-- pan/zoom;
-- hover state;
-- hit testing;
-- pointer following;
-- camera movement.
+- immutable geometry;
+- constant styles;
+- predetermined animations whose values depend only on timeline time.
 
-Python should receive semantic events rather than every raw pointer sample where possible.
+These should be fully compiled, cached, packed, instanced, or GPU-evaluated as appropriate.
+
+### Native reactive
+
+The value changes at runtime, but its dependency graph is understood by Noon.
+
+Examples:
+
+- `ValueTracker` / `Signal`;
+- pointer position;
+- viewport dimensions;
+- a property bound to another property;
+- built-in constraints;
+- engine-native updaters;
+- derived expressions.
+
+Only affected dependencies should be reevaluated.
+
+### Host dynamic
+
+Correct behavior requires arbitrary host-language execution.
+
+Examples:
+
+```python
+def update(mob, dt):
+    if arbitrary_python_condition():
+        mob.rotate(dt * speed)
+        mob.set_fill(compute_color())
+
+circle.add_updater(update)
+```
+
+Host dynamic behavior is supported intentionally. It is not the default frame path, but it is not treated as an unsupported architectural escape hatch either.
+
+The presence of ten host-dynamic nodes must not cause 100,000 unrelated static nodes to become dynamic.
+
+## 5. Signals and bindings
+
+Noon should provide native reactive primitives that can express common updater behavior without host-language execution.
+
+Conceptually:
+
+```text
+Value<T>
++-- Constant(T)
++-- Timeline(track)
++-- Signal(SignalId)
++-- Derived(ExpressionId)
+```
+
+This need not be the literal public type layout, but the execution model should distinguish these cases.
+
+Example dependency graph:
+
+```text
+pointer.x ---> tracker ---> circle.position.x
+                         
+                          ---> label/value expression
+```
+
+Changing `pointer.x` should invalidate only the dependent chain.
+
+Manim-compatible `ValueTracker`, `always_redraw`, and updater APIs may lower to native reactive constructs when semantics are known. Arbitrary Python remains a host callback.
+
+## 6. Host callback protocol
+
+A callback must not require a language/process crossing for every property access.
+
+The callback protocol is frame/transaction oriented:
+
+```text
+runtime frame
+    |
+    +-- time / dt
+    +-- relevant input state
+    +-- coherent dynamic snapshot
+    |
+    v
+host callback phase
+    |
+    +-- callback
+    +-- callback
+    +-- callback
+    |
+    v
+mutation transaction
+    |
+    v
+runtime commit
+    |
+    +-- validate atomically
+    +-- classify impact
+    +-- propagate dirtiness
+    +-- perform minimum recompilation
+    |
+    v
+render
+```
+
+Host callbacks observe a coherent frame snapshot. Their writes are accumulated and committed atomically as a mutation transaction.
+
+The normal bridge should cross once per callback phase/transaction, not once for every getter and setter. Native bindings may optimize further where calls are in-process.
+
+If no host callback slots exist, the host interpreter is not required during playback.
+
+## 7. Mutation is intrinsic runtime behavior
+
+Live edits and callback writes should use the same mutation machinery. Replacing a complete `SceneDefinition` and diffing it is useful as an editor fallback, but it is not the fundamental interaction mechanism.
+
+The semantic mutation vocabulary should evolve toward operations such as:
+
+```text
+MutationTransaction
++-- SetProperty
++-- SetSignal
++-- ReplaceGeometry
++-- AddNode
++-- RemoveNode
++-- ReparentNode
++-- AddAnimation
++-- RemoveAnimation
++-- ChangeSubscription
+```
+
+Each mutation has an impact class. Examples:
+
+```text
+translation/color change   -> property slot update
+signal change              -> reactive dirty propagation
+path vertex change         -> retessellate affected geometry
+object add/remove          -> local structural allocation/rebuild
+large hierarchy change     -> potentially wider relowering
+```
+
+A transaction is validated before commit so callbacks cannot leave runtime and semantic state half-updated.
+
+## 8. Animation model
+
+Animations are semantic objects before they become tracks.
+
+Composition should be represented structurally:
+
+```text
+AnimationNode
++-- Leaf
++-- Parallel
++-- Sequence
++-- Lagged
+```
+
+Animation options remain unresolved at this level. A single resolver applies animation defaults, animation/builder options and `Scene.play` overrides, then scheduling lowers the tree to explicit runtime timing.
+
+`.animate` constructs a target state in the shared semantic implementation. Python must not clone and mutate a parallel Python-side object snapshot to determine the result.
+
+Predetermined animations should compile completely. Animations driven by live signals remain reactive. Host callbacks remain host dynamic.
+
+## 9. Interactivity and input
+
+Input is data entering the same semantic/reactive system rather than browser-specific patches.
+
+Conceptually:
+
+```text
+InputState
++-- pointer position/buttons
++-- keyboard state/events
++-- viewport
++-- time
++-- user-defined controls
+```
+
+High-frequency interactions such as drag constraints, pointer following, pan/zoom and hit testing should execute natively when possible.
+
+Semantic events can invoke host callbacks when arbitrary user code is required.
 
 Example:
 
 ```text
-pointer event
-    |
-Rust hit test
-    |
-Click(ObjectId)
-    |
-Python callback
-    |
-scene patch
+pointer sample -> native hit test -> Click(NodeId)
+                                      |
+                                      v
+                                host handler
+                                      |
+                                      v
+                           mutation transaction
 ```
 
-This preserves interactive flexibility without putting Python in the 60/120 Hz critical path.
+## 10. Browser topology
 
----
+The browser should keep authoring/host execution away from the render main loop while avoiding unnecessary message traffic.
 
-## 15. Parallelism strategy
-
-Rayon can be useful for native preprocessing and offline/batch work, including:
-
-- path preprocessing;
-- morph-plan generation;
-- text outlining/shaping batches;
-- asset import;
-- offline frame preparation;
-- CPU-heavy scene compilation.
-
-Browser CPU threading should not be a foundational performance assumption.
-
-Optimization priority:
-
-1. minimize per-frame work;
-2. cache static state;
-3. batch and instance;
-4. use compact data-oriented runtime structures;
-5. move suitable work to GPU shaders/compute;
-6. add CPU parallelism where profiling shows value.
-
----
-
-## 16. Correctness and validation strategy
-
-Visual output must **not** imply visual-only testing.
-
-Noon should make each pipeline stage deterministic and inspectable so most correctness can be verified before rasterization.
-
-The test stack should be layered as follows.
-
-### 16.1 Frontend -> `SceneDefinition`
-
-Verify frontend semantics with structural snapshots.
-
-Example input:
-
-```python
-scene.play(
-    circle.position.to((4, 0)),
-    duration=2,
-)
-```
-
-Expected structural output might be:
+Recommended topology:
 
 ```text
-object: circle
-property: position
-start: [0, 0]
-end: [4, 0]
-t0: 0
-duration: 2
-ease: default
+Python worker
++-- Pyodide
++-- thin Python facade
++-- shared Noon semantic implementation compiled to WASM
++-- host callback execution
+          |
+          | transactions / scene payloads
+          | transferable binary buffers
+          v
+main/render context
++-- Noon runtime WASM
++-- input collection
++-- runtime evaluation
++-- WebGPU / WebGL2 renderer
 ```
 
-Tests should compare normalized serialized IR rather than images.
+The semantic WASM module may live beside Pyodide in the worker so ordinary Python semantic calls are synchronous within one worker. Python object wrappers contain handles into this module.
 
-This catches API/compiler regressions before geometry or rendering is involved.
+For frame callbacks, the runtime sends one coherent callback request to the worker and receives one mutation transaction. Static playback requires no Pyodide participation.
 
-### 16.2 `SceneDefinition` -> `CompiledScene`
+The exact transport encoding is an implementation detail. JSON may remain useful for debugging, but the performance path should support compact transferable binary payloads. A separate `noon-wire` crate is unnecessary unless multiple consumers later justify that dependency boundary.
 
-Compiler tests should verify invariants such as:
+## 11. Optimized execution is automatic
 
-- every object reference resolves;
-- dense indices are valid;
-- tracks are sorted and non-corrupt;
-- static objects do not receive dynamic work unnecessarily;
-- instance ranges do not overlap incorrectly;
-- all geometry references resolve;
-- all buffers have valid lengths/offsets;
-- no dependency graph cycles exist unless explicitly supported;
-- compiled output is deterministic for identical input.
+Do not expose a semantic split such as `InteractiveMode` versus `OptimizedMode`.
 
-Compiled-scene snapshots can provide strong regression coverage.
-
-### 16.3 Timeline evaluator tests
-
-This should be one of the strongest test layers.
-
-Given a compiled scene and exact time `t`, evaluate a frame state without rendering.
-
-For example:
+The same program should specialize automatically:
 
 ```text
-t = 0.0 -> position = (0, 0)
-t = 1.0 -> position = (2, 0)
-t = 2.0 -> position = (4, 0)
+semantic scene
+ |
+ +-- constants ----------------------> fold/cache
+ +-- predetermined animation --------> timeline tracks
+ +-- native reactive dependencies ---> runtime graph
+ +-- arbitrary callbacks ------------> host slots
 ```
 
-Test:
-
-- easing functions;
-- chained tracks;
-- overlapping tracks;
-- relative operations;
-- hierarchy propagation;
-- signal dependencies;
-- seeking backward/forward;
-- random-access versus sequential evaluation;
-- boundary conditions at exact start/end times.
-
-A key invariant should be:
-
-> Evaluating the scene directly at time `t` must produce the same semantic frame state as advancing sequentially to `t`.
-
-This makes timeline scrubbing and offline rendering testable without pixels.
-
-### 16.4 Geometry tests
-
-Geometry compilation should expose numerical and structural invariants.
-
-For analytic primitives:
-
-- expected bounds;
-- expected signed-distance behavior at selected points;
-- transform correctness;
-- stroke/fill parameters.
-
-For tessellated paths:
-
-- indices stay within vertex bounds;
-- output contains no NaN/Inf;
-- winding/orientation is valid where required;
-- bounds conservatively contain generated vertices;
-- tessellation is deterministic;
-- empty/degenerate input is handled intentionally.
-
-For morph plans:
-
-- `morph(t=0)` reproduces the source;
-- `morph(t=1)` reproduces the destination;
-- vertex counts/topology are compatible;
-- intermediate frames contain no invalid values;
-- closed paths remain closed when required;
-- random-access evaluation matches sequential evaluation.
-
-For path reveal:
-
-- reveal 0 shows none;
-- reveal 1 shows all;
-- revealed arc length is monotonic;
-- no segment is skipped or duplicated unexpectedly.
-
-### 16.5 Text tests
-
-Keep text tests below the pixel layer where possible.
-
-For a fixed font asset and input string, verify:
-
-- glyph IDs;
-- glyph positions;
-- advances;
-- line breaks;
-- shaping direction;
-- bounding boxes;
-- outline extraction where applicable.
-
-Fonts used by tests should be pinned test assets rather than relying on host-system fonts.
-
-### 16.6 CPU/GPU parity tests
-
-Where computation can run on both CPU and GPU, keep a simple reference evaluator.
-
-For example, a compiled kernel should be evaluable by:
+An execution report/profiler should eventually expose what prevented specialization, for example:
 
 ```text
-reference Rust evaluator
-optimized Rust evaluator
-WGSL/WebGPU evaluator
+static nodes:              99,840
+native dynamic nodes:         150
+host-callback nodes:           10
+host callback required:       yes
 ```
 
-Generate random inputs and compare outputs within explicit numerical tolerances.
+This makes performance explainable rather than surprising.
 
-The same approach should apply to:
+## 12. Geometry and rendering
 
-- animation kernels;
-- transform propagation;
-- morph interpolation where GPU accelerated;
-- particle updates;
-- culling predicates where practical.
+Semantic geometry should remain analytic where useful. Compilation chooses the cheapest representation:
 
-GPU acceleration should therefore be an optimization of already-defined semantics rather than the only implementation of those semantics.
+- circles/rectangles/lines: analytic/instanced paths where possible;
+- static arbitrary paths: cached tessellation;
+- morphs: precomputed compatible geometry;
+- path reveal: cached arc-length metadata;
+- text: shaped glyph runs by default, outlines only when semantics require them.
 
-### 16.7 Native/browser parity
+Transform/style updates must not retessellate static geometry. Reactive changes invalidate only the representations they actually affect.
 
-The same serialized `CompiledScene` should be evaluable on native and browser runtimes.
+## 13. Crate boundaries
 
-At fixed times, compare semantic `FrameState` data such as:
+Crates should correspond to real dependency or compilation boundaries, not conceptual labels.
 
-- transforms;
-- colors;
-- opacities;
-- active geometry IDs;
-- instance data;
-- bounds;
-- draw-list structure.
-
-This provides much stronger browser correctness guarantees than comparing screenshots alone.
-
-### 16.8 Interaction replay tests
-
-Input should be recordable as semantic event sequences:
+Current intended responsibilities:
 
 ```text
-PointerDown(x, y)
-PointerMove(x, y)
-PointerUp(x, y)
-KeyDown(...)
-```
-
-Given a fixed initial scene and event stream, the resulting scene state should be deterministic.
-
-This enables repeatable tests for:
-
-- dragging;
-- hover transitions;
-- hit testing;
-- selection;
-- camera controls;
-- user-triggered animations.
-
-### 16.9 Property-based tests and fuzzing
-
-Many graphics bugs arise in combinations that hand-written examples miss.
-
-Randomized tests should generate:
-
-- transforms;
-- animation sequences;
-- path shapes;
-- nested groups;
-- morph targets;
-- extreme scales;
-- degenerate geometry;
-- seek patterns;
-- large instance counts.
-
-Useful invariants include:
-
-- no panics;
-- no NaN/Inf propagation;
-- deterministic output;
-- valid buffer indices;
-- conservative bounds;
-- identical direct/sequential evaluation;
-- exact endpoint behavior for animations;
-- stable serialization round-trips.
-
-Fuzzing should target parsers, path processing, compilation, and scene deserialization especially aggressively.
-
-### 16.10 Golden image tests
-
-Golden images should be used at the **renderer integration boundary**, not as the primary correctness mechanism.
-
-Maintain a small canonical scene suite covering:
-
-- primitive fill/stroke;
-- clipping/masking;
-- transparency;
-- gradients;
-- text;
-- path tessellation;
-- morphing;
-- camera transforms;
-- antialiasing;
-- layering/depth;
-- instance rendering.
-
-Render scenes at fixed:
-
-- dimensions;
-- device pixel ratio;
-- time;
-- random seed;
-- font assets;
-- color space/configuration;
-- antialiasing settings.
-
-On a controlled CI rendering environment, exact or near-exact image diffs can catch regressions.
-
-Across different GPUs/browsers, allow a documented tolerance or perceptual metric because rasterization/antialiasing may differ slightly.
-
-Do not weaken semantic tests merely to accommodate image variation.
-
-### 16.11 Visual regression gallery
-
-CI should also generate a human-reviewable gallery for canonical scenes.
-
-For each changed renderer/compiler PR, preserve artifacts such as:
-
-```text
-reference image
-new image
-difference image
-error metric
-```
-
-This is valuable for changes that are intentionally visual but difficult to characterize with one scalar threshold.
-
-### 16.12 Debug/introspection mode
-
-Noon should make runtime state inspectable.
-
-A debug frame dump could include:
-
-```text
-FrameDump
-+-- time
-+-- evaluated object properties
-+-- dirty objects
-+-- visible objects
-+-- bounds
-+-- draw batches
-+-- geometry IDs
-+-- instance ranges
-+-- GPU upload ranges
-```
-
-This is useful for both automated testing and diagnosis when an image is wrong.
-
-### 16.13 Determinism requirements
-
-Determinism should be treated as an architectural feature.
-
-Prefer:
-
-- explicit scene time instead of wall-clock dependence;
-- seeded/stateless randomness;
-- pinned test fonts/assets;
-- deterministic scene compilation;
-- stable ordering rules;
-- deterministic serialization;
-- explicit viewport/DPI/color-space state.
-
-This directly improves:
-
-- reproducible videos;
-- browser/native parity;
-- timeline seeking;
-- regression testing;
-- debugging.
-
-### 16.14 Performance regression tests
-
-Performance is part of correctness for a real-time engine.
-
-Maintain benchmark scenes for at least:
-
-- 1k / 10k / 100k analytic primitives;
-- large instance clouds;
-- 1k+ simultaneous transforms;
-- many static arbitrary paths;
-- many path morphs;
-- heavy text scenes;
-- repeated random-access seeking;
-- scene compilation time;
-- GPU upload volume;
-- allocations per frame.
-
-Track metrics such as:
-
-- median and tail frame time;
-- CPU frame evaluation time;
-- GPU frame time;
-- allocations/frame;
-- bytes uploaded/frame;
-- draw-call count;
-- compile time;
-- peak memory.
-
-A visually correct change that causes a 10x frame-time regression should fail review just like a numerical correctness regression.
-
----
-
-## 17. Testing pyramid
-
-The intended test distribution should be roughly:
-
-```text
-                 few
-          +----------------+
-          | visual goldens |
-          +----------------+
-          | backend parity |
-          +----------------+
-          | geometry tests |
-          +----------------+
-          | frame evaluator|
-          +----------------+
-          | IR/compiler    |
-          +----------------+
-          | unit/property  |
-          +----------------+
-                many
-```
-
-The lower layers should catch most problems before a renderer is involved.
-
----
-
-## 18. Proposed crate organization
-
-A possible future workspace:
-
-```text
+noon
+  public Rust API + shared semantic implementation
+        |
+        v
 noon-core
-    object IDs, scene definition, user-facing semantic types
-
-noon-ir
-    portable authoring/compiled representations
-
-noon-geometry
-    paths, tessellation, morph plans, geometry compilation
-
+  normalized renderer-independent execution data
+        |
+        v
 noon-compile
-    SceneDefinition -> CompiledScene
-
+  specialization/lowering
+        |
+        v
 noon-runtime
-    packed timeline/frame evaluator
-
+  mutable execution + incremental updates
+        |
+        v
 noon-render-wgpu
-    rendering, batching, GPU resource management
-
-noon-text
-    shaping, glyphs, optional outline extraction
-
-noon-python
-    PyO3 Python frontend
 
 noon-web
-    wasm-bindgen browser runtime
-
-noon-ui-egui
-    optional native/web editor UI
-
-noon-parallel
-    optional native parallel preprocessing
+  browser/WASM integration
 ```
 
-This is a conceptual target, not a requirement to split crates immediately.
+This is intentionally not a commitment to a separate `noon-authoring` or `noon-wire` crate. Extract those only if the dependency graph later demonstrates real value.
 
----
+The existing `noon-ir` name should be reconsidered because `SceneDefinition` is already an intermediate representation; serialization/transport is a codec concern, not another semantic scene model.
 
-## 19. Dependency direction
+## 14. Correctness invariants
 
-Initial likely dependencies:
+Core invariants:
 
-| Layer | Candidates |
-|---|---|
-| math | `glam` |
-| small containers | `smallvec` |
-| serialization | `serde` |
-| vector geometry | direct Lyon crates |
-| GPU | `wgpu`, `bytemuck` |
-| text | `cosmic-text`, `glyphon`, optional `skrifa` |
-| native Python | `pyo3`, maturin |
-| web | `wasm-bindgen`, `web-sys` |
-| optional UI | `egui`, `eframe` |
-| optional native parallelism | `rayon` |
+1. High-level semantics are implemented once and shared by all language facades.
+2. Direct evaluation at time `t` agrees with sequential evaluation when no history-dependent host callback semantics make that impossible.
+3. A mutation transaction is atomic.
+4. Static regions are not invalidated by unrelated dynamic changes.
+5. Reactive evaluation visits only affected dependencies.
+6. Host callbacks observe a coherent snapshot and their mutations become visible only at transaction commit.
+7. If a program contains no host-dynamic behavior, playback requires no host interpreter.
+8. Offline and realtime rendering use the same semantic/runtime behavior.
+9. Unsupported Manim behavior is explicit; silent approximation is not acceptable.
 
-Nannou should be removed from the core architecture.
+## 15. Validation strategy
 
-The full Bevy engine should not be required. `bevy_ecs` can be retained temporarily or in authoring/editor layers if it remains useful, while the compiled runtime is evaluated independently.
+CI should verify architecture behavior without relying mainly on screenshots:
 
----
+- cross-language semantic parity tests;
+- animation option/scheduling snapshots;
+- dependency graph tests;
+- dirty-propagation tests proving unrelated objects remain untouched;
+- transaction rollback/atomicity tests;
+- static-scene tests proving zero host callbacks and minimal mutable state;
+- mixed 100k-static + small-dynamic performance tests;
+- host-callback batching tests;
+- direct-seek versus sequential timeline tests;
+- geometry invariants and deterministic tessellation;
+- browser interactive smoke tests;
+- WebGPU and fallback rendering tests.
 
-## 20. Implementation phases
+Performance regressions should be measured per execution class rather than only as total FPS.
 
-### Phase 0 - establish benchmarks and correctness harness
+## 16. Migration order
 
-Before major architectural work:
+The architecture reset should happen before broadening the API surface.
 
-- select canonical visual scenes;
-- add deterministic scene-time handling;
-- build initial frame-state snapshots;
-- establish basic benchmark workloads;
-- measure current allocations/frame and frame cost.
+1. Establish the semantic-scene versus execution-plan boundary.
+2. Replace ad-hoc patch assumptions with atomic mutation transactions and impact classification.
+3. Add native signal/reactive primitives and dependency tracking.
+4. Define host callback slots and the batched snapshot/transaction protocol.
+5. Move Rust high-level authoring semantics onto the shared semantic scene.
+6. Bind Python objects directly to the same semantic implementation.
+7. Delete Python-owned scene state, scheduling, easing and layout implementations.
+8. Add automatic specialization analysis and execution diagnostics.
+9. Resume broader Manim surface expansion on top of the new architecture.
 
-This gives the rewrite measurable targets.
-
-### Phase 1 - extract renderer-independent core
-
-- remove Nannou types from public/core scene semantics;
-- introduce stable object IDs;
-- introduce renderer-independent transforms/colors/geometry descriptors;
-- define `SceneDefinition`;
-- define a minimal `CompiledScene`;
-- preserve a small subset of existing functionality end to end.
-
-### Phase 2 - wgpu renderer
-
-Implement native rendering first for:
-
-- circles;
-- rectangles;
-- lines;
-- static arbitrary vector paths;
-- transforms;
-- fill/stroke/opacity;
-- depth/order.
-
-Then bring the same runtime to browser WebGPU.
-
-### Phase 3 - compiled timeline runtime
-
-- sorted property tracks;
-- track cursors;
-- random-access seeking;
-- dirty flags;
-- static/dynamic classification;
-- packed frame state.
-
-### Phase 4 - geometry compiler
-
-- cached tessellation;
-- path reveal metadata;
-- precomputed morph plans;
-- text/glyph caching;
-- batching/instancing improvements.
-
-### Phase 5 - Python frontend
-
-Build PyO3 bindings around the now-stable semantic model.
-
-The Python API should be optimized for ergonomics rather than old Noon or Manim compatibility.
-
-### Phase 6 - browser authoring
-
-- Pyodide worker;
-- scene-definition/patch protocol;
-- transferable binary arrays;
-- live reload;
-- error reporting;
-- browser editor integration.
-
-### Phase 7 - reactive expression compiler
-
-- signals;
-- expression graph;
-- symbolic Python tracer;
-- Rust tape evaluator;
-- optimization passes;
-- CPU/reference parity testing.
-
-### Phase 8 - GPU compute lowering
-
-- WGSL lowering for selected expression kernels;
-- GPU-driven instance updates;
-- CPU/GPU parity harness;
-- large particle/field demonstrations.
-
-### Phase 9 - production features
-
-Examples:
-
-- gradients;
-- clipping/masks;
-- richer text/math support;
-- image/video assets;
-- camera systems;
-- editor timeline;
-- profiling UI;
-- export/render pipeline;
-- plugin/extension interfaces.
-
----
-
-## 21. Initial benchmark scenes
-
-The architecture should be evaluated continuously against representative workloads.
-
-Suggested baseline suite:
-
-1. **100,000 moving circles**
-   - analytic primitive;
-   - per-instance transform/color;
-   - validates batching and GPU instance updates.
-
-2. **10,000 static arbitrary paths with animated transforms**
-   - validates cached tessellation and transform-only updates.
-
-3. **1,000 simultaneous path morphs**
-   - validates morph-plan compilation and runtime interpolation.
-
-4. **Large text scene**
-   - many labels plus a subset converted to outline text.
-
-5. **Particle field driven by one compiled kernel**
-   - validates bulk data model and future GPU compute path.
-
-6. **Long timeline with sparse active animation**
-   - validates that runtime cost depends on active tracks rather than historical track count.
-
-7. **Random-access seeking stress test**
-   - validates deterministic direct evaluation.
-
-These targets should be refined based on actual profiling and realistic user workloads.
-
----
-
-## 22. Architecture invariants
-
-The following should guide implementation decisions:
-
-1. Python is not required in the normal frame-critical path.
-2. Static geometry is not regenerated every frame.
-3. Transform/color/opacity animation does not trigger tessellation.
-4. Runtime work scales primarily with active/visible/dirty state.
-5. Large homogeneous object sets can use packed/instanced representations.
-6. Random-access evaluation at time `t` matches sequential playback at time `t`.
-7. Real-time and offline rendering use the same scene evaluator.
-8. Compiled scenes can execute without their authoring frontend.
-9. GPU implementations have testable reference semantics where practical.
-10. Most correctness is verified numerically/structurally before image comparison.
-11. Steady-state frame evaluation should avoid unnecessary heap allocation.
-12. Performance regressions are treated as correctness regressions for key benchmark scenes.
-
----
-
-## 23. Near-term decision order
-
-Before extensive implementation, resolve these in order:
-
-1. exact `SceneDefinition` model;
-2. exact `CompiledScene` model;
-3. stable object/geometry IDs and ownership;
-4. packed runtime/frame-state layout;
-5. property-track semantics;
-6. renderer interface and first analytic primitive pipeline;
-7. geometry caching and morph representation;
-8. signal/reactive semantics;
-9. Python frontend API;
-10. browser authoring protocol;
-11. expression/kernel compiler.
-
-The first four decisions are especially important because they determine whether later performance features remain natural or require another rewrite.
+The migration does not preserve the legacy Noon API or internal serialization merely for compatibility. Git history is the archive.
