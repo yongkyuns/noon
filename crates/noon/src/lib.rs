@@ -17,9 +17,10 @@ pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{ReactiveScene, ReactiveTimelineScene, ValueTracker, VectorSignal};
     pub use noon_core::{
-        resolve_animation_options, resolve_lifecycle_plan, validate_presence_transition,
-        AnimationDefaults, AnimationOptions, AnimationOptionsError, LifecycleBinding,
-        LifecycleError, LifecycleIntent, LifecyclePlan, LifecycleState, PresenceTransitionError,
-        ResolvedAnimationOptions,
+        resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
+        resolve_uniform_composition_schedule, validate_presence_transition, AnimationDefaults,
+        AnimationOptions, AnimationOptionsError, CompositionError, CompositionInterval,
+        CompositionSchedule, LifecycleBinding, LifecycleError, LifecycleIntent, LifecyclePlan,
+        LifecycleState, PresenceTransitionError, ResolvedAnimationOptions,
     };
 }
