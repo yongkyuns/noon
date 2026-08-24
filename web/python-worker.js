@@ -1,3 +1,4 @@
+import initNoonWeb, { resolveAnimationOptions } from "./pkg/noon_web.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
@@ -7,6 +8,7 @@ const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
 const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
+const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 
@@ -22,6 +24,9 @@ self.addEventListener("message", (event) => {
 });
 
 async function initializePyodide() {
+  await initNoonWeb();
+  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+
   const pyodide = await loadPyodide();
   const [
     apiResponse,
@@ -29,6 +34,7 @@ async function initializePyodide() {
     compatResponse,
     rateFunctionsResponse,
     phaseBResponse,
+    animationOptionsResponse,
     animateResponse,
     reactiveResponse,
   ] = await Promise.all([
@@ -37,6 +43,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_compat.py", import.meta.url)),
     fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
+    fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
   ]);
@@ -56,6 +63,11 @@ async function initializePyodide() {
   }
   if (!phaseBResponse.ok) {
     throw new Error(`Unable to load Noon Manim Phase B layer: HTTP ${phaseBResponse.status}`);
+  }
+  if (!animationOptionsResponse.ok) {
+    throw new Error(
+      `Unable to load Noon Manim animation options: HTTP ${animationOptionsResponse.status}`,
+    );
   }
   if (!animateResponse.ok) {
     throw new Error(`Unable to load Noon Manim animate layer: HTTP ${animateResponse.status}`);
@@ -81,6 +93,11 @@ async function initializePyodide() {
   pyodide.FS.writeFile(MANIM_PHASE_B_MODULE_PATH, await phaseBResponse.text(), {
     encoding: "utf8",
   });
+  pyodide.FS.writeFile(
+    MANIM_ANIMATION_OPTIONS_MODULE_PATH,
+    await animationOptionsResponse.text(),
+    { encoding: "utf8" },
+  );
   pyodide.FS.writeFile(MANIM_ANIMATE_MODULE_PATH, await animateResponse.text(), {
     encoding: "utf8",
   });
@@ -99,6 +116,24 @@ import _manim_animate
 import _manim_reactive
 `);
   return pyodide;
+}
+
+function resolveAnimationOptionsPlain(...args) {
+  const result = resolveAnimationOptions(...args);
+  try {
+    return {
+      ok: result.ok,
+      runTime: result.runTime,
+      rateFunc: result.rateFunc,
+      lagRatio: result.lagRatio,
+      pathArc: result.pathArc,
+      reverseRateFunction: result.reverseRateFunction,
+      errorKind: result.errorKind ?? "",
+      message: result.message ?? "",
+    };
+  } finally {
+    result.free();
+  }
 }
 
 async function handleRequest(request) {

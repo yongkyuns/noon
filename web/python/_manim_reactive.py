@@ -12,7 +12,7 @@ from typing import Any
 
 import noon as _base
 import _noon_ir as _ir
-import _manim_animate as _animate
+import _manim_animation_options as _options
 
 _INSTALLED = False
 _ORIGINAL_SCENE_INIT = _ir.Scene.__init__
@@ -249,13 +249,11 @@ def _scene_play(
     base_start = self._cursor if start_time is None else float(start_time)
     if not math.isfinite(base_start) or base_start < 0.0:
         raise ValueError("start_time must be finite and non-negative")
-    play_duration = None
-    if run_time is not None:
-        play_duration = _animate._positive_duration("run_time", run_time)
-    elif duration is not None:
-        play_duration = _animate._positive_duration("duration", duration)
+    play_run_time = run_time if run_time is not None else duration
+    if play_run_time is not None:
+        play_run_time = float(play_run_time)
     if lag_ratio is not None:
-        _animate._lag_ratio(lag_ratio)
+        lag_ratio = float(lag_ratio)
 
     ordinary = [
         animation for animation in animations if not isinstance(animation, _ValueAnimationBuilder)
@@ -278,26 +276,23 @@ def _scene_play(
                 lag_ratio=lag_ratio,
             )
         for builder in value_builders:
-            builder_args = _animate._validate_builder_args(builder)
-            item_duration = (
-                play_duration
-                if play_duration is not None
-                else builder_args.get("run_time", 1.0)
-            )
-            item_duration = _animate._positive_duration("run_time", item_duration)
-            item_easing = _animate._resolve_easing(
+            builder_args = _options.builder_args(builder)
+            resolved = _options.resolve(
                 builder_args=builder_args,
+                default_lag_ratio=0.0,
+                play_run_time=play_run_time,
                 play_easing=easing,
                 play_rate_func=rate_func,
+                play_lag_ratio=lag_ratio,
             )
             _schedule_value_builder(
                 self,
                 builder,
                 start_time=base_start,
-                run_time=item_duration,
-                easing=item_easing,
+                run_time=resolved.run_time,
+                easing=resolved.rate_func,
             )
-            max_end = max(max_end, base_start + item_duration)
+            max_end = max(max_end, base_start + resolved.run_time)
         self._cursor = max(self._cursor, cursor_before, max_end)
         return self
     except Exception:

@@ -23,6 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_compat.py \
   web/python/_manim_rate_functions.py \
   web/python/_manim_phase_b.py \
+  web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
   web/python/_manim_reactive.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
