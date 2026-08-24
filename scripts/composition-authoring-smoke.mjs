@@ -1,0 +1,161 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import playwright from "playwright";
+
+const { chromium } = playwright;
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
+const port = 4179;
+const baseUrl = `http://127.0.0.1:${port}`;
+
+let serverOutput = "";
+const server = spawn(
+  "python3",
+  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
+  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+);
+server.stdout.on("data", (chunk) => (serverOutput += chunk));
+server.stderr.on("data", (chunk) => (serverOutput += chunk));
+
+async function waitForServer() {
+  let lastError = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
+      if (response.ok) return;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Composition smoke server did not start: ${lastError}\n${serverOutput}`);
+}
+
+const source = `
+from noon import *
+
+class CompositionScene(Scene):
+    def construct(self):
+        a = Circle(radius=0.2, color=BLUE).shift(LEFT * 3)
+        b = Square(side_length=0.4, color=PINK)
+        c = Circle(radius=0.2, color=GREEN).shift(RIGHT * 3)
+        self.add(a, b, c)
+
+        # Unequal child runtimes: starts are [0, 1], maximum end is 2.
+        self.play(AnimationGroup(
+            a.animate(run_time=2.0, rate_func=linear).shift(UP),
+            b.animate(run_time=1.0, rate_func=linear).shift(DOWN),
+            lag_ratio=0.5,
+        ))
+
+        # LaggedStart uses Manim's 0.05 default and explicit total runtime rescales
+        # the shared virtual schedule.
+        self.play(LaggedStart(
+            a.animate(run_time=1.0, rate_func=linear).shift(RIGHT),
+            b.animate(run_time=1.0, rate_func=linear).shift(RIGHT),
+            c.animate(run_time=1.0, rate_func=linear).shift(RIGHT),
+            run_time=2.2,
+        ))
+
+        # Succession is the same shared scheduler with lag_ratio=1 and supports
+        # multiple animations of one mobject because the flattened intervals do not overlap.
+        self.play(Succession(
+            c.animate(run_time=0.5, rate_func=linear).shift(UP),
+            c.animate(run_time=1.0, rate_func=linear).shift(LEFT),
+        ))
+
+        # Nested linear compositions are recursively rescaled without introducing
+        # another scheduler in Python.
+        self.play(AnimationGroup(
+            Succession(
+                a.animate(run_time=0.5, rate_func=linear).shift(UP),
+                a.animate(run_time=0.5, rate_func=linear).shift(DOWN),
+            ),
+            b.animate(run_time=1.0, rate_func=linear).shift(UP),
+            lag_ratio=0.0,
+            run_time=2.0,
+        ))
+
+        try:
+            self.play(AnimationGroup(
+                a.animate(rate_func=linear).shift(RIGHT),
+                b.animate(rate_func=linear).shift(LEFT),
+                rate_func=smooth,
+            ))
+            raise AssertionError("nonlinear outer composition rate must fail explicitly")
+        except NotImplementedError as error:
+            assert "runtime composition time-map" in str(error)
+`;
+
+let browser = null;
+try {
+  await waitForServer();
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: ["--disable-dev-shm-usage"],
+  });
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+
+  await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
+  await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
+  await page.evaluate(() => window.noonManimCompat.ready());
+
+  const result = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    source,
+  );
+  assert.equal(result.kind, "scene_document");
+  assert.equal(errors.length, 0, errors.join("\n"));
+
+  const transforms = result.document.tracks.filter((track) => track.property === "transform");
+  assert.equal(transforms.length, 11);
+  const byObject = new Map();
+  for (const track of transforms) {
+    const list = byObject.get(track.object) ?? [];
+    list.push(track);
+    byObject.set(track.object, list);
+  }
+
+  // AnimationGroup([2, 1], lag=.5): [0..2], [1..2].
+  assert.equal(byObject.get(0)[0].timing.start_time, 0);
+  assert.equal(byObject.get(0)[0].timing.duration, 2);
+  assert.equal(byObject.get(1)[0].timing.start_time, 1);
+  assert.equal(byObject.get(1)[0].timing.duration, 1);
+
+  // LaggedStart default lag=.05, run_time=2.2 over virtual duration 1.1:
+  // each child duration=2, starts 2.0, 2.1, 2.2.
+  assert.ok(Math.abs(byObject.get(0)[1].timing.start_time - 2.0) < 1e-9);
+  assert.ok(Math.abs(byObject.get(0)[1].timing.duration - 2.0) < 1e-9);
+  assert.ok(Math.abs(byObject.get(1)[1].timing.start_time - 2.1) < 1e-9);
+  assert.ok(Math.abs(byObject.get(2)[0].timing.start_time - 2.2) < 1e-9);
+
+  // Succession starts after LaggedStart ends at 4.2 and advances strictly.
+  assert.ok(Math.abs(byObject.get(2)[1].timing.start_time - 4.2) < 1e-9);
+  assert.ok(Math.abs(byObject.get(2)[1].timing.duration - 0.5) < 1e-9);
+  assert.ok(Math.abs(byObject.get(2)[2].timing.start_time - 4.7) < 1e-9);
+  assert.ok(Math.abs(byObject.get(2)[2].timing.duration - 1.0) < 1e-9);
+
+  // Nested group total runtime=2.0. Inner Succession (0.5 + 0.5) is rescaled
+  // to the parent's 2-second parallel child interval => two 1-second leaves.
+  assert.ok(Math.abs(byObject.get(0)[2].timing.start_time - 5.7) < 1e-9);
+  assert.ok(Math.abs(byObject.get(0)[2].timing.duration - 1.0) < 1e-9);
+  assert.ok(Math.abs(byObject.get(0)[3].timing.start_time - 6.7) < 1e-9);
+  assert.ok(Math.abs(byObject.get(0)[3].timing.duration - 1.0) < 1e-9);
+  assert.ok(Math.abs(byObject.get(1)[2].timing.start_time - 5.7) < 1e-9);
+  assert.ok(Math.abs(byObject.get(1)[2].timing.duration - 2.0) < 1e-9);
+
+  console.log("composition authoring smoke test passed");
+} finally {
+  if (browser !== null) await browser.close();
+  server.kill("SIGTERM");
+}
