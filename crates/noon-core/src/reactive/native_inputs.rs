@@ -111,7 +111,9 @@ impl NativeInputDefinition {
     }
 
     pub fn drives(&self, signal: SignalId) -> bool {
-        self.bindings.iter().any(|binding| binding.signal() == signal)
+        self.bindings
+            .iter()
+            .any(|binding| binding.signal() == signal)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -201,7 +203,11 @@ impl std::fmt::Display for NativeInputError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownSignal(signal) => {
-                write!(formatter, "native input references unknown signal {}", signal.get())
+                write!(
+                    formatter,
+                    "native input references unknown signal {}",
+                    signal.get()
+                )
             }
             Self::NotInputSignal(signal) => write!(
                 formatter,

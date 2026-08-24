@@ -47,8 +47,8 @@ impl TimedScenePlayer {
     pub fn from_scene_json(json: &str) -> Result<Self, TimedPlayerError> {
         let scene = decode_timed_semantic_scene(json)?;
         let instance = TimedSceneInstance::from_timed(&scene)?;
-        let native_inputs = NativeInputRouter::from_scene(&scene)
-            .map_err(TimedSceneRuntimeError::from)?;
+        let native_inputs =
+            NativeInputRouter::from_scene(&scene).map_err(TimedSceneRuntimeError::from)?;
         Ok(Self {
             scene,
             instance,
@@ -719,10 +719,7 @@ mod tests {
         let mut player = TimedScenePlayer::from_scene_json(&json).unwrap();
 
         player
-            .dispatch_native_state(
-                &NativeStateSource::PointerPosition,
-                Vec2::new(1.5, -0.5),
-            )
+            .dispatch_native_state(&NativeStateSource::PointerPosition, Vec2::new(1.5, -0.5))
             .unwrap();
         player
             .emit_native_event(&NativeEventSource::PointerDown { button: 0 })

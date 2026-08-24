@@ -52,10 +52,18 @@ impl NativeInputRouter {
         for binding in scene.native_inputs().bindings() {
             match binding {
                 NativeInputBinding::State { source, signal } => {
-                    result.state.entry(source.clone()).or_default().push(*signal);
+                    result
+                        .state
+                        .entry(source.clone())
+                        .or_default()
+                        .push(*signal);
                 }
                 NativeInputBinding::Event { source, signal } => {
-                    result.events.entry(source.clone()).or_default().push(*signal);
+                    result
+                        .events
+                        .entry(source.clone())
+                        .or_default()
+                        .push(*signal);
                 }
             }
         }
@@ -148,8 +156,7 @@ impl NativeInputRouter {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, NativeInputDefinition, Property, SemanticScene, SignalTimelineDefinition,
-        Vec2,
+        GeometryRef, NativeInputDefinition, Property, SemanticScene, SignalTimelineDefinition, Vec2,
     };
 
     use super::*;

@@ -29,8 +29,9 @@ impl TimedSemanticSceneDocument {
         let semantic = self.scene.into_semantic()?;
         let timeline =
             SignalTimelineDefinition::from_parts(semantic.reactive(), self.signal_tracks)?;
-        let native_inputs = NativeInputDefinition::from_parts(semantic.reactive(), self.native_inputs)
-            .map_err(SignalTimelineError::from)?;
+        let native_inputs =
+            NativeInputDefinition::from_parts(semantic.reactive(), self.native_inputs)
+                .map_err(SignalTimelineError::from)?;
         Ok(TimedSemanticScene::from_parts_with_native_inputs(
             semantic,
             timeline,
@@ -50,7 +51,10 @@ impl std::fmt::Display for TimedSemanticIrError {
         match self {
             Self::Semantic(error) => error.fmt(formatter),
             Self::SignalTimeline(error) => {
-                write!(formatter, "invalid Noon signal timeline/input document: {error}")
+                write!(
+                    formatter,
+                    "invalid Noon signal timeline/input document: {error}"
+                )
             }
         }
     }

@@ -152,11 +152,7 @@ impl TimedSemanticScene {
         scene: SemanticScene,
         signal_timeline: SignalTimelineDefinition,
     ) -> Result<Self, SignalTimelineError> {
-        Self::from_parts_with_native_inputs(
-            scene,
-            signal_timeline,
-            NativeInputDefinition::new(),
-        )
+        Self::from_parts_with_native_inputs(scene, signal_timeline, NativeInputDefinition::new())
     }
 
     pub fn from_parts_with_native_inputs(
