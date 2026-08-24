@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,
-    RectangleInstance,
+    RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -651,74 +651,85 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
-        let has_paths = prepared
-            .path_batches
-            .iter()
-            .any(|batch| !batch.index_range.is_empty());
-        let has_analytics = !prepared.circles.is_empty()
-            || !prepared.rectangles.is_empty()
-            || !prepared.lines.is_empty();
+        // All transparent primitives share one multisampled target so pipeline
+        // switches can follow semantic painter order. Splitting paths and
+        // analytic primitives into separate passes is not alpha-order safe.
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: &self.path_msaa_view,
+            depth_slice: None,
+            resolve_target: Some(view),
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(clear_color),
+                store: wgpu::StoreOp::Discard,
+            },
+        })];
+        let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(0),
+            end_of_pass_write_index: Some(1),
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Noon ordered multisampled render pass"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.draw_ordered(&mut pass, prepared)
+    }
+
+    fn draw_ordered<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+    ) -> DrawStats {
         let mut stats = DrawStats::default();
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-        if has_paths {
-            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &self.path_msaa_view,
-                depth_slice: None,
-                resolve_target: Some(view),
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
-                    store: wgpu::StoreOp::Discard,
-                },
-            })];
-            let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
-                query_set,
-                beginning_of_pass_write_index: Some(0),
-                end_of_pass_write_index: (!has_analytics).then_some(1),
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Noon multisampled path render pass"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            if let Some(bundle) = &self.path_render_bundle {
-                pass.execute_bundles(std::iter::once(bundle));
-                add_draw_stats(&mut stats, path_draw_stats(prepared));
-            } else {
-                add_draw_stats(&mut stats, self.draw_paths(&mut pass, prepared));
+        for batch in prepared.render_batches {
+            match batch.primitive {
+                RenderPrimitive::Circle => {
+                    pass.set_pipeline(&self.circle_pipeline);
+                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                    pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
+                    pass.draw(0..6, batch.instance_range.clone());
+                }
+                RenderPrimitive::Rectangle => {
+                    pass.set_pipeline(&self.rectangle_pipeline);
+                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                    pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
+                    pass.draw(0..6, batch.instance_range.clone());
+                }
+                RenderPrimitive::Line => {
+                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                    pass.set_vertex_buffer(1, self.line_buffer.slice(..));
+                    pass.draw(0..6, batch.instance_range.clone());
+                }
+                RenderPrimitive::Path {
+                    batch: path_batch_index,
+                } => {
+                    let path_batch = &prepared.path_batches[path_batch_index];
+                    if path_batch.index_range.is_empty() {
+                        continue;
+                    }
+                    pass.set_pipeline(&self.path_pipeline);
+                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                    pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.path_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.draw_indexed(
+                        path_batch.index_range.clone(),
+                        0,
+                        batch.instance_range.clone(),
+                    );
+                }
             }
-        }
-
-        if has_analytics || !has_paths {
-            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: if has_paths {
-                        wgpu::LoadOp::Load
-                    } else {
-                        wgpu::LoadOp::Clear(clear_color)
-                    },
-                    store: wgpu::StoreOp::Store,
-                },
-            })];
-            let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
-                query_set,
-                beginning_of_pass_write_index: (!has_paths).then_some(0),
-                end_of_pass_write_index: Some(1),
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Noon analytic render pass"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            add_draw_stats(&mut stats, self.draw(&mut pass, prepared));
+            stats.draw_calls += 1;
+            stats.instances_drawn += batch.instance_range.len();
         }
         stats
     }
@@ -765,29 +776,6 @@ impl GpuRenderer {
         stats
     }
 
-    fn draw_paths<'a>(
-        &'a self,
-        pass: &mut wgpu::RenderPass<'a>,
-        prepared: &PreparedFrame<'_>,
-    ) -> DrawStats {
-        let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_pipeline(&self.path_pipeline);
-        pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-        pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        for batch in prepared
-            .path_batches
-            .iter()
-            .filter(|batch| !batch.index_range.is_empty())
-        {
-            pass.draw_indexed(batch.index_range.clone(), 0, batch.instance_range.clone());
-            stats.draw_calls += 1;
-            stats.instances_drawn += batch.instance_range.len();
-        }
-        stats
-    }
-
     pub const fn circle_capacity_bytes(&self) -> usize {
         self.circle_capacity_bytes
     }
@@ -815,24 +803,6 @@ impl GpuRenderer {
     pub const fn path_render_bundle_rebuilds(&self) -> usize {
         self.path_render_bundle_rebuilds
     }
-}
-
-fn path_draw_stats(prepared: &PreparedFrame<'_>) -> DrawStats {
-    let mut stats = DrawStats::default();
-    for batch in prepared
-        .path_batches
-        .iter()
-        .filter(|batch| !batch.index_range.is_empty())
-    {
-        stats.draw_calls += 1;
-        stats.instances_drawn += batch.instance_range.len();
-    }
-    stats
-}
-
-fn add_draw_stats(total: &mut DrawStats, next: DrawStats) {
-    total.draw_calls += next.draw_calls;
-    total.instances_drawn += next.instances_drawn;
 }
 
 pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -903,7 +873,10 @@ fn create_pipeline(
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: PATH_SAMPLE_COUNT,
+            ..Default::default()
+        },
         multiview_mask: None,
         cache: None,
     })
