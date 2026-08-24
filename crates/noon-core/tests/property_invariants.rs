@@ -128,8 +128,8 @@ fn assert_store_matches_model(store: &SemanticStore, nodes: &[ModelNode], seed: 
             (Some(key), Some(SourceIdentity::ExplicitKey(actual))) => {
                 assert_eq!(actual, key, "seed={seed} step={step}: source key")
             }
-            (expected, actual) => panic!(
-                "seed={seed} step={step}: source mismatch for {:?}: model={expected:?} store={actual:?}",
+            (expected_source, actual_source) => panic!(
+                "seed={seed} step={step}: source mismatch for {:?}: model={expected_source:?} store={actual_source:?}",
                 expected.id
             ),
         }
@@ -483,7 +483,8 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
             }
 
             if step % 17 == 0 && live.len() > 4 {
-                let removed = live.swap_remove(rng.index(live.len()));
+                let removed_index = rng.index(live.len());
+                let removed = live.swap_remove(removed_index);
                 if let Some(SourceIdentity::ExplicitKey(key)) =
                     store.node(removed).unwrap().source_identity().cloned()
                 {
