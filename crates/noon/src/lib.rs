@@ -11,3 +11,9 @@ mod reactive_authoring;
 
 pub use legacy::*;
 pub use reactive_authoring::*;
+
+/// Common imports for deterministic and native-reactive Noon authoring.
+pub mod prelude {
+    pub use crate::legacy::prelude::*;
+    pub use crate::{ReactiveScene, ValueTracker, VectorSignal};
+}
