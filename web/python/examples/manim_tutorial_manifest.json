@@ -1,0 +1,121 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "license": "MIT",
+    "tutorial_root": "https://docs.manim.community/en/stable/tutorials/index.html"
+  },
+  "policy": "Examples are original Noon/browser adaptations of upstream learning goals unless reuse is explicitly marked. Preserve upstream MIT notices for substantial copied code and do not copy protected third-party assets.",
+  "entries": [
+    {
+      "id": "quickstart-create",
+      "title": "Quickstart: create a circle",
+      "status": "ready",
+      "path": "python/examples/tutorial_quickstart.py",
+      "category": "tutorial/quickstart",
+      "features": ["Scene", "Circle", "Create", "style"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "square-to-circle",
+      "title": "Square to circle",
+      "status": "ready",
+      "path": "python/examples/tutorial_square_to_circle.py",
+      "category": "tutorial/quickstart",
+      "features": ["Square", "Circle", "Create", "Transform"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "positioning",
+      "title": "Positioning and layout",
+      "status": "ready",
+      "path": "python/examples/tutorial_positioning.py",
+      "category": "tutorial/quickstart",
+      "features": ["VGroup", "arrange", "to_edge", "animate"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "animate",
+      "title": "Animating methods with .animate",
+      "status": "ready",
+      "path": "python/examples/tutorial_animate.py",
+      "category": "tutorial/quickstart",
+      "features": ["animate", "shift", "rotate", "scale", "set_color"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "transform-lifecycle",
+      "title": "Transform vs ReplacementTransform",
+      "status": "ready",
+      "path": "python/examples/tutorial_transform_lifecycle.py",
+      "category": "tutorial/building-blocks",
+      "features": ["Transform", "ReplacementTransform", "lifecycle"],
+      "upstream": "tutorials/building_blocks.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "animation-composition",
+      "title": "Animation groups and staggered timing",
+      "status": "ready",
+      "path": "python/examples/tutorial_composition.py",
+      "category": "tutorial/building-blocks",
+      "features": ["AnimationGroup", "LaggedStart", "VGroup"],
+      "upstream": "reference/manim.animation.composition.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "value-tracker",
+      "title": "ValueTracker and native reactivity",
+      "status": "ready",
+      "path": "python/examples/tutorial_value_tracker.py",
+      "category": "tutorial/reactivity",
+      "features": ["ValueTracker", "bind_position", "native-reactive"],
+      "upstream": "reference/manim.mobject.value_tracker.ValueTracker.html",
+      "reuse": "original-noon-adaptation"
+    },
+    {
+      "id": "text-and-math",
+      "title": "Text and mathematical notation",
+      "status": "blocked",
+      "category": "tutorial/text-math",
+      "features": ["Text", "MathTex", "Write"],
+      "dependency": "#65/#83/#80"
+    },
+    {
+      "id": "axes-and-plots",
+      "title": "Axes and function plotting",
+      "status": "blocked",
+      "category": "tutorial/plotting",
+      "features": ["Axes", "plot", "NumberPlane"],
+      "dependency": "#85/#83"
+    },
+    {
+      "id": "graph-networks",
+      "title": "Graph and DiGraph",
+      "status": "blocked",
+      "category": "tutorial/graphs",
+      "features": ["Graph", "DiGraph", "layouts"],
+      "dependency": "#87/#77/#83"
+    },
+    {
+      "id": "moving-camera",
+      "title": "Moving and zoomed camera",
+      "status": "blocked",
+      "category": "tutorial/scene-camera",
+      "features": ["MovingCameraScene", "ZoomedScene"],
+      "dependency": "#89"
+    },
+    {
+      "id": "three-d",
+      "title": "3D scenes",
+      "status": "deferred",
+      "category": "tutorial/3d",
+      "features": ["ThreeDScene", "ThreeDAxes", "Surface"],
+      "dependency": "#90"
+    }
+  ]
+}
