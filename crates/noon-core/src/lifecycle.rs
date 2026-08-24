@@ -90,13 +90,20 @@ pub enum LifecycleError {
 impl std::fmt::Display for LifecycleError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BelongsToAnotherScene => formatter.write_str("object already belongs to another Scene"),
-            Self::RequiresBoundObject => formatter.write_str("lifecycle operation requires an object bound to this Scene"),
+            Self::BelongsToAnotherScene => {
+                formatter.write_str("object already belongs to another Scene")
+            }
+            Self::RequiresBoundObject => formatter
+                .write_str("lifecycle operation requires an object bound to this Scene"),
             Self::FutureLifecycleEvent => formatter.write_str(
                 "object has a future lifecycle event; lifecycle operations must be authored chronologically",
             ),
-            Self::RequiresPresent => formatter.write_str("lifecycle operation requires the object to be present"),
-            Self::RequiresAbsent => formatter.write_str("lifecycle operation requires the object to be absent"),
+            Self::RequiresPresent => {
+                formatter.write_str("lifecycle operation requires the object to be present")
+            }
+            Self::RequiresAbsent => {
+                formatter.write_str("lifecycle operation requires the object to be absent")
+            }
         }
     }
 }
@@ -219,8 +226,12 @@ pub enum PresenceTransitionError {
 impl std::fmt::Display for PresenceTransitionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidTime => formatter.write_str("presence event time must be finite and non-negative"),
-            Self::OutOfOrder => formatter.write_str("presence events must be scheduled in chronological order"),
+            Self::InvalidTime => {
+                formatter.write_str("presence event time must be finite and non-negative")
+            }
+            Self::OutOfOrder => {
+                formatter.write_str("presence events must be scheduled in chronological order")
+            }
             Self::Discontinuous => formatter.write_str("presence event chain must be continuous"),
         }
     }
@@ -254,12 +265,28 @@ mod tests {
     #[test]
     fn readd_and_remove_are_idempotent_membership_operations() {
         let absent = LifecycleState::bound(true, false, false, false);
-        assert!(resolve_lifecycle_plan(LifecycleIntent::Add, absent).unwrap().show_now);
-        assert!(!resolve_lifecycle_plan(LifecycleIntent::Remove, absent).unwrap().hide_now);
+        assert!(
+            resolve_lifecycle_plan(LifecycleIntent::Add, absent)
+                .unwrap()
+                .show_now
+        );
+        assert!(
+            !resolve_lifecycle_plan(LifecycleIntent::Remove, absent)
+                .unwrap()
+                .hide_now
+        );
 
         let present = LifecycleState::bound(true, true, false, false);
-        assert!(!resolve_lifecycle_plan(LifecycleIntent::Add, present).unwrap().show_now);
-        assert!(resolve_lifecycle_plan(LifecycleIntent::Remove, present).unwrap().hide_now);
+        assert!(
+            !resolve_lifecycle_plan(LifecycleIntent::Add, present)
+                .unwrap()
+                .show_now
+        );
+        assert!(
+            resolve_lifecycle_plan(LifecycleIntent::Remove, present)
+                .unwrap()
+                .hide_now
+        );
     }
 
     #[test]
