@@ -283,7 +283,7 @@ impl std::fmt::Display for SignalTimelineError {
             ),
             Self::ExternallyDrivenSignal(signal) => write!(
                 formatter,
-                "signal {} cannot be driven by both a signal timeline and an external/native input",
+                "signal {} is timeline-driven and cannot also be driven by an external/native input",
                 signal.get()
             ),
         }
