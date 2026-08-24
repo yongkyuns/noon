@@ -1,0 +1,41 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - scene_decode
+          - patch_transaction
+          - tessellation
+          - morph
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use stable Rust
+        run: rustup default stable
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run bounded libFuzzer target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cd fuzz
+          cargo fuzz run "$TARGET" -- -max_total_time=60 -max_len=65536 -rss_limit_mb=2048
+      - name: Upload crashing/minimized inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
