@@ -190,7 +190,8 @@ mod tests {
         )]);
         assert_eq!(map.evaluate(0.25).alpha, 1.0);
         assert_eq!(map.evaluate(0.5).alpha, 1.0);
-        assert!(map.evaluate(0.75).alpha < 1.0);
+        assert_eq!(map.evaluate(0.75).alpha, 1.0);
+        assert!(map.evaluate(0.9).alpha < 1.0);
         assert_eq!(map.evaluate(1.0).alpha, 0.0);
     }
 
