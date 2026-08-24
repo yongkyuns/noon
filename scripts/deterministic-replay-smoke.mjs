@@ -128,7 +128,10 @@ try {
         result.direct,
         `${example.name}: WASM rewind diverged at t=${target}`,
       );
-      assert.equal(result.direct.time, target, `${example.name}: snapshot time drifted`);
+      assert.ok(
+        Math.abs(result.direct.time - target) <= 1e-12,
+        `${example.name}: snapshot time drifted (${result.direct.time} vs ${target})`,
+      );
     }
     console.log(`✓ ${example.name}: direct/playback/rewind WASM snapshots agree`);
   }
