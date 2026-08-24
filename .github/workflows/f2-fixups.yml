@@ -1,0 +1,103 @@
+name: F2 transport fixups
+
+on:
+  push:
+    branches:
+      - arch/f2-engine-worker-transport
+
+permissions:
+  contents: write
+
+jobs:
+  fixups:
+    if: github.event.head_commit.message != 'Tighten F2 transport backpressure and restart state'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/f2-engine-worker-transport
+      - name: Apply transport fixups
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          js = Path('web/execution-transport.js')
+          text = js.read_text()
+          shared_anchor = '''  send(json) {\n    executionDeltaMetadata(json);\n'''
+          shared_replacement = '''  canSend() {\n    return (\n      Atomics.load(this.#header, SLOT_STATE_0) === SLOT_FREE ||\n      Atomics.load(this.#header, SLOT_STATE_1) === SLOT_FREE\n    );\n  }\n\n  send(json) {\n    executionDeltaMetadata(json);\n'''
+          if 'Atomics.load(this.#header, SLOT_STATE_0) === SLOT_FREE' not in text:
+              if shared_anchor not in text:
+                  raise SystemExit('shared writer anchor not found')
+              text = text.replace(shared_anchor, shared_replacement, 1)
+
+          transfer_anchor = '''  send(json) {\n    const metadata = executionDeltaMetadata(json);\n'''
+          transfer_replacement = '''  canSend() {\n    return this.#inFlight < this.#maxInFlight;\n  }\n\n  send(json) {\n    const metadata = executionDeltaMetadata(json);\n'''
+          if 'return this.#inFlight < this.#maxInFlight;' not in text:
+              if transfer_anchor not in text:
+                  raise SystemExit('transfer writer anchor not found')
+              text = text.replace(transfer_anchor, transfer_replacement, 1)
+          js.write_text(text)
+
+          rust = Path('crates/noon-web/src/execution_transport.rs')
+          text = rust.read_text()
+          scene_anchor = '''    pub const fn next_patch_sequence(&self) -> u64 {\n        self.player.next_sequence()\n    }\n'''
+          scene_replacement = '''    pub fn scene_json(&self) -> Result<String, ExecutionTransportError> {\n        self.player.scene_json().map_err(ExecutionTransportError::from)\n    }\n\n    pub const fn next_patch_sequence(&self) -> u64 {\n        self.player.next_sequence()\n    }\n'''
+          if 'pub fn scene_json(&self) -> Result<String, ExecutionTransportError>' not in text:
+              if scene_anchor not in text:
+                  raise SystemExit('engine scene json anchor not found')
+              text = text.replace(scene_anchor, scene_replacement, 1)
+
+          wasm_anchor = '''        #[wasm_bindgen(js_name = nextPatchSequence)]\n        pub fn next_patch_sequence(&self) -> u64 {\n            self.inner.next_patch_sequence()\n        }\n'''
+          wasm_replacement = '''        #[wasm_bindgen(js_name = sceneJson)]\n        pub fn scene_json(&self) -> Result<String, JsValue> {\n            self.inner.scene_json().map_err(js_error)\n        }\n\n        #[wasm_bindgen(js_name = nextPatchSequence)]\n        pub fn next_patch_sequence(&self) -> u64 {\n            self.inner.next_patch_sequence()\n        }\n'''
+          if '#[wasm_bindgen(js_name = sceneJson)]' not in text:
+              if wasm_anchor not in text:
+                  raise SystemExit('wasm scene json anchor not found')
+              text = text.replace(wasm_anchor, wasm_replacement, 1)
+
+          if '#[cfg(target_arch = "wasm32")]\npub use wasm::*;' not in text:
+              marker = '\n#[cfg(test)]\nmod tests {'
+              if marker not in text:
+                  raise SystemExit('wasm re-export marker not found')
+              text = text.replace(marker, '\n#[cfg(target_arch = "wasm32")]\npub use wasm::*;\n' + marker, 1)
+
+          test_helper_anchor = '''    fn scene_json() -> String {\n'''
+          helper = '''    fn encode_current(\n        encoder: &mut ExecutionDeltaEncoder,\n        player: &mut ScenePlayer,\n    ) -> ExecutionDeltaEnvelope {\n        let changes = player.take_frame_changes();\n        encoder.encode(player.frame(), &changes).unwrap().unwrap()\n    }\n\n'''
+          if 'fn encode_current(' not in text:
+              if test_helper_anchor not in text:
+                  raise SystemExit('test helper anchor not found')
+              text = text.replace(test_helper_anchor, helper + test_helper_anchor, 1)
+          text = re.sub(
+              r'encoder\s*\.encode\(player\.frame\(\), &player\.take_frame_changes\(\)\)\s*\.unwrap\(\)\s*\.unwrap\(\)',
+              'encode_current(&mut encoder, &mut player)',
+              text,
+          )
+          rust.write_text(text)
+
+          engine = Path('web/execution-engine-worker.js')
+          text = engine.read_text()
+          needle = '          nextPatchSequence: String(player.nextPatchSequence()),\n'
+          replacement = needle + '          sceneJson: player.sceneJson(),\n'
+          if text.count('sceneJson: player.sceneJson(),') < 3:
+              text = text.replace(needle, replacement)
+          engine.write_text(text)
+
+          lib = Path('crates/noon-web/src/lib.rs')
+          text = lib.read_text()
+          text = text.replace(
+              'pub use execution_canvas::*;\n',
+              '#[cfg(target_arch = "wasm32")]\npub use execution_canvas::*;\n',
+          )
+          lib.write_text(text)
+
+          workflow = Path('.github/workflows/f2-fixups.yml')
+          workflow.unlink()
+          PY
+          cargo fmt --all
+      - name: Commit fixups
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-web/src web/execution-transport.js web/execution-engine-worker.js .github/workflows/f2-fixups.yml
+          git commit -m 'Tighten F2 transport backpressure and restart state'
+          git push origin HEAD:arch/f2-engine-worker-transport
