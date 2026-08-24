@@ -67,7 +67,10 @@ impl From<serde_json::Error> for TimedSemanticIrError {
 pub fn encode_timed_semantic_scene(
     scene: &TimedSemanticScene,
 ) -> Result<String, TimedSemanticIrError> {
-    scene.semantic().compile_reactive()?;
+    scene
+        .semantic()
+        .compile_reactive()
+        .map_err(SemanticIrError::Reactive)?;
     SignalTimelineDefinition::from_parts(
         scene.semantic().reactive(),
         scene.signal_timeline().tracks().to_vec(),
