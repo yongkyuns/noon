@@ -45,20 +45,33 @@ class NativeTrackers(Scene):
         self.add(square, circle)
 
         angle = ValueTracker(0.25)
-        assert abs(angle.get_value() - 0.25) < 1e-9
         angle.increment_value(0.5).set_value(1.5)
         self.bind_rotation(square, angle)
         assert angle.signal_id == 0
 
-        progress = self.value_tracker(2.0)
+        progress = self.value_tracker(0.0)
         self.bind_position(circle, progress, direction=RIGHT, offset=UP)
         assert progress.signal_id == 1
 
+        self.play(
+            angle.animate(run_time=2.0, rate_func=linear).set_value(3.5)
+        )
+        assert abs(angle.get_value() - 3.5) < 1e-9
+
+        # Scene.play options override builder-local timing just like ordinary .animate.
+        self.play(
+            progress.animate(run_time=5.0, rate_func=linear).set_value(2.0),
+            square.animate.shift(UP),
+            run_time=1.0,
+            rate_func=smooth,
+        )
+        assert abs(progress.get_value() - 2.0) < 1e-9
+
         try:
-            _ = angle.animate
-            raise AssertionError("timeline-driven ValueTracker animation must fail explicitly")
-        except NotImplementedError as error:
-            assert "timeline-driven signal tracks" in str(error)
+            angle.set_value(4.0)
+            raise AssertionError("direct mutation after tracker timeline authoring must fail")
+        except ValueError as error:
+            assert "timeline animation is ambiguous" in str(error)
 `;
 
 let browser = null;
@@ -88,44 +101,50 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
 
   const reactive = result.document.reactive;
-  assert.ok(reactive, "reactive graph should be included only when used");
+  assert.ok(reactive, "reactive graph should be present");
   assert.equal(reactive.signals.length, 3);
   assert.equal(reactive.bindings.length, 2);
-
   assert.deepEqual(reactive.signals[0], {
     id: 0,
     source: { input: { scalar: 1.5 } },
+  });
+  assert.deepEqual(reactive.signals[1], {
+    id: 1,
+    source: { input: { scalar: 0 } },
   });
   assert.deepEqual(reactive.bindings[0], {
     signal: 0,
     object: 0,
     property: "rotation",
   });
-  assert.deepEqual(reactive.signals[1], {
-    id: 1,
-    source: { input: { scalar: 2.0 } },
-  });
-  assert.deepEqual(reactive.signals[2], {
-    id: 2,
-    source: {
-      derived: {
-        add: [
-          { constant: { vec2: { x: 0, y: 1 } } },
-          {
-            mul: [
-              { signal: 1 },
-              { constant: { vec2: { x: 1, y: 0 } } },
-            ],
-          },
-        ],
-      },
-    },
-  });
   assert.deepEqual(reactive.bindings[1], {
     signal: 2,
     object: 1,
     property: "position",
   });
+
+  assert.deepEqual(result.document.signal_tracks, [
+    {
+      signal: 0,
+      from: 1.5,
+      to: 3.5,
+      timing: { start_time: 0, duration: 2, easing: "linear" },
+    },
+    {
+      signal: 1,
+      from: 0,
+      to: 2,
+      timing: { start_time: 2, duration: 1, easing: "ease_in_out_cubic" },
+    },
+  ]);
+
+  const transform = result.document.tracks.find(
+    (track) => track.object === 0 && track.property === "transform",
+  );
+  assert.ok(transform, "mixed tracker/object play should preserve object animation");
+  assert.equal(transform.timing.start_time, 2);
+  assert.equal(transform.timing.duration, 1);
+  assert.equal(transform.timing.easing, "ease_in_out_cubic");
 
   console.log("reactive authoring smoke test passed");
 } finally {
