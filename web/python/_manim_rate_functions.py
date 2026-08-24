@@ -1,6 +1,6 @@
 """Thin Python adapters for Noon's shared deterministic rate-function vocabulary.
 
-Playback remains authoritative in Rust (`noon_core::RateFunction`).  This module only
+Playback remains authoritative in Rust (`noon_core::RateFunction`). This module only
 provides Manim-compatible public callables, maps known callables to the shared semantic
 IDs written into scene IR, and mirrors those deterministic functions for authoring-time
 snapshot evaluation inside the Python frontend.
@@ -17,6 +17,8 @@ import _noon_ir as _ir
 
 
 INFLECTION = 10.0
+_INSTALLED = False
+_ORIGINAL_ADD_TRACK = _ir.Scene._add_track
 
 
 def linear(t: float) -> float:
@@ -105,8 +107,56 @@ def _track_progress(timing: dict[str, Any], time: float) -> float:
     return evaluate_rate_function(timing["easing"], raw)
 
 
+def _add_track(
+    self: _ir.Scene,
+    obj: _ir.Object,
+    property_name: str,
+    values: dict[str, Any],
+    start_time: float,
+    duration: float,
+    easing: str,
+    key: str | None,
+) -> None:
+    """Bridge the legacy Python IR whitelist to the shared core vocabulary.
+
+    The old IR builder validates only ``linear`` and ``ease_in_out_cubic``. For a
+    known shared semantic ID, reuse all of its existing structural validation with
+    ``linear`` as the temporary accepted token, then restore the semantic ID in the
+    emitted track. Unknown values still flow through the original validator and fail.
+    """
+
+    if easing in _KNOWN_RATE_FUNCTIONS and easing != "linear":
+        _ORIGINAL_ADD_TRACK(
+            self,
+            obj,
+            property_name,
+            values,
+            start_time,
+            duration,
+            "linear",
+            key,
+        )
+        self._tracks[-1]["timing"]["easing"] = easing
+        return
+    _ORIGINAL_ADD_TRACK(
+        self,
+        obj,
+        property_name,
+        values,
+        start_time,
+        duration,
+        easing,
+        key,
+    )
+
+
 def install() -> None:
     """Install thin public adapters without creating a second playback engine."""
+
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    _INSTALLED = True
 
     public = {
         "linear": linear,
@@ -124,6 +174,7 @@ def install() -> None:
     # `_noon_ir` needs progress only while materializing authoring-time snapshots.
     # Runtime playback never calls this mirror; Rust RateFunction remains authoritative.
     _ir._track_progress = _track_progress
+    _ir.Scene._add_track = _add_track
 
     exports = list(_base.__all__)
     for name in public:
