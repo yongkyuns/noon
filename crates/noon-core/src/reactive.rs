@@ -6,6 +6,10 @@ pub use authoring::*;
 mod composition;
 pub use composition::*;
 
+#[path = "host_callbacks.rs"]
+mod host_callbacks;
+pub use host_callbacks::*;
+
 #[path = "lifecycle.rs"]
 mod lifecycle;
 pub use lifecycle::*;
