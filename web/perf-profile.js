@@ -1,4 +1,5 @@
 import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
+import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
 import { ANALYTIC_LAYOUTS, buildAnalyticScene } from "./perf-workloads.js";
 
@@ -22,6 +23,7 @@ canvas.height = height;
 canvas.style.aspectRatio = `${width} / ${height}`;
 
 let player = null;
+const browserJank = new BrowserJankMonitor();
 try {
   await init();
   const workload = buildAnalyticScene({ count: objectCount, layout, aspect: width / height });
@@ -50,7 +52,11 @@ try {
     prepareMs: new SampleWindow(measuredFrames),
     uploadMs: new SampleWindow(measuredFrames),
     encodeSubmitMs: new SampleWindow(measuredFrames),
+    unattributedFrameMs: new SampleWindow(measuredFrames),
   };
+  browserJank.start();
+  const measurementStartMs = performance.now();
+  let previousTimestamp = null;
   let measured = 0;
   while (measured < measuredFrames) {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
@@ -62,14 +68,23 @@ try {
       continue;
     }
 
+    const cpuFrameMs = player.lastCpuFrameMs();
     cadence.record(timestamp, browserCallMs);
-    recordPlayerMetric(windows.cpuFrameMs, player.lastCpuFrameMs(), "cpu frame");
+    recordPlayerMetric(windows.cpuFrameMs, cpuFrameMs, "cpu frame");
     recordPlayerMetric(windows.runtimeMs, player.lastRuntimeEvaluationMs(), "runtime");
     recordPlayerMetric(windows.prepareMs, player.lastFramePrepareMs(), "prepare");
     recordPlayerMetric(windows.uploadMs, player.lastUploadMs(), "upload");
     recordPlayerMetric(windows.encodeSubmitMs, player.lastEncodeSubmitMs(), "encode/submit");
+    if (previousTimestamp !== null) {
+      windows.unattributedFrameMs.record(
+        estimateUnattributedFrameMs(timestamp - previousTimestamp, cpuFrameMs),
+      );
+    }
+    previousTimestamp = timestamp;
     measured += 1;
   }
+  const measurementEndMs = performance.now();
+  browserJank.stop();
 
   await waitForGpuSamples(player, gpuSupported, measuredFrames);
   const frame = cadence.summary();
@@ -105,6 +120,10 @@ try {
       frameIntervalMs: frame.interval,
       effective: frame.cadence,
       browserRenderCallMs: frame.submission,
+      unattributedFrameMs: windows.unattributedFrameMs.summary(),
+    },
+    browser: {
+      longTasks: browserJank.summary(measurementStartMs, measurementEndMs),
     },
     cpu: {
       frameMs: windows.cpuFrameMs.summary(),
@@ -151,6 +170,7 @@ try {
   status.value = `Profile failed: ${error}`;
   status.dataset.state = "error";
 } finally {
+  browserJank.stop();
   player?.free?.();
 }
 
