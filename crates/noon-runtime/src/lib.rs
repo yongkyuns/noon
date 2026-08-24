@@ -235,6 +235,11 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
+    /// Applies a low-level patch to the compiled timeline/object program.
+    ///
+    /// Reactive semantic scenes currently support value-only patches on this path.
+    /// Structural/timeline mutations must be revalidated and rebuilt from the
+    /// `SemanticScene` until reactive-aware transactional lowering is implemented.
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
         if matches!(
             patch,
