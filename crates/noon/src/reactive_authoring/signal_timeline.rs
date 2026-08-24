@@ -89,8 +89,12 @@ impl ReactiveTimelineScene {
             .ok_or(SignalTimelineError::UnknownSignal(tracker.signal_id()))?;
         match &signal.source {
             SignalSource::Input(ReactiveValue::Scalar(value)) => Ok(*value),
-            SignalSource::Input(_) => Err(SignalTimelineError::NonScalarSignal(tracker.signal_id()).into()),
-            SignalSource::Derived(_) => Err(SignalTimelineError::NotInputSignal(tracker.signal_id()).into()),
+            SignalSource::Input(_) => {
+                Err(SignalTimelineError::NonScalarSignal(tracker.signal_id()).into())
+            }
+            SignalSource::Derived(_) => {
+                Err(SignalTimelineError::NotInputSignal(tracker.signal_id()).into())
+            }
         }
     }
 }
@@ -187,7 +191,10 @@ mod tests {
         assert_eq!(track.to, 2.0);
         assert_eq!(track.timing.easing, RateFunction::Linear);
         let timed = scene.timed_semantic_scene().unwrap();
-        assert_eq!(timed.semantic().reactive().bindings()[0].property, Property::Position);
+        assert_eq!(
+            timed.semantic().reactive().bindings()[0].property,
+            Property::Position
+        );
     }
 
     #[test]
