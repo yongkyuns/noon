@@ -217,6 +217,10 @@ jobs:
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
         run: node scripts/browser-smoke.mjs
 
+      - name: Test mixed painter order in WebGPU
+        if: matrix.backend == 'webgpu'
+        run: node scripts/painter-order-browser-smoke.mjs
+
       - name: Upload browser smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4
