@@ -21,3 +21,7 @@ This slice intentionally does not pretend the dense compatibility view is gone. 
 `CompiledScene` object indices are now stable slot addresses. Removal tombstones a slot and removes only tracks targeting that slot; later object indices are never decremented or rebuilt. Creation reuses free slots before extending slot capacity. `FrameObjectState.live` carries the tombstone boundary into runtime/render preparation, and browser object-count metrics report live objects rather than slot capacity.
 
 The next #58 slice localizes timeline channel relowering and scheduler event updates; the temporary full group/scheduler rebuild in `SceneInstance::apply_patch` is intentionally left visible until that change is validated independently.
+
+## Local timeline relowering
+
+Runtime timeline groups now retain stable `(execution slot, property)` keys rather than start/end offsets into the globally sorted compatibility track array. The event scheduler indexes boundary events by time and stable channel key, so add/replace/remove operations replace only the affected channel's events. Runtime patch instrumentation reports affected objects and rebuilt groups; the 100k-channel regression requires a one-channel replacement to rebuild exactly one group and one scheduler channel. Direct seek remains intentionally global.

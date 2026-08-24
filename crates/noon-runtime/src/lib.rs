@@ -8,6 +8,8 @@ mod reactive;
 pub use execution_slots::*;
 pub use reactive::*;
 
+use std::collections::BTreeMap;
+
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
 use noon_core::{
     Color, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
@@ -149,19 +151,27 @@ impl std::error::Error for EvaluationError {}
 struct TrackGroup {
     object_index: usize,
     property: Property,
-    start: usize,
-    end: usize,
     cursor: usize,
     mapped: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimePatchStats {
+    pub affected_objects: usize,
+    pub groups_rebuilt: usize,
+    pub scheduler_groups_rebuilt: usize,
+    pub full_group_rebuilds: usize,
+    pub full_scheduler_rebuilds: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct SceneInstance {
     compiled: CompiledScene,
     frame: FrameState,
-    groups: Vec<TrackGroup>,
+    groups: BTreeMap<TrackGroupKey, TrackGroup>,
     timeline_scheduler: TimelineEventScheduler,
     last_stats: EvaluationStats,
+    last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
@@ -178,6 +188,7 @@ impl SceneInstance {
             groups,
             timeline_scheduler,
             last_stats: EvaluationStats::default(),
+            last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
@@ -192,6 +203,10 @@ impl SceneInstance {
 
     pub const fn last_stats(&self) -> EvaluationStats {
         self.last_stats
+    }
+
+    pub const fn last_patch_stats(&self) -> RuntimePatchStats {
+        self.last_patch_stats
     }
 
     pub fn take_frame_changes(&mut self) -> FrameChanges {
@@ -240,13 +255,112 @@ impl SceneInstance {
             ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. }
         ) {
             self.apply_value_patch(patch)?;
+            self.last_patch_stats = RuntimePatchStats {
+                affected_objects: 1,
+                ..RuntimePatchStats::default()
+            };
             return Ok(&self.frame);
         }
+
         let current_time = self.frame.time;
+        let mut affected_channels = Vec::new();
+        let mut affected_objects = Vec::new();
+        let removed_object = match patch {
+            ScenePatch::RemoveObject(object) => self
+                .compiled
+                .object_index(*object)
+                .map(|index| index as usize),
+            _ => None,
+        };
+        match patch {
+            ScenePatch::AddTrack(track) => {
+                if let Some(index) = self.compiled.object_index(track.object) {
+                    push_channel(&mut affected_channels, index as usize, track.property);
+                    push_object(&mut affected_objects, index as usize);
+                }
+            }
+            ScenePatch::ReplaceTrack(track) => {
+                if let Some(old) = self.compiled.tracks().iter().find(|old| old.id == track.id) {
+                    push_channel(
+                        &mut affected_channels,
+                        old.object_index as usize,
+                        old.property,
+                    );
+                    push_object(&mut affected_objects, old.object_index as usize);
+                }
+                if let Some(index) = self.compiled.object_index(track.object) {
+                    push_channel(&mut affected_channels, index as usize, track.property);
+                    push_object(&mut affected_objects, index as usize);
+                }
+            }
+            ScenePatch::RemoveTrack(id) => {
+                if let Some(old) = self.compiled.tracks().iter().find(|track| track.id == *id) {
+                    push_channel(
+                        &mut affected_channels,
+                        old.object_index as usize,
+                        old.property,
+                    );
+                    push_object(&mut affected_objects, old.object_index as usize);
+                }
+            }
+            _ => {}
+        }
+
         self.compiled.apply_patch(patch)?;
-        self.groups = build_groups(self.compiled.tracks());
-        self.timeline_scheduler = TimelineEventScheduler::new(self.compiled.tracks());
-        self.seek_unchecked(current_time);
+        let mut groups_rebuilt = 0;
+        let mut scheduler_groups_rebuilt = 0;
+
+        match patch {
+            ScenePatch::CreateObject(object) => {
+                let index = self
+                    .compiled
+                    .object_index(object.id)
+                    .expect("compiled create succeeded") as usize;
+                self.sync_frame_slot_from_compiled(index);
+                self.changes.insert(index);
+                push_object(&mut affected_objects, index);
+            }
+            ScenePatch::RemoveObject(_) => {
+                if let Some(index) = removed_object {
+                    for property in ALL_PROPERTIES {
+                        let key = track_group_key(index as u32, property);
+                        if self.groups.remove(&key).is_some() {
+                            groups_rebuilt += 1;
+                        }
+                        let stats = self.timeline_scheduler.remove_group(
+                            index as u32,
+                            property,
+                            current_time,
+                        );
+                        scheduler_groups_rebuilt += stats.groups_rebuilt;
+                    }
+                    self.frame.objects[index].live = false;
+                    self.frame.presences[index] = false;
+                    self.frame.render_geometries[index] = None;
+                    self.changes.insert(index);
+                    push_object(&mut affected_objects, index);
+                }
+            }
+            ScenePatch::AddTrack(_) | ScenePatch::ReplaceTrack(_) | ScenePatch::RemoveTrack(_) => {
+                for (object_index, property) in affected_channels.iter().copied() {
+                    self.refresh_group_structure(object_index, property, current_time);
+                    groups_rebuilt += 1;
+                    scheduler_groups_rebuilt += 1;
+                }
+                for object_index in affected_objects.iter().copied() {
+                    self.reapply_object_timeline(object_index);
+                }
+            }
+            ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. } => unreachable!(),
+        }
+
+        self.last_patch_stats = RuntimePatchStats {
+            affected_objects: affected_objects.len(),
+            groups_rebuilt,
+            scheduler_groups_rebuilt,
+            full_group_rebuilds: 0,
+            full_scheduler_rebuilds: 0,
+        };
         Ok(&self.frame)
     }
 
@@ -287,27 +401,113 @@ impl SceneInstance {
 
     fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
         let time = self.frame.time;
-        let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
-        for group in &mut self.groups {
-            if group.object_index == object_index && properties.contains(&group.property) {
-                let slice = &tracks[group.start..group.end];
-                group.cursor = upper_bound_start(slice, time, &mut stats.binary_search_steps);
-                apply_group(&mut self.frame, slice, group, time);
-                stats.groups_evaluated += 1;
-            }
+        for property in properties {
+            let key = track_group_key(object_index as u32, *property);
+            let Some(group) = self.groups.get_mut(&key) else {
+                continue;
+            };
+            let slice = self.compiled.track_group(object_index as u32, *property);
+            group.cursor = upper_bound_start(slice, time, &mut stats.binary_search_steps);
+            apply_group(&mut self.frame, slice, group, time);
+            stats.groups_evaluated += 1;
         }
+        self.last_stats = stats;
+    }
+
+    fn refresh_group_structure(&mut self, object_index: usize, property: Property, time: f64) {
+        let key = track_group_key(object_index as u32, property);
+        let slice = self.compiled.track_group(object_index as u32, property);
+        if slice.is_empty() {
+            self.groups.remove(&key);
+        } else {
+            let mapped = slice.iter().any(|track| !track.time_map.is_identity());
+            let mut binary_search_steps = 0;
+            let cursor = upper_bound_start(slice, time, &mut binary_search_steps);
+            self.groups.insert(
+                key,
+                TrackGroup {
+                    object_index,
+                    property,
+                    cursor,
+                    mapped,
+                },
+            );
+        }
+        self.timeline_scheduler
+            .replace_group(object_index as u32, property, slice, time);
+    }
+
+    fn sync_frame_slot_from_compiled(&mut self, object_index: usize) {
+        let object = &self.compiled.objects()[object_index];
+        let state = FrameObjectState {
+            live: object.live,
+            id: object.id,
+            geometry: object.geometry.clone(),
+            transform: object.base_transform,
+            style: object.base_style,
+            appearance: 1.0,
+        };
+        if object_index == self.frame.objects.len() {
+            self.frame.objects.push(state);
+            self.frame.presences.push(true);
+            self.frame.reveals.push(1.0);
+            self.frame.morphs.push(0.0);
+            self.frame.render_geometries.push(None);
+        } else {
+            self.frame.objects[object_index] = state;
+            self.frame.presences[object_index] = true;
+            self.frame.reveals[object_index] = 1.0;
+            self.frame.morphs[object_index] = 0.0;
+            self.frame.render_geometries[object_index] = None;
+        }
+    }
+
+    fn reapply_object_timeline(&mut self, object_index: usize) {
+        self.sync_frame_slot_from_compiled(object_index);
+        let time = self.frame.time;
+        let mut stats = EvaluationStats::default();
+        for property in ALL_PROPERTIES {
+            let key = track_group_key(object_index as u32, property);
+            let Some(group) = self.groups.get_mut(&key) else {
+                continue;
+            };
+            let slice = self.compiled.track_group(object_index as u32, property);
+            if let Some(first) = slice.first() {
+                match (property, &first.values) {
+                    (Property::Presence, TrackValues::Bool { from, .. }) => {
+                        self.frame.presences[object_index] = *from;
+                    }
+                    (Property::Appearance, TrackValues::Scalar { from, .. }) => {
+                        self.frame.objects[object_index].appearance = from.clamp(0.0, 1.0);
+                    }
+                    (Property::Reveal, TrackValues::Scalar { from, .. }) => {
+                        self.frame.reveals[object_index] = from.clamp(0.0, 1.0);
+                    }
+                    (Property::Morph, TrackValues::Scalar { from, .. }) => {
+                        self.frame.morphs[object_index] = from.clamp(0.0, 1.0);
+                    }
+                    _ => {}
+                }
+            }
+            group.cursor = upper_bound_start(slice, time, &mut stats.binary_search_steps);
+            apply_group(&mut self.frame, slice, group, time);
+            stats.groups_evaluated += 1;
+        }
+        self.reapply_reactive_for_object(object_index);
+        self.changes.insert(object_index);
         self.last_stats = stats;
     }
 
     fn seek_unchecked(&mut self, time: f64) {
         self.frame = base_frame(&self.compiled, time);
         self.changes.invalidate_all();
-        let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
 
-        for group in &mut self.groups {
-            let slice = &tracks[group.start..group.end];
+        for group in self.groups.values_mut() {
+            let slice = self
+                .compiled
+                .track_group(group.object_index as u32, group.property);
             group.cursor = upper_bound_start(slice, time, &mut stats.binary_search_steps);
             apply_group(&mut self.frame, slice, group, time);
             stats.groups_evaluated += 1;
@@ -321,13 +521,16 @@ impl SceneInstance {
     fn advance_unchecked(&mut self, time: f64) {
         self.frame.time = time;
         let requested = self.timeline_scheduler.advance(time).to_vec();
-        let tracks = self.compiled.tracks();
         let mut stats = EvaluationStats::default();
         let changes = &mut self.changes;
 
-        for group_index in requested {
-            let group = &mut self.groups[group_index];
-            let slice = &tracks[group.start..group.end];
+        for group_key in requested {
+            let Some(group) = self.groups.get_mut(&group_key) else {
+                continue;
+            };
+            let slice = self
+                .compiled
+                .track_group(group.object_index as u32, group.property);
             while group.cursor < slice.len() && slice[group.cursor].timing.start_time <= time {
                 group.cursor += 1;
                 stats.tracks_advanced += 1;
@@ -424,8 +627,8 @@ fn initial_scalar_property(
     values
 }
 
-fn build_groups(tracks: &[CompiledTrack]) -> Vec<TrackGroup> {
-    let mut groups = Vec::new();
+fn build_groups(tracks: &[CompiledTrack]) -> BTreeMap<TrackGroupKey, TrackGroup> {
+    let mut groups = BTreeMap::new();
     let mut start = 0;
 
     while start < tracks.len() {
@@ -441,18 +644,42 @@ fn build_groups(tracks: &[CompiledTrack]) -> Vec<TrackGroup> {
         let mapped = tracks[start..end]
             .iter()
             .any(|track| !track.time_map.is_identity());
-        groups.push(TrackGroup {
-            object_index,
-            property,
-            start,
-            end,
-            cursor: 0,
-            mapped,
-        });
+        groups.insert(
+            track_group_key(object_index as u32, property),
+            TrackGroup {
+                object_index,
+                property,
+                cursor: 0,
+                mapped,
+            },
+        );
         start = end;
     }
 
     groups
+}
+
+const ALL_PROPERTIES: [Property; 8] = [
+    Property::Presence,
+    Property::Transform,
+    Property::Position,
+    Property::Rotation,
+    Property::Opacity,
+    Property::Appearance,
+    Property::Reveal,
+    Property::Morph,
+];
+
+fn push_channel(channels: &mut Vec<(usize, Property)>, object_index: usize, property: Property) {
+    if !channels.contains(&(object_index, property)) {
+        channels.push((object_index, property));
+    }
+}
+
+fn push_object(objects: &mut Vec<usize>, object_index: usize) {
+    if !objects.contains(&object_index) {
+        objects.push(object_index);
+    }
 }
 
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {

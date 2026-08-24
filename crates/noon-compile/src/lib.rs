@@ -250,6 +250,22 @@ impl CompiledScene {
         self.object_indices.get(&id).copied()
     }
 
+    /// Returns the sorted tracks for one stable execution slot/property channel.
+    ///
+    /// Runtime groups deliberately resolve this range on demand so insertion or
+    /// removal in an unrelated channel never invalidates retained group metadata.
+    pub fn track_group(&self, object_index: u32, property: Property) -> &[CompiledTrack] {
+        let rank = property_rank(property);
+        let start = self.tracks.partition_point(|track| {
+            track.object_index < object_index
+                || (track.object_index == object_index && property_rank(track.property) < rank)
+        });
+        let count = self.tracks[start..].partition_point(|track| {
+            track.object_index == object_index && property_rank(track.property) == rank
+        });
+        &self.tracks[start..start + count]
+    }
+
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
         match patch {
             ScenePatch::CreateObject(object) => {
