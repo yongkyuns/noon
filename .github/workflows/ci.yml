@@ -15,9 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: CI
+  rust:
+    name: Rust
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,18 +30,61 @@ jobs:
         run: |
           rustup default stable
           rustup component add rustfmt clippy
-          rustup target add wasm32-unknown-unknown
 
-      - name: Cache Cargo
+      - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-noon-${{ hashFiles('crates/**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-noon-
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Format workspace
+        run: cargo fmt --all -- --check
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace --all-features
+
+  web-build:
+    name: Web package
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
 
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -45,33 +92,32 @@ jobs:
           tool: wasm-pack@0.15.0
           fallback: none
 
-      - name: Format workspace
-        run: cargo fmt --all -- --check
-
-      - name: Compile workspace
-        run: cargo check --workspace --all-targets --all-features
-
-      - name: Clippy workspace
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Test geometry correctness invariants
-        run: |
-          cargo test -p noon-geometry --test tessellation_correctness
-          cargo test -p noon-geometry --test stroke_style_parity
-          cargo test -p noon-geometry --test filled_morph
-          cargo test -p noon-geometry --test filled_morph_interval
-
-      - name: Test workspace
-        run: cargo test --workspace --all-features
-
-      - name: Compile browser renderer
-        run: cargo check -p noon-render-wgpu --target wasm32-unknown-unknown --no-default-features --features web
-
-      - name: Compile browser runtime
-        run: cargo check -p noon-web --target wasm32-unknown-unknown
-
       - name: Build and validate browser package
+        env:
+          NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
+
+      - name: Upload browser package
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-pkg
+          path: web/pkg
+          if-no-files-found: error
+          retention-days: 1
+
+  browser-authoring:
+    name: Browser authoring
+    runs-on: ubuntu-latest
+    needs: web-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: web-pkg
+          path: web/pkg
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
@@ -82,7 +128,7 @@ jobs:
       - name: Install browser smoke dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
 
       - name: Test Rust/Python semantic parity
         run: node scripts/cross-language-parity.mjs
@@ -92,6 +138,31 @@ jobs:
 
       - name: Test Manim composition authoring
         run: node scripts/composition-authoring-smoke.mjs
+
+  browser-reactive:
+    name: Browser reactive and editor
+    runs-on: ubuntu-latest
+    needs: web-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: web-pkg
+          path: web/pkg
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
 
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
@@ -105,23 +176,48 @@ jobs:
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs
 
-      - name: Test browser WebGPU rendering
-        env:
-          NOON_BROWSER_SMOKE_BACKEND: webgpu
-          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
-        run: node scripts/browser-smoke.mjs
+  browser-rendering:
+    name: Browser rendering (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    needs: web-build
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - webgpu
+          - webgl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Test browser WebGL2 fallback
+      - name: Download browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: web-pkg
+          path: web/pkg
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Test browser rendering
         env:
-          NOON_BROWSER_SMOKE_BACKEND: webgl
-          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgl
+          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
         run: node scripts/browser-smoke.mjs
 
       - name: Upload browser smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-smoke-screenshots
+          name: browser-smoke-screenshots-${{ matrix.backend }}
           path: browser-smoke-artifacts
           if-no-files-found: ignore
           retention-days: 7
