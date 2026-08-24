@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod patch;
+mod reactive;
 mod timeline;
 
 pub use patch::*;
+pub use reactive::*;
 pub use timeline::*;
 
 use serde::{Deserialize, Serialize};
