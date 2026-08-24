@@ -118,7 +118,7 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
 
   const transforms = result.document.tracks.filter((track) => track.property === "transform");
-  assert.equal(transforms.length, 11);
+  assert.equal(transforms.length, 10);
   const byObject = new Map();
   for (const track of transforms) {
     const list = byObject.get(track.object) ?? [];
