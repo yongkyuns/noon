@@ -54,8 +54,10 @@ impl ScenePatch {
 /// Atomic group of semantic mutations.
 ///
 /// Host callbacks, live editor actions, and frontend-driven updates should
-/// converge on this transaction boundary. A transaction is validated against a
-/// staged scene and becomes visible only if every contained mutation succeeds.
+/// converge on this transaction boundary. Property-only transactions use an
+/// allocation-free preflight path; structural/timeline transactions retain the
+/// stronger staged rollback path until those mutations receive specialized
+/// incremental commit support.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MutationTransaction {
     mutations: Vec<ScenePatch>,
@@ -189,13 +191,32 @@ impl SceneDefinition {
 
     /// Applies all mutations atomically.
     ///
-    /// This is deliberately independent of transport sequencing: transactions
-    /// are a semantic/runtime concept, whereas sequencing is a protocol concern.
+    /// Property-only callback/update transactions are preflighted and then
+    /// applied in place, avoiding a full scene clone on the high-frequency path.
+    /// More disruptive mutations still stage a complete scene for rollback.
     pub fn apply_transaction(
         &mut self,
         transaction: &MutationTransaction,
     ) -> Result<(), PatchError> {
         if transaction.is_empty() {
+            return Ok(());
+        }
+
+        if transaction.impact() == Some(MutationImpact::Property) {
+            for mutation in transaction.mutations() {
+                let object = match mutation {
+                    ScenePatch::SetTransform { object, .. }
+                    | ScenePatch::SetStyle { object, .. } => *object,
+                    _ => unreachable!("property transaction contains only property mutations"),
+                };
+                if self.object(object).is_none() {
+                    return Err(PatchError::UnknownObject(object));
+                }
+            }
+            for mutation in transaction.mutations() {
+                self.apply_patch(mutation.clone())
+                    .expect("property transaction was preflighted");
+            }
             return Ok(());
         }
 
@@ -360,6 +381,33 @@ mod tests {
                 },
             },
             ScenePatch::RemoveObject(ObjectId::new(999)),
+        ]);
+
+        assert!(matches!(
+            scene.apply_transaction(&transaction),
+            Err(PatchError::UnknownObject(ObjectId(999)))
+        ));
+        assert_eq!(scene, before);
+    }
+
+    #[test]
+    fn property_transaction_preflight_preserves_atomicity() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let before = scene.clone();
+
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(5.0, 2.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::SetStyle {
+                object: ObjectId::new(999),
+                style: Style::default(),
+            },
         ]);
 
         assert!(matches!(
