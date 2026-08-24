@@ -7,9 +7,8 @@ use std::{
 use crate::{SignalId, ValueKind, Vec2};
 
 use super::{
-    validate_reactive_value, ReactiveError, ReactiveEvaluationStats, ReactiveExpr,
-    ReactiveProgram, ReactivePropertyChange, ReactiveUpdate, ReactiveValue, SignalChange,
-    SignalSource,
+    validate_reactive_value, ReactiveError, ReactiveEvaluationStats, ReactiveExpr, ReactiveProgram,
+    ReactivePropertyChange, ReactiveUpdate, ReactiveValue, SignalChange, SignalSource,
 };
 
 /// Compact value types understood by the native reactive compute IR.
@@ -43,9 +42,7 @@ impl ComputeValueKind {
 }
 
 /// Dense SSA-style register identifier local to one reactive kernel.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComputeRegister(u32);
 
 impl ComputeRegister {
@@ -468,8 +465,8 @@ impl<'a> Lowerer<'a> {
                 let kind = self.signal_kinds[signal_index]
                     .expect("topological lowering must know dependency value types");
                 let dst = self.register(kind);
-                let signal_index = u32::try_from(signal_index)
-                    .expect("reactive signal index space exhausted");
+                let signal_index =
+                    u32::try_from(signal_index).expect("reactive signal index space exhausted");
                 self.instructions.push(match kind {
                     ComputeValueKind::Bool => ComputeInstruction::LoadBool { dst, signal_index },
                     ComputeValueKind::Scalar => {
@@ -830,7 +827,11 @@ mod tests {
                 let compute_update = compute.set_input(target, value).unwrap();
                 assert_eq!(compute_update, reference_update, "seed={seed}");
                 for signal in &signals {
-                    assert_eq!(compute.value(*signal), reference.value(*signal), "seed={seed}");
+                    assert_eq!(
+                        compute.value(*signal),
+                        reference.value(*signal),
+                        "seed={seed}"
+                    );
                 }
             }
         }
