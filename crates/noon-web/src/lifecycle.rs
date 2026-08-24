@@ -1,7 +1,7 @@
 use noon_core::{
     resolve_lifecycle_plan as resolve_core_lifecycle_plan,
-    validate_presence_transition as validate_core_presence_transition, LifecycleBinding, LifecycleError,
-    LifecycleIntent, LifecyclePlan, LifecycleState, PresenceTransitionError,
+    validate_presence_transition as validate_core_presence_transition, LifecycleBinding,
+    LifecycleError, LifecycleIntent, LifecyclePlan, LifecycleState, PresenceTransitionError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,28 +234,16 @@ mod tests {
 
     #[test]
     fn browser_bridge_uses_shared_reintroduction_rules() {
-        let resolved = resolve_frontend_lifecycle_plan(
-            "add",
-            "this_scene",
-            true,
-            false,
-            false,
-            false,
-        );
+        let resolved =
+            resolve_frontend_lifecycle_plan("add", "this_scene", true, false, false, false);
         assert!(resolved.ok());
         assert!(resolved.plan().show_now);
     }
 
     #[test]
     fn browser_bridge_preserves_lifecycle_errors() {
-        let resolved = resolve_frontend_lifecycle_plan(
-            "introduce",
-            "this_scene",
-            true,
-            true,
-            false,
-            false,
-        );
+        let resolved =
+            resolve_frontend_lifecycle_plan("introduce", "this_scene", true, true, false, false);
         assert!(!resolved.ok());
         assert_eq!(resolved.error_kind().as_deref(), Some("requires_absent"));
     }
