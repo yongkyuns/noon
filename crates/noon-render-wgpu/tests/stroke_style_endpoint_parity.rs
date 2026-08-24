@@ -26,6 +26,7 @@ fn frame(geometry: GeometryRef, style: Style) -> FrameState {
     FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
+            live: true,
             id: ObjectId::new(0),
             geometry,
             transform: Transform2D::IDENTITY,

@@ -1057,6 +1057,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    live: true,
                     id: ObjectId::new(1),
                     geometry: GeometryRef::circle(0.25),
                     transform: Transform2D::IDENTITY,
@@ -1064,6 +1065,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    live: true,
                     id: ObjectId::new(3),
                     geometry: GeometryRef::line(Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0)),
                     transform: Transform2D::IDENTITY,
@@ -1071,6 +1073,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    live: true,
                     id: ObjectId::new(2),
                     geometry: GeometryRef::rectangle(0.5, 0.25),
                     transform: Transform2D::IDENTITY,
@@ -1094,6 +1097,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    live: true,
                     id: ObjectId::new(1),
                     geometry: GeometryRef::path(path),
                     transform: Transform2D::IDENTITY,
@@ -1107,6 +1111,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    live: true,
                     id: ObjectId::new(2),
                     geometry: GeometryRef::circle(0.2),
                     transform: Transform2D::IDENTITY,

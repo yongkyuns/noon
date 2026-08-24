@@ -69,7 +69,7 @@ impl TimedScenePlayer {
     }
 
     pub fn object_count(&self) -> usize {
-        self.instance.frame().objects.len()
+        self.instance.frame().live_object_count()
     }
 
     pub fn scene_json(&self) -> Result<String, TimedPlayerError> {

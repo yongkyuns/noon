@@ -55,6 +55,8 @@ pub struct CompiledObject {
     pub base_transform: Transform2D,
     pub base_style: Style,
     pub dynamic: DynamicProperties,
+    /// Whether this stable compiled slot currently owns a live semantic object.
+    pub live: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -93,6 +95,7 @@ pub struct CompiledScene {
     objects: Vec<CompiledObject>,
     tracks: Vec<CompiledTrack>,
     object_indices: BTreeMap<ObjectId, u32>,
+    free_object_indices: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +211,7 @@ impl CompiledScene {
                 base_transform: object.transform,
                 base_style: object.style,
                 dynamic: DynamicProperties::default(),
+                live: true,
             });
         }
 
@@ -230,6 +234,7 @@ impl CompiledScene {
             objects,
             tracks,
             object_indices,
+            free_object_indices: Vec::new(),
         })
     }
 
@@ -251,30 +256,36 @@ impl CompiledScene {
                 if self.object_indices.contains_key(&object.id) {
                     return Err(CompilePatchError::DuplicateObject(object.id));
                 }
-                let index = u32::try_from(self.objects.len())
-                    .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
-                self.objects.push(CompiledObject {
+                let compiled = CompiledObject {
                     id: object.id,
                     geometry: object.geometry.clone(),
                     base_transform: object.transform,
                     base_style: object.style,
                     dynamic: DynamicProperties::default(),
-                });
+                    live: true,
+                };
+                let index = if let Some(index) = self.free_object_indices.pop() {
+                    self.objects[index as usize] = compiled;
+                    index
+                } else {
+                    let index = u32::try_from(self.objects.len())
+                        .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
+                    self.objects.push(compiled);
+                    index
+                };
                 self.object_indices.insert(object.id, index);
             }
             ScenePatch::RemoveObject(id) => {
                 let index = self
-                    .object_index(*id)
+                    .object_indices
+                    .remove(id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
-                self.objects.remove(index as usize);
+                let object = &mut self.objects[index as usize];
+                debug_assert!(object.live);
+                object.live = false;
+                object.dynamic = DynamicProperties::default();
                 self.tracks.retain(|track| track.object_index != index);
-                for track in &mut self.tracks {
-                    if track.object_index > index {
-                        track.object_index -= 1;
-                    }
-                }
-                self.rebuild_object_indices();
-                self.recompute_dynamic();
+                self.free_object_indices.push(index);
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
@@ -345,14 +356,6 @@ impl CompiledScene {
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
         compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
-    }
-
-    fn rebuild_object_indices(&mut self) {
-        self.object_indices.clear();
-        for (index, object) in self.objects.iter().enumerate() {
-            let index = u32::try_from(index).expect("compiled object count already validated");
-            self.object_indices.insert(object.id, index);
-        }
     }
 
     fn recompute_dynamic(&mut self) {

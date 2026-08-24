@@ -10,6 +10,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
         ..Style::default()
     };
     FrameObjectState {
+        live: true,
         id: ObjectId::new(id),
         geometry: GeometryRef::rectangle(width, height),
         transform: Transform2D::IDENTITY,

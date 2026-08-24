@@ -153,6 +153,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            live: true,
             id: ObjectId::new(id),
             geometry,
             transform: Transform2D::default(),
