@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::timeline::validate_track_timing;
 use crate::{
-    ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError, TrackDefinition, TrackId,
-    Transform2D,
+    validate_track_definition, ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError,
+    TrackDefinition, TrackId, Transform2D,
 };
 
 /// Coarse invalidation class for a semantic scene mutation.
@@ -52,12 +51,6 @@ impl ScenePatch {
 }
 
 /// Atomic group of semantic mutations.
-///
-/// Host callbacks, live editor actions, and frontend-driven updates should
-/// converge on this transaction boundary. Property-only transactions use an
-/// allocation-free preflight path; structural/timeline transactions retain the
-/// stronger staged rollback path until those mutations receive specialized
-/// incremental commit support.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MutationTransaction {
     mutations: Vec<ScenePatch>,
@@ -190,10 +183,6 @@ impl SceneDefinition {
     }
 
     /// Applies all mutations atomically.
-    ///
-    /// Property-only callback/update transactions are preflighted and then
-    /// applied in place, avoiding a full scene clone on the high-frequency path.
-    /// More disruptive mutations still stage a complete scene for rollback.
     pub fn apply_transaction(
         &mut self,
         transaction: &MutationTransaction,
@@ -295,23 +284,15 @@ impl SceneDefinition {
     }
 
     fn validate_track_fields(track: &TrackDefinition) -> Result<(), PatchError> {
-        validate_track_timing(track.property, track.timing).map_err(PatchError::InvalidTrack)?;
-        let expected = track.property.value_kind();
-        let actual = track.values.value_kind();
-        if expected != actual {
-            return Err(PatchError::InvalidTrack(TimelineError::ValueTypeMismatch {
-                property: track.property,
-                expected,
-                actual,
-            }));
-        }
-        Ok(())
+        validate_track_definition(track).map_err(PatchError::InvalidTrack)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
+    use crate::{
+        CompositionTimeMap, GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2,
+    };
 
     use super::*;
 
@@ -493,6 +474,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
         };
 
         scene
@@ -530,6 +512,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
         }];
 
         let mut scene = SceneDefinition::from_parts(objects.clone(), tracks.clone())
@@ -564,6 +547,7 @@ mod tests {
                 to: true,
             },
             timing: TrackTiming::instant(3.0),
+            time_map: CompositionTimeMap::identity(),
         };
 
         let scene = SceneDefinition::from_parts(vec![object], vec![track.clone()])
@@ -585,6 +569,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
         };
         assert!(matches!(
             SceneDefinition::from_parts(Vec::new(), vec![dangling_track]),
