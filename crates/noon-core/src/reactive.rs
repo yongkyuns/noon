@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::{
-    GeometryRef, ObjectId, Property, SceneDefinition, SignalId, ValueKind, Vec2,
-};
+use crate::{GeometryRef, ObjectId, Property, SceneDefinition, SignalId, ValueKind, Vec2};
 
 /// A value that can participate in the native reactive graph.
 ///
