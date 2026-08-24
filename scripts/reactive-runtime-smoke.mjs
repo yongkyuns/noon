@@ -38,23 +38,35 @@ async function waitForServer() {
 
 function foregroundCentroid(buffer) {
   const image = PNG.sync.read(buffer);
+  const background = [image.data[0], image.data[1], image.data[2], image.data[3]];
   let weightedX = 0;
   let weight = 0;
+  let changedPixels = 0;
   for (let y = 0; y < image.height; y += 1) {
     for (let x = 0; x < image.width; x += 1) {
       const offset = (y * image.width + x) * 4;
-      const r = image.data[offset];
-      const g = image.data[offset + 1];
-      const b = image.data[offset + 2];
-      const brightness = Math.max(r, g, b);
-      if (brightness < 55) continue;
-      const pixelWeight = brightness - 54;
-      weightedX += x * pixelWeight;
-      weight += pixelWeight;
+      const distance =
+        Math.abs(image.data[offset] - background[0]) +
+        Math.abs(image.data[offset + 1] - background[1]) +
+        Math.abs(image.data[offset + 2] - background[2]) +
+        Math.abs(image.data[offset + 3] - background[3]);
+      if (distance < 32) continue;
+      changedPixels += 1;
+      weightedX += x * distance;
+      weight += distance;
     }
   }
-  assert.ok(weight > 0, "rendered tracker scene should contain foreground pixels");
+  assert.ok(
+    changedPixels > 200,
+    `rendered tracker scene should contain foreground pixels; got ${changedPixels}`,
+  );
   return weightedX / weight;
+}
+
+async function waitForPresentation(page) {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+  );
 }
 
 const source = `
@@ -80,7 +92,19 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: ["--disable-dev-shm-usage", "--enable-unsafe-webgpu"],
+    args: [
+      "--enable-unsafe-webgpu",
+      "--enable-unsafe-swiftshader",
+      "--use-webgpu-adapter=swiftshader",
+      "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist",
+      "--enable-features=Vulkan",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--use-vulkan=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
   });
   const page = await browser.newPage({ viewport: { width: 720, height: 440 } });
   const errors = [];
@@ -97,7 +121,7 @@ try {
     source,
   );
 
-  await page.evaluate(async (sceneDocument) => {
+  const runtimeInfo = await page.evaluate(async (sceneDocument) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const canvas = document.createElement("canvas");
@@ -115,18 +139,41 @@ try {
       4.0,
     );
     window.__reactivePlayer = player;
-    const first = player.renderFrame(1000.0);
+    const first = player.seek(0.0);
     if (!first) throw new Error("initial reactive frame was not presented");
+    return {
+      backend: player.rendererBackend(),
+      objectCount: player.objectCount(),
+      time: player.time(),
+    };
   }, authored.document);
+  assert.equal(runtimeInfo.backend, "WebGPU");
+  assert.equal(runtimeInfo.objectCount, 1);
+  assert.equal(runtimeInfo.time, 0);
 
+  await waitForPresentation(page);
   const canvas = page.locator("#reactive-smoke-canvas");
   const initial = await canvas.screenshot();
   const initialX = foregroundCentroid(initial);
 
+  const middleTime = await page.evaluate(() => {
+    const player = window.__reactivePlayer;
+    const second = player.seek(1.0);
+    if (!second) throw new Error("advanced reactive frame was not presented");
+    return player.time();
+  });
+  assert.equal(middleTime, 1);
+  await waitForPresentation(page);
+
+  const middle = await canvas.screenshot();
+  const middleX = foregroundCentroid(middle);
+  assert.ok(
+    middleX - initialX > 70,
+    `native tracker timeline should move the rendered circle rightward (${initialX} -> ${middleX})`,
+  );
+
   await page.evaluate(() => {
     const player = window.__reactivePlayer;
-    const second = player.renderFrame(2000.0);
-    if (!second) throw new Error("advanced reactive frame was not presented");
     player.setReactiveInput(2, 0.5);
     try {
       player.setReactiveInput(0, 1.0);
@@ -136,12 +183,6 @@ try {
     }
   });
 
-  const middle = await canvas.screenshot();
-  const middleX = foregroundCentroid(middle);
-  assert.ok(
-    middleX - initialX > 70,
-    `native tracker timeline should move the rendered circle rightward (${initialX} -> ${middleX})`,
-  );
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log("reactive runtime browser smoke test passed");
 } finally {
