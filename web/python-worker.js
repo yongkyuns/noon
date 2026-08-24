@@ -1,6 +1,8 @@
 import initNoonWeb, {
   resolveAnimationOptions,
+  resolveCompositionSchedule,
   resolveLifecyclePlan,
+  resolveUniformCompositionSchedule,
   validatePresenceTransition,
 } from "./pkg/noon_web.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
@@ -31,6 +33,8 @@ self.addEventListener("message", (event) => {
 async function initializePyodide() {
   await initNoonWeb();
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+  self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
+  self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
 
@@ -150,6 +154,43 @@ function resolveAnimationOptionsPlain(...args) {
   } finally {
     result.free();
   }
+}
+
+function compositionResultPlain(result) {
+  try {
+    const intervals = [];
+    for (let index = 0; index < result.length; index += 1) {
+      intervals.push({
+        startTime: result.startTime(index),
+        duration: result.duration(index),
+        endTime: result.endTime(index),
+      });
+    }
+    return {
+      ok: result.ok,
+      runTime: result.runTime,
+      intrinsicRunTime: result.intrinsicRunTime,
+      intervals,
+      errorKind: result.errorKind ?? "",
+      message: result.message ?? "",
+    };
+  } finally {
+    result.free();
+  }
+}
+
+function resolveCompositionSchedulePlain(childRunTimesJson, lagRatio, runTime) {
+  const childRunTimes = JSON.parse(childRunTimesJson);
+  if (!Array.isArray(childRunTimes)) {
+    throw new TypeError("child runtimes must decode to an array");
+  }
+  return compositionResultPlain(
+    resolveCompositionSchedule(new Float64Array(childRunTimes), lagRatio, runTime),
+  );
+}
+
+function resolveUniformCompositionSchedulePlain(...args) {
+  return compositionResultPlain(resolveUniformCompositionSchedule(...args));
 }
 
 function lifecycleResultPlain(result) {

@@ -33,6 +33,8 @@ const expectedJavascriptSurface = [
   "lastGeometryCacheMisses(",
   "export function demoSceneJson(",
   "export function resolveAnimationOptions(",
+  "export function resolveCompositionSchedule(",
+  "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
 ];
@@ -56,6 +58,8 @@ const expectedTypeSurface = [
   "lastGeometryCacheMisses(): number",
   "export function demoSceneJson(): string",
   "export function resolveAnimationOptions(",
+  "export function resolveCompositionSchedule(",
+  "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
 ];
