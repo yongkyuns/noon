@@ -1,3 +1,6 @@
+mod time_map;
+pub use time_map::*;
+
 use serde::{Deserialize, Serialize};
 
 /// One child's interval within a resolved animation composition.
@@ -170,8 +173,6 @@ mod tests {
 
     #[test]
     fn lagged_schedule_uses_max_end_not_last_end() {
-        // Matches Manim's canonical edge case: the long first animation ends at
-        // t=10 while the short second animation, lagged by 10%, ends at t=2.
         let schedule = resolve_composition_schedule(&[10.0, 1.0], 0.1, None).unwrap();
         assert_eq!(schedule.intrinsic_run_time, 10.0);
         assert_eq!(schedule.intervals[0].end_time(), 10.0);
