@@ -1,6 +1,6 @@
 use noon_core::{
-    resolve_animation_options, AnimationDefaults, AnimationOptions, AnimationOptionsError,
-    RateFunction, ResolvedAnimationOptions,
+    resolve_animation_options as resolve_core_animation_options, AnimationDefaults, AnimationOptions,
+    AnimationOptionsError, RateFunction, ResolvedAnimationOptions,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -137,7 +137,7 @@ pub fn resolve_frontend_animation_options(
         ..AnimationOptions::new()
     };
 
-    match resolve_animation_options(
+    match resolve_core_animation_options(
         AnimationDefaults::MANIM.lag_ratio(default_lag_ratio),
         animation,
         play,
