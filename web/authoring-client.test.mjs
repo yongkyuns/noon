@@ -6,6 +6,7 @@ import {
   AUTHORING_PROTOCOL_VERSION,
   PythonAuthoringClient,
   parseAuthoringResult,
+  validateCallbackSession,
   validatePatchBatch,
   validateSceneDocument,
   validateSceneIdentities,
@@ -74,7 +75,7 @@ test("correlates a Python request with a validated PatchBatch response", async (
   assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
 });
 
-test("correlates a Python request with a validated Scene response", async () => {
+test("correlates a Python request with Scene callback metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -82,8 +83,9 @@ test("correlates a Python request with a validated Scene response", async () => 
 
   const resultPromise = client.run("result = scene");
   await Promise.resolve();
-  const scene = { version: 1, objects: [], tracks: [] };
-  const identities = { objects: [], tracks: [] };
+  const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
+  const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
+  const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
   worker.emit(
     "message",
     workerMessage("result", {
@@ -92,6 +94,7 @@ test("correlates a Python request with a validated Scene response", async () => 
         kind: "scene_document",
         document: scene,
         identities,
+        callbacks,
       }),
     }),
   );
@@ -100,7 +103,43 @@ test("correlates a Python request with a validated Scene response", async () => 
     kind: "scene_document",
     document: scene,
     identities,
+    callbacks,
   });
+});
+
+test("runs one callback phase and validates its PatchBatch", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const frame = {
+    time: 0.25,
+    delta_time: 0.25,
+    objects: [],
+    invocations: [{ callback: 0, object_indices: [] }],
+  };
+  const resultPromise = client.runCallbackPhase(2, frame, 7);
+  await Promise.resolve();
+  assert.deepEqual(worker.messages[0], {
+    channel: AUTHORING_CHANNEL,
+    protocolVersion: AUTHORING_PROTOCOL_VERSION,
+    type: "callback_phase",
+    requestId: 0,
+    sessionId: 2,
+    frame,
+    sequence: 7,
+  });
+
+  const batch = { version: 1, sequence: 7, patches: [] };
+  worker.emit(
+    "message",
+    workerMessage("callback_result", {
+      requestId: 0,
+      patchBatchJson: JSON.stringify(batch),
+    }),
+  );
+  assert.deepEqual(await resultPromise, batch);
 });
 
 test("rejects only the request associated with a Python execution error", async () => {
@@ -165,6 +204,17 @@ test("rejects Scene identities that do not cover the document", () => {
         { version: 1, objects: [{ id: 0 }], tracks: [] },
       ),
     /must match its definitions/,
+  );
+});
+
+test("rejects callback slots that reference objects outside the scene", () => {
+  assert.throws(
+    () =>
+      validateCallbackSession(
+        { session_id: 0, slots: [{ id: 0, objects: [4] }] },
+        { version: 1, objects: [{ id: 0 }], tracks: [] },
+      ),
+    /references an invalid object/,
   );
 });
 
