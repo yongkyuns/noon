@@ -390,7 +390,11 @@ mod tests {
             .expect("transaction must commit");
 
         assert_eq!(
-            scene.object(first).expect("first object remains").transform.translation,
+            scene
+                .object(first)
+                .expect("first object remains")
+                .transform
+                .translation,
             Vec2::new(2.0, 1.0)
         );
         assert!(scene.object(second).is_none());
