@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod reactive;
+
+pub use reactive::*;
+
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
 use noon_core::{
     Color, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
@@ -161,6 +165,8 @@ pub struct SceneInstance {
     groups: Vec<TrackGroup>,
     last_stats: EvaluationStats,
     changes: FrameChanges,
+    reactive: Option<ReactiveRuntime>,
+    last_reactive_stats: ReactiveRuntimeStats,
 }
 
 impl SceneInstance {
@@ -173,6 +179,8 @@ impl SceneInstance {
             groups,
             last_stats: EvaluationStats::default(),
             changes: FrameChanges::all(),
+            reactive: None,
+            last_reactive_stats: ReactiveRuntimeStats::default(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -227,6 +235,11 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
+    /// Applies a low-level patch to the compiled timeline/object program.
+    ///
+    /// Reactive semantic scenes currently support value-only patches on this path.
+    /// Structural/timeline mutations must be revalidated and rebuilt from the
+    /// `SemanticScene` until reactive-aware transactional lowering is implemented.
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
         if matches!(
             patch,
@@ -270,6 +283,7 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts transform or style patches"),
         }
+        self.reapply_reactive_for_object(index);
         if self.frame.objects[index] != before {
             self.changes.insert(index);
         }
@@ -304,6 +318,7 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
 
+        self.reapply_reactive();
         self.last_stats = stats;
     }
 

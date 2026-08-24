@@ -12,12 +12,13 @@ A large scene with one interactive tracker should keep unrelated objects static 
 
 ## Scene layers
 
-The initial implementation distinguishes two related representations:
+The implementation distinguishes related representations:
 
 - `SemanticScene`: the mutable high-level semantic scene. It owns the normalized deterministic `SceneDefinition` plus a native reactive graph. Future host callback slots and richer authoring state belong at this level.
 - `SceneDefinition`: the normalized object/timeline program consumed by the existing compiler/runtime. Reactive dependencies are not encoded as fake or infinite timeline tracks.
+- `SceneInstance`: the dense mutable execution state. Instances created with `SceneInstance::from_semantic` own a `ReactiveState` beside the compiled timeline and lower semantic bindings to dense frame targets once.
 
-This distinction is intentional. Timeline animation and reactive state have different execution and invalidation rules and should meet during lowering rather than being conflated in the authoring model.
+This distinction is intentional. Timeline animation and reactive state have different execution and invalidation rules and meet during lowering rather than being conflated in the authoring model.
 
 ## Native reactive graph
 
@@ -48,14 +49,25 @@ Different properties on the same object may use different execution strategies. 
 
 Changing one input does not scan the whole graph. It schedules only direct dependents. A derived signal schedules its own dependents only if its evaluated value actually changed. Therefore an unchanged intermediate value terminates dirty propagation.
 
-Each input update returns a `ReactiveUpdate` containing:
+Each input update returns a `ReactiveUpdate` containing changed signals and invalidated object/property bindings. `SceneInstance` consumes that update directly:
 
-- changed signals;
-- invalidated object/property bindings;
-- affected object identities; and
-- evaluation statistics.
+1. semantic bindings are mapped once to dense `FrameState` object indices when the instance is built;
+2. `set_reactive_input` evaluates only the affected dependency branch;
+3. each invalidated binding writes directly to its precomputed dense property target;
+4. changed object indices are inserted into `FrameChanges` for renderer-side incremental preparation; and
+5. no `SceneDefinition` reconstruction, timeline recompilation, or whole-scene diff occurs on the native input path.
 
-This result is the boundary that the mutable runtime will consume. The runtime should map object/property changes directly to compact runtime slots and renderer dirty ranges rather than reconstructing or diffing a complete scene.
+`ReactiveRuntimeStats` reports dependency work and dense-target writes separately from ordinary timeline `EvaluationStats`. CI includes a mixed scene with 50,000 unrelated static objects and verifies that one reactive input still evaluates only its two derived signals, applies one dense target, and invalidates one object.
+
+## Timeline and seek interaction
+
+Timeline and reactive ownership remains property-local. The compiler rejects a timeline track and reactive binding that drive the same property in the semantic scene, while different properties may coexist on one object.
+
+A forward timeline step mutates only timeline-owned properties, so reactive values remain in place. A seek is different: `SceneInstance` reconstructs its base frame and evaluates the timeline from deterministic state, then reapplies current reactive values. Seek cost therefore includes the number of attached reactive bindings, not arbitrary host execution or a full reactive graph reevaluation.
+
+Value-only live patches also reapply reactive values for the patched object after timeline-owned properties are reconciled. This preserves a reactive position/rotation/opacity when unrelated base transform or style fields are edited.
+
+Reactive-aware structural/timeline graph mutation is intentionally a later slice: structural changes need the semantic reactive graph to be revalidated and re-lowered atomically rather than silently inventing precedence between drivers.
 
 ## Execution analysis
 
@@ -70,20 +82,20 @@ This is intentionally object-local rather than a scene-wide mode switch. Later e
 
 ## Mutation transactions
 
-Arbitrary host callbacks and editor actions converge on `MutationTransaction`. Property-only transactions now use a preflight-and-commit path that avoids cloning the entire scene. Timeline or structural transactions retain staged rollback until they have specialized incremental commit paths.
+Arbitrary host callbacks and editor actions converge on `MutationTransaction`. Property-only transactions use a preflight-and-commit path that avoids cloning the entire scene. Timeline or structural transactions retain staged rollback until they have specialized incremental commit paths.
 
-Native reactive evaluation is not itself expressed as generic scene patches. It produces typed property invalidations so the runtime can update the dense execution representation directly. This avoids paying transport/patch machinery costs for every native signal change.
+Native reactive evaluation is not itself expressed as generic scene patches. It produces typed property invalidations consumed directly by the dense runtime representation. This avoids paying transport/patch machinery costs for every native signal change.
 
 ## Next implementation slices
 
-1. Integrate `ReactiveProgram`/`ReactiveState` with `SceneInstance`, including direct property-slot updates and renderer dirty propagation.
-2. Add semantic signal/property APIs to the shared Rust authoring facade and thin Python bindings.
-3. Add input/event signals for pointer, keyboard, viewport, and user controls.
+1. Add semantic signal/property APIs to the shared Rust authoring facade and thin Python bindings.
+2. Add input/event signals for pointer, keyboard, viewport, and user controls.
+3. Add reactive-aware structural/timeline mutation that revalidates and re-lowers affected bindings atomically.
 4. Add host callback slots that read a coherent frame snapshot and submit one batched mutation transaction per callback phase.
 5. Extend execution analysis with host-dynamic dependencies and report static/native/host participation and costs.
-6. Profile mixed scenes where a small reactive region sits beside tens or hundreds of thousands of static objects; CI performance tests should ensure reactive cost scales with affected dependencies rather than total scene size.
+6. Profile mixed scenes where a small reactive region sits beside tens or hundreds of thousands of static objects; add explicit performance budgets in CI once stable runner variance is characterized.
 
-## Non-goals of this slice
+## Non-goals
 
 - encoding native reactivity as timeline tracks;
 - running arbitrary Python on every frame by default;
