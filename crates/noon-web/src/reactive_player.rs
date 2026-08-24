@@ -1,8 +1,6 @@
 use noon_core::{ReactiveValue, SignalId, TimedSemanticScene};
 use noon_ir::{decode_timed_semantic_scene, encode_timed_semantic_scene, TimedSemanticIrError};
-use noon_runtime::{
-    FrameChanges, FrameState, TimedSceneInstance, TimedSceneRuntimeError,
-};
+use noon_runtime::{FrameChanges, FrameState, TimedSceneInstance, TimedSceneRuntimeError};
 
 #[derive(Debug)]
 pub enum TimedPlayerError {
@@ -211,6 +209,7 @@ mod wasm {
                 .get_default_config(&adapter, width, height)
                 .ok_or_else(|| js_message("GPU adapter cannot present to this canvas"))?;
             surface.configure(&device, &config);
+            let renderer = GpuRenderer::new(&device, config.format);
 
             let mut result = Self {
                 instance,
@@ -224,7 +223,7 @@ mod wasm {
                 player,
                 clock,
                 preparer: FramePreparer::new(),
-                renderer: GpuRenderer::new(&device, config.format),
+                renderer,
                 camera_center: Vec2::ZERO,
                 camera_height: 6.0,
                 clear_color: wgpu::Color {
