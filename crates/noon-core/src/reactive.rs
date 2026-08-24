@@ -18,6 +18,10 @@ pub use lifecycle::*;
 mod semantic_store;
 pub use semantic_store::*;
 
+#[path = "semantic_model.rs"]
+mod semantic_model;
+pub use semantic_model::*;
+
 include!("reactive_impl.rs");
 
 mod compute_ir;
