@@ -1,0 +1,55 @@
+name: B2 converge current master
+
+on:
+  push:
+    branches:
+      - arch/b2-incremental-runtime
+
+permissions:
+  contents: write
+
+concurrency:
+  group: b2-converge-current-master
+  cancel-in-progress: true
+
+jobs:
+  converge:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/b2-incremental-runtime
+          fetch-depth: 1
+
+      - name: Converge compiled patch localization
+        run: |
+          python3 scripts/b2_absorb_compiler_localization.py
+          cargo fmt --all
+          cargo clippy -p noon-compile -p noon-runtime --all-targets --all-features -- -D warnings
+          cargo test -p noon-compile --all-features
+          cargo test -p noon-runtime --all-features
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-compile/src/lib.rs
+          git commit -m "Converge stable slots with local compiled patching"
+
+      - name: Merge current master
+        run: |
+          git fetch --deepen=64 origin arch/b2-incremental-runtime master
+          git merge -X ours --no-edit origin/master
+
+      - name: Validate full converged B2 slice
+        run: |
+          cargo fmt --all
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features
+          node --check scripts/authoring-perf.mjs
+          node --check web/authoring-perf.js
+
+      - name: Remove helpers and push
+        run: |
+          rm .github/workflows/b2-converge-master.yml scripts/b2_absorb_compiler_localization.py
+          git add -A
+          git commit -m "Validate B2 against current master"
+          git push origin HEAD:arch/b2-incremental-runtime
