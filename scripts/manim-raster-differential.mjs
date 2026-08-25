@@ -1,0 +1,555 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import playwright from "playwright";
+import pngjs from "pngjs";
+
+const { chromium } = playwright;
+const { PNG } = pngjs;
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
+const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const reference = manifest.reference;
+const fixtureSourcePath = path.join(repoRoot, reference.source);
+const fixtureSource = await readFile(fixtureSourcePath, "utf8");
+const artifactRoot = path.resolve(
+  repoRoot,
+  process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
+);
+const port = Number(process.env.NOON_MANIM_RASTER_PORT ?? "4191");
+const baseUrl = `http://127.0.0.1:${port}`;
+const enforce = process.env.NOON_MANIM_RASTER_ENFORCE === "1";
+const backends = (process.env.NOON_MANIM_RASTER_BACKENDS ?? "webgpu,webgl")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+for (const backend of backends) {
+  assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend ${backend}`);
+}
+assert.equal(reference.version, "0.21.0", "raster oracle must stay pinned to ManimCE 0.21.0");
+assert.equal(reference.renderer, "cairo", "initial raster oracle is defined against Cairo");
+assert.ok(fixtureSource.includes("from manim import *"), "canonical source must import real Manim");
+
+await rm(artifactRoot, { recursive: true, force: true });
+await mkdir(artifactRoot, { recursive: true });
+
+function runChecked(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} ${args.join(" ")} failed (${result.status})\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+  return result;
+}
+
+function verifyManimVersion() {
+  const version = runChecked("python3", ["-m", "manim", "--version"]);
+  const output = `${version.stdout}\n${version.stderr}`;
+  assert.ok(
+    output.includes(reference.version),
+    `expected ManimCE ${reference.version}; got ${output.trim()}`,
+  );
+}
+
+async function walkFiles(root) {
+  const entries = await readdir(root, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...(await walkFiles(entryPath)));
+    else files.push(entryPath);
+  }
+  return files;
+}
+
+async function findSingleFile(root, suffix, scene) {
+  const files = (await walkFiles(root)).filter(
+    (file) => file.endsWith(suffix) && path.basename(file).includes(scene),
+  );
+  assert.equal(
+    files.length,
+    1,
+    `${scene}: expected one ${suffix} under ${root}, found ${files.join(", ")}`,
+  );
+  return files[0];
+}
+
+function probeVideo(videoPath) {
+  const result = runChecked("ffprobe", [
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=nb_frames,r_frame_rate,duration,width,height",
+    "-of",
+    "json",
+    videoPath,
+  ]);
+  const stream = JSON.parse(result.stdout).streams?.[0];
+  assert.ok(stream, `ffprobe returned no video stream for ${videoPath}`);
+  const [rateNum, rateDen] = String(stream.r_frame_rate).split("/").map(Number);
+  return {
+    frameCount: Number(stream.nb_frames),
+    frameRate: rateNum / rateDen,
+    duration: Number(stream.duration),
+    width: Number(stream.width),
+    height: Number(stream.height),
+  };
+}
+
+function sampleFrames(frameCount) {
+  assert.ok(Number.isSafeInteger(frameCount) && frameCount > 0, "invalid reference frame count");
+  const indices = manifest.sample_fractions.map((fraction) =>
+    Math.round((frameCount - 1) * Number(fraction)),
+  );
+  return [...new Set(indices)].map((frameIndex) => ({
+    frameIndex,
+    time: frameIndex / reference.frame_rate,
+    label: `frame-${String(frameIndex).padStart(4, "0")}`,
+  }));
+}
+
+function extractFrame(videoPath, frameIndex, outputPath) {
+  runChecked("ffmpeg", [
+    "-y",
+    "-v",
+    "error",
+    "-i",
+    videoPath,
+    "-vf",
+    `select=eq(n\\,${frameIndex})`,
+    "-vsync",
+    "0",
+    "-frames:v",
+    "1",
+    outputPath,
+  ]);
+}
+
+async function renderManimReferences() {
+  verifyManimVersion();
+  const results = new Map();
+  for (const fixture of manifest.fixtures) {
+    const mediaDir = path.join(artifactRoot, "manim-media", fixture.id);
+    const frameDir = path.join(artifactRoot, "reference", fixture.id);
+    await mkdir(mediaDir, { recursive: true });
+    await mkdir(frameDir, { recursive: true });
+
+    runChecked("python3", [
+      "-m",
+      "manim",
+      "--renderer=cairo",
+      "--disable_caching",
+      "--format=mp4",
+      "--media_dir",
+      mediaDir,
+      "-r",
+      `${reference.pixel_width},${reference.pixel_height}`,
+      "--fps",
+      String(reference.frame_rate),
+      fixtureSourcePath,
+      fixture.scene,
+    ]);
+
+    const videoPath = await findSingleFile(mediaDir, ".mp4", fixture.scene);
+    const video = probeVideo(videoPath);
+    assert.equal(video.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
+    assert.equal(video.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
+    assert.ok(
+      Math.abs(video.frameRate - reference.frame_rate) < 1e-9,
+      `${fixture.id}: Manim reference FPS ${video.frameRate}`,
+    );
+
+    const samples = sampleFrames(video.frameCount);
+    for (const sample of samples) {
+      const outputPath = path.join(frameDir, `${sample.label}.png`);
+      extractFrame(videoPath, sample.frameIndex, outputPath);
+      sample.referencePath = outputPath;
+    }
+
+    results.set(fixture.id, { fixture, video, samples });
+  }
+  return results;
+}
+
+function noonSourceFor(scene) {
+  const adapted = fixtureSource.replace("from manim import *", "from noon import *");
+  return `${adapted}\n\nresult = ${scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
+}
+
+function latestSceneEnd(document) {
+  const tracks = [...(document.tracks ?? []), ...(document.signal_tracks ?? [])];
+  if (tracks.length === 0) return 0;
+  return Math.max(
+    ...tracks.map((track) => Number(track.timing.start_time) + Number(track.timing.duration)),
+  );
+}
+
+async function authorNoonDocuments() {
+  const browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: ["--disable-dev-shm-usage"],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
+    await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
+    await page.evaluate(() => window.noonManimCompat.ready());
+    const documents = new Map();
+    for (const fixture of manifest.fixtures) {
+      const result = await page.evaluate(
+        (source) => window.noonManimCompat.run(source),
+        noonSourceFor(fixture.scene),
+      );
+      assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
+      assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
+      documents.set(fixture.id, result.document);
+    }
+    return documents;
+  } finally {
+    await browser.close();
+  }
+}
+
+function browserArgs(backend) {
+  if (backend === "webgpu") {
+    return [
+      "--enable-unsafe-webgpu",
+      "--enable-unsafe-swiftshader",
+      "--use-webgpu-adapter=swiftshader",
+      "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist",
+      "--enable-features=Vulkan",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--use-vulkan=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ];
+  }
+  return [
+    "--disable-features=WebGPU",
+    "--enable-unsafe-swiftshader",
+    "--ignore-gpu-blocklist",
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
+    "--disable-gpu-sandbox",
+    "--disable-dev-shm-usage",
+  ];
+}
+
+async function captureNoonBackend(backend, documents, references) {
+  const browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: browserArgs(backend),
+  });
+  const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
+  try {
+    const page = await browser.newPage({
+      viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
+    });
+    await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
+    await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
+      timeout: 30_000,
+    });
+    const initial = await page.evaluate(() => window.noonSmoke.metrics());
+    assert.equal(initial.rendererBackend, expectedBackend, `${backend}: selected renderer backend`);
+
+    const output = new Map();
+    for (const fixture of manifest.fixtures) {
+      const document = documents.get(fixture.id);
+      const loaded = await page.evaluate(
+        (json) => window.noonSmoke.loadScene(json),
+        JSON.stringify(document),
+      );
+      assert.equal(loaded.objectCount, document.objects.length, `${fixture.id}: loaded object count`);
+      const fixtureDir = path.join(artifactRoot, backend, fixture.id);
+      await mkdir(fixtureDir, { recursive: true });
+      const captures = [];
+      for (const sample of references.get(fixture.id).samples) {
+        const metrics = await page.evaluate(
+          (time) => window.noonSmoke.renderAt(time),
+          sample.time,
+        );
+        assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+        const outputPath = path.join(fixtureDir, `${sample.label}.png`);
+        await page.locator("#scene").screenshot({ path: outputPath });
+        captures.push({ ...sample, noonPath: outputPath, metrics });
+      }
+      output.set(fixture.id, {
+        duration: latestSceneEnd(document),
+        objectCount: document.objects.length,
+        captures,
+      });
+    }
+    return output;
+  } finally {
+    await browser.close();
+  }
+}
+
+function pixelStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  const background = [png.data[0], png.data[1], png.data[2], png.data[3]];
+  let changedPixels = 0;
+  let minX = png.width;
+  let minY = png.height;
+  let maxX = -1;
+  let maxY = -1;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const distance =
+      Math.abs(png.data[offset] - background[0]) +
+      Math.abs(png.data[offset + 1] - background[1]) +
+      Math.abs(png.data[offset + 2] - background[2]) +
+      Math.abs(png.data[offset + 3] - background[3]);
+    if (distance >= 24) {
+      changedPixels += 1;
+      r += png.data[offset];
+      g += png.data[offset + 1];
+      b += png.data[offset + 2];
+      const pixel = offset / 4;
+      const x = pixel % png.width;
+      const y = Math.floor(pixel / png.width);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  const bounds = changedPixels === 0 ? null : { minX, minY, maxX, maxY };
+  const centroid = bounds
+    ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+    : null;
+  return {
+    width: png.width,
+    height: png.height,
+    background,
+    changedPixels,
+    bounds,
+    centroid,
+    foregroundMeanRgb:
+      changedPixels === 0 ? null : [r / changedPixels, g / changedPixels, b / changedPixels],
+  };
+}
+
+function comparePng(referenceBuffer, actualBuffer) {
+  const expected = PNG.sync.read(referenceBuffer);
+  const actual = PNG.sync.read(actualBuffer);
+  assert.equal(actual.width, expected.width, "raster comparison width");
+  assert.equal(actual.height, expected.height, "raster comparison height");
+  const diff = new PNG({ width: expected.width, height: expected.height });
+  let differingPixels = 0;
+  let absoluteChannelError = 0;
+  let maxChannelError = 0;
+  for (let offset = 0; offset < expected.data.length; offset += 4) {
+    let pixelError = 0;
+    for (let channel = 0; channel < 4; channel += 1) {
+      const error = Math.abs(expected.data[offset + channel] - actual.data[offset + channel]);
+      absoluteChannelError += error;
+      maxChannelError = Math.max(maxChannelError, error);
+      pixelError += error;
+      if (channel < 3) diff.data[offset + channel] = Math.min(255, error * 4);
+    }
+    diff.data[offset + 3] = 255;
+    if (pixelError >= 24) differingPixels += 1;
+  }
+  return {
+    diffBuffer: PNG.sync.write(diff),
+    differingPixels,
+    differingRatio: differingPixels / (expected.width * expected.height),
+    meanAbsoluteChannelError: absoluteChannelError / expected.data.length,
+    maxChannelError,
+  };
+}
+
+function bboxDelta(referenceStats, actualStats) {
+  if (!referenceStats.bounds || !actualStats.bounds) return null;
+  return {
+    centroidX: actualStats.centroid.x - referenceStats.centroid.x,
+    centroidY: actualStats.centroid.y - referenceStats.centroid.y,
+    width:
+      actualStats.bounds.maxX -
+      actualStats.bounds.minX -
+      (referenceStats.bounds.maxX - referenceStats.bounds.minX),
+    height:
+      actualStats.bounds.maxY -
+      actualStats.bounds.minY -
+      (referenceStats.bounds.maxY - referenceStats.bounds.minY),
+  };
+}
+
+function classify(sample, timingDelta) {
+  const categories = [];
+  if (Math.abs(timingDelta) > 1 / reference.frame_rate + 1e-9) categories.push("timing");
+  const backgroundDelta = sample.reference.background
+    .map((value, index) => Math.abs(value - sample.noon.background[index]))
+    .reduce((sum, value) => sum + value, 0);
+  if (backgroundDelta >= 12) categories.push("background/color-pipeline");
+  if (
+    sample.boundsDelta &&
+    Math.max(
+      Math.abs(sample.boundsDelta.centroidX),
+      Math.abs(sample.boundsDelta.centroidY),
+      Math.abs(sample.boundsDelta.width),
+      Math.abs(sample.boundsDelta.height),
+    ) > 2
+  ) {
+    categories.push("camera/layout/geometry");
+  }
+  if (sample.diff.differingRatio > 0.02) categories.push("raster/style/animation-state");
+  return [...new Set(categories)];
+}
+
+async function compareAll(references, backendResults) {
+  const report = {
+    reference,
+    enforce,
+    generatedAt: new Date().toISOString(),
+    fixtures: [],
+  };
+  const enforcementFailures = [];
+
+  for (const fixture of manifest.fixtures) {
+    const referenceResult = references.get(fixture.id);
+    const backendEntries = {};
+    for (const backend of backends) {
+      const actualResult = backendResults.get(backend).get(fixture.id);
+      const timingDelta = actualResult.duration - referenceResult.video.duration;
+      const samples = [];
+      for (const capture of actualResult.captures) {
+        const referenceBuffer = await readFile(capture.referencePath);
+        const actualBuffer = await readFile(capture.noonPath);
+        const referenceStats = pixelStats(referenceBuffer);
+        const noonStats = pixelStats(actualBuffer);
+        const diff = comparePng(referenceBuffer, actualBuffer);
+        const diffPath = path.join(
+          artifactRoot,
+          `diff-${backend}`,
+          fixture.id,
+          `${capture.label}.png`,
+        );
+        await mkdir(path.dirname(diffPath), { recursive: true });
+        await writeFile(diffPath, diff.diffBuffer);
+        const sample = {
+          frameIndex: capture.frameIndex,
+          time: capture.time,
+          reference: referenceStats,
+          noon: noonStats,
+          boundsDelta: bboxDelta(referenceStats, noonStats),
+          diff: {
+            differingPixels: diff.differingPixels,
+            differingRatio: diff.differingRatio,
+            meanAbsoluteChannelError: diff.meanAbsoluteChannelError,
+            maxChannelError: diff.maxChannelError,
+          },
+        };
+        sample.categories = classify(sample, timingDelta);
+        samples.push(sample);
+        if (enforce && sample.categories.length > 0) {
+          enforcementFailures.push(
+            `${fixture.id}/${backend}/${capture.label}: ${sample.categories.join(", ")}`,
+          );
+        }
+      }
+      backendEntries[backend] = {
+        noonDuration: actualResult.duration,
+        manimVideoDuration: referenceResult.video.duration,
+        durationDelta: timingDelta,
+        objectCount: actualResult.objectCount,
+        samples,
+      };
+    }
+    report.fixtures.push({
+      id: fixture.id,
+      scene: fixture.scene,
+      expectedDuration: fixture.expected_duration,
+      manim: referenceResult.video,
+      backends: backendEntries,
+    });
+  }
+
+  const reportPath = path.join(artifactRoot, "report.json");
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  for (const fixture of report.fixtures) {
+    for (const backend of backends) {
+      const entry = fixture.backends[backend];
+      const categories = [...new Set(entry.samples.flatMap((sample) => sample.categories))];
+      const worstRatio = Math.max(...entry.samples.map((sample) => sample.diff.differingRatio));
+      console.log(
+        `${fixture.id} ${backend}: duration Δ=${entry.durationDelta.toFixed(4)}s, ` +
+          `worst pixel diff=${(worstRatio * 100).toFixed(2)}%, ` +
+          `categories=${categories.join("|") || "none"}`,
+      );
+    }
+  }
+  if (enforcementFailures.length > 0) {
+    throw new Error(`Manim raster parity failures:\n${enforcementFailures.join("\n")}`);
+  }
+  return reportPath;
+}
+
+let serverOutput = "";
+const server = spawn(
+  "python3",
+  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
+  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+);
+server.stdout.on("data", (chunk) => (serverOutput += chunk));
+server.stderr.on("data", (chunk) => (serverOutput += chunk));
+
+async function waitForServer() {
+  let lastError = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}/web/browser-smoke.html`);
+      if (response.ok) return;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Manim raster server did not start: ${lastError}\n${serverOutput}`);
+}
+
+try {
+  const references = await renderManimReferences();
+  await waitForServer();
+  const documents = await authorNoonDocuments();
+  const backendResults = new Map();
+  for (const backend of backends) {
+    backendResults.set(backend, await captureNoonBackend(backend, documents, references));
+  }
+  const reportPath = await compareAll(references, backendResults);
+  console.log(`ManimCE raster differential report: ${reportPath}`);
+  if (!enforce) {
+    console.log("Raster mismatches are report-only until NOON_MANIM_RASTER_ENFORCE=1 is enabled.");
+  }
+} finally {
+  server.kill("SIGTERM");
+}
