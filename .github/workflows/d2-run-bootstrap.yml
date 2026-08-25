@@ -7,7 +7,7 @@ permissions:
   contents: write
 jobs:
   bootstrap:
-    if: github.event.head_commit.message == 'Retry D2 bootstrap after packing-order fix'
+    if: github.event.head_commit.message == 'Retry D2 bootstrap with mega buffer accounting'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,16 @@ jobs:
           new = '''            repacked\n        };\n        self.rebuild_mega_path_draws();\n\n        if !self.circles.is_empty() {\n'''
           if old not in text:
               raise SystemExit('missing post-geometry mega rebuild anchor')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-render-wgpu/src/gpu.rs')
+          text = path.read_text()
+          old = '        assert_eq!(upload.buffer_reallocations, 4);\n'
+          new = '        assert_eq!(upload.buffer_reallocations, 6);\n'
+          if old not in text:
+              raise SystemExit('missing cold path allocation assertion')
           path.write_text(text.replace(old, new, 1))
           PY
           cargo fmt --all
