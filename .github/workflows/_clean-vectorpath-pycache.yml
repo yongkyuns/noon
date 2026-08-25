@@ -1,0 +1,28 @@
+name: Clean VectorPath branch pycache
+
+on:
+  push:
+    branches:
+      - parity/manim-vectorpath-uncreate
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-vectorpath-uncreate
+          fetch-depth: 16
+      - name: Restore tracked pycache from master
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --depth=16 origin master
+          git checkout origin/master -- web/python/__pycache__
+          rm .github/workflows/_clean-vectorpath-pycache.yml
+          git add -A
+          git commit -m "chore: remove generated Python cache artifacts"
+          git push origin HEAD:parity/manim-vectorpath-uncreate
