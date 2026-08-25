@@ -4,7 +4,7 @@ use std::{
     ops::Bound::{Excluded, Included},
 };
 
-use noon_compile::{CompiledChannelKey, CompiledTrack};
+use noon_compile::{CompiledChannelKey, CompiledScene, CompiledTrack};
 use noon_core::{Property, TrackId};
 
 use crate::SceneInstance;
@@ -121,6 +121,15 @@ impl TimelineEventScheduler {
             }
             scheduler.relower_channel(channel, &tracks[start..end]);
             start = end;
+        }
+        scheduler.last_stats = TimelineSchedulerStats::default();
+        scheduler
+    }
+
+    pub fn from_compiled(compiled: &CompiledScene) -> Self {
+        let mut scheduler = Self::new(&[]);
+        for channel in compiled.channels() {
+            scheduler.relower_channel(channel, compiled.channel_tracks(channel));
         }
         scheduler.last_stats = TimelineSchedulerStats::default();
         scheduler
