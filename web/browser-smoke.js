@@ -1,6 +1,7 @@
 import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
 
 const canvas = document.querySelector("#scene");
+const MANIM_DEFAULT_CAMERA_HEIGHT = 8.0;
 const state = {
   ready: false,
   error: null,
@@ -67,6 +68,7 @@ async function start() {
   await init();
   player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
   player.resize(canvas.width, canvas.height);
+  player.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
 
   window.noonSmoke.loadScene = (sceneJson) => {
     if (typeof sceneJson !== "string") {

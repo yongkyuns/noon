@@ -1,3 +1,14 @@
+#[cfg(any(target_arch = "wasm32", test))]
+const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
+
+#[cfg(target_arch = "wasm32")]
+const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::mem;
@@ -9,6 +20,8 @@ mod wasm {
     use web_sys::OffscreenCanvas;
 
     use crate::{ExecutionFrameMirror, TransportApplyOutcome};
+
+    use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -110,13 +123,8 @@ mod wasm {
                 preparer: FramePreparer::new(),
                 renderer,
                 camera_center: Vec2::ZERO,
-                camera_height: 6.0,
-                clear_color: wgpu::Color {
-                    r: 0.035,
-                    g: 0.047,
-                    b: 0.075,
-                    a: 1.0,
-                },
+                camera_height: MANIM_DEFAULT_CAMERA_HEIGHT,
+                clear_color: MANIM_DEFAULT_CLEAR_COLOR,
                 last_draw_calls: 0,
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
@@ -312,3 +320,13 @@ mod wasm {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::*;
+
+#[cfg(test)]
+mod tests {
+    use super::MANIM_DEFAULT_CAMERA_HEIGHT;
+
+    #[test]
+    fn default_camera_matches_manim_frame_height() {
+        assert_eq!(MANIM_DEFAULT_CAMERA_HEIGHT, 8.0);
+    }
+}
