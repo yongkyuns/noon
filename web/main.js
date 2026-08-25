@@ -37,6 +37,55 @@ const SCENE_EXAMPLES = [
     features: "primitives · position · rotation · opacity",
   },
   {
+    name: "Manim CE · Create a circle",
+    path: "./python/examples/tutorial_quickstart.py",
+    summary:
+      "A Noon/browser adaptation of the Manim CE quickstart: create and reveal a styled circle.",
+    features: "Manim CE · Circle · Create · fill/stroke",
+  },
+  {
+    name: "Manim CE · Square → circle",
+    path: "./python/examples/tutorial_square_to_circle.py",
+    summary:
+      "The canonical Manim square-to-circle lesson, adapted to Noon's browser runtime.",
+    features: "Manim CE · Square · Circle · Transform",
+  },
+  {
+    name: "Manim CE · Positioning",
+    path: "./python/examples/tutorial_positioning.py",
+    summary:
+      "Arrange a circle, square, and line as a group, place them at an edge, then animate the group.",
+    features: "Manim CE · VGroup · arrange · to_edge",
+  },
+  {
+    name: "Manim CE · .animate",
+    path: "./python/examples/tutorial_animate.py",
+    summary:
+      "Chain shift, rotate, scale, and color changes through Manim-style .animate syntax.",
+    features: "Manim CE · .animate · shift · rotate · scale",
+  },
+  {
+    name: "Manim CE · Transform lifecycle",
+    path: "./python/examples/tutorial_transform_lifecycle.py",
+    summary:
+      "Compare Transform with ReplacementTransform and their different object-lifecycle semantics.",
+    features: "Manim CE · Transform · ReplacementTransform",
+  },
+  {
+    name: "Manim CE · Animation groups",
+    path: "./python/examples/tutorial_composition.py",
+    summary:
+      "Compose simultaneous and staggered motion with AnimationGroup and LaggedStart.",
+    features: "Manim CE · AnimationGroup · LaggedStart",
+  },
+  {
+    name: "Manim CE · ValueTracker",
+    path: "./python/examples/tutorial_value_tracker.py",
+    summary:
+      "Drive a native reactive binding from a Manim-style ValueTracker animation.",
+    features: "Manim CE · ValueTracker · native reactivity",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
