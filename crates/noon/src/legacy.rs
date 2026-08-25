@@ -114,9 +114,23 @@ define_shape!(Square);
 define_shape!(Line);
 define_shape!(Path);
 
+const MANIM_CAIRO_DEFAULT_STROKE_WIDTH: f32 = 0.04;
+
+fn manim_vmobject_snapshot(geometry: GeometryRef) -> ObjectSnapshot {
+    let mut snapshot = ObjectSnapshot::new(geometry);
+    let mut transparent_white = WHITE;
+    transparent_white.alpha = 0.0;
+    snapshot.style.fill = Some(transparent_white);
+    snapshot.style.stroke = Some(WHITE);
+    snapshot.style.stroke_width = MANIM_CAIRO_DEFAULT_STROKE_WIDTH;
+    snapshot.style.stroke_join = StrokeJoin::Miter;
+    snapshot.style.stroke_cap = StrokeCap::Butt;
+    snapshot
+}
+
 impl Circle {
     pub fn new(radius: f32) -> Self {
-        Self(ObjectSnapshot::new(GeometryRef::circle(radius)))
+        Self(manim_vmobject_snapshot(GeometryRef::circle(radius)))
     }
 }
 
@@ -128,13 +142,15 @@ impl Default for Circle {
 
 impl Rectangle {
     pub fn new(width: f32, height: f32) -> Self {
-        Self(ObjectSnapshot::new(GeometryRef::rectangle(width, height)))
+        Self(manim_vmobject_snapshot(GeometryRef::rectangle(
+            width, height,
+        )))
     }
 }
 
 impl Square {
     pub fn new(side_length: f32) -> Self {
-        Self(ObjectSnapshot::new(GeometryRef::square(side_length)))
+        Self(manim_vmobject_snapshot(GeometryRef::square(side_length)))
     }
 }
 
@@ -146,10 +162,7 @@ impl Default for Square {
 
 impl Line {
     pub fn new(start: Vec2, end: Vec2) -> Self {
-        let snapshot = ObjectSnapshot::new(GeometryRef::line(start, end))
-            .set_fill(None, None)
-            .set_stroke(Some(WHITE), Some(0.04));
-        Self(snapshot)
+        Self(manim_vmobject_snapshot(GeometryRef::line(start, end)))
     }
 }
 
@@ -161,7 +174,7 @@ impl Default for Line {
 
 impl Path {
     pub fn new(path: VectorPath) -> Self {
-        Self(ObjectSnapshot::new(GeometryRef::path(path)))
+        Self(manim_vmobject_snapshot(GeometryRef::path(path)))
     }
 }
 
