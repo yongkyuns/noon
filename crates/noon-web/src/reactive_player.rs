@@ -278,11 +278,11 @@ mod wasm {
                 preparer: FramePreparer::new(),
                 renderer,
                 camera_center: Vec2::ZERO,
-                camera_height: 6.0,
+                camera_height: noon_core::DEFAULT_FRAME_HEIGHT,
                 clear_color: wgpu::Color {
-                    r: 0.035,
-                    g: 0.047,
-                    b: 0.075,
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
                     a: 1.0,
                 },
             };
