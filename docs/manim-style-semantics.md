@@ -33,17 +33,23 @@ The public compatibility layer accepts constructor keywords `fill_color`, `fill_
 
 For backwards compatibility, historical Noon `set_fill(None)` / `set_stroke(None)` with no other arguments still explicitly disable that layer. In contrast, `set_fill(opacity=x)` and `set_stroke(width=..., opacity=...)` preserve the current color as Manim users expect.
 
-## Stroke-width units: unresolved semantic mismatch
+## Pinned ManimCE v0.21.0 Cairo defaults
 
-ManimCE v0.21 uses a default VMobject `stroke_width=4`, and ordinary `VMobject.scale(...)` does not scale the stroke unless `scale_stroke=True` is requested. This makes stroke width behave like a display-space style quantity rather than ordinary local geometry.
+The raster oracle is pinned to ManimCE v0.21.0 with Cairo, so compatibility follows that renderer's effective contract rather than inventing a generic unit conversion:
 
-Noon's current analytic and tessellated paths use `stroke_width` in local/world geometry units. Object scale therefore naturally scales stroke geometry. Simply passing Manim values such as `4`, `8`, or `20` through unchanged would produce grossly incorrect visuals, while silently applying a fixed conversion constant would only approximate one camera/frame configuration.
+- VMobject default `fill_opacity=0.0`;
+- VMobject default `stroke_opacity=1.0`;
+- default inherited paint color is white;
+- default `stroke_width=4`;
+- Cairo applies `cairo_line_width_multiple=0.01`, so the default stroke is **0.04 scene units** before camera projection;
+- `joint_type=AUTO` and `cap_style=AUTO` leave Cairo's default **miter join** and **butt cap** in effect.
 
-Until this is resolved, the compatibility layer should not claim numeric Manim stroke-width parity. Existing Noon world-space stroke widths remain supported, and independent stroke opacity can land without choosing a stroke-width policy.
+The Manim facade therefore constructs its VMobject families with those defaults and converts an authored Manim stroke width `w` to Noon's legacy render width `0.01 * w`. The shared low-level IR emitter remains neutral, so native Noon constructors and Rust/Python cross-language parity retain Noon's existing style defaults and units.
 
-The two coherent long-term options are:
+## Remaining stroke-scaling work
 
-1. **Display-space Manim stroke widths.** Add an explicit display-space stroke-width semantic to the renderer. This gives stronger visual/source compatibility but requires renderer work for analytic primitives and vector paths, including non-uniform transforms and cache/tessellation policy.
-2. **World-space Noon stroke widths with a compatibility conversion.** Keep the simpler current renderer model and translate Manim-style widths at the Python boundary. This preserves the current fast geometry architecture but cannot exactly match Manim across camera/output-scale changes.
+This conversion fixes the effective width for unscaled and rotated VMobjects, including the canonical Quickstart parity corpus. It is not the end of #179.
 
-This is a real semantic choice, not merely an API spelling issue, and should be decided before changing compatibility defaults from Noon's existing stroke-width behavior.
+Manim applies Cairo stroke width after object point transforms, so ordinary object scaling does **not** multiply stroke thickness. Noon's current analytic and tessellated renderers interpret legacy `stroke_width` in local geometry units, so object scale still scales the stroke. Exact compatibility therefore still requires lowering `StrokeWidthMode::ScreenSpace` (or an equivalent transform-invariant width mode) through the renderer for scaled and non-uniformly-scaled objects.
+
+That remaining renderer work must be tested independently from the 0.01 frontend conversion: changing camera size affects world-to-pixel projection in both systems, while changing object geometry scale must not change a Manim stroke's authored thickness.

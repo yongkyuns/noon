@@ -111,6 +111,19 @@ _compat.Scene._bind_introducer_target = _bind_introducer_target
 _ORIGINAL_MAKE_MOBJECT = _base._ir._make_mobject
 _MISSING = object()
 
+# Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts
+# VMobject stroke widths to scene units with this multiplier and AUTO
+# leaves its native miter-join / butt-cap defaults in effect.
+MANIM_CAIRO_LINE_WIDTH_MULTIPLE = 0.01
+MANIM_DEFAULT_STROKE_WIDTH = 4.0
+
+
+def _manim_stroke_width(value: object) -> float:
+    width = _base._ir._finite_number("stroke width", value)
+    if width < 0.0:
+        raise ValueError("stroke width must be non-negative")
+    return width * MANIM_CAIRO_LINE_WIDTH_MULTIPLE
+
 
 def _opacity(name: str, value: object) -> float:
     return _base._ir._unit_interval(name, value)
@@ -140,12 +153,15 @@ def _compat_make_mobject(
     fill_opacity = kwargs.pop("fill_opacity", None)
     stroke_opacity = kwargs.pop("stroke_opacity", None)
 
-    if fill_color is not _MISSING:
-        kwargs["fill"] = None if fill_color is None else _as_color("fill_color", fill_color)
-    if stroke_color is not _MISSING:
-        kwargs["stroke"] = (
-            None if stroke_color is None else _as_color("stroke_color", stroke_color)
-        )
+    if fill_color is not _MISSING and fill_color is not None:
+        kwargs["fill"] = _as_color("fill_color", fill_color)
+    if stroke_color is not _MISSING and stroke_color is not None:
+        kwargs["stroke"] = _as_color("stroke_color", stroke_color)
+
+    # Only convert an authored Manim width that the facade explicitly supplied.
+    # Native Noon IR constructors which omit stroke_width retain native defaults.
+    if "stroke_width" in kwargs:
+        kwargs["stroke_width"] = _manim_stroke_width(kwargs["stroke_width"])
 
     raw = _ORIGINAL_MAKE_MOBJECT(geometry, **kwargs)
     style = raw.style
@@ -227,10 +243,7 @@ def _vmobject_set_stroke(
         raw.style["stroke"] = None
 
     if width is not None:
-        value = _base._ir._finite_number("stroke width", width)
-        if value < 0.0:
-            raise ValueError("stroke width must be non-negative")
-        raw.style["stroke_width"] = value
+        raw.style["stroke_width"] = _manim_stroke_width(width)
         if raw.style["stroke"] is None:
             raw.style["stroke"] = _base.WHITE.to_ir()
 
