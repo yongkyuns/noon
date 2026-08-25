@@ -8,16 +8,19 @@ import {
 
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
+const BOOTSTRAP_QUEUE_LIMIT = 1;
 
 let renderPort = null;
 let transportMode = null;
 let sharedReader = null;
+let transferableReceiver = null;
 let renderer = null;
 let canvas = null;
 let width = 1;
 let height = 1;
-let deltaQueue = [];
+let bootstrapQueue = [];
 let bootstrapPromise = null;
+let needsPresent = false;
 let running = false;
 let lastFrameTimestamp = null;
 let presentedFrames = 0;
@@ -46,6 +49,7 @@ async function handleMainMessage(message) {
         return;
       case "stop":
         running = false;
+        bootstrapQueue = [];
         renderPort?.close?.();
         self.close();
         return;
@@ -83,7 +87,10 @@ async function initialize(message) {
 
   renderPort.addEventListener("message", (event) => handleEngineMessage(event.data));
   if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
-    new TransferableExecutionDeltaReceiver(renderPort, (json) => enqueueDelta(json));
+    transferableReceiver = new TransferableExecutionDeltaReceiver(
+      renderPort,
+      (json) => consumeDelta(json),
+    );
   }
   renderPort.start();
 }
@@ -99,77 +106,101 @@ function handleEngineMessage(message) {
     }
     try {
       sharedReader = new SharedExecutionDeltaReader(message.mailbox);
-      pumpSharedMailbox();
+      drainTransport();
     } catch (error) {
       fail(error, null);
     }
     return;
   }
   if (message.type === "shared_delta") {
-    pumpSharedMailbox();
+    drainTransport();
   }
 }
 
-function pumpSharedMailbox() {
-  if (sharedReader === null) {
-    return;
-  }
+function drainTransport() {
   try {
-    const drained = sharedReader.drain((json) => enqueueDelta(json));
-    if (drained > 0) {
-      renderPort.postMessage({ type: "transport_writable" });
+    if (sharedReader !== null) {
+      const drained = sharedReader.drain((json) => consumeDelta(json));
+      if (drained > 0) {
+        renderPort.postMessage({ type: "transport_writable" });
+      }
     }
+    transferableReceiver?.drain();
   } catch (error) {
     fail(error, null);
   }
 }
 
-function enqueueDelta(json) {
-  deltaQueue.push(json);
-  if (bootstrapPromise === null && renderer === null) {
-    bootstrapPromise = bootstrapRenderer();
-    return;
+function consumeDelta(json) {
+  if (renderer === null) {
+    if (bootstrapPromise === null) {
+      bootstrapPromise = bootstrapRenderer(json);
+      return true;
+    }
+    if (bootstrapQueue.length >= BOOTSTRAP_QUEUE_LIMIT) {
+      return false;
+    }
+    bootstrapQueue.push(json);
+    return true;
   }
-  if (renderer !== null) {
-    flushDeltaQueue();
+
+  if (needsPresent) {
+    return false;
   }
+  const applied = renderer.applyDeltaJson(json);
+  if (!applied) {
+    return true;
+  }
+  needsPresent = true;
+  tryPresent();
+  return true;
 }
 
-async function bootstrapRenderer() {
+async function bootstrapRenderer(initial) {
   try {
-    const initial = deltaQueue.shift();
-    if (initial === undefined) {
-      throw new Error("render worker bootstrap requires an execution snapshot");
-    }
     renderer = await ExecutionCanvasRenderer.create(canvas, initial);
     renderer.resize(width, height);
-    renderer.render();
-    presentedFrames += 1;
-    flushDeltaQueue();
+    needsPresent = true;
+    tryPresent();
     running = true;
     postMain({
       type: "ready",
       transportMode,
       backend: renderer.rendererBackend(),
     });
+    flushBootstrapQueue();
+    drainTransport();
     scheduleFrame();
   } catch (error) {
     fail(error, null);
   }
 }
 
-function flushDeltaQueue() {
+function tryPresent() {
+  if (renderer === null || !needsPresent) {
+    return false;
+  }
+  if (!renderer.render()) {
+    return false;
+  }
+  needsPresent = false;
+  presentedFrames += 1;
+  return true;
+}
+
+function flushBootstrapQueue() {
   if (renderer === null) {
     return;
   }
-  while (deltaQueue.length > 0) {
-    const json = deltaQueue.shift();
+  while (!needsPresent && bootstrapQueue.length > 0) {
+    const json = bootstrapQueue.shift();
     const applied = renderer.applyDeltaJson(json);
     if (!applied) {
       continue;
     }
-    if (renderer.render()) {
-      presentedFrames += 1;
+    needsPresent = true;
+    if (!tryPresent()) {
+      break;
     }
   }
 }
@@ -190,8 +221,13 @@ function frame(timestamp) {
     return;
   }
   lastFrameTimestamp = timestamp;
-  if (transportMode === EXECUTION_TRANSPORT_SHARED) {
-    pumpSharedMailbox();
+  if (needsPresent && tryPresent()) {
+    flushBootstrapQueue();
+  }
+  drainTransport();
+  if (!needsPresent) {
+    flushBootstrapQueue();
+    drainTransport();
   }
   renderPort.postMessage({ type: "tick", timestamp });
   scheduleFrame();
@@ -203,6 +239,8 @@ function currentMetrics() {
       ready: false,
       presentedFrames,
       lastFrameTimestamp,
+      bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
+      needsPresent,
     };
   }
   return {
@@ -217,6 +255,8 @@ function currentMetrics() {
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     presentedFrames,
     lastFrameTimestamp,
+    bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
+    needsPresent,
   };
 }
 
