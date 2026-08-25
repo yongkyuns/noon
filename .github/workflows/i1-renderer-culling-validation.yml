@@ -30,6 +30,26 @@ jobs:
           path.write_text(text)
           PY
           python .github/scripts/apply_i1_renderer_culling.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/execution_transport.rs')
+          text = path.read_text()
+          old = '''        let patch = noon_ir::PatchBatch {
+            sequence: 0,
+            patches: vec![noon_core::ScenePatch::SetTransform {'''
+          new = '''        let patch = PatchBatch::new(0, vec![noon_core::ScenePatch::SetTransform {'''
+          if old not in text:
+              raise SystemExit('versioned PatchBatch test anchor missing')
+          text = text.replace(old, new, 1)
+          old = '''            }],
+        };
+        let delta = engine'''
+          new = '''            }]);
+        let delta = engine'''
+          if old not in text:
+              raise SystemExit('PatchBatch closing test anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Format
         run: |
           cargo fmt --all
