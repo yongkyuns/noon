@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use noon_core::{
@@ -1396,5 +1397,147 @@ mod tests {
             .apply_patch(&ScenePatch::AddTrack(track))
             .expect("valid patch");
         assert!(compiled.objects()[1].dynamic.opacity);
+    }
+
+    #[test]
+    fn large_add_track_patch_avoids_global_clone_and_dynamic_sweep() {
+        let mut scene = SceneDefinition::new();
+        let mut objects = Vec::with_capacity(10_000);
+        for index in 0..10_000u32 {
+            let object = scene.add(GeometryRef::circle(1.0));
+            objects.push(object);
+            scene
+                .animate_position(
+                    object,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                )
+                .expect("valid track");
+        }
+        let mut compiled = CompiledScene::compile(&scene).expect("large scene must compile");
+        let target = objects[5_000];
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(100_000),
+                object: target,
+                property: Property::Opacity,
+                values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+                timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .expect("local track add must compile");
+
+        assert_eq!(stats.track_vector_clones, 0);
+        assert_eq!(stats.presence_tracks_inspected, 0);
+        assert_eq!(stats.dynamic_objects_recomputed, 0);
+        assert_eq!(stats.dynamic_tracks_inspected, 0);
+        assert!(stats.dense_track_slots_shifted > 0);
+        let target_index = compiled.object_index(target).unwrap() as usize;
+        assert!(compiled.objects()[target_index].dynamic.position);
+        assert!(compiled.objects()[target_index].dynamic.opacity);
+        assert!(compiled.objects()[0].dynamic.position);
+    }
+
+    #[test]
+    fn replace_track_recomputes_only_affected_object_channels() {
+        let mut scene = SceneDefinition::new();
+        let first = scene.add(GeometryRef::circle(1.0));
+        let second = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_position(
+                first,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        scene
+            .animate_position(
+                second,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        let replaced = scene
+            .animate_scalar(
+                first,
+                Property::Opacity,
+                1.0,
+                0.0,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::ReplaceTrack(TrackDefinition {
+                id: replaced,
+                object: second,
+                property: Property::Opacity,
+                values: TrackValues::Scalar {
+                    from: 0.5,
+                    to: 0.25,
+                },
+                timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+
+        assert_eq!(stats.track_vector_clones, 0);
+        assert_eq!(stats.dynamic_objects_recomputed, 2);
+        assert_eq!(stats.dynamic_tracks_inspected, 3);
+        assert!(
+            !compiled.objects()[compiled.object_index(first).unwrap() as usize]
+                .dynamic
+                .opacity
+        );
+        assert!(
+            compiled.objects()[compiled.object_index(second).unwrap() as usize]
+                .dynamic
+                .opacity
+        );
+    }
+
+    #[test]
+    fn presence_patch_validation_inspects_only_affected_chain() {
+        let mut scene = SceneDefinition::new();
+        let target = scene.add(GeometryRef::circle(1.0));
+        let first = scene.set_presence_at(target, false, true, 1.0).unwrap();
+        for index in 0..5_000u32 {
+            let object = scene.add(GeometryRef::circle(1.0));
+            scene
+                .animate_position(
+                    object,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                )
+                .unwrap();
+        }
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let next = TrackId::new(50_000);
+        let before = compiled.tracks().to_vec();
+        let error = compiled
+            .apply_patch_with_stats(&ScenePatch::AddTrack(TrackDefinition {
+                id: next,
+                object: target,
+                property: Property::Presence,
+                values: TrackValues::Bool {
+                    from: false,
+                    to: true,
+                },
+                timing: TrackTiming::instant(2.0),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CompilePatchError::DiscontinuousPresence {
+                previous: first,
+                next,
+            }
+        );
+        assert_eq!(compiled.tracks(), before);
     }
 }

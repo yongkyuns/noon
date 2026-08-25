@@ -5,20 +5,34 @@ export class SceneIdentityMap {
   stabilize(document, identities) {
     const objectIds = this.#objects.resolve(identities.objects);
     const trackIds = this.#tracks.resolve(identities.tracks);
-    return {
-      ...document,
-      objects: document.objects.map((object) => {
-        const id = requiredId(objectIds, object.id, "object");
-        return id === object.id ? object : { ...object, id };
-      }),
-      tracks: document.tracks.map((track) => {
-        const id = requiredId(trackIds, track.id, "track");
-        const object = requiredId(objectIds, track.object, "track object");
-        return id === track.id && object === track.object
-          ? track
-          : { ...track, id, object };
-      }),
-    };
+    if (objectIds === null && trackIds === null) {
+      return document;
+    }
+
+    const objects =
+      objectIds === null
+        ? document.objects
+        : document.objects.map((object) => {
+            const id = requiredId(objectIds, object.id, "object");
+            return id === object.id ? object : { ...object, id };
+          });
+    const tracks =
+      objectIds === null && trackIds === null
+        ? document.tracks
+        : document.tracks.map((track) => {
+            const id = trackIds === null ? track.id : requiredId(trackIds, track.id, "track");
+            const object =
+              objectIds === null
+                ? track.object
+                : requiredId(objectIds, track.object, "track object");
+            return id === track.id && object === track.object
+              ? track
+              : { ...track, id, object };
+          });
+
+    return objects === document.objects && tracks === document.tracks
+      ? document
+      : { ...document, objects, tracks };
   }
 }
 
@@ -33,13 +47,27 @@ class IdentityNamespace {
   }
 
   resolve(entries) {
-    const localToStable = new Map();
+    let localToStable = null;
     for (const { id: localId, key } of entries) {
       let stableId = this.#keyToId.get(key);
       if (stableId === undefined) {
         stableId = this.#claim(localId, key);
       }
-      localToStable.set(localId, stableId);
+      if (stableId !== localId) {
+        localToStable ??= new Map();
+      }
+      localToStable?.set(localId, stableId);
+    }
+    if (localToStable === null) {
+      return null;
+    }
+
+    // Once one entry needs remapping, callers still need identity mappings for
+    // every other local ID referenced by the same document.
+    for (const { id: localId, key } of entries) {
+      if (!localToStable.has(localId)) {
+        localToStable.set(localId, this.#keyToId.get(key));
+      }
     }
     return localToStable;
   }

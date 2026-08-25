@@ -28,6 +28,22 @@ class Vec2(tuple):
     def __new__(cls, x: float = 0.0, y: float = 0.0) -> Vec2:
         return tuple.__new__(cls, (float(x), float(y)))
 
+    def __getnewargs__(self) -> tuple[float, float]:
+        """Return scalar constructor arguments for tuple/pickle reconstruction."""
+
+        return (self.x, self.y)
+
+    def __copy__(self) -> Vec2:
+        """Immutable vectors can be shared by shallow copies."""
+
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Vec2:
+        """Immutable vectors can be shared without tuple reconstruction."""
+
+        memo[id(self)] = self
+        return self
+
     @property
     def x(self) -> float:
         return self[0]
