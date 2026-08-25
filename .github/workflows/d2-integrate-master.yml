@@ -1,0 +1,32 @@
+name: D2 integrate latest master
+on:
+  push:
+    branches:
+      - arch/d2-packed-mega-mesh
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.event.head_commit.message == 'Integrate latest master into D2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/d2-packed-mega-mesh
+          fetch-depth: 0
+      - name: Merge latest master
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin master
+          git merge --no-edit origin/master
+          cargo fmt --all --check
+      - name: Validate workspace
+        run: |
+          cargo test --workspace --all-features
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Remove integration workflow and push
+        run: |
+          git rm .github/workflows/d2-integrate-master.yml
+          git commit -m 'Remove D2 integration workflow'
+          git push origin HEAD:arch/d2-packed-mega-mesh
