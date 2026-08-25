@@ -586,6 +586,18 @@ impl EngineScenePlayer {
         self.take_delta_json()
     }
 
+    pub fn apply_host_patch_batch_delta_json(
+        &mut self,
+        json: &str,
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        self.player.apply_host_patch_batch_json(json)?;
+        self.take_delta_json()
+    }
+
+    pub fn snapshot_delta_json(&mut self) -> Result<String, ExecutionTransportError> {
+        self.force_snapshot_json()
+    }
+
     pub fn replace_scene_delta_json(
         &mut self,
         json: &str,
@@ -673,6 +685,21 @@ mod wasm {
             self.inner
                 .apply_patch_batch_delta_json(json)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = applyHostPatchBatchDeltaJson)]
+        pub fn apply_host_patch_batch_delta_json(
+            &mut self,
+            json: &str,
+        ) -> Result<Option<String>, JsValue> {
+            self.inner
+                .apply_host_patch_batch_delta_json(json)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = snapshotDeltaJson)]
+        pub fn snapshot_delta_json(&mut self) -> Result<String, JsValue> {
+            self.inner.snapshot_delta_json().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = replaceSceneDeltaJson)]

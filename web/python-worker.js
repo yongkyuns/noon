@@ -9,6 +9,8 @@ import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyod
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 5;
+const HOST_CHANNEL = "noon.host-callback";
+const HOST_PROTOCOL_VERSION = 1;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
@@ -23,6 +25,7 @@ const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
+let engineHostPort = null;
 
 pyodidePromise
   .then(() => post("ready"))
@@ -226,9 +229,34 @@ async function handleRequest(request) {
       post("callback_result", { requestId, patchBatchJson });
       return;
     }
+    if (request.type === "attach_engine_port") {
+      engineHostPort?.close?.();
+      engineHostPort = request.port;
+      engineHostPort.addEventListener("message", (event) => {
+        requestQueue = requestQueue.then(() => handleHostRequest(event.data));
+      });
+      engineHostPort.start();
+      post("host_port_attached", { requestId });
+      return;
+    }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
     postError(requestId, error);
+  }
+}
+
+async function handleHostRequest(request) {
+  let requestId = null;
+  let generation = null;
+  try {
+    validateHostRequest(request);
+    requestId = request.requestId;
+    generation = request.generation;
+    const pyodide = await pyodidePromise;
+    const patchBatchJson = await runCallbackPhase(pyodide, request.sessionId, request.frame, request.sequence);
+    postHost("callback_result", { requestId, generation, patchBatchJson });
+  } catch (error) {
+    postHost("error", { requestId, generation, message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -366,7 +394,29 @@ function validateRequest(request) {
     }
     return;
   }
+  if (request.type === "attach_engine_port") {
+    if (!(request.port instanceof MessagePort)) {
+      throw new Error("Python host attachment requires a MessagePort");
+    }
+    return;
+  }
   throw new Error(`Unsupported Python authoring request: ${request.type}`);
+}
+
+function validateHostRequest(request) {
+  if (!isRecord(request) || request.channel !== HOST_CHANNEL ||
+      request.protocolVersion !== HOST_PROTOCOL_VERSION || request.type !== "callback_phase" ||
+      !Number.isSafeInteger(request.requestId) || request.requestId < 0 ||
+      !Number.isSafeInteger(request.generation) || request.generation < 0 ||
+      !Number.isSafeInteger(request.sessionId) || request.sessionId < 0 ||
+      !Number.isSafeInteger(request.sequence) || request.sequence < 0 || !isRecord(request.frame)) {
+    throw new Error("invalid engine host callback request");
+  }
+}
+
+function postHost(type, payload = {}) {
+  if (engineHostPort === null) return;
+  engineHostPort.postMessage({ channel: HOST_CHANNEL, protocolVersion: HOST_PROTOCOL_VERSION, type, ...payload });
 }
 
 function post(type, payload = {}) {
