@@ -546,6 +546,11 @@ mod wasm {
                             }
                         }
                     } else {
+                        // wgpu records the requested map range before the backend
+                        // completes the async operation. A failed map therefore
+                        // still needs an explicit unmap before this ring slot can
+                        // safely be reused by a later GPU submission.
+                        readback.unmap();
                         let mut state = state.borrow_mut();
                         if state.generation == sample.generation {
                             state.failed_samples += 1;
