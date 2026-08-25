@@ -147,15 +147,6 @@ mod wasm {
             if !self.drawable || self.pending_changes.is_empty() {
                 return Ok(false);
             }
-            let changes = mem::take(&mut self.pending_changes);
-            let frame = self
-                .mirror
-                .frame()
-                .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
-            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
-            self.last_bytes_uploaded = upload.bytes_uploaded;
 
             let (surface_texture, reconfigure_after_present) =
                 match self.surface.get_current_texture() {
@@ -178,6 +169,17 @@ mod wasm {
                         ));
                     }
                 };
+
+            let changes = mem::take(&mut self.pending_changes);
+            let frame = self
+                .mirror
+                .frame()
+                .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
+            let prepared = self.preparer.prepare_incremental(frame, &changes);
+            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
+            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
+            self.last_bytes_uploaded = upload.bytes_uploaded;
+
             let view = surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());

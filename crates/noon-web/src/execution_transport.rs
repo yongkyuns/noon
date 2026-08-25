@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use noon_runtime::{
+    ExecutionSlotError, ExecutionSlotId, ExecutionSlotTable, FrameChanges, FrameObjectState,
+    FrameState,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome, ScenePlayer};
@@ -13,6 +16,15 @@ pub const EXECUTION_TRANSPORT_VERSION: u32 = 1;
 pub struct TransportSlotId {
     pub slot: u32,
     pub generation: u32,
+}
+
+impl From<ExecutionSlotId> for TransportSlotId {
+    fn from(value: ExecutionSlotId) -> Self {
+        Self {
+            slot: value.slot(),
+            generation: value.generation(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -53,6 +65,7 @@ pub enum TransportApplyOutcome {
 pub enum ExecutionTransportError {
     Player(PlayerError),
     Clock(ClockError),
+    ExecutionSlot(ExecutionSlotError),
     Json(serde_json::Error),
     InvalidChannel(String),
     UnsupportedVersion(u32),
@@ -75,6 +88,7 @@ impl std::fmt::Display for ExecutionTransportError {
         match self {
             Self::Player(error) => error.fmt(formatter),
             Self::Clock(error) => error.fmt(formatter),
+            Self::ExecutionSlot(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
             Self::InvalidChannel(channel) => {
                 write!(formatter, "invalid execution transport channel {channel:?}")
@@ -153,15 +167,16 @@ impl From<ClockError> for ExecutionTransportError {
     }
 }
 
+impl From<ExecutionSlotError> for ExecutionTransportError {
+    fn from(value: ExecutionSlotError) -> Self {
+        Self::ExecutionSlot(value)
+    }
+}
+
 impl From<serde_json::Error> for ExecutionTransportError {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value)
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SlotRecord {
-    id: TransportSlotId,
 }
 
 #[derive(Clone, Debug)]
@@ -169,9 +184,7 @@ pub struct ExecutionDeltaEncoder {
     session: u32,
     next_sequence: u64,
     initialized: bool,
-    object_slots: HashMap<ObjectId, SlotRecord>,
-    generations: Vec<u32>,
-    free_slots: Vec<u32>,
+    slots: ExecutionSlotTable,
     previous_order: Vec<ObjectId>,
 }
 
@@ -181,9 +194,7 @@ impl ExecutionDeltaEncoder {
             session,
             next_sequence: 0,
             initialized: false,
-            object_slots: HashMap::new(),
-            generations: Vec::new(),
-            free_slots: Vec::new(),
+            slots: ExecutionSlotTable::new(),
             previous_order: Vec::new(),
         }
     }
@@ -271,47 +282,22 @@ impl ExecutionDeltaEncoder {
         }
 
         let removed = self
-            .object_slots
-            .keys()
+            .previous_order
+            .iter()
             .copied()
             .filter(|object| !current.contains(object))
             .collect::<Vec<_>>();
         let mut structural = !removed.is_empty() || self.previous_order != order;
         for object in removed {
-            let record = self
-                .object_slots
-                .remove(&object)
-                .expect("removed object came from slot map");
-            let generation = self
-                .generations
-                .get_mut(record.id.slot as usize)
-                .expect("slot generation exists");
-            *generation = generation
-                .checked_add(1)
-                .ok_or(ExecutionTransportError::SlotGenerationExhausted(record.id))?;
-            self.free_slots.push(record.id.slot);
+            self.slots.remove_object(object)?;
         }
 
         for object in &order {
-            if self.object_slots.contains_key(object) {
+            if self.slots.slot_for_object(*object).is_some() {
                 continue;
             }
             structural = true;
-            let slot = if let Some(slot) = self.free_slots.pop() {
-                slot
-            } else {
-                let slot = u32::try_from(self.generations.len())
-                    .map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
-                self.generations.push(0);
-                slot
-            };
-            let generation = self.generations[slot as usize];
-            self.object_slots.insert(
-                *object,
-                SlotRecord {
-                    id: TransportSlotId { slot, generation },
-                },
-            );
+            self.slots.insert_object(*object)?;
         }
         self.previous_order = order;
         Ok(structural)
@@ -324,11 +310,11 @@ impl ExecutionDeltaEncoder {
         order: u32,
     ) -> Result<TransportObjectState, ExecutionTransportError> {
         let object = &frame.objects[index];
-        let slot = self
-            .object_slots
-            .get(&object.id)
-            .expect("frame object was synchronized to a transport slot")
-            .id;
+        let slot: TransportSlotId = self
+            .slots
+            .slot_for_object(object.id)
+            .expect("frame object was synchronized to an execution slot")
+            .into();
         Ok(TransportObjectState {
             slot,
             order,
