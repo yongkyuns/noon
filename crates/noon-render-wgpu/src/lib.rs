@@ -141,6 +141,8 @@ pub struct RenderStats {
     pub instances_repacked: usize,
     pub dirty_instance_count: usize,
     pub geometry_cache_misses: usize,
+    pub path_vertices_repacked: usize,
+    pub path_indices_repacked: usize,
 }
 
 #[derive(Debug)]
@@ -229,6 +231,8 @@ pub struct FramePreparer {
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
     path_mesh_cache_limit: Option<usize>,
     path_mesh_clock: u64,
+    path_mesh_cache_generation: u64,
+    packed_path_mesh_cache_generation: u64,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
     circle_dirty_ranges: Vec<Range<usize>>,
@@ -334,7 +338,7 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.line_dirty_ranges);
         normalize_dirty_ranges(&mut self.path_dirty_ranges);
 
-        self.prepared_frame(frame.time, 0, instances_repacked, 0)
+        self.prepared_frame(frame.time, 0, instances_repacked, 0, 0, 0)
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
@@ -351,7 +355,7 @@ impl FramePreparer {
         self.paths.clear();
         self.path_batches.clear();
         self.render_batches.clear();
-        self.path_batch_cache_indices.clear();
+        let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
         self.slots.clear();
         self.clear_dirty_ranges();
@@ -459,8 +463,17 @@ impl FramePreparer {
             }
         }
 
-        let mut next_vertices = Vec::new();
-        let mut next_indices = Vec::new();
+        let reuse_packed_path_geometry = self.packed_path_mesh_cache_generation
+            == self.path_mesh_cache_generation
+            && previous_path_batch_cache_indices.len() == path_groups.len()
+            && previous_path_batch_cache_indices
+                .iter()
+                .zip(&path_groups)
+                .all(|(&cache_index, group)| cache_index == group.cache_index);
+        let mut next_vertices = (!reuse_packed_path_geometry).then(Vec::new);
+        let mut next_indices = (!reuse_packed_path_geometry).then(Vec::new);
+        let mut vertex_count = 0usize;
+        let mut index_count = 0usize;
         let mut group_offsets = Vec::with_capacity(path_groups.len());
         for group in path_groups {
             let instance_start = self.paths.len();
@@ -469,22 +482,27 @@ impl FramePreparer {
             self.paths.extend(group.instances);
 
             let mesh = &self.path_mesh_cache[group.cache_index].mesh;
-            let vertex_start = u32::try_from(next_vertices.len())
-                .expect("path vertex count exceeds renderer limits");
-            let index_start = u32::try_from(next_indices.len())
-                .expect("path index count exceeds renderer limits");
-            next_vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
-                position: [vertex.position.x, vertex.position.y],
-                target_position: [vertex.target_position.x, vertex.target_position.y],
-                surface: pack_path_surface(vertex.surface, vertex.path_progress),
-            }));
-            next_indices.extend(mesh.indices.iter().map(|index| {
-                index
-                    .checked_add(vertex_start)
-                    .expect("path index exceeds renderer limits")
-            }));
-            let index_end = u32::try_from(next_indices.len())
-                .expect("path index count exceeds renderer limits");
+            let vertex_start =
+                u32::try_from(vertex_count).expect("path vertex count exceeds renderer limits");
+            let index_start =
+                u32::try_from(index_count).expect("path index count exceeds renderer limits");
+            if let (Some(vertices), Some(indices)) = (next_vertices.as_mut(), next_indices.as_mut())
+            {
+                vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
+                    position: [vertex.position.x, vertex.position.y],
+                    target_position: [vertex.target_position.x, vertex.target_position.y],
+                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                }));
+                indices.extend(mesh.indices.iter().map(|index| {
+                    index
+                        .checked_add(vertex_start)
+                        .expect("path index exceeds renderer limits")
+                }));
+            }
+            vertex_count += mesh.vertices.len();
+            index_count += mesh.indices.len();
+            let index_end =
+                u32::try_from(index_count).expect("path index count exceeds renderer limits");
             let instance_end = u32::try_from(self.paths.len())
                 .expect("path instance count exceeds renderer limits");
             self.path_batches.push(PathBatch {
@@ -501,10 +519,20 @@ impl FramePreparer {
             }
         }
         self.rebuild_ordered_render_batches();
-        self.path_geometry_dirty =
-            self.path_vertices != next_vertices || self.path_indices != next_indices;
-        self.path_vertices = next_vertices;
-        self.path_indices = next_indices;
+        let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {
+            self.path_geometry_dirty = false;
+            (0, 0)
+        } else {
+            let next_vertices = next_vertices.expect("path vertices must be repacked");
+            let next_indices = next_indices.expect("path indices must be repacked");
+            let repacked = (next_vertices.len(), next_indices.len());
+            self.path_geometry_dirty =
+                self.path_vertices != next_vertices || self.path_indices != next_indices;
+            self.path_vertices = next_vertices;
+            self.path_indices = next_indices;
+            self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
+            repacked
+        };
 
         if !self.circles.is_empty() {
             self.circle_dirty_ranges.push(0..self.circles.len());
@@ -532,6 +560,8 @@ impl FramePreparer {
             capacity_growths,
             self.circles.len() + self.rectangles.len() + self.lines.len() + self.paths.len(),
             geometry_cache_misses,
+            path_vertices_repacked,
+            path_indices_repacked,
         )
     }
 
@@ -541,6 +571,8 @@ impl FramePreparer {
         capacity_growths: usize,
         instances_repacked: usize,
         geometry_cache_misses: usize,
+        path_vertices_repacked: usize,
+        path_indices_repacked: usize,
     ) -> PreparedFrame<'_> {
         let batch_count = self.render_batches.len();
         let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
@@ -578,6 +610,8 @@ impl FramePreparer {
                 instances_repacked,
                 dirty_instance_count,
                 geometry_cache_misses,
+                path_vertices_repacked,
+                path_indices_repacked,
             },
         }
     }
@@ -810,6 +844,7 @@ impl FramePreparer {
             return;
         }
 
+        self.path_mesh_cache_generation = self.path_mesh_cache_generation.saturating_add(1);
         let old_cache = std::mem::take(&mut self.path_mesh_cache);
         self.path_mesh_lookup.clear();
         for (old_index, entry) in old_cache.into_iter().enumerate() {
@@ -1167,6 +1202,31 @@ mod tests {
             .iter()
             .any(|vertex| vertex.surface & 1 == 0));
         assert_eq!(preparer.cached_path_mesh_count(), 2);
+    }
+
+    #[test]
+    fn full_rebuild_reuses_unchanged_packed_path_geometry() {
+        let geometry = GeometryRef::path(curved_path());
+        let mut path = object(23, geometry);
+        path.style.fill = Some(Color::WHITE);
+        path.style.stroke = Some(Color::BLACK);
+        path.style.stroke_width = 0.08;
+        let initial = frame(vec![path]);
+        let mut preparer = FramePreparer::new();
+
+        let (vertices, indices) = {
+            let cold = preparer.prepare(&initial);
+            assert!(cold.stats.path_vertices_repacked > 0);
+            assert!(cold.stats.path_indices_repacked > 0);
+            (cold.path_vertices.to_vec(), cold.path_indices.to_vec())
+        };
+        let rebuilt = preparer.prepare(&initial);
+        assert_eq!(rebuilt.stats.geometry_cache_misses, 0);
+        assert_eq!(rebuilt.stats.path_vertices_repacked, 0);
+        assert_eq!(rebuilt.stats.path_indices_repacked, 0);
+        assert!(!rebuilt.path_geometry_dirty);
+        assert_eq!(rebuilt.path_vertices, vertices);
+        assert_eq!(rebuilt.path_indices, indices);
     }
 
     #[test]
