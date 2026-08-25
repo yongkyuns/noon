@@ -1,0 +1,566 @@
+[
+  {
+    "differences": [],
+    "fixture": "circle_dimensions",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 1.5,
+      "width": 1.5
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 1.5,
+      "width": 1.5
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "rectangle_dimensions",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 1.25,
+      "width": 3.0
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 1.25,
+      "width": 3.0
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "shifted_circle",
+    "manim": {
+      "center": [
+        2.25,
+        1.5
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "noon": {
+      "center": [
+        2.25,
+        1.5
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "moved_rectangle",
+    "manim": {
+      "center": [
+        -1.75,
+        -0.6
+      ],
+      "height": 0.75,
+      "width": 2.0
+    },
+    "noon": {
+      "center": [
+        -1.75,
+        -0.6
+      ],
+      "height": 0.75,
+      "width": 2.0
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "scaled_square",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 2.1,
+      "width": 2.1
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 2.1,
+      "width": 2.1
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "rotated_rectangle",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 3.0,
+      "width": 1.0000000000000007
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "height": 3.0,
+      "width": 1.0000000000000002
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "next_to",
+    "manim": {
+      "left": {
+        "center": [
+          -1.0,
+          0.0
+        ],
+        "height": 1.2,
+        "width": 1.2000000000000002
+      },
+      "right": {
+        "center": [
+          0.29999999999999993,
+          0.0
+        ],
+        "height": 0.8,
+        "width": 0.8
+      }
+    },
+    "noon": {
+      "left": {
+        "center": [
+          -1.0,
+          0.0
+        ],
+        "height": 1.2,
+        "width": 1.2000000000000002
+      },
+      "right": {
+        "center": [
+          0.29999999999999993,
+          0.0
+        ],
+        "height": 0.8,
+        "width": 0.8
+      }
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "align_to_top",
+    "manim": {
+      "object": {
+        "center": [
+          -2.0,
+          0.85
+        ],
+        "height": 0.8,
+        "width": 0.7999999999999998
+      },
+      "target": {
+        "center": [
+          0.8,
+          0.5
+        ],
+        "height": 1.5,
+        "width": 2.0
+      }
+    },
+    "noon": {
+      "object": {
+        "center": [
+          -2.0,
+          0.85
+        ],
+        "height": 0.8,
+        "width": 0.7999999999999998
+      },
+      "target": {
+        "center": [
+          0.8,
+          0.5
+        ],
+        "height": 1.5,
+        "width": 2.0
+      }
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "to_edge",
+    "manim": {
+      "center": [
+        -6.21111111111111,
+        0.0
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "noon": {
+      "center": [
+        -6.21111111111111,
+        0.0
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "to_corner",
+    "manim": {
+      "center": [
+        6.361111111111111,
+        3.25
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "noon": {
+      "center": [
+        6.361111111111111,
+        3.25
+      ],
+      "height": 1.0,
+      "width": 1.0
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "vgroup_arrange",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "members": [
+        {
+          "center": [
+            -0.9000000000000001,
+            0.0
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            -0.1500000000000001,
+            0.0
+          ],
+          "height": 0.6,
+          "width": 0.6000000000000001
+        },
+        {
+          "center": [
+            0.75,
+            0.0
+          ],
+          "height": 0.4,
+          "width": 0.8000000000000003
+        }
+      ]
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "members": [
+        {
+          "center": [
+            -0.9000000000000001,
+            0.0
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            -0.15000000000000013,
+            0.0
+          ],
+          "height": 0.6,
+          "width": 0.6
+        },
+        {
+          "center": [
+            0.75,
+            0.0
+          ],
+          "height": 0.4,
+          "width": 0.7999999999999999
+        }
+      ]
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "set_xy",
+    "manim": {
+      "center": [
+        1.25,
+        -0.75
+      ],
+      "height": 0.7999999999999999,
+      "width": 0.7999999999999999
+    },
+    "noon": {
+      "center": [
+        1.25,
+        -0.75
+      ],
+      "height": 0.7999999999999999,
+      "width": 0.7999999999999999
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "next_to_point",
+    "manim": {
+      "center": [
+        1.5,
+        0.65
+      ],
+      "height": 0.5999999999999999,
+      "width": 0.6000000000000001
+    },
+    "noon": {
+      "center": [
+        1.5,
+        0.65
+      ],
+      "height": 0.5999999999999999,
+      "width": 0.6000000000000001
+    },
+    "status": "pass"
+  },
+  {
+    "error": "AttributeError: 'VGroup' object has no attribute 'remove'",
+    "fixture": "vgroup_add_remove",
+    "status": "error",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/noon/noon/scripts/diagnose-parity-o1.py\", line 14, in <module>\n    noon_value = fixture.noon_probe()\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/noon/noon/scripts/manim-differential.py\", line 222, in _noon_vgroup_add_remove\n    group = noon.VGroup(first, removed).add(last).remove(removed)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'VGroup' object has no attribute 'remove'\n"
+  },
+  {
+    "differences": [],
+    "fixture": "vgroup_shift",
+    "manim": {
+      "center": [
+        -0.19999999999999996,
+        0.75
+      ],
+      "members": [
+        {
+          "center": [
+            -1.2,
+            0.75
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.8,
+            0.75
+          ],
+          "height": 0.5,
+          "width": 0.5
+        }
+      ]
+    },
+    "noon": {
+      "center": [
+        -0.19999999999999996,
+        0.75
+      ],
+      "members": [
+        {
+          "center": [
+            -1.2,
+            0.75
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.8,
+            0.75
+          ],
+          "height": 0.5,
+          "width": 0.5
+        }
+      ]
+    },
+    "status": "pass"
+  },
+  {
+    "differences": [],
+    "fixture": "mobject_copy_independence",
+    "manim": {
+      "clone": {
+        "center": [
+          1.2,
+          0.0
+        ],
+        "height": 0.6,
+        "width": 1.1999999999999997
+      },
+      "source": {
+        "center": [
+          -0.8,
+          0.0
+        ],
+        "height": 0.6,
+        "width": 1.1999999999999997
+      }
+    },
+    "noon": {
+      "clone": {
+        "center": [
+          1.2,
+          0.0
+        ],
+        "height": 0.6,
+        "width": 1.1999999999999997
+      },
+      "source": {
+        "center": [
+          -0.8,
+          0.0
+        ],
+        "height": 0.6,
+        "width": 1.1999999999999997
+      }
+    },
+    "status": "pass"
+  },
+  {
+    "error": "AttributeError: 'VGroup' object has no attribute 'copy'",
+    "fixture": "vgroup_copy_independence",
+    "status": "error",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/noon/noon/scripts/diagnose-parity-o1.py\", line 14, in <module>\n    noon_value = fixture.noon_probe()\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/noon/noon/scripts/manim-differential.py\", line 267, in _noon_vgroup_copy_independence\n    clone = source.copy().shift(noon.UP * 1.1)\n            ^^^^^^^^^^^\nAttributeError: 'VGroup' object has no attribute 'copy'\n"
+  },
+  {
+    "differences": [],
+    "fixture": "vgroup_arrange_grid",
+    "manim": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "members": [
+        {
+          "center": [
+            -0.4,
+            0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.4,
+            0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            -0.4,
+            -0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.4,
+            -0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        }
+      ]
+    },
+    "noon": {
+      "center": [
+        0.0,
+        0.0
+      ],
+      "members": [
+        {
+          "center": [
+            -0.4,
+            0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.4,
+            0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            -0.4,
+            -0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        },
+        {
+          "center": [
+            0.4,
+            -0.4
+          ],
+          "height": 0.5,
+          "width": 0.5
+        }
+      ]
+    },
+    "status": "pass"
+  },
+  {
+    "error": "AttributeError: 'VGroup' object has no attribute 'scale'",
+    "fixture": "vgroup_scale",
+    "status": "error",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/noon/noon/scripts/diagnose-parity-o1.py\", line 14, in <module>\n    noon_value = fixture.noon_probe()\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/noon/noon/scripts/manim-differential.py\", line 298, in _noon_vgroup_scale\n    ).arrange(noon.RIGHT, buff=0.4).scale(1.5)\n                                    ^^^^^\nAttributeError: 'VGroup' object has no attribute 'scale'\n"
+  },
+  {
+    "error": "AttributeError: 'VGroup' object has no attribute 'rotate'",
+    "fixture": "vgroup_rotate",
+    "status": "error",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/runner/work/noon/noon/scripts/diagnose-parity-o1.py\", line 14, in <module>\n    noon_value = fixture.noon_probe()\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/runner/work/noon/noon/scripts/manim-differential.py\", line 314, in _noon_vgroup_rotate\n    ).arrange(noon.RIGHT, buff=0.25).rotate(math.pi / 2.0)\n                                     ^^^^^^\nAttributeError: 'VGroup' object has no attribute 'rotate'\n"
+  }
+]
