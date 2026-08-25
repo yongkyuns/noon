@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: parity/manim-create-partial
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Apply constructor patch
         run: python3 scripts/_apply_manim_circle_default.py
       - name: Format Rust
