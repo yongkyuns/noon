@@ -56,6 +56,9 @@ pub struct CompiledObject {
     pub base_transform: Transform2D,
     pub base_style: Style,
     pub dynamic: DynamicProperties,
+    /// Whether this stable compiled slot currently contains a live scene object.
+    /// Removed objects leave tombstones so unrelated slot numbers never change.
+    pub live: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -149,11 +152,19 @@ pub struct CompiledPatchStats {
     pub dynamic_objects_recomputed: usize,
     pub dynamic_tracks_inspected: usize,
     pub dense_track_slots_shifted: usize,
+    pub object_slots_appended: usize,
+    pub object_slots_retired: usize,
+    pub object_indices_rewritten: usize,
+    pub track_object_indices_rewritten: usize,
+    pub track_locators_removed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
+    // Stable append-only slot storage. Removal tombstones a slot instead of shifting it.
+    // A future compaction generation may reclaim retired capacity off the live-edit path.
     objects: Vec<CompiledObject>,
+    live_object_count: usize,
     tracks: Vec<CompiledTrack>,
     object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
@@ -272,6 +283,7 @@ impl CompiledScene {
                 base_transform: object.transform,
                 base_style: object.style,
                 dynamic: DynamicProperties::default(),
+                live: true,
             });
         }
 
@@ -294,16 +306,54 @@ impl CompiledScene {
             .map(|track| (track.id, CompiledTrackLocator::from_track(track)))
             .collect();
 
+        let live_object_count = objects.len();
         Ok(Self {
             objects,
+            live_object_count,
             tracks,
             object_indices,
             track_locators,
         })
     }
 
+    /// Stable compiled object slots. Retired slots remain in this slice and have `live == false`.
     pub fn objects(&self) -> &[CompiledObject] {
         &self.objects
+    }
+
+    pub const fn live_object_count(&self) -> usize {
+        self.live_object_count
+    }
+
+    pub fn object_slot_is_live(&self, object_index: u32) -> bool {
+        self.objects
+            .get(object_index as usize)
+            .is_some_and(|object| object.live)
+    }
+
+    pub fn object_id_at_slot(&self, object_index: u32) -> Option<ObjectId> {
+        let object = self.objects.get(object_index as usize)?;
+        object.live.then_some(object.id)
+    }
+
+    pub fn object_channels(&self, id: ObjectId) -> Vec<CompiledChannelKey> {
+        let Some(object_index) = self.object_index(id) else {
+            return Vec::new();
+        };
+        let range = self.object_track_range(object_index);
+        let mut channels = Vec::with_capacity(8);
+        for track in &self.tracks[range] {
+            let channel = CompiledChannelKey::new(object_index, track.property);
+            if channels.last() != Some(&channel) {
+                channels.push(channel);
+            }
+        }
+        channels
+    }
+
+    pub fn track_object(&self, id: TrackId) -> Option<ObjectId> {
+        let locator = self.track_locators.get(&id)?;
+        self.object_id_at_slot(locator.object_index)
     }
 
     pub fn tracks(&self) -> &[CompiledTrack] {
@@ -353,25 +403,39 @@ impl CompiledScene {
                     base_transform: object.transform,
                     base_style: object.style,
                     dynamic: DynamicProperties::default(),
+                    live: true,
                 });
                 self.object_indices.insert(object.id, index);
+                self.live_object_count += 1;
+                stats.object_slots_appended = 1;
             }
             ScenePatch::RemoveObject(id) => {
                 let index = self
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
-                self.objects.remove(index as usize);
-                self.tracks.retain(|track| track.object_index != index);
-                for track in &mut self.tracks {
-                    if track.object_index > index {
-                        track.object_index -= 1;
-                    }
+                let range = self.object_track_range(index);
+                for track in &self.tracks[range.clone()] {
+                    self.track_locators.remove(&track.id);
+                    stats.track_locators_removed += 1;
                 }
-                self.rebuild_object_indices();
-                self.rebuild_track_locators();
-                self.recompute_dynamic();
-                stats.dynamic_objects_recomputed = self.objects.len();
-                stats.dynamic_tracks_inspected = self.tracks.len();
+                let before_remove_len = self.tracks.len();
+                let removed_track_count = range.len();
+                let shifted_after = before_remove_len.saturating_sub(range.end);
+                self.tracks.drain(range);
+                if removed_track_count > 0 {
+                    stats.dense_track_slots_shifted = shifted_after;
+                }
+
+                let object = &mut self.objects[index as usize];
+                debug_assert!(object.live);
+                object.live = false;
+                object.dynamic = DynamicProperties::default();
+                self.object_indices.remove(id);
+                self.live_object_count -= 1;
+                stats.object_slots_retired = 1;
+                // Crucially, later object slots and every remaining track's object slot are unchanged.
+                stats.object_indices_rewritten = 0;
+                stats.track_object_indices_rewritten = 0;
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
@@ -453,23 +517,6 @@ impl CompiledScene {
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
         compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
-    }
-
-    fn rebuild_object_indices(&mut self) {
-        self.object_indices.clear();
-        for (index, object) in self.objects.iter().enumerate() {
-            let index = u32::try_from(index).expect("compiled object count already validated");
-            self.object_indices.insert(object.id, index);
-        }
-    }
-
-    fn rebuild_track_locators(&mut self) {
-        self.track_locators.clear();
-        self.track_locators.extend(
-            self.tracks
-                .iter()
-                .map(|track| (track.id, CompiledTrackLocator::from_track(track))),
-        );
     }
 
     fn track_insertion_position(&self, track: &CompiledTrack) -> usize {
@@ -596,17 +643,6 @@ impl CompiledScene {
             }
             self.objects[object_index as usize].dynamic = dynamic;
             stats.dynamic_objects_recomputed += 1;
-        }
-    }
-
-    fn recompute_dynamic(&mut self) {
-        for object in &mut self.objects {
-            object.dynamic = DynamicProperties::default();
-        }
-        for track in &self.tracks {
-            self.objects[track.object_index as usize]
-                .dynamic
-                .mark(track.property);
         }
     }
 }
@@ -1402,5 +1438,45 @@ mod tests {
             }
         );
         assert_eq!(compiled.tracks(), before);
+    }
+    #[test]
+    fn removing_middle_object_keeps_compiled_slots_and_track_targets_stable() {
+        let mut scene = SceneDefinition::new();
+        let mut objects = Vec::with_capacity(100_000);
+        for _ in 0..100_000 {
+            objects.push(scene.add(GeometryRef::circle(1.0)));
+        }
+        let tracked = objects[99_999];
+        let track = scene
+            .animate_position(
+                tracked,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let later_slot = compiled.object_index(objects[50_001]).unwrap();
+        let tracked_slot = compiled.object_index(tracked).unwrap();
+
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::RemoveObject(objects[50_000]))
+            .unwrap();
+
+        assert_eq!(compiled.object_index(objects[50_000]), None);
+        assert_eq!(compiled.object_index(objects[50_001]), Some(later_slot));
+        assert_eq!(compiled.object_index(tracked), Some(tracked_slot));
+        assert_eq!(
+            compiled.channel_for_track(track).unwrap().object_index,
+            tracked_slot
+        );
+        assert!(!compiled.object_slot_is_live(50_000));
+        assert_eq!(compiled.objects().len(), 100_000);
+        assert_eq!(compiled.live_object_count(), 99_999);
+        assert_eq!(stats.object_slots_retired, 1);
+        assert_eq!(stats.object_indices_rewritten, 0);
+        assert_eq!(stats.track_object_indices_rewritten, 0);
+        assert_eq!(stats.dynamic_objects_recomputed, 0);
+        assert_eq!(stats.dynamic_tracks_inspected, 0);
     }
 }

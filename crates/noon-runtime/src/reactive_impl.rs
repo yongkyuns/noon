@@ -105,6 +105,38 @@ impl ReactiveRuntime {
             .expect("reactive update must reference a lowered binding");
         self.targets[index]
     }
+
+    fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
+        const PROPERTIES: [Property; 8] = [
+            Property::Presence,
+            Property::Transform,
+            Property::Position,
+            Property::Rotation,
+            Property::Opacity,
+            Property::Appearance,
+            Property::Reveal,
+            Property::Morph,
+        ];
+        for property in PROPERTIES {
+            let Some(&target_index) = self.target_lookup.get(&binding_key(object, property)) else {
+                continue;
+            };
+            let old_index = self.targets[target_index].object_index;
+            if old_index == object_index {
+                continue;
+            }
+            if let Some(old_targets) = self.targets_by_object.get_mut(old_index) {
+                if let Some(position) = old_targets.iter().position(|&index| index == target_index) {
+                    old_targets.swap_remove(position);
+                }
+            }
+            if self.targets_by_object.len() <= object_index {
+                self.targets_by_object.resize_with(object_index + 1, Vec::new);
+            }
+            self.targets[target_index].object_index = object_index;
+            self.targets_by_object[object_index].push(target_index);
+        }
+    }
 }
 
 impl SceneInstance {
@@ -147,6 +179,7 @@ impl SceneInstance {
             .state
             .set_input(signal, value)?;
         let evaluation = update.stats();
+        let mut applied_targets = 0;
         let mut changed_targets = 0;
 
         for change in update.property_changes() {
@@ -155,6 +188,13 @@ impl SceneInstance {
                 .as_ref()
                 .expect("reactive state exists while applying its update")
                 .target(change.object, change.property);
+            if !self
+                .compiled
+                .object_slot_is_live(target.object_index as u32)
+            {
+                continue;
+            }
+            applied_targets += 1;
             if apply_reactive_value(
                 &mut self.frame,
                 target.object_index,
@@ -166,19 +206,24 @@ impl SceneInstance {
             }
         }
 
-        self.last_reactive_stats =
-            runtime_stats(evaluation, update.property_changes().len(), changed_targets);
+        self.last_reactive_stats = runtime_stats(evaluation, applied_targets, changed_targets);
         Ok(&self.frame)
     }
 
     pub(crate) fn reapply_reactive(&mut self) {
         let Self {
-            reactive, frame, ..
+            compiled,
+            reactive,
+            frame,
+            ..
         } = self;
         let Some(reactive) = reactive.as_ref() else {
             return;
         };
         for target in &reactive.targets {
+            if !compiled.object_slot_is_live(target.object_index as u32) {
+                continue;
+            }
             let value = reactive
                 .state
                 .value(target.signal)
@@ -187,7 +232,17 @@ impl SceneInstance {
         }
     }
 
+    pub(crate) fn rebind_reactive_object(&mut self, object: ObjectId, object_index: usize) {
+        let Some(reactive) = self.reactive.as_mut() else {
+            return;
+        };
+        reactive.rebind_object(object, object_index);
+    }
+
     pub(crate) fn reapply_reactive_for_object(&mut self, object_index: usize) {
+        if !self.object_slot_is_live(object_index) {
+            return;
+        }
         let Self {
             reactive, frame, ..
         } = self;
@@ -419,4 +474,45 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn removed_reactive_target_stays_hidden_and_rebinds_on_same_id_recreate() {
+        let mut scene = SemanticScene::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let visible = scene.add_input(true);
+        scene.bind(visible, object, Property::Presence);
+
+        let mut instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        instance
+            .apply_patch(&noon_core::ScenePatch::RemoveObject(object))
+            .expect("remove must compile");
+        assert!(!instance.frame().presences[0]);
+
+        instance
+            .set_reactive_input(visible, false)
+            .expect("removed target update is still a valid signal update");
+        instance
+            .set_reactive_input(visible, true)
+            .expect("removed target update is still a valid signal update");
+        assert!(!instance.frame().presences[0]);
+        assert_eq!(instance.last_reactive_stats().dense_targets_applied, 0);
+
+        instance
+            .apply_patch(&noon_core::ScenePatch::CreateObject(
+                noon_core::ObjectDefinition::new(object, GeometryRef::rectangle(2.0, 1.0)),
+            ))
+            .expect("same identity may be recreated after removal");
+        assert_eq!(instance.frame().objects.len(), 2);
+        assert!(!instance.frame().presences[0]);
+        assert_eq!(instance.frame().objects[1].id, object);
+        assert!(instance.frame().presences[1]);
+
+        instance
+            .set_reactive_input(visible, false)
+            .expect("rebound target update must apply");
+        assert!(!instance.frame().presences[0]);
+        assert!(!instance.frame().presences[1]);
+        assert_eq!(instance.last_reactive_stats().dense_targets_applied, 1);
+    }
+
 }
