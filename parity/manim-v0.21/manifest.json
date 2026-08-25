@@ -13,7 +13,8 @@
     {
       "id": "create-circle",
       "scene": "CreateCircle",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "expected_default_stroke": "#FC6255"
     },
     {
       "id": "square-to-circle",
