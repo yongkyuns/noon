@@ -56,7 +56,7 @@ class CallbackContextTests(unittest.TestCase):
         self.assertEqual(current.transform["translation"]["x"], 777.0)
         self.assertEqual(set(context._current), {777})
         self.assertEqual(set(context._baseline), {777})
-        self.assertEqual(context.patch_batch(0).patches, [])
+        self.assertEqual(context.patch_batch(0).to_document()["patches"], [])
 
     def test_replace_materializes_baseline_before_recording_mutation(self) -> None:
         objects = [_object(index) for index in range(8)]
@@ -72,9 +72,9 @@ class CallbackContextTests(unittest.TestCase):
         )
         context.replace_raw(3, moved)
 
-        batch = context.patch_batch(4)
-        self.assertEqual(len(batch.patches), 1)
-        self.assertEqual(batch.patches[0]["set_transform"]["object"], 3)
+        batch = context.patch_batch(4).to_document()
+        self.assertEqual(len(batch["patches"]), 1)
+        self.assertEqual(batch["patches"][0]["set_transform"]["object"], 3)
         self.assertEqual(set(context._current), {3})
         self.assertEqual(set(context._baseline), {3})
 
