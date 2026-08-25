@@ -63,13 +63,9 @@ impl TessellatedPath {
         } else {
             0.0
         };
-        if last.distance <= 0.0 {
-            return Some(first.position);
-        }
-        let target = last.distance * reveal;
         let upper = self
             .reveal_points
-            .partition_point(|point| point.distance < target);
+            .partition_point(|point| point.progress < reveal);
         if upper == 0 {
             return Some(first.position);
         }
@@ -78,11 +74,11 @@ impl TessellatedPath {
         }
         let left = self.reveal_points[upper - 1];
         let right = self.reveal_points[upper];
-        let span = right.distance - left.distance;
+        let span = right.progress - left.progress;
         if span <= f32::EPSILON {
             return Some(right.position);
         }
-        let t = ((target - left.distance) / span).clamp(0.0, 1.0);
+        let t = ((reveal - left.progress) / span).clamp(0.0, 1.0);
         Some(Vec2::new(
             left.position.x + (right.position.x - left.position.x) * t,
             left.position.y + (right.position.y - left.position.y) * t,
@@ -118,8 +114,16 @@ impl std::error::Error for GeometryError {}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct RevealPoint {
-    distance: f32,
+    progress: f32,
     position: Vec2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CubicRevealCurve {
+    start: Vec2,
+    control1: Vec2,
+    control2: Vec2,
+    end: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +131,7 @@ struct TessellationVertex {
     position: Vec2,
     surface: PathSurface,
     path_distance: f32,
+    path_progress: f32,
 }
 
 pub fn tessellate(path: &VectorPath, stroke_width: f32) -> Result<TessellatedPath, GeometryError> {
@@ -167,19 +172,21 @@ pub fn tessellate_styled_with_fill(
         );
     }
     let reveal_points = build_reveal_points(path)?;
-    let path = build_lyon_path(path)?;
+    let fill_path = build_lyon_path(path)?;
+    let stroke_path = build_lyon_path_with_manim_progress(path)?;
     let mut buffers = VertexBuffers::new();
 
     if fill_enabled {
         FillTessellator::new()
             .tessellate_path(
-                &path,
+                &fill_path,
                 &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
                 &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| {
                     TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
                         surface: PathSurface::Fill,
                         path_distance: 0.0,
+                        path_progress: 1.0,
                     }
                 }),
             )
@@ -189,22 +196,28 @@ pub fn tessellate_styled_with_fill(
     if stroke_width > 0.0 {
         StrokeTessellator::new()
             .tessellate_path(
-                &path,
+                &stroke_path,
                 &StrokeOptions::default()
                     .with_tolerance(PATH_TESSELLATION_TOLERANCE)
                     .with_line_width(stroke_width)
                     .with_miter_limit(MORPH_MITER_LIMIT)
                     .with_line_cap(lyon_line_cap(stroke_cap))
                     .with_line_join(lyon_line_join(stroke_join)),
-                &mut BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+                &mut BuffersBuilder::new(&mut buffers, |mut vertex: StrokeVertex<'_, '_>| {
+                    let path_progress = vertex
+                        .interpolated_attributes()
+                        .first()
+                        .copied()
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0);
                     TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
                         surface: PathSurface::Stroke,
-                        // Lyon defines advancement as how far along the complete
-                        // input path the stroke vertex is. It is already global
-                        // across subpaths, so adding contour offsets would
-                        // double-count later contours.
+                        // Keep advancement as an independent physical-length metric,
+                        // but drive Create from Manim's curve-index + local-t
+                        // parameter carried as an interpolated endpoint attribute.
                         path_distance: vertex.advancement(),
+                        path_progress,
                     }
                 }),
             )
@@ -223,17 +236,12 @@ pub fn tessellate_styled_with_fill(
         .into_iter()
         .map(|vertex| {
             if vertex.surface == PathSurface::Stroke {
-                let path_progress = if stroke_length > 0.0 {
-                    (vertex.path_distance / stroke_length).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
                 MeshVertex {
                     position: vertex.position,
                     target_position: vertex.position,
                     surface: vertex.surface,
                     path_distance: vertex.path_distance,
-                    path_progress,
+                    path_progress: vertex.path_progress,
                 }
             } else {
                 MeshVertex {
@@ -259,17 +267,26 @@ pub fn tessellate_styled_with_fill(
 }
 
 fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryError> {
+    let curve_count = count_manim_curves(path)?;
     let mut points = Vec::new();
     let mut current = None;
     let mut contour_start = None;
-    let mut distance = 0.0_f32;
+    let mut curve_index = 0_usize;
+
+    let progress = |index: usize| -> f32 {
+        if curve_count == 0 {
+            0.0
+        } else {
+            index as f32 / curve_count as f32
+        }
+    };
 
     for command in path.commands() {
         match *command {
             PathCommand::MoveTo { to } => {
                 ensure_finite_point(to)?;
                 points.push(RevealPoint {
-                    distance,
+                    progress: progress(curve_index),
                     position: to,
                 });
                 current = Some(to);
@@ -278,14 +295,30 @@ fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryEr
             PathCommand::LineTo { to } => {
                 ensure_finite_point(to)?;
                 let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
-                append_reveal_segment(&mut points, &mut distance, from, to);
+                append_reveal_segment(
+                    &mut points,
+                    progress(curve_index),
+                    progress(curve_index + 1),
+                    from,
+                    to,
+                );
+                curve_index += 1;
                 current = Some(to);
             }
             PathCommand::QuadraticTo { control, to } => {
                 ensure_finite_point(control)?;
                 ensure_finite_point(to)?;
                 let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
-                flatten_quadratic_reveal(&mut points, &mut distance, from, control, to, 0);
+                flatten_quadratic_reveal(
+                    &mut points,
+                    progress(curve_index),
+                    progress(curve_index + 1),
+                    from,
+                    control,
+                    to,
+                    0,
+                );
+                curve_index += 1;
                 current = Some(to);
             }
             PathCommand::CubicTo {
@@ -297,13 +330,34 @@ fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryEr
                 ensure_finite_point(control2)?;
                 ensure_finite_point(to)?;
                 let from = current.ok_or(GeometryError::DrawingBeforeMove)?;
-                flatten_cubic_reveal(&mut points, &mut distance, from, control1, control2, to, 0);
+                flatten_cubic_reveal(
+                    &mut points,
+                    progress(curve_index),
+                    progress(curve_index + 1),
+                    CubicRevealCurve {
+                        start: from,
+                        control1,
+                        control2,
+                        end: to,
+                    },
+                    0,
+                );
+                curve_index += 1;
                 current = Some(to);
             }
             PathCommand::Close => {
                 let from = current.ok_or(GeometryError::CloseBeforeMove)?;
                 let to = contour_start.ok_or(GeometryError::CloseBeforeMove)?;
-                append_reveal_segment(&mut points, &mut distance, from, to);
+                if (from.x - to.x).hypot(from.y - to.y) > f32::EPSILON {
+                    append_reveal_segment(
+                        &mut points,
+                        progress(curve_index),
+                        progress(curve_index + 1),
+                        from,
+                        to,
+                    );
+                    curve_index += 1;
+                }
                 current = Some(to);
             }
         }
@@ -319,20 +373,22 @@ fn ensure_finite_point(point: Vec2) -> Result<(), GeometryError> {
     }
 }
 
-fn append_reveal_segment(points: &mut Vec<RevealPoint>, distance: &mut f32, from: Vec2, to: Vec2) {
+fn append_reveal_segment(
+    points: &mut Vec<RevealPoint>,
+    start_progress: f32,
+    end_progress: f32,
+    from: Vec2,
+    to: Vec2,
+) {
     if points.is_empty() {
         points.push(RevealPoint {
-            distance: *distance,
+            progress: start_progress,
             position: from,
         });
     }
-    let dx = to.x - from.x;
-    let dy = to.y - from.y;
-    let length = (dx * dx + dy * dy).sqrt();
-    if length > 0.0 {
-        *distance += length;
+    if (to.x - from.x).hypot(to.y - from.y) > 0.0 {
         points.push(RevealPoint {
-            distance: *distance,
+            progress: end_progress,
             position: to,
         });
     }
@@ -356,36 +412,58 @@ fn point_line_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
 
 fn flatten_quadratic_reveal(
     points: &mut Vec<RevealPoint>,
-    distance: &mut f32,
+    start_progress: f32,
+    end_progress: f32,
     start: Vec2,
     control: Vec2,
     end: Vec2,
     depth: u8,
 ) {
     if depth >= 16 || point_line_distance(control, start, end) <= PATH_TESSELLATION_TOLERANCE {
-        append_reveal_segment(points, distance, start, end);
+        append_reveal_segment(points, start_progress, end_progress, start, end);
         return;
     }
     let start_control = midpoint(start, control);
     let control_end = midpoint(control, end);
     let center = midpoint(start_control, control_end);
-    flatten_quadratic_reveal(points, distance, start, start_control, center, depth + 1);
-    flatten_quadratic_reveal(points, distance, center, control_end, end, depth + 1);
+    let mid_progress = (start_progress + end_progress) * 0.5;
+    flatten_quadratic_reveal(
+        points,
+        start_progress,
+        mid_progress,
+        start,
+        start_control,
+        center,
+        depth + 1,
+    );
+    flatten_quadratic_reveal(
+        points,
+        mid_progress,
+        end_progress,
+        center,
+        control_end,
+        end,
+        depth + 1,
+    );
 }
 
 fn flatten_cubic_reveal(
     points: &mut Vec<RevealPoint>,
-    distance: &mut f32,
-    start: Vec2,
-    control1: Vec2,
-    control2: Vec2,
-    end: Vec2,
+    start_progress: f32,
+    end_progress: f32,
+    curve: CubicRevealCurve,
     depth: u8,
 ) {
+    let CubicRevealCurve {
+        start,
+        control1,
+        control2,
+        end,
+    } = curve;
     let flatness =
         point_line_distance(control1, start, end).max(point_line_distance(control2, start, end));
     if depth >= 16 || flatness <= PATH_TESSELLATION_TOLERANCE {
-        append_reveal_segment(points, distance, start, end);
+        append_reveal_segment(points, start_progress, end_progress, start, end);
         return;
     }
     let a = midpoint(start, control1);
@@ -394,8 +472,31 @@ fn flatten_cubic_reveal(
     let d = midpoint(a, b);
     let e = midpoint(b, c);
     let center = midpoint(d, e);
-    flatten_cubic_reveal(points, distance, start, a, d, center, depth + 1);
-    flatten_cubic_reveal(points, distance, center, e, c, end, depth + 1);
+    let mid_progress = (start_progress + end_progress) * 0.5;
+    flatten_cubic_reveal(
+        points,
+        start_progress,
+        mid_progress,
+        CubicRevealCurve {
+            start,
+            control1: a,
+            control2: d,
+            end: center,
+        },
+        depth + 1,
+    );
+    flatten_cubic_reveal(
+        points,
+        mid_progress,
+        end_progress,
+        CubicRevealCurve {
+            start: center,
+            control1: e,
+            control2: c,
+            end,
+        },
+        depth + 1,
+    );
 }
 
 fn lyon_line_join(join: StrokeJoin) -> LineJoin {
@@ -987,6 +1088,146 @@ fn morph_mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
     Some(Rect::new(min, max))
 }
 
+fn count_manim_curves(path: &VectorPath) -> Result<usize, GeometryError> {
+    let mut count = 0_usize;
+    let mut active = false;
+    let mut current = None;
+    let mut contour_start = None;
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo { to } => {
+                finite(to)?;
+                active = true;
+                current = Some(to);
+                contour_start = Some(to);
+            }
+            PathCommand::LineTo { to } => {
+                require_active(active)?;
+                finite(to)?;
+                count += 1;
+                current = Some(to);
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                require_active(active)?;
+                finite(control)?;
+                finite(to)?;
+                count += 1;
+                current = Some(to);
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                require_active(active)?;
+                finite(control1)?;
+                finite(control2)?;
+                finite(to)?;
+                count += 1;
+                current = Some(to);
+            }
+            PathCommand::Close => {
+                require_active(active)?;
+                let from = current.ok_or(GeometryError::CloseBeforeMove)?;
+                let to = contour_start.ok_or(GeometryError::CloseBeforeMove)?;
+                if (from.x - to.x).hypot(from.y - to.y) > f32::EPSILON {
+                    count += 1;
+                }
+                active = false;
+                current = Some(to);
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn build_lyon_path_with_manim_progress(path: &VectorPath) -> Result<Path, GeometryError> {
+    let curve_count = count_manim_curves(path)?;
+    let mut builder = Path::builder_with_attributes(1);
+    let mut active = false;
+    let mut current = None;
+    let mut contour_start = None;
+    let mut curve_index = 0_usize;
+    let progress = |index: usize| -> f32 {
+        if curve_count == 0 {
+            0.0
+        } else {
+            index as f32 / curve_count as f32
+        }
+    };
+
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo { to } => {
+                finite(to)?;
+                if active {
+                    builder.end(false);
+                }
+                builder.begin(point(to.x, to.y), &[progress(curve_index)]);
+                active = true;
+                current = Some(to);
+                contour_start = Some(to);
+            }
+            PathCommand::LineTo { to } => {
+                require_active(active)?;
+                finite(to)?;
+                curve_index += 1;
+                builder.line_to(point(to.x, to.y), &[progress(curve_index)]);
+                current = Some(to);
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                require_active(active)?;
+                finite(control)?;
+                finite(to)?;
+                curve_index += 1;
+                builder.quadratic_bezier_to(
+                    point(control.x, control.y),
+                    point(to.x, to.y),
+                    &[progress(curve_index)],
+                );
+                current = Some(to);
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                require_active(active)?;
+                finite(control1)?;
+                finite(control2)?;
+                finite(to)?;
+                curve_index += 1;
+                builder.cubic_bezier_to(
+                    point(control1.x, control1.y),
+                    point(control2.x, control2.y),
+                    point(to.x, to.y),
+                    &[progress(curve_index)],
+                );
+                current = Some(to);
+            }
+            PathCommand::Close => {
+                require_active(active)?;
+                let from = current.ok_or(GeometryError::CloseBeforeMove)?;
+                let to = contour_start.ok_or(GeometryError::CloseBeforeMove)?;
+                // A native lyon close interpolates back to the first endpoint's
+                // attribute, which would make reveal progress run backwards. Emit
+                // Manim's closing curve explicitly with the next global progress.
+                if (from.x - to.x).hypot(from.y - to.y) > f32::EPSILON {
+                    curve_index += 1;
+                    builder.line_to(point(to.x, to.y), &[progress(curve_index)]);
+                }
+                builder.end(false);
+                active = false;
+                current = Some(to);
+            }
+        }
+    }
+    if active {
+        builder.end(false);
+    }
+    Ok(builder.build())
+}
+
 fn build_lyon_path(path: &VectorPath) -> Result<Path, GeometryError> {
     let mut builder = Path::builder();
     let mut active = false;
@@ -1164,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_contours_use_one_global_ordered_arc_length() {
+    fn multiple_contours_use_one_global_manim_curve_parameter() {
         let path = VectorPath::new()
             .move_to(Vec2::new(0.0, 0.0))
             .line_to(Vec2::new(3.0, 0.0))
@@ -1182,10 +1423,26 @@ mod tests {
         assert!(!second_contour_progresses.is_empty());
         assert!(second_contour_progresses
             .iter()
-            .all(|progress| *progress >= 3.0 / 7.0 - 1e-5));
+            .all(|progress| *progress >= 0.5 - 1e-5));
         assert!(second_contour_progresses
             .iter()
             .any(|progress| (*progress - 1.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn reveal_head_uses_curve_count_not_arc_length() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(100.0, 0.0))
+            .line_to(Vec2::new(100.0, 1.0));
+        let mesh = tessellate(&path, 0.2).expect("valid path");
+        let halfway = mesh.reveal_head_position(0.5).expect("reveal head");
+        assert!((halfway.x - 100.0).abs() < 1e-5);
+        assert!(halfway.y.abs() < 1e-5);
+
+        let three_quarters = mesh.reveal_head_position(0.75).expect("reveal head");
+        assert!((three_quarters.x - 100.0).abs() < 1e-5);
+        assert!((three_quarters.y - 0.5).abs() < 1e-5);
     }
 
     #[test]

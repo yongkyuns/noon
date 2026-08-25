@@ -245,6 +245,26 @@ class SharedQueryTransforms(Scene):
         self.add(box, target, orbit)
 `;
 
+const uncreateSource = `
+from noon import *
+
+class UncreateLifecycle(Scene):
+    def construct(self):
+        first = Square(side_length=0.6, color=BLUE)
+        kept = Circle(radius=0.25, color=PINK)
+        forward = Square(side_length=0.4, color=GREEN)
+        self.add(first, kept, forward)
+
+        self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
+        assert first not in self.mobjects
+
+        self.play(Uncreate(kept, remover=False), run_time=1.0)
+        assert kept in self.mobjects
+
+        self.play(Uncreate(forward, reverse_rate_function=False), run_time=1.0)
+        assert forward not in self.mobjects
+`;
+
 const rateFunctionSource = `
 from noon import *
 
@@ -296,6 +316,25 @@ try {
   );
   const transform = foundation.document.tracks.find((track) => track.property === "transform");
   assert.equal(transform.timing.easing, "linear");
+
+  const uncreate = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    uncreateSource,
+  );
+  assert.equal(uncreate.kind, "scene_document");
+  const uncreateReveals = uncreate.document.tracks.filter((track) => track.property === "reveal");
+  assert.equal(uncreateReveals.length, 3);
+  assert.deepEqual(uncreateReveals[0].values.scalar, { from: 1, to: 0 });
+  assert.equal(uncreateReveals[0].timing.easing, "rush_from");
+  assert.deepEqual(uncreateReveals[1].values.scalar, { from: 1, to: 0 });
+  assert.equal(uncreateReveals[1].timing.easing, "smooth");
+  assert.deepEqual(uncreateReveals[2].values.scalar, { from: 0, to: 1 });
+  const uncreateRemovals = uncreate.document.tracks.filter(
+    (track) => track.property === "presence" && track.values.bool?.from === true && track.values.bool?.to === false,
+  );
+  assert.equal(uncreateRemovals.length, 2, "remover=False must preserve scene membership");
+  assert.equal(uncreateRemovals[0].timing.start_time, 2.0);
+  assert.equal(uncreateRemovals[1].timing.start_time, 4.0);
 
   const phaseB = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),

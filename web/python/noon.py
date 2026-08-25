@@ -661,6 +661,14 @@ class Create:
 
 
 @dataclass(frozen=True, slots=True)
+class Uncreate(Create):
+    """Manim-style Create in reverse, optionally removing the target at completion."""
+
+    reverse_rate_function: bool = True
+    remover: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class FadeIn:
     target: Mobject | _ir.Object
     key: str | None = None
@@ -876,6 +884,62 @@ class Scene(_ir.Scene):
                 f"{root_key}.appearance",
             )
 
+    def _schedule_uncreate(
+        self,
+        animation: Uncreate,
+        *,
+        duration: float,
+        start_time: float,
+        easing: str,
+    ) -> None:
+        obj = self._raw_object(animation.target)
+        start = float(start_time)
+        run_duration = float(duration)
+        if not math.isfinite(start) or start < 0.0:
+            raise ValueError("start_time must be finite and non-negative")
+        if not math.isfinite(run_duration) or run_duration <= 0.0:
+            raise ValueError("duration must be finite and positive")
+        end = start + run_duration
+
+        snapshot = self._snapshot_for_object_at(obj, start)
+        geometry = snapshot["geometry"]
+        if not any(name in geometry for name in ("circle", "rectangle", "line", "vector_path")):
+            raise ValueError("Uncreate supports Circle, Rectangle/Square, Line, and VectorPath")
+
+        self._ensure_lifecycle_timeline_available(obj, start, "Uncreate target")
+        if not self._presence_at(obj, start):
+            raise ValueError("Uncreate target must be present at animation start")
+
+        for track in self._tracks:
+            if track["object"] != obj.id or track["property"] != "reveal":
+                continue
+            track_start = track["timing"]["start_time"]
+            track_end = track_start + track["timing"]["duration"]
+            if track_start < end and start < track_end:
+                raise ValueError("Create/reveal animations for one object must not overlap")
+
+        object_key = self._object_keys[obj.id]
+        root_key = animation.key or f"@uncreate:{object_key}:{start:g}"
+        reverse = bool(animation.reverse_rate_function)
+        self._add_scalar_track(
+            obj,
+            "reveal",
+            1.0 if reverse else 0.0,
+            0.0 if reverse else 1.0,
+            start,
+            run_duration,
+            easing,
+            root_key,
+        )
+        if animation.remover:
+            self._add_presence_track(
+                obj,
+                True,
+                False,
+                end,
+                key=f"{root_key}.remove",
+            )
+
     def play(
         self,
         *animations: Any,
@@ -894,6 +958,7 @@ class Scene(_ir.Scene):
         actual_start = self._cursor if start_time is None else float(start_time)
         lowered: list[Any] = []
         creates: list[Create] = []
+        uncreates: list[Uncreate] = []
         for animation in animations:
             if isinstance(animation, _AnimationBuilder):
                 lowered.append(
@@ -934,6 +999,8 @@ class Scene(_ir.Scene):
                         animation.key,
                     )
                 )
+            elif isinstance(animation, Uncreate):
+                uncreates.append(animation)
             elif isinstance(animation, Create):
                 creates.append(animation)
             elif isinstance(animation, FadeIn):
@@ -955,6 +1022,13 @@ class Scene(_ir.Scene):
                 )
             for animation in creates:
                 self._schedule_create(
+                    animation,
+                    duration=actual_duration,
+                    start_time=actual_start,
+                    easing=easing,
+                )
+            for animation in uncreates:
+                self._schedule_uncreate(
                     animation,
                     duration=actual_duration,
                     start_time=actual_start,
@@ -1014,6 +1088,7 @@ __all__ = [
     "Circle",
     "Color",
     "Create",
+    "Uncreate",
     "DEGREES",
     "DEFAULT_FRAME_HEIGHT",
     "DEFAULT_FRAME_WIDTH",
