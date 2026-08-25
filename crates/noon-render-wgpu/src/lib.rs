@@ -218,6 +218,7 @@ enum PreparedSlot {
         index: usize,
         batch: usize,
         analytic_reveal: Option<AnalyticRevealKey>,
+        partial_reveal_bits: Option<u32>,
         reveal_head: Option<usize>,
     },
     Unsupported(usize),
@@ -389,11 +390,18 @@ impl FramePreparer {
                 PreparedSlot::Path {
                     index,
                     batch,
+                    partial_reveal_bits,
                     reveal_head,
                     ..
                 } => {
                     let reveal = frame.reveal(object_index);
-                    let packed = pack_path(object, reveal, frame.morph(object_index));
+                    let packed = if partial_reveal_bits.is_some() {
+                        // The temporary geometry already *is* Manim's partial VMobject.
+                        // Never apply the legacy path shader reveal a second time.
+                        pack_path(object, 1.0, 0.0)
+                    } else {
+                        pack_path(object, reveal, frame.morph(object_index))
+                    };
                     instances_repacked += 1;
                     if self.paths[index] != packed {
                         self.paths[index] = packed;
@@ -442,28 +450,19 @@ impl FramePreparer {
         if !frame.is_present(object_index) {
             return false;
         }
-        let Some(PreparedSlot::Path {
-            index,
-            batch,
-            analytic_reveal: None,
-            reveal_head,
-        }) = self.slots.get(object_index)
-        else {
+        let Some(PreparedSlot::Path { index, batch, .. }) = self.slots.get(object_index) else {
             return false;
         };
         let Some(path_batch) = self.path_batches.get(*batch) else {
             return false;
         };
-        if path_batch.instance_range.end != path_batch.instance_range.start + 1
-            || self.path_ids.get(*index) != Some(&object.id)
-            || !matches!(
-                frame.render_geometry(object_index),
-                GeometryRef::VectorPath(_)
-            )
-        {
-            return false;
-        }
-        reveal_head.is_some() || !should_create_path_reveal_head(object, frame.reveal(object_index))
+        let render_geometry = frame.render_geometry(object_index);
+        let reveal = frame.reveal(object_index);
+        let has_replacement_path = temporary_reveal_path(render_geometry, reveal).is_some()
+            || matches!(render_geometry, GeometryRef::VectorPath(_));
+        path_batch.instance_range.end == path_batch.instance_range.start + 1
+            && self.path_ids.get(*index) == Some(&object.id)
+            && has_replacement_path
     }
 
     fn replace_unique_path_geometry(
@@ -472,9 +471,17 @@ impl FramePreparer {
         object_index: usize,
     ) -> Result<PathReplacementStats, noon_geometry::GeometryError> {
         let object = &frame.objects[object_index];
-        let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
-            unreachable!("unique path replacement preflight requires vector geometry");
-        };
+        let render_geometry = frame.render_geometry(object_index);
+        let reveal = frame.reveal(object_index);
+        let temporary_reveal = temporary_reveal_path(render_geometry, reveal);
+        let path = temporary_reveal
+            .as_ref()
+            .map(|(_, path)| path)
+            .or(match render_geometry {
+                GeometryRef::VectorPath(path) => Some(path),
+                _ => None,
+            })
+            .expect("unique path replacement preflight requires renderable path geometry");
         let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
             unreachable!("unique path replacement preflight requires a path slot");
         };
@@ -532,6 +539,19 @@ impl FramePreparer {
         self.path_batch_vertex_ranges[batch] = vertex_range;
         self.path_batches[batch].index_range = index_range;
         self.path_batch_cache_indices[batch] = cache_index;
+        if let PreparedSlot::Path {
+            analytic_reveal,
+            partial_reveal_bits,
+            reveal_head,
+            ..
+        } = &mut self.slots[object_index]
+        {
+            *analytic_reveal = temporary_reveal.as_ref().map(|(key, _)| *key);
+            *partial_reveal_bits = temporary_reveal
+                .as_ref()
+                .map(|_| reveal.clamp(0.0, 1.0).to_bits());
+            *reveal_head = None;
+        }
         self.detach_mega_path(batch);
         self.path_geometry_dirty = true;
         Ok(PathReplacementStats {
@@ -609,13 +629,20 @@ impl FramePreparer {
                 };
                 let reveal = frame.reveal(object_index);
                 let index = path_groups[batch].instances.len();
+                let partial_reveal_bits = temporary_reveal
+                    .as_ref()
+                    .map(|_| reveal.clamp(0.0, 1.0).to_bits());
                 path_groups[batch].ids.push(object.id);
-                path_groups[batch].instances.push(pack_path(
-                    object,
-                    reveal,
-                    frame.morph(object_index),
-                ));
-                let reveal_head = if should_create_path_reveal_head(object, reveal) {
+                path_groups[batch]
+                    .instances
+                    .push(if partial_reveal_bits.is_some() {
+                        pack_path(object, 1.0, 0.0)
+                    } else {
+                        pack_path(object, reveal, frame.morph(object_index))
+                    });
+                let reveal_head = if partial_reveal_bits.is_none()
+                    && should_create_path_reveal_head(object, reveal)
+                {
                     let head_index = self.lines.len();
                     self.line_ids.push(object.id);
                     self.lines.push(pack_path_reveal_head(
@@ -631,6 +658,7 @@ impl FramePreparer {
                     index,
                     batch,
                     analytic_reveal: temporary_reveal.as_ref().map(|(key, _)| *key),
+                    partial_reveal_bits,
                     reveal_head,
                 });
                 continue;
@@ -909,6 +937,7 @@ impl FramePreparer {
                 index,
                 batch,
                 analytic_reveal,
+                partial_reveal_bits,
                 reveal_head,
             } => {
                 let Some(cache_index) = self.path_batch_cache_indices.get(*batch) else {
@@ -917,8 +946,12 @@ impl FramePreparer {
                 let cache = &self.path_mesh_cache[*cache_index];
                 let geometry_matches = match analytic_reveal {
                     Some(expected) => {
-                        frame.reveal(object_index) < 1.0
+                        let reveal = frame.reveal(object_index).clamp(0.0, 1.0);
+                        reveal < 1.0
                             && analytic_reveal_key(render_geometry) == Some(*expected)
+                            && *partial_reveal_bits == Some(reveal.to_bits())
+                            && temporary_reveal_path(render_geometry, reveal)
+                                .is_some_and(|(_, path)| cache.path == path)
                     }
                     None => {
                         let GeometryRef::VectorPath(path) = render_geometry else {
@@ -1692,29 +1725,37 @@ mod tests {
     }
 
     #[test]
-    fn circle_create_stays_on_the_analytic_fast_path() {
+    fn circle_create_uses_partial_geometry_then_returns_to_analytic_circle() {
         let mut state = object(7, GeometryRef::circle(1.25));
-        state.style.fill = Some(Color::WHITE);
-        state.style.stroke = Some(Color::BLACK);
+        state.style.fill = Some(Color::rgba(1.0, 0.0, 0.5, 0.5));
+        state.style.stroke = Some(Color::WHITE);
         state.style.stroke_width = 0.08;
         let mut frame = frame(vec![state]);
         frame.reveals[0] = 0.25;
         let mut preparer = FramePreparer::new();
 
-        let cold = preparer.prepare(&frame);
-        assert_eq!(cold.circles.len(), 1);
-        assert!(cold.paths.is_empty());
-        assert_eq!(cold.circles[0].padding[0], 0.25);
-        assert_eq!(cold.stats.geometry_cache_misses, 0);
+        let (cold_vertices, cold_indices) = {
+            let cold = preparer.prepare(&frame);
+            assert!(cold.circles.is_empty());
+            assert_eq!(cold.paths.len(), 1);
+            assert!(cold.lines.is_empty());
+            assert_eq!(cold.paths[0].path_params, [1.0, 0.0]);
+            assert_eq!(cold.stats.geometry_cache_misses, 1);
+            assert!(cold.path_geometry_dirty);
+            (cold.path_vertices.to_vec(), cold.path_indices.to_vec())
+        };
 
         frame.reveals[0] = 0.6;
         let steady = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-        assert_eq!(steady.circles.len(), 1);
-        assert!(steady.paths.is_empty());
-        assert_eq!(steady.circles[0].padding[0], 0.6);
-        assert_eq!(steady.stats.geometry_cache_misses, 0);
-        assert_eq!(steady.stats.instances_repacked, 1);
-        assert!(!steady.path_geometry_dirty);
+        assert!(steady.circles.is_empty());
+        assert_eq!(steady.paths.len(), 1);
+        assert_eq!(steady.paths[0].path_params, [1.0, 0.0]);
+        assert!(steady.lines.is_empty());
+        assert_eq!(steady.stats.geometry_cache_misses, 1);
+        assert!(steady.path_geometry_dirty);
+        assert!(steady.stats.path_vertices_repacked > 0);
+        assert!(steady.stats.path_indices_repacked > 0);
+        assert!(steady.path_vertices != cold_vertices || steady.path_indices != cold_indices);
 
         frame.reveals[0] = 1.0;
         let complete = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
@@ -1725,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_and_line_create_stay_analytic_while_rectangle_uses_a_path() {
+    fn closed_analytic_create_uses_partial_paths_while_line_stays_analytic() {
         let mut circle = object(1, GeometryRef::circle(1.0));
         let mut rectangle = object(2, GeometryRef::rectangle(2.0, 1.0));
         let mut line = object(
@@ -1742,24 +1783,27 @@ mod tests {
         let mut preparer = FramePreparer::new();
 
         let prepared = preparer.prepare(&frame);
-        assert_eq!(prepared.circles.len(), 1);
-        assert_eq!(prepared.circles[0].padding[0], 0.5);
+        assert!(prepared.circles.is_empty());
         assert!(prepared.rectangles.is_empty());
-        assert_eq!(prepared.lines.len(), 2);
-        assert_eq!(prepared.lines[1].transform.padding, 0.5);
-        assert_eq!(prepared.paths.len(), 1);
-        assert_eq!(prepared.stats.instance_count, 4);
+        assert_eq!(prepared.paths.len(), 2);
+        assert!(prepared
+            .paths
+            .iter()
+            .all(|path| path.path_params == [1.0, 0.0]));
+        assert_eq!(prepared.lines.len(), 1);
+        assert_eq!(prepared.lines[0].transform.padding, 0.5);
+        assert_eq!(prepared.stats.instance_count, 3);
         assert_eq!(prepared.stats.unsupported_count, 0);
-        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert_eq!(prepared.stats.geometry_cache_misses, 2);
 
         frame.reveals[2] = 0.8;
         let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));
-        assert_eq!(advanced.lines.len(), 2);
-        assert_eq!(advanced.lines[1].transform.padding, 0.8);
+        assert_eq!(advanced.lines.len(), 1);
+        assert_eq!(advanced.lines[0].transform.padding, 0.8);
         assert_eq!(advanced.stats.geometry_cache_misses, 0);
         assert_eq!(advanced.stats.instances_repacked, 1);
         assert_eq!(advanced.line_dirty_ranges.len(), 1);
-        assert_eq!(advanced.line_dirty_ranges[0], 1..2);
+        assert_eq!(advanced.line_dirty_ranges[0], 0..1);
         assert!(!advanced.path_geometry_dirty);
     }
 

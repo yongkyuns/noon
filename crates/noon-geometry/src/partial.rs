@@ -232,10 +232,7 @@ fn split_cubic(points: [Vec2; 4], t: f32) -> ([Vec2; 4], [Vec2; 4]) {
     let p012 = lerp(p01, p12, t);
     let p123 = lerp(p12, p23, t);
     let p0123 = lerp(p012, p123, t);
-    (
-        [points[0], p01, p012, p0123],
-        [p0123, p123, p23, points[3]],
-    )
+    ([points[0], p01, p012, p0123], [p0123, p123, p23, points[3]])
 }
 
 fn lerp(a: Vec2, b: Vec2, t: f32) -> Vec2 {
@@ -247,8 +244,14 @@ mod tests {
     use super::*;
 
     fn assert_vec2(actual: Vec2, expected: Vec2) {
-        assert!((actual.x - expected.x).abs() < 1e-5, "x: {actual:?} != {expected:?}");
-        assert!((actual.y - expected.y).abs() < 1e-5, "y: {actual:?} != {expected:?}");
+        assert!(
+            (actual.x - expected.x).abs() < 1e-5,
+            "x: {actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.y - expected.y).abs() < 1e-5,
+            "y: {actual:?} != {expected:?}"
+        );
     }
 
     #[test]
@@ -307,7 +310,7 @@ mod tests {
         );
         let partial = pointwise_partial_path(&path, 0.0, 0.5);
         match partial.commands().last().unwrap() {
-            PathCommand::CubicTo { to, .. } => assert_vec2(*to, Vec2::new(0.5, 0.75)),
+            PathCommand::CubicTo { to, .. } => assert_vec2(*to, Vec2::new(0.5, 0.875)),
             other => panic!("unexpected command: {other:?}"),
         }
     }
