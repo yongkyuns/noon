@@ -91,3 +91,19 @@ class UncreateSquare(Scene):
         square = Square()
         self.add(square)
         self.play(Uncreate(square))
+
+
+class SetColorIndependentOpacity(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        square.set_color(GREEN)
+        self.add(square)
+        # Keep a real one-second animation interval so the raster oracle samples
+        # normal Manim frames instead of save-last-frame collapsing a static wait.
+        self.play(square.animate.shift(ORIGIN))

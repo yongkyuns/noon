@@ -453,6 +453,26 @@ def _compat_make_mobject(
 _base._ir._make_mobject = _compat_make_mobject
 
 
+def _vmobject_set_color(
+    self: _compat.VMobject,
+    color: object,
+    family: bool = True,
+) -> _compat.VMobject:
+    del family
+    parsed = _as_color("color", color)
+    raw = _base._raw_mobject(self._current_raw())
+    for channel in ("fill", "stroke"):
+        current = raw.style[channel]
+        if current is None:
+            # Preserve Noon's explicit disabled-layer extension. Ordinary Manim
+            # VMobjects retain both paint layers, including zero-alpha fill.
+            continue
+        alpha = float(current["alpha"])
+        raw.style[channel] = parsed.to_ir()
+        raw.style[channel]["alpha"] = alpha
+    return self._apply(raw)
+
+
 def _vmobject_set_fill(
     self: _compat.VMobject,
     color: object = None,
@@ -545,6 +565,7 @@ def _vmobject_get_stroke_opacity(self: _compat.VMobject) -> float:
     return 0.0 if stroke is None else float(stroke["alpha"])
 
 
+_compat.VMobject.set_color = _vmobject_set_color
 _compat.VMobject.set_fill = _vmobject_set_fill
 _compat.VMobject.set_stroke = _vmobject_set_stroke
 _compat.VMobject.set_opacity = _vmobject_set_opacity
