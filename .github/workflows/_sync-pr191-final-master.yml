@@ -15,9 +15,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: parity/manim-create-partial
-          fetch-depth: 1
+          fetch-depth: 32
       - name: Fetch current master
-        run: git fetch --depth=1 origin master
+        run: git fetch --depth=32 origin master
       - name: Merge current master
         run: git merge --no-edit origin/master
       - name: Format
