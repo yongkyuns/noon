@@ -21,6 +21,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('crates/noon-geometry/src/tessellation.rs')
           text = path.read_text()
@@ -30,7 +31,11 @@ jobs:
               position: Vec2,
           }
           '''
-          replacement = marker + '''
+          if marker not in text:
+              raise SystemExit('RevealPoint marker not found')
+          text = text.replace(
+              marker,
+              marker + '''
           #[derive(Clone, Copy, Debug, PartialEq)]
           struct CubicRevealCurve {
               start: Vec2,
@@ -38,22 +43,14 @@ jobs:
               control2: Vec2,
               end: Vec2,
           }
-          '''
-          if marker not in text:
-              raise SystemExit('RevealPoint marker not found')
-          text = text.replace(marker, replacement, 1)
+          ''',
+              1,
+          )
 
-          old_call = '''                flatten_cubic_reveal(
-                      &mut points,
-                      progress(curve_index),
-                      progress(curve_index + 1),
-                      from,
-                      control1,
-                      control2,
-                      to,
-                      0,
-                  );'''
-          new_call = '''                flatten_cubic_reveal(
+          call_pattern = re.compile(
+              r'''flatten_cubic_reveal\(\s*&mut points,\s*progress\(curve_index\),\s*progress\(curve_index \+ 1\),\s*from,\s*control1,\s*control2,\s*to,\s*0,\s*\);'''
+          )
+          replacement_call = '''flatten_cubic_reveal(
                       &mut points,
                       progress(curve_index),
                       progress(curve_index + 1),
@@ -65,55 +62,12 @@ jobs:
                       },
                       0,
                   );'''
-          if old_call not in text:
-              raise SystemExit('cubic call marker not found')
-          text = text.replace(old_call, new_call, 1)
+          text, count = call_pattern.subn(replacement_call, text, count=1)
+          if count != 1:
+              raise SystemExit(f'cubic call replacement count={count}')
 
-          old_fn = '''fn flatten_cubic_reveal(
-              points: &mut Vec<RevealPoint>,
-              start_progress: f32,
-              end_progress: f32,
-              start: Vec2,
-              control1: Vec2,
-              control2: Vec2,
-              end: Vec2,
-              depth: u8,
-          ) {
-              let flatness =
-                  point_line_distance(control1, start, end).max(point_line_distance(control2, start, end));
-              if depth >= 16 || flatness <= PATH_TESSELLATION_TOLERANCE {
-                  append_reveal_segment(points, start_progress, end_progress, start, end);
-                  return;
-              }
-              let a = midpoint(start, control1);
-              let b = midpoint(control1, control2);
-              let c = midpoint(control2, end);
-              let d = midpoint(a, b);
-              let e = midpoint(b, c);
-              let center = midpoint(d, e);
-              let mid_progress = (start_progress + end_progress) * 0.5;
-              flatten_cubic_reveal(
-                  points,
-                  start_progress,
-                  mid_progress,
-                  start,
-                  a,
-                  d,
-                  center,
-                  depth + 1,
-              );
-              flatten_cubic_reveal(
-                  points,
-                  mid_progress,
-                  end_progress,
-                  center,
-                  e,
-                  c,
-                  end,
-                  depth + 1,
-              );
-          }
-          '''
+          fn_start = text.index('fn flatten_cubic_reveal(')
+          fn_end = text.index('\nfn lyon_line_join', fn_start)
           new_fn = '''fn flatten_cubic_reveal(
               points: &mut Vec<RevealPoint>,
               start_progress: f32,
@@ -166,42 +120,36 @@ jobs:
               );
           }
           '''
-          if old_fn not in text:
-              raise SystemExit('cubic function marker not found')
-          path.write_text(text.replace(old_fn, new_fn, 1))
+          text = text[:fn_start] + new_fn + text[fn_end:]
+          path.write_text(text)
 
           path = Path('scripts/manim-compat-smoke.mjs')
           text = path.read_text()
-          old = '''        first = Square(side_length=0.6, color=BLUE)
-                  self.add(first)
-                  self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
-                  assert first not in self.mobjects
-          
-                  kept = Circle(radius=0.25, color=PINK)
-                  self.add(kept)
-                  self.play(Uncreate(kept, remover=False), run_time=1.0)
-                  assert kept in self.mobjects
-          
-                  forward = Square(side_length=0.4, color=GREEN)
-                  self.add(forward)
-                  self.play(Uncreate(forward, reverse_rate_function=False), run_time=1.0)
-                  assert forward not in self.mobjects'''
-          new = '''        first = Square(side_length=0.6, color=BLUE)
+          start = text.index('const uncreateSource = `')
+          end = text.index('const rateFunctionSource = `', start)
+          new_source = '''const uncreateSource = `
+          from noon import *
+
+          class UncreateLifecycle(Scene):
+              def construct(self):
+                  first = Square(side_length=0.6, color=BLUE)
                   kept = Circle(radius=0.25, color=PINK)
                   forward = Square(side_length=0.4, color=GREEN)
                   self.add(first, kept, forward)
-          
+
                   self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
                   assert first not in self.mobjects
-          
+
                   self.play(Uncreate(kept, remover=False), run_time=1.0)
                   assert kept in self.mobjects
-          
+
                   self.play(Uncreate(forward, reverse_rate_function=False), run_time=1.0)
-                  assert forward not in self.mobjects'''
-          if old not in text:
-              raise SystemExit('Uncreate smoke marker not found')
-          path.write_text(text.replace(old, new, 1))
+                  assert forward not in self.mobjects
+          `;
+
+          '''
+          text = text[:start] + new_source + text[end:]
+          path.write_text(text)
           PY
 
       - name: Format and lint geometry
