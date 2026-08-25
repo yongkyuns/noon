@@ -1,0 +1,37 @@
+name: B2 browser transaction rebase validation
+
+on:
+  push:
+    branches:
+      - arch/b2-browser-local-transactions
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-current-master:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Merge current master
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin master
+          git merge --no-edit origin/master
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Focused tests
+        run: cargo test -p noon-compile -p noon-runtime -p noon-web
+      - name: Focused clippy
+        run: cargo clippy -p noon-compile -p noon-runtime -p noon-web --all-targets -- -D warnings
+      - name: Commit cleanup and push
+        run: |
+          rm .github/workflows/b2-browser-rebase.yml
+          git add -A
+          git commit -m 'Remove temporary browser transaction rebase workflow'
+          git push origin HEAD:arch/b2-browser-local-transactions
