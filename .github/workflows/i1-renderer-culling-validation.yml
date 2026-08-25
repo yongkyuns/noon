@@ -19,72 +19,9 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Apply renderer culling implementation
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/scripts/apply_i1_renderer_culling.py')
-          text = path.read_text()
-          text = text.replace(
-              'fn structural_incremental_delta_preserves_surviving_frame_rows()',
-              'fn structural_change_is_one_slot_delta_and_preserves_surviving_slot()',
-          )
-          path.write_text(text)
-          PY
+          python -c "from pathlib import Path; p=Path('.github/scripts/apply_i1_renderer_culling.py'); t=p.read_text(); p.write_text(t.replace('fn structural_incremental_delta_preserves_surviving_frame_rows()', 'fn structural_change_is_one_slot_delta_and_preserves_surviving_slot()'))"
           python .github/scripts/apply_i1_renderer_culling.py
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('crates/noon-web/src/execution_transport.rs')
-          text = path.read_text()
-          old = "        let patch = noon_ir::PatchBatch {\n            sequence: 0,\n            patches: vec![noon_core::ScenePatch::SetTransform {"
-          new = "        let patch = PatchBatch::new(0, vec![noon_core::ScenePatch::SetTransform {"
-          if old not in text:
-              raise SystemExit('versioned PatchBatch test anchor missing')
-          text = text.replace(old, new, 1)
-          old = "            }],\n        };\n        let delta = engine"
-          new = "            }]);\n        let delta = engine"
-          if old not in text:
-              raise SystemExit('PatchBatch closing test anchor missing')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('crates/noon-render-wgpu/src/gpu.rs')
-          text = path.read_text()
-          old = """        assert_eq!(ordered_render_sample_count(&[]), 1);
-        assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..0,
-                instance_range: 0..1,
-            }]),
-            1
-        );
-        assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..3,
-                instance_range: 0..1,
-            }]),
-            PATH_SAMPLE_COUNT
-        );
-"""
-          new = """        assert_eq!(ordered_render_sample_count(&[]), 1);
-        assert_eq!(
-            ordered_render_sample_count(&[OrderedRenderBatch {
-                primitive: RenderPrimitive::Circle,
-                instance_range: 0..1,
-            }]),
-            1
-        );
-        assert_eq!(
-            ordered_render_sample_count(&[OrderedRenderBatch {
-                primitive: RenderPrimitive::Path { batch: 0 },
-                instance_range: 0..1,
-            }]),
-            PATH_SAMPLE_COUNT
-        );
-"""
-          if old not in text:
-              raise SystemExit('ordered sample-count test anchor missing')
-          path.write_text(text.replace(old, new, 1))
-          PY
+          python .github/scripts/fix_i1_renderer_culling_validation.py
       - name: Format
         run: |
           cargo fmt --all
@@ -100,6 +37,7 @@ jobs:
       - name: Publish validated source
         run: |
           rm .github/scripts/apply_i1_renderer_culling.py
+          rm .github/scripts/fix_i1_renderer_culling_validation.py
           rm .github/workflows/i1-renderer-culling-validation.yml
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
@@ -113,6 +51,7 @@ jobs:
                   web/execution-render-worker.js \
                   docs/spatial-index.md \
                   .github/scripts/apply_i1_renderer_culling.py \
+                  .github/scripts/fix_i1_renderer_culling_validation.py \
                   .github/workflows/i1-renderer-culling-validation.yml
           git commit -m "Add retained viewport culling and browser hit queries [validated-i1-culling]"
           git push origin HEAD:arch/i1-renderer-culling
