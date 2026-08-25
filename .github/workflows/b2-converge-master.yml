@@ -38,6 +38,7 @@ jobs:
         run: |
           git fetch --deepen=64 origin arch/b2-incremental-runtime master
           git merge -X ours --no-edit origin/master
+          sed -i '/^use std::cmp::Ordering;$/d' crates/noon-compile/src/lib.rs
 
       - name: Validate full converged B2 slice
         run: |
