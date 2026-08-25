@@ -1,0 +1,50 @@
+name: B2 transplant validation
+
+on:
+  push:
+    branches:
+      - arch/b2-incremental-runtime
+
+permissions:
+  contents: write
+
+concurrency:
+  group: b2-incremental-runtime-transplant
+  cancel-in-progress: true
+
+jobs:
+  transplant:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/b2-incremental-runtime
+          fetch-depth: 1
+
+      - name: Fetch validated B2 commits
+        run: |
+          git fetch origin 318ef4b 86b7238
+
+      - name: Transplant stable slots and local timeline relowering
+        run: |
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git cherry-pick 318ef4b
+          git cherry-pick 86b7238
+
+      - name: Validate transplanted architecture
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-compile -p noon-runtime -p noon-render-wgpu -p noon-web --all-targets --all-features -- -D warnings
+          cargo test -p noon-compile --all-features
+          cargo test -p noon-runtime --all-features
+          cargo test -p noon-render-wgpu --all-features
+          cargo test -p noon-web --all-features
+
+      - name: Commit clean transplant and remove helper
+        run: |
+          rm .github/workflows/b2-transplant.yml
+          git add -A
+          git commit -m "Transplant validated B2 incremental runtime work"
+          git push origin HEAD:arch/b2-incremental-runtime
