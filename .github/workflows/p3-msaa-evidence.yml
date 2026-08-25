@@ -78,8 +78,8 @@ jobs:
           import json
           before = json.load(open('/tmp/p3-before.json'))
           after = json.load(open('/tmp/p3-after.json'))
-          print('| Layout | GPU p50 before | GPU p50 after | GPU p95 before | GPU p95 after | GPU p95 gain | Frame p95 before | Frame p95 after |')
-          print('|---|---:|---:|---:|---:|---:|---:|---:|')
+          print('| Layout | GPU p50 before | GPU p50 after | GPU p95 before | GPU p95 after | GPU p99 before | GPU p99 after | p95 gain | Frame p95 before | Frame p95 after |')
+          print('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
           for b, a in zip(before['cases'], after['cases']):
               assert b['workload']['layout'] == a['workload']['layout']
               layout = b['workload']['layout']
@@ -88,6 +88,6 @@ jobs:
               bc = b['cadence']['frameIntervalMs']
               ac = a['cadence']['frameIntervalMs']
               gain = (bg['p95'] - ag['p95']) / bg['p95'] * 100 if bg.get('p95') and ag.get('p95') else float('nan')
-              print(f"| {layout} | {bg.get('p50', float('nan')):.3f} ms | {ag.get('p50', float('nan')):.3f} ms | {bg.get('p95', float('nan')):.3f} ms | {ag.get('p95', float('nan')):.3f} ms | {gain:.1f}% | {bc.get('p95', float('nan')):.3f} ms | {ac.get('p95', float('nan')):.3f} ms |")
+              print(f"| {layout} | {bg.get('p50', float('nan')):.3f} ms | {ag.get('p50', float('nan')):.3f} ms | {bg.get('p95', float('nan')):.3f} ms | {ag.get('p95', float('nan')):.3f} ms | {bg.get('p99', float('nan')):.3f} ms | {ag.get('p99', float('nan')):.3f} ms | {gain:.1f}% | {bc.get('p95', float('nan')):.3f} ms | {ac.get('p95', float('nan')):.3f} ms |")
           PY
           cat /tmp/p3-summary.md >> "$GITHUB_STEP_SUMMARY"
