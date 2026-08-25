@@ -124,4 +124,4 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
     let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
     let has_outline = stroke_enabled || derive_creation_stroke;
     let world_stroke_padding = vec2<f32>(max(input.metrics.x, 0.0) * 0.5);
-    let screen_stroke_padding = pixel_padding
+    let screen_stroke_padding = pixel_paddin

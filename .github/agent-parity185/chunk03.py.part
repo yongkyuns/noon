@@ -64,12 +64,13 @@ s = s.replace(
 )
 s = s.replace(
     '''    let half_stroke_width = max(stroke_width, 0.0) * 0.5;
-'',
+''',
     '''    let half_stroke_width = stroke_half_width_at_distance(
         stroke_width,
         screen_space_stroke,
         signed_distance,
-    );''',
+    );
+''',
     1,
 )
 s = s.replace(
@@ -84,7 +85,7 @@ s = s.replace(
 s = s.replace(
     '''    let fill_enabled = input.flags.x > 0.5;
     let stroke_enabled = input.flags.y > 0.5;
-'',
+''',
     '''    let fill_enabled = input.flags.x >= 1.0;
     let stroke_enabled = input.flags.y == 1.0 || input.flags.y == 3.0;
     let screen_space_stroke = input.flags.y >= 2.0;
@@ -94,7 +95,7 @@ s = s.replace(
 needle = '''        stroke_enabled,
         signed_distance,
         stroke_width,
-    );''
+    );'''
 repl = '''        stroke_enabled,
         signed_distance,
         stroke_width,
@@ -103,24 +104,24 @@ repl = '''        stroke_enabled,
 assert needle in s
 s = s.replace(needle, repl, 1)
 needle = '''    let progress_edge = max(fwidth(progress), 0.00001);
-    let half_stroke_width = stroke_width * 0.5;''
+    let half_stroke_width = stroke_width * 0.5;'''
 repl = '''    let progress_edge = max(fwidth(progress), 0.00001);
     let half_stroke_width = stroke_half_width_at_distance(
         stroke_width,
         screen_space_stroke,
         signed_distance,
-    );''
+    );'''
 assert needle in s
 s = s.replace(needle, repl, 1)
 needle = '''        input.flags.y > 0.5,
         signed_distance,
         stroke_width,
-    );''
+    );'''
 repl = '''        input.flags.y == 1.0 || input.flags.y == 3.0,
         signed_distance,
         stroke_width,
         input.flags.y >= 2.0,
-    );''
+    );'''
 assert needle in s
 s = s.replace(needle, repl, 1)
 p.write_text(s)
@@ -129,9 +130,9 @@ p = Path('crates/noon-render-wgpu/src/path.wgsl')
 s = p.read_text()
 s = s.replace(
     '''    let fill_enabled = input.flags.x != 0u;
-    let stroke_enabled = input.flags.y != 0u;'',
+    let stroke_enabled = input.flags.y != 0u;''',
     '''    let fill_enabled = (input.flags.x & 1u) != 0u;
-    let stroke_enabled = (input.flags.y & 1u) != 0u;'',
+    let stroke_enabled = (input.flags.y & 1u) != 0u;''',
     1,
 )
 p.write_text(s)
@@ -140,4 +141,15 @@ p.write_text(s)
 p = Path('crates/noon-render-wgpu/tests/analytic_stroke_parity.rs')
 s = p.read_text()
 s = s.replace(
-    
+    '    assert!(shader.contains("let stroke_padding = stroke_half_width(input.metrics, input.flags);"));',
+    '    assert!(shader.contains("stroke_is_screen_space(input.flags)"));\n    assert!(shader.contains("stroke_half_width_at_distance("));',
+)
+p.write_text(s)
+
+p = Path('crates/noon-ir/src/legacy.rs')
+s = p.read_text()
+s = s.replace(
+    '''        RateFunction, Style, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+''',
+    '''        RateFunction, StrokeWidthMode, Style, TrackTiming, TrackValues, Transform2D, Vec2,
+        
