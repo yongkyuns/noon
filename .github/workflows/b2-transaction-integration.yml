@@ -23,7 +23,9 @@ jobs:
           fetch-depth: 1
 
       - name: Apply clone-free local transaction migration
-        run: python3 scripts/b2_transaction_integration.py
+        run: |
+          python3 scripts/b2_transaction_helper_fix.py
+          python3 scripts/b2_transaction_integration.py
 
       - name: Format and validate B2
         run: |
@@ -37,7 +39,7 @@ jobs:
 
       - name: Commit integrated source and remove helpers
         run: |
-          rm .github/workflows/b2-transaction-integration.yml scripts/b2_transaction_integration.py
+          rm .github/workflows/b2-transaction-integration.yml scripts/b2_transaction_integration.py scripts/b2_transaction_helper_fix.py
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -A
