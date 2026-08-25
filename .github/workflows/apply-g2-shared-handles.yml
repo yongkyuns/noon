@@ -33,13 +33,20 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          rust_path = Path("crates/noon-web/src/authoring_mobject.rs")
+          rust = rust_path.read_text()
+          before = "#[wasm_bindgen(js_name = AuthoringMobjectHandle)]"
+          if rust.count(before) != 1:
+              raise SystemExit("expected one wasm authoring handle export rename")
+          rust_path.write_text(rust.replace(before, "#[wasm_bindgen]", 1))
+
           path = Path("web/python-worker.js")
           text = path.read_text()
 
           replacements = [
               (
                   'import initNoonWeb, {\n  resolveAnimationOptions,',
-                  'import initNoonWeb, {\n  AuthoringMobjectHandle,\n  resolveAnimationOptions,',
+                  'import initNoonWeb, {\n  WasmAuthoringMobjectHandle,\n  resolveAnimationOptions,',
               ),
               (
                   'const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";\n',
@@ -47,7 +54,7 @@ jobs:
               ),
               (
                   '  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;\n',
-                  '  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>\n    new AuthoringMobjectHandle(snapshotJson);\n  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;\n',
+                  '  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>\n    new WasmAuthoringMobjectHandle(snapshotJson);\n  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;\n',
               ),
               (
                   '    compatResponse,\n    rateFunctionsResponse,',
