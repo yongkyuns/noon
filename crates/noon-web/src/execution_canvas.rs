@@ -1,3 +1,4 @@
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
 
 #[cfg(target_arch = "wasm32")]
