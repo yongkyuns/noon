@@ -1,0 +1,102 @@
+name: A3 origin and runtime validation
+on:
+  push:
+    branches:
+      - arch/a3-animation-graph
+permissions:
+  contents: write
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'Propagate A3 origins through execution'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/a3-animation-graph
+      - name: Carry semantic origins through flattened tracks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          rust_files = list((root / 'crates').rglob('*.rs')) + list((root / 'fuzz').rglob('*.rs'))
+
+          for path in rust_files:
+              text = path.read_text()
+              original = text
+              # Every TrackDefinition literal already spells out time_map. Add a
+              # backwards-compatible optional semantic origin; the struct definition
+              # uses `pub time_map` and is intentionally not matched here.
+              text = re.sub(
+                  r'(TrackDefinition\s*\{.*?\n)(\s*)(time_map:)',
+                  lambda m: m.group(1) + m.group(2) + 'origin: None,\n' + m.group(2) + m.group(3),
+                  text,
+                  flags=re.S,
+              )
+              # Same mechanical migration for manually-constructed CompiledTrack
+              # values in scheduler/runtime tests and examples.
+              text = re.sub(
+                  r'(CompiledTrack\s*\{.*?\n)(\s*)(transform_geometry_plan:)',
+                  lambda m: m.group(1) + m.group(2) + 'animation_origin: None,\n' + m.group(2) + m.group(3),
+                  text,
+                  flags=re.S,
+              )
+              if text != original:
+                  path.write_text(text)
+
+          timeline = Path('crates/noon-core/src/timeline.rs')
+          text = timeline.read_text()
+          anchor = '''    #[serde(default, skip_serializing_if = "CompositionTimeMap::is_identity")]\n    pub time_map: CompositionTimeMap,\n'''
+          replacement = anchor + '''    /// Stable semantic leaf origin when this execution track was lowered from\n    /// a retained AnimationGraph. Omitted for legacy/directly-authored tracks.\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub origin: Option<crate::AnimationTrackOrigin>,\n'''
+          if anchor not in text:
+              raise SystemExit('TrackDefinition field anchor missing')
+          timeline.write_text(text.replace(anchor, replacement, 1))
+
+          graph = Path('crates/noon-core/src/animation_graph.rs')
+          text = graph.read_text()
+          if text.count('origin: None,') < 3:
+              raise SystemExit('expected migrated TrackDefinition literals in animation graph')
+          text = text.replace('origin: None,', 'origin: Some(origin),', 2)
+          graph.write_text(text)
+
+          compile_rs = Path('crates/noon-compile/src/lib.rs')
+          text = compile_rs.read_text()
+          anchor = '''    pub time_map: CompositionTimeMap,\n    pub transform_geometry_plan: Option<TransformGeometryPlan>,\n'''
+          replacement = '''    pub time_map: CompositionTimeMap,\n    /// Retained semantic origin for local invalidation/debug/profiling.\n    pub animation_origin: Option<noon_core::AnimationTrackOrigin>,\n    pub transform_geometry_plan: Option<TransformGeometryPlan>,\n'''
+          if anchor not in text:
+              raise SystemExit('CompiledTrack field anchor missing')
+          text = text.replace(anchor, replacement, 1)
+          compile_anchor = '''        time_map: track.time_map.clone(),\n        animation_origin: None,\n        transform_geometry_plan: compile_transform_geometry_plan(track)?,\n'''
+          compile_replacement = '''        time_map: track.time_map.clone(),\n        animation_origin: track.origin,\n        transform_geometry_plan: compile_transform_geometry_plan(track)?,\n'''
+          if compile_anchor not in text:
+              raise SystemExit('compile_track origin anchor missing')
+          text = text.replace(compile_anchor, compile_replacement, 1)
+          accessor_anchor = '''    pub fn track(&self, id: TrackId) -> Option<&CompiledTrack> {\n'''
+          accessor = '''    pub fn track_origin(&self, id: TrackId) -> Option<noon_core::AnimationTrackOrigin> {\n        self.track(id).and_then(|track| track.animation_origin)\n    }\n\n'''
+          if accessor_anchor not in text:
+              raise SystemExit('CompiledScene track accessor anchor missing')
+          text = text.replace(accessor_anchor, accessor + accessor_anchor, 1)
+          compile_rs.write_text(text)
+
+          runtime_test = Path('crates/noon-runtime/tests/animation_graph.rs')
+          text = runtime_test.read_text()
+          anchor = '''    let mut live = SceneInstance::new(CompiledScene::compile(&scene).unwrap());\n'''
+          replacement = '''    let compiled = CompiledScene::compile(&scene).unwrap();\n    assert_eq!(\n        compiled.track_origin(unrelated_track),\n        Some(unrelated_origin)\n    );\n    let mut live = SceneInstance::new(compiled);\n'''
+          if anchor not in text:
+              raise SystemExit('runtime origin assertion anchor missing')
+          runtime_test.write_text(text.replace(anchor, replacement, 1))
+          PY
+          cargo fmt --all
+      - name: Validate full workspace
+        run: |
+          cargo test --workspace --all-features
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Commit implementation
+        run: |
+          rm -f .github/workflows/a3-validate2.yml .github/workflows/a3-origin-validation.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates fuzz .github/workflows/a3-validate2.yml .github/workflows/a3-origin-validation.yml
+          git commit -m 'Propagate animation origins through compiled execution'
+          git push origin HEAD:arch/a3-animation-graph
