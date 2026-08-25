@@ -16,6 +16,7 @@ jobs:
         run: |
           git show ac41c928230144d3d31ef96d85dd770f706536e6:crates/noon-runtime/examples/timeline_scheduler_perf.rs > /tmp/timeline_scheduler_perf.rs
           git checkout -f d8b72023a88aaa75d187c7d23ed0d3a5d5332c5a
+          mkdir -p crates/noon-runtime/examples
           cp /tmp/timeline_scheduler_perf.rs crates/noon-runtime/examples/timeline_scheduler_perf.rs
           cargo run --release -p noon-runtime --example timeline_scheduler_perf -- --samples 1000 --warmups 100 --groups 100000 --active 10000 | tee /tmp/p1-before.txt
           git checkout -f ac41c928230144d3d31ef96d85dd770f706536e6
@@ -25,6 +26,7 @@ jobs:
         run: |
           git show 95cedd76e1f918d83af8dad0a8dae323a5b18b82:crates/noon-render-wgpu/examples/frame_preparation_perf.rs > /tmp/frame_preparation_perf.rs
           git checkout -f 7c63c7beace9263d9597a1a7a048cb8c56995dff
+          mkdir -p crates/noon-render-wgpu/examples
           cp /tmp/frame_preparation_perf.rs crates/noon-render-wgpu/examples/frame_preparation_perf.rs
           cargo run --release -p noon-render-wgpu --example frame_preparation_perf -- --warmups 20 --samples 200 100000 | tee /tmp/p2-before.txt
           git checkout -f 95cedd76e1f918d83af8dad0a8dae323a5b18b82
