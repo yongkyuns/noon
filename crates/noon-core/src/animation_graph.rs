@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnimationOptions, CompositionTimeMap, CompositionTimeMapStep, MutationTransaction, ObjectId,
-    PatchError, Property, RateFunction, SceneDefinition, ScenePatch, TimelineError, TrackDefinition,
-    TrackId, TrackTiming, TrackValues,
+    PatchError, Property, RateFunction, SceneDefinition, ScenePatch, TimelineError,
+    TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
 
 /// Stable semantic identity for a retained animation node.
@@ -503,9 +503,11 @@ impl AnimationLowering {
         lower_node(
             graph,
             root,
-            root,
-            context,
-            root_duration,
+            LowerRootContext {
+                root,
+                context,
+                root_duration,
+            },
             &[],
             &mut candidates,
             &mut stats,
@@ -590,16 +592,24 @@ struct CandidateTrack {
     track: TrackDefinition,
 }
 
-fn lower_node(
-    graph: &AnimationGraph,
-    node_id: AnimationNodeId,
+#[derive(Clone, Copy)]
+struct LowerRootContext {
     root: AnimationNodeId,
     context: AnimationLoweringContext,
     root_duration: f64,
+}
+
+fn lower_node(
+    graph: &AnimationGraph,
+    node_id: AnimationNodeId,
+    lowering: LowerRootContext,
     inherited_steps: &[CompositionTimeMapStep],
     output: &mut Vec<CandidateTrack>,
     stats: &mut AnimationRelowerStats,
 ) -> Result<(), AnimationGraphError> {
+    let root = lowering.root;
+    let context = lowering.context;
+    let root_duration = lowering.root_duration;
     let node = graph
         .node(node_id)
         .ok_or(AnimationGraphError::UnknownNode(node_id))?;
@@ -607,7 +617,15 @@ fn lower_node(
     match &node.kind {
         AnimationNodeKind::Leaf { tracks } => {
             let intrinsic = leaf_intrinsic_run_time(tracks)?;
-            let rate_func = node.options.rate_func.unwrap_or(RateFunction::Linear);
+            let rate_func = if node_id == root {
+                context
+                    .play_options
+                    .rate_func
+                    .or(node.options.rate_func)
+                    .unwrap_or(RateFunction::Linear)
+            } else {
+                node.options.rate_func.unwrap_or(RateFunction::Linear)
+            };
             for (index, template) in tracks.iter().enumerate() {
                 let origin = AnimationTrackOrigin {
                     leaf: node_id,
@@ -635,17 +653,11 @@ fn lower_node(
                     continue;
                 }
                 let mut steps = inherited_steps.to_vec();
-                let leaf_run_time = node_effective_run_time(intrinsic, node.options.run_time)?;
                 let local_start = template.timing.start_time / intrinsic.max(f64::EPSILON);
                 let local_duration = template.timing.duration / intrinsic.max(f64::EPSILON);
-                let scale = if leaf_run_time > 0.0 {
-                    intrinsic / leaf_run_time
-                } else {
-                    1.0
-                };
                 steps.push(CompositionTimeMapStep::new(
-                    (local_start * scale).clamp(0.0, 1.0),
-                    (local_duration * scale).clamp(f64::EPSILON, 1.0),
+                    local_start.clamp(0.0, 1.0),
+                    local_duration.clamp(f64::EPSILON, 1.0),
                     rate_func,
                 ));
                 let track = TrackDefinition {
@@ -713,16 +725,7 @@ fn lower_node(
                     interval.duration / node_run_time,
                     rate_func,
                 ));
-                lower_node(
-                    graph,
-                    child,
-                    root,
-                    context,
-                    root_duration,
-                    &steps,
-                    output,
-                    stats,
-                )?;
+                lower_node(graph, child, lowering, &steps, output, stats)?;
             }
         }
     }
@@ -966,10 +969,20 @@ mod tests {
         let second = position_leaf(&mut graph, second_object, 0.0, 20.0, 1.0);
         let mut lowering = AnimationLowering::new();
         lowering
-            .lower_root(&graph, &mut scene, first, AnimationLoweringContext::new(0.0))
+            .lower_root(
+                &graph,
+                &mut scene,
+                first,
+                AnimationLoweringContext::new(0.0),
+            )
             .unwrap();
         lowering
-            .lower_root(&graph, &mut scene, second, AnimationLoweringContext::new(0.0))
+            .lower_root(
+                &graph,
+                &mut scene,
+                second,
+                AnimationLoweringContext::new(0.0),
+            )
             .unwrap();
         let second_origin = AnimationTrackOrigin {
             leaf: second,
@@ -994,10 +1007,7 @@ mod tests {
         assert_eq!(result.stats.tracks_removed, 0);
         assert_eq!(lowering.track_for_origin(second_origin), Some(second_track));
         assert_eq!(
-            scene
-                .tracks()
-                .iter()
-                .find(|track| track.id == second_track),
+            scene.tracks().iter().find(|track| track.id == second_track),
             Some(&second_definition)
         );
     }
@@ -1043,7 +1053,12 @@ mod tests {
             .unwrap();
         let mut lowering = AnimationLowering::new();
         lowering
-            .lower_root(&graph, &mut scene, lagged, AnimationLoweringContext::new(2.0))
+            .lower_root(
+                &graph,
+                &mut scene,
+                lagged,
+                AnimationLoweringContext::new(2.0),
+            )
             .unwrap();
 
         assert_eq!(scene.tracks().len(), 2);

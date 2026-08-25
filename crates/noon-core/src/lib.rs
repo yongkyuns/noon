@@ -6,10 +6,12 @@
 
 #![forbid(unsafe_code)]
 
+mod animation_graph;
 mod patch;
 mod reactive;
 mod timeline;
 
+pub use animation_graph::*;
 pub use patch::*;
 pub use reactive::*;
 pub use timeline::*;
