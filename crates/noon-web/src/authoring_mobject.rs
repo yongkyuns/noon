@@ -261,6 +261,49 @@ impl FrontendMobjectHandle {
         self.snapshot.style.opacity = self.semantic_style.object_opacity as f32;
     }
 
+    pub fn become_handle(&mut self, other: &Self) {
+        self.snapshot = other.snapshot.clone();
+        self.semantic_style = other.semantic_style.clone();
+    }
+
+    pub fn replace_handle(
+        &mut self,
+        other: &Self,
+        dim_to_match: u32,
+        stretch: bool,
+    ) -> Result<(), String> {
+        if dim_to_match > 1 {
+            return Err(
+                "replace currently supports width (0) or height (1) in the 2D authoring model"
+                    .to_owned(),
+            );
+        }
+        let target_center = other.center();
+        let source_width = self.width();
+        let source_height = self.height();
+        let target_width = other.width();
+        let target_height = other.height();
+
+        if stretch {
+            if source_width == 0.0 || source_height == 0.0 {
+                return Err("cannot stretch-replace an object with zero width or height".to_owned());
+            }
+            self.scale(target_width / source_width, target_height / source_height)?;
+        } else {
+            let (source_length, target_length) = if dim_to_match == 0 {
+                (source_width, target_width)
+            } else {
+                (source_height, target_height)
+            };
+            if source_length == 0.0 {
+                return Err("cannot replace along a zero-length dimension".to_owned());
+            }
+            let factor = target_length / source_length;
+            self.scale(factor, factor)?;
+        }
+        self.move_to(target_center.0, target_center.1)
+    }
+
     pub fn next_to_handle(
         &mut self,
         other: &Self,
@@ -645,6 +688,23 @@ mod wasm {
             self.0.set_opacity(opacity).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = becomeHandle)]
+        pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) {
+            self.0.become_handle(&other.0);
+        }
+
+        #[wasm_bindgen(js_name = replaceHandle)]
+        pub fn replace_handle(
+            &mut self,
+            other: &WasmAuthoringMobjectHandle,
+            dim_to_match: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.0
+                .replace_handle(&other.0, dim_to_match, stretch)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = nextToHandle)]
         pub fn next_to_handle(
             &mut self,
@@ -795,6 +855,32 @@ mod tests {
         assert_eq!(handle.stroke_opacity(), 0.2);
         handle.disable_fill();
         assert_eq!(handle.fill_opacity(), 0.0);
+    }
+
+    #[test]
+    fn become_and_replace_keep_state_inside_shared_handle() {
+        let mut source = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.5)));
+        source.shift(-2.0, 0.5).unwrap();
+        let mut target =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 1.0)));
+        target.shift(1.0, -0.25).unwrap();
+
+        source.become_handle(&target);
+        assert_eq!(source.snapshot(), target.snapshot());
+
+        let mut replacement =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        replacement.replace_handle(&target, 0, false).unwrap();
+        assert!((replacement.width() - 2.0).abs() < 1e-6);
+        assert!((replacement.height() - 2.0).abs() < 1e-6);
+        assert!((replacement.center().0 - 1.0).abs() < 1e-6);
+        assert!((replacement.center().1 + 0.25).abs() < 1e-6);
+
+        let mut stretched =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        stretched.replace_handle(&target, 0, true).unwrap();
+        assert!((stretched.width() - 2.0).abs() < 1e-6);
+        assert!((stretched.height() - 1.0).abs() < 1e-6);
     }
 
     #[test]
