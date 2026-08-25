@@ -320,10 +320,12 @@ else:
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
+    __noon_duration = float(__noon_result.time)
     __noon_identities = __noon_result.identity_document()
     __noon_callbacks = _manim_updaters.register_scene(__noon_result)
 elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
+    __noon_duration = None
     __noon_identities = None
     __noon_callbacks = None
 else:
@@ -332,6 +334,7 @@ json.dumps(
     {
         "kind": __noon_kind,
         "document": __noon_result.to_document(),
+        "duration": __noon_duration,
         "identities": __noon_identities,
         "callbacks": __noon_callbacks,
     },

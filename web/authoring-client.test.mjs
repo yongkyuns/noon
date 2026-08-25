@@ -9,6 +9,7 @@ import {
   validateCallbackSession,
   validatePatchBatch,
   validateSceneDocument,
+  validateSceneDuration,
   validateSceneIdentities,
 } from "./authoring-client.js";
 
@@ -75,7 +76,7 @@ test("correlates a Python request with a validated PatchBatch response", async (
   assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
 });
 
-test("correlates a Python request with Scene callback metadata", async () => {
+test("correlates a Python request with Scene callback and duration metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -93,6 +94,7 @@ test("correlates a Python request with Scene callback metadata", async () => {
       resultJson: JSON.stringify({
         kind: "scene_document",
         document: scene,
+        duration: 2.75,
         identities,
         callbacks,
       }),
@@ -102,9 +104,30 @@ test("correlates a Python request with Scene callback metadata", async () => {
   assert.deepEqual(await resultPromise, {
     kind: "scene_document",
     document: scene,
+    duration: 2.75,
     identities,
     callbacks,
   });
+});
+
+test("Scene duration accepts zero and rejects missing, negative, or non-finite values", () => {
+  assert.equal(validateSceneDuration(0), 0);
+  assert.equal(validateSceneDuration(3.5), 3.5);
+  assert.throws(() => validateSceneDuration(undefined), /finite and non-negative/);
+  assert.throws(() => validateSceneDuration(-0.01), /finite and non-negative/);
+  assert.throws(() => validateSceneDuration(Number.NaN), /finite and non-negative/);
+  assert.throws(() => validateSceneDuration(Number.POSITIVE_INFINITY), /finite and non-negative/);
+
+  const sceneResult = {
+    kind: "scene_document",
+    document: { version: 1, objects: [], tracks: [] },
+    identities: { objects: [], tracks: [] },
+    callbacks: null,
+  };
+  assert.throws(
+    () => parseAuthoringResult(JSON.stringify(sceneResult)),
+    /duration must be finite and non-negative/,
+  );
 });
 
 test("runs one callback phase and validates its PatchBatch", async () => {

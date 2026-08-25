@@ -204,6 +204,7 @@ export function parseAuthoringResult(resultJson) {
     return {
       kind: result.kind,
       document,
+      duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
       callbacks: validateCallbackSession(result.callbacks, document),
     };
@@ -254,6 +255,13 @@ export function validateSceneDocument(scene) {
     throw new Error("Python Scene tracks must be an array");
   }
   return scene;
+}
+
+export function validateSceneDuration(duration) {
+  if (!Number.isFinite(duration) || duration < 0) {
+    throw new Error("Python Scene duration must be finite and non-negative");
+  }
+  return duration;
 }
 
 export function validateSceneIdentities(identities, scene) {
