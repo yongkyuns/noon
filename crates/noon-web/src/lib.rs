@@ -11,6 +11,7 @@ mod host_player;
 mod legacy;
 mod lifecycle;
 mod reactive_player;
+mod semantic_snapshot;
 
 pub use authoring_mobject::*;
 pub use authoring_options::*;
@@ -23,3 +24,4 @@ pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
 pub use reactive_player::*;
+pub use semantic_snapshot::*;
