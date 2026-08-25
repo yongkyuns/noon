@@ -4,6 +4,11 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
+#[path = "presentation.rs"]
+mod presentation;
+pub use presentation::OutputTransfer;
+use presentation::PresentationBridge;
+
 use crate::{
     CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,
     RectangleInstance, RenderPrimitive,
@@ -265,6 +270,7 @@ pub struct GpuRenderer {
     camera: Camera2D,
     viewport_size: [u32; 2],
     target_format: wgpu::TextureFormat,
+    presentation: PresentationBridge,
     path_msaa_texture: wgpu::Texture,
     path_msaa_view: wgpu::TextureView,
     circle_buffer: wgpu::Buffer,
@@ -290,6 +296,14 @@ pub struct GpuRenderer {
 
 impl GpuRenderer {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        Self::new_with_output_transfer(device, target_format, OutputTransfer::Direct)
+    }
+
+    pub fn new_with_output_transfer(
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        output_transfer: OutputTransfer,
+    ) -> Self {
         assert_eq!(
             size_of::<CircleInstance>(),
             size_of::<RectangleInstance>(),
@@ -303,6 +317,9 @@ impl GpuRenderer {
 
         let camera = Camera2D::DEFAULT;
         let viewport_size = [1, 1];
+        let presentation =
+            PresentationBridge::new(device, surface_format, output_transfer, viewport_size);
+        let target_format = presentation.scene_format();
         let camera_uniform = camera.uniform(viewport_size);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Noon camera uniform"),
@@ -464,6 +481,7 @@ impl GpuRenderer {
             camera,
             viewport_size,
             target_format,
+            presentation,
             path_msaa_texture,
             path_msaa_view,
             circle_buffer,
@@ -503,6 +521,7 @@ impl GpuRenderer {
         self.viewport_size = [width.max(1), height.max(1)];
         (self.path_msaa_texture, self.path_msaa_view) =
             create_path_msaa_target(device, self.target_format, self.viewport_size);
+        self.presentation.resize(device, self.viewport_size);
         self.write_camera_uniform(queue);
     }
 
@@ -752,13 +771,14 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
+        let scene_view = self.presentation.scene_view(view);
         let sample_count = ordered_render_sample_count(prepared.path_batches);
-        if sample_count == 1 {
+        let stats = if sample_count == 1 {
             // Analytic SDF primitives already use derivative-based edge coverage. When
             // no visible vector path participates in painter order, avoid 4x sample
             // shading and the multisample resolve without changing alpha ordering.
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view,
+                view: scene_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -779,35 +799,37 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            return self.draw_ordered(&mut pass, prepared, true);
-        }
-
-        // Mixed vector/analytic content still shares one 4x multisampled target so
-        // pipeline switches follow semantic painter order. Splitting these primitives
-        // into separate passes would not be alpha-order safe.
-        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: &self.path_msaa_view,
-            depth_slice: None,
-            resolve_target: Some(view),
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(clear_color),
-                store: wgpu::StoreOp::Discard,
-            },
-        })];
-        let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
-            query_set,
-            beginning_of_pass_write_index: Some(0),
-            end_of_pass_write_index: Some(1),
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Noon ordered multisampled render pass"),
-            color_attachments: &color_attachments,
-            depth_stencil_attachment: None,
-            timestamp_writes,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        self.draw_ordered(&mut pass, prepared, false)
+            self.draw_ordered(&mut pass, prepared, true)
+        } else {
+            // Mixed vector/analytic content still shares one 4x multisampled target so
+            // pipeline switches follow semantic painter order. Splitting these primitives
+            // into separate passes would not be alpha-order safe.
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.path_msaa_view,
+                depth_slice: None,
+                resolve_target: Some(scene_view),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: wgpu::StoreOp::Discard,
+                },
+            })];
+            let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Noon ordered multisampled render pass"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_ordered(&mut pass, prepared, false)
+        };
+        self.presentation.encode_present(encoder, view);
+        stats
     }
 
     fn draw_ordered<'a>(
@@ -1491,6 +1513,47 @@ mod tests {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+        queue.submit(Some(encoder.finish()));
+
+        assert_eq!(draw.draw_calls, 3);
+        assert_eq!(draw.instances_drawn, 3);
+    }
+
+    #[test]
+    fn noop_device_validates_webgl_presentation_transfer() {
+        const WEBGL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new_with_output_transfer(
+            &device,
+            WEBGL_FORMAT,
+            OutputTransfer::BrowserWebGlSrgb,
+        );
+        renderer.set_viewport(&device, &queue, 64, 64);
+        assert_eq!(renderer.target_format, WEBGL_FORMAT);
+
+        let frame = test_frame();
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+        renderer.upload(&device, &queue, &prepared);
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Noon WebGL presentation noop target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: WEBGL_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
