@@ -11,20 +11,52 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Create common identity benchmark
+        shell: bash
+        run: |
+          cat > /tmp/identity-perf.mjs <<'JS'
+          import { performance } from "node:perf_hooks";
+          import { pathToFileURL } from "node:url";
+          const { SceneIdentityMap } = await import(pathToFileURL(process.cwd() + "/web/scene-identity.js"));
+          const count = 100_000;
+          const objects = Array.from({ length: count }, (_, id) => ({
+            id,
+            geometry: { circle: { radius: 0.5 } },
+            transform: { translation: { x: id, y: 0 }, rotation: 0, scale: { x: 1, y: 1 } },
+            style: { fill: null, stroke: null, stroke_width: 0, opacity: 1 },
+          }));
+          const document = { version: 1, objects, tracks: [] };
+          const identities = { objects: objects.map(({ id }) => ({ id, key: `circle-${id}` })), tracks: [] };
+          const map = new SceneIdentityMap();
+          map.stabilize(document, identities);
+          for (let i = 0; i < 5; i += 1) map.stabilize(document, identities);
+          const samples = [];
+          for (let i = 0; i < 20; i += 1) {
+            const start = performance.now();
+            map.stabilize(document, identities);
+            samples.push(performance.now() - start);
+          }
+          samples.sort((a, b) => a - b);
+          const pct = (p) => samples[Math.max(0, Math.min(samples.length - 1, Math.ceil(p * samples.length) - 1))];
+          console.log(`objects,p50_ms,p95_ms`);
+          console.log(`${count},${pct(0.5).toFixed(6)},${pct(0.95).toFixed(6)}`);
+          JS
       - name: Benchmark before #146
         shell: bash
         run: |
           git checkout -f 70c68e0b9e62e615dcd2b2a40323648af9b8adb3
-          node web/scene-pipeline-perf.mjs --warmups 5 --samples 20 100000 | tee /tmp/before.txt
+          cp /tmp/identity-perf.mjs ./identity-perf.mjs
+          node identity-perf.mjs | tee /tmp/before.txt
       - name: Benchmark #146 head
         shell: bash
         run: |
           git checkout -f c9b93ffb943b31a60b0e6cfa53b854fcf448511b
-          node web/scene-pipeline-perf.mjs --warmups 5 --samples 20 100000 | tee /tmp/after.txt
+          cp /tmp/identity-perf.mjs ./identity-perf.mjs
+          node identity-perf.mjs | tee /tmp/after.txt
       - name: Publish evidence
         shell: bash
         run: |
           echo '### Before #146' >> "$GITHUB_STEP_SUMMARY"
-          grep 'stabilize identities' /tmp/before.txt >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/before.txt >> "$GITHUB_STEP_SUMMARY"
           echo '### #146 head' >> "$GITHUB_STEP_SUMMARY"
-          grep 'stabilize identities' /tmp/after.txt >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/after.txt >> "$GITHUB_STEP_SUMMARY"
