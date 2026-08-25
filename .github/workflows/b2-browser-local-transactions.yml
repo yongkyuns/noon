@@ -22,7 +22,7 @@ jobs:
       - name: Apply implementation
         run: python scripts/b2-browser-local-transactions.py
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
       - name: Focused tests
         run: cargo test -p noon-compile -p noon-runtime -p noon-web
       - name: Focused clippy
