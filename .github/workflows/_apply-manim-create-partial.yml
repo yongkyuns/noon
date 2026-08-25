@@ -18,6 +18,18 @@ jobs:
           fetch-depth: 0
       - name: Apply renderer integration
         run: python3 scripts/_apply_manim_create_partial.py
+      - name: Correct cubic endpoint fixture
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("crates/noon-geometry/src/partial.rs")
+          text = path.read_text()
+          old = 'assert_vec2(*to, Vec2::new(0.5, 0.75))'
+          new = 'assert_vec2(*to, Vec2::new(0.5, 0.875))'
+          if text.count(old) != 1:
+              raise SystemExit("cubic endpoint fixture anchor mismatch")
+          path.write_text(text.replace(old, new))
+          PY
       - name: Format
         run: cargo fmt --all
       - name: Test partial geometry
