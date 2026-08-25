@@ -11,6 +11,7 @@ on:
 permissions:
   contents: write
 
+# Retrigger after initial workflow creation so the push workflow is active.
 jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
