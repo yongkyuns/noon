@@ -185,3 +185,16 @@ class SetGlobalOpacity(Scene):
         square.set_opacity(0.5)
         self.add(square)
         self.play(square.animate.shift(ORIGIN))
+
+
+class AnimateSetColor(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=BLUE,
+            fill_opacity=0.35,
+            stroke_color=RED,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        self.add(square)
+        self.play(square.animate(rate_func=linear).set_color(GREEN))
