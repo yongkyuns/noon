@@ -104,4 +104,6 @@ class SetColorIndependentOpacity(Scene):
         )
         square.set_color(GREEN)
         self.add(square)
-        self.wait(1)
+        # Keep a real one-second animation interval so the raster oracle samples
+        # normal Manim frames instead of save-last-frame collapsing a static wait.
+        self.play(square.animate.shift(ORIGIN))
