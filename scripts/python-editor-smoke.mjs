@@ -77,11 +77,26 @@ try {
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
 
-  await page.waitForFunction(
-    () => document.querySelector("#status")?.dataset.state === "running",
-    null,
-    { timeout: 30_000 },
+  let runtimeStatus = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    runtimeStatus = await page.evaluate(() => {
+      const status = document.querySelector("#status");
+      return {
+        state: status?.dataset.state ?? null,
+        text: document.querySelector("#status-text")?.textContent ?? status?.textContent ?? "",
+      };
+    });
+    if (runtimeStatus.state === "running" || runtimeStatus.state === "error") {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+  assert.equal(
+    runtimeStatus?.state,
+    "running",
+    `playground runtime did not become ready: ${JSON.stringify(runtimeStatus)}\n${errors.join("\n")}`,
   );
+
   const layout = await page.evaluate(() => {
     const scroller = document
       .querySelector("#scene-editor-panel .cm-scroller")
