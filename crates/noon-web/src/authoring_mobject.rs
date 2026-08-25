@@ -96,12 +96,10 @@ impl FrontendMobjectHandle {
     pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
         let x = finite_f32("scale.x", x)?;
         let y = finite_f32("scale.y", y)?;
-        self.snapshot.transform.scale = self
-            .snapshot
-            .transform
-            .scale
-            .component_mul(Vec2::new(x, y));
-        if !self.snapshot.transform.scale.x.is_finite() || !self.snapshot.transform.scale.y.is_finite()
+        self.snapshot.transform.scale =
+            self.snapshot.transform.scale.component_mul(Vec2::new(x, y));
+        if !self.snapshot.transform.scale.x.is_finite()
+            || !self.snapshot.transform.scale.y.is_finite()
         {
             return Err("scale result must be finite".to_owned());
         }
@@ -180,8 +178,16 @@ impl FrontendMobjectHandle {
         let source = self.critical_point(direction_x, direction_y);
         let target = other.critical_point(direction_x, direction_y);
         self.shift(
-            if direction_x == 0.0 { 0.0 } else { target.0 - source.0 },
-            if direction_y == 0.0 { 0.0 } else { target.1 - source.1 },
+            if direction_x == 0.0 {
+                0.0
+            } else {
+                target.0 - source.0
+            },
+            if direction_y == 0.0 {
+                0.0
+            } else {
+                target.1 - source.1
+            },
         )
     }
 
@@ -195,8 +201,16 @@ impl FrontendMobjectHandle {
         semantic_xy(point_x, point_y)?;
         let source = self.critical_point(direction_x, direction_y);
         self.shift(
-            if direction_x == 0.0 { 0.0 } else { point_x - source.0 },
-            if direction_y == 0.0 { 0.0 } else { point_y - source.1 },
+            if direction_x == 0.0 {
+                0.0
+            } else {
+                point_x - source.0
+            },
+            if direction_y == 0.0 {
+                0.0
+            } else {
+                point_y - source.1
+            },
         )
     }
 
@@ -309,7 +323,7 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
-    #[wasm_bindgen(js_name = AuthoringMobjectHandle)]
+    #[wasm_bindgen]
     pub struct WasmAuthoringMobjectHandle(FrontendMobjectHandle);
 
     #[wasm_bindgen]
@@ -485,7 +499,10 @@ mod tests {
         assert_eq!(handle.center(), (2.0, -1.0));
         assert_eq!(handle.width(), 3.0);
         assert_eq!(handle.height(), 1.0);
-        assert_eq!(handle.snapshot().transform.translation, Vec2::new(2.0, -1.0));
+        assert_eq!(
+            handle.snapshot().transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
     }
 
     #[test]
@@ -505,18 +522,24 @@ mod tests {
     #[test]
     fn layout_operations_are_shared_and_deterministic() {
         let left = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.5)));
-        let mut right = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        let mut right =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
         right.next_to_handle(&left, 1.0, 0.0, 0.25).unwrap();
         assert!((right.center().0 - 1.25).abs() < 1e-9);
         right.align_on_frame(1.0, 1.0, 0.5).unwrap();
         let bounds = right.layout_bounds().unwrap();
-        assert!((bounds.max_x - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.5)).abs() < 1e-6);
-        assert!((bounds.max_y - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - 0.5)).abs() < 1e-6);
+        assert!(
+            (bounds.max_x - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.5)).abs() < 1e-6
+        );
+        assert!(
+            (bounds.max_y - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - 0.5)).abs() < 1e-6
+        );
     }
 
     #[test]
     fn json_round_trip_preserves_wire_snapshot() {
-        let handle = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 3.0)));
+        let handle =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 3.0)));
         let json = handle.snapshot_json().unwrap();
         let restored = FrontendMobjectHandle::from_json(&json).unwrap();
         assert_eq!(restored, handle);
