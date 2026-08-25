@@ -55,6 +55,21 @@ export function executionDeltaMetadata(json) {
   };
 }
 
+export function decodeTransferableExecutionDelta(message) {
+  if (!isRecord(message) || message.type !== "execution_delta") {
+    throw new Error("transferable execution message must be an execution_delta envelope");
+  }
+  if (!(message.buffer instanceof ArrayBuffer)) {
+    throw new Error("transferable execution delta payload must be an ArrayBuffer");
+  }
+  const json = decoder.decode(new Uint8Array(message.buffer));
+  const metadata = executionDeltaMetadata(json);
+  if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
+    throw new Error("transferable execution delta metadata does not match its envelope");
+  }
+  return { json, metadata };
+}
+
 export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SLOT_CAPACITY) {
   if (!Number.isSafeInteger(slotCapacity) || slotCapacity <= 0) {
     throw new TypeError("shared execution mailbox capacity must be a positive integer");
@@ -207,8 +222,7 @@ export class TransferableExecutionDeltaSender {
     this.#port = port;
     this.#maxInFlight = maxInFlight;
     this.#onWritable = onWritable;
-    port.addEventListener?.("message", (event) => this.#handleMessage(event.data));
-    port.on?.("message", (data) => this.#handleMessage(data));
+    addMessageListener(port, (message) => this.#handleMessage(message));
     port.start?.();
   }
 
@@ -280,8 +294,7 @@ export class TransferableExecutionDeltaReceiver {
     this.#port = port;
     this.#apply = apply;
     this.#onWritable = onWritable;
-    port.addEventListener?.("message", (event) => this.#handleMessage(event.data));
-    port.on?.("message", (data) => this.#handleMessage(data));
+    addMessageListener(port, (message) => this.#handleMessage(message));
     port.start?.();
   }
 
@@ -320,17 +333,22 @@ export class TransferableExecutionDeltaReceiver {
     if (!isRecord(message) || message.type !== "execution_delta") {
       return;
     }
-    if (!(message.buffer instanceof ArrayBuffer)) {
-      throw new Error("transferable execution delta payload must be an ArrayBuffer");
-    }
-    const json = decoder.decode(new Uint8Array(message.buffer));
-    const metadata = executionDeltaMetadata(json);
-    if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
-      throw new Error("transferable execution delta metadata does not match its envelope");
-    }
-    this.#pending.push({ json, metadata });
+    const item = decodeTransferableExecutionDelta(message);
+    this.#pending.push(item);
     this.drain();
   }
+}
+
+function addMessageListener(port, handleMessage) {
+  if (typeof port.addEventListener === "function") {
+    port.addEventListener("message", (event) => handleMessage(event.data));
+    return;
+  }
+  if (typeof port.on === "function") {
+    port.on("message", handleMessage);
+    return;
+  }
+  throw new TypeError("MessagePort-like object cannot receive messages");
 }
 
 function validateSharedMailbox(mailbox) {
