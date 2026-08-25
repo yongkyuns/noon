@@ -7,6 +7,8 @@ const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_LAYOUT_PORT ?? "4174");
 const baseUrl = `http://127.0.0.1:${port}`;
 const desktopMaxCanvasWidth = 44 * 16;
+const deviceScaleFactor = 1.25;
+const expectedRendererBackend = "WebGL2";
 
 let serverOutput = "";
 const server = spawn(
@@ -38,14 +40,35 @@ async function waitForServer() {
   throw new Error(`Playground layout server did not start: ${lastError}\n${serverOutput}`);
 }
 
+async function settleLayout(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }),
+  );
+}
+
 async function layout(page) {
   const canvas = await page.locator("#scene").boundingBox();
   const wrap = await page.locator(".canvas-wrap").boundingBox();
   assert.ok(canvas, "playground canvas must be laid out");
   assert.ok(wrap, "canvas wrapper must be laid out");
-  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-  const viewportWidth = await page.evaluate(() => window.innerWidth);
-  return { canvas, wrap, documentWidth, viewportWidth };
+  const browserState = await page.evaluate(() => {
+    const scene = document.querySelector("#scene");
+    const status = document.querySelector("#status");
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      clientWidth: scene.clientWidth,
+      clientHeight: scene.clientHeight,
+      backingWidth: scene.width,
+      backingHeight: scene.height,
+      devicePixelRatio: window.devicePixelRatio,
+      rendererBackend: status.dataset.rendererBackend ?? null,
+    };
+  });
+  return { canvas, wrap, ...browserState };
 }
 
 function assertCentered(canvas, wrap, label) {
@@ -76,18 +99,70 @@ function assertNoOverflow(result, label) {
   );
 }
 
+function assertInitialBackingStore(result, label) {
+  assert.equal(
+    result.rendererBackend,
+    expectedRendererBackend,
+    `${label}: live playground must actually initialize the WebGL2 renderer`,
+  );
+  assert.equal(
+    result.devicePixelRatio,
+    deviceScaleFactor,
+    `${label}: Chromium must run at the requested fractional DPR`,
+  );
+  const expectedWidth = Math.max(1, Math.round(result.clientWidth * result.devicePixelRatio));
+  const expectedHeight = Math.max(1, Math.round(result.clientHeight * result.devicePixelRatio));
+  assert.equal(
+    result.backingWidth,
+    expectedWidth,
+    `${label}: backing width must match CSS content width × DPR before WebGL surface creation`,
+  );
+  assert.equal(
+    result.backingHeight,
+    expectedHeight,
+    `${label}: backing height must match CSS content height × DPR before WebGL surface creation`,
+  );
+}
+
 let browser = null;
 try {
   await waitForServer();
-  browser = await chromium.launch({ channel: "chromium", headless: true });
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: [
+      "--disable-features=WebGPU",
+      "--enable-unsafe-swiftshader",
+      "--ignore-gpu-blocklist",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
   const context = await browser.newContext({
-    javaScriptEnabled: false,
     viewport: { width: 1440, height: 900 },
+    deviceScaleFactor,
   });
   const page = await context.newPage();
+  const browserErrors = [];
+  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserErrors.push(`console: ${message.text()}`);
+    }
+  });
+
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
+  await page.waitForFunction(
+    (backend) => document.querySelector("#status")?.dataset.rendererBackend === backend,
+    expectedRendererBackend,
+    { timeout: 30_000 },
+  );
+  await settleLayout(page);
 
   const desktop = await layout(page);
+  assertInitialBackingStore(desktop, "desktop WebGL");
   assert.ok(
     desktop.canvas.width <= desktopMaxCanvasWidth + 1,
     `desktop: canvas width ${desktop.canvas.width}px exceeds ${desktopMaxCanvasWidth}px cap`,
@@ -97,7 +172,9 @@ try {
   assertNoOverflow(desktop, "desktop");
 
   await page.setViewportSize({ width: 900, height: 800 });
+  await settleLayout(page);
   const stacked = await layout(page);
+  assert.equal(stacked.rendererBackend, expectedRendererBackend, "stacked: renderer backend drifted");
   assert.ok(
     stacked.canvas.width <= desktopMaxCanvasWidth + 1,
     `stacked: canvas width ${stacked.canvas.width}px exceeds ${desktopMaxCanvasWidth}px cap`,
@@ -107,13 +184,18 @@ try {
   assertNoOverflow(stacked, "stacked");
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
   const mobile = await layout(page);
+  assert.equal(mobile.rendererBackend, expectedRendererBackend, "mobile: renderer backend drifted");
   assertAspect(mobile.canvas, 4 / 3, "mobile");
   assertCentered(mobile.canvas, mobile.wrap, "mobile");
   assertNoOverflow(mobile, "mobile");
 
+  assert.deepEqual(browserErrors, [], `live playground emitted browser errors:\n${browserErrors.join("\n")}`);
+
   console.log(
-    `✓ playground viewport: desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
+    `✓ live WebGL playground viewport @ ${deviceScaleFactor}x DPR: ` +
+      `desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `stacked ${stacked.canvas.width.toFixed(0)}×${stacked.canvas.height.toFixed(0)}, ` +
       `mobile ${mobile.canvas.width.toFixed(0)}×${mobile.canvas.height.toFixed(0)}`,
   );
