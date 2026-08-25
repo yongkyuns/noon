@@ -69,7 +69,17 @@ def _handle_for(value: object):
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
     _ORIGINAL_INIT(self, raw)
     if _create_handle is not None:
+        # Preserve exact Python authoring opacity before the wire/render snapshot
+        # lowers color alpha to f32. The semantic handle owns the f64 API contract.
+        fill = raw.style.get("fill")
+        stroke = raw.style.get("stroke")
+        fill_opacity = None if fill is None else float(fill["alpha"])
+        stroke_opacity = None if stroke is None else float(stroke["alpha"])
         self._semantic_handle = _create_handle(_snapshot_json(raw))
+        if fill_opacity is not None:
+            self._semantic_handle.setFillOpacity(fill_opacity)
+        if stroke_opacity is not None:
+            self._semantic_handle.setStrokeOpacity(stroke_opacity)
         # The handle is now authoritative for detached state. Keeping a second Python
         # snapshot here would recreate exactly the ownership split #61 is removing.
         self._raw = None
