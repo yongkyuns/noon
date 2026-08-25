@@ -949,7 +949,11 @@ fn apply_transform_track(
         .transform_geometry_plan
         .as_ref()
         .expect("compiled Transform track must carry a geometry plan");
-    let next_transform = interpolate_transform(from.transform, to.transform, progress);
+    let next_transform = if matches!(plan, TransformGeometryPlan::PointwiseRotation) {
+        interpolate_pointwise_rotation_transform(from.transform, to.transform, progress)
+    } else {
+        interpolate_transform(from.transform, to.transform, progress)
+    };
     let next_style = interpolate_style(from.style, to.style, progress);
     let next_morph = if matches!(plan, TransformGeometryPlan::PathPair(_)) {
         progress
@@ -990,7 +994,9 @@ fn apply_transform_geometry(
     progress: f32,
 ) -> bool {
     match plan {
-        TransformGeometryPlan::Static => set_geometry_if_changed(current, &from.geometry),
+        TransformGeometryPlan::Static | TransformGeometryPlan::PointwiseRotation => {
+            set_geometry_if_changed(current, &from.geometry)
+        }
         TransformGeometryPlan::Circle {
             from_radius,
             to_radius,
@@ -1087,6 +1093,29 @@ fn set_optional_geometry_if_changed(
             true
         }
         None => false,
+    }
+}
+
+fn interpolate_pointwise_rotation_transform(
+    from: Transform2D,
+    to: Transform2D,
+    progress: f32,
+) -> Transform2D {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
+    debug_assert_eq!(from.scale, to.scale);
+    let inverse = 1.0 - progress;
+    let cosine = inverse * from.rotation.cos() + progress * to.rotation.cos();
+    let sine = inverse * from.rotation.sin() + progress * to.rotation.sin();
+    let magnitude = cosine.hypot(sine);
+    Transform2D {
+        translation: interpolate_vec2(from.translation, to.translation, progress),
+        rotation: sine.atan2(cosine),
+        scale: Vec2::new(from.scale.x * magnitude, from.scale.y * magnitude),
     }
 }
 

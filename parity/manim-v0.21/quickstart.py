@@ -142,3 +142,15 @@ class TranslucentPainterOrder(Scene):
         ).shift(0.4 * RIGHT)
         self.add(back, front)
         self.play(front.animate.shift(ORIGIN))
+
+
+class AnimateRotateOffsetSquare(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(2 * RIGHT)
+        self.add(square)
+        self.play(square.animate(rate_func=linear).rotate(PI))

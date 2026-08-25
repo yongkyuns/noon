@@ -144,6 +144,35 @@ impl FrontendMobjectHandle {
         self.sync_legacy_transform()
     }
 
+    pub fn rotate_about_point(
+        &mut self,
+        angle: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<(), String> {
+        let angle = render_f64("rotation", angle)?;
+        let pivot = semantic_xy_f64(point_x, point_y)?;
+        let rotation = self.semantic_transform.rotation_z + angle;
+        finite_f32("rotation result", rotation)?;
+
+        let translation = self.semantic_transform.translation;
+        let relative_x = translation.x - pivot.x;
+        let relative_y = translation.y - pivot.y;
+        let cosine = angle.cos();
+        let sine = angle.sin();
+        let next_translation = SemanticVec3::new(
+            pivot.x + relative_x * cosine - relative_y * sine,
+            pivot.y + relative_x * sine + relative_y * cosine,
+            translation.z,
+        );
+        next_translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.semantic_transform.translation = next_translation;
+        self.semantic_transform.rotation_z = rotation;
+        self.sync_legacy_transform()
+    }
+
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
         let color = opaque_color("color", red, green, blue)?;
         let opacity = unit_opacity("color.alpha", alpha)?;
@@ -660,6 +689,18 @@ mod wasm {
             self.0.rotate(angle).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = rotateAboutPoint)]
+        pub fn rotate_about_point(
+            &mut self,
+            angle: f64,
+            point_x: f64,
+            point_y: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .rotate_about_point(angle, point_x, point_y)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setColor)]
         pub fn set_color(
             &mut self,
@@ -867,6 +908,27 @@ mod tests {
         assert_eq!(handle.semantic_transform.scale.x, 1.1);
         assert_eq!(handle.semantic_transform.scale.y, 0.9);
         assert_eq!(handle.semantic_transform.rotation_z, 0.2);
+    }
+
+    #[test]
+    fn pivoted_rotation_preserves_offset_line_center() {
+        let mut handle = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::line(
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+        )));
+        handle.shift(2.0, 0.0).unwrap();
+        let pivot = handle.center();
+        assert!((pivot.0 - 2.5).abs() < 1e-12);
+        assert!(pivot.1.abs() < 1e-12);
+        handle
+            .rotate_about_point(std::f64::consts::FRAC_PI_2, pivot.0, pivot.1)
+            .unwrap();
+        let center = handle.center();
+        assert!((center.0 - 2.5).abs() < 1e-9);
+        assert!(center.1.abs() < 1e-9);
+        assert!((handle.semantic_transform.translation.x - 2.5).abs() < 1e-12);
+        assert!((handle.semantic_transform.translation.y + 0.5).abs() < 1e-12);
+        assert!((handle.semantic_transform.rotation_z - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
     }
 
     #[test]

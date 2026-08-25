@@ -301,3 +301,60 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
     assert_eq!(frame.morph(0), 0.5);
     assert_eq!(frame.reveal(0), 0.25);
 }
+
+#[test]
+fn rotation_transform_interpolates_source_and_target_points_not_angle() {
+    let mut scene = SceneDefinition::new();
+    let object = scene.add(GeometryRef::rectangle(2.0, 1.0));
+    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut to = from.clone();
+    to.transform.translation = Vec2::new(2.0, -1.0);
+    to.transform.rotation = std::f32::consts::PI;
+    scene
+        .animate_transform(
+            object,
+            from.clone(),
+            to.clone(),
+            TrackTiming::new(0.0, 1.0, Easing::Linear),
+        )
+        .unwrap();
+
+    fn world(transform: Transform2D, point: Vec2) -> Vec2 {
+        let scaled = Vec2::new(point.x * transform.scale.x, point.y * transform.scale.y);
+        let (sine, cosine) = transform.rotation.sin_cos();
+        Vec2::new(
+            scaled.x * cosine - scaled.y * sine + transform.translation.x,
+            scaled.x * sine + scaled.y * cosine + transform.translation.y,
+        )
+    }
+
+    let compiled = CompiledScene::compile(&scene).unwrap();
+    let mut instance = SceneInstance::new(compiled);
+    let point = Vec2::new(1.0, 0.5);
+    for progress in [0.25_f32, 0.5, 0.75] {
+        let frame = instance.seek(f64::from(progress)).unwrap();
+        let actual = world(frame.objects[0].transform, point);
+        let start = world(from.transform, point);
+        let end = world(to.transform, point);
+        let expected = Vec2::new(
+            start.x + (end.x - start.x) * progress,
+            start.y + (end.y - start.y) * progress,
+        );
+        assert!(
+            (actual.x - expected.x).abs() < 2.0e-6,
+            "x at {progress}: {actual:?} vs {expected:?}"
+        );
+        assert!(
+            (actual.y - expected.y).abs() < 2.0e-6,
+            "y at {progress}: {actual:?} vs {expected:?}"
+        );
+    }
+    assert_eq!(
+        instance.seek(0.0).unwrap().objects[0].transform,
+        from.transform
+    );
+    assert_eq!(
+        instance.seek(1.0).unwrap().objects[0].transform,
+        to.transform
+    );
+}
