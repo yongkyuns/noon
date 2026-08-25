@@ -20,22 +20,10 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
-      - name: Prepare common fixes and P3 patch
+      - name: Prepare P3 patch and timestamp-capable browser flags
         shell: bash
         run: |
-          git diff fd7f8dafb1e53efc19e33ed004da974ef025a2a1 f9fe8ec9724177736a014633e52497348fa1acb3 -- crates/noon-render-wgpu/src/gpu.rs > /tmp/p3.patch
-          cat > /tmp/fix-map.py <<'PY'
-          from pathlib import Path
-          p = Path('crates/noon-web/src/legacy.rs')
-          s = p.read_text()
-          old = '''                    } else {\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
-          new = '''                    } else {\n                        readback.unmap();\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
-          if old in s:
-              s = s.replace(old, new, 1)
-              p.write_text(s)
-          elif 'readback.unmap();\n                        let mut state = state.borrow_mut();' not in s:
-              raise SystemExit('timestamp map cleanup anchor not found')
-          PY
+          git diff bdb54cc56f35a13a05d2ca84ac192854dc7868b9 f2fa52b3319c9f900cfe3d7598c318720c2cbe1f -- crates/noon-render-wgpu/src/gpu.rs > /tmp/p3.patch
           cat > /tmp/enable-timestamps.py <<'PY'
           from pathlib import Path
           p = Path('scripts/perf-profile.mjs')
@@ -48,40 +36,24 @@ jobs:
       - name: Measure before P3
         shell: bash
         run: |
-          git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
-          python3 /tmp/fix-map.py
+          git checkout -f bdb54cc56f35a13a05d2ca84ac192854dc7868b9
           python3 /tmp/enable-timestamps.py
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
-          NOON_PERF_BACKEND=webgpu \
-          NOON_PERF_COUNTS=10000 \
-          NOON_PERF_LAYOUTS=fixed,overdraw \
-          NOON_PERF_WARMUP=30 \
-          NOON_PERF_FRAMES=300 \
-          NOON_PERF_WIDTH=1920 \
-          NOON_PERF_HEIGHT=1080 \
-          NOON_PERF_PORT=4201 \
-          NOON_PERF_ARTIFACT=/tmp/p3-before.json \
-          node scripts/perf-profile.mjs
+          NOON_PERF_BACKEND=webgpu NOON_PERF_COUNTS=10000 NOON_PERF_LAYOUTS=fixed,overdraw \
+          NOON_PERF_WARMUP=30 NOON_PERF_FRAMES=300 NOON_PERF_WIDTH=1920 NOON_PERF_HEIGHT=1080 \
+          NOON_PERF_PORT=4201 NOON_PERF_ARTIFACT=/tmp/p3-before.json node scripts/perf-profile.mjs
       - name: Measure P3 single-sample analytics
         shell: bash
         run: |
-          git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
-          python3 /tmp/fix-map.py
+          git checkout -f bdb54cc56f35a13a05d2ca84ac192854dc7868b9
           python3 /tmp/enable-timestamps.py
           git apply /tmp/p3.patch
           cargo fmt --all --check
           cargo test -p noon-render-wgpu --all-features
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
-          NOON_PERF_BACKEND=webgpu \
-          NOON_PERF_COUNTS=10000 \
-          NOON_PERF_LAYOUTS=fixed,overdraw \
-          NOON_PERF_WARMUP=30 \
-          NOON_PERF_FRAMES=300 \
-          NOON_PERF_WIDTH=1920 \
-          NOON_PERF_HEIGHT=1080 \
-          NOON_PERF_PORT=4202 \
-          NOON_PERF_ARTIFACT=/tmp/p3-after.json \
-          node scripts/perf-profile.mjs
+          NOON_PERF_BACKEND=webgpu NOON_PERF_COUNTS=10000 NOON_PERF_LAYOUTS=fixed,overdraw \
+          NOON_PERF_WARMUP=30 NOON_PERF_FRAMES=300 NOON_PERF_WIDTH=1920 NOON_PERF_HEIGHT=1080 \
+          NOON_PERF_PORT=4202 NOON_PERF_ARTIFACT=/tmp/p3-after.json node scripts/perf-profile.mjs
       - name: Publish percentile evidence
         shell: bash
         run: |
@@ -96,10 +68,8 @@ jobs:
           for b, a in zip(before['cases'], after['cases']):
               assert b['workload']['layout'] == a['workload']['layout']
               layout = b['workload']['layout']
-              bg = b['gpu']['renderPassMs']
-              ag = a['gpu']['renderPassMs']
-              bc = b['cadence']['frameIntervalMs']
-              ac = a['cadence']['frameIntervalMs']
+              bg, ag = b['gpu']['renderPassMs'], a['gpu']['renderPassMs']
+              bc, ac = b['cadence']['frameIntervalMs'], a['cadence']['frameIntervalMs']
               bp, ap = bg.get('p95'), ag.get('p95')
               gain = f'{(bp-ap)/bp*100:.1f}%' if isinstance(bp,(int,float)) and isinstance(ap,(int,float)) and bp else '—'
               print(f"| {layout} | {fmt(bg.get('p50'))} | {fmt(ag.get('p50'))} | {fmt(bp)} | {fmt(ap)} | {fmt(bg.get('p99'))} | {fmt(ag.get('p99'))} | {gain} | {fmt(bc.get('p95'))} | {fmt(ac.get('p95'))} |")
