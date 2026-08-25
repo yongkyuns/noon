@@ -30,7 +30,7 @@
       "expected_duration": 4.0
     }
   ],
-  "sample_fractions": [0.0, 0.25, 0.5, 0.75, 1.0],
+  "sample_fractions": [0.0, 0.25, 0.5, 0.75, 0.9, 0.95, 0.98, 0.99, 1.0],
   "policy": {
     "source_adaptation": "replace only `from manim import *` with `from noon import *`, then append a scene-selection wrapper for the browser authoring worker",
     "blocking": "oracle/tooling failures are blocking; visual/timing mismatches are reported until the parity ratchet is enabled"
