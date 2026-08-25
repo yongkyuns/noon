@@ -53,9 +53,22 @@ class AnimatedSquareToCircle(Scene):
         self.play(square.animate.set_fill(PINK, opacity=0.5))
 
 
-# Supplemental source-equivalent parity probe. This is deliberately ordinary
-# Manim source (not a Noon-specific adaptation) and exercises the exact inverse
-# lifecycle/reveal contract paired with Create above.
+# Supplemental source-equivalent parity probes. These are deliberately ordinary
+# Manim source (not Noon-specific adaptations) and exercise reveal/lifecycle
+# contracts that are not covered directly by the quickstart examples above.
+class CreateLine(Scene):
+    def construct(self):
+        line = Line(LEFT, RIGHT)
+        self.play(Create(line))
+
+
+class UncreateLine(Scene):
+    def construct(self):
+        line = Line(LEFT, RIGHT)
+        self.add(line)
+        self.play(Uncreate(line))
+
+
 class UncreateSquare(Scene):
     def construct(self):
         square = Square()
