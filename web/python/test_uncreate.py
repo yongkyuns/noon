@@ -7,8 +7,8 @@ class UncreateAuthoringTests(unittest.TestCase):
     def test_default_uncreate_reverses_reveal_and_removes_at_exact_end(self) -> None:
         scene = Scene()
         square = scene.add(Square(), key="square")
-        # The low-level authoring facade uses its native easing IDs. Manim rate-function
-        # reversal is covered separately by the browser compatibility contract.
+        # The low-level Noon authoring facade uses its native easing IDs. Manim
+        # rate-function reversal is covered by the browser compatibility contract.
         scene.play(Uncreate(square), run_time=2.0, easing="linear")
 
         tracks = scene.to_document()["tracks"]
