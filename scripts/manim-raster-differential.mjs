@@ -223,6 +223,19 @@ function browserArgs(backend) {
   ];
 }
 
+async function createCapturePage(browser, expectedBackend, backend) {
+  const page = await browser.newPage({
+    viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
+  });
+  await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
+  await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
+    timeout: 30_000,
+  });
+  const initial = await page.evaluate(() => window.noonSmoke.metrics());
+  assert.equal(initial.rendererBackend, expectedBackend, `${backend}: selected renderer backend`);
+  return page;
+}
+
 async function captureNoonBackend(backend, documents, references) {
   const browser = await chromium.launch({
     channel: "chromium",
@@ -231,43 +244,44 @@ async function captureNoonBackend(backend, documents, references) {
   });
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
   try {
-    const page = await browser.newPage({
-      viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
-    });
-    await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
-    await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
-      timeout: 30_000,
-    });
-    const initial = await page.evaluate(() => window.noonSmoke.metrics());
-    assert.equal(initial.rendererBackend, expectedBackend, `${backend}: selected renderer backend`);
-
     const output = new Map();
     for (const fixture of manifest.fixtures) {
-      const document = documents.get(fixture.id);
-      const loaded = await page.evaluate(
-        (json) => window.noonSmoke.loadScene(json),
-        JSON.stringify(document),
-      );
-      assert.equal(loaded.objectCount, document.objects.length, `${fixture.id}: loaded object count`);
-      const fixtureDir = path.join(artifactRoot, backend, fixture.id);
-      await mkdir(fixtureDir, { recursive: true });
-      const captures = [];
-      for (const sample of references.get(fixture.id).samples) {
-        const metrics = await page.evaluate(
-          (time) => window.noonSmoke.renderAt(time),
-          sample.time,
+      let page = null;
+      try {
+        // Give every parity fixture an independent canvas player. WebGL drawing
+        // buffers may retain the last presented backbuffer while a new scene's
+        // first presentation becomes visible; reusing one player across fixtures
+        // therefore makes frame zero depend on fixture order instead of scene state.
+        page = await createCapturePage(browser, expectedBackend, backend);
+        const document = documents.get(fixture.id);
+        const loaded = await page.evaluate(
+          (json) => window.noonSmoke.loadScene(json),
+          JSON.stringify(document),
         );
-        assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
-        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-        const outputPath = path.join(fixtureDir, `${sample.label}.png`);
-        await page.locator("#scene").screenshot({ path: outputPath });
-        captures.push({ ...sample, noonPath: outputPath, metrics });
+        assert.equal(loaded.objectCount, document.objects.length, `${fixture.id}: loaded object count`);
+        const fixtureDir = path.join(artifactRoot, backend, fixture.id);
+        await mkdir(fixtureDir, { recursive: true });
+        const captures = [];
+        for (const sample of references.get(fixture.id).samples) {
+          const metrics = await page.evaluate(
+            (time) => window.noonSmoke.renderAt(time),
+            sample.time,
+          );
+          assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
+          assert.equal(metrics.presented, true, `${fixture.id}: frame was not presented at ${sample.time}`);
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+          const outputPath = path.join(fixtureDir, `${sample.label}.png`);
+          await page.locator("#scene").screenshot({ path: outputPath });
+          captures.push({ ...sample, noonPath: outputPath, metrics });
+        }
+        output.set(fixture.id, {
+          duration: document.__noonAuthoredDuration,
+          objectCount: document.objects.length,
+          captures,
+        });
+      } finally {
+        await page?.close();
       }
-      output.set(fixture.id, {
-        duration: document.__noonAuthoredDuration,
-        objectCount: document.objects.length,
-        captures,
-      });
     }
     return output;
   } finally {
