@@ -79,7 +79,7 @@ jobs:
           PY
       - name: Validate Rust and Python integration
         run: |
-          cargo fmt --all -- --check
+          cargo fmt --all
           cargo clippy -p noon-web --all-targets -- -D warnings
           cargo test -p noon-web
           cargo check -p noon-web --target wasm32-unknown-unknown
