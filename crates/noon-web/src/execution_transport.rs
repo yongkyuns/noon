@@ -266,7 +266,7 @@ impl ExecutionDeltaEncoder {
             return Ok(None);
         }
 
-        let mut removed = Vec::with_capacity(dirty_objects.len() + added_objects.len());
+        let mut removed = Vec::with_capacity(removed_slots.len());
         let mut seen_removed = HashSet::with_capacity(removed_slots.len());
         for &slot in removed_slots {
             let slot = TransportSlotId::from(slot);
@@ -574,7 +574,7 @@ impl ExecutionFrameMirror {
             self.slots.push(object.slot);
             self.slot_indices.insert(object.slot, index);
             self.object_slots.insert(object.object, object.slot);
-            push_frame_object(&mut frame, object.clone());
+            push_frame_object(frame, object.clone());
             added_indices.push(index);
             changed.push(index);
         }
@@ -954,9 +954,9 @@ mod tests {
         assert!(!delta.snapshot);
         assert_eq!(delta.objects.len(), 1);
         let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, TransportApplyOutcome::Applied);
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame().unwrap(), player.frame());
-        assert_eq!(outcome, TransportApplyOutcome::Applied);
     }
 
     #[test]
