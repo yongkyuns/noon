@@ -1,0 +1,33 @@
+name: F2 apply non-workflow migration
+on:
+  push:
+    branches:
+      - arch/f2-engine-worker-transport
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'Run validated F2 non-workflow migration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/f2-engine-worker-transport
+      - name: Apply validated migration
+        run: |
+          python3 scripts/f2-playground-migrate.py
+          git checkout -- .github/workflows/ci.yml
+      - name: Validate
+        run: |
+          node --check web/main.js
+          node --check web/execution-engine-worker.js
+          node --check web/execution-worker-client.js
+          node --check scripts/execution-worker-host-smoke.mjs
+          node --test web/execution-transport.test.mjs
+      - name: Commit non-workflow changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add web/main.js scripts/build-web-demo.sh docs/execution-worker-transport.md
+          git commit -m 'Make worker topology the default browser execution path'
+          git push origin HEAD:arch/f2-engine-worker-transport
