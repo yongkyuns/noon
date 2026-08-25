@@ -45,39 +45,53 @@ test("transport mode selects SAB only for isolated contexts", () => {
   );
 });
 
-test("shared two-slot mailbox applies deltas in sequence and reports backpressure", () => {
+test("shared two-slot mailbox retains ownership until consumer accepts", () => {
   const mailbox = createSharedExecutionMailbox(4096);
   const writer = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   assert.equal(writer.send(delta(0)), true);
   assert.equal(writer.send(delta(1, { snapshot: false })), true);
+  assert.equal(writer.canSend(), false);
   assert.equal(writer.send(delta(2, { snapshot: false })), false);
   assert.equal(writer.backpressureCount(), 1);
 
+  let accepting = false;
   const received = [];
-  assert.equal(
-    reader.drain((json) => received.push(executionDeltaMetadata(json).sequence)),
-    2,
-  );
-  assert.deepEqual(received, [0, 1]);
+  const apply = (json) => {
+    if (!accepting) {
+      return false;
+    }
+    received.push(executionDeltaMetadata(json).sequence);
+    return true;
+  };
 
-  // A writer that was backpressured must recover with a snapshot. The Rust
-  // receiver accepts a snapshot across a sequence gap and rejects partial gaps.
-  assert.equal(writer.send(delta(3, { snapshot: true })), true);
-  reader.drain((json) => received.push(executionDeltaMetadata(json).sequence));
-  assert.deepEqual(received, [0, 1, 3]);
+  assert.equal(reader.drain(apply), 0);
+  assert.equal(writer.canSend(), false, "rejected reads must leave shared slots owned");
+  accepting = true;
+  assert.equal(reader.drain(apply), 2);
+  assert.deepEqual(received, [0, 1]);
+  assert.equal(writer.canSend(), true);
+
+  assert.equal(writer.send(delta(2, { snapshot: false })), true);
+  reader.drain(apply);
+  assert.deepEqual(received, [0, 1, 2]);
 });
 
-test("transferable mailbox bounds in-flight buffers and resumes after ack", async () => {
+test("transferable mailbox defers ack until consumer accepts", async () => {
   const { port1, port2 } = new MessageChannel();
   const writable = [];
   const received = [];
+  let accepting = false;
   const sender = new TransferableExecutionDeltaSender(port1, {
     maxInFlight: 2,
     onWritable: () => writable.push(true),
   });
-  new TransferableExecutionDeltaReceiver(port2, (json) => {
+  const receiver = new TransferableExecutionDeltaReceiver(port2, (json) => {
+    if (!accepting) {
+      return false;
+    }
     received.push(executionDeltaMetadata(json).sequence);
+    return true;
   });
 
   assert.equal(sender.send(delta(0)), true);
@@ -86,13 +100,46 @@ test("transferable mailbox bounds in-flight buffers and resumes after ack", asyn
   assert.equal(sender.backpressureCount(), 1);
   await turn();
   await turn();
+  assert.equal(sender.inFlight(), 2);
+  assert.equal(receiver.pendingCount(), 2);
+  assert.deepEqual(received, []);
+
+  accepting = true;
+  assert.equal(receiver.drain(), 2);
+  await turn();
+  await turn();
   assert.deepEqual(received, [0, 1]);
   assert.equal(sender.inFlight(), 0);
   assert.ok(writable.length >= 1);
 
-  assert.equal(sender.send(delta(3, { snapshot: true })), true);
+  assert.equal(sender.send(delta(2, { snapshot: false })), true);
   await turn();
-  assert.deepEqual(received, [0, 1, 3]);
+  await turn();
+  assert.deepEqual(received, [0, 1, 2]);
+  port1.close();
+  port2.close();
+});
+
+test("transferable envelope metadata must match encoded payload", async () => {
+  const { port1, port2 } = new MessageChannel();
+  const receiver = new TransferableExecutionDeltaReceiver(port2, () => true);
+  const errors = [];
+  process.once("uncaughtException", (error) => errors.push(error));
+  const payload = new TextEncoder().encode(delta(0));
+  const buffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+  port1.postMessage(
+    {
+      type: "execution_delta",
+      session: 1,
+      sequence: 99,
+      buffer,
+    },
+    [buffer],
+  );
+  await turn();
+  await turn();
+  assert.equal(receiver.pendingCount(), 0);
+  assert.match(String(errors[0]), /metadata does not match/);
   port1.close();
   port2.close();
 });
