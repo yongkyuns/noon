@@ -69,6 +69,23 @@ class UncreateLine(Scene):
         self.play(Uncreate(line))
 
 
+class CreateStyledSquare(Scene):
+    def construct(self):
+        square = Square()
+        square.set_fill(PINK, opacity=0.35)
+        square.set_stroke(BLUE, width=8, opacity=0.65)
+        self.play(Create(square))
+
+
+class UncreateStyledSquare(Scene):
+    def construct(self):
+        square = Square()
+        square.set_fill(PINK, opacity=0.35)
+        square.set_stroke(BLUE, width=8, opacity=0.65)
+        self.add(square)
+        self.play(Uncreate(square))
+
+
 class UncreateSquare(Scene):
     def construct(self):
         square = Square()

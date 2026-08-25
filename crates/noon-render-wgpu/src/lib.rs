@@ -1281,6 +1281,7 @@ impl FramePreparer {
             }
             PreparedSlot::Rectangle(index) => {
                 matches!(render_geometry, GeometryRef::Rectangle { .. })
+                    && frame.reveal(object_index) >= 1.0
                     && self.rectangle_ids.get(*index) == Some(&object.id)
             }
             PreparedSlot::Line(index) => {
