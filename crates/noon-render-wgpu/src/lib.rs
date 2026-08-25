@@ -157,6 +157,8 @@ pub struct RenderStats {
     pub mega_path_batch_count: usize,
     /// Index entries in the packed painter-order stream.
     pub mega_path_index_count: usize,
+    /// Packed mega-index entries rewritten by this preparation call.
+    pub mega_path_indices_repacked: usize,
     /// Per-vertex instance records rewritten for dirty unique paths.
     pub mega_path_instance_vertices_repacked: usize,
     /// Number of free vertex chunks retained until the next compaction rebuild.
@@ -209,6 +211,8 @@ pub struct PreparedFrame<'a> {
     /// Dirty packed path-geometry index ranges.
     pub path_index_dirty_ranges: &'a [Range<usize>],
     pub mega_path_instance_dirty_ranges: &'a [Range<usize>],
+    /// Dirty ranges in the packed painter-order mega-index stream.
+    pub mega_path_index_dirty_ranges: &'a [Range<usize>],
     pub mega_path_index_dirty: bool,
     pub path_geometry_dirty: bool,
     pub stats: RenderStats,
@@ -255,6 +259,14 @@ struct PathReplacementStats {
     cache_miss: bool,
     vertices_repacked: usize,
     indices_repacked: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StructuralAppendStats {
+    instances_repacked: usize,
+    geometry_cache_misses: usize,
+    path_vertices_repacked: usize,
+    path_indices_repacked: usize,
 }
 
 #[derive(Debug)]
@@ -307,6 +319,7 @@ pub struct FramePreparer {
     path_vertex_free_ranges: Vec<Range<u32>>,
     path_index_free_ranges: Vec<Range<u32>>,
     mega_path_instance_dirty_ranges: Vec<Range<usize>>,
+    mega_path_index_dirty_ranges: Vec<Range<usize>>,
     mega_path_index_dirty: bool,
     path_geometry_dirty: bool,
     initialized: bool,
@@ -323,10 +336,10 @@ impl FramePreparer {
 
     /// Updates cached instance records using the runtime's consumed change set.
     ///
-    /// Structural removals retire packed slots in place. Tail-appended analytic
-    /// objects extend packed storage and painter order locally. New vector-path
-    /// resources remain an explicit full-rebuild boundary until append-only
-    /// mega-mesh resource insertion is unified with #174's replacement arena.
+    /// Structural removals retire packed slots in place. Tail-appended objects,
+    /// including new vector paths, extend packed storage and painter order locally.
+    /// New path meshes append one arena chunk and one mega-index suffix; unrelated
+    /// geometry and packed painter-order indices remain untouched.
     pub fn prepare_incremental<'a>(
         &'a mut self,
         frame: &FrameState,
@@ -393,7 +406,11 @@ impl FramePreparer {
             instances_repacked += self.retire_structural_slot(object_index);
         }
         for &object_index in changes.added_indices() {
-            instances_repacked += self.append_structural_slot(frame, object_index);
+            let appended = self.append_structural_slot(frame, object_index);
+            instances_repacked += appended.instances_repacked;
+            geometry_cache_misses += appended.geometry_cache_misses;
+            path_vertices_repacked += appended.path_vertices_repacked;
+            path_indices_repacked += appended.path_indices_repacked;
         }
 
         for &object_index in changes.object_indices() {
@@ -478,6 +495,7 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_vertex_dirty_ranges);
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
+        normalize_dirty_ranges(&mut self.mega_path_index_dirty_ranges);
 
         self.prepared_frame(
             frame.time,
@@ -501,19 +519,42 @@ impl FramePreparer {
             GeometryRef::Circle { .. }
                 | GeometryRef::Rectangle { .. }
                 | GeometryRef::Line { .. }
+                | GeometryRef::VectorPath(_)
                 | GeometryRef::External(_)
         )
     }
 
-    fn append_structural_slot(&mut self, frame: &FrameState, object_index: usize) -> usize {
+    fn append_structural_slot(
+        &mut self,
+        frame: &FrameState,
+        object_index: usize,
+    ) -> StructuralAppendStats {
         debug_assert_eq!(object_index, self.slots.len());
         let object = &frame.objects[object_index];
-        let slot = match frame.render_geometry(object_index) {
+        let render_geometry = frame.render_geometry(object_index);
+        let reveal = frame.reveal(object_index);
+        let temporary_reveal = temporary_reveal_path(render_geometry, reveal);
+        let path = temporary_reveal
+            .as_ref()
+            .map(|(_, path)| path)
+            .or(match render_geometry {
+                GeometryRef::VectorPath(path) => Some(path),
+                _ => None,
+            });
+        if let Some(path) = path {
+            return self.append_path_structural_slot(
+                frame,
+                object_index,
+                path,
+                temporary_reveal.as_ref().map(|(key, _)| *key),
+            );
+        }
+
+        let slot = match render_geometry {
             GeometryRef::Circle { .. } => {
                 let index = self.circles.len();
                 self.circle_ids.push(object.id);
-                self.circles
-                    .push(pack_circle(object, frame.reveal(object_index)));
+                self.circles.push(pack_circle(object, reveal));
                 push_dirty_range(&mut self.circle_dirty_ranges, index);
                 PreparedSlot::Circle(index)
             }
@@ -527,8 +568,7 @@ impl FramePreparer {
             GeometryRef::Line { .. } => {
                 let index = self.lines.len();
                 self.line_ids.push(object.id);
-                self.lines
-                    .push(pack_line(object, frame.reveal(object_index)));
+                self.lines.push(pack_line(object, reveal));
                 push_dirty_range(&mut self.line_dirty_ranges, index);
                 PreparedSlot::Line(index)
             }
@@ -537,11 +577,160 @@ impl FramePreparer {
                 self.unsupported.push(object.id);
                 PreparedSlot::Unsupported(index)
             }
-            GeometryRef::VectorPath(_) => unreachable!("path structural append requires rebuild"),
+            GeometryRef::VectorPath(_) => unreachable!("vector path must enter append path branch"),
         };
         self.slots.push(slot);
         self.append_ordered_render_slot(slot);
-        usize::from(!matches!(slot, PreparedSlot::Unsupported(_)))
+        StructuralAppendStats {
+            instances_repacked: usize::from(!matches!(slot, PreparedSlot::Unsupported(_))),
+            ..StructuralAppendStats::default()
+        }
+    }
+
+    fn append_path_structural_slot(
+        &mut self,
+        frame: &FrameState,
+        object_index: usize,
+        path: &VectorPath,
+        analytic_reveal: Option<AnalyticRevealKey>,
+    ) -> StructuralAppendStats {
+        let object = &frame.objects[object_index];
+        let reveal = frame.reveal(object_index);
+        let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
+        let (cache_index, cache_miss) = match self.cache_path_mesh(path, object.style) {
+            Ok(value) => value,
+            Err(_) => {
+                let slot = PreparedSlot::Unsupported(self.unsupported.len());
+                self.unsupported.push(object.id);
+                self.slots.push(slot);
+                self.append_ordered_render_slot(slot);
+                return StructuralAppendStats::default();
+            }
+        };
+
+        let packed = if partial_reveal_bits.is_some() {
+            pack_path(object, 1.0, 0.0)
+        } else {
+            pack_path(object, reveal, frame.morph(object_index))
+        };
+        let path_index = self.paths.len();
+        self.path_ids.push(object.id);
+        self.paths.push(packed);
+        push_dirty_range(&mut self.path_dirty_ranges, path_index);
+
+        let reveal_head_instance =
+            if partial_reveal_bits.is_none() && should_create_path_reveal_head(object, reveal) {
+                Some(pack_path_reveal_head(
+                    object,
+                    &self.path_mesh_cache[cache_index].mesh,
+                    reveal,
+                ))
+            } else {
+                None
+            };
+        let reveal_head = reveal_head_instance.map(|instance| {
+            let line_index = self.lines.len();
+            self.line_ids.push(object.id);
+            self.lines.push(instance);
+            push_dirty_range(&mut self.line_dirty_ranges, line_index);
+            line_index
+        });
+
+        let shared_geometry = self
+            .path_batch_cache_indices
+            .iter()
+            .position(|&existing| existing == cache_index);
+        let (vertex_range, index_range, vertices_repacked, indices_repacked, mega_eligible) =
+            if let Some(batch) = shared_geometry {
+                (
+                    self.path_batch_vertex_ranges[batch].clone(),
+                    self.path_batches[batch].index_range.clone(),
+                    0,
+                    0,
+                    false,
+                )
+            } else {
+                let (packed_vertices, local_indices) = {
+                    let mesh = &self.path_mesh_cache[cache_index].mesh;
+                    (
+                        mesh.vertices
+                            .iter()
+                            .map(|vertex| PathVertex {
+                                position: [vertex.position.x, vertex.position.y],
+                                target_position: [
+                                    vertex.target_position.x,
+                                    vertex.target_position.y,
+                                ],
+                                surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                            })
+                            .collect::<Vec<_>>(),
+                        mesh.indices.clone(),
+                    )
+                };
+                let vertex_start = u32::try_from(self.path_vertices.len())
+                    .expect("path vertex count exceeds renderer limits");
+                let index_start = u32::try_from(self.path_indices.len())
+                    .expect("path index count exceeds renderer limits");
+                self.path_vertices.extend_from_slice(&packed_vertices);
+                self.path_indices.extend(local_indices.iter().map(|index| {
+                    index
+                        .checked_add(vertex_start)
+                        .expect("path index exceeds renderer limits")
+                }));
+                let vertex_end = u32::try_from(self.path_vertices.len())
+                    .expect("path vertex count exceeds renderer limits");
+                let index_end = u32::try_from(self.path_indices.len())
+                    .expect("path index count exceeds renderer limits");
+                let vertex_range = vertex_start..vertex_end;
+                let index_range = index_start..index_end;
+                self.path_vertex_dirty_ranges
+                    .push(range_usize_u32(&vertex_range));
+                self.path_index_dirty_ranges
+                    .push(range_usize_u32(&index_range));
+                self.path_geometry_dirty = true;
+                (
+                    vertex_range,
+                    index_range,
+                    packed_vertices.len(),
+                    local_indices.len(),
+                    true,
+                )
+            };
+
+        let batch = self.path_batches.len();
+        let instance_start = u32::try_from(path_index).expect("path instance count exceeds limits");
+        self.path_batch_vertex_ranges.push(vertex_range);
+        self.path_batches.push(PathBatch {
+            index_range,
+            instance_range: instance_start..instance_start + 1,
+        });
+        self.path_batch_cache_indices.push(cache_index);
+        self.mega_path_segments.push(None);
+        self.mega_path_detached.push(false);
+        let slot = PreparedSlot::Path {
+            index: path_index,
+            batch,
+            analytic_reveal,
+            partial_reveal_bits,
+            reveal_head,
+        };
+        self.slots.push(slot);
+
+        let appended_to_mega = mega_eligible && self.append_mega_path_draw(batch, packed);
+        if appended_to_mega {
+            if let Some(line_index) = reveal_head {
+                self.append_ordered_reveal_head(line_index);
+            }
+        } else {
+            self.append_ordered_render_slot(slot);
+        }
+
+        StructuralAppendStats {
+            instances_repacked: 1 + usize::from(reveal_head.is_some()),
+            geometry_cache_misses: usize::from(cache_miss),
+            path_vertices_repacked: vertices_repacked,
+            path_indices_repacked: indices_repacked,
+        }
     }
 
     fn retire_structural_slot(&mut self, object_index: usize) -> usize {
@@ -1006,6 +1195,7 @@ impl FramePreparer {
             path_vertex_dirty_ranges: &self.path_vertex_dirty_ranges,
             path_index_dirty_ranges: &self.path_index_dirty_ranges,
             mega_path_instance_dirty_ranges: &self.mega_path_instance_dirty_ranges,
+            mega_path_index_dirty_ranges: &self.mega_path_index_dirty_ranges,
             mega_path_index_dirty: self.mega_path_index_dirty,
             path_geometry_dirty: self.path_geometry_dirty,
             stats: RenderStats {
@@ -1028,6 +1218,7 @@ impl FramePreparer {
                     .sum(),
                 mega_path_batch_count: self.mega_path_batches.len(),
                 mega_path_index_count: self.mega_path_indices.len(),
+                mega_path_indices_repacked: dirty_len(&self.mega_path_index_dirty_ranges),
                 mega_path_instance_vertices_repacked: dirty_len(
                     &self.mega_path_instance_dirty_ranges,
                 ),
@@ -1063,6 +1254,7 @@ impl FramePreparer {
         self.path_vertex_dirty_ranges.clear();
         self.path_index_dirty_ranges.clear();
         self.mega_path_instance_dirty_ranges.clear();
+        self.mega_path_index_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
         self.path_geometry_dirty = false;
     }
@@ -1139,7 +1331,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 31] {
+    fn capacities(&self) -> [usize; 32] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -1159,6 +1351,7 @@ impl FramePreparer {
             self.mega_path_segments.capacity(),
             self.mega_path_detached.capacity(),
             self.mega_path_instance_dirty_ranges.capacity(),
+            self.mega_path_index_dirty_ranges.capacity(),
             self.path_batch_cache_indices.capacity(),
             self.path_mesh_cache.capacity(),
             self.path_mesh_lookup.capacity(),
@@ -2329,6 +2522,150 @@ mod tests {
         assert!(matches!(
             prepared.render_batches[0].primitive,
             RenderPrimitive::MegaPath { .. }
+        ));
+    }
+
+    #[test]
+    fn structural_unique_path_append_touches_only_new_mesh_and_mega_suffix() {
+        const OBJECT_COUNT: usize = 10_000;
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let y = index as f32 * 0.0001;
+                let mut state = object(
+                    index as u64,
+                    GeometryRef::path(
+                        VectorPath::new()
+                            .move_to(Vec2::new(-0.5, y))
+                            .line_to(Vec2::new(0.5, y)),
+                    ),
+                );
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let mut frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
+        let middle_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT / 2].clone();
+        let last_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1].clone();
+        let first_index_range = preparer.path_batches[0].index_range.clone();
+        let last_index_range = preparer.path_batches[OBJECT_COUNT - 1].index_range.clone();
+        let old_vertex_count = preparer.path_vertices.len();
+        let old_index_count = preparer.path_indices.len();
+        let old_mega_index_count = preparer.mega_path_indices.len();
+
+        let mut appended = object(
+            OBJECT_COUNT as u64,
+            GeometryRef::path(VectorPath::new().move_to(Vec2::new(-0.75, 1.5)).cubic_to(
+                Vec2::new(-0.25, 2.0),
+                Vec2::new(0.25, 1.0),
+                Vec2::new(0.75, 1.5),
+            )),
+        );
+        appended.style.fill = None;
+        appended.style.stroke = Some(Color::WHITE);
+        appended.style.stroke_width = 0.015;
+        frame.objects.push(appended);
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+
+        let prepared = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::structural(vec![OBJECT_COUNT], Vec::new()),
+        );
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert_eq!(prepared.path_batches.len(), OBJECT_COUNT + 1);
+        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT + 1);
+        assert_eq!(prepared.stats.mega_path_batch_count, 1);
+        assert!(prepared.stats.path_vertices_repacked > 0);
+        assert!(prepared.stats.path_vertices_repacked < old_vertex_count);
+        assert!(prepared.stats.path_indices_repacked > 0);
+        assert!(prepared.stats.path_indices_repacked < old_index_count);
+        assert_eq!(prepared.path_vertex_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_vertex_dirty_ranges[0].start, old_vertex_count);
+        assert_eq!(prepared.path_index_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_index_dirty_ranges[0].start, old_index_count);
+        assert_eq!(prepared.mega_path_index_dirty_ranges.len(), 1);
+        assert_eq!(
+            prepared.mega_path_index_dirty_ranges[0].start,
+            old_mega_index_count
+        );
+        assert_eq!(
+            prepared.stats.mega_path_indices_repacked,
+            prepared.mega_path_index_dirty_ranges[0].len()
+        );
+        assert!(prepared.stats.mega_path_indices_repacked < old_mega_index_count);
+        assert_eq!(preparer.path_batch_vertex_ranges[0], first_vertex_range);
+        assert_eq!(
+            preparer.path_batch_vertex_ranges[OBJECT_COUNT / 2],
+            middle_vertex_range
+        );
+        assert_eq!(
+            preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1],
+            last_vertex_range
+        );
+        assert_eq!(preparer.path_batches[0].index_range, first_index_range);
+        assert_eq!(
+            preparer.path_batches[OBJECT_COUNT - 1].index_range,
+            last_index_range
+        );
+    }
+
+    #[test]
+    fn structural_repeated_path_append_reuses_existing_geometry_without_repacking() {
+        let mut original = object(
+            1,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, 0.0))
+                    .line_to(Vec2::new(1.0, 0.0)),
+            ),
+        );
+        original.style.fill = None;
+        original.style.stroke = Some(Color::WHITE);
+        original.style.stroke_width = 0.02;
+        let mut frame = frame(vec![original.clone()]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        let old_vertex_count = preparer.path_vertices.len();
+        let old_index_count = preparer.path_indices.len();
+
+        original.id = ObjectId::new(2);
+        original.transform.translation = Vec2::new(0.0, 1.0);
+        frame.objects.push(original);
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![1], Vec::new()));
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.path_vertices_repacked, 0);
+        assert_eq!(prepared.stats.path_indices_repacked, 0);
+        assert_eq!(prepared.path_vertices.len(), old_vertex_count);
+        assert_eq!(prepared.path_indices.len(), old_index_count);
+        assert!(prepared.path_vertex_dirty_ranges.is_empty());
+        assert!(prepared.path_index_dirty_ranges.is_empty());
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        assert_eq!(prepared.path_batches.len(), 2);
+        assert_eq!(
+            prepared.path_batches[0].index_range,
+            prepared.path_batches[1].index_range
+        );
+        assert!(matches!(
+            prepared.render_batches.last().unwrap().primitive,
+            RenderPrimitive::Path { batch: 1 }
         ));
     }
 

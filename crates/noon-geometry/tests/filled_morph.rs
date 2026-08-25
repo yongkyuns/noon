@@ -57,7 +57,7 @@ fn rounded_loop_to_concave_star_has_stable_fill_topology() {
 
     for progress in [0.0, 0.125, 0.25, 0.5, 0.75, 0.875, 1.0] {
         let vertices = plan.interpolate_vertices(progress);
-        for triangle in plan.indices.chunks_exact(3) {
+        for triangle in plan.indices.as_chunks::<3>().0 {
             let a = vertices[triangle[0] as usize];
             let b = vertices[triangle[1] as usize];
             let c = vertices[triangle[2] as usize];
@@ -97,7 +97,9 @@ fn filled_morph_tessellation_contains_fill_and_stroke_with_one_topology() {
 
 fn fill_mesh_area(mesh: &noon_geometry::TessellatedPath, target: bool) -> f32 {
     mesh.indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .filter_map(|triangle| {
             let a = &mesh.vertices[triangle[0] as usize];
             let b = &mesh.vertices[triangle[1] as usize];

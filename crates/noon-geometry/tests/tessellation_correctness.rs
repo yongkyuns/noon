@@ -61,7 +61,9 @@ fn signed_triangle_area(a: Vec2, b: Vec2, c: Vec2) -> f32 {
 
 fn stroke_triangle_area(mesh: &TessellatedPath) -> f32 {
     mesh.indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .filter_map(|triangle| {
             let a = &mesh.vertices[triangle[0] as usize];
             let b = &mesh.vertices[triangle[1] as usize];
@@ -670,7 +672,7 @@ fn morph_active_triangles_keep_winding_through_interpolation() {
 
     for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
         let mut active = 0;
-        for triangle in mesh.indices.chunks_exact(3) {
+        for triangle in mesh.indices.as_chunks::<3>().0 {
             let position = |index: u32| {
                 let vertex = mesh.vertices[index as usize];
                 add(

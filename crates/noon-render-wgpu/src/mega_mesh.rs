@@ -17,6 +17,7 @@ impl FramePreparer {
         self.mega_path_segments.clear();
         self.mega_path_detached.clear();
         self.mega_path_instance_dirty_ranges.clear();
+        self.mega_path_index_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
 
         let eligible = self
@@ -75,11 +76,88 @@ impl FramePreparer {
         self.rebuild_mega_render_batches();
         if !self.mega_path_indices.is_empty() {
             self.mega_path_index_dirty = true;
+            self.mega_path_index_dirty_ranges
+                .push(0..self.mega_path_indices.len());
         }
         if !self.mega_path_vertex_instances.is_empty() {
             self.mega_path_instance_dirty_ranges
                 .push(0..self.mega_path_vertex_instances.len());
         }
+    }
+
+    /// Appends one unique path to the packed painter-order stream without
+    /// rewriting any existing mega indices or vertex-instance attributes.
+    pub(crate) fn append_mega_path_draw(
+        &mut self,
+        path_batch_index: usize,
+        packed: PathInstance,
+    ) -> bool {
+        let Some(path_batch) = self.path_batches.get(path_batch_index).cloned() else {
+            return false;
+        };
+        if path_batch.instance_range.end != path_batch.instance_range.start + 1
+            || path_batch.index_range.is_empty()
+        {
+            return false;
+        }
+        let Some(vertex_range) = self.path_batch_vertex_ranges.get(path_batch_index).cloned()
+        else {
+            return false;
+        };
+
+        if self.mega_path_segments.len() <= path_batch_index {
+            self.mega_path_segments.resize(path_batch_index + 1, None);
+        }
+        if self.mega_path_detached.len() <= path_batch_index {
+            self.mega_path_detached.resize(path_batch_index + 1, false);
+        }
+
+        let source = range_usize(&path_batch.index_range);
+        let segment_start = u32::try_from(self.mega_path_indices.len())
+            .expect("mega path index count exceeds renderer limits");
+        self.mega_path_indices
+            .extend_from_slice(&self.path_indices[source]);
+        let segment_end = u32::try_from(self.mega_path_indices.len())
+            .expect("mega path index count exceeds renderer limits");
+        let segment = segment_start..segment_end;
+        self.mega_path_segments[path_batch_index] = Some(segment.clone());
+        self.mega_path_detached[path_batch_index] = false;
+        push_dirty_range(
+            &mut self.mega_path_index_dirty_ranges,
+            range_usize(&segment),
+        );
+        self.mega_path_index_dirty = true;
+
+        if self.mega_path_vertex_instances.len() < self.path_vertices.len() {
+            self.mega_path_vertex_instances
+                .resize(self.path_vertices.len(), PathInstance::zeroed());
+        }
+        let vertex_range = range_usize(&vertex_range);
+        self.mega_path_vertex_instances[vertex_range.clone()].fill(packed);
+        push_dirty_range(&mut self.mega_path_instance_dirty_ranges, vertex_range);
+
+        if let Some(ordered) = self.render_batches.last_mut() {
+            if let RenderPrimitive::MegaPath { batch } = ordered.primitive {
+                let mega = &mut self.mega_path_batches[batch];
+                if mega.index_range.end == segment.start {
+                    mega.index_range.end = segment.end;
+                    mega.path_count += 1;
+                    ordered.instance_range.end += 1;
+                    return true;
+                }
+            }
+        }
+
+        let batch = self.mega_path_batches.len();
+        self.mega_path_batches.push(MegaPathBatch {
+            index_range: segment,
+            path_count: 1,
+        });
+        self.render_batches.push(OrderedRenderBatch {
+            primitive: RenderPrimitive::MegaPath { batch },
+            instance_range: 0..1,
+        });
+        true
     }
 
     /// Rebuilds only CPU-side ordered draw descriptors around the immutable packed
