@@ -21,6 +21,8 @@ export class ExecutionWorkerClient {
   #transportMode = null;
   #ready = null;
   #onError;
+  #hostAuthoringClient = null;
+  #hostCallbacks = null;
 
   constructor(canvas, { onError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -62,7 +64,10 @@ export class ExecutionWorkerClient {
     ) {
       throw new TypeError(`unsupported execution transport mode ${transportMode}`);
     }
-    if (transportMode === EXECUTION_TRANSPORT_SHARED && selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED) {
+    if (
+      transportMode === EXECUTION_TRANSPORT_SHARED &&
+      selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED
+    ) {
       throw new Error("shared execution transport requires cross-origin isolation");
     }
     if (typeof this.#canvas.transferControlToOffscreen !== "function") {
@@ -125,17 +130,19 @@ export class ExecutionWorkerClient {
     return this.#ready;
   }
 
-  async replaceScene(sceneJson) {
+  async replaceScene(sceneJson, { callbacks = null, authoringClient = null } = {}) {
     validateSceneJson(sceneJson);
     const result = await this.#requestEngine("replace_scene", { sceneJson });
     this.#sceneJson = result.sceneJson ?? sceneJson;
+    await this.configureHostCallbacks(callbacks, authoringClient);
     return result;
   }
 
-  async reconcileScene(sceneJson) {
+  async reconcileScene(sceneJson, { callbacks = null, authoringClient = null } = {}) {
     validateSceneJson(sceneJson);
     const result = await this.#requestEngine("reconcile_scene", { sceneJson });
     this.#sceneJson = result.sceneJson ?? sceneJson;
+    await this.configureHostCallbacks(callbacks, authoringClient);
     return result;
   }
 
@@ -150,8 +157,41 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async configureHostCallbacks(callbacks, authoringClient = null) {
+    await this.ready();
+    if (callbacks === null || callbacks === undefined) {
+      this.#hostCallbacks = null;
+      await this.#requestEngine("configure_callbacks", { callbacks: null });
+      return;
+    }
+    validateCallbacks(callbacks);
+    if (!authoringClient || typeof authoringClient.attachEnginePort !== "function") {
+      throw new TypeError("host callbacks require a PythonAuthoringClient");
+    }
+    if (this.#hostAuthoringClient !== authoringClient) {
+      const channel = new MessageChannel();
+      await authoringClient.attachEnginePort(channel.port2);
+      await this.#requestEngine(
+        "attach_host_port",
+        { port: channel.port1 },
+        [channel.port1],
+      );
+      this.#hostAuthoringClient = authoringClient;
+    }
+    this.#hostCallbacks = cloneCallbacks(callbacks);
+    await this.#requestEngine("configure_callbacks", { callbacks: this.#hostCallbacks });
+  }
+
+  async state() {
+    return this.#requestEngine("state", {});
+  }
+
   async metrics() {
-    return this.#requestRender("metrics", {});
+    const [render, engine] = await Promise.all([
+      this.#requestRender("metrics", {}),
+      this.#requestEngine("metrics", {}),
+    ]);
+    return { ...render, engineMetrics: engine.metrics };
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -173,7 +213,9 @@ export class ExecutionWorkerClient {
     const sceneJson = this.#sceneJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
-    this.terminate();
+    const callbacks = this.#hostCallbacks;
+    const authoringClient = this.#hostAuthoringClient;
+    this.terminate({ preserveHostConfiguration: true });
 
     const previous = this.#canvas;
     const replacement = previous.cloneNode(false);
@@ -183,10 +225,15 @@ export class ExecutionWorkerClient {
     replacement.id = previous.id;
     previous.replaceWith(replacement);
     this.#canvas = replacement;
-    return this.start(sceneJson, { loopDurationSeconds, transportMode });
+    const ready = await this.start(sceneJson, { loopDurationSeconds, transportMode });
+    if (callbacks !== null && authoringClient !== null) {
+      this.#hostAuthoringClient = null;
+      await this.configureHostCallbacks(callbacks, authoringClient);
+    }
+    return ready;
   }
 
-  terminate() {
+  terminate({ preserveHostConfiguration = false } = {}) {
     this.#engineWorker?.terminate();
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
@@ -197,25 +244,43 @@ export class ExecutionWorkerClient {
       pending.reject(error);
     }
     this.#pending.clear();
+    if (!preserveHostConfiguration) {
+      this.#hostAuthoringClient = null;
+      this.#hostCallbacks = null;
+    }
   }
 
-  async #requestEngine(type, payload) {
+  async #requestEngine(type, payload, transfer = []) {
     await this.ready();
-    return this.#request(this.#engineWorker, "engine", engineEnvelope, type, payload);
+    return this.#request(
+      this.#engineWorker,
+      "engine",
+      engineEnvelope,
+      type,
+      payload,
+      transfer,
+    );
   }
 
-  async #requestRender(type, payload) {
+  async #requestRender(type, payload, transfer = []) {
     await this.ready();
-    return this.#request(this.#renderWorker, "render", renderEnvelope, type, payload);
+    return this.#request(
+      this.#renderWorker,
+      "render",
+      renderEnvelope,
+      type,
+      payload,
+      transfer,
+    );
   }
 
-  #request(worker, owner, envelopeFactory, type, payload) {
+  #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
     const requestId = this.#nextRequestId;
-    this.#nextRequestId += 1;
+    this.#nextRequestId = checkedNextRequestId(this.#nextRequestId);
     const result = new Promise((resolve, reject) => {
       this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
     });
-    worker.postMessage(envelopeFactory(type, { requestId, ...payload }));
+    worker.postMessage(envelopeFactory(type, { requestId, ...payload }), transfer);
     return result;
   }
 
@@ -227,6 +292,10 @@ export class ExecutionWorkerClient {
           validateWorkerEnvelope(message, channel);
           if (message.type === "ready") {
             resolve(message);
+            return;
+          }
+          if (message.type === "host_callback_error") {
+            this.#notifyError(new Error(message.message || "host callback failed"), "host");
             return;
           }
           if (message.type === "error") {
@@ -334,6 +403,32 @@ function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
   }
+}
+
+function validateCallbacks(callbacks) {
+  if (!callbacks || typeof callbacks !== "object") {
+    throw new TypeError("callback configuration must be an object");
+  }
+  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
+    throw new TypeError("callback configuration has an invalid session ID");
+  }
+  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
+    throw new TypeError("callback configuration must contain slots");
+  }
+}
+
+function cloneCallbacks(callbacks) {
+  return {
+    session_id: callbacks.session_id,
+    slots: callbacks.slots.map((slot) => ({ id: slot.id, objects: [...slot.objects] })),
+  };
+}
+
+function checkedNextRequestId(current) {
+  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("execution worker request ID space exhausted");
+  }
+  return current + 1;
 }
 
 function checkedNextSession(current) {
