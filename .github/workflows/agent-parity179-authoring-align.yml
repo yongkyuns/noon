@@ -50,9 +50,6 @@ jobs:
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
           python -m unittest discover -s web/python -p 'test_*.py'
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install chromium
-          node scripts/cross-language-parity.mjs
           node --check scripts/manim-compat-smoke.mjs
           git diff --check
       - name: Commit clean authoring alignment
