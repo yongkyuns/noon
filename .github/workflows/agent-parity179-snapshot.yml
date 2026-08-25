@@ -44,7 +44,11 @@ jobs:
           )
           if old not in test:
               raise SystemExit('expected analytic stroke assertion not found')
-          test_path.write_text(test.replace(old, new))
+          test = test.replace(old, new)
+          stale = '    assert!(shader.contains("let stroke_width = max(input.metrics.x, 0.0);"));\n'
+          if stale not in test:
+              raise SystemExit('expected stale stroke width assertion not found')
+          test_path.write_text(test.replace(stale, ''))
           PY
 
       - name: Format and validate
@@ -65,7 +69,7 @@ jobs:
           rm .github/workflows/agent-parity179-snapshot.yml
           find web/python -type d -name __pycache__ -prune -exec rm -rf {} +
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m "Keep Manim strokes invariant under object transforms"
           git push origin HEAD:agent/parity-179-screen-space
