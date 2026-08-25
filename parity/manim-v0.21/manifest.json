@@ -130,6 +130,25 @@
       "raster_tolerance": {
         "max_bounds_delta_px": 4
       }
+    },
+    {
+      "id": "fill-opacity-ladder",
+      "scene": "FillOpacityLadder",
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.005,
+        "max_mean_absolute_channel_error": 0.3
+      }
+    },
+    {
+      "id": "set-global-opacity",
+      "scene": "SetGlobalOpacity",
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0045,
+        "max_mean_absolute_channel_error": 0.1
+      }
     }
   ],
   "sample_fractions": [
