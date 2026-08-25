@@ -18,6 +18,15 @@ class _GenericAnimationBuilder(_compat._CompatAnimationBuilder, _base._Animation
 # low-level Scene.play isinstance check for Noon's animation builder.
 _compat._CompatAnimationBuilder = _GenericAnimationBuilder
 
+# Pinned ManimCE v0.21.0 primitive constructor defaults. Rectangle's dimensions
+# are width=4, height=2; Square passes its side length explicitly and is unchanged.
+MANIM_DEFAULT_RECTANGLE_WIDTH = 4.0
+MANIM_DEFAULT_RECTANGLE_HEIGHT = 2.0
+_compat.Rectangle.__init__.__defaults__ = (
+    MANIM_DEFAULT_RECTANGLE_WIDTH,
+    MANIM_DEFAULT_RECTANGLE_HEIGHT,
+)
+
 
 def _bind_raw(
     scene: _compat.Scene,
