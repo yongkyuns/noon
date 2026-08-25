@@ -34,9 +34,20 @@ The default 2D presentation contract is also part of parity: the camera is cente
 - `diff-webgpu/` and `diff-webgl/` — amplified absolute pixel differences;
 - `report.json` — timing, foreground bounds/centroid, background color, foreground color summary, pixel error metrics, and categorized mismatch hints.
 
-The diagnostic categories are timing, background/color pipeline, camera/layout/geometry, and raster/style/animation-state. Focused semantic tests remain the preferred oracle for identifying exact causes; raster output catches what structural observations cannot.
+`node scripts/manim-raster-semantic-state.mjs` then attaches renderer-independent state at those **same frame indices and times**:
 
-After measurement, `node scripts/manim-raster-enforce.mjs` evaluates every fixture/backend/sample against the explicit manifest ratchet and writes `ratchet-report.json`. The dedicated CI workflow uploads both reports with the reference/Noon/diff images.
+- `semantic/manim-all-frames.json` — Manim state captured from the actual `Scene.play_internal()`/Cairo frame progression with pixel output disabled;
+- `semantic/<fixture>/frame-XXXX.json` — the paired Manim and Noon state plus normalized deltas for one sampled raster frame;
+- `semantic/index.json` — a compact machine-readable index of every sampled semantic comparison;
+- each backend sample in `report.json` gets a `semantic` summary and a path to its full paired state.
+
+The common semantic observations include top-level scene membership/order, object center and axis-aligned bounds, fill/stroke RGBA, normalized scene-unit stroke width, and object count. Noon additionally records its runtime `appearance`, `reveal`, and `morph` scalars. Noon snapshots are produced by a fresh deterministic `ScenePlayer.seek()` over the exact authored `SceneDocument`; they therefore exercise the same renderer-independent `FrameState` model consumed by browser rendering without requiring a GPU.
+
+Semantic deltas are **diagnostic**, not a second visual baseline. Reveal/morph representations intentionally differ internally between the engines, so the existing focused `manim-differential.py` suite remains the blocking structural oracle while the raster ratchet remains the blocking final-presentation oracle. The paired frame-state files exist to make a pixel failure attributable to membership/timing, geometry/bounds, style, or rasterization without re-running either engine interactively.
+
+The diagnostic raster categories are timing, background/color pipeline, camera/layout/geometry, and raster/style/animation-state. Focused semantic tests remain the preferred oracle for identifying exact causes; raster output catches what structural observations cannot.
+
+After measurement and semantic capture, `node scripts/manim-raster-enforce.mjs` evaluates every fixture/backend/sample against the explicit manifest ratchet and writes `ratchet-report.json`. The dedicated CI workflow uploads all reports, semantic state, and reference/Noon/diff images together.
 
 ## Blocking ratchet policy
 
@@ -61,6 +72,7 @@ The render command requires the same dependencies as the dedicated CI workflow: 
 ```sh
 node scripts/manim-raster-policy.test.mjs
 node scripts/manim-raster-differential.mjs
+node scripts/manim-raster-semantic-state.mjs
 node scripts/manim-raster-enforce.mjs
 node scripts/manim-seek-playback-raster.mjs
 ```
