@@ -116,12 +116,12 @@ define_shape!(Path);
 
 const MANIM_CAIRO_DEFAULT_STROKE_WIDTH: f32 = 0.04;
 
-fn manim_vmobject_snapshot(geometry: GeometryRef) -> ObjectSnapshot {
+fn manim_vmobject_snapshot(geometry: GeometryRef, default_color: Color) -> ObjectSnapshot {
     let mut snapshot = ObjectSnapshot::new(geometry);
-    let mut transparent_white = WHITE;
-    transparent_white.alpha = 0.0;
-    snapshot.style.fill = Some(transparent_white);
-    snapshot.style.stroke = Some(WHITE);
+    let mut transparent_fill = default_color;
+    transparent_fill.alpha = 0.0;
+    snapshot.style.fill = Some(transparent_fill);
+    snapshot.style.stroke = Some(default_color);
     snapshot.style.stroke_width = MANIM_CAIRO_DEFAULT_STROKE_WIDTH;
     snapshot.style.stroke_join = StrokeJoin::Miter;
     snapshot.style.stroke_cap = StrokeCap::Butt;
@@ -130,7 +130,7 @@ fn manim_vmobject_snapshot(geometry: GeometryRef) -> ObjectSnapshot {
 
 impl Circle {
     pub fn new(radius: f32) -> Self {
-        Self(manim_vmobject_snapshot(GeometryRef::circle(radius)))
+        Self(manim_vmobject_snapshot(GeometryRef::circle(radius), RED))
     }
 }
 
@@ -142,15 +142,19 @@ impl Default for Circle {
 
 impl Rectangle {
     pub fn new(width: f32, height: f32) -> Self {
-        Self(manim_vmobject_snapshot(GeometryRef::rectangle(
-            width, height,
-        )))
+        Self(manim_vmobject_snapshot(
+            GeometryRef::rectangle(width, height),
+            WHITE,
+        ))
     }
 }
 
 impl Square {
     pub fn new(side_length: f32) -> Self {
-        Self(manim_vmobject_snapshot(GeometryRef::square(side_length)))
+        Self(manim_vmobject_snapshot(
+            GeometryRef::square(side_length),
+            WHITE,
+        ))
     }
 }
 
@@ -162,7 +166,10 @@ impl Default for Square {
 
 impl Line {
     pub fn new(start: Vec2, end: Vec2) -> Self {
-        Self(manim_vmobject_snapshot(GeometryRef::line(start, end)))
+        Self(manim_vmobject_snapshot(
+            GeometryRef::line(start, end),
+            WHITE,
+        ))
     }
 }
 
@@ -174,7 +181,7 @@ impl Default for Line {
 
 impl Path {
     pub fn new(path: VectorPath) -> Self {
-        Self(manim_vmobject_snapshot(GeometryRef::path(path)))
+        Self(manim_vmobject_snapshot(GeometryRef::path(path), WHITE))
     }
 }
 
