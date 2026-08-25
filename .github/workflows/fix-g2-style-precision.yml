@@ -1,0 +1,57 @@
+name: Fix G2 semantic style precision
+
+on:
+  push:
+    branches:
+      - agent/g2-shared-style-state
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/g2-shared-style-state
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Use stable Rust and wasm target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt clippy
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Apply semantic style precision fix
+        run: python .github/fix-g2-style-precision.py
+      - name: Validate Rust and wasm integration
+        run: |
+          cargo fmt --all
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          cargo test -p noon-web
+          cargo check -p noon-web --target wasm32-unknown-unknown
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Run failing compatibility smoke directly
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          node scripts/manim-compat-smoke.mjs
+      - name: Commit precision fix and remove helpers
+        run: |
+          find web scripts -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/authoring_mobject.rs
+          git rm .github/fix-g2-style-precision.py .github/workflows/fix-g2-style-precision.yml
+          git commit -m "Keep authoring style opacity at semantic precision"
+          git push origin HEAD:agent/g2-shared-style-state
