@@ -7,7 +7,7 @@ permissions:
   contents: write
 jobs:
   bootstrap:
-    if: github.event.head_commit.message == 'Retry D2 bootstrap with mega buffer accounting'
+    if: github.event.head_commit.message == 'Retry D2 bootstrap after Clippy cleanup'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,11 @@ jobs:
           new = '''            repacked\n        };\n        self.rebuild_mega_path_draws();\n\n        if !self.circles.is_empty() {\n'''
           if old not in text:
               raise SystemExit('missing post-geometry mega rebuild anchor')
+          text = text.replace(old, new, 1)
+          old = '        assert!(dirty.len() > 0);\n'
+          new = '        assert!(!dirty.is_empty());\n'
+          if old not in text:
+              raise SystemExit('missing Clippy len-zero assertion')
           path.write_text(text.replace(old, new, 1))
           PY
           python3 - <<'PY'
