@@ -25,13 +25,26 @@ jobs:
           git apply /tmp/parity179.patch
           python - <<'PY'
           from pathlib import Path
-          path = Path('crates/noon-render-wgpu/src/analytic.wgsl')
-          text = path.read_text()
-          text = text.replace('u32(input.flags.y) & 1u != 0u', '(u32(input.flags.y) & 1u) != 0u')
-          text = text.replace('u32(input.flags.y) & 2u != 0u', '(u32(input.flags.y) & 2u) != 0u')
-          text = text.replace('stroke_flags & 2u != 0u', '(stroke_flags & 2u) != 0u')
-          text = text.replace('stroke_flags & 1u != 0u', '(stroke_flags & 1u) != 0u')
-          path.write_text(text)
+
+          shader_path = Path('crates/noon-render-wgpu/src/analytic.wgsl')
+          shader = shader_path.read_text()
+          shader = shader.replace('u32(input.flags.y) & 1u != 0u', '(u32(input.flags.y) & 1u) != 0u')
+          shader = shader.replace('u32(input.flags.y) & 2u != 0u', '(u32(input.flags.y) & 2u) != 0u')
+          shader = shader.replace('stroke_flags & 2u != 0u', '(stroke_flags & 2u) != 0u')
+          shader = shader.replace('stroke_flags & 1u != 0u', '(stroke_flags & 1u) != 0u')
+          shader_path.write_text(shader)
+
+          test_path = Path('crates/noon-render-wgpu/tests/analytic_stroke_parity.rs')
+          test = test_path.read_text()
+          old = '    assert!(shader.contains("let stroke_padding = stroke_half_width(input.metrics, input.flags);"));\n'
+          new = (
+              '    assert!(shader.contains("let stroke_padding = select("));\n'
+              '    assert!(shader.contains("stroke_is_screen_space(input.flags)"));\n'
+              '    assert!(shader.contains("let invariant_padding = vec2<f32>(half_width) / safe_abs_scale(input.scale);"));\n'
+          )
+          if old not in test:
+              raise SystemExit('expected analytic stroke assertion not found')
+          test_path.write_text(test.replace(old, new))
           PY
 
       - name: Format and validate
