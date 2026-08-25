@@ -13,6 +13,7 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
+import _manim_phase_b as _phase_b
 
 _ir = _base._ir
 
@@ -34,6 +35,12 @@ _ORIGINAL_SET_COLOR = _base.Mobject.set_color
 _ORIGINAL_NEXT_TO = _base.Mobject.next_to
 _ORIGINAL_ALIGN_TO = _base.Mobject.align_to
 _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
+
+_ORIGINAL_SET_FILL = _compat.VMobject.set_fill
+_ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
+_ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
+_ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
+_ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
 
 
 def _snapshot_json(raw: _ir.Mobject) -> str:
@@ -232,6 +239,79 @@ def _align_on_frame(
     return self
 
 
+
+def _set_fill(
+    self: _compat.VMobject,
+    color: object = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _compat.VMobject:
+    handle = _handle_for(self)
+    if handle is None:
+        return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
+    if color is not None:
+        parsed = _phase_b._as_color("fill color", color)
+        handle.setFillColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    elif opacity is None:
+        handle.disableFill()
+    if opacity is not None:
+        handle.setFillOpacity(_phase_b._opacity("fill opacity", opacity))
+    return self
+
+
+def _set_stroke(
+    self: _compat.VMobject,
+    color: object = None,
+    width: float | None = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _compat.VMobject:
+    handle = _handle_for(self)
+    if handle is None:
+        return _ORIGINAL_SET_STROKE(
+            self, color=color, width=width, opacity=opacity, family=family
+        )
+    if color is not None:
+        parsed = _phase_b._as_color("stroke color", color)
+        handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    elif width is None and opacity is None:
+        handle.disableStroke()
+    if width is not None:
+        value = _base._ir._finite_number("stroke width", width)
+        if value < 0.0:
+            raise ValueError("stroke width must be non-negative")
+        handle.setStrokeWidth(value)
+    if opacity is not None:
+        handle.setStrokeOpacity(_phase_b._opacity("stroke opacity", opacity))
+    return self
+
+
+def _set_opacity(
+    self: _compat.VMobject,
+    opacity: float,
+    family: bool = True,
+) -> _compat.VMobject:
+    handle = _handle_for(self)
+    if handle is None:
+        return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
+    handle.setOpacity(_phase_b._opacity("opacity", opacity))
+    return self
+
+
+def _get_fill_opacity(self: _compat.VMobject) -> float:
+    handle = _handle_for(self)
+    if handle is None:
+        return _ORIGINAL_GET_FILL_OPACITY(self)
+    return float(handle.fillOpacity)
+
+
+def _get_stroke_opacity(self: _compat.VMobject) -> float:
+    handle = _handle_for(self)
+    if handle is None:
+        return _ORIGINAL_GET_STROKE_OPACITY(self)
+    return float(handle.strokeOpacity)
+
+
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
     present: list[tuple[_base.Vec2, _base.Vec2]] = []
@@ -283,5 +363,11 @@ def install() -> None:
 
     # VMobject historically had its own deep-copy implementation; route it through
     # the same Rust-owned handle so `.animate` does not recreate Python snapshots.
+
     _compat.VMobject.copy = _copy_mobject
+    _compat.VMobject.set_fill = _set_fill
+    _compat.VMobject.set_stroke = _set_stroke
+    _compat.VMobject.set_opacity = _set_opacity
+    _compat.VMobject.get_fill_opacity = _get_fill_opacity
+    _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for

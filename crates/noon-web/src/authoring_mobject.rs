@@ -134,6 +134,111 @@ impl FrontendMobjectHandle {
         Ok(())
     }
 
+    pub fn disable_fill(&mut self) {
+        self.snapshot.style.fill = None;
+    }
+
+    pub fn set_fill_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        let color = Color::rgba(
+            finite_f32("fill.red", red)?,
+            finite_f32("fill.green", green)?,
+            finite_f32("fill.blue", blue)?,
+            unit_alpha("fill.alpha", alpha)?,
+        );
+        let alpha = self
+            .snapshot
+            .style
+            .fill
+            .map_or(color.alpha, |current| current.alpha);
+        self.snapshot.style.fill = Some(Color { alpha, ..color });
+        Ok(())
+    }
+
+    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        let alpha = unit_alpha("fill opacity", opacity)?;
+        let mut color = self.snapshot.style.fill.unwrap_or(Color::WHITE);
+        color.alpha = alpha;
+        self.snapshot.style.fill = Some(color);
+        Ok(())
+    }
+
+    pub fn fill_opacity(&self) -> f64 {
+        self.snapshot
+            .style
+            .fill
+            .map_or(0.0, |color| f64::from(color.alpha))
+    }
+
+    pub fn disable_stroke(&mut self) {
+        self.snapshot.style.stroke = None;
+    }
+
+    pub fn set_stroke_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        let color = Color::rgba(
+            finite_f32("stroke.red", red)?,
+            finite_f32("stroke.green", green)?,
+            finite_f32("stroke.blue", blue)?,
+            unit_alpha("stroke.alpha", alpha)?,
+        );
+        let alpha = self
+            .snapshot
+            .style
+            .stroke
+            .map_or(color.alpha, |current| current.alpha);
+        self.snapshot.style.stroke = Some(Color { alpha, ..color });
+        Ok(())
+    }
+
+    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
+        let width = finite_f32("stroke width", width)?;
+        if width < 0.0 {
+            return Err("stroke width must be non-negative".to_owned());
+        }
+        self.snapshot.style.stroke_width = width;
+        if self.snapshot.style.stroke.is_none() {
+            self.snapshot.style.stroke = Some(Color::WHITE);
+        }
+        Ok(())
+    }
+
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        let alpha = unit_alpha("stroke opacity", opacity)?;
+        let mut color = self.snapshot.style.stroke.unwrap_or(Color::WHITE);
+        color.alpha = alpha;
+        self.snapshot.style.stroke = Some(color);
+        Ok(())
+    }
+
+    pub fn stroke_opacity(&self) -> f64 {
+        self.snapshot
+            .style
+            .stroke
+            .map_or(0.0, |color| f64::from(color.alpha))
+    }
+
+    pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        let alpha = unit_alpha("opacity", opacity)?;
+        if let Some(fill) = &mut self.snapshot.style.fill {
+            fill.alpha = alpha;
+        }
+        if let Some(stroke) = &mut self.snapshot.style.stroke {
+            stroke.alpha = alpha;
+        }
+        Ok(())
+    }
+
     pub fn next_to_handle(
         &mut self,
         other: &Self,
@@ -242,6 +347,14 @@ fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
         return Err(format!("{name} must be a finite f32-compatible number"));
     }
     Ok(value as f32)
+}
+
+fn unit_alpha(name: &str, value: f64) -> Result<f32, String> {
+    let value = finite_f32(name, value)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!("{name} must be between 0 and 1"));
+    }
+    Ok(value)
 }
 
 fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {
@@ -408,6 +521,72 @@ mod wasm {
             self.0.set_color(red, green, blue, alpha).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = disableFill)]
+        pub fn disable_fill(&mut self) {
+            self.0.disable_fill();
+        }
+
+        #[wasm_bindgen(js_name = setFillColor)]
+        pub fn set_fill_color(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .set_fill_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFillOpacity)]
+        pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.0.set_fill_opacity(opacity).map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = fillOpacity)]
+        pub fn fill_opacity(&self) -> f64 {
+            self.0.fill_opacity()
+        }
+
+        #[wasm_bindgen(js_name = disableStroke)]
+        pub fn disable_stroke(&mut self) {
+            self.0.disable_stroke();
+        }
+
+        #[wasm_bindgen(js_name = setStrokeColor)]
+        pub fn set_stroke_color(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .set_stroke_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeWidth)]
+        pub fn set_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
+            self.0.set_stroke_width(width).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeOpacity)]
+        pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.0.set_stroke_opacity(opacity).map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeOpacity)]
+        pub fn stroke_opacity(&self) -> f64 {
+            self.0.stroke_opacity()
+        }
+
+        #[wasm_bindgen(js_name = setOpacity)]
+        pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.0.set_opacity(opacity).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = nextToHandle)]
         pub fn next_to_handle(
             &mut self,
@@ -534,6 +713,29 @@ mod tests {
         assert!(
             (bounds.max_y - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - 0.5)).abs() < 1e-6
         );
+    }
+
+    #[test]
+    fn shared_style_mutations_preserve_independent_channels() {
+        let mut value = snapshot(GeometryRef::circle(1.0));
+        value.style.fill = Some(Color::rgba(1.0, 0.0, 0.0, 0.4));
+        value.style.stroke = Some(Color::rgba(0.0, 0.0, 1.0, 0.7));
+        let mut handle = FrontendMobjectHandle::from_snapshot(value);
+
+        handle.set_fill_color(0.0, 1.0, 0.0, 1.0).unwrap();
+        assert!((handle.fill_opacity() - 0.4).abs() < 1e-6);
+        handle.set_fill_opacity(0.25).unwrap();
+        handle.set_stroke_width(3.5).unwrap();
+        handle.set_stroke_opacity(0.6).unwrap();
+        assert!((handle.fill_opacity() - 0.25).abs() < 1e-6);
+        assert!((handle.stroke_opacity() - 0.6).abs() < 1e-6);
+        assert!((handle.snapshot().style.stroke_width - 3.5).abs() < 1e-6);
+
+        handle.set_opacity(0.2).unwrap();
+        assert!((handle.fill_opacity() - 0.2).abs() < 1e-6);
+        assert!((handle.stroke_opacity() - 0.2).abs() < 1e-6);
+        handle.disable_fill();
+        assert_eq!(handle.fill_opacity(), 0.0);
     }
 
     #[test]
