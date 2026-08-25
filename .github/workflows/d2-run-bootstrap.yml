@@ -7,7 +7,7 @@ permissions:
   contents: write
 jobs:
   bootstrap:
-    if: github.event.head_commit.message == 'Run D2 bootstrap implementation'
+    if: github.event.head_commit.message == 'Retry D2 bootstrap after packing-order fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +25,21 @@ jobs:
           Path('/tmp/d2_bootstrap.py').write_text(script)
           PY
           python3 /tmp/d2_bootstrap.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-render-wgpu/src/lib.rs')
+          text = path.read_text()
+          old = '''        self.rebuild_ordered_render_batches();\n        self.rebuild_mega_path_draws();\n        let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {\n'''
+          new = '''        self.rebuild_ordered_render_batches();\n        let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {\n'''
+          if old not in text:
+              raise SystemExit('missing early mega rebuild anchor')
+          text = text.replace(old, new, 1)
+          old = '''            repacked\n        };\n\n        if !self.circles.is_empty() {\n'''
+          new = '''            repacked\n        };\n        self.rebuild_mega_path_draws();\n\n        if !self.circles.is_empty() {\n'''
+          if old not in text:
+              raise SystemExit('missing post-geometry mega rebuild anchor')
+          path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
       - name: Validate renderer slice
         run: |
