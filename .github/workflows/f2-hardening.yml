@@ -1,0 +1,122 @@
+name: F2 Rust hardening
+
+on:
+  push:
+    branches:
+      - arch/f2-engine-worker-transport
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.event.head_commit.message != 'Reuse runtime slots and retain pending render frames'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/f2-engine-worker-transport
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Apply runtime slot and surface retry refactor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          transport = Path('crates/noon-web/src/execution_transport.rs')
+          text = transport.read_text()
+          text = text.replace(
+              'use noon_runtime::{FrameChanges, FrameObjectState, FrameState};',
+              'use noon_runtime::{ExecutionSlotError, ExecutionSlotId, ExecutionSlotTable, FrameChanges, FrameObjectState, FrameState};',
+          )
+          text = text.replace(
+              'pub struct TransportSlotId {\n    pub slot: u32,\n    pub generation: u32,\n}\n',
+              'pub struct TransportSlotId {\n    pub slot: u32,\n    pub generation: u32,\n}\n\nimpl From<ExecutionSlotId> for TransportSlotId {\n    fn from(value: ExecutionSlotId) -> Self {\n        Self {\n            slot: value.slot(),\n            generation: value.generation(),\n        }\n    }\n}\n',
+          )
+          text = text.replace(
+              '    Clock(ClockError),\n',
+              '    Clock(ClockError),\n    ExecutionSlot(ExecutionSlotError),\n',
+          )
+          text = text.replace(
+              '            Self::Clock(error) => error.fmt(formatter),\n',
+              '            Self::Clock(error) => error.fmt(formatter),\n            Self::ExecutionSlot(error) => error.fmt(formatter),\n',
+          )
+          clock_from = '''impl From<ClockError> for ExecutionTransportError {\n    fn from(value: ClockError) -> Self {\n        Self::Clock(value)\n    }\n}\n'''
+          slot_from = clock_from + '''\nimpl From<ExecutionSlotError> for ExecutionTransportError {\n    fn from(value: ExecutionSlotError) -> Self {\n        Self::ExecutionSlot(value)\n    }\n}\n'''
+          if 'impl From<ExecutionSlotError> for ExecutionTransportError' not in text:
+              if clock_from not in text:
+                  raise SystemExit('ClockError conversion anchor not found')
+              text = text.replace(clock_from, slot_from, 1)
+
+          text = re.sub(
+              r'\n#\[derive\(Clone, Copy, Debug\)\]\nstruct SlotRecord \{\n    id: TransportSlotId,\n\}\n',
+              '\n',
+              text,
+              count=1,
+          )
+          fields = '''    initialized: bool,\n    object_slots: HashMap<ObjectId, SlotRecord>,\n    generations: Vec<u32>,\n    free_slots: Vec<u32>,\n    previous_order: Vec<ObjectId>,\n'''
+          replacement = '''    initialized: bool,\n    slots: ExecutionSlotTable,\n    previous_order: Vec<ObjectId>,\n'''
+          if fields not in text:
+              raise SystemExit('encoder fields anchor not found')
+          text = text.replace(fields, replacement, 1)
+          constructor = '''            initialized: false,\n            object_slots: HashMap::new(),\n            generations: Vec::new(),\n            free_slots: Vec::new(),\n            previous_order: Vec::new(),\n'''
+          constructor_replacement = '''            initialized: false,\n            slots: ExecutionSlotTable::new(),\n            previous_order: Vec::new(),\n'''
+          if constructor not in text:
+              raise SystemExit('encoder constructor anchor not found')
+          text = text.replace(constructor, constructor_replacement, 1)
+
+          sync_pattern = re.compile(
+              r'    fn sync_slots\(&mut self, frame: &FrameState\) -> Result<bool, ExecutionTransportError> \{.*?\n    \}\n\n    fn object_state\(',
+              re.S,
+          )
+          sync_replacement = '''    fn sync_slots(&mut self, frame: &FrameState) -> Result<bool, ExecutionTransportError> {\n        let order = frame\n            .objects\n            .iter()\n            .map(|object| object.id)\n            .collect::<Vec<_>>();\n        let current = order.iter().copied().collect::<HashSet<_>>();\n        if current.len() != order.len() {\n            if let Some(duplicate) = order.iter().copied().find(|object| {\n                order\n                    .iter()\n                    .filter(|candidate| **candidate == *object)\n                    .count()\n                    > 1\n            }) {\n                return Err(ExecutionTransportError::DuplicateObject(duplicate));\n            }\n        }\n\n        let removed = self\n            .previous_order\n            .iter()\n            .copied()\n            .filter(|object| !current.contains(object))\n            .collect::<Vec<_>>();\n        let mut structural = !removed.is_empty() || self.previous_order != order;\n        for object in removed {\n            self.slots.remove_object(object)?;\n        }\n\n        for object in &order {\n            if self.slots.slot_for_object(*object).is_some() {\n                continue;\n            }\n            structural = true;\n            self.slots.insert_object(*object)?;\n        }\n        self.previous_order = order;\n        Ok(structural)\n    }\n\n    fn object_state('''
+          text, count = sync_pattern.subn(sync_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'sync_slots replacement count {count}')
+
+          old_lookup = '''        let slot = self\n            .object_slots\n            .get(&object.id)\n            .expect("frame object was synchronized to a transport slot")\n            .id;\n'''
+          new_lookup = '''        let slot: TransportSlotId = self\n            .slots\n            .slot_for_object(object.id)\n            .expect("frame object was synchronized to an execution slot")\n            .into();\n'''
+          if old_lookup not in text:
+              raise SystemExit('object slot lookup anchor not found')
+          text = text.replace(old_lookup, new_lookup, 1)
+          transport.write_text(text)
+
+          canvas = Path('crates/noon-web/src/execution_canvas.rs')
+          text = canvas.read_text()
+          render_pattern = re.compile(
+              r'        pub fn render\(&mut self\) -> Result<bool, JsValue> \{.*?\n        \}\n\n        pub fn resize',
+              re.S,
+          )
+          render_replacement = '''        pub fn render(&mut self) -> Result<bool, JsValue> {\n            if !self.drawable || self.pending_changes.is_empty() {\n                return Ok(false);\n            }\n\n            let (surface_texture, reconfigure_after_present) =\n                match self.surface.get_current_texture() {\n                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),\n                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),\n                    wgpu::CurrentSurfaceTexture::Timeout\n                    | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),\n                    wgpu::CurrentSurfaceTexture::Outdated => {\n                        self.surface.configure(&self.device, &self.config);\n                        return Ok(false);\n                    }\n                    wgpu::CurrentSurfaceTexture::Lost => {\n                        self.surface = create_surface(&self.instance, &self.canvas)?;\n                        self.surface.configure(&self.device, &self.config);\n                        return Ok(false);\n                    }\n                    wgpu::CurrentSurfaceTexture::Validation => {\n                        return Err(js_message(\n                            "GPU backend rejected the OffscreenCanvas surface texture",\n                        ));\n                    }\n                };\n\n            let changes = mem::take(&mut self.pending_changes);\n            let frame = self\n                .mirror\n                .frame()\n                .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;\n            let prepared = self.preparer.prepare_incremental(frame, &changes);\n            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;\n            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);\n            self.last_bytes_uploaded = upload.bytes_uploaded;\n\n            let view = surface_texture\n                .texture\n                .create_view(&wgpu::TextureViewDescriptor::default());\n            let mut encoder = self\n                .device\n                .create_command_encoder(&wgpu::CommandEncoderDescriptor {\n                    label: Some("Noon execution render worker frame"),\n                });\n            let draw = self\n                .renderer\n                .encode(&mut encoder, &view, &prepared, self.clear_color);\n            self.queue.submit(Some(encoder.finish()));\n            surface_texture.present();\n            self.last_draw_calls = draw.draw_calls;\n            self.last_instances_drawn = draw.instances_drawn;\n            if reconfigure_after_present {\n                self.surface.configure(&self.device, &self.config);\n            }\n            Ok(true)\n        }\n\n        pub fn resize'''
+          text, count = render_pattern.subn(render_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'render replacement count {count}')
+          canvas.write_text(text)
+          PY
+          cargo fmt --all
+
+      - name: Validate native transport
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p noon-web execution_transport
+          node --test web/execution-transport.test.mjs
+          node --check web/execution-engine-worker.js
+          node --check web/execution-render-worker.js
+          node --check web/execution-worker-client.js
+
+      - name: Validate WASM transport
+        run: cargo check -p noon-web --target wasm32-unknown-unknown
+
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/f2-hardening.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-web/src/execution_transport.rs crates/noon-web/src/execution_canvas.rs .github/workflows/f2-hardening.yml
+          git commit -m 'Reuse runtime slots and retain pending render frames'
+          git push origin HEAD:arch/f2-engine-worker-transport
