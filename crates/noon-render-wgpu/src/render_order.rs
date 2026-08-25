@@ -88,40 +88,50 @@ impl FramePreparer {
 
     pub(crate) fn rebuild_ordered_render_batches(&mut self) {
         self.render_batches.clear();
-        let mut object_indices = (0..self.slots.len()).collect::<Vec<_>>();
+
         if self.render_order_keys.len() == self.slots.len() {
+            // Explicit z-order is comparatively uncommon and genuinely needs a
+            // sortable indirection. Keep that allocation isolated to this path.
+            let mut object_indices = (0..self.slots.len()).collect::<Vec<_>>();
             object_indices.sort_by_key(|&index| self.render_order_keys[index]);
+            for object_index in object_indices {
+                push_slot_batches(&mut self.render_batches, self.slots[object_index]);
+            }
+            return;
         }
 
-        for object_index in object_indices {
-            match self.slots[object_index] {
-                PreparedSlot::Absent | PreparedSlot::Unsupported(_) => {}
-                PreparedSlot::Circle(index) => {
-                    push_batch(&mut self.render_batches, RenderPrimitive::Circle, index);
-                }
-                PreparedSlot::Rectangle(index) => {
-                    push_batch(&mut self.render_batches, RenderPrimitive::Rectangle, index);
-                }
-                PreparedSlot::Line(index) => {
-                    push_batch(&mut self.render_batches, RenderPrimitive::Line, index);
-                }
-                PreparedSlot::Path {
-                    index,
-                    batch,
-                    reveal_head,
-                    ..
-                } => {
-                    push_batch(
-                        &mut self.render_batches,
-                        RenderPrimitive::Path { batch },
-                        index,
-                    );
-                    // The animated reveal head belongs to this object's painter
-                    // position and should sit immediately above its path body.
-                    if let Some(line_index) = reveal_head {
-                        push_batch(&mut self.render_batches, RenderPrimitive::Line, line_index);
-                    }
-                }
+        // Default painter order is already the semantic object-vector order.
+        // Walking slots directly avoids allocating/filling a temporary index
+        // vector on every full preparation or structural rebuild.
+        for slot in self.slots.iter().copied() {
+            push_slot_batches(&mut self.render_batches, slot);
+        }
+    }
+}
+
+fn push_slot_batches(batches: &mut Vec<OrderedRenderBatch>, slot: PreparedSlot) {
+    match slot {
+        PreparedSlot::Absent | PreparedSlot::Unsupported(_) => {}
+        PreparedSlot::Circle(index) => {
+            push_batch(batches, RenderPrimitive::Circle, index);
+        }
+        PreparedSlot::Rectangle(index) => {
+            push_batch(batches, RenderPrimitive::Rectangle, index);
+        }
+        PreparedSlot::Line(index) => {
+            push_batch(batches, RenderPrimitive::Line, index);
+        }
+        PreparedSlot::Path {
+            index,
+            batch,
+            reveal_head,
+            ..
+        } => {
+            push_batch(batches, RenderPrimitive::Path { batch }, index);
+            // The animated reveal head belongs to this object's painter
+            // position and should sit immediately above its path body.
+            if let Some(line_index) = reveal_head {
+                push_batch(batches, RenderPrimitive::Line, line_index);
             }
         }
     }

@@ -4,7 +4,7 @@ use noon_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{IrError, FORMAT_VERSION};
+use crate::{preflight_version, IrError, FORMAT_VERSION};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReactiveGraphDocument {
@@ -126,6 +126,7 @@ pub fn encode_semantic_scene(scene: &SemanticScene) -> Result<String, SemanticIr
 }
 
 pub fn decode_semantic_scene(json: &str) -> Result<SemanticScene, SemanticIrError> {
+    preflight_version(json)?;
     let document: SemanticSceneDocument = serde_json::from_str(json)?;
     document.into_semantic()
 }
@@ -207,5 +208,19 @@ mod tests {
             Some(&ReactiveValue::Scalar(1.5))
         );
         assert_eq!(scene.reactive().bindings()[0].property, Property::Rotation);
+    }
+
+    #[test]
+    fn future_semantic_versions_are_rejected_before_new_reactive_variants() {
+        let json = r#"{
+            "version":2,
+            "objects":[],
+            "tracks":[],
+            "reactive":{"signals":[{"id":0,"source":{"future_input":{}}}],"bindings":[]}
+        }"#;
+        assert!(matches!(
+            decode_semantic_scene(json),
+            Err(SemanticIrError::Scene(IrError::UnsupportedVersion(2)))
+        ));
     }
 }
