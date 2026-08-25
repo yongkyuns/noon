@@ -119,8 +119,8 @@ class DefaultVmobjectStyle(Scene):
         assert abs(circle.style["stroke_width"] - 0.04) < 1e-9
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
-        assert circle.style["fill"]["red"] == 1.0
-        assert circle.style["stroke"]["red"] == 1.0
+        assert abs(circle.style["fill"]["red"] - RED.red) < 1e-7
+        assert abs(circle.style["stroke"]["red"] - RED.red) < 1e-7
 
         explicit = Square(stroke_width=10)
         assert abs(explicit.style["stroke_width"] - 0.10) < 1e-9
@@ -213,7 +213,6 @@ class AnimateParity(Scene):
         except ValueError as error:
             assert "only be passed once" in str(error)
 `;
-
 
 const queryTransformSource = `
 from noon import *
@@ -384,7 +383,6 @@ try {
     "smooth",
     "Scene.play kwargs should override builder animation kwargs",
   );
-
 
   const queryTransforms = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
