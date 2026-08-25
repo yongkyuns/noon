@@ -5,6 +5,8 @@ Kept separate from the compatibility surface while Phase B is under active devel
 
 from __future__ import annotations
 
+import math
+
 import noon as _base
 import _manim_compat as _compat
 
@@ -17,6 +19,268 @@ class _GenericAnimationBuilder(_compat._CompatAnimationBuilder, _base._Animation
 # so replacing the class preserves the generic proxy while also satisfying the
 # low-level Scene.play isinstance check for Noon's animation builder.
 _compat._CompatAnimationBuilder = _GenericAnimationBuilder
+
+# Pinned ManimCE v0.21.0 primitive constructor defaults. Rectangle's dimensions
+# are width=4, height=2; Square passes its side length explicitly and is unchanged.
+MANIM_DEFAULT_RECTANGLE_WIDTH = 4.0
+MANIM_DEFAULT_RECTANGLE_HEIGHT = 2.0
+_compat.Rectangle.__init__.__defaults__ = (
+    MANIM_DEFAULT_RECTANGLE_WIDTH,
+    MANIM_DEFAULT_RECTANGLE_HEIGHT,
+)
+
+
+# Manim layout is based on actual VMobject point/curve extrema, not the control
+# hull used for conservative renderer bounds. Detached browser objects already use
+# the shared Rust semantic handle for tight local path bounds; this fallback keeps
+# CPython and scene-owned compatibility objects on the same contract and handles
+# affine transforms without rotating an already-axis-aligned bounding box.
+def _transform_point(raw: _base._ir.Mobject, point: _base.Vec2) -> _base.Vec2:
+    transform = raw.transform
+    scale_x = float(transform["scale"]["x"])
+    scale_y = float(transform["scale"]["y"])
+    rotation = float(transform["rotation"])
+    translation_x = float(transform["translation"]["x"])
+    translation_y = float(transform["translation"]["y"])
+    sine = math.sin(rotation)
+    cosine = math.cos(rotation)
+    x = point.x * scale_x
+    y = point.y * scale_y
+    return _base.Vec2(
+        x * cosine - y * sine + translation_x,
+        x * sine + y * cosine + translation_y,
+    )
+
+
+def _bounds_from_points(points: list[_base.Vec2]) -> tuple[_base.Vec2, _base.Vec2] | None:
+    if not points:
+        return None
+    return (
+        _base.Vec2(
+            min(point.x for point in points),
+            min(point.y for point in points),
+        ),
+        _base.Vec2(
+            max(point.x for point in points),
+            max(point.y for point in points),
+        ),
+    )
+
+
+def _quadratic_point(
+    p0: _base.Vec2, p1: _base.Vec2, p2: _base.Vec2, t: float
+) -> _base.Vec2:
+    u = 1.0 - t
+    return _base.Vec2(
+        u * u * p0.x + 2.0 * u * t * p1.x + t * t * p2.x,
+        u * u * p0.y + 2.0 * u * t * p1.y + t * t * p2.y,
+    )
+
+
+def _cubic_point(
+    p0: _base.Vec2,
+    p1: _base.Vec2,
+    p2: _base.Vec2,
+    p3: _base.Vec2,
+    t: float,
+) -> _base.Vec2:
+    u = 1.0 - t
+    return _base.Vec2(
+        u * u * u * p0.x
+        + 3.0 * u * u * t * p1.x
+        + 3.0 * u * t * t * p2.x
+        + t * t * t * p3.x,
+        u * u * u * p0.y
+        + 3.0 * u * u * t * p1.y
+        + 3.0 * u * t * t * p2.y
+        + t * t * t * p3.y,
+    )
+
+
+def _cubic_derivative_roots(p0: float, p1: float, p2: float, p3: float) -> list[float]:
+    a = -p0 + 3.0 * p1 - 3.0 * p2 + p3
+    b = 2.0 * (p0 - 2.0 * p1 + p2)
+    c = p1 - p0
+    epsilon = 1.0e-14
+    if abs(a) <= epsilon:
+        if abs(b) <= epsilon:
+            return []
+        return [-c / b]
+    discriminant = b * b - 4.0 * a * c
+    if discriminant < 0.0:
+        return []
+    root = math.sqrt(discriminant)
+    roots = [(-b + root) / (2.0 * a)]
+    if root > epsilon:
+        roots.append((-b - root) / (2.0 * a))
+    return roots
+
+
+def _vector_path_world_bounds(
+    raw: _base._ir.Mobject, commands: list[object]
+) -> tuple[_base.Vec2, _base.Vec2] | None:
+    points: list[_base.Vec2] = []
+    current: _base.Vec2 | None = None
+    subpath_start: _base.Vec2 | None = None
+
+    def include(point: _base.Vec2) -> None:
+        points.append(point)
+
+    for command in commands:
+        if command == "close":
+            if current is not None:
+                include(current)
+            if subpath_start is not None:
+                include(subpath_start)
+                current = subpath_start
+            continue
+
+        kind, payload = next(iter(command.items()))
+        to_payload = payload.get("to")
+        end = (
+            None
+            if to_payload is None
+            else _transform_point(
+                raw,
+                _base.Vec2(float(to_payload["x"]), float(to_payload["y"])),
+            )
+        )
+
+        if kind == "move_to":
+            if end is not None:
+                include(end)
+                current = end
+                subpath_start = end
+            continue
+
+        if kind == "line_to":
+            if current is not None:
+                include(current)
+            if end is not None:
+                include(end)
+                current = end
+            continue
+
+        if kind == "quadratic_to" and end is not None:
+            if current is None:
+                include(end)
+                current = end
+                continue
+            control_payload = payload["control"]
+            control = _transform_point(
+                raw,
+                _base.Vec2(
+                    float(control_payload["x"]),
+                    float(control_payload["y"]),
+                ),
+            )
+            start = current
+            include(start)
+            include(end)
+            for axis in (0, 1):
+                p0 = start[axis]
+                p1 = control[axis]
+                p2 = end[axis]
+                denominator = p0 - 2.0 * p1 + p2
+                if abs(denominator) <= 1.0e-14:
+                    continue
+                t = (p0 - p1) / denominator
+                if 0.0 < t < 1.0:
+                    include(_quadratic_point(start, control, end, t))
+            current = end
+            continue
+
+        if kind == "cubic_to" and end is not None:
+            if current is None:
+                include(end)
+                current = end
+                continue
+            control1_payload = payload["control1"]
+            control2_payload = payload["control2"]
+            control1 = _transform_point(
+                raw,
+                _base.Vec2(
+                    float(control1_payload["x"]),
+                    float(control1_payload["y"]),
+                ),
+            )
+            control2 = _transform_point(
+                raw,
+                _base.Vec2(
+                    float(control2_payload["x"]),
+                    float(control2_payload["y"]),
+                ),
+            )
+            start = current
+            include(start)
+            include(end)
+            roots = _cubic_derivative_roots(
+                start.x, control1.x, control2.x, end.x
+            ) + _cubic_derivative_roots(start.y, control1.y, control2.y, end.y)
+            for t in roots:
+                if 0.0 < t < 1.0:
+                    include(_cubic_point(start, control1, control2, end, t))
+            current = end
+
+    return _bounds_from_points(points)
+
+
+def _manim_layout_bounds(raw: _base._ir.Mobject) -> tuple[_base.Vec2, _base.Vec2] | None:
+    geometry = raw.geometry
+    transform = raw.transform
+    translation = _base.Vec2(
+        float(transform["translation"]["x"]),
+        float(transform["translation"]["y"]),
+    )
+
+    if "circle" in geometry:
+        radius = float(geometry["circle"]["radius"])
+        scale_x = float(transform["scale"]["x"])
+        scale_y = float(transform["scale"]["y"])
+        rotation = float(transform["rotation"])
+        sine = math.sin(rotation)
+        cosine = math.cos(rotation)
+        half_width = radius * math.hypot(scale_x * cosine, scale_y * sine)
+        half_height = radius * math.hypot(scale_x * sine, scale_y * cosine)
+        return (
+            _base.Vec2(translation.x - half_width, translation.y - half_height),
+            _base.Vec2(translation.x + half_width, translation.y + half_height),
+        )
+
+    if "rectangle" in geometry:
+        size = geometry["rectangle"]["size"]
+        half = _base.Vec2(float(size["x"]) * 0.5, float(size["y"]) * 0.5)
+        return _bounds_from_points(
+            [
+                _transform_point(raw, _base.Vec2(x, y))
+                for x, y in (
+                    (-half.x, -half.y),
+                    (-half.x, half.y),
+                    (half.x, -half.y),
+                    (half.x, half.y),
+                )
+            ]
+        )
+
+    if "line" in geometry:
+        line = geometry["line"]
+        return _bounds_from_points(
+            [
+                _transform_point(
+                    raw,
+                    _base.Vec2(float(point["x"]), float(point["y"])),
+                )
+                for point in (line["start"], line["end"])
+            ]
+        )
+
+    if "vector_path" in geometry:
+        return _vector_path_world_bounds(raw, geometry["vector_path"]["commands"])
+
+    return None
+
+
+_base._bounds = _manim_layout_bounds
 
 
 def _bind_raw(

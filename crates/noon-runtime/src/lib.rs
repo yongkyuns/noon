@@ -65,6 +65,8 @@ impl FrameState {
 pub struct FrameChanges {
     all: bool,
     object_indices: Vec<usize>,
+    added_indices: Vec<usize>,
+    removed_indices: Vec<usize>,
 }
 
 impl FrameChanges {
@@ -72,15 +74,50 @@ impl FrameChanges {
         Self {
             all: true,
             object_indices: Vec::new(),
+            added_indices: Vec::new(),
+            removed_indices: Vec::new(),
         }
     }
 
     pub fn objects(mut object_indices: Vec<usize>) -> Self {
-        object_indices.sort_unstable();
-        object_indices.dedup();
+        sort_dedup(&mut object_indices);
         Self {
             all: false,
             object_indices,
+            added_indices: Vec::new(),
+            removed_indices: Vec::new(),
+        }
+    }
+
+    pub fn structural(mut added_indices: Vec<usize>, mut removed_indices: Vec<usize>) -> Self {
+        sort_dedup(&mut added_indices);
+        sort_dedup(&mut removed_indices);
+        let mut object_indices = added_indices.clone();
+        object_indices.extend_from_slice(&removed_indices);
+        sort_dedup(&mut object_indices);
+        Self {
+            all: false,
+            object_indices,
+            added_indices,
+            removed_indices,
+        }
+    }
+
+    pub fn with_structure(
+        mut object_indices: Vec<usize>,
+        mut added_indices: Vec<usize>,
+        mut removed_indices: Vec<usize>,
+    ) -> Self {
+        sort_dedup(&mut added_indices);
+        sort_dedup(&mut removed_indices);
+        object_indices.extend_from_slice(&added_indices);
+        object_indices.extend_from_slice(&removed_indices);
+        sort_dedup(&mut object_indices);
+        Self {
+            all: false,
+            object_indices,
+            added_indices,
+            removed_indices,
         }
     }
 
@@ -92,6 +129,18 @@ impl FrameChanges {
         &self.object_indices
     }
 
+    pub fn added_indices(&self) -> &[usize] {
+        &self.added_indices
+    }
+
+    pub fn removed_indices(&self) -> &[usize] {
+        &self.removed_indices
+    }
+
+    pub const fn is_structural(&self) -> bool {
+        !self.added_indices.is_empty() || !self.removed_indices.is_empty()
+    }
+
     pub const fn is_empty(&self) -> bool {
         !self.all && self.object_indices.is_empty()
     }
@@ -99,21 +148,40 @@ impl FrameChanges {
     fn invalidate_all(&mut self) {
         self.all = true;
         self.object_indices.clear();
+        self.added_indices.clear();
+        self.removed_indices.clear();
     }
 
     fn insert(&mut self, object_index: usize) {
-        if self.all || self.object_indices.last() == Some(&object_index) {
+        insert_sorted_unique(&mut self.object_indices, object_index);
+    }
+
+    fn insert_added(&mut self, object_index: usize) {
+        if self.all {
             return;
         }
-        if self
-            .object_indices
-            .last()
-            .is_none_or(|last| *last < object_index)
-        {
-            self.object_indices.push(object_index);
-        } else if let Err(position) = self.object_indices.binary_search(&object_index) {
-            self.object_indices.insert(position, object_index);
+        insert_sorted_unique(&mut self.object_indices, object_index);
+        insert_sorted_unique(&mut self.added_indices, object_index);
+    }
+
+    fn insert_removed(&mut self, object_index: usize) {
+        if self.all {
+            return;
         }
+        insert_sorted_unique(&mut self.object_indices, object_index);
+        insert_sorted_unique(&mut self.removed_indices, object_index);
+    }
+}
+
+fn sort_dedup(values: &mut Vec<usize>) {
+    values.sort_unstable();
+    values.dedup();
+}
+
+fn insert_sorted_unique(values: &mut Vec<usize>, value: usize) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(position) => values.insert(position, value),
     }
 }
 
@@ -312,7 +380,7 @@ impl SceneInstance {
                 append_object_frame(&self.compiled, &mut self.frame, object_index);
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
-                self.changes.insert(object_index);
+                self.changes.insert_added(object_index);
             }
             ScenePatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -326,7 +394,7 @@ impl SceneInstance {
                 let object_index = object_index as usize;
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
-                self.changes.insert(object_index);
+                self.changes.insert_removed(object_index);
             }
             _ => unreachable!("structural patch helper accepts only create/remove"),
         }

@@ -2,8 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
 use noon_runtime::{
-    ExecutionSlotError, ExecutionSlotId, ExecutionSlotTable, FrameChanges, FrameObjectState,
-    FrameState,
+    ExecutionSlotError, ExecutionSlotId, FrameChanges, FrameObjectState, FrameState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -184,9 +183,8 @@ pub struct ExecutionDeltaEncoder {
     session: u32,
     next_sequence: u64,
     initialized: bool,
-    slots: ExecutionSlotTable,
-    previous_order: Vec<ObjectId>,
-    object_orders: HashMap<ObjectId, u32>,
+    slot_orders: HashMap<TransportSlotId, u32>,
+    next_order: u32,
 }
 
 impl ExecutionDeltaEncoder {
@@ -195,9 +193,8 @@ impl ExecutionDeltaEncoder {
             session,
             next_sequence: 0,
             initialized: false,
-            slots: ExecutionSlotTable::new(),
-            previous_order: Vec::new(),
-            object_orders: HashMap::new(),
+            slot_orders: HashMap::new(),
+            next_order: 0,
         }
     }
 
@@ -209,168 +206,146 @@ impl ExecutionDeltaEncoder {
         self.next_sequence
     }
 
-    pub fn encode(
-        &mut self,
-        frame: &FrameState,
-        changes: &FrameChanges,
-    ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
-        let live_indices = (0..frame.objects.len()).collect::<Vec<_>>();
-        self.encode_live(frame, changes, &live_indices)
+    pub const fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
-    pub fn encode_live(
+    pub fn contains_slot(&self, slot: ExecutionSlotId) -> bool {
+        self.slot_orders.contains_key(&TransportSlotId::from(slot))
+    }
+
+    pub fn encode_snapshot(
         &mut self,
         frame: &FrameState,
-        changes: &FrameChanges,
-        live_indices: &[usize],
-    ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
-        if !frame.time.is_finite() {
-            return Err(ExecutionTransportError::InvalidTime(frame.time));
+        live_objects: &[(ExecutionSlotId, usize)],
+    ) -> Result<ExecutionDeltaEnvelope, ExecutionTransportError> {
+        self.validate_time(frame.time)?;
+        self.slot_orders.clear();
+        self.next_order = 0;
+        let mut objects = Vec::with_capacity(live_objects.len());
+        let mut seen = HashSet::with_capacity(live_objects.len());
+        for &(slot, frame_index) in live_objects {
+            let slot = TransportSlotId::from(slot);
+            if !seen.insert(slot) {
+                return Err(ExecutionTransportError::DuplicateSlot(slot));
+            }
+            let order = self.next_order;
+            self.next_order = self
+                .next_order
+                .checked_add(1)
+                .ok_or(ExecutionTransportError::SlotSpaceExhausted)?;
+            self.slot_orders.insert(slot, order);
+            objects.push(Self::object_state(frame, frame_index, slot, order)?);
         }
+        let sequence = self.take_sequence()?;
+        self.initialized = true;
+        Ok(ExecutionDeltaEnvelope {
+            channel: EXECUTION_TRANSPORT_CHANNEL.to_owned(),
+            protocol_version: EXECUTION_TRANSPORT_VERSION,
+            session: self.session,
+            sequence,
+            snapshot: true,
+            time: frame.time,
+            removed: Vec::new(),
+            objects,
+        })
+    }
 
-        let structural = self.sync_slots(frame, live_indices)?;
-        let snapshot = !self.initialized || structural || changes.is_all();
-        if !snapshot && changes.is_empty() {
+    pub fn encode_incremental(
+        &mut self,
+        frame: &FrameState,
+        dirty_objects: &[(ExecutionSlotId, usize)],
+        added_objects: &[(ExecutionSlotId, usize)],
+        removed_slots: &[ExecutionSlotId],
+    ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
+        self.validate_time(frame.time)?;
+        if !self.initialized {
+            return Err(ExecutionTransportError::StructuralDeltaRequiresSnapshot);
+        }
+        if dirty_objects.is_empty() && added_objects.is_empty() && removed_slots.is_empty() {
             return Ok(None);
         }
 
-        let sequence = self.next_sequence;
-        self.next_sequence = self
-            .next_sequence
-            .checked_add(1)
-            .ok_or(ExecutionTransportError::SequenceExhausted)?;
-        let indices = if snapshot {
-            live_indices.to_vec()
-        } else {
-            changes.object_indices().to_vec()
-        };
-        let mut objects = Vec::with_capacity(indices.len());
-        for (snapshot_order, index) in indices.into_iter().enumerate() {
-            let object = frame
-                .objects
-                .get(index)
-                .ok_or(ExecutionTransportError::SlotSpaceExhausted)?;
-            let order = if snapshot {
-                u32::try_from(snapshot_order)
-                    .map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?
-            } else {
-                *self.object_orders.get(&object.id).ok_or_else(|| {
-                    ExecutionTransportError::UnknownSlot(
-                        self.slots
-                            .slot_for_object(object.id)
-                            .map(TransportSlotId::from)
-                            .unwrap_or(TransportSlotId {
-                                slot: u32::MAX,
-                                generation: 0,
-                            }),
-                    )
-                })?
-            };
-            objects.push(self.object_state(frame, index, order)?);
+        let mut removed = Vec::with_capacity(removed_slots.len());
+        let mut seen_removed = HashSet::with_capacity(removed_slots.len());
+        for &slot in removed_slots {
+            let slot = TransportSlotId::from(slot);
+            if !seen_removed.insert(slot) {
+                continue;
+            }
+            self.slot_orders
+                .remove(&slot)
+                .ok_or(ExecutionTransportError::UnknownSlot(slot))?;
+            removed.push(slot);
         }
-        self.initialized = true;
 
+        let mut objects = Vec::with_capacity(dirty_objects.len() + added_objects.len());
+        let mut emitted = HashSet::with_capacity(objects.capacity());
+        for &(slot, frame_index) in added_objects {
+            let slot = TransportSlotId::from(slot);
+            if self.slot_orders.contains_key(&slot) || !emitted.insert(slot) {
+                return Err(ExecutionTransportError::DuplicateSlot(slot));
+            }
+            let order = self.next_order;
+            self.next_order = self
+                .next_order
+                .checked_add(1)
+                .ok_or(ExecutionTransportError::SlotSpaceExhausted)?;
+            self.slot_orders.insert(slot, order);
+            objects.push(Self::object_state(frame, frame_index, slot, order)?);
+        }
+        for &(slot, frame_index) in dirty_objects {
+            let slot = TransportSlotId::from(slot);
+            if !emitted.insert(slot) {
+                continue;
+            }
+            let order = *self
+                .slot_orders
+                .get(&slot)
+                .ok_or(ExecutionTransportError::UnknownSlot(slot))?;
+            objects.push(Self::object_state(frame, frame_index, slot, order)?);
+        }
+
+        let sequence = self.take_sequence()?;
         Ok(Some(ExecutionDeltaEnvelope {
             channel: EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: EXECUTION_TRANSPORT_VERSION,
             session: self.session,
             sequence,
-            snapshot,
+            snapshot: false,
             time: frame.time,
-            removed: Vec::new(),
+            removed,
             objects,
         }))
     }
 
-    pub fn encode_json(
-        &mut self,
-        frame: &FrameState,
-        changes: &FrameChanges,
-    ) -> Result<Option<String>, ExecutionTransportError> {
-        self.encode(frame, changes)?
-            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
-            .transpose()
+    fn validate_time(&self, time: f64) -> Result<(), ExecutionTransportError> {
+        if time.is_finite() {
+            Ok(())
+        } else {
+            Err(ExecutionTransportError::InvalidTime(time))
+        }
     }
 
-    pub fn encode_live_json(
-        &mut self,
-        frame: &FrameState,
-        changes: &FrameChanges,
-        live_indices: &[usize],
-    ) -> Result<Option<String>, ExecutionTransportError> {
-        self.encode_live(frame, changes, live_indices)?
-            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
-            .transpose()
-    }
-
-    fn sync_slots(
-        &mut self,
-        frame: &FrameState,
-        live_indices: &[usize],
-    ) -> Result<bool, ExecutionTransportError> {
-        let order = live_indices
-            .iter()
-            .map(|index| {
-                frame
-                    .objects
-                    .get(*index)
-                    .map(|object| object.id)
-                    .ok_or(ExecutionTransportError::SlotSpaceExhausted)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let current = order.iter().copied().collect::<HashSet<_>>();
-        if current.len() != order.len() {
-            if let Some(duplicate) = order.iter().copied().find(|object| {
-                order
-                    .iter()
-                    .filter(|candidate| **candidate == *object)
-                    .count()
-                    > 1
-            }) {
-                return Err(ExecutionTransportError::DuplicateObject(duplicate));
-            }
-        }
-
-        let removed = self
-            .previous_order
-            .iter()
-            .copied()
-            .filter(|object| !current.contains(object))
-            .collect::<Vec<_>>();
-        let mut structural = !removed.is_empty() || self.previous_order != order;
-        for object in removed {
-            self.slots.remove_object(object)?;
-        }
-
-        for object in &order {
-            if self.slots.slot_for_object(*object).is_some() {
-                continue;
-            }
-            structural = true;
-            self.slots.insert_object(*object)?;
-        }
-        self.previous_order = order;
-        self.object_orders.clear();
-        for (order, object) in self.previous_order.iter().copied().enumerate() {
-            let order =
-                u32::try_from(order).map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
-            self.object_orders.insert(object, order);
-        }
-        Ok(structural)
+    fn take_sequence(&mut self) -> Result<u64, ExecutionTransportError> {
+        let sequence = self.next_sequence;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or(ExecutionTransportError::SequenceExhausted)?;
+        Ok(sequence)
     }
 
     fn object_state(
-        &self,
         frame: &FrameState,
         index: usize,
+        slot: TransportSlotId,
         order: u32,
     ) -> Result<TransportObjectState, ExecutionTransportError> {
-        let object = &frame.objects[index];
-        let slot: TransportSlotId = self
-            .slots
-            .slot_for_object(object.id)
-            .expect("frame object was synchronized to an execution slot")
-            .into();
+        let object = frame
+            .objects
+            .get(index)
+            .ok_or(ExecutionTransportError::SlotSpaceExhausted)?;
         Ok(TransportObjectState {
             slot,
             order,
@@ -393,6 +368,7 @@ pub struct ExecutionFrameMirror {
     next_sequence: u64,
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
+    object_slots: HashMap<ObjectId, TransportSlotId>,
     frame: Option<FrameState>,
 }
 
@@ -407,6 +383,10 @@ impl ExecutionFrameMirror {
 
     pub const fn next_sequence(&self) -> u64 {
         self.next_sequence
+    }
+
+    pub fn live_object_count(&self) -> usize {
+        self.slot_indices.len()
     }
 
     pub fn apply_json(
@@ -484,6 +464,7 @@ impl ExecutionFrameMirror {
         self.next_sequence = 0;
         self.slots.clear();
         self.slot_indices.clear();
+        self.object_slots.clear();
         self.frame = None;
     }
 
@@ -514,6 +495,7 @@ impl ExecutionFrameMirror {
 
         self.slots.clear();
         self.slot_indices.clear();
+        self.object_slots.clear();
         let mut frame = FrameState {
             time: delta.time,
             objects: Vec::with_capacity(count),
@@ -526,6 +508,7 @@ impl ExecutionFrameMirror {
             let object = object.ok_or(ExecutionTransportError::InvalidOrder(index as u32))?;
             self.slots.push(object.slot);
             self.slot_indices.insert(object.slot, index);
+            self.object_slots.insert(object.object, object.slot);
             push_frame_object(&mut frame, object);
         }
         self.frame = Some(frame);
@@ -536,9 +519,6 @@ impl ExecutionFrameMirror {
         &mut self,
         delta: &ExecutionDeltaEnvelope,
     ) -> Result<FrameChanges, ExecutionTransportError> {
-        if !delta.removed.is_empty() {
-            return Err(ExecutionTransportError::StructuralDeltaRequiresSnapshot);
-        }
         let frame =
             self.frame
                 .as_mut()
@@ -547,26 +527,66 @@ impl ExecutionFrameMirror {
                     sequence: delta.sequence,
                 })?;
         frame.time = delta.time;
+
+        let mut removed_indices = Vec::with_capacity(delta.removed.len());
+        let mut seen_removed = HashSet::with_capacity(delta.removed.len());
+        for &slot in &delta.removed {
+            if !seen_removed.insert(slot) {
+                continue;
+            }
+            let index = self
+                .slot_indices
+                .remove(&slot)
+                .ok_or(ExecutionTransportError::UnknownSlot(slot))?;
+            let object = frame.objects[index].id;
+            self.object_slots.remove(&object);
+            frame.presences[index] = false;
+            frame.render_geometries[index] = None;
+            removed_indices.push(index);
+        }
+
         let mut changed = Vec::with_capacity(delta.objects.len());
+        let mut added_indices = Vec::new();
         let mut seen = HashSet::with_capacity(delta.objects.len());
         for object in &delta.objects {
             if !seen.insert(object.slot) {
                 return Err(ExecutionTransportError::DuplicateSlot(object.slot));
             }
-            let index = *self
-                .slot_indices
-                .get(&object.slot)
-                .ok_or(ExecutionTransportError::UnknownSlot(object.slot))?;
+            if let Some(&index) = self.slot_indices.get(&object.slot) {
+                if object.order as usize != index {
+                    return Err(ExecutionTransportError::InvalidOrder(object.order));
+                }
+                if frame.objects[index].id != object.object {
+                    return Err(ExecutionTransportError::SlotIdentityChanged(object.slot));
+                }
+                replace_frame_object(frame, index, object.clone());
+                changed.push(index);
+                continue;
+            }
+
+            if self.object_slots.contains_key(&object.object) {
+                return Err(ExecutionTransportError::DuplicateObject(object.object));
+            }
+            let index = frame.objects.len();
             if object.order as usize != index {
                 return Err(ExecutionTransportError::InvalidOrder(object.order));
             }
-            if frame.objects[index].id != object.object {
-                return Err(ExecutionTransportError::SlotIdentityChanged(object.slot));
-            }
-            replace_frame_object(frame, index, object.clone());
+            self.slots.push(object.slot);
+            self.slot_indices.insert(object.slot, index);
+            self.object_slots.insert(object.object, object.slot);
+            push_frame_object(frame, object.clone());
+            added_indices.push(index);
             changed.push(index);
         }
-        Ok(FrameChanges::objects(changed))
+
+        changed.extend_from_slice(&removed_indices);
+        changed.sort_unstable();
+        changed.dedup();
+        Ok(FrameChanges::with_structure(
+            changed,
+            added_indices,
+            removed_indices,
+        ))
     }
 }
 
@@ -598,6 +618,65 @@ fn replace_frame_object(frame: &mut FrameState, index: usize, object: TransportO
     frame.render_geometries[index] = object.render_geometry;
 }
 
+fn encode_player_delta(
+    encoder: &mut ExecutionDeltaEncoder,
+    player: &mut ScenePlayer,
+    force_snapshot: bool,
+) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
+    let changes = player.take_frame_changes();
+    let execution_delta = player.take_execution_delta();
+    if force_snapshot || !encoder.is_initialized() || changes.is_all() {
+        let live_objects = player
+            .live_frame_indices()
+            .into_iter()
+            .filter_map(|frame_index| {
+                player
+                    .execution_slot_for_frame_index(frame_index)
+                    .map(|slot| (slot, frame_index))
+            })
+            .collect::<Vec<_>>();
+        return encoder
+            .encode_snapshot(player.frame(), &live_objects)
+            .map(Some);
+    }
+
+    let mut dirty_objects = Vec::new();
+    let mut added_objects = Vec::new();
+    for &frame_index in changes.object_indices() {
+        let Some(slot) = player.execution_slot_for_frame_index(frame_index) else {
+            continue;
+        };
+        if encoder.contains_slot(slot) {
+            if !dirty_objects.iter().any(|(existing, _)| *existing == slot) {
+                dirty_objects.push((slot, frame_index));
+            }
+        } else if !added_objects.iter().any(|(existing, _)| *existing == slot) {
+            added_objects.push((slot, frame_index));
+        }
+    }
+
+    let mut removed_slots = Vec::new();
+    for &slot in execution_delta.slots() {
+        match player.frame_index_for_execution_slot(slot) {
+            Some(frame_index) if !encoder.contains_slot(slot) => {
+                if !added_objects.iter().any(|(existing, _)| *existing == slot) {
+                    added_objects.push((slot, frame_index));
+                }
+            }
+            Some(_) => {}
+            None if encoder.contains_slot(slot) => removed_slots.push(slot),
+            None => {}
+        }
+    }
+
+    encoder.encode_incremental(
+        player.frame(),
+        &dirty_objects,
+        &added_objects,
+        &removed_slots,
+    )
+}
+
 #[derive(Debug)]
 pub struct EngineScenePlayer {
     player: ScenePlayer,
@@ -619,10 +698,9 @@ impl EngineScenePlayer {
     }
 
     pub fn initial_delta_json(&mut self) -> Result<String, ExecutionTransportError> {
-        let changes = self.player.take_frame_changes();
-        let live_indices = self.player.live_frame_indices();
-        self.encoder
-            .encode_live_json(self.player.frame(), &changes, &live_indices)?
+        encode_player_delta(&mut self.encoder, &mut self.player, true)?
+            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
+            .transpose()?
             .ok_or(ExecutionTransportError::StructuralDeltaRequiresSnapshot)
     }
 
@@ -688,16 +766,15 @@ impl EngineScenePlayer {
     }
 
     fn take_delta_json(&mut self) -> Result<Option<String>, ExecutionTransportError> {
-        let changes = self.player.take_frame_changes();
-        let live_indices = self.player.live_frame_indices();
-        self.encoder
-            .encode_live_json(self.player.frame(), &changes, &live_indices)
+        encode_player_delta(&mut self.encoder, &mut self.player, false)?
+            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
+            .transpose()
     }
 
     fn force_snapshot_json(&mut self) -> Result<String, ExecutionTransportError> {
-        let live_indices = self.player.live_frame_indices();
-        self.encoder
-            .encode_live_json(self.player.frame(), &FrameChanges::all(), &live_indices)?
+        encode_player_delta(&mut self.encoder, &mut self.player, true)?
+            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
+            .transpose()?
             .ok_or(ExecutionTransportError::StructuralDeltaRequiresSnapshot)
     }
 }
@@ -815,10 +892,7 @@ mod tests {
         encoder: &mut ExecutionDeltaEncoder,
         player: &mut ScenePlayer,
     ) -> ExecutionDeltaEnvelope {
-        let changes = player.take_frame_changes();
-        let live_indices = player.live_frame_indices();
-        encoder
-            .encode_live(player.frame(), &changes, &live_indices)
+        encode_player_delta(encoder, player, false)
             .unwrap()
             .unwrap()
     }
@@ -844,11 +918,7 @@ mod tests {
         let mut encoder = ExecutionDeltaEncoder::new(7);
         let mut mirror = ExecutionFrameMirror::default();
 
-        let initial_changes = player.take_frame_changes();
-        let initial = encoder
-            .encode(player.frame(), &initial_changes)
-            .unwrap()
-            .unwrap();
+        let initial = encode_current(&mut encoder, &mut player);
         assert!(initial.snapshot);
         let (outcome, changes) = mirror.apply(initial).unwrap();
         assert_eq!(outcome, TransportApplyOutcome::Applied);
@@ -856,8 +926,7 @@ mod tests {
         assert_eq!(mirror.frame().unwrap(), player.frame());
 
         player.advance_to(0.5).unwrap();
-        let changes = player.take_frame_changes();
-        let delta = encoder.encode(player.frame(), &changes).unwrap().unwrap();
+        let delta = encode_current(&mut encoder, &mut player);
         assert!(!delta.snapshot);
         assert_eq!(delta.objects.len(), 1);
         let (outcome, changes) = mirror.apply(delta).unwrap();
@@ -867,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_change_forces_snapshot_and_preserves_surviving_slot() {
+    fn structural_change_is_one_slot_delta_and_preserves_surviving_slot() {
         let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
         let mut encoder = ExecutionDeltaEncoder::new(2);
         let initial = encode_current(&mut encoder, &mut player);
@@ -878,9 +947,18 @@ mod tests {
             .apply_patch_batch_json(&encode_patch_batch(&batch).unwrap())
             .unwrap();
         let delta = encode_current(&mut encoder, &mut player);
-        assert!(delta.snapshot);
-        assert_eq!(delta.objects.len(), 1);
-        assert_eq!(delta.objects[0].slot, surviving_slot);
+        assert!(!delta.snapshot);
+        assert!(delta.objects.is_empty());
+        assert_eq!(delta.removed, vec![initial.objects[0].slot]);
+
+        let mut mirror = ExecutionFrameMirror::default();
+        mirror.apply(initial).unwrap();
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(changes.removed_indices(), &[0]);
+        assert_eq!(mirror.live_object_count(), 1);
+        assert_eq!(mirror.frame().unwrap().objects.len(), 2);
+        assert!(!mirror.frame().unwrap().presences[0]);
+        assert_eq!(mirror.slots[1], surviving_slot);
     }
 
     #[test]

@@ -19,6 +19,107 @@ import _manim_compat as _compat
 import _manim_phase_b as _phase_b
 
 
+_ORIGINAL_TRANSFORM = _base.Transform
+_ORIGINAL_REPLACEMENT_TRANSFORM = _base.ReplacementTransform
+_ORIGINAL_TRANSFORM_FROM_COPY = _base.TransformFromCopy
+_ORIGINAL_TRANSFORM_MATCHING_SHAPES = _base.TransformMatchingShapes
+_ORIGINAL_CREATE = _base.Create
+_ORIGINAL_FADE_IN = _base.FadeIn
+_ORIGINAL_FADE_OUT = _base.FadeOut
+
+
+def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
+    """Attach Manim Animation kwargs for the shared option resolver.
+
+    Noon's original animation records are frozen/slotted dataclasses. Subclassing them
+    gives the compatibility facade a small Python ``__dict__`` for authoring metadata
+    while preserving the existing low-level fields and isinstance-based lowering.
+    Validation remains centralized in ``_manim_animation_options`` at play time.
+    """
+
+    object.__setattr__(animation, "anim_args", dict(kwargs))
+
+
+class Transform(_ORIGINAL_TRANSFORM):
+    def __init__(
+        self,
+        source: object,
+        target: object,
+        key: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(source, target, key)
+        _store_animation_args(self, kwargs)
+
+
+class ReplacementTransform(_ORIGINAL_REPLACEMENT_TRANSFORM):
+    def __init__(
+        self,
+        source: object,
+        target: object,
+        key: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(source, target, key)
+        _store_animation_args(self, kwargs)
+
+
+class TransformFromCopy(_ORIGINAL_TRANSFORM_FROM_COPY):
+    def __init__(
+        self,
+        source: object,
+        target: object,
+        key: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(source, target, key)
+        _store_animation_args(self, kwargs)
+
+
+class TransformMatchingShapes(_ORIGINAL_TRANSFORM_MATCHING_SHAPES):
+    def __init__(
+        self,
+        sources: object,
+        targets: object,
+        key: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(sources, targets, key)
+        _store_animation_args(self, kwargs)
+
+
+class Create(_ORIGINAL_CREATE):
+    def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
+        super().__init__(target, key)
+        _store_animation_args(self, kwargs)
+
+
+class FadeIn(_ORIGINAL_FADE_IN):
+    def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
+        super().__init__(target, key)
+        _store_animation_args(self, kwargs)
+
+
+class FadeOut(_ORIGINAL_FADE_OUT):
+    def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
+        super().__init__(target, key)
+        _store_animation_args(self, kwargs)
+
+
+# Replace only the public compatibility classes. Their frozen Noon bases remain the
+# low-level representation and existing code using isinstance(..., noon.Create/etc.)
+# continues to work because the module globals now point at these subclasses.
+for _name, _value in {
+    "Transform": Transform,
+    "ReplacementTransform": ReplacementTransform,
+    "TransformFromCopy": TransformFromCopy,
+    "TransformMatchingShapes": TransformMatchingShapes,
+    "Create": Create,
+    "FadeIn": FadeIn,
+    "FadeOut": FadeOut,
+}.items():
+    setattr(_base, _name, _value)
+
 
 class _AnimateBuilderMixin:
     """Mirror Manim's callable/chained ``_AnimationBuilder`` contract."""

@@ -254,7 +254,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = objectCount)]
         pub fn object_count(&self) -> usize {
-            self.mirror.frame().map_or(0, |frame| frame.objects.len())
+            self.mirror.live_object_count()
         }
 
         #[wasm_bindgen(js_name = lastDrawCalls)]

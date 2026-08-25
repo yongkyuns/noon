@@ -17,8 +17,8 @@ use noon_core::{
 };
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
 use noon_runtime::{
-    EvaluationError, ExecutionDelta, ExecutionTransactionError, FrameChanges, FrameState,
-    SlottedSceneInstance,
+    EvaluationError, ExecutionDelta, ExecutionSlotId, ExecutionTransactionError, FrameChanges,
+    FrameState, SlottedSceneInstance,
 };
 
 #[derive(Debug)]
@@ -227,6 +227,21 @@ impl ScenePlayer {
 
     pub fn last_execution_delta(&self) -> &ExecutionDelta {
         self.instance.last_execution_delta()
+    }
+
+    pub(crate) fn take_execution_delta(&mut self) -> ExecutionDelta {
+        self.instance.take_execution_delta()
+    }
+
+    pub(crate) fn execution_slot_for_frame_index(
+        &self,
+        frame_index: usize,
+    ) -> Option<ExecutionSlotId> {
+        self.instance.slot_for_frame_index(frame_index)
+    }
+
+    pub(crate) fn frame_index_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<usize> {
+        self.instance.frame_index_for_slot(slot)
     }
 
     pub fn object_count(&self) -> usize {
