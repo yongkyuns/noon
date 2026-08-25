@@ -69,10 +69,19 @@ const scenePickerBlock = pickerSource
 assert.ok(scenePickerBlock, "browser picker must declare SCENE_EXAMPLES");
 const pickerSceneCount =
   scenePickerBlock.match(/path:\s*"\.\/python\/[^\"]+\.py"/g)?.length ?? 0;
+const manimManifest = JSON.parse(
+  await readFile(
+    path.join(repoRoot, "web/python/examples/manim_tutorial_manifest.json"),
+    "utf8",
+  ),
+);
+const browserAuthoredManimCount = manimManifest.entries.filter(
+  (entry) => entry.status === "ready",
+).length;
 assert.equal(
-  examples.length,
+  examples.length + browserAuthoredManimCount,
   pickerSceneCount,
-  "browser smoke must cover every picker scene",
+  "native render smoke plus browser-authored Manim smoke must cover every picker scene",
 );
 
 let serverOutput = "";
@@ -389,7 +398,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} picker scenes at four semantic checkpoints each.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} native picker scenes at four semantic checkpoints each; ${browserAuthoredManimCount} Manim picker scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();

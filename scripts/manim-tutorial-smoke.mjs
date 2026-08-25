@@ -20,6 +20,16 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
 assert.ok(ready.length >= 7, "expected the initial tutorial tranche");
 
+const demoMainPath = path.join(repoRoot, "web", "main.js");
+const demoMainSource = await readFile(demoMainPath, "utf8");
+for (const entry of ready) {
+  const pickerPath = `./${entry.path}`;
+  assert.ok(
+    demoMainSource.includes(`path: "${pickerPath}"`),
+    `${entry.id}: ready tutorial is not exposed in the demo picker`,
+  );
+}
+
 const port = 4182;
 const baseUrl = `http://127.0.0.1:${port}`;
 let serverOutput = "";
