@@ -3,10 +3,12 @@ use noon_render_wgpu::FramePreparer;
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 
 fn rectangle_frame(reveal: f32) -> FrameState {
-    let mut style = Style::default();
-    style.fill = Some(Color::rgba(0.35, 0.75, 0.95, 0.35));
-    style.stroke = Some(Color::rgba(0.95, 0.3, 0.75, 0.65));
-    style.stroke_width = 0.08;
+    let style = Style {
+        fill: Some(Color::rgba(0.35, 0.75, 0.95, 0.35)),
+        stroke: Some(Color::rgba(0.95, 0.3, 0.75, 0.65)),
+        stroke_width: 0.08,
+        ..Style::default()
+    };
 
     FrameState {
         time: 0.0,
