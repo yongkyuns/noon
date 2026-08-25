@@ -426,6 +426,7 @@ def _compat_make_mobject(
     # Native Noon IR constructors which omit stroke_width retain native defaults.
     if "stroke_width" in kwargs:
         kwargs["stroke_width"] = _manim_stroke_width(kwargs["stroke_width"])
+    kwargs.setdefault("stroke_width_mode", "screen_space")
 
     raw = _ORIGINAL_MAKE_MOBJECT(geometry, **kwargs)
     style = raw.style

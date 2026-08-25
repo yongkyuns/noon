@@ -18,6 +18,7 @@ fn path_scene(paths: &[VectorPath]) -> SceneInstance {
             fill: None,
             stroke: Some(Color::WHITE),
             stroke_width: 0.2,
+            stroke_width_mode: Default::default(),
             ..Style::default()
         };
     }

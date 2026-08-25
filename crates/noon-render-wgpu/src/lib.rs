@@ -16,8 +16,8 @@ pub use render_order::*;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
-    Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, Style, Transform2D, Vec2,
-    VectorPath,
+    Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Style,
+    Transform2D, Vec2, VectorPath,
 };
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
@@ -69,13 +69,17 @@ impl From<Style> for PackedStyle {
     fn from(value: Style) -> Self {
         let (fill, fill_enabled) = pack_optional_color(value.fill);
         let (stroke, stroke_enabled) = pack_optional_color(value.stroke);
+        let stroke_width_mode = match value.stroke_width_mode {
+            StrokeWidthMode::ScaleWithObject => 0,
+            StrokeWidthMode::ScreenSpace => 2,
+        };
         Self {
             fill,
             stroke,
             stroke_width: value.stroke_width,
             opacity: value.opacity,
             fill_enabled,
-            stroke_enabled,
+            stroke_enabled: stroke_enabled | stroke_width_mode,
         }
     }
 }
@@ -234,9 +238,17 @@ enum PreparedSlot {
     Unsupported(usize),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct PathStrokeTransformKey {
+    scale_x_bits: u32,
+    scale_y_bits: u32,
+    rotation_bits: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PathMeshKey {
     path_hash: u64,
+    stroke_transform: PathStrokeTransformKey,
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
@@ -246,6 +258,7 @@ struct PathMeshKey {
 #[derive(Clone, Debug)]
 struct CachedPathMesh {
     path: VectorPath,
+    stroke_transform: PathStrokeTransformKey,
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
@@ -826,7 +839,8 @@ impl FramePreparer {
         let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
             unreachable!("unique path replacement preflight requires a path slot");
         };
-        let (cache_index, cache_miss) = self.cache_path_mesh(path, object.style)?;
+        let (cache_index, cache_miss) =
+            self.cache_path_mesh(path, object.style, object.transform)?;
         let mesh = &self.path_mesh_cache[cache_index].mesh;
         let packed_vertices = mesh
             .vertices
@@ -943,7 +957,7 @@ impl FramePreparer {
                     _ => None,
                 });
             if let Some(path) = path {
-                let cache_index = match self.cache_path_mesh(path, object.style) {
+                let cache_index = match self.cache_path_mesh(path, object.style, object.transform) {
                     Ok((index, cache_miss)) => {
                         geometry_cache_misses += usize::from(cache_miss);
                         index
@@ -1320,6 +1334,8 @@ impl FramePreparer {
                 self.path_ids.get(*index) == Some(&object.id)
                     && geometry_matches
                     && reveal_head_available
+                    && cache.stroke_transform
+                        == path_stroke_transform_key(object.style, object.transform)
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
@@ -1373,11 +1389,14 @@ impl FramePreparer {
         &mut self,
         path: &VectorPath,
         style: Style,
+        transform: Transform2D,
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
+        let stroke_transform = path_stroke_transform_key(style, transform);
         let stroke_width_bits = style.stroke_width.to_bits();
         let fill_enabled = style.fill.is_some();
         let key = path_mesh_key(
             path,
+            stroke_transform,
             stroke_width_bits,
             style.stroke_join,
             style.stroke_cap,
@@ -1387,6 +1406,7 @@ impl FramePreparer {
             candidates.iter().copied().find(|&index| {
                 let entry = &self.path_mesh_cache[index];
                 entry.path == *path
+                    && entry.stroke_transform == stroke_transform
                     && entry.stroke_width_bits == stroke_width_bits
                     && entry.stroke_join == style.stroke_join
                     && entry.stroke_cap == style.stroke_cap
@@ -1398,8 +1418,15 @@ impl FramePreparer {
             return Ok((index, false));
         }
 
+        let transformed_path;
+        let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+            transformed_path = transform_path_without_translation(path, transform);
+            &transformed_path
+        } else {
+            path
+        };
         let mesh = noon_geometry::tessellate_styled_with_fill(
-            path,
+            tessellation_path,
             style.stroke_width,
             style.stroke_join,
             style.stroke_cap,
@@ -1409,6 +1436,7 @@ impl FramePreparer {
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
             path: path.clone(),
+            stroke_transform,
             stroke_width_bits,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
@@ -1456,10 +1484,12 @@ impl FramePreparer {
             let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
                 continue;
             };
+            let stroke_transform = path_stroke_transform_key(object.style, object.transform);
             let stroke_width_bits = object.style.stroke_width.to_bits();
             let fill_enabled = object.style.fill.is_some();
             let key = path_mesh_key(
                 path,
+                stroke_transform,
                 stroke_width_bits,
                 object.style.stroke_join,
                 object.style.stroke_cap,
@@ -1469,6 +1499,7 @@ impl FramePreparer {
                 if let Some(index) = candidates.iter().copied().find(|&index| {
                     let entry = &self.path_mesh_cache[index];
                     entry.path == *path
+                        && entry.stroke_transform == stroke_transform
                         && entry.stroke_width_bits == stroke_width_bits
                         && entry.stroke_join == object.style.stroke_join
                         && entry.stroke_cap == object.style.stroke_cap
@@ -1506,6 +1537,7 @@ impl FramePreparer {
             }
             let key = path_mesh_key(
                 &entry.path,
+                entry.stroke_transform,
                 entry.stroke_width_bits,
                 entry.stroke_join,
                 entry.stroke_cap,
@@ -1597,8 +1629,68 @@ fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
     free_ranges.truncate(write);
 }
 
+fn path_stroke_transform_key(style: Style, transform: Transform2D) -> PathStrokeTransformKey {
+    if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+        PathStrokeTransformKey {
+            scale_x_bits: transform.scale.x.to_bits(),
+            scale_y_bits: transform.scale.y.to_bits(),
+            rotation_bits: transform.rotation.to_bits(),
+        }
+    } else {
+        PathStrokeTransformKey::default()
+    }
+}
+
+fn transform_path_without_translation(path: &VectorPath, transform: Transform2D) -> VectorPath {
+    fn point(value: Vec2, transform: Transform2D) -> Vec2 {
+        value
+            .component_mul(transform.scale)
+            .rotate(transform.rotation)
+    }
+
+    let mut transformed = VectorPath::new();
+    for command in path.commands() {
+        transformed = match *command {
+            PathCommand::MoveTo { to } => transformed.move_to(point(to, transform)),
+            PathCommand::LineTo { to } => transformed.line_to(point(to, transform)),
+            PathCommand::QuadraticTo { control, to } => {
+                transformed.quadratic_to(point(control, transform), point(to, transform))
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => transformed.cubic_to(
+                point(control1, transform),
+                point(control2, transform),
+                point(to, transform),
+            ),
+            PathCommand::Close => transformed.close(),
+        };
+    }
+    if let Some(target) = path.morph_target() {
+        transformed =
+            transformed.with_morph_target(transform_path_without_translation(target, transform));
+    }
+    transformed
+}
+
+fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
+    if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+        PackedTransform {
+            translation: [transform.translation.x, transform.translation.y],
+            scale: [1.0, 1.0],
+            rotation: 0.0,
+            padding: 0.0,
+        }
+    } else {
+        transform.into()
+    }
+}
+
 fn path_mesh_key(
     path: &VectorPath,
+    stroke_transform: PathStrokeTransformKey,
     stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
@@ -1608,6 +1700,7 @@ fn path_mesh_key(
     hash_vector_path(path, &mut hasher);
     PathMeshKey {
         path_hash: hasher.finish(),
+        stroke_transform,
         stroke_width_bits,
         stroke_join,
         stroke_cap,
@@ -1717,14 +1810,14 @@ fn pack_path_reveal_head(
 ) -> LineInstance {
     let reveal = reveal.clamp(0.0, 1.0);
     let point = mesh.reveal_head_position(reveal).unwrap_or(Vec2::ZERO);
-    let mut transform: PackedTransform = object.transform.into();
+    let mut transform = packed_path_transform(object.style, object.transform);
     transform.padding = 1.0;
     let mut style = pack_style(object);
     style.fill = [0.0; 4];
     style.fill_enabled = 0;
     if let Some(color) = object.style.stroke.or(object.style.fill) {
         style.stroke = [color.red, color.green, color.blue, color.alpha];
-        style.stroke_enabled = 1;
+        style.stroke_enabled = (style.stroke_enabled & 2) | 1;
     } else {
         style.stroke = [0.0; 4];
         style.stroke_enabled = 0;
@@ -1752,7 +1845,7 @@ fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
 
 fn pack_path(object: &FrameObjectState, reveal: f32, morph: f32) -> PathInstance {
     PathInstance {
-        transform: object.transform.into(),
+        transform: packed_path_transform(object.style, object.transform),
         style: pack_style(object),
         path_params: [reveal.clamp(0.0, 1.0), morph.clamp(0.0, 1.0)],
     }
@@ -2301,6 +2394,53 @@ mod tests {
     }
 
     #[test]
+    fn screen_space_stroke_mode_uses_existing_style_flag_bits() {
+        let mut state = object(42, GeometryRef::circle(1.0));
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.04;
+        state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.circles[0].style.stroke_enabled, 3);
+        assert_eq!(prepared.circles[0].style.stroke_width, 0.04);
+        assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
+    }
+
+    #[test]
+    fn screen_space_path_bakes_scale_and_rotation_before_tessellation() {
+        let geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(0.0, 0.0))
+                .line_to(Vec2::new(1.0, 0.0)),
+        );
+        let mut state = object(43, geometry);
+        state.transform = Transform2D {
+            translation: Vec2::new(5.0, -2.0),
+            rotation: std::f32::consts::FRAC_PI_2,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        state.style.fill = None;
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.04;
+        state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.paths[0].transform.translation, [5.0, -2.0]);
+        assert_eq!(prepared.paths[0].transform.scale, [1.0, 1.0]);
+        assert_eq!(prepared.paths[0].transform.rotation, 0.0);
+        let max_y = prepared
+            .path_vertices
+            .iter()
+            .map(|vertex| vertex.position[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(max_y > 1.9, "scaled path must be tessellated near y=2");
+    }
+
+    #[test]
     fn mixed_primitives_batch_by_pipeline_not_object() {
         let mut objects = Vec::with_capacity(30_000);
         for id in 0..10_000_u64 {
@@ -2339,6 +2479,7 @@ mod tests {
             fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.4)),
             stroke: Some(Color::rgb(0.8, 0.7, 0.6)),
             stroke_width: 3.0,
+            stroke_width_mode: Default::default(),
             opacity: 0.5,
             stroke_join: noon_core::StrokeJoin::Round,
             stroke_cap: noon_core::StrokeCap::Round,
@@ -2384,6 +2525,7 @@ mod tests {
             fill: None,
             stroke: Some(Color::rgb(0.2, 0.8, 0.4)),
             stroke_width: 0.125,
+            stroke_width_mode: Default::default(),
             opacity: 0.75,
             stroke_join: noon_core::StrokeJoin::Round,
             stroke_cap: noon_core::StrokeCap::Round,

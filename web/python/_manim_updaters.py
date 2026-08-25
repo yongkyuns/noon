@@ -204,6 +204,7 @@ class _CallbackContext:
                     fill=_color(after.style["fill"]),
                     stroke=_color(after.style["stroke"]),
                     stroke_width=after.style["stroke_width"],
+                    stroke_width_mode=after.style.get("stroke_width_mode", "scale_with_object"),
                     stroke_join=after.style["stroke_join"],
                     stroke_cap=after.style["stroke_cap"],
                     opacity=after.style["opacity"],

@@ -19,6 +19,7 @@ fn build_scene() -> SceneDefinition {
         fill: Some(Color::rgb(0.2, 0.3, 0.4)),
         stroke: None,
         stroke_width: 1.0,
+        stroke_width_mode: Default::default(),
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
