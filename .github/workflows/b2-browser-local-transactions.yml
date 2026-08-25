@@ -1,0 +1,36 @@
+name: B2 browser local transactions bootstrap
+
+on:
+  push:
+    branches:
+      - arch/b2-browser-local-transactions
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply implementation
+        run: python scripts/b2-browser-local-transactions.py
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Focused tests
+        run: cargo test -p noon-compile -p noon-runtime -p noon-web
+      - name: Focused clippy
+        run: cargo clippy -p noon-compile -p noon-runtime -p noon-web --all-targets -- -D warnings
+      - name: Commit validated implementation
+        run: |
+          rm scripts/b2-browser-local-transactions.py
+          rm .github/workflows/b2-browser-local-transactions.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Make browser mutation batches fully incremental'
+          git push
