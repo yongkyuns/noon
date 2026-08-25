@@ -1,4 +1,4 @@
-name: Agent parity179 source snapshot
+name: Apply parity179 renderer slice
 
 on:
   push:
@@ -6,20 +6,43 @@ on:
       - agent/parity-179-screen-space
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Upload source snapshot
-        uses: actions/upload-artifact@v4
         with:
-          name: agent-parity179-source
-          path: |
-            .
-            !.git
-          include-hidden-files: true
-          retention-days: 1
+          fetch-depth: 0
+
+      - name: Apply exact local patch
+        shell: bash
+        run: |
+          cat .github/agent-parity179/patch.00 .github/agent-parity179/patch.02 | base64 -d | gzip -d > /tmp/parity179.patch
+          git apply --check /tmp/parity179.patch
+          git apply /tmp/parity179.patch
+
+      - name: Format and validate
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          cargo fmt --all
+          cargo test -p noon-core -p noon-runtime -p noon-render-wgpu
+          python -m unittest discover -s web/python -p 'test_*.py'
+          node --check scripts/manim-compat-smoke.mjs
+          git diff --check
+
+      - name: Commit clean source
+        shell: bash
+        run: |
+          rm -rf .github/agent-parity179
+          rm .github/workflows/agent-parity179-snapshot.yml
+          find web/python -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep Manim strokes invariant under object transforms"
+          git push origin HEAD:agent/parity-179-screen-space
