@@ -91,3 +91,17 @@ class UncreateSquare(Scene):
         square = Square()
         self.add(square)
         self.play(Uncreate(square))
+
+
+class SetColorIndependentOpacity(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        square.set_color(GREEN)
+        self.add(square)
+        self.wait(1)

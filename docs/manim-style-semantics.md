@@ -31,6 +31,8 @@ This has useful architectural properties:
 
 The public compatibility layer accepts constructor keywords `fill_color`, `fill_opacity`, `stroke_color`, and `stroke_opacity`. `set_fill(..., opacity=...)` changes only fill alpha; `set_stroke(..., opacity=...)` changes only stroke alpha; Manim-style `VMobject.set_opacity(...)` updates both layer alphas.
 
+`VMobject.set_color(...)` changes the RGB of both active paint layers while preserving each layer's existing alpha. This is important for default VMobjects: recoloring a shape must not turn the normally transparent fill opaque.
+
 For backwards compatibility, historical Noon `set_fill(None)` / `set_stroke(None)` with no other arguments still explicitly disable that layer. In contrast, `set_fill(opacity=x)` and `set_stroke(width=..., opacity=...)` preserve the current color as Manim users expect.
 
 ## Pinned ManimCE v0.21.0 Cairo defaults

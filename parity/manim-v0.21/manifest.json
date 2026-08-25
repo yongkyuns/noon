@@ -55,9 +55,24 @@
       "id": "uncreate-square",
       "scene": "UncreateSquare",
       "expected_duration": 1.0
+    },
+    {
+      "id": "set-color-independent-opacity",
+      "scene": "SetColorIndependentOpacity",
+      "expected_duration": 1.0
     }
   ],
-  "sample_fractions": [0.0, 0.25, 0.5, 0.75, 0.9, 0.95, 0.98, 0.99, 1.0],
+  "sample_fractions": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    0.9,
+    0.95,
+    0.98,
+    0.99,
+    1.0
+  ],
   "policy": {
     "source_adaptation": "replace only `from manim import *` with `from noon import *`, then append a scene-selection wrapper for the browser authoring worker",
     "reference_frames": "compare Noon screenshots against Manim Cairo's native lossless PNG frame sequence; never derive parity references from compressed video",
