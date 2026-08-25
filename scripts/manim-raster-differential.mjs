@@ -186,6 +186,8 @@ async function authorNoonDocuments() {
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
       assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
+      assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
+      Object.defineProperty(result.document, "__noonAuthoredDuration", { value: result.duration });
       documents.set(fixture.id, result.document);
     }
     return documents;
@@ -262,7 +264,7 @@ async function captureNoonBackend(backend, documents, references) {
         captures.push({ ...sample, noonPath: outputPath, metrics });
       }
       output.set(fixture.id, {
-        duration: latestSceneEnd(document),
+        duration: document.__noonAuthoredDuration,
         objectCount: document.objects.length,
         captures,
       });
