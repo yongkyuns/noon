@@ -63,13 +63,12 @@ async function layout(page) {
       viewportWidth: window.innerWidth,
       clientWidth: scene.clientWidth,
       clientHeight: scene.clientHeight,
-      backingWidth: scene.width,
-      backingHeight: scene.height,
       transferWidth: transfer?.width ?? null,
       transferHeight: transfer?.height ?? null,
       transferClientWidth: transfer?.clientWidth ?? null,
       transferClientHeight: transfer?.clientHeight ?? null,
       transferDevicePixelRatio: transfer?.devicePixelRatio ?? null,
+      renderResizes: window.__noonRenderResizes ?? [],
       devicePixelRatio: window.devicePixelRatio,
       rendererBackend: status.dataset.rendererBackend ?? null,
     };
@@ -105,7 +104,7 @@ function assertNoOverflow(result, label) {
   );
 }
 
-function assertInitialBackingStore(result, label) {
+function assertRendererSizing(result, label) {
   assert.equal(
     result.rendererBackend,
     expectedRendererBackend,
@@ -125,26 +124,40 @@ function assertInitialBackingStore(result, label) {
     result.transferClientWidth > 0 && result.transferClientHeight > 0,
     `${label}: canvas must be laid out before offscreen transfer`,
   );
-  const expectedWidth = Math.max(
+
+  const transferWidth = Math.max(
     1,
     Math.round(result.transferClientWidth * result.transferDevicePixelRatio),
   );
-  const expectedHeight = Math.max(
+  const transferHeight = Math.max(
     1,
     Math.round(result.transferClientHeight * result.transferDevicePixelRatio),
   );
   assert.equal(
     result.transferWidth,
-    expectedWidth,
+    transferWidth,
     `${label}: backing width must match CSS content width × DPR at transfer`,
   );
   assert.equal(
     result.transferHeight,
-    expectedHeight,
+    transferHeight,
     `${label}: backing height must match CSS content height × DPR at transfer`,
   );
-  assert.equal(result.backingWidth, expectedWidth, `${label}: transferred backing width drifted`);
-  assert.equal(result.backingHeight, expectedHeight, `${label}: transferred backing height drifted`);
+
+  const lastResize = result.renderResizes.at(-1);
+  assert.ok(lastResize, `${label}: live playground must send a render-worker resize`);
+  const expectedWidth = Math.max(1, Math.round(result.clientWidth * result.devicePixelRatio));
+  const expectedHeight = Math.max(1, Math.round(result.clientHeight * result.devicePixelRatio));
+  assert.equal(
+    lastResize.width,
+    expectedWidth,
+    `${label}: render-worker width drifted; resizes=${JSON.stringify(result.renderResizes)}`,
+  );
+  assert.equal(
+    lastResize.height,
+    expectedHeight,
+    `${label}: render-worker height drifted; resizes=${JSON.stringify(result.renderResizes)}`,
+  );
 }
 
 let browser = null;
@@ -176,8 +189,23 @@ try {
     }
   });
   await page.addInitScript(() => {
-    const original = HTMLCanvasElement.prototype.transferControlToOffscreen;
-    if (typeof original !== "function") {
+    window.__noonRenderResizes = [];
+    const originalWorkerPostMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function postMessage(message, ...rest) {
+      if (message?.channel === "noon.render" && message?.type === "resize") {
+        const scene = document.querySelector("#scene");
+        window.__noonRenderResizes.push({
+          width: message.width,
+          height: message.height,
+          clientWidth: scene?.clientWidth ?? null,
+          clientHeight: scene?.clientHeight ?? null,
+        });
+      }
+      return originalWorkerPostMessage.call(this, message, ...rest);
+    };
+
+    const originalTransfer = HTMLCanvasElement.prototype.transferControlToOffscreen;
+    if (typeof originalTransfer !== "function") {
       return;
     }
     HTMLCanvasElement.prototype.transferControlToOffscreen = function transferControlToOffscreen() {
@@ -190,7 +218,7 @@ try {
           devicePixelRatio: window.devicePixelRatio,
         };
       }
-      return original.call(this);
+      return originalTransfer.call(this);
     };
   });
 
@@ -203,7 +231,7 @@ try {
   await settleLayout(page);
 
   const desktop = await layout(page);
-  assertInitialBackingStore(desktop, "desktop WebGL");
+  assertRendererSizing(desktop, "desktop WebGL");
   assert.ok(
     desktop.canvas.width <= desktopMaxCanvasWidth + 1,
     `desktop: canvas width ${desktop.canvas.width}px exceeds ${desktopMaxCanvasWidth}px cap`,
@@ -215,7 +243,7 @@ try {
   await page.setViewportSize({ width: 900, height: 800 });
   await settleLayout(page);
   const stacked = await layout(page);
-  assert.equal(stacked.rendererBackend, expectedRendererBackend, "stacked: renderer backend drifted");
+  assertRendererSizing(stacked, "stacked WebGL");
   assert.ok(
     stacked.canvas.width <= desktopMaxCanvasWidth + 1,
     `stacked: canvas width ${stacked.canvas.width}px exceeds ${desktopMaxCanvasWidth}px cap`,
@@ -227,7 +255,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   const mobile = await layout(page);
-  assert.equal(mobile.rendererBackend, expectedRendererBackend, "mobile: renderer backend drifted");
+  assertRendererSizing(mobile, "mobile WebGL");
   assertAspect(mobile.canvas, 4 / 3, "mobile");
   assertCentered(mobile.canvas, mobile.wrap, "mobile");
   assertNoOverflow(mobile, "mobile");
