@@ -12,7 +12,7 @@ Build the release web package and install the pinned Playwright dependencies use
 NOON_PERF_DEVICE_ID=my-machine node scripts/perf-device-run.mjs
 ```
 
-The default records the canonical frame matrix on WebGPU and WebGL2. Control the matrix with the existing `NOON_PERF_*` variables, for example:
+The default records both the canonical synthetic frame matrix and the realistic authored-scene corpus on WebGPU and WebGL2, so a named-device bundle contains object-scaling data and normal user-facing scenes together. Control the matrix with the existing `NOON_PERF_*` variables, for example:
 
 ```bash
 NOON_PERF_DEVICE_ID=my-machine \
@@ -23,7 +23,15 @@ NOON_PERF_COUNTS=1000,10000,100000 \
 node scripts/perf-device-run.mjs
 ```
 
-When the P6 authoring profiler is present, include it with `NOON_PERF_SUITES=frame,authoring`. The bundle manifest and per-suite JSON files are written under `perf-artifacts/<device>/<timestamp>/` by default.
+Use `NOON_PERF_SUITES` to choose `frame`, `corpus`, and/or `authoring`. A complete release characterization can run all three:
+
+```bash
+NOON_PERF_DEVICE_ID=my-machine \
+NOON_PERF_SUITES=frame,corpus,authoring \
+node scripts/perf-device-run.mjs
+```
+
+The bundle manifest and per-suite JSON files are written under `perf-artifacts/<device>/<timestamp>/` by default.
 
 Do not relabel SwiftShader, software rasterization, or a generic hosted runner as a physical-device baseline. If the browser cannot expose the selected GPU identity, record the result at host/backend level rather than guessing the adapter.
 
