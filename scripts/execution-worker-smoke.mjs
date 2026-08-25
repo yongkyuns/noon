@@ -151,6 +151,27 @@ async function runMode(browser, transportMode) {
   }, badPatch);
   assert.match(errorMessage, /expected patch sequence 1, got 9/);
 
+  const beforeRetime = await page.evaluate(() => window.executionSmoke.client.state());
+  const retimed = await page.evaluate(
+    ({ sceneJson, duration }) =>
+      window.executionSmoke.client.reconcileScene(sceneJson, {
+        loopDurationSeconds: duration,
+      }),
+    { sceneJson: beforeRetime.sceneJson, duration: 0.9 },
+  );
+  assert.equal(retimed.nextPatchSequence, "1", `${transportMode}: retime reset patch sequence`);
+  assert.ok(
+    Math.abs(retimed.time - beforeRetime.time) < 0.15,
+    `${transportMode}: retime jumped the current playhead`,
+  );
+  await page.waitForTimeout(650);
+  const afterRetime = await page.evaluate(() => window.executionSmoke.client.state());
+  assert.ok(
+    afterRetime.time >= 0 && afterRetime.time < 0.9,
+    `${transportMode}: authored loop duration did not wrap execution time`,
+  );
+  assert.equal(afterRetime.nextPatchSequence, "1");
+
   const beforeStall = await page.evaluate(() => window.executionSmoke.client.metrics());
   const stallStarted = await page.evaluate(() => {
     const worker = new Worker(
@@ -182,6 +203,10 @@ async function runMode(browser, transportMode) {
   assert.equal(afterRestart.metrics.ready, true);
   assert.equal(afterRestart.metrics.objectCount, 4);
   assert.ok(afterRestart.metrics.presentedFrames >= 1);
+  assert.ok(
+    afterRestart.metrics.time >= 0 && afterRestart.metrics.time < 0.9,
+    `${transportMode}: restart forgot the authored loop duration`,
+  );
 
   const clientErrors = await page.evaluate(() => window.executionSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
