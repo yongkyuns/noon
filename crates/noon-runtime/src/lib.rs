@@ -10,10 +10,13 @@ pub use reactive::*;
 
 use std::collections::BTreeMap;
 
-use noon_compile::{CompilePatchError, CompiledScene, CompiledTrack, TransformGeometryPlan};
+use noon_compile::{
+    CompilePatchError, CompiledScene, CompiledTrack, CompiledTransactionPreflightStats,
+    TransformGeometryPlan,
+};
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
-    Transform2D, Vec2,
+    Color, GeometryRef, MutationTransaction, ObjectId, ObjectSnapshot, Property, ScenePatch, Style,
+    TrackValues, Transform2D, Vec2,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,6 +167,16 @@ pub struct RuntimePatchStats {
     pub full_scheduler_rebuilds: usize,
 }
 
+impl RuntimePatchStats {
+    fn merge_from(&mut self, other: Self) {
+        self.affected_objects += other.affected_objects;
+        self.groups_rebuilt += other.groups_rebuilt;
+        self.scheduler_groups_rebuilt += other.scheduler_groups_rebuilt;
+        self.full_group_rebuilds += other.full_group_rebuilds;
+        self.full_scheduler_rebuilds += other.full_scheduler_rebuilds;
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SceneInstance {
     compiled: CompiledScene,
@@ -246,6 +259,28 @@ impl SceneInstance {
         } else {
             self.advance_unchecked(time);
         }
+        Ok(&self.frame)
+    }
+
+    pub fn preflight_transaction(
+        &self,
+        transaction: &MutationTransaction,
+    ) -> Result<CompiledTransactionPreflightStats, CompilePatchError> {
+        self.compiled.preflight_transaction(transaction)
+    }
+
+    pub fn apply_transaction(
+        &mut self,
+        transaction: &MutationTransaction,
+    ) -> Result<&FrameState, CompilePatchError> {
+        self.preflight_transaction(transaction)?;
+        let mut aggregate = RuntimePatchStats::default();
+        for patch in transaction.mutations() {
+            self.apply_patch(patch)
+                .expect("compiled transaction was fully preflighted");
+            aggregate.merge_from(self.last_patch_stats);
+        }
+        self.last_patch_stats = aggregate;
         Ok(&self.frame)
     }
 

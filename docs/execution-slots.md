@@ -25,3 +25,18 @@ The next #58 slice localizes timeline channel relowering and scheduler event upd
 ## Local timeline relowering
 
 Runtime timeline groups now retain stable `(execution slot, property)` keys rather than start/end offsets into the globally sorted compatibility track array. The event scheduler indexes boundary events by time and stable channel key, so add/replace/remove operations replace only the affected channel's events. Runtime patch instrumentation reports affected objects and rebuilt groups; the 100k-channel regression requires a one-channel replacement to rebuild exactly one group and one scheduler channel. Direct seek remains intentionally global.
+
+
+## Local transactional mutation
+
+Live patch batches now use a three-stage preflight before commit: semantic identity/field
+validation, lightweight compiled channel validation, and execution-slot generation validation.
+None of these stages clones `SceneDefinition`, `CompiledScene`, `SceneInstance`, frame state, or
+geometry payloads. After preflight, patches commit through stable compiled slots and only the
+affected `(slot, property)` timeline channels are relowered. `SlottedSceneInstance` aggregates
+all per-patch effects into one `ExecutionDelta` for renderer/reactive consumers.
+
+The compatibility frame vectors remain slot-addressed and may contain tombstones. Removing an
+object therefore never renumbers unrelated compiled/frame/GPU targets; later creates reuse a free
+slot. Direct seek is still intentionally allowed to revisit the timeline, while forward playback
+and live mutation stay proportional to active/crossed or explicitly affected channels.

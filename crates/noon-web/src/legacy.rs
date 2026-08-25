@@ -12,9 +12,14 @@ pub use clock::*;
 use noon_compile::{CompileError, CompilePatchError, CompiledScene};
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon_core::{ObjectId, PatchError, SceneDefinition, ScenePatch};
+use noon_core::{
+    preflight_transaction, MutationTransaction, ObjectId, PatchError, SceneDefinition, ScenePatch,
+};
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
-use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
+use noon_runtime::{
+    EvaluationError, ExecutionDelta, ExecutionTransactionError, FrameChanges, FrameState,
+    SlottedSceneInstance,
+};
 
 #[derive(Debug)]
 pub enum PlayerError {
@@ -22,6 +27,7 @@ pub enum PlayerError {
     Compile(CompileError),
     Patch(PatchError),
     CompilePatch(CompilePatchError),
+    ExecutionTransaction(ExecutionTransactionError),
     Evaluation(EvaluationError),
     Sequence { expected: u64, actual: u64 },
     SequenceExhausted,
@@ -34,6 +40,9 @@ impl std::fmt::Display for PlayerError {
             Self::Compile(error) => write!(formatter, "scene compilation failed: {error}"),
             Self::Patch(error) => write!(formatter, "scene patch failed: {error}"),
             Self::CompilePatch(error) => write!(formatter, "runtime patch failed: {error}"),
+            Self::ExecutionTransaction(error) => {
+                write!(formatter, "execution transaction failed: {error}")
+            }
             Self::Evaluation(error) => write!(formatter, "scene evaluation failed: {error}"),
             Self::Sequence { expected, actual } => {
                 write!(
@@ -72,17 +81,31 @@ impl From<CompilePatchError> for PlayerError {
     }
 }
 
+impl From<ExecutionTransactionError> for PlayerError {
+    fn from(value: ExecutionTransactionError) -> Self {
+        Self::ExecutionTransaction(value)
+    }
+}
+
 impl From<EvaluationError> for PlayerError {
     fn from(value: EvaluationError) -> Self {
         Self::Evaluation(value)
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerTransactionStats {
+    pub mutations: usize,
+    pub semantic_scene_clones: usize,
+    pub runtime_rebuilds: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScenePlayer {
     definition: SceneDefinition,
-    instance: SceneInstance,
+    instance: SlottedSceneInstance,
     next_sequence: u64,
+    last_transaction_stats: PlayerTransactionStats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,8 +121,9 @@ impl ScenePlayer {
         let compiled = CompiledScene::compile(&definition)?;
         Ok(Self {
             definition,
-            instance: SceneInstance::new(compiled),
+            instance: SlottedSceneInstance::new(compiled),
             next_sequence: 0,
+            last_transaction_stats: PlayerTransactionStats::default(),
         })
     }
 
@@ -137,7 +161,7 @@ impl ScenePlayer {
         let definition = decode_scene(json)?;
         let compiled = CompiledScene::compile(&definition)?;
         let playhead = self.instance.frame().time;
-        let mut instance = SceneInstance::new(compiled);
+        let mut instance = SlottedSceneInstance::new(compiled);
         instance.seek(playhead)?;
 
         self.definition = definition;
@@ -153,51 +177,26 @@ impl ScenePlayer {
             return Ok(ReconcileOutcome::Replaced);
         };
         let patch_count = patches.len();
-        let value_only = patches.iter().all(is_value_patch);
         self.apply_patches_transactionally(&patches)?;
         self.next_sequence = 0;
-        Ok(if value_only {
-            ReconcileOutcome::Incremental { patch_count }
-        } else {
-            ReconcileOutcome::Rebuilt { patch_count }
-        })
+        Ok(ReconcileOutcome::Incremental { patch_count })
     }
 
     fn apply_patches_transactionally(&mut self, patches: &[ScenePatch]) -> Result<(), PlayerError> {
-        if patches.iter().all(is_value_patch) {
-            for patch in patches {
-                let object = value_patch_object(patch);
-                if self.definition.object(object).is_none() {
-                    return Err(PlayerError::Patch(PatchError::UnknownObject(object)));
-                }
-                if !self.instance.contains_object(object) {
-                    return Err(PlayerError::CompilePatch(CompilePatchError::UnknownObject(
-                        object,
-                    )));
-                }
-            }
-            for patch in patches {
-                self.definition
-                    .apply_patch(patch.clone())
-                    .expect("value patch was preflighted against the scene definition");
-                self.instance
-                    .apply_patch(patch)
-                    .expect("value patch was preflighted against the compiled scene");
-            }
-            return Ok(());
-        }
-
-        let playhead = self.instance.frame().time;
-        let mut definition = self.definition.clone();
-        for patch in patches {
-            definition.apply_patch(patch.clone())?;
-        }
-        let compiled = CompiledScene::compile(&definition)?;
-        let mut instance = SceneInstance::new(compiled);
-        instance.seek(playhead)?;
-
-        self.definition = definition;
-        self.instance = instance;
+        let transaction = MutationTransaction::from_mutations(patches.iter().cloned());
+        // Semantic and execution validation both happen before either live world
+        // mutates. Neither stage clones the SceneDefinition or SceneInstance.
+        preflight_transaction(&self.definition, &transaction)?;
+        self.instance.preflight_transaction(&transaction)?;
+        self.instance.apply_transaction(&transaction)?;
+        self.definition
+            .apply_transaction(&transaction)
+            .expect("semantic transaction was fully preflighted");
+        self.last_transaction_stats = PlayerTransactionStats {
+            mutations: patches.len(),
+            semantic_scene_clones: 0,
+            runtime_rebuilds: 0,
+        };
         Ok(())
     }
 
@@ -213,22 +212,16 @@ impl ScenePlayer {
         self.next_sequence
     }
 
+    pub const fn last_transaction_stats(&self) -> PlayerTransactionStats {
+        self.last_transaction_stats
+    }
+
+    pub fn last_execution_delta(&self) -> &ExecutionDelta {
+        self.instance.last_execution_delta()
+    }
+
     pub fn object_count(&self) -> usize {
         self.instance.frame().live_object_count()
-    }
-}
-
-fn is_value_patch(patch: &ScenePatch) -> bool {
-    matches!(
-        patch,
-        ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. }
-    )
-}
-
-fn value_patch_object(patch: &ScenePatch) -> ObjectId {
-    match patch {
-        ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => *object,
-        _ => unreachable!("value patch helper only accepts transform or style patches"),
     }
 }
 
@@ -1477,8 +1470,8 @@ mod tests {
             .reconcile_scene_json(&json)
             .expect("grid reconciliation must succeed");
 
-        let ReconcileOutcome::Rebuilt { patch_count } = outcome else {
-            panic!("dense structural edit must use one atomic rebuild: {outcome:?}");
+        let ReconcileOutcome::Incremental { patch_count } = outcome else {
+            panic!("dense structural edit must stay incremental: {outcome:?}");
         };
         assert!(
             patch_count > 180,
@@ -1487,6 +1480,39 @@ mod tests {
         assert_eq!(player.object_count(), 200);
         assert_eq!(player.frame().time, 1.75);
         assert_eq!(player.next_sequence(), 0);
+    }
+
+    #[test]
+    fn hundred_thousand_object_remove_is_atomic_local_and_bounded() {
+        let mut scene = SceneDefinition::new();
+        for _ in 0..100_000 {
+            scene.add(GeometryRef::circle(1.0));
+        }
+        let json = encode_scene(&scene).expect("large scene serializes");
+        let mut player = ScenePlayer::from_scene_json(&json).expect("large scene loads");
+        let retained_before = player
+            .instance
+            .slot_for_object(ObjectId::new(99_999))
+            .expect("retained slot exists");
+        let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ObjectId::new(10))]);
+        let json = encode_patch_batch(&batch).expect("batch serializes");
+
+        player
+            .apply_patch_batch_json(&json)
+            .expect("local removal succeeds");
+
+        assert_eq!(player.object_count(), 99_999);
+        assert_eq!(
+            player.instance.slot_for_object(ObjectId::new(99_999)),
+            Some(retained_before)
+        );
+        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
+        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
+        assert_eq!(player.last_execution_delta().slots().len(), 1);
+        let runtime = player.instance.scene_instance().last_patch_stats();
+        assert_eq!(runtime.affected_objects, 1);
+        assert_eq!(runtime.full_group_rebuilds, 0);
+        assert_eq!(runtime.full_scheduler_rebuilds, 0);
     }
 
     #[test]
@@ -1560,7 +1586,7 @@ mod tests {
             player
                 .reconcile_scene_json(&json)
                 .expect("transform edit must reconcile"),
-            ReconcileOutcome::Rebuilt { patch_count: 1 }
+            ReconcileOutcome::Incremental { patch_count: 1 }
         );
         assert_eq!(player.frame().time, 0.5);
         assert!((player.frame().objects[0].transform.translation.x - 0.75).abs() < 1.0e-6);

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use noon_compile::{CompilePatchError, CompiledScene};
-use noon_core::{ObjectId, Property, ScenePatch, TrackId};
+use noon_compile::{CompilePatchError, CompiledScene, CompiledTransactionPreflightStats};
+use noon_core::{MutationTransaction, ObjectId, Property, ScenePatch, TrackId};
 
-use crate::{FrameState, SceneInstance};
+use crate::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
 /// Stable runtime identity independent of semantic IDs and dense frame indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -85,7 +85,7 @@ impl ExecutionSlotTable {
 
     pub fn from_compiled(compiled: &CompiledScene) -> Self {
         let mut table = Self::new();
-        for object in compiled.objects() {
+        for object in compiled.objects().iter().filter(|object| object.live) {
             table
                 .insert_object(object.id)
                 .expect("compiled scene object identities are unique");
@@ -184,6 +184,27 @@ impl ExecutionSlotTable {
     pub const fn last_mutation_stats(&self) -> ExecutionSlotMutationStats {
         self.last_mutation
     }
+
+    fn preflight_transaction(
+        &self,
+        transaction: &MutationTransaction,
+    ) -> Result<(), ExecutionSlotError> {
+        // Slot metadata is intentionally cheap to stage: it contains only IDs,
+        // generations, and free-list links—not frame, geometry, or runtime state.
+        let mut shadow = self.clone();
+        for patch in transaction.mutations() {
+            match patch {
+                ScenePatch::CreateObject(object) => {
+                    shadow.insert_object(object.id)?;
+                }
+                ScenePatch::RemoveObject(object) => {
+                    shadow.remove_object(*object)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -241,6 +262,57 @@ impl ExecutionDelta {
         }
         self.push_slot(slot);
     }
+
+    fn merge_from(&mut self, other: &Self) {
+        for slot in other.slots.iter().copied() {
+            self.push_slot(slot);
+        }
+        for channel in other.channels.iter().copied() {
+            self.push_channel(channel.slot, channel.property);
+        }
+        self.effects.property |= other.effects.property;
+        self.effects.timeline |= other.effects.timeline;
+        self.effects.structure |= other.effects.structure;
+        self.effects.render |= other.effects.render;
+        self.effects.resources |= other.effects.resources;
+        self.effects.hierarchy |= other.effects.hierarchy;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionTransactionPreflightStats {
+    pub compiled: CompiledTransactionPreflightStats,
+    pub slots_indexed: usize,
+    pub staged_runtime_clones: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionTransactionError {
+    Compile(CompilePatchError),
+    Slot(ExecutionSlotError),
+}
+
+impl std::fmt::Display for ExecutionTransactionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compile(error) => write!(formatter, "compiled transaction failed: {error}"),
+            Self::Slot(error) => write!(formatter, "execution slot transaction failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionTransactionError {}
+
+impl From<CompilePatchError> for ExecutionTransactionError {
+    fn from(value: CompilePatchError) -> Self {
+        Self::Compile(value)
+    }
+}
+
+impl From<ExecutionSlotError> for ExecutionTransactionError {
+    fn from(value: ExecutionSlotError) -> Self {
+        Self::Slot(value)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -251,6 +323,7 @@ struct PatchContext {
 
 /// Transitional runtime adapter exposing stable execution identity while
 /// the renderer/frame compatibility view remains dense.
+#[derive(Clone, Debug)]
 pub struct SlottedSceneInstance {
     inner: SceneInstance,
     slots: ExecutionSlotTable,
@@ -289,6 +362,50 @@ impl SlottedSceneInstance {
 
     pub fn take_execution_delta(&mut self) -> ExecutionDelta {
         std::mem::take(&mut self.last_delta)
+    }
+
+    pub fn seek(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        self.inner.seek(time)
+    }
+
+    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        self.inner.advance_to(time)
+    }
+
+    pub fn take_frame_changes(&mut self) -> FrameChanges {
+        self.inner.take_frame_changes()
+    }
+
+    pub fn contains_object(&self, object: ObjectId) -> bool {
+        self.inner.contains_object(object)
+    }
+
+    pub fn preflight_transaction(
+        &self,
+        transaction: &MutationTransaction,
+    ) -> Result<ExecutionTransactionPreflightStats, ExecutionTransactionError> {
+        let compiled = self.inner.preflight_transaction(transaction)?;
+        self.slots.preflight_transaction(transaction)?;
+        Ok(ExecutionTransactionPreflightStats {
+            compiled,
+            slots_indexed: self.slots.slot_capacity(),
+            staged_runtime_clones: 0,
+        })
+    }
+
+    pub fn apply_transaction(
+        &mut self,
+        transaction: &MutationTransaction,
+    ) -> Result<&FrameState, ExecutionTransactionError> {
+        self.preflight_transaction(transaction)?;
+        let mut aggregate = ExecutionDelta::default();
+        for patch in transaction.mutations() {
+            self.apply_patch(patch)
+                .expect("execution transaction was fully preflighted");
+            aggregate.merge_from(&self.last_delta);
+        }
+        self.last_delta = aggregate;
+        Ok(self.inner.frame())
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
@@ -382,15 +499,21 @@ impl SlottedSceneInstance {
             | ScenePatch::SetStyle { object, .. } => {
                 context.primary_slot = self.slots.slot_for_object(*object);
                 if matches!(patch, ScenePatch::RemoveObject(_)) {
-                    for track in self.inner.compiled.tracks() {
-                        let compiled_object =
-                            &self.inner.compiled.objects()[track.object_index as usize];
-                        if compiled_object.id == *object {
-                            if let Some(slot) = context.primary_slot {
+                    if let (Some(slot), Some(object_index)) = (
+                        context.primary_slot,
+                        self.inner.compiled.object_index(*object),
+                    ) {
+                        for property in EXECUTION_PROPERTIES {
+                            if !self
+                                .inner
+                                .compiled
+                                .track_group(object_index, property)
+                                .is_empty()
+                            {
                                 push_context_channel(
                                     &mut context.old_track_channels,
                                     slot,
-                                    track.property,
+                                    property,
                                 );
                             }
                         }
@@ -424,6 +547,17 @@ impl SlottedSceneInstance {
         }
     }
 }
+
+const EXECUTION_PROPERTIES: [Property; 8] = [
+    Property::Presence,
+    Property::Transform,
+    Property::Position,
+    Property::Rotation,
+    Property::Opacity,
+    Property::Appearance,
+    Property::Reveal,
+    Property::Morph,
+];
 
 fn push_context_channel(
     channels: &mut Vec<ExecutionChannelDelta>,
@@ -562,6 +696,48 @@ mod tests {
             }]
         );
         assert!(!delta.slots().contains(&second_slot));
+        assert!(delta.effects().timeline);
+    }
+
+    #[test]
+    fn transaction_aggregates_bounded_execution_delta_without_runtime_clone() {
+        let mut definition = SceneDefinition::new();
+        let first = definition.add(GeometryRef::circle(1.0));
+        let second = definition.add(GeometryRef::circle(1.0));
+        let compiled = CompiledScene::compile(&definition).expect("valid scene");
+        let mut live = SlottedSceneInstance::new(compiled);
+        let first_slot = live.slot_for_object(first).expect("first slot");
+        let second_slot = live.slot_for_object(second).expect("second slot");
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object: first,
+                transform: noon_core::Transform2D {
+                    translation: Vec2::new(2.0, 0.0),
+                    ..noon_core::Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(20),
+                object: first,
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::new(3.0, 0.0),
+                },
+                timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+                time_map: noon_core::CompositionTimeMap::identity(),
+            }),
+        ]);
+        let preflight = live
+            .preflight_transaction(&transaction)
+            .expect("transaction preflights");
+        assert_eq!(preflight.staged_runtime_clones, 0);
+        live.apply_transaction(&transaction)
+            .expect("transaction commits locally");
+        let delta = live.last_execution_delta();
+        assert_eq!(delta.slots(), &[first_slot]);
+        assert!(!delta.slots().contains(&second_slot));
+        assert!(delta.effects().property);
         assert!(delta.effects().timeline);
     }
 }
