@@ -1,4 +1,5 @@
 import initNoonWeb, {
+  WasmAuthoringMobjectHandle,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -14,6 +15,7 @@ const HOST_PROTOCOL_VERSION = 1;
 const PYTHON_MODULE_PATH = "/tmp/noon.py";
 const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
+const MANIM_SEMANTIC_HANDLES_MODULE_PATH = "/tmp/_manim_semantic_handles.py";
 const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
@@ -37,6 +39,8 @@ self.addEventListener("message", (event) => {
 
 async function initializePyodide() {
   await initNoonWeb();
+  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
+    new WasmAuthoringMobjectHandle(snapshotJson);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
@@ -48,6 +52,7 @@ async function initializePyodide() {
     apiResponse,
     irResponse,
     compatResponse,
+    semanticHandlesResponse,
     rateFunctionsResponse,
     phaseBResponse,
     animationOptionsResponse,
@@ -60,6 +65,7 @@ async function initializePyodide() {
     fetch(new URL("./python/noon.py", import.meta.url)),
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
     fetch(new URL("./python/_manim_compat.py", import.meta.url)),
+    fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
     fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
@@ -73,6 +79,7 @@ async function initializePyodide() {
     [apiResponse, "Noon Python API"],
     [irResponse, "Noon Python IR emitter"],
     [compatResponse, "Noon Manim compatibility layer"],
+    [semanticHandlesResponse, "Noon shared semantic handle layer"],
     [rateFunctionsResponse, "Noon Manim rate functions"],
     [phaseBResponse, "Noon Manim Phase B layer"],
     [animationOptionsResponse, "Noon Manim animation options"],
@@ -92,6 +99,7 @@ async function initializePyodide() {
     [PYTHON_MODULE_PATH, apiResponse],
     [PYTHON_IR_MODULE_PATH, irResponse],
     [MANIM_COMPAT_MODULE_PATH, compatResponse],
+    [MANIM_SEMANTIC_HANDLES_MODULE_PATH, semanticHandlesResponse],
     [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
     [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
     [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
@@ -113,6 +121,8 @@ _manim_compat.install()
 import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_phase_b
+import _manim_semantic_handles
+_manim_semantic_handles.install()
 import _manim_animate
 import _manim_composition
 _manim_composition.install()

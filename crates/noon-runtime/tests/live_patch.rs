@@ -5,6 +5,35 @@ use noon_core::{
 };
 use noon_runtime::SceneInstance;
 
+fn semantic_frame(
+    instance: &SceneInstance,
+) -> Vec<(
+    ObjectId,
+    noon_runtime::FrameObjectState,
+    bool,
+    f32,
+    f32,
+    Option<GeometryRef>,
+)> {
+    let frame = instance.frame();
+    let mut objects = Vec::new();
+    for (index, object) in frame.objects.iter().enumerate() {
+        if !instance.object_slot_is_live(index) {
+            continue;
+        }
+        objects.push((
+            object.id,
+            object.clone(),
+            frame.presences[index],
+            frame.reveals[index],
+            frame.morphs[index],
+            frame.render_geometries[index].clone(),
+        ));
+    }
+    objects.sort_by_key(|entry| entry.0);
+    objects
+}
+
 fn assert_live_matches_definition(
     live: &mut SceneInstance,
     definition: &SceneDefinition,
@@ -14,7 +43,8 @@ fn assert_live_matches_definition(
     let mut expected = SceneInstance::new(compiled);
     expected.seek(time).expect("valid seek");
     live.seek(time).expect("valid seek");
-    assert_eq!(live.frame(), expected.frame());
+    assert_eq!(live.frame().time, expected.frame().time);
+    assert_eq!(semantic_frame(live), semantic_frame(&expected));
 }
 
 #[test]
@@ -65,8 +95,9 @@ fn create_add_track_and_remove_match_full_recompile() {
         .expect("definition remove must succeed");
 
     assert_live_matches_definition(&mut live, &definition, time);
-    assert_eq!(live.frame().objects.len(), 1);
-    assert_eq!(live.frame().objects[0].id, created);
+    assert_eq!(live.frame().objects.len(), 2);
+    assert!(!live.frame().presences[0]);
+    assert_eq!(live.frame().objects[1].id, created);
 }
 
 #[test]
@@ -220,4 +251,85 @@ fn moving_a_track_between_objects_relowers_only_old_and_new_channels() {
     assert_eq!(stats.full_group_rebuilds, 0);
     assert_eq!(stats.full_seeks, 0);
     assert_live_matches_definition(&mut live, &definition, 2.0);
+}
+
+#[test]
+fn structural_remove_and_create_touch_only_their_stable_frame_slots() {
+    let mut definition = SceneDefinition::new();
+    let mut objects = Vec::with_capacity(100_000);
+    for _ in 0..100_000 {
+        objects.push(definition.add(GeometryRef::circle(1.0)));
+    }
+    let compiled = CompiledScene::compile(&definition).unwrap();
+    let mut live = SceneInstance::new(compiled);
+    live.seek(0.5).unwrap();
+    live.take_frame_changes();
+    let untouched_id = live.frame().objects[11].id;
+    let untouched_before = live.frame().objects[11].clone();
+
+    let remove = ScenePatch::RemoveObject(objects[10]);
+    live.apply_patch(&remove).unwrap();
+    definition.apply_patch(remove).unwrap();
+    let stats = live.last_patch_stats();
+    assert_eq!(stats.object_slots_retired, 1);
+    assert_eq!(stats.object_slots_appended, 0);
+    assert_eq!(stats.channels_relowered, 0);
+    assert_eq!(stats.objects_recomputed, 0);
+    assert_eq!(stats.full_group_rebuilds, 0);
+    assert_eq!(stats.full_seeks, 0);
+    let changes = live.take_frame_changes();
+    assert!(!changes.is_all());
+    assert_eq!(changes.object_indices(), &[10]);
+    assert!(!live.frame().presences[10]);
+    assert_eq!(live.frame().objects[11].id, untouched_id);
+    assert_eq!(live.frame().objects[11], untouched_before);
+    assert_live_matches_definition(&mut live, &definition, 0.5);
+
+    live.take_frame_changes();
+    let created = ObjectId::new(200_000);
+    let create = ScenePatch::CreateObject(ObjectDefinition::new(
+        created,
+        GeometryRef::rectangle(2.0, 3.0),
+    ));
+    live.apply_patch(&create).unwrap();
+    definition.apply_patch(create).unwrap();
+    let stats = live.last_patch_stats();
+    assert_eq!(stats.object_slots_appended, 1);
+    assert_eq!(stats.object_slots_retired, 0);
+    assert_eq!(stats.full_group_rebuilds, 0);
+    assert_eq!(stats.full_seeks, 0);
+    let changes = live.take_frame_changes();
+    assert_eq!(changes.object_indices(), &[100_000]);
+    assert_eq!(live.frame().objects[100_000].id, created);
+    assert!(live.frame().presences[100_000]);
+    assert_eq!(live.frame().objects[11], untouched_before);
+    assert_live_matches_definition(&mut live, &definition, 0.5);
+}
+
+#[test]
+fn remove_then_recreate_same_object_id_appends_a_new_live_slot() {
+    let mut definition = SceneDefinition::new();
+    let object = definition.add(GeometryRef::circle(1.0));
+    let compiled = CompiledScene::compile(&definition).unwrap();
+    let mut live = SceneInstance::new(compiled);
+
+    let remove = ScenePatch::RemoveObject(object);
+    live.apply_patch(&remove).unwrap();
+    definition.apply_patch(remove).unwrap();
+
+    let create = ScenePatch::CreateObject(ObjectDefinition::new(
+        object,
+        GeometryRef::rectangle(3.0, 2.0),
+    ));
+    live.apply_patch(&create).unwrap();
+    definition.apply_patch(create).unwrap();
+
+    assert_eq!(live.frame().objects.len(), 2);
+    assert_eq!(live.frame().objects[0].id, object);
+    assert!(!live.frame().presences[0]);
+    assert_eq!(live.frame().objects[1].id, object);
+    assert!(live.frame().presences[1]);
+    assert!(live.object_slot_is_live(1));
+    assert!(!live.object_slot_is_live(0));
+    assert_live_matches_definition(&mut live, &definition, 0.0);
 }

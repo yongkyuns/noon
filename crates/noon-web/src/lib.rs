@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod authoring_mobject;
 mod authoring_options;
 mod composition;
 mod determinism;
@@ -11,6 +12,7 @@ mod legacy;
 mod lifecycle;
 mod reactive_player;
 
+pub use authoring_mobject::*;
 pub use authoring_options::*;
 pub use composition::*;
 pub use determinism::*;
