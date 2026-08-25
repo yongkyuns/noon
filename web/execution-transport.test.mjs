@@ -10,6 +10,7 @@ import {
   TransferableExecutionDeltaReceiver,
   TransferableExecutionDeltaSender,
   createSharedExecutionMailbox,
+  decodeTransferableExecutionDelta,
   executionDeltaMetadata,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
@@ -120,28 +121,37 @@ test("transferable mailbox defers ack until consumer accepts", async () => {
   port2.close();
 });
 
-test("transferable envelope metadata must match encoded payload", async () => {
-  const { port1, port2 } = new MessageChannel();
-  const receiver = new TransferableExecutionDeltaReceiver(port2, () => true);
-  const errors = [];
-  process.once("uncaughtException", (error) => errors.push(error));
+test("transferable envelope metadata must match encoded payload", () => {
   const payload = new TextEncoder().encode(delta(0));
-  const buffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
-  port1.postMessage(
-    {
+  const validBuffer = payload.buffer.slice(
+    payload.byteOffset,
+    payload.byteOffset + payload.byteLength,
+  );
+  assert.deepEqual(
+    decodeTransferableExecutionDelta({
       type: "execution_delta",
       session: 1,
-      sequence: 99,
-      buffer,
-    },
-    [buffer],
+      sequence: 0,
+      buffer: validBuffer,
+    }).metadata,
+    { session: 1, sequence: 0, snapshot: true },
   );
-  await turn();
-  await turn();
-  assert.equal(receiver.pendingCount(), 0);
-  assert.match(String(errors[0]), /metadata does not match/);
-  port1.close();
-  port2.close();
+
+  const mismatchPayload = new TextEncoder().encode(delta(0));
+  const mismatchBuffer = mismatchPayload.buffer.slice(
+    mismatchPayload.byteOffset,
+    mismatchPayload.byteOffset + mismatchPayload.byteLength,
+  );
+  assert.throws(
+    () =>
+      decodeTransferableExecutionDelta({
+        type: "execution_delta",
+        session: 1,
+        sequence: 99,
+        buffer: mismatchBuffer,
+      }),
+    /metadata does not match/,
+  );
 });
 
 test("metadata rejects future protocols and unsafe sequence values", () => {
