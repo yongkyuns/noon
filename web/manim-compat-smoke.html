@@ -7,12 +7,15 @@
   </head>
   <body>
     <script type="module">
+      import init, { semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
 
       const client = new PythonAuthoringClient();
+      const wasmReady = init();
       window.noonManimCompat = {
-        ready: () => client.ready(),
+        ready: () => Promise.all([client.ready(), wasmReady]),
         run: (source) => client.run(source),
+        semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
     </script>
   </body>
