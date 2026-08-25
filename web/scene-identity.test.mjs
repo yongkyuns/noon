@@ -3,6 +3,25 @@ import test from "node:test";
 
 import { SceneIdentityMap } from "./scene-identity.js";
 
+test("returns the original document when every semantic ID is already stable", () => {
+  const identities = new SceneIdentityMap();
+  const document = {
+    version: 1,
+    objects: [{ id: 0 }, { id: 1 }],
+    tracks: [{ id: 0, object: 1 }],
+  };
+  const keys = {
+    objects: [
+      { id: 0, key: "circle" },
+      { id: 1, key: "line" },
+    ],
+    tracks: [{ id: 0, key: "line.move" }],
+  };
+
+  assert.strictEqual(identities.stabilize(document, keys), document);
+  assert.strictEqual(identities.stabilize(document, keys), document);
+});
+
 test("preserves runtime IDs when Python insertion order changes", () => {
   const identities = new SceneIdentityMap();
   const first = identities.stabilize(
