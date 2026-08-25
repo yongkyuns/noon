@@ -15,6 +15,120 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_phase_b as _phase_b
 
+
+def _alignment_mask2(value: object) -> _base.Vec2:
+    try:
+        length = len(value)  # type: ignore[arg-type]
+    except (TypeError, AttributeError):
+        length = None
+    if length in (2, 3):
+        try:
+            return _base.Vec2(float(value[0]), float(value[1]))  # type: ignore[index]
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("coordinate mask must contain numeric x/y values") from error
+    raise TypeError("coordinate mask must be a two- or three-component vector")
+
+
+def _alignment_is_mobject(value: object) -> bool:
+    return isinstance(value, _base.Mobject)
+
+
+def _alignment_critical(value: object, direction: _base.Vec2) -> _base.Vec2:
+    if not _alignment_is_mobject(value):
+        raise TypeError("critical-point target must be a Mobject")
+    return value.get_critical_point(direction)  # type: ignore[union-attr]
+
+
+def _alignment_indexed(value: object, index: int | None) -> object:
+    if index is None:
+        return value
+    try:
+        return value[index]  # type: ignore[index]
+    except (TypeError, AttributeError, IndexError) as error:
+        raise IndexError("alignment submobject index is unavailable") from error
+
+
+def _manim_move_to(
+    self: _base.Mobject,
+    point_or_mobject: object,
+    aligned_edge: object = _base.ORIGIN,
+    coor_mask: object = (1.0, 1.0, 1.0),
+) -> _base.Mobject:
+    """Pinned ManimCE v0.21.0 ``Mobject.move_to`` in Noon's x/y plane."""
+
+    edge = _base._as_vec2(aligned_edge)
+    if _alignment_is_mobject(point_or_mobject):
+        target = _alignment_critical(point_or_mobject, edge)
+    else:
+        target = _base._as_vec2(point_or_mobject)
+    source = _alignment_critical(self, edge)
+    mask = _alignment_mask2(coor_mask)
+    delta = target - source
+    return self.shift(_base.Vec2(delta.x * mask.x, delta.y * mask.y))
+
+
+def _manim_next_to(
+    self: _base.Mobject,
+    mobject_or_point: object,
+    direction: object = _base.RIGHT,
+    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    aligned_edge: object = _base.ORIGIN,
+    submobject_to_align: object | None = None,
+    index_of_submobject_to_align: int | None = None,
+    coor_mask: object = (1.0, 1.0, 1.0),
+) -> _base.Mobject:
+    """Pinned Manim ``next_to`` semantics, including unnormalized direction."""
+
+    vector = _base._as_vec2(direction)
+    edge = _base._as_vec2(aligned_edge)
+
+    if _alignment_is_mobject(mobject_or_point):
+        target_aligner = _alignment_indexed(
+            mobject_or_point, index_of_submobject_to_align
+        )
+        target = _alignment_critical(target_aligner, edge + vector)
+    else:
+        target = _base._as_vec2(mobject_or_point)
+
+    if submobject_to_align is not None:
+        aligner = submobject_to_align
+    elif index_of_submobject_to_align is not None:
+        aligner = _alignment_indexed(self, index_of_submobject_to_align)
+    else:
+        aligner = self
+    source = _alignment_critical(aligner, edge - vector)
+
+    mask = _alignment_mask2(coor_mask)
+    delta = target - source + vector * float(buff)
+    return self.shift(_base.Vec2(delta.x * mask.x, delta.y * mask.y))
+
+
+def _manim_arrange(
+    self: _compat.Group,
+    direction: object = _base.RIGHT,
+    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    center: bool = True,
+    **kwargs: Any,
+) -> _compat.Group:
+    """Pinned Manim ``arrange`` forwarding placement kwargs to ``next_to``."""
+
+    vector = _base.RIGHT if direction is None else direction
+    for previous, current in zip(self.submobjects, self.submobjects[1:]):
+        current.next_to(previous, vector, buff, **kwargs)
+    if center:
+        self.center()
+    return self
+
+
+# Install compatibility placement before capturing fallbacks below. The generic
+# formulas use dynamic ``shift``/query dispatch, so after semantic-handle install
+# the same code mutates Rust/WASM-owned detached objects and ordinary scene objects.
+_base.Mobject.move_to = _manim_move_to
+_base.Mobject.next_to = _manim_next_to
+_compat.Group.move_to = _manim_move_to
+_compat.Group.next_to = _manim_next_to
+_compat.Group.arrange = _manim_arrange
+
 _ir = _base._ir
 
 try:
@@ -149,12 +263,20 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 
 
 def _width(self: _base.Mobject) -> float:
-    bounds = _layout_bounds(self) if _handle_for(self) is not None else _base._bounds(self._current_raw())
+    bounds = (
+        _layout_bounds(self)
+        if _handle_for(self) is not None
+        else _base._bounds(self._current_raw())
+    )
     return 0.0 if bounds is None else bounds[1].x - bounds[0].x
 
 
 def _height(self: _base.Mobject) -> float:
-    bounds = _layout_bounds(self) if _handle_for(self) is not None else _base._bounds(self._current_raw())
+    bounds = (
+        _layout_bounds(self)
+        if _handle_for(self) is not None
+        else _base._bounds(self._current_raw())
+    )
     return 0.0 if bounds is None else bounds[1].y - bounds[0].y
 
 
@@ -175,14 +297,18 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     return self
 
 
-def _move_to(self: _base.Mobject, point: object) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_MOVE_TO(self, point)
-    value = _base._as_vec2(point)
-    center = _layout_center(self)
-    handle.shift(value.x - center.x, value.y - center.y)
-    return self
+def _move_to(
+    self: _base.Mobject,
+    point_or_mobject: object,
+    aligned_edge: object = _base.ORIGIN,
+    coor_mask: object = (1.0, 1.0, 1.0),
+) -> _base.Mobject:
+    return _ORIGINAL_MOVE_TO(
+        self,
+        point_or_mobject,
+        aligned_edge=aligned_edge,
+        coor_mask=coor_mask,
+    )
 
 
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
@@ -277,21 +403,24 @@ def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
 
 def _next_to(
     self: _base.Mobject,
-    other: object,
+    mobject_or_point: object,
     direction: object = _base.RIGHT,
     buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    aligned_edge: object = _base.ORIGIN,
+    submobject_to_align: object | None = None,
+    index_of_submobject_to_align: int | None = None,
+    coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_NEXT_TO(self, other, direction, buff)
-    axis = _base._as_vec2(direction).normalized()
-    source = _critical(self, -axis)
-    target = _critical(other, axis) if isinstance(other, _base.Mobject) else _base._as_vec2(other)
-    handle.shift(
-        target.x - source.x + axis.x * float(buff),
-        target.y - source.y + axis.y * float(buff),
+    return _ORIGINAL_NEXT_TO(
+        self,
+        mobject_or_point,
+        direction,
+        buff,
+        aligned_edge=aligned_edge,
+        submobject_to_align=submobject_to_align,
+        index_of_submobject_to_align=index_of_submobject_to_align,
+        coor_mask=coor_mask,
     )
-    return self
 
 
 def _align_to(
@@ -408,7 +537,11 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
     present: list[tuple[_base.Vec2, _base.Vec2]] = []
     for member in leaves:
-        bounds = _layout_bounds(member) if _handle_for(member) is not None else _base._bounds(member._current_raw())
+        bounds = (
+            _layout_bounds(member)
+            if _handle_for(member) is not None
+            else _base._bounds(member._current_raw())
+        )
         if bounds is not None:
             present.append(bounds)
     if not present:
