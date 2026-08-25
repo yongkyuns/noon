@@ -15,6 +15,7 @@ let transportMode = null;
 let transport = null;
 let player = null;
 let latestTick = null;
+let controlQueue = [];
 let initialized = false;
 let stopped = false;
 
@@ -30,49 +31,14 @@ async function handleMainMessage(message) {
         await initialize(message);
         return;
       case "replace_scene":
-        requireInitialized();
-        sendDelta(player.replaceSceneDeltaJson(message.sceneJson));
-        respond(message.requestId, {
-          type: "result",
-          operation: "replace_scene",
-          time: player.time(),
-          nextPatchSequence: String(player.nextPatchSequence()),
-          sceneJson: player.sceneJson(),
-        });
+      case "reconcile_scene":
+      case "apply_patch":
+        enqueueControl(message);
         return;
-      case "reconcile_scene": {
-        requireInitialized();
-        const result = JSON.parse(player.reconcileSceneDeltaJson(message.sceneJson));
-        if (result.delta !== null) {
-          sendDelta(result.delta);
-        }
-        respond(message.requestId, {
-          type: "result",
-          operation: "reconcile_scene",
-          incremental: result.incremental,
-          time: player.time(),
-          nextPatchSequence: String(player.nextPatchSequence()),
-          sceneJson: player.sceneJson(),
-        });
-        return;
-      }
-      case "apply_patch": {
-        requireInitialized();
-        const delta = player.applyPatchBatchDeltaJson(message.patchBatchJson);
-        if (delta !== undefined) {
-          sendDelta(delta);
-        }
-        respond(message.requestId, {
-          type: "result",
-          operation: "apply_patch",
-          time: player.time(),
-          nextPatchSequence: String(player.nextPatchSequence()),
-          sceneJson: player.sceneJson(),
-        });
-        return;
-      }
       case "stop":
         stopped = true;
+        controlQueue = [];
+        latestTick = null;
         renderPort?.close?.();
         self.close();
         return;
@@ -129,16 +95,15 @@ async function initialize(message) {
   } else {
     transport = new TransferableExecutionDeltaSender(renderPort, {
       maxInFlight: 2,
-      onWritable: drainLatestTick,
+      onWritable: drainWork,
     });
   }
 
   const initial = player.initialDeltaJson();
-  if (!sendDelta(initial)) {
-    throw new Error("execution transport rejected its initial snapshot");
-  }
+  sendDeltaOrThrow(initial);
   initialized = true;
   postMain({ type: "ready", transportMode });
+  drainWork();
 }
 
 function handleRenderMessage(message) {
@@ -151,15 +116,103 @@ function handleRenderMessage(message) {
       return;
     }
     latestTick = message.timestamp;
-    drainLatestTick();
+    drainWork();
     return;
   }
   if (message.type === "transport_writable") {
-    drainLatestTick();
+    drainWork();
     return;
   }
   if (message.type === "render_error") {
     fail(new Error(`render worker failed: ${message.message}`), null);
+  }
+}
+
+function enqueueControl(message) {
+  requireInitialized();
+  if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) {
+    throw new Error("engine request ID must be a non-negative safe integer");
+  }
+  controlQueue.push(message);
+  drainWork();
+}
+
+function drainWork() {
+  if (!initialized || stopped || transport === null || player === null) {
+    return;
+  }
+
+  while (controlQueue.length > 0 && transportCanSend()) {
+    const message = controlQueue.shift();
+    try {
+      executeControl(message);
+    } catch (error) {
+      fail(error, message.requestId);
+      return;
+    }
+  }
+
+  if (controlQueue.length > 0 || latestTick === null || !transportCanSend()) {
+    return;
+  }
+
+  const timestamp = latestTick;
+  latestTick = null;
+  try {
+    const delta = player.tickDeltaJson(timestamp);
+    if (delta !== undefined && delta !== null) {
+      sendDeltaOrThrow(delta);
+    }
+  } catch (error) {
+    fail(error, null);
+  }
+}
+
+function executeControl(message) {
+  switch (message.type) {
+    case "replace_scene": {
+      const delta = player.replaceSceneDeltaJson(message.sceneJson);
+      sendDeltaOrThrow(delta);
+      respond(message.requestId, {
+        type: "result",
+        operation: "replace_scene",
+        time: player.time(),
+        nextPatchSequence: String(player.nextPatchSequence()),
+        sceneJson: player.sceneJson(),
+      });
+      return;
+    }
+    case "reconcile_scene": {
+      const result = JSON.parse(player.reconcileSceneDeltaJson(message.sceneJson));
+      if (result.delta !== null && result.delta !== undefined) {
+        sendDeltaOrThrow(result.delta);
+      }
+      respond(message.requestId, {
+        type: "result",
+        operation: "reconcile_scene",
+        incremental: result.incremental,
+        time: player.time(),
+        nextPatchSequence: String(player.nextPatchSequence()),
+        sceneJson: player.sceneJson(),
+      });
+      return;
+    }
+    case "apply_patch": {
+      const delta = player.applyPatchBatchDeltaJson(message.patchBatchJson);
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, {
+        type: "result",
+        operation: "apply_patch",
+        time: player.time(),
+        nextPatchSequence: String(player.nextPatchSequence()),
+        sceneJson: player.sceneJson(),
+      });
+      return;
+    }
+    default:
+      throw new Error(`unknown queued engine command ${message.type}`);
   }
 }
 
@@ -176,33 +229,16 @@ function transportCanSend() {
   return true;
 }
 
-function drainLatestTick() {
-  if (!initialized || stopped || latestTick === null || !transportCanSend()) {
+function sendDeltaOrThrow(json) {
+  if (json === undefined || json === null) {
     return;
   }
-  const timestamp = latestTick;
-  latestTick = null;
-  try {
-    const delta = player.tickDeltaJson(timestamp);
-    if (delta !== undefined && !sendDelta(delta)) {
-      // Capacity is checked before evaluation, so this can only happen if a
-      // concurrent transport consumer changed state between the two operations.
-      throw new Error("execution transport became backpressured after frame evaluation");
-    }
-  } catch (error) {
-    fail(error, null);
+  if (!transport.send(json)) {
+    throw new Error("execution transport became backpressured after work was admitted");
   }
-}
-
-function sendDelta(json) {
-  if (json === undefined || json === null) {
-    return true;
-  }
-  const sent = transport.send(json);
-  if (sent && transportMode === EXECUTION_TRANSPORT_SHARED) {
+  if (transportMode === EXECUTION_TRANSPORT_SHARED) {
     renderPort.postMessage({ type: "shared_delta" });
   }
-  return sent;
 }
 
 function respond(requestId, payload) {
