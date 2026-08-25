@@ -11,17 +11,6 @@ WEB_ROOT = Path(__file__).parents[1]
 # Each picker entry has one primary teaching purpose and one source file.
 PLAYGROUND_SCENE_EXAMPLES = (
     ("Getting started", "python/demo_scene.py", {}),
-    ("Manim CE · Create a circle", "python/examples/tutorial_quickstart.py", {}),
-    ("Manim CE · Square → circle", "python/examples/tutorial_square_to_circle.py", {}),
-    ("Manim CE · Positioning", "python/examples/tutorial_positioning.py", {}),
-    ("Manim CE · .animate", "python/examples/tutorial_animate.py", {}),
-    (
-        "Manim CE · Transform lifecycle",
-        "python/examples/tutorial_transform_lifecycle.py",
-        {},
-    ),
-    ("Manim CE · Animation groups", "python/examples/tutorial_composition.py", {}),
-    ("Manim CE · ValueTracker", "python/examples/tutorial_value_tracker.py", {}),
     ("Analytic Transform", "python/examples/analytic_transform.py", {}),
     ("Lifecycle handoffs", "python/examples/lifecycle_handoffs.py", {}),
     ("Fade & appearance", "python/examples/fade_appearance.py", {}),
