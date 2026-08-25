@@ -189,6 +189,38 @@ class AnimateParity(Scene):
             assert "only be passed once" in str(error)
 `;
 
+
+const queryTransformSource = `
+from noon import *
+
+class SharedQueryTransforms(Scene):
+    def construct(self):
+        box = Rectangle(width=2.0, height=1.0).shift(RIGHT * 0.7 + UP * 0.3)
+        assert abs(box.get_left().x + 0.3) < 1e-9
+        assert abs(box.get_right().x - 1.7) < 1e-9
+        assert abs(box.get_top().y - 0.8) < 1e-9
+        assert abs(box.get_x(LEFT) + 0.3) < 1e-9
+
+        box.set_coord(-1.5, 0, LEFT).set_coord(1.25, 1, UP)
+        assert abs(box.get_left().x + 1.5) < 1e-9
+        assert abs(box.get_top().y - 1.25) < 1e-9
+        box.width = 3.0
+        box.stretch_to_fit_height(2.0)
+        assert abs(box.width - 3.0) < 1e-9
+        assert abs(box.height - 2.0) < 1e-9
+
+        target = Circle(radius=0.4).shift(RIGHT * 1.2 + DOWN * 0.4)
+        box.match_x(target).match_y(target)
+        assert abs(box.get_x() - target.get_x()) < 1e-9
+        assert abs(box.get_y() - target.get_y()) < 1e-9
+
+        orbit = Square(side_length=0.5).shift(RIGHT * 1.5 + UP * 0.5)
+        orbit.rotate_about_origin(PI / 2)
+        assert abs(orbit.get_x() + 0.5) < 1e-9
+        assert abs(orbit.get_y() - 1.5) < 1e-9
+        self.add(box, target, orbit)
+`;
+
 const rateFunctionSource = `
 from noon import *
 
@@ -315,6 +347,14 @@ try {
     "Scene.play kwargs should override builder animation kwargs",
   );
 
+
+  const queryTransforms = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    queryTransformSource,
+  );
+  assert.equal(queryTransforms.kind, "scene_document");
+  assert.equal(queryTransforms.document.objects.length, 3);
+
   const sharedRates = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
     rateFunctionSource,
@@ -341,7 +381,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

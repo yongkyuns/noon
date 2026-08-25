@@ -695,6 +695,298 @@ class Scene(_BaseScene):
         )
 
 
+
+def _mobject_get_critical_point(
+    self: _BaseMobject, direction: object
+) -> _base.Vec2:
+    return _critical_for(self, _as_vec2(direction))
+
+
+def _mobject_get_edge_center(self: _BaseMobject, direction: object) -> _base.Vec2:
+    return self.get_critical_point(direction)
+
+
+def _mobject_get_corner(self: _BaseMobject, direction: object) -> _base.Vec2:
+    return self.get_critical_point(direction)
+
+
+def _mobject_get_left(self: _BaseMobject) -> _base.Vec2:
+    return self.get_critical_point(_base.LEFT)
+
+
+def _mobject_get_right(self: _BaseMobject) -> _base.Vec2:
+    return self.get_critical_point(_base.RIGHT)
+
+
+def _mobject_get_top(self: _BaseMobject) -> _base.Vec2:
+    return self.get_critical_point(_base.UP)
+
+
+def _mobject_get_bottom(self: _BaseMobject) -> _base.Vec2:
+    return self.get_critical_point(_base.DOWN)
+
+
+def _mobject_get_coord(
+    self: _BaseMobject, dim: int, direction: object = _base.ORIGIN
+) -> float:
+    if dim not in (0, 1):
+        raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
+    point = self.get_critical_point(direction)
+    return float(point[dim])
+
+
+def _mobject_get_x(self: _BaseMobject, direction: object = _base.ORIGIN) -> float:
+    return self.get_coord(0, direction)
+
+
+def _mobject_get_y(self: _BaseMobject, direction: object = _base.ORIGIN) -> float:
+    return self.get_coord(1, direction)
+
+
+def _mobject_set_coord(
+    self: _BaseMobject,
+    value: float,
+    dim: int,
+    direction: object = _base.ORIGIN,
+) -> _BaseMobject:
+    if dim not in (0, 1):
+        raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
+    delta = float(value) - self.get_coord(dim, direction)
+    return self.shift(_base.Vec2(delta, 0.0) if dim == 0 else _base.Vec2(0.0, delta))
+
+
+def _mobject_set_x(
+    self: _BaseMobject, x: float, direction: object = _base.ORIGIN
+) -> _BaseMobject:
+    return self.set_coord(x, 0, direction)
+
+
+def _mobject_set_y(
+    self: _BaseMobject, y: float, direction: object = _base.ORIGIN
+) -> _BaseMobject:
+    return self.set_coord(y, 1, direction)
+
+
+def _mobject_rescale_to_fit(
+    self: _BaseMobject,
+    length: float,
+    dim: int,
+    stretch: bool = False,
+    **kwargs: Any,
+) -> _BaseMobject:
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(
+            f"rescale_to_fit anchor option(s) are not yet supported: {unsupported}"
+        )
+    if dim not in (0, 1):
+        raise NotImplementedError("Noon currently exposes width/height fitting only")
+    old_length = self.width if dim == 0 else self.height
+    if old_length == 0.0:
+        return self
+    factor = float(length) / old_length
+    if stretch:
+        return self.scale((factor, 1.0) if dim == 0 else (1.0, factor))
+    return self.scale(factor)
+
+
+def _mobject_scale_to_fit_width(self: _BaseMobject, width: float, **kwargs: Any) -> _BaseMobject:
+    return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
+
+
+def _mobject_scale_to_fit_height(self: _BaseMobject, height: float, **kwargs: Any) -> _BaseMobject:
+    return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
+
+
+def _mobject_stretch_to_fit_width(self: _BaseMobject, width: float, **kwargs: Any) -> _BaseMobject:
+    return self.rescale_to_fit(width, 0, stretch=True, **kwargs)
+
+
+def _mobject_stretch_to_fit_height(self: _BaseMobject, height: float, **kwargs: Any) -> _BaseMobject:
+    return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
+
+
+def _mobject_match_dim_size(
+    self: _BaseMobject, mobject: _BaseMobject, dim: int, **kwargs: Any
+) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("dimension match target must be a Mobject")
+    if dim == 0:
+        length = mobject.width
+    elif dim == 1:
+        length = mobject.height
+    else:
+        raise NotImplementedError("Noon currently exposes width/height matching only")
+    return self.rescale_to_fit(length, dim, **kwargs)
+
+
+def _mobject_match_width(
+    self: _BaseMobject, mobject: _BaseMobject, **kwargs: Any
+) -> _BaseMobject:
+    return self.match_dim_size(mobject, 0, **kwargs)
+
+
+def _mobject_match_height(
+    self: _BaseMobject, mobject: _BaseMobject, **kwargs: Any
+) -> _BaseMobject:
+    return self.match_dim_size(mobject, 1, **kwargs)
+
+
+def _mobject_match_coord(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    dim: int,
+    direction: object = _base.ORIGIN,
+) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("coordinate match target must be a Mobject")
+    return self.set_coord(mobject.get_coord(dim, direction), dim, direction)
+
+
+def _mobject_match_x(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    direction: object = _base.ORIGIN,
+) -> _BaseMobject:
+    return self.match_coord(mobject, 0, direction)
+
+
+def _mobject_match_y(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    direction: object = _base.ORIGIN,
+) -> _BaseMobject:
+    return self.match_coord(mobject, 1, direction)
+
+
+def _mobject_rotate_about_origin(
+    self: _BaseMobject, angle: float, axis: object = None
+) -> _BaseMobject:
+    if axis is not None:
+        try:
+            if len(axis) != 3:  # type: ignore[arg-type]
+                raise TypeError
+            x = float(axis[0])  # type: ignore[index]
+            y = float(axis[1])  # type: ignore[index]
+            z = float(axis[2])  # type: ignore[index]
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("rotation axis must be a three-component vector") from error
+        if not math.isclose(x, 0.0, abs_tol=1e-12) or not math.isclose(
+            y, 0.0, abs_tol=1e-12
+        ) or not math.isclose(abs(z), 1.0, abs_tol=1e-12):
+            raise NotImplementedError("2D authoring supports rotation about the z axis only")
+        if z < 0.0:
+            angle = -float(angle)
+    angle = float(angle)
+    center = self.get_center()
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    target = _base.Vec2(
+        center.x * cosine - center.y * sine,
+        center.x * sine + center.y * cosine,
+    )
+    self.rotate(angle)
+    return self.move_to(target)
+
+
+def _set_width_property(self: _BaseMobject, width: float) -> None:
+    self.scale_to_fit_width(float(width))
+
+
+def _set_height_property(self: _BaseMobject, height: float) -> None:
+    self.scale_to_fit_height(float(height))
+
+
+def _state_target(self: _BaseMobject, mobject: _BaseMobject, *, match_height: bool, match_width: bool, match_depth: bool, match_center: bool, stretch: bool) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("state target must be a Mobject")
+    if match_depth:
+        raise NotImplementedError("depth matching requires the shared 2.5D family model")
+    if not (match_height or match_width or match_center or stretch):
+        return mobject
+    target = mobject.copy()
+    if stretch:
+        if target.width == 0.0 or target.height == 0.0:
+            raise ValueError("cannot stretch a zero-width or zero-height target")
+        target.scale((self.width / target.width, self.height / target.height))
+    else:
+        if match_height:
+            if target.height == 0.0:
+                raise ValueError("cannot match height from a zero-height target")
+            target.scale(self.height / target.height)
+        if match_width:
+            if target.width == 0.0:
+                raise ValueError("cannot match width from a zero-width target")
+            target.scale(self.width / target.width)
+    if match_center:
+        target.move_to(self.get_center())
+    return target
+
+
+def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> _BaseMobject:
+    # Noon's copy already performs a deep semantic clone. In the browser the payload
+    # remains in the Rust/WASM handle, so both Manim modes avoid Python snapshot ownership.
+    del use_deepcopy
+    self.target = None
+    self.target = self.copy()
+    return self.target
+
+
+def _mobject_save_state(self: _BaseMobject) -> _BaseMobject:
+    if hasattr(self, "saved_state"):
+        self.saved_state = None
+    self.saved_state = self.copy()
+    return self
+
+
+def _mobject_restore(self: _BaseMobject) -> _BaseMobject:
+    if not hasattr(self, "saved_state") or self.saved_state is None:
+        raise Exception("Trying to restore without having saved")
+    return self.become(self.saved_state)
+
+
+def _mobject_become(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    match_height: bool = False,
+    match_width: bool = False,
+    match_depth: bool = False,
+    match_center: bool = False,
+    stretch: bool = False,
+) -> _BaseMobject:
+    target = _state_target(
+        self,
+        mobject,
+        match_height=match_height,
+        match_width=match_width,
+        match_depth=match_depth,
+        match_center=match_center,
+        stretch=stretch,
+    )
+    return self._apply(_base._raw_mobject(target._current_raw()))
+
+
+def _mobject_replace(
+    self: _BaseMobject, mobject: _BaseMobject, dim_to_match: int = 0, stretch: bool = False
+) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("replacement target must be a Mobject")
+    if dim_to_match not in (0, 1):
+        raise NotImplementedError("replace currently supports width (0) or height (1)")
+    if stretch:
+        if self.width == 0.0 or self.height == 0.0:
+            raise ValueError("cannot stretch-replace an object with zero width or height")
+        self.scale((mobject.width / self.width, mobject.height / self.height))
+    else:
+        source_length = self.width if dim_to_match == 0 else self.height
+        target_length = mobject.width if dim_to_match == 0 else mobject.height
+        if source_length == 0.0:
+            raise ValueError("cannot replace along a zero-length dimension")
+        self.scale(target_length / source_length)
+    self.move_to(mobject.get_center())
+    return self
+
+
 def install() -> None:
     """Install the compatibility surface into the public ``noon`` module."""
 
@@ -707,6 +999,38 @@ def install() -> None:
     # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
     _base._as_vec2 = _as_vec2
     _BaseMobject.animate = property(lambda self: _CompatAnimationBuilder(self))
+    _BaseMobject.get_critical_point = _mobject_get_critical_point
+    _BaseMobject.get_edge_center = _mobject_get_edge_center
+    _BaseMobject.get_corner = _mobject_get_corner
+    _BaseMobject.get_left = _mobject_get_left
+    _BaseMobject.get_right = _mobject_get_right
+    _BaseMobject.get_top = _mobject_get_top
+    _BaseMobject.get_bottom = _mobject_get_bottom
+    _BaseMobject.get_coord = _mobject_get_coord
+    _BaseMobject.get_x = _mobject_get_x
+    _BaseMobject.get_y = _mobject_get_y
+    _BaseMobject.set_coord = _mobject_set_coord
+    _BaseMobject.set_x = _mobject_set_x
+    _BaseMobject.set_y = _mobject_set_y
+    _BaseMobject.rescale_to_fit = _mobject_rescale_to_fit
+    _BaseMobject.scale_to_fit_width = _mobject_scale_to_fit_width
+    _BaseMobject.scale_to_fit_height = _mobject_scale_to_fit_height
+    _BaseMobject.stretch_to_fit_width = _mobject_stretch_to_fit_width
+    _BaseMobject.stretch_to_fit_height = _mobject_stretch_to_fit_height
+    _BaseMobject.match_dim_size = _mobject_match_dim_size
+    _BaseMobject.match_width = _mobject_match_width
+    _BaseMobject.match_height = _mobject_match_height
+    _BaseMobject.match_coord = _mobject_match_coord
+    _BaseMobject.match_x = _mobject_match_x
+    _BaseMobject.match_y = _mobject_match_y
+    _BaseMobject.rotate_about_origin = _mobject_rotate_about_origin
+    _BaseMobject.width = property(_BaseMobject.width.fget, _set_width_property)
+    _BaseMobject.height = property(_BaseMobject.height.fget, _set_height_property)
+    _BaseMobject.generate_target = _mobject_generate_target
+    _BaseMobject.save_state = _mobject_save_state
+    _BaseMobject.restore = _mobject_restore
+    _BaseMobject.become = _mobject_become
+    _BaseMobject.replace = _mobject_replace
 
     public = {
         "VMobject": VMobject,

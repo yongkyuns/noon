@@ -123,3 +123,27 @@ try {
   await browser?.close();
   server.kill("SIGTERM");
 }
+
+// Keep a compact sustained timestamp-query regression in the existing WebGPU
+// browser gate. The canonical performance suite separately validates 300-frame
+// runs; 64 measured frames here rotate the four readback slots many times while
+// keeping normal PR CI bounded.
+const sustained = spawnSync(process.execPath, ["scripts/perf-profile.mjs"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    NOON_PERF_BACKEND: "webgpu",
+    NOON_PERF_COUNTS: "10000",
+    NOON_PERF_LAYOUTS: "fixed",
+    NOON_PERF_WARMUP: "8",
+    NOON_PERF_FRAMES: "64",
+    NOON_PERF_PORT: "4188",
+  },
+});
+if (sustained.status !== 0) {
+  throw new Error(
+    `Sustained WebGPU timestamp profiling failed:\n${sustained.stdout}\n${sustained.stderr}`,
+  );
+}
+console.log("Sustained WebGPU timestamp profiler regression passed (64 measured frames)");

@@ -1,19 +1,35 @@
 use noon_core::{
     semantic_path_bounds, Bounds2D64, Color, GeometryRef, ObjectSnapshot, SemanticPaint,
-    SemanticStyle, SemanticVec3, Style, Vec2,
+    SemanticStyle, SemanticTransform2_5D, SemanticVec3, Style, Vec2,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrontendMobjectHandle {
     snapshot: ObjectSnapshot,
+    semantic_transform: SemanticTransform2_5D,
     semantic_style: SemanticStyle,
 }
 
 impl FrontendMobjectHandle {
     pub fn from_snapshot(snapshot: ObjectSnapshot) -> Self {
+        let transform = snapshot.transform;
+        let semantic_transform = SemanticTransform2_5D {
+            translation: SemanticVec3::new(
+                f64::from(transform.translation.x),
+                f64::from(transform.translation.y),
+                0.0,
+            ),
+            scale: SemanticVec3::new(
+                f64::from(transform.scale.x),
+                f64::from(transform.scale.y),
+                1.0,
+            ),
+            rotation_z: f64::from(transform.rotation),
+        };
         let semantic_style = authoring_style_from_legacy(snapshot.style);
         Self {
             snapshot,
+            semantic_transform,
             semantic_style,
         }
     }
@@ -39,7 +55,7 @@ impl FrontendMobjectHandle {
     }
 
     pub fn layout_bounds(&self) -> Option<Bounds2D64> {
-        snapshot_layout_bounds(&self.snapshot)
+        snapshot_layout_bounds(&self.snapshot, self.semantic_transform)
     }
 
     pub fn center(&self) -> (f64, f64) {
@@ -51,8 +67,8 @@ impl FrontendMobjectHandle {
                 )
             })
             .unwrap_or_else(|| {
-                let translation = self.snapshot.transform.translation;
-                (translation.x as f64, translation.y as f64)
+                let translation = self.semantic_transform.translation;
+                (translation.x, translation.y)
             })
     }
 
@@ -88,9 +104,17 @@ impl FrontendMobjectHandle {
     }
 
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let offset = semantic_xy(x, y)?;
-        self.snapshot.transform.translation += offset;
-        Ok(())
+        let offset = semantic_xy_f64(x, y)?;
+        let translation = SemanticVec3::new(
+            self.semantic_transform.translation.x + offset.x,
+            self.semantic_transform.translation.y + offset.y,
+            self.semantic_transform.translation.z,
+        );
+        translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.semantic_transform.translation = translation;
+        self.sync_legacy_transform()
     }
 
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), String> {
@@ -100,25 +124,24 @@ impl FrontendMobjectHandle {
     }
 
     pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        let x = finite_f32("scale.x", x)?;
-        let y = finite_f32("scale.y", y)?;
-        self.snapshot.transform.scale =
-            self.snapshot.transform.scale.component_mul(Vec2::new(x, y));
-        if !self.snapshot.transform.scale.x.is_finite()
-            || !self.snapshot.transform.scale.y.is_finite()
-        {
-            return Err("scale result must be finite".to_owned());
-        }
-        Ok(())
+        let x = render_f64("scale.x", x)?;
+        let y = render_f64("scale.y", y)?;
+        let scale = SemanticVec3::new(
+            self.semantic_transform.scale.x * x,
+            self.semantic_transform.scale.y * y,
+            self.semantic_transform.scale.z,
+        );
+        scale.lower_xy_f32().map_err(|error| error.to_string())?;
+        self.semantic_transform.scale = scale;
+        self.sync_legacy_transform()
     }
 
     pub fn rotate(&mut self, angle: f64) -> Result<(), String> {
-        let angle = finite_f32("rotation", angle)?;
-        self.snapshot.transform.rotation += angle;
-        if !self.snapshot.transform.rotation.is_finite() {
-            return Err("rotation result must be finite".to_owned());
-        }
-        Ok(())
+        let angle = render_f64("rotation", angle)?;
+        let rotation = self.semantic_transform.rotation_z + angle;
+        finite_f32("rotation result", rotation)?;
+        self.semantic_transform.rotation_z = rotation;
+        self.sync_legacy_transform()
     }
 
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
@@ -248,6 +271,22 @@ impl FrontendMobjectHandle {
         Ok(())
     }
 
+    fn sync_legacy_transform(&mut self) -> Result<(), String> {
+        self.snapshot.transform.translation = self
+            .semantic_transform
+            .translation
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.snapshot.transform.scale = self
+            .semantic_transform
+            .scale
+            .lower_xy_f32()
+            .map_err(|error| error.to_string())?;
+        self.snapshot.transform.rotation =
+            finite_f32("rotation", self.semantic_transform.rotation_z)?;
+        Ok(())
+    }
+
     fn sync_legacy_style(&mut self) {
         self.snapshot.style.fill = legacy_solid_color(
             self.semantic_style.fill.as_ref(),
@@ -259,6 +298,50 @@ impl FrontendMobjectHandle {
         );
         self.snapshot.style.stroke_width = self.semantic_style.stroke_width as f32;
         self.snapshot.style.opacity = self.semantic_style.object_opacity as f32;
+    }
+
+    pub fn become_handle(&mut self, other: &Self) {
+        self.snapshot = other.snapshot.clone();
+        self.semantic_transform = other.semantic_transform;
+        self.semantic_style = other.semantic_style.clone();
+    }
+
+    pub fn replace_handle(
+        &mut self,
+        other: &Self,
+        dim_to_match: u32,
+        stretch: bool,
+    ) -> Result<(), String> {
+        if dim_to_match > 1 {
+            return Err(
+                "replace currently supports width (0) or height (1) in the 2D authoring model"
+                    .to_owned(),
+            );
+        }
+        let target_center = other.center();
+        let source_width = self.width();
+        let source_height = self.height();
+        let target_width = other.width();
+        let target_height = other.height();
+
+        if stretch {
+            if source_width == 0.0 || source_height == 0.0 {
+                return Err("cannot stretch-replace an object with zero width or height".to_owned());
+            }
+            self.scale(target_width / source_width, target_height / source_height)?;
+        } else {
+            let (source_length, target_length) = if dim_to_match == 0 {
+                (source_width, target_width)
+            } else {
+                (source_height, target_height)
+            };
+            if source_length == 0.0 {
+                return Err("cannot replace along a zero-length dimension".to_owned());
+            }
+            let factor = target_length / source_length;
+            self.scale(factor, factor)?;
+        }
+        self.move_to(target_center.0, target_center.1)
     }
 
     pub fn next_to_handle(
@@ -416,9 +499,15 @@ fn legacy_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Col
 }
 
 fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {
-    SemanticVec3::new(x, y, 0.0)
+    semantic_xy_f64(x, y)?
         .lower_xy_f32()
         .map_err(|error| error.to_string())
+}
+
+fn semantic_xy_f64(x: f64, y: f64) -> Result<SemanticVec3, String> {
+    let value = SemanticVec3::new(x, y, 0.0);
+    value.lower_xy_f32().map_err(|error| error.to_string())?;
+    Ok(value)
 }
 
 fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), String> {
@@ -432,7 +521,10 @@ fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), String> {
     Ok((x / length, y / length))
 }
 
-fn snapshot_layout_bounds(snapshot: &ObjectSnapshot) -> Option<Bounds2D64> {
+fn snapshot_layout_bounds(
+    snapshot: &ObjectSnapshot,
+    transform: SemanticTransform2_5D,
+) -> Option<Bounds2D64> {
     let local = match &snapshot.geometry {
         GeometryRef::Circle { radius } => Bounds2D64 {
             min_x: -f64::from(*radius),
@@ -456,13 +548,12 @@ fn snapshot_layout_bounds(snapshot: &ObjectSnapshot) -> Option<Bounds2D64> {
         GeometryRef::External(_) => return None,
     };
 
-    let transform = snapshot.transform;
-    let sine = f64::from(transform.rotation).sin();
-    let cosine = f64::from(transform.rotation).cos();
-    let scale_x = f64::from(transform.scale.x);
-    let scale_y = f64::from(transform.scale.y);
-    let translation_x = f64::from(transform.translation.x);
-    let translation_y = f64::from(transform.translation.y);
+    let sine = transform.rotation_z.sin();
+    let cosine = transform.rotation_z.cos();
+    let scale_x = transform.scale.x;
+    let scale_y = transform.scale.y;
+    let translation_x = transform.translation.x;
+    let translation_y = transform.translation.y;
     let corners = [
         (local.min_x, local.min_y),
         (local.min_x, local.max_y),
@@ -645,6 +736,23 @@ mod wasm {
             self.0.set_opacity(opacity).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = becomeHandle)]
+        pub fn become_handle(&mut self, other: &WasmAuthoringMobjectHandle) {
+            self.0.become_handle(&other.0);
+        }
+
+        #[wasm_bindgen(js_name = replaceHandle)]
+        pub fn replace_handle(
+            &mut self,
+            other: &WasmAuthoringMobjectHandle,
+            dim_to_match: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.0
+                .replace_handle(&other.0, dim_to_match, stretch)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = nextToHandle)]
         pub fn next_to_handle(
             &mut self,
@@ -743,6 +851,24 @@ mod tests {
     }
 
     #[test]
+    fn authoring_transform_keeps_f64_precision_until_render_lowering() {
+        let mut handle =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 1.0)));
+        handle.shift(0.7, 0.3).unwrap();
+        assert_eq!(handle.semantic_transform.translation.x, 0.7);
+        assert_eq!(handle.semantic_transform.translation.y, 0.3);
+        assert!((handle.critical_point(-1.0, 0.0).0 + 0.3).abs() < 1e-12);
+        assert!((handle.critical_point(0.0, 1.0).1 - 0.8).abs() < 1e-12);
+        assert_ne!(f64::from(handle.snapshot().transform.translation.x), 0.7);
+
+        handle.scale(1.1, 0.9).unwrap();
+        handle.rotate(0.2).unwrap();
+        assert_eq!(handle.semantic_transform.scale.x, 1.1);
+        assert_eq!(handle.semantic_transform.scale.y, 0.9);
+        assert_eq!(handle.semantic_transform.rotation_z, 0.2);
+    }
+
+    #[test]
     fn vector_path_layout_uses_extrema_not_control_hull() {
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
@@ -795,6 +921,32 @@ mod tests {
         assert_eq!(handle.stroke_opacity(), 0.2);
         handle.disable_fill();
         assert_eq!(handle.fill_opacity(), 0.0);
+    }
+
+    #[test]
+    fn become_and_replace_keep_state_inside_shared_handle() {
+        let mut source = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.5)));
+        source.shift(-2.0, 0.5).unwrap();
+        let mut target =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 1.0)));
+        target.shift(1.0, -0.25).unwrap();
+
+        source.become_handle(&target);
+        assert_eq!(source.snapshot(), target.snapshot());
+
+        let mut replacement =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        replacement.replace_handle(&target, 0, false).unwrap();
+        assert!((replacement.width() - 2.0).abs() < 1e-6);
+        assert!((replacement.height() - 2.0).abs() < 1e-6);
+        assert!((replacement.center().0 - 1.0).abs() < 1e-6);
+        assert!((replacement.center().1 + 0.25).abs() < 1e-6);
+
+        let mut stretched =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(0.25)));
+        stretched.replace_handle(&target, 0, true).unwrap();
+        assert!((stretched.width() - 2.0).abs() < 1e-6);
+        assert!((stretched.height() - 1.0).abs() < 1e-6);
     }
 
     #[test]

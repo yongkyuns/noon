@@ -25,6 +25,7 @@ const frames = positiveInteger(process.env.NOON_PERF_FRAMES ?? "300", "NOON_PERF
 const targetHz = positiveNumber(process.env.NOON_PERF_TARGET_HZ ?? "60", "NOON_PERF_TARGET_HZ");
 const width = positiveInteger(process.env.NOON_PERF_WIDTH ?? "960", "NOON_PERF_WIDTH");
 const height = positiveInteger(process.env.NOON_PERF_HEIGHT ?? "540", "NOON_PERF_HEIGHT");
+const dpr = positiveNumber(process.env.NOON_PERF_DPR ?? "1", "NOON_PERF_DPR");
 const artifactPath = path.resolve(
   repoRoot,
   process.env.NOON_PERF_ARTIFACT ?? `perf-artifacts/perf-profile-${backend}.json`,
@@ -61,7 +62,11 @@ try {
   const results = [];
   for (const layout of layouts) {
     for (const objects of counts) {
-      const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+      const context = await browser.newContext({
+        viewport: { width: 1200, height: 900 },
+        deviceScaleFactor: dpr,
+      });
+      const page = await context.newPage();
       const errors = [];
       page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
       page.on("console", (message) => {
@@ -94,6 +99,7 @@ try {
       const report = await page.evaluate(() => window.__NOON_PERF_REPORT__);
       assert.equal(report.workload.objects, objects);
       assert.equal(report.workload.layout, layout);
+      assert.equal(report.environment.devicePixelRatio, dpr);
       results.push(report);
       console.log(
         `${format(report.cadence.effective?.effectiveFps)} FPS, ` +
@@ -101,7 +107,7 @@ try {
           `CPU ${format(report.cpu.frameMs?.p95)} ms, ` +
           `GPU ${format(report.gpu.renderPassMs?.p95)} ms`,
       );
-      await page.close();
+      await context.close();
     }
   }
 
@@ -119,7 +125,7 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, counts, layouts, warmup, frames, targetHz, width, height },
+    configuration: { backend, counts, layouts, warmup, frames, targetHz, width, height, dpr },
     cases: results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
