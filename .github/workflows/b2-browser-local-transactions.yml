@@ -17,6 +17,8 @@ jobs:
         with:
           fetch-depth: 1
       - uses: dtolnay/rust-toolchain@stable
+      - name: Fix bootstrap anchor
+        run: python scripts/fix-b2-browser-local-bootstrap.py
       - name: Apply implementation
         run: python scripts/b2-browser-local-transactions.py
       - name: Format
@@ -28,6 +30,7 @@ jobs:
       - name: Commit validated implementation
         run: |
           rm scripts/b2-browser-local-transactions.py
+          rm scripts/fix-b2-browser-local-bootstrap.py
           rm .github/workflows/b2-browser-local-transactions.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
