@@ -1,0 +1,38 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "renderer": "cairo",
+    "pixel_width": 960,
+    "pixel_height": 540,
+    "frame_rate": 30,
+    "source": "parity/manim-v0.21/quickstart.py"
+  },
+  "fixtures": [
+    {
+      "id": "create-circle",
+      "scene": "CreateCircle",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "square-to-circle",
+      "scene": "SquareToCircle",
+      "expected_duration": 3.0
+    },
+    {
+      "id": "square-and-circle",
+      "scene": "SquareAndCircle",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "animated-square-to-circle",
+      "scene": "AnimatedSquareToCircle",
+      "expected_duration": 4.0
+    }
+  ],
+  "sample_fractions": [0.0, 0.25, 0.5, 0.75, 1.0],
+  "policy": {
+    "source_adaptation": "replace only `from manim import *` with `from noon import *`, then append a scene-selection wrapper for the browser authoring worker",
+    "blocking": "oracle/tooling failures are blocking; visual/timing mismatches are reported until the parity ratchet is enabled"
+  }
+}

@@ -1,0 +1,81 @@
+name: Manim raster differential
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manim-raster-differential-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  raster:
+    name: ManimCE 0.21.0 raster oracle
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Manim system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libcairo2-dev \
+            libpango1.0-dev \
+            pkg-config
+
+      - name: Install pinned ManimCE reference
+        run: python -m pip install --disable-pip-version-check "manim==0.21.0"
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install raster harness dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Render and compare canonical Manim scenes
+        env:
+          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+        run: node scripts/manim-raster-differential.mjs
+
+      - name: Upload Manim/Noon/diff artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manim-raster-differential
+          path: manim-raster-artifacts
+          if-no-files-found: error
+          retention-days: 14

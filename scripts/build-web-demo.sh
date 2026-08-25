@@ -26,6 +26,7 @@ node --check web/scene-perf.js
 node --check web/host-callback-perf.js
 node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
+node --check scripts/manim-raster-differential.mjs
 node --check scripts/perf-profile.mjs
 node --check scripts/authoring-perf.mjs
 node --check scripts/perf-device-run.mjs
