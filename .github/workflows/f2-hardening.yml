@@ -22,6 +22,16 @@ jobs:
           rustup default stable
           rustup target add wasm32-unknown-unknown
 
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-f2-cargo-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-f2-cargo-
+
       - name: Apply runtime slot and surface retry refactor
         run: |
           python3 - <<'PY'
@@ -100,16 +110,25 @@ jobs:
           PY
           cargo fmt --all
 
-      - name: Validate native transport
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test Rust execution transport
+        timeout-minutes: 10
+        run: cargo test -p noon-web execution_transport
+
+      - name: Test JavaScript execution transport
+        timeout-minutes: 2
+        run: node --test web/execution-transport.test.mjs
+
+      - name: Check worker JavaScript syntax
         run: |
-          cargo fmt --all -- --check
-          cargo test -p noon-web execution_transport
-          node --test web/execution-transport.test.mjs
           node --check web/execution-engine-worker.js
           node --check web/execution-render-worker.js
           node --check web/execution-worker-client.js
 
       - name: Validate WASM transport
+        timeout-minutes: 10
         run: cargo check -p noon-web --target wasm32-unknown-unknown
 
       - name: Remove one-shot workflow and commit
