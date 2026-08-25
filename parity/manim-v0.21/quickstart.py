@@ -107,3 +107,38 @@ class SetColorIndependentOpacity(Scene):
         # Keep a real one-second animation interval so the raster oracle samples
         # normal Manim frames instead of save-last-frame collapsing a static wait.
         self.play(square.animate.shift(ORIGIN))
+
+
+class PaletteSwatches(Scene):
+    def construct(self):
+        colors = [RED, GREEN, BLUE, YELLOW, PURPLE]
+        swatches = []
+        for index, color in enumerate(colors):
+            swatch = Square(
+                side_length=0.9,
+                fill_color=color,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            )
+            swatch.move_to((index - 2) * 1.2 * RIGHT)
+            swatches.append(swatch)
+        self.add(*swatches)
+        self.play(swatches[-1].animate.shift(ORIGIN))
+
+
+class TranslucentPainterOrder(Scene):
+    def construct(self):
+        back = Square(
+            side_length=2.4,
+            fill_color=RED,
+            fill_opacity=0.5,
+            stroke_opacity=0.0,
+        ).shift(0.4 * LEFT)
+        front = Square(
+            side_length=2.4,
+            fill_color=BLUE,
+            fill_opacity=0.5,
+            stroke_opacity=0.0,
+        ).shift(0.4 * RIGHT)
+        self.add(back, front)
+        self.play(front.animate.shift(ORIGIN))
