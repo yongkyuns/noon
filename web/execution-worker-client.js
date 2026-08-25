@@ -164,6 +164,15 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async setLoopDurationSeconds(loopDurationSeconds) {
+    const duration = validateLoopDurationSeconds(loopDurationSeconds);
+    const result = await this.#requestEngine("set_loop_duration", {
+      loopDurationSeconds: duration,
+    });
+    this.#loopDurationSeconds = duration;
+    return result;
+  }
+
   async applyPatchBatch(patchBatchJson) {
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");
