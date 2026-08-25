@@ -32,6 +32,16 @@
       "expected_duration": 4.0
     },
     {
+      "id": "create-line",
+      "scene": "CreateLine",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "uncreate-line",
+      "scene": "UncreateLine",
+      "expected_duration": 1.0
+    },
+    {
       "id": "uncreate-square",
       "scene": "UncreateSquare",
       "expected_duration": 1.0
