@@ -1,0 +1,170 @@
+name: Apply Manim color alpha parity
+
+on:
+  push:
+    branches:
+      - parity/manim-style-color-alpha
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply style semantics slice
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          phase = Path('web/python/_manim_phase_b.py')
+          text = phase.read_text()
+          marker = 'def _vmobject_set_fill(\n'
+          if '_vmobject_set_color' not in text:
+              function = '''def _vmobject_set_color(\n    self: _compat.VMobject,\n    color: object,\n    family: bool = True,\n) -> _compat.VMobject:\n    del family\n    parsed = _as_color("color", color)\n    raw = _base._raw_mobject(self._current_raw())\n    for channel in ("fill", "stroke"):\n        current = raw.style[channel]\n        if current is None:\n            # Preserve Noon's explicit disabled-layer extension. Ordinary Manim\n            # VMobjects retain both paint layers, including zero-alpha fill.\n            continue\n        alpha = float(current["alpha"])\n        raw.style[channel] = parsed.to_ir()\n        raw.style[channel]["alpha"] = alpha\n    return self._apply(raw)\n\n\n'''
+              if marker not in text:
+                  raise SystemExit('set_fill insertion point not found')
+              text = text.replace(marker, function + marker, 1)
+
+          assignment = '_compat.VMobject.set_fill = _vmobject_set_fill\n'
+          if '_compat.VMobject.set_color = _vmobject_set_color' not in text:
+              if assignment not in text:
+                  raise SystemExit('style assignment insertion point not found')
+              text = text.replace(
+                  assignment,
+                  '_compat.VMobject.set_color = _vmobject_set_color\n' + assignment,
+                  1,
+              )
+          phase.write_text(text)
+
+          docs = Path('docs/manim-style-semantics.md')
+          text = docs.read_text()
+          anchor = 'The public compatibility layer accepts constructor keywords `fill_color`, `fill_opacity`, `stroke_color`, and `stroke_opacity`. `set_fill(..., opacity=...)` changes only fill alpha; `set_stroke(..., opacity=...)` changes only stroke alpha; Manim-style `VMobject.set_opacity(...)` updates both layer alphas.\n'
+          addition = anchor + '\n`VMobject.set_color(...)` changes the RGB of both active paint layers while preserving each layer\'s existing alpha. This is important for default VMobjects: recoloring a shape must not turn the normally transparent fill opaque.\n'
+          if 'recoloring a shape must not turn the normally transparent fill opaque' not in text:
+              if anchor not in text:
+                  raise SystemExit('style docs insertion point not found')
+              docs.write_text(text.replace(anchor, addition, 1))
+
+          quickstart = Path('parity/manim-v0.21/quickstart.py')
+          text = quickstart.read_text()
+          if 'class SetColorIndependentOpacity' not in text:
+              text += '''\n\nclass SetColorIndependentOpacity(Scene):\n    def construct(self):\n        square = Square(\n            fill_color=PINK,\n            fill_opacity=0.35,\n            stroke_color=BLUE,\n            stroke_opacity=0.65,\n            stroke_width=8,\n        )\n        square.set_color(GREEN)\n        self.add(square)\n        self.wait(1)\n'''
+              quickstart.write_text(text)
+
+          manifest = Path('parity/manim-v0.21/manifest.json')
+          data = json.loads(manifest.read_text())
+          if not any(fixture['id'] == 'set-color-independent-opacity' for fixture in data['fixtures']):
+              data['fixtures'].append({
+                  'id': 'set-color-independent-opacity',
+                  'scene': 'SetColorIndependentOpacity',
+                  'expected_duration': 1.0,
+              })
+              manifest.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          cat > web/python/test_manim_style_color.py <<'PY'
+          import os
+          import subprocess
+          import sys
+          import textwrap
+          import unittest
+          from pathlib import Path
+
+
+          class ManimStyleColorTests(unittest.TestCase):
+              def test_set_color_preserves_independent_fill_and_stroke_alpha(self) -> None:
+                  python_dir = Path(__file__).resolve().parent
+                  env = os.environ.copy()
+                  existing_pythonpath = env.get("PYTHONPATH")
+                  env["PYTHONPATH"] = (
+                      str(python_dir)
+                      if not existing_pythonpath
+                      else os.pathsep.join((str(python_dir), existing_pythonpath))
+                  )
+                  source = textwrap.dedent(
+                      """
+                      import _manim_compat
+
+                      _manim_compat.install()
+                      import _manim_phase_b  # noqa: F401
+                      from noon import BLUE, GREEN, PINK, YELLOW, Circle, Square
+
+                      def assert_rgb(actual, expected):
+                          assert abs(actual["red"] - expected.red) < 1e-12
+                          assert abs(actual["green"] - expected.green) < 1e-12
+                          assert abs(actual["blue"] - expected.blue) < 1e-12
+
+                      # Constructor color is implemented through VMobject.set_color in
+                      # Manim and must not make the default zero-alpha fill visible.
+                      circle = Circle(color=BLUE)
+                      assert_rgb(circle.style["fill"], BLUE)
+                      assert_rgb(circle.style["stroke"], BLUE)
+                      assert abs(circle.style["fill"]["alpha"] - 0.0) < 1e-12
+                      assert abs(circle.style["stroke"]["alpha"] - 1.0) < 1e-12
+
+                      square = Square(
+                          fill_color=PINK,
+                          fill_opacity=0.35,
+                          stroke_color=BLUE,
+                          stroke_opacity=0.65,
+                          stroke_width=8,
+                      )
+                      square.set_color(GREEN)
+                      assert_rgb(square.style["fill"], GREEN)
+                      assert_rgb(square.style["stroke"], GREEN)
+                      assert abs(square.style["fill"]["alpha"] - 0.35) < 1e-12
+                      assert abs(square.style["stroke"]["alpha"] - 0.65) < 1e-12
+
+                      # Keep the existing Noon compatibility escape hatch: an explicitly
+                      # disabled layer stays disabled when the remaining style is recolored.
+                      square.set_fill()
+                      square.set_color(YELLOW)
+                      assert square.style["fill"] is None
+                      assert_rgb(square.style["stroke"], YELLOW)
+                      assert abs(square.style["stroke"]["alpha"] - 0.65) < 1e-12
+                      """
+                  )
+                  completed = subprocess.run(
+                      [sys.executable, "-c", source],
+                      check=False,
+                      cwd=python_dir,
+                      env=env,
+                      capture_output=True,
+                      text=True,
+                  )
+                  self.assertEqual(
+                      completed.returncode,
+                      0,
+                      f"compatibility subprocess failed:\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+                  )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+      - name: Validate focused compatibility suite
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest web.python.test_manim_style_color
+          python3 -m unittest discover -s web/python -p 'test_*.py'
+          python3 -m json.tool parity/manim-v0.21/manifest.json >/dev/null
+          git diff --check
+
+      - name: Commit validated source
+        shell: bash
+        run: |
+          rm .github/workflows/agent-style-color-alpha.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Preserve Manim fill and stroke alpha when recoloring'
+          git push
