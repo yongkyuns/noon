@@ -201,7 +201,7 @@ impl SceneInstance {
                 target.property,
                 &change.value,
             ) {
-                self.changes.insert(target.object_index);
+                self.mark_changed(target.object_index);
                 changed_targets += 1;
             }
         }

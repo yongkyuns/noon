@@ -4,9 +4,11 @@
 
 mod execution_slots;
 mod reactive;
+mod spatial_index;
 
 pub use execution_slots::*;
 pub use reactive::*;
+pub use spatial_index::*;
 
 use std::collections::BTreeMap;
 
@@ -237,6 +239,7 @@ pub struct SceneInstance {
     last_stats: EvaluationStats,
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
+    spatial_changes: FrameChanges,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
 }
@@ -254,6 +257,7 @@ impl SceneInstance {
             last_stats: EvaluationStats::default(),
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
+            spatial_changes: FrameChanges::all(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
         };
@@ -275,6 +279,30 @@ impl SceneInstance {
 
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.changes)
+    }
+
+    pub(crate) fn take_spatial_changes(&mut self) -> FrameChanges {
+        std::mem::take(&mut self.spatial_changes)
+    }
+
+    pub(crate) fn mark_changed(&mut self, object_index: usize) {
+        self.changes.insert(object_index);
+        self.spatial_changes.insert(object_index);
+    }
+
+    pub(crate) fn mark_added(&mut self, object_index: usize) {
+        self.changes.insert_added(object_index);
+        self.spatial_changes.insert_added(object_index);
+    }
+
+    pub(crate) fn mark_removed(&mut self, object_index: usize) {
+        self.changes.insert_removed(object_index);
+        self.spatial_changes.insert_removed(object_index);
+    }
+
+    pub(crate) fn mark_all_changed(&mut self) {
+        self.changes.invalidate_all();
+        self.spatial_changes.invalidate_all();
     }
 
     pub fn contains_object(&self, id: ObjectId) -> bool {
@@ -380,7 +408,7 @@ impl SceneInstance {
                 append_object_frame(&self.compiled, &mut self.frame, object_index);
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
-                self.changes.insert_added(object_index);
+                self.mark_added(object_index);
             }
             ScenePatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -394,7 +422,7 @@ impl SceneInstance {
                 let object_index = object_index as usize;
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
-                self.changes.insert_removed(object_index);
+                self.mark_removed(object_index);
             }
             _ => unreachable!("structural patch helper accepts only create/remove"),
         }
@@ -458,7 +486,7 @@ impl SceneInstance {
         for object_index in affected_objects.into_iter().flatten() {
             self.relower_object(object_index, self.frame.time, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
-            self.changes.insert(object_index);
+            self.mark_changed(object_index);
             patch_stats.objects_recomputed += 1;
         }
         patch_stats.groups_evaluated = evaluation.groups_evaluated;
@@ -497,7 +525,7 @@ impl SceneInstance {
         }
         self.reapply_reactive_for_object(index);
         if self.frame.objects[index] != before {
-            self.changes.insert(index);
+            self.mark_changed(index);
         }
         Ok(())
     }
@@ -534,7 +562,7 @@ impl SceneInstance {
 
     fn seek_unchecked(&mut self, time: f64) {
         self.frame = base_frame(&self.compiled, time);
-        self.changes.invalidate_all();
+        self.mark_all_changed();
         let mut stats = EvaluationStats::default();
 
         for group in self.groups.values_mut() {
@@ -565,7 +593,7 @@ impl SceneInstance {
                 stats.tracks_advanced += 1;
             }
             if apply_group(&mut self.frame, tracks, group, time) {
-                self.changes.insert(channel.object_index as usize);
+                self.mark_changed(channel.object_index as usize);
             }
             stats.groups_evaluated += 1;
         }
