@@ -1,0 +1,471 @@
+name: D2 bootstrap mega mesh
+on:
+  push:
+    branches:
+      - arch/d2-packed-mega-mesh
+permissions:
+  contents: write
+jobs:
+  bootstrap:
+    if: github.event.head_commit.message == 'Bootstrap D2 packed mega-mesh implementation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/d2-packed-mega-mesh
+      - name: Apply packed mega-mesh implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f"missing anchor: {label}")
+              return text.replace(old, new, 1)
+
+          lib_path = Path('crates/noon-render-wgpu/src/lib.rs')
+          lib = lib_path.read_text()
+          lib = replace_once(lib,
+              'mod gpu;\nmod render_order;\nmod reveal;\n',
+              'mod gpu;\nmod mega_mesh;\nmod render_order;\nmod reveal;\n',
+              'module list')
+          lib = replace_once(lib,
+              '''#[derive(Clone, Debug, PartialEq, Eq)]\npub struct PathBatch {\n    pub index_range: Range<u32>,\n    pub instance_range: Range<u32>,\n}\n''',
+              '''#[derive(Clone, Debug, PartialEq, Eq)]\npub struct PathBatch {\n    pub index_range: Range<u32>,\n    pub instance_range: Range<u32>,\n}\n\n/// One ordered draw slice in the packed unique-path index stream.\n#[derive(Clone, Debug, PartialEq, Eq)]\npub struct MegaPathBatch {\n    pub index_range: Range<u32>,\n    pub path_count: usize,\n}\n''',
+              'mega batch type')
+          lib = replace_once(lib,
+              '''    pub path_vertices_repacked: usize,\n    pub path_indices_repacked: usize,\n}\n''',
+              '''    pub path_vertices_repacked: usize,\n    pub path_indices_repacked: usize,\n    /// Unique vector paths submitted through the packed mega-mesh path.\n    pub mega_path_count: usize,\n    /// Ordered packed draws after painter-order coalescing.\n    pub mega_path_batch_count: usize,\n    /// Index entries in the packed painter-order stream.\n    pub mega_path_index_count: usize,\n    /// Per-vertex instance records rewritten for dirty unique paths.\n    pub mega_path_instance_vertices_repacked: usize,\n}\n''',
+              'render stats')
+          lib = replace_once(lib,
+              '''    pub path_indices: &'a [u32],\n    pub path_batches: &'a [PathBatch],\n    pub render_batches: &'a [OrderedRenderBatch],\n''',
+              '''    pub path_indices: &'a [u32],\n    pub path_batches: &'a [PathBatch],\n    /// Painter-ordered index stream for mostly-unique path geometry.\n    pub mega_path_indices: &'a [u32],\n    /// Path instance attributes repeated per geometry vertex so the packed path\n    /// pipeline works on both WebGPU and the WebGL2 fallback without SSBOs.\n    pub mega_path_vertex_instances: &'a [PathInstance],\n    pub mega_path_batches: &'a [MegaPathBatch],\n    pub render_batches: &'a [OrderedRenderBatch],\n''',
+              'prepared frame mega fields')
+          lib = replace_once(lib,
+              '''    pub path_dirty_ranges: &'a [Range<usize>],\n    pub path_geometry_dirty: bool,\n    pub stats: RenderStats,\n''',
+              '''    pub path_dirty_ranges: &'a [Range<usize>],\n    pub mega_path_instance_dirty_ranges: &'a [Range<usize>],\n    pub mega_path_index_dirty: bool,\n    pub path_geometry_dirty: bool,\n    pub stats: RenderStats,\n''',
+              'prepared dirty fields')
+          lib = replace_once(lib,
+              '''    path_indices: Vec<u32>,\n    path_batches: Vec<PathBatch>,\n    render_batches: Vec<OrderedRenderBatch>,\n''',
+              '''    path_indices: Vec<u32>,\n    path_batches: Vec<PathBatch>,\n    path_batch_vertex_ranges: Vec<Range<u32>>,\n    mega_path_indices: Vec<u32>,\n    mega_path_vertex_instances: Vec<PathInstance>,\n    mega_path_batches: Vec<MegaPathBatch>,\n    render_batches: Vec<OrderedRenderBatch>,\n''',
+              'preparer mega fields')
+          lib = replace_once(lib,
+              '''    path_dirty_ranges: Vec<Range<usize>>,\n    path_geometry_dirty: bool,\n    initialized: bool,\n''',
+              '''    path_dirty_ranges: Vec<Range<usize>>,\n    mega_path_instance_dirty_ranges: Vec<Range<usize>>,\n    mega_path_index_dirty: bool,\n    path_geometry_dirty: bool,\n    initialized: bool,\n''',
+              'preparer dirty mega fields')
+          lib = replace_once(lib,
+              '''                    if self.paths[index] != packed {\n                        self.paths[index] = packed;\n                        push_dirty_range(&mut self.path_dirty_ranges, index);\n                    }\n''',
+              '''                    if self.paths[index] != packed {\n                        self.paths[index] = packed;\n                        push_dirty_range(&mut self.path_dirty_ranges, index);\n                        self.update_mega_path_instance(batch, packed);\n                    }\n''',
+              'incremental mega instance update')
+          lib = replace_once(lib,
+              '''        self.path_batches.clear();\n        self.render_batches.clear();\n''',
+              '''        self.path_batches.clear();\n        self.path_batch_vertex_ranges.clear();\n        self.render_batches.clear();\n''',
+              'clear path vertex ranges')
+          lib = replace_once(lib,
+              '''            vertex_count += mesh.vertices.len();\n            index_count += mesh.indices.len();\n            let index_end =\n                u32::try_from(index_count).expect("path index count exceeds renderer limits");\n''',
+              '''            vertex_count += mesh.vertices.len();\n            index_count += mesh.indices.len();\n            let vertex_end =\n                u32::try_from(vertex_count).expect("path vertex count exceeds renderer limits");\n            let index_end =\n                u32::try_from(index_count).expect("path index count exceeds renderer limits");\n            self.path_batch_vertex_ranges.push(vertex_start..vertex_end);\n''',
+              'path vertex range tracking')
+          lib = replace_once(lib,
+              '''        self.rebuild_ordered_render_batches();\n        let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {\n''',
+              '''        self.rebuild_ordered_render_batches();\n        self.rebuild_mega_path_draws();\n        let (path_vertices_repacked, path_indices_repacked) = if reuse_packed_path_geometry {\n''',
+              'rebuild mega draws')
+          lib = replace_once(lib,
+              '''            path_indices: &self.path_indices,\n            path_batches: &self.path_batches,\n            render_batches: &self.render_batches,\n''',
+              '''            path_indices: &self.path_indices,\n            path_batches: &self.path_batches,\n            mega_path_indices: &self.mega_path_indices,\n            mega_path_vertex_instances: &self.mega_path_vertex_instances,\n            mega_path_batches: &self.mega_path_batches,\n            render_batches: &self.render_batches,\n''',
+              'prepared mega slices')
+          lib = replace_once(lib,
+              '''            path_dirty_ranges: &self.path_dirty_ranges,\n            path_geometry_dirty: self.path_geometry_dirty,\n            stats: RenderStats {\n''',
+              '''            path_dirty_ranges: &self.path_dirty_ranges,\n            mega_path_instance_dirty_ranges: &self.mega_path_instance_dirty_ranges,\n            mega_path_index_dirty: self.mega_path_index_dirty,\n            path_geometry_dirty: self.path_geometry_dirty,\n            stats: RenderStats {\n''',
+              'prepared mega dirty')
+          lib = replace_once(lib,
+              '''                path_vertices_repacked,\n                path_indices_repacked,\n            },\n''',
+              '''                path_vertices_repacked,\n                path_indices_repacked,\n                mega_path_count: self\n                    .mega_path_batches\n                    .iter()\n                    .map(|batch| batch.path_count)\n                    .sum(),\n                mega_path_batch_count: self.mega_path_batches.len(),\n                mega_path_index_count: self.mega_path_indices.len(),\n                mega_path_instance_vertices_repacked: dirty_len(\n                    &self.mega_path_instance_dirty_ranges,\n                ),\n            },\n''',
+              'mega stats values')
+          lib = replace_once(lib,
+              '''        self.path_dirty_ranges.clear();\n        self.path_geometry_dirty = false;\n''',
+              '''        self.path_dirty_ranges.clear();\n        self.mega_path_instance_dirty_ranges.clear();\n        self.mega_path_index_dirty = false;\n        self.path_geometry_dirty = false;\n''',
+              'clear mega dirty')
+          lib = replace_once(lib,
+              '''    fn capacities(&self) -> [usize; 20] {\n''',
+              '''    fn capacities(&self) -> [usize; 25] {\n''',
+              'capacity width')
+          lib = replace_once(lib,
+              '''            self.path_batches.capacity(),\n            self.path_batch_cache_indices.capacity(),\n''',
+              '''            self.path_batches.capacity(),\n            self.path_batch_vertex_ranges.capacity(),\n            self.mega_path_indices.capacity(),\n            self.mega_path_vertex_instances.capacity(),\n            self.mega_path_batches.capacity(),\n            self.mega_path_instance_dirty_ranges.capacity(),\n            self.path_batch_cache_indices.capacity(),\n''',
+              'mega capacities')
+
+          test_code = r'''
+
+    #[test]
+    fn ten_thousand_unique_paths_collapse_into_one_mega_draw_batch() {
+        const OBJECT_COUNT: usize = 10_000;
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let y = index as f32 * 0.0001;
+                let geometry = GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                );
+                let mut state = object(index as u64, geometry);
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.path_batches.len(), OBJECT_COUNT);
+        assert_eq!(prepared.mega_path_batches.len(), 1);
+        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT);
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert_eq!(prepared.render_batches.len(), 1);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+    }
+
+    #[test]
+    fn repeated_paths_keep_true_instancing_instead_of_entering_mega_mesh() {
+        const OBJECT_COUNT: usize = 2_000;
+        let geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.0))
+                .line_to(Vec2::new(0.5, 0.0)),
+        );
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let mut state = object(index as u64, geometry.clone());
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.path_batches.len(), 1);
+        assert!(prepared.mega_path_batches.is_empty());
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::Path { batch: 0 }
+        ));
+    }
+
+    #[test]
+    fn unique_path_transform_update_rewrites_attributes_not_geometry() {
+        let make_path = |id: u64, y: f32| {
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.01;
+            state
+        };
+        let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.2)]);
+        let mut preparer = FramePreparer::new();
+        let total_vertex_instances = preparer.prepare(&frame).mega_path_vertex_instances.len();
+
+        frame.objects[0].transform.translation = Vec2::new(1.25, -0.75);
+        frame.objects[0].style.stroke = Some(Color::rgb(0.2, 0.8, 0.4));
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.path_vertices_repacked, 0);
+        assert_eq!(prepared.stats.path_indices_repacked, 0);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.mega_path_instance_dirty_ranges.len(), 1);
+        let dirty = &prepared.mega_path_instance_dirty_ranges[0];
+        assert!(dirty.len() > 0);
+        assert!(dirty.len() < total_vertex_instances);
+    }
+
+    #[test]
+    fn mega_paths_never_coalesce_across_an_analytic_painter_boundary() {
+        let mut first = object(
+            1,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, 0.0))
+                    .line_to(Vec2::new(-0.25, 0.0)),
+            ),
+        );
+        first.style.fill = None;
+        first.style.stroke = Some(Color::WHITE);
+        first.style.stroke_width = 0.02;
+        let middle = object(2, GeometryRef::circle(0.5));
+        let mut last = object(
+            3,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(0.25, 0.0))
+                    .line_to(Vec2::new(1.0, 0.0)),
+            ),
+        );
+        last.style.fill = None;
+        last.style.stroke = Some(Color::WHITE);
+        last.style.stroke_width = 0.02;
+        let frame = frame(vec![first, middle, last]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.render_batches.len(), 3);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+        assert_eq!(prepared.render_batches[1].primitive, RenderPrimitive::Circle);
+        assert!(matches!(
+            prepared.render_batches[2].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+    }
+'''
+          insert_at = lib.rfind('\n}')
+          if insert_at < 0:
+              raise SystemExit('missing final tests module brace')
+          lib = lib[:insert_at] + test_code + lib[insert_at:]
+          lib_path.write_text(lib)
+
+          mega = r'''use std::ops::Range;
+
+use bytemuck::Zeroable;
+
+use crate::{FramePreparer, MegaPathBatch, OrderedRenderBatch, PathInstance, RenderPrimitive};
+
+impl FramePreparer {
+    /// Rewrites only the draw stream for unique vector paths. Geometry remains in
+    /// the shared tessellation/cache buffer; a parallel vertex-stepped PathInstance
+    /// buffer supplies transform/style attributes without requiring storage buffers.
+    pub(crate) fn rebuild_mega_path_draws(&mut self) {
+        self.mega_path_indices.clear();
+        self.mega_path_vertex_instances.clear();
+        self.mega_path_batches.clear();
+        self.mega_path_instance_dirty_ranges.clear();
+        self.mega_path_index_dirty = false;
+
+        let eligible = self
+            .path_batches
+            .iter()
+            .map(|batch| {
+                batch.instance_range.end == batch.instance_range.start + 1
+                    && !batch.index_range.is_empty()
+            })
+            .collect::<Vec<_>>();
+        if !eligible.iter().any(|&eligible| eligible) {
+            return;
+        }
+
+        self.mega_path_vertex_instances
+            .resize(self.path_vertices.len(), PathInstance::zeroed());
+        for (batch_index, &eligible) in eligible.iter().enumerate() {
+            if !eligible {
+                continue;
+            }
+            let batch = &self.path_batches[batch_index];
+            let instance = self.paths[batch.instance_range.start as usize];
+            let vertex_range = range_usize(&self.path_batch_vertex_ranges[batch_index]);
+            self.mega_path_vertex_instances[vertex_range].fill(instance);
+        }
+
+        let ordered = std::mem::take(&mut self.render_batches);
+        let mut active_mega = None::<usize>;
+        for ordered_batch in ordered {
+            let RenderPrimitive::Path { batch: path_batch_index } = ordered_batch.primitive else {
+                active_mega = None;
+                self.render_batches.push(ordered_batch);
+                continue;
+            };
+            if !eligible[path_batch_index] {
+                active_mega = None;
+                self.render_batches.push(ordered_batch);
+                continue;
+            }
+
+            let path_batch = &self.path_batches[path_batch_index];
+            let index_range = range_usize(&path_batch.index_range);
+            let packed_start = u32::try_from(self.mega_path_indices.len())
+                .expect("mega path index count exceeds renderer limits");
+            self.mega_path_indices
+                .extend_from_slice(&self.path_indices[index_range]);
+            let packed_end = u32::try_from(self.mega_path_indices.len())
+                .expect("mega path index count exceeds renderer limits");
+
+            if let Some(mega_index) = active_mega {
+                let mega = &mut self.mega_path_batches[mega_index];
+                mega.index_range.end = packed_end;
+                mega.path_count += 1;
+                let ordered = self
+                    .render_batches
+                    .last_mut()
+                    .expect("active mega batch must have an ordered batch");
+                ordered.instance_range.end += 1;
+                continue;
+            }
+
+            let mega_index = self.mega_path_batches.len();
+            self.mega_path_batches.push(MegaPathBatch {
+                index_range: packed_start..packed_end,
+                path_count: 1,
+            });
+            self.render_batches.push(OrderedRenderBatch {
+                primitive: RenderPrimitive::MegaPath { batch: mega_index },
+                instance_range: 0..1,
+            });
+            active_mega = Some(mega_index);
+        }
+
+        if !self.mega_path_indices.is_empty() {
+            self.mega_path_index_dirty = true;
+        }
+        if !self.mega_path_vertex_instances.is_empty() {
+            self.mega_path_instance_dirty_ranges
+                .push(0..self.mega_path_vertex_instances.len());
+        }
+    }
+
+    pub(crate) fn update_mega_path_instance(&mut self, path_batch_index: usize, packed: PathInstance) {
+        if self.mega_path_indices.is_empty()
+            || self
+                .path_batches
+                .get(path_batch_index)
+                .is_none_or(|batch| batch.instance_range.end != batch.instance_range.start + 1)
+        {
+            return;
+        }
+        let Some(vertex_range) = self.path_batch_vertex_ranges.get(path_batch_index) else {
+            return;
+        };
+        let range = range_usize(vertex_range);
+        if self.mega_path_vertex_instances[range.clone()]
+            .iter()
+            .all(|instance| *instance == packed)
+        {
+            return;
+        }
+        self.mega_path_vertex_instances[range.clone()].fill(packed);
+        push_dirty_range(&mut self.mega_path_instance_dirty_ranges, range);
+    }
+}
+
+fn range_usize(range: &Range<u32>) -> Range<usize> {
+    range.start as usize..range.end as usize
+}
+
+fn push_dirty_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
+    if range.is_empty() {
+        return;
+    }
+    if let Some(last) = ranges.last_mut() {
+        if last.end >= range.start {
+            last.end = last.end.max(range.end);
+            return;
+        }
+    }
+    ranges.push(range);
+}
+'''
+          Path('crates/noon-render-wgpu/src/mega_mesh.rs').write_text(mega)
+
+          order_path = Path('crates/noon-render-wgpu/src/render_order.rs')
+          order = order_path.read_text()
+          order = replace_once(order,
+              '''    Path {\n        batch: usize,\n    },\n}\n''',
+              '''    Path {\n        batch: usize,\n    },\n    /// Index into `PreparedFrame::mega_path_batches` for a painter-ordered\n    /// packed draw containing one or more unique path meshes.\n    MegaPath {\n        batch: usize,\n    },\n}\n''',
+              'render mega primitive')
+          order_path.write_text(order)
+
+          gpu_path = Path('crates/noon-render-wgpu/src/gpu.rs')
+          gpu = gpu_path.read_text()
+          gpu = replace_once(gpu,
+              '''    path_pipeline: wgpu::RenderPipeline,\n    quad_buffer: wgpu::Buffer,\n''',
+              '''    path_pipeline: wgpu::RenderPipeline,\n    mega_path_pipeline: wgpu::RenderPipeline,\n    quad_buffer: wgpu::Buffer,\n''',
+              'mega pipeline field')
+          gpu = replace_once(gpu,
+              '''    path_index_buffer: wgpu::Buffer,\n    path_instance_buffer: wgpu::Buffer,\n    path_render_bundle: Option<wgpu::RenderBundle>,\n''',
+              '''    path_index_buffer: wgpu::Buffer,\n    path_instance_buffer: wgpu::Buffer,\n    mega_path_index_buffer: wgpu::Buffer,\n    mega_path_vertex_instance_buffer: wgpu::Buffer,\n    path_render_bundle: Option<wgpu::RenderBundle>,\n''',
+              'mega buffers fields')
+          gpu = replace_once(gpu,
+              '''    path_index_capacity_bytes: usize,\n    path_instance_capacity_bytes: usize,\n}\n''',
+              '''    path_index_capacity_bytes: usize,\n    path_instance_capacity_bytes: usize,\n    mega_path_index_capacity_bytes: usize,\n    mega_path_vertex_instance_capacity_bytes: usize,\n}\n''',
+              'mega capacity fields')
+          gpu = replace_once(gpu,
+              '''        let path_pipeline =\n            create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);\n''',
+              '''        let path_pipeline =\n            create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);\n        let mega_path_pipeline =\n            create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);\n''',
+              'create mega pipeline')
+          gpu = replace_once(gpu,
+              '''        let path_instance_buffer = empty_instance_buffer(device, "Noon path instances");\n        let (path_msaa_texture, path_msaa_view) =\n''',
+              '''        let path_instance_buffer = empty_instance_buffer(device, "Noon path instances");\n        let mega_path_index_buffer = empty_buffer(\n            device,\n            "Noon packed path indices",\n            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,\n        );\n        let mega_path_vertex_instance_buffer =\n            empty_instance_buffer(device, "Noon packed path vertex attributes");\n        let (path_msaa_texture, path_msaa_view) =\n''',
+              'create mega buffers')
+          gpu = replace_once(gpu,
+              '''            path_pipeline,\n            quad_buffer,\n''',
+              '''            path_pipeline,\n            mega_path_pipeline,\n            quad_buffer,\n''',
+              'init mega pipeline')
+          gpu = replace_once(gpu,
+              '''            path_index_buffer,\n            path_instance_buffer,\n            path_render_bundle: None,\n''',
+              '''            path_index_buffer,\n            path_instance_buffer,\n            mega_path_index_buffer,\n            mega_path_vertex_instance_buffer,\n            path_render_bundle: None,\n''',
+              'init mega buffers')
+          gpu = replace_once(gpu,
+              '''            path_index_capacity_bytes: 0,\n            path_instance_capacity_bytes: 0,\n        }\n''',
+              '''            path_index_capacity_bytes: 0,\n            path_instance_capacity_bytes: 0,\n            mega_path_index_capacity_bytes: 0,\n            mega_path_vertex_instance_capacity_bytes: 0,\n        }\n''',
+              'init mega capacities')
+          gpu = replace_once(gpu,
+              '''        let path_instance_bytes = std::mem::size_of_val(prepared.paths);\n        let mut buffer_reallocations = 0;\n''',
+              '''        let path_instance_bytes = std::mem::size_of_val(prepared.paths);\n        let mega_path_index_bytes = std::mem::size_of_val(prepared.mega_path_indices);\n        let mega_path_vertex_instance_bytes =\n            std::mem::size_of_val(prepared.mega_path_vertex_instances);\n        let mut buffer_reallocations = 0;\n''',
+              'mega upload sizes')
+          gpu = replace_once(gpu,
+              '''        buffer_reallocations += usize::from(path_instance_reallocated);\n\n        self.prepare_path_render_bundle(\n''',
+              '''        buffer_reallocations += usize::from(path_instance_reallocated);\n        let mega_path_index_reallocated = ensure_capacity_with_usage(\n            device,\n            &mut self.mega_path_index_buffer,\n            &mut self.mega_path_index_capacity_bytes,\n            mega_path_index_bytes,\n            "Noon packed path indices",\n            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,\n        );\n        buffer_reallocations += usize::from(mega_path_index_reallocated);\n        let mega_path_vertex_instance_reallocated = ensure_capacity(\n            device,\n            &mut self.mega_path_vertex_instance_buffer,\n            &mut self.mega_path_vertex_instance_capacity_bytes,\n            mega_path_vertex_instance_bytes,\n            "Noon packed path vertex attributes",\n        );\n        buffer_reallocations += usize::from(mega_path_vertex_instance_reallocated);\n\n        self.prepare_path_render_bundle(\n''',
+              'ensure mega buffers')
+          gpu = replace_once(gpu,
+              '''        ) + upload_dirty(\n            queue,\n            &self.path_instance_buffer,\n            prepared.paths,\n            prepared.path_dirty_ranges,\n            path_instance_reallocated,\n        );\n''',
+              '''        ) + upload_dirty(\n            queue,\n            &self.path_instance_buffer,\n            prepared.paths,\n            prepared.path_dirty_ranges,\n            path_instance_reallocated,\n        ) + upload_full_if(\n            queue,\n            &self.mega_path_index_buffer,\n            prepared.mega_path_indices,\n            prepared.mega_path_index_dirty || mega_path_index_reallocated,\n        ) + upload_dirty(\n            queue,\n            &self.mega_path_vertex_instance_buffer,\n            prepared.mega_path_vertex_instances,\n            prepared.mega_path_instance_dirty_ranges,\n            mega_path_vertex_instance_reallocated,\n        );\n''',
+              'upload mega buffers')
+          gpu = replace_once(gpu,
+              '''                RenderPrimitive::Path {\n                    batch: path_batch_index,\n                } => {\n''',
+              '''                RenderPrimitive::MegaPath {\n                    batch: mega_batch_index,\n                } => {\n                    let mega_batch = &prepared.mega_path_batches[mega_batch_index];\n                    if mega_batch.index_range.is_empty() {\n                        continue;\n                    }\n                    pass.set_pipeline(&self.mega_path_pipeline);\n                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));\n                    pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));\n                    pass.set_index_buffer(\n                        self.mega_path_index_buffer.slice(..),\n                        wgpu::IndexFormat::Uint32,\n                    );\n                    pass.draw_indexed(mega_batch.index_range.clone(), 0, 0..1);\n                    stats.draw_calls += 1;\n                    stats.instances_drawn += mega_batch.path_count;\n                    continue;\n                }\n                RenderPrimitive::Path {\n                    batch: path_batch_index,\n                } => {\n''',
+              'draw mega path')
+          gpu = replace_once(gpu,
+              '''pub fn path_instance_layout() -> wgpu::VertexBufferLayout<'static> {\n    wgpu::VertexBufferLayout {\n        array_stride: size_of::<PathInstance>() as wgpu::BufferAddress,\n        step_mode: wgpu::VertexStepMode::Instance,\n        attributes: &PATH_INSTANCE_ATTRIBUTES,\n    }\n}\n''',
+              '''pub fn path_instance_layout() -> wgpu::VertexBufferLayout<'static> {\n    wgpu::VertexBufferLayout {\n        array_stride: size_of::<PathInstance>() as wgpu::BufferAddress,\n        step_mode: wgpu::VertexStepMode::Instance,\n        attributes: &PATH_INSTANCE_ATTRIBUTES,\n    }\n}\n\npub fn mega_path_instance_layout() -> wgpu::VertexBufferLayout<'static> {\n    wgpu::VertexBufferLayout {\n        array_stride: size_of::<PathInstance>() as wgpu::BufferAddress,\n        step_mode: wgpu::VertexStepMode::Vertex,\n        attributes: &PATH_INSTANCE_ATTRIBUTES,\n    }\n}\n''',
+              'mega vertex layout')
+          old_path_fn = '''fn create_path_pipeline(\n    device: &wgpu::Device,\n    layout: &wgpu::PipelineLayout,\n    shader: &wgpu::ShaderModule,\n    target_format: wgpu::TextureFormat,\n) -> wgpu::RenderPipeline {\n    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {\n        label: Some("Noon vector path pipeline"),\n'''
+          new_path_fn = '''fn create_path_pipeline(\n    device: &wgpu::Device,\n    layout: &wgpu::PipelineLayout,\n    shader: &wgpu::ShaderModule,\n    target_format: wgpu::TextureFormat,\n) -> wgpu::RenderPipeline {\n    create_path_pipeline_with_instance_layout(\n        device,\n        layout,\n        shader,\n        target_format,\n        path_instance_layout(),\n        "Noon vector path pipeline",\n    )\n}\n\nfn create_mega_path_pipeline(\n    device: &wgpu::Device,\n    layout: &wgpu::PipelineLayout,\n    shader: &wgpu::ShaderModule,\n    target_format: wgpu::TextureFormat,\n) -> wgpu::RenderPipeline {\n    create_path_pipeline_with_instance_layout(\n        device,\n        layout,\n        shader,\n        target_format,\n        mega_path_instance_layout(),\n        "Noon packed mega-path pipeline",\n    )\n}\n\nfn create_path_pipeline_with_instance_layout(\n    device: &wgpu::Device,\n    layout: &wgpu::PipelineLayout,\n    shader: &wgpu::ShaderModule,\n    target_format: wgpu::TextureFormat,\n    instance_layout: wgpu::VertexBufferLayout<'static>,\n    label: &'static str,\n) -> wgpu::RenderPipeline {\n    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {\n        label: Some(label),\n'''
+          gpu = replace_once(gpu, old_path_fn, new_path_fn, 'path pipeline generalization')
+          gpu = replace_once(gpu,
+              '''            buffers: &[path_vertex_layout(), path_instance_layout()],\n''',
+              '''            buffers: &[path_vertex_layout(), instance_layout],\n''',
+              'path pipeline instance layout')
+          gpu = replace_once(gpu,
+              '''    pub const fn path_instance_capacity_bytes(&self) -> usize {\n        self.path_instance_capacity_bytes\n    }\n\n    pub const fn path_render_bundle_rebuilds(&self) -> usize {\n''',
+              '''    pub const fn path_instance_capacity_bytes(&self) -> usize {\n        self.path_instance_capacity_bytes\n    }\n\n    pub const fn mega_path_index_capacity_bytes(&self) -> usize {\n        self.mega_path_index_capacity_bytes\n    }\n\n    pub const fn mega_path_vertex_instance_capacity_bytes(&self) -> usize {\n        self.mega_path_vertex_instance_capacity_bytes\n    }\n\n    pub const fn path_render_bundle_rebuilds(&self) -> usize {\n''',
+              'mega capacity accessors')
+          gpu_path.write_text(gpu)
+          PY
+          cargo fmt --all
+      - name: Validate renderer slice
+        run: |
+          cargo test -p noon-render-wgpu
+          cargo clippy -p noon-render-wgpu --all-targets -- -D warnings
+      - name: Commit implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-render-wgpu
+          git commit -m 'Pack unique vector paths into mega-mesh draws'
+          git push origin HEAD:arch/d2-packed-mega-mesh
