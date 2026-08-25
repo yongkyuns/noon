@@ -296,15 +296,19 @@ function drainWork() {
 function executeControl(message) {
   switch (message.type) {
     case "replace_scene": {
+      validateOptionalLoopDuration(message.loopDurationSeconds);
       clearHostCallbacks();
       const delta = player.replaceSceneDeltaJson(message.sceneJson);
+      applyOptionalLoopDuration(message.loopDurationSeconds);
       sendDeltaOrThrow(delta);
       respond(message.requestId, runtimeResult("replace_scene"));
       return;
     }
     case "reconcile_scene": {
+      validateOptionalLoopDuration(message.loopDurationSeconds);
       clearHostCallbacks();
       const result = JSON.parse(player.reconcileSceneDeltaJson(message.sceneJson));
+      applyOptionalLoopDuration(message.loopDurationSeconds);
       if (result.delta !== null && result.delta !== undefined) {
         sendDeltaOrThrow(result.delta);
       }
@@ -333,6 +337,21 @@ function executeControl(message) {
     }
     default:
       throw new Error(`unknown queued engine command ${message.type}`);
+  }
+}
+
+function validateOptionalLoopDuration(duration) {
+  if (duration === null || duration === undefined) {
+    return;
+  }
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("execution engine loop duration must be positive and finite");
+  }
+}
+
+function applyOptionalLoopDuration(duration) {
+  if (duration !== null && duration !== undefined) {
+    player.setLoopDurationSeconds(duration);
   }
 }
 
