@@ -57,6 +57,7 @@ async function layout(page) {
   const browserState = await page.evaluate(() => {
     const scene = document.querySelector("#scene");
     const status = document.querySelector("#status");
+    const transfer = window.__noonCanvasTransferSize ?? null;
     return {
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
@@ -64,6 +65,11 @@ async function layout(page) {
       clientHeight: scene.clientHeight,
       backingWidth: scene.width,
       backingHeight: scene.height,
+      transferWidth: transfer?.width ?? null,
+      transferHeight: transfer?.height ?? null,
+      transferClientWidth: transfer?.clientWidth ?? null,
+      transferClientHeight: transfer?.clientHeight ?? null,
+      transferDevicePixelRatio: transfer?.devicePixelRatio ?? null,
       devicePixelRatio: window.devicePixelRatio,
       rendererBackend: status.dataset.rendererBackend ?? null,
     };
@@ -110,18 +116,35 @@ function assertInitialBackingStore(result, label) {
     deviceScaleFactor,
     `${label}: Chromium must run at the requested fractional DPR`,
   );
-  const expectedWidth = Math.max(1, Math.round(result.clientWidth * result.devicePixelRatio));
-  const expectedHeight = Math.max(1, Math.round(result.clientHeight * result.devicePixelRatio));
   assert.equal(
-    result.backingWidth,
+    result.transferDevicePixelRatio,
+    deviceScaleFactor,
+    `${label}: offscreen transfer must observe the requested fractional DPR`,
+  );
+  assert.ok(
+    result.transferClientWidth > 0 && result.transferClientHeight > 0,
+    `${label}: canvas must be laid out before offscreen transfer`,
+  );
+  const expectedWidth = Math.max(
+    1,
+    Math.round(result.transferClientWidth * result.transferDevicePixelRatio),
+  );
+  const expectedHeight = Math.max(
+    1,
+    Math.round(result.transferClientHeight * result.transferDevicePixelRatio),
+  );
+  assert.equal(
+    result.transferWidth,
     expectedWidth,
-    `${label}: backing width must match CSS content width × DPR before WebGL surface creation`,
+    `${label}: backing width must match CSS content width × DPR at transfer`,
   );
   assert.equal(
-    result.backingHeight,
+    result.transferHeight,
     expectedHeight,
-    `${label}: backing height must match CSS content height × DPR before WebGL surface creation`,
+    `${label}: backing height must match CSS content height × DPR at transfer`,
   );
+  assert.equal(result.backingWidth, expectedWidth, `${label}: transferred backing width drifted`);
+  assert.equal(result.backingHeight, expectedHeight, `${label}: transferred backing height drifted`);
 }
 
 let browser = null;
@@ -151,6 +174,24 @@ try {
     if (message.type() === "error") {
       browserErrors.push(`console: ${message.text()}`);
     }
+  });
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.transferControlToOffscreen;
+    if (typeof original !== "function") {
+      return;
+    }
+    HTMLCanvasElement.prototype.transferControlToOffscreen = function transferControlToOffscreen() {
+      if (this.id === "scene") {
+        window.__noonCanvasTransferSize = {
+          width: this.width,
+          height: this.height,
+          clientWidth: this.clientWidth,
+          clientHeight: this.clientHeight,
+          devicePixelRatio: window.devicePixelRatio,
+        };
+      }
+      return original.call(this);
+    };
   });
 
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
