@@ -1,0 +1,91 @@
+name: Physical device performance baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: Stable physical device ID (for example macbook-m4-pro)
+        required: true
+        type: string
+      backends:
+        description: Comma-separated renderer backends
+        required: true
+        default: webgpu,webgl
+        type: string
+      suites:
+        description: Comma-separated suites (frame,corpus,authoring)
+        required: true
+        default: frame,corpus,authoring
+        type: string
+      width:
+        description: Canvas backing width
+        required: true
+        default: '1920'
+        type: string
+      height:
+        description: Canvas backing height
+        required: true
+        default: '1080'
+        type: string
+      dpr:
+        description: Browser device pixel ratio
+        required: true
+        default: '1'
+        type: string
+      target_hz:
+        description: Target refresh rate used for frame-budget reporting
+        required: true
+        default: '60'
+        type: string
+      notes:
+        description: Power/thermal/browser/device notes
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    # This workflow is intentionally physical-runner-only. Do not replace this
+    # with github-hosted runners or SwiftShader and call the result a P8 baseline.
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Build optimized production WASM
+        run: bash scripts/build-web-demo.sh
+      - name: Record named physical-device bundle
+        env:
+          NOON_PERF_DEVICE_ID: ${{ inputs.device_id }}
+          NOON_PERF_BACKENDS: ${{ inputs.backends }}
+          NOON_PERF_SUITES: ${{ inputs.suites }}
+          NOON_PERF_WIDTH: ${{ inputs.width }}
+          NOON_PERF_HEIGHT: ${{ inputs.height }}
+          NOON_PERF_DPR: ${{ inputs.dpr }}
+          NOON_PERF_TARGET_HZ: ${{ inputs.target_hz }}
+          NOON_PERF_DEVICE_NOTES: ${{ inputs.notes }}
+          NOON_PERF_RUN_DIR: perf-artifacts/physical-dispatch
+        run: node scripts/perf-device-run.mjs
+      - name: Upload performance bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: noon-perf-${{ inputs.device_id }}-${{ github.run_id }}
+          path: perf-artifacts/physical-dispatch
+          if-no-files-found: error
+          retention-days: 30
