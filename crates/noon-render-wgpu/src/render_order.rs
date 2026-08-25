@@ -91,6 +91,14 @@ impl FramePreparer {
         }
     }
 
+    pub(crate) fn append_ordered_render_slot(&mut self, slot: PreparedSlot) {
+        debug_assert!(
+            self.render_order_keys.is_empty(),
+            "explicit render-order keys require structural rebuild",
+        );
+        push_slot_batches(&mut self.render_batches, slot);
+    }
+
     pub(crate) fn rebuild_ordered_render_batches(&mut self) {
         self.render_batches.clear();
 

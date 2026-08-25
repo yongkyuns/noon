@@ -169,6 +169,12 @@ pub struct RenderStats {
     pub path_index_free_element_count: usize,
     /// Unique paths temporarily detached from the immutable mega stream.
     pub mega_path_detached_count: usize,
+    /// Appended semantic/render slots handled without a full preparation rebuild.
+    pub structural_slots_added: usize,
+    /// Retired semantic/render slots handled without compacting packed storage.
+    pub structural_slots_retired: usize,
+    /// Full preparation rebuilds performed by this preparation call.
+    pub full_rebuilds: usize,
 }
 
 #[derive(Debug)]
@@ -316,14 +322,36 @@ impl FramePreparer {
 
     /// Updates cached instance records using the runtime's consumed change set.
     ///
-    /// Structural changes and seeks rebuild all records. Forward animation and
-    /// value patches repack only the object indices named by `changes`.
+    /// Structural removals retire packed slots in place. Tail-appended analytic
+    /// objects extend packed storage and painter order locally. New vector-path
+    /// resources remain an explicit full-rebuild boundary until append-only
+    /// mega-mesh resource insertion is unified with #174's replacement arena.
     pub fn prepare_incremental<'a>(
         &'a mut self,
         frame: &FrameState,
         changes: &FrameChanges,
     ) -> PreparedFrame<'a> {
-        if !self.initialized || changes.is_all() || self.slots.len() != frame.objects.len() {
+        if !self.initialized || changes.is_all() || frame.objects.len() < self.slots.len() {
+            return self.rebuild(frame);
+        }
+
+        let old_slot_len = self.slots.len();
+        let expected_added = frame.objects.len().saturating_sub(old_slot_len);
+        let added_are_tail = expected_added == changes.added_indices().len()
+            && changes
+                .added_indices()
+                .iter()
+                .copied()
+                .eq(old_slot_len..frame.objects.len());
+        let removed_are_existing = changes
+            .removed_indices()
+            .iter()
+            .all(|&index| index < old_slot_len);
+        let can_append = changes
+            .added_indices()
+            .iter()
+            .all(|&index| self.can_append_structural_slot(frame, index));
+        if !added_are_tail || !removed_are_existing || !can_append {
             return self.rebuild(frame);
         }
 
@@ -331,6 +359,8 @@ impl FramePreparer {
             .object_indices()
             .iter()
             .copied()
+            .filter(|index| changes.added_indices().binary_search(index).is_err())
+            .filter(|index| changes.removed_indices().binary_search(index).is_err())
             .filter(|&index| !self.slot_matches(frame, index))
             .collect::<Vec<_>>();
         if !replacement_indices
@@ -358,7 +388,22 @@ impl FramePreparer {
         }
 
         let mut instances_repacked = 0;
+        for &object_index in changes.removed_indices() {
+            instances_repacked += self.retire_structural_slot(object_index);
+        }
+        for &object_index in changes.added_indices() {
+            instances_repacked += self.append_structural_slot(frame, object_index);
+        }
+
         for &object_index in changes.object_indices() {
+            if changes.added_indices().binary_search(&object_index).is_ok()
+                || changes
+                    .removed_indices()
+                    .binary_search(&object_index)
+                    .is_ok()
+            {
+                continue;
+            }
             let object = &frame.objects[object_index];
             match self.slots[object_index] {
                 PreparedSlot::Absent => {}
@@ -424,6 +469,7 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_dirty_ranges);
         normalize_dirty_ranges(&mut self.path_vertex_dirty_ranges);
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
+        normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
 
         self.prepared_frame(
             frame.time,
@@ -432,7 +478,113 @@ impl FramePreparer {
             geometry_cache_misses,
             path_vertices_repacked,
             path_indices_repacked,
+            changes.added_indices().len(),
+            changes.removed_indices().len(),
+            0,
         )
+    }
+
+    fn can_append_structural_slot(&self, frame: &FrameState, object_index: usize) -> bool {
+        if !self.render_order_keys.is_empty() || !frame.is_present(object_index) {
+            return false;
+        }
+        matches!(
+            frame.render_geometry(object_index),
+            GeometryRef::Circle { .. }
+                | GeometryRef::Rectangle { .. }
+                | GeometryRef::Line { .. }
+                | GeometryRef::External(_)
+        )
+    }
+
+    fn append_structural_slot(&mut self, frame: &FrameState, object_index: usize) -> usize {
+        debug_assert_eq!(object_index, self.slots.len());
+        let object = &frame.objects[object_index];
+        let slot = match frame.render_geometry(object_index) {
+            GeometryRef::Circle { .. } => {
+                let index = self.circles.len();
+                self.circle_ids.push(object.id);
+                self.circles
+                    .push(pack_circle(object, frame.reveal(object_index)));
+                push_dirty_range(&mut self.circle_dirty_ranges, index);
+                PreparedSlot::Circle(index)
+            }
+            GeometryRef::Rectangle { .. } => {
+                let index = self.rectangles.len();
+                self.rectangle_ids.push(object.id);
+                self.rectangles.push(pack_rectangle(object));
+                push_dirty_range(&mut self.rectangle_dirty_ranges, index);
+                PreparedSlot::Rectangle(index)
+            }
+            GeometryRef::Line { .. } => {
+                let index = self.lines.len();
+                self.line_ids.push(object.id);
+                self.lines
+                    .push(pack_line(object, frame.reveal(object_index)));
+                push_dirty_range(&mut self.line_dirty_ranges, index);
+                PreparedSlot::Line(index)
+            }
+            GeometryRef::External(_) => {
+                let index = self.unsupported.len();
+                self.unsupported.push(object.id);
+                PreparedSlot::Unsupported(index)
+            }
+            GeometryRef::VectorPath(_) => unreachable!("path structural append requires rebuild"),
+        };
+        self.slots.push(slot);
+        self.append_ordered_render_slot(slot);
+        usize::from(!matches!(slot, PreparedSlot::Unsupported(_)))
+    }
+
+    fn retire_structural_slot(&mut self, object_index: usize) -> usize {
+        match self.slots[object_index] {
+            PreparedSlot::Absent => 0,
+            PreparedSlot::Circle(index) => {
+                if self.circles[index].style.opacity != 0.0 {
+                    self.circles[index].style.opacity = 0.0;
+                    push_dirty_range(&mut self.circle_dirty_ranges, index);
+                }
+                1
+            }
+            PreparedSlot::Rectangle(index) => {
+                if self.rectangles[index].style.opacity != 0.0 {
+                    self.rectangles[index].style.opacity = 0.0;
+                    push_dirty_range(&mut self.rectangle_dirty_ranges, index);
+                }
+                1
+            }
+            PreparedSlot::Line(index) => {
+                if self.lines[index].style.opacity != 0.0 {
+                    self.lines[index].style.opacity = 0.0;
+                    push_dirty_range(&mut self.line_dirty_ranges, index);
+                }
+                1
+            }
+            PreparedSlot::Path {
+                index,
+                batch,
+                reveal_head,
+                ..
+            } => {
+                let mut packed = self.paths[index];
+                packed.style.opacity = 0.0;
+                if self.paths[index] != packed {
+                    self.paths[index] = packed;
+                    push_dirty_range(&mut self.path_dirty_ranges, index);
+                    self.update_mega_path_instance(batch, packed);
+                }
+                let mut repacked = 1;
+                if let Some(head_index) = reveal_head {
+                    repacked += 1;
+                    if self.lines[head_index].style.opacity != 0.0 {
+                        self.lines[head_index].style.opacity = 0.0;
+                        push_dirty_range(&mut self.line_dirty_ranges, head_index);
+                    }
+                }
+                repacked
+            }
+            PreparedSlot::Unsupported(_) => 0,
+        }
     }
 
     fn can_replace_unique_path_geometry(&self, frame: &FrameState, object_index: usize) -> bool {
@@ -777,9 +929,13 @@ impl FramePreparer {
             geometry_cache_misses,
             path_vertices_repacked,
             path_indices_repacked,
+            0,
+            0,
+            1,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepared_frame(
         &self,
         time: f64,
@@ -788,6 +944,9 @@ impl FramePreparer {
         geometry_cache_misses: usize,
         path_vertices_repacked: usize,
         path_indices_repacked: usize,
+        structural_slots_added: usize,
+        structural_slots_retired: usize,
+        full_rebuilds: usize,
     ) -> PreparedFrame<'_> {
         let batch_count = self.render_batches.len();
         let dirty_instance_count = dirty_len(&self.circle_dirty_ranges)
@@ -861,6 +1020,9 @@ impl FramePreparer {
                     .iter()
                     .filter(|&&detached| detached)
                     .count(),
+                structural_slots_added,
+                structural_slots_retired,
+                full_rebuilds,
             },
         }
     }
@@ -2378,5 +2540,76 @@ mod tests {
             prepared.render_batches[2].primitive,
             RenderPrimitive::MegaPath { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod structural_execution_delta_tests {
+    use super::*;
+    use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
+
+    fn circle(id: u64) -> FrameObjectState {
+        FrameObjectState {
+            id: ObjectId::new(id),
+            geometry: GeometryRef::circle(0.1),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+        }
+    }
+
+    #[test]
+    fn removing_one_of_100k_objects_retires_one_packed_slot_without_rebuild() {
+        let count = 100_000usize;
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: (0..count).map(|id| circle(id as u64)).collect(),
+            presences: vec![true; count],
+            reveals: vec![1.0; count],
+            morphs: vec![0.0; count],
+            render_geometries: vec![None; count],
+        };
+        let mut preparer = FramePreparer::new();
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.full_rebuilds, 1);
+        frame.presences[10] = false;
+        let changes = FrameChanges::structural(Vec::new(), vec![10]);
+        let prepared = preparer.prepare_incremental(&frame, &changes);
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_retired, 1);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.circles.len(), count);
+        assert_eq!(prepared.circle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.circle_dirty_ranges[0], 10..11);
+        assert_eq!(prepared.circles[10].style.opacity, 0.0);
+    }
+
+    #[test]
+    fn appended_analytic_object_packs_only_the_new_slot() {
+        let count = 10_000usize;
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: (0..count).map(|id| circle(id as u64)).collect(),
+            presences: vec![true; count],
+            reveals: vec![1.0; count],
+            morphs: vec![0.0; count],
+            render_geometries: vec![None; count],
+        };
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        frame.objects.push(circle(count as u64));
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        let changes = FrameChanges::structural(vec![count], Vec::new());
+        let prepared = preparer.prepare_incremental(&frame, &changes);
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.circle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.circle_dirty_ranges[0], count..count + 1);
     }
 }
