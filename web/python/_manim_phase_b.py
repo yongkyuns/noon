@@ -153,24 +153,15 @@ def _compat_make_mobject(
     fill_opacity = kwargs.pop("fill_opacity", None)
     stroke_opacity = kwargs.pop("stroke_opacity", None)
 
-    # Manim VMobjects default to an invisible white fill and visible white
-    # stroke. `None` means "use the inherited/default color", not "disable
-    # the paint layer". Native Noon constructors keep their own defaults;
-    # this function is installed only by the Manim compatibility frontend.
-    if "fill" not in kwargs:
-        kwargs["fill"] = _with_alpha(_base.WHITE, 0.0)
     if fill_color is not _MISSING and fill_color is not None:
         kwargs["fill"] = _as_color("fill_color", fill_color)
-
-    if "stroke" not in kwargs:
-        kwargs["stroke"] = _base.WHITE
     if stroke_color is not _MISSING and stroke_color is not None:
         kwargs["stroke"] = _as_color("stroke_color", stroke_color)
 
-    stroke_width = kwargs.pop("stroke_width", MANIM_DEFAULT_STROKE_WIDTH)
-    kwargs["stroke_width"] = _manim_stroke_width(stroke_width)
-    kwargs.setdefault("stroke_join", "miter")
-    kwargs.setdefault("stroke_cap", "butt")
+    # Only convert an authored Manim width that the facade explicitly supplied.
+    # Native Noon IR constructors which omit stroke_width retain native defaults.
+    if "stroke_width" in kwargs:
+        kwargs["stroke_width"] = _manim_stroke_width(kwargs["stroke_width"])
 
     raw = _ORIGINAL_MAKE_MOBJECT(geometry, **kwargs)
     style = raw.style
