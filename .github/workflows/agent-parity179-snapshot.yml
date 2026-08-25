@@ -23,6 +23,16 @@ jobs:
           cat .github/agent-parity179/patch.00 .github/agent-parity179/patch.02 | base64 -d | gzip -d > /tmp/parity179.patch
           git apply --check /tmp/parity179.patch
           git apply /tmp/parity179.patch
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-render-wgpu/src/analytic.wgsl')
+          text = path.read_text()
+          text = text.replace('u32(input.flags.y) & 1u != 0u', '(u32(input.flags.y) & 1u) != 0u')
+          text = text.replace('u32(input.flags.y) & 2u != 0u', '(u32(input.flags.y) & 2u) != 0u')
+          text = text.replace('stroke_flags & 2u != 0u', '(stroke_flags & 2u) != 0u')
+          text = text.replace('stroke_flags & 1u != 0u', '(stroke_flags & 1u) != 0u')
+          path.write_text(text)
+          PY
 
       - name: Format and validate
         shell: bash
