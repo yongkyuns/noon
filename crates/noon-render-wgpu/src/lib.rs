@@ -1426,13 +1426,25 @@ impl FramePreparer {
         } else {
             path
         };
-        let mesh = noon_geometry::tessellate_styled_with_fill(
-            tessellation_path,
-            style.stroke_width,
-            style.stroke_join,
-            style.stroke_cap,
-            fill_enabled,
-        )?;
+        let mesh = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+            && tessellation_path.morph_target().is_some()
+        {
+            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
+                tessellation_path,
+                style.stroke_width,
+                style.stroke_join,
+                style.stroke_cap,
+                fill_enabled,
+            )?
+        } else {
+            noon_geometry::tessellate_styled_with_fill(
+                tessellation_path,
+                style.stroke_width,
+                style.stroke_join,
+                style.stroke_cap,
+                fill_enabled,
+            )?
+        };
         let index = self.path_mesh_cache.len();
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
