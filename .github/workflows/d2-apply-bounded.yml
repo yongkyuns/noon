@@ -1,0 +1,31 @@
+name: D2 apply bounded replacement
+on:
+  push:
+    branches:
+      - arch/d2-packed-mega-mesh
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'Apply D2 bounded replacement patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/d2-packed-mega-mesh
+      - name: Apply bounded path replacement
+        run: |
+          python3 scripts/_d2_bounded_patch.py
+          cargo fmt --all
+      - name: Validate renderer
+        run: |
+          cargo test -p noon-render-wgpu
+          cargo clippy -p noon-render-wgpu --all-targets -- -D warnings
+      - name: Commit implementation
+        run: |
+          rm scripts/_d2_bounded_patch.py .github/workflows/d2-apply-bounded.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-render-wgpu scripts/_d2_bounded_patch.py .github/workflows/d2-apply-bounded.yml
+          git commit -m 'Bound live path replacement to stable mesh chunks'
+          git push origin HEAD:arch/d2-packed-mega-mesh
