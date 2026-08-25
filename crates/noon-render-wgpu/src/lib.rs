@@ -610,16 +610,17 @@ impl FramePreparer {
         let object = &frame.objects[object_index];
         let reveal = frame.reveal(object_index);
         let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
-        let (cache_index, cache_miss) = match self.cache_path_mesh(path, object.style) {
-            Ok(value) => value,
-            Err(_) => {
-                let slot = PreparedSlot::Unsupported(self.unsupported.len());
-                self.unsupported.push(object.id);
-                self.slots.push(slot);
-                self.append_ordered_render_slot(slot);
-                return StructuralAppendStats::default();
-            }
-        };
+        let (cache_index, cache_miss) =
+            match self.cache_path_mesh(path, object.style, object.transform) {
+                Ok(value) => value,
+                Err(_) => {
+                    let slot = PreparedSlot::Unsupported(self.unsupported.len());
+                    self.unsupported.push(object.id);
+                    self.slots.push(slot);
+                    self.append_ordered_render_slot(slot);
+                    return StructuralAppendStats::default();
+                }
+            };
 
         let packed = if partial_reveal_bits.is_some() {
             pack_path(object, 1.0, 0.0)
