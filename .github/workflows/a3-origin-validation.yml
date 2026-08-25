@@ -59,7 +59,12 @@ jobs:
           replacement = anchor + '''    /// Stable semantic leaf origin when this execution track was lowered from\n    /// a retained AnimationGraph. Omitted for legacy/directly-authored tracks.\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub origin: Option<crate::AnimationTrackOrigin>,\n'''
           if anchor not in text:
               raise SystemExit('TrackDefinition field anchor missing')
-          timeline.write_text(text.replace(anchor, replacement, 1))
+          text = text.replace(anchor, replacement, 1)
+          constructor_anchor = '''            timing,\n            time_map,\n        };\n'''
+          constructor_replacement = '''            timing,\n            time_map,\n            origin: None,\n        };\n'''
+          if constructor_anchor not in text:
+              raise SystemExit('direct add_track constructor anchor missing')
+          timeline.write_text(text.replace(constructor_anchor, constructor_replacement, 1))
 
           graph = Path('crates/noon-core/src/animation_graph.rs')
           text = graph.read_text()
