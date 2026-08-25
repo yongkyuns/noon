@@ -1,0 +1,25 @@
+name: Agent parity179 source snapshot
+
+on:
+  push:
+    branches:
+      - agent/parity-179-screen-space
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-parity179-source
+          path: |
+            .
+            !.git
+          include-hidden-files: true
+          retention-days: 1
