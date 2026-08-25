@@ -1,0 +1,33 @@
+name: Apply lossless Manim raster oracle
+
+on:
+  push:
+    branches:
+      - parity/manim-create-partial
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-create-partial
+          fetch-depth: 0
+      - name: Apply oracle patch
+        run: python3 scripts/_apply_lossless_manim_oracle.py
+      - name: Validate harness syntax
+        run: node --check scripts/manim-raster-differential.mjs
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/_apply_lossless_manim_oracle.py
+          rm .github/workflows/_apply-lossless-manim-oracle.yml
+      - name: Commit oracle fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: use lossless Manim PNG frames as raster oracle"
+          git push origin HEAD:parity/manim-create-partial
