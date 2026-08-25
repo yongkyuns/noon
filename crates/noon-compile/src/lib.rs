@@ -151,7 +151,10 @@ pub struct CompiledPatchStats {
     pub presence_tracks_inspected: usize,
     pub dynamic_objects_recomputed: usize,
     pub dynamic_tracks_inspected: usize,
+    /// Entries shifted inside an affected object/property channel only.
     pub dense_track_slots_shifted: usize,
+    /// Global/unrelated track payload movement. This must remain zero for local edits.
+    pub unrelated_track_slots_shifted: usize,
     pub object_slots_appended: usize,
     pub object_slots_retired: usize,
     pub object_indices_rewritten: usize,
@@ -165,9 +168,57 @@ pub struct CompiledScene {
     // A future compaction generation may reclaim retired capacity off the live-edit path.
     objects: Vec<CompiledObject>,
     live_object_count: usize,
-    tracks: Vec<CompiledTrack>,
+    /// Tracks are segmented by stable execution channel. Mutating one channel never
+    /// relocates payloads belonging to another channel. Each channel vector remains
+    /// sorted by start time and TrackId for deterministic evaluation.
+    tracks: BTreeMap<CompiledChannelKey, Vec<CompiledTrack>>,
+    track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CompiledTracks<'a> {
+    channels: &'a BTreeMap<CompiledChannelKey, Vec<CompiledTrack>>,
+}
+
+impl<'a> CompiledTracks<'a> {
+    pub fn iter(self) -> impl Iterator<Item = &'a CompiledTrack> + 'a {
+        self.channels.values().flat_map(|tracks| tracks.iter())
+    }
+
+    pub fn len(self) -> usize {
+        self.channels.values().map(Vec::len).sum()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.channels.is_empty()
+    }
+
+    pub fn to_vec(self) -> Vec<CompiledTrack> {
+        self.iter().cloned().collect()
+    }
+}
+
+impl std::ops::Index<usize> for CompiledTracks<'_> {
+    type Output = CompiledTrack;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.channels
+            .values()
+            .flat_map(|tracks| tracks.iter())
+            .nth(index)
+            .expect("compiled track index out of bounds")
+    }
+}
+
+impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
+    fn eq(&self, other: &Vec<CompiledTrack>) -> bool {
+        self.channels
+            .values()
+            .flat_map(|tracks| tracks.iter())
+            .eq(other.iter())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -305,12 +356,21 @@ impl CompiledScene {
             .iter()
             .map(|track| (track.id, CompiledTrackLocator::from_track(track)))
             .collect();
+        let track_count = tracks.len();
+        let mut tracks_by_channel = BTreeMap::<CompiledChannelKey, Vec<CompiledTrack>>::new();
+        for track in tracks {
+            tracks_by_channel
+                .entry(CompiledChannelKey::new(track.object_index, track.property))
+                .or_default()
+                .push(track);
+        }
 
         let live_object_count = objects.len();
         Ok(Self {
             objects,
             live_object_count,
-            tracks,
+            tracks: tracks_by_channel,
+            track_count,
             object_indices,
             track_locators,
         })
@@ -340,15 +400,7 @@ impl CompiledScene {
         let Some(object_index) = self.object_index(id) else {
             return Vec::new();
         };
-        let range = self.object_track_range(object_index);
-        let mut channels = Vec::with_capacity(8);
-        for track in &self.tracks[range] {
-            let channel = CompiledChannelKey::new(object_index, track.property);
-            if channels.last() != Some(&channel) {
-                channels.push(channel);
-            }
-        }
-        channels
+        self.channels_for_object_index(object_index).collect()
     }
 
     pub fn track_object(&self, id: TrackId) -> Option<ObjectId> {
@@ -356,8 +408,35 @@ impl CompiledScene {
         self.object_id_at_slot(locator.object_index)
     }
 
-    pub fn tracks(&self) -> &[CompiledTrack] {
-        &self.tracks
+    /// Snapshot tracks in deterministic runtime order. This compatibility accessor
+    /// clones payloads; hot compiler/runtime paths should use `tracks_iter` or
+    /// `channel_tracks` instead.
+    pub fn tracks(&self) -> CompiledTracks<'_> {
+        CompiledTracks {
+            channels: &self.tracks,
+        }
+    }
+
+    pub fn tracks_iter(&self) -> impl Iterator<Item = &CompiledTrack> {
+        self.tracks.values().flat_map(|tracks| tracks.iter())
+    }
+
+    pub fn channels(&self) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+        self.tracks.keys().copied()
+    }
+
+    pub const fn track_count(&self) -> usize {
+        self.track_count
+    }
+
+    pub fn track(&self, id: TrackId) -> Option<&CompiledTrack> {
+        let locator = *self.track_locators.get(&id)?;
+        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        let tracks = self.tracks.get(&channel)?;
+        let position = tracks
+            .binary_search_by(|track| compare_track_locator(track, locator))
+            .ok()?;
+        tracks.get(position)
     }
 
     pub fn object_index(&self, id: ObjectId) -> Option<u32> {
@@ -373,12 +452,20 @@ impl CompiledScene {
     }
 
     pub fn channel_tracks(&self, channel: CompiledChannelKey) -> &[CompiledTrack] {
-        let range = self.channel_track_range(channel);
-        &self.tracks[range]
+        self.tracks.get(&channel).map_or(&[], Vec::as_slice)
     }
 
     pub fn has_channel(&self, channel: CompiledChannelKey) -> bool {
-        !self.channel_tracks(channel).is_empty()
+        self.tracks.contains_key(&channel)
+    }
+
+    fn channels_for_object_index(
+        &self,
+        object_index: u32,
+    ) -> impl Iterator<Item = CompiledChannelKey> + '_ {
+        let start = CompiledChannelKey::new(object_index, Property::Presence);
+        let end = CompiledChannelKey::new(object_index, Property::Morph);
+        self.tracks.range(start..=end).map(|(channel, _)| *channel)
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
@@ -413,17 +500,15 @@ impl CompiledScene {
                 let index = self
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
-                let range = self.object_track_range(index);
-                for track in &self.tracks[range.clone()] {
-                    self.track_locators.remove(&track.id);
-                    stats.track_locators_removed += 1;
-                }
-                let before_remove_len = self.tracks.len();
-                let removed_track_count = range.len();
-                let shifted_after = before_remove_len.saturating_sub(range.end);
-                self.tracks.drain(range);
-                if removed_track_count > 0 {
-                    stats.dense_track_slots_shifted = shifted_after;
+                let channels: Vec<_> = self.channels_for_object_index(index).collect();
+                for channel in channels {
+                    if let Some(removed) = self.tracks.remove(&channel) {
+                        self.track_count -= removed.len();
+                        for track in removed {
+                            self.track_locators.remove(&track.id);
+                            stats.track_locators_removed += 1;
+                        }
+                    }
                 }
 
                 let object = &mut self.objects[index as usize];
@@ -433,9 +518,10 @@ impl CompiledScene {
                 self.object_indices.remove(id);
                 self.live_object_count -= 1;
                 stats.object_slots_retired = 1;
-                // Crucially, later object slots and every remaining track's object slot are unchanged.
+                // No unrelated object or track payload changes storage location.
                 stats.object_indices_rewritten = 0;
                 stats.track_object_indices_rewritten = 0;
+                stats.unrelated_track_slots_shifted = 0;
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
@@ -457,9 +543,13 @@ impl CompiledScene {
                 stats.presence_tracks_inspected +=
                     self.validate_presence_edit(None, Some(&compiled))?;
                 let locator = CompiledTrackLocator::from_track(&compiled);
-                let position = self.track_insertion_position(&compiled);
-                stats.dense_track_slots_shifted = self.tracks.len().saturating_sub(position);
-                self.tracks.insert(position, compiled);
+                let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+                let channel_tracks = self.tracks.entry(channel).or_default();
+                let position = track_insertion_position(channel_tracks, &compiled);
+                stats.dense_track_slots_shifted = channel_tracks.len().saturating_sub(position);
+                stats.unrelated_track_slots_shifted = 0;
+                channel_tracks.insert(position, compiled);
+                self.track_count += 1;
                 self.track_locators.insert(track.id, locator);
                 self.objects[locator.object_index as usize]
                     .dynamic
@@ -471,19 +561,35 @@ impl CompiledScene {
                     .get(&track.id)
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
+                let old_channel =
+                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
                 let old_position = self.track_position(old_locator);
                 let compiled = self.compile_patch_track(track)?;
                 stats.presence_tracks_inspected +=
                     self.validate_presence_edit(Some(track.id), Some(&compiled))?;
 
-                let before_remove_len = self.tracks.len();
-                self.tracks.remove(old_position);
-                stats.dense_track_slots_shifted +=
-                    before_remove_len.saturating_sub(old_position + 1);
+                let remove_channel = {
+                    let old_tracks = self
+                        .tracks
+                        .get_mut(&old_channel)
+                        .expect("track locator channel must exist");
+                    stats.dense_track_slots_shifted +=
+                        old_tracks.len().saturating_sub(old_position + 1);
+                    old_tracks.remove(old_position);
+                    old_tracks.is_empty()
+                };
+                if remove_channel {
+                    self.tracks.remove(&old_channel);
+                }
+
                 let new_locator = CompiledTrackLocator::from_track(&compiled);
-                let new_position = self.track_insertion_position(&compiled);
-                stats.dense_track_slots_shifted += self.tracks.len().saturating_sub(new_position);
-                self.tracks.insert(new_position, compiled);
+                let new_channel =
+                    CompiledChannelKey::new(new_locator.object_index, new_locator.property);
+                let new_tracks = self.tracks.entry(new_channel).or_default();
+                let new_position = track_insertion_position(new_tracks, &compiled);
+                stats.dense_track_slots_shifted += new_tracks.len().saturating_sub(new_position);
+                stats.unrelated_track_slots_shifted = 0;
+                new_tracks.insert(new_position, compiled);
                 self.track_locators.insert(track.id, new_locator);
                 self.recompute_dynamic_for_objects(
                     &[old_locator.object_index, new_locator.object_index],
@@ -497,10 +603,23 @@ impl CompiledScene {
                     .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
                 stats.presence_tracks_inspected += self.validate_presence_edit(Some(*id), None)?;
+                let channel =
+                    CompiledChannelKey::new(old_locator.object_index, old_locator.property);
                 let position = self.track_position(old_locator);
-                let before_remove_len = self.tracks.len();
-                self.tracks.remove(position);
-                stats.dense_track_slots_shifted = before_remove_len.saturating_sub(position + 1);
+                let remove_channel = {
+                    let tracks = self
+                        .tracks
+                        .get_mut(&channel)
+                        .expect("track locator channel must exist");
+                    stats.dense_track_slots_shifted = tracks.len().saturating_sub(position + 1);
+                    tracks.remove(position);
+                    tracks.is_empty()
+                };
+                if remove_channel {
+                    self.tracks.remove(&channel);
+                }
+                self.track_count -= 1;
+                stats.unrelated_track_slots_shifted = 0;
                 self.track_locators.remove(id);
                 self.recompute_dynamic_for_objects(&[old_locator.object_index], &mut stats);
             }
@@ -519,41 +638,11 @@ impl CompiledScene {
         compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
     }
 
-    fn track_insertion_position(&self, track: &CompiledTrack) -> usize {
-        self.tracks
-            .binary_search_by(|existing| compare_tracks(existing, track))
-            .unwrap_or_else(|position| position)
-    }
-
     fn track_position(&self, locator: CompiledTrackLocator) -> usize {
-        self.tracks
+        let channel = CompiledChannelKey::new(locator.object_index, locator.property);
+        self.channel_tracks(channel)
             .binary_search_by(|track| compare_track_locator(track, locator))
-            .expect("track locator index must match sorted track storage")
-    }
-
-    fn object_track_range(&self, object_index: u32) -> std::ops::Range<usize> {
-        let start = self
-            .tracks
-            .partition_point(|track| track.object_index < object_index);
-        let end = self
-            .tracks
-            .partition_point(|track| track.object_index <= object_index);
-        start..end
-    }
-
-    fn channel_track_range(&self, channel: CompiledChannelKey) -> std::ops::Range<usize> {
-        let rank = property_rank(channel.property);
-        let start = self.tracks.partition_point(|track| {
-            track.object_index < channel.object_index
-                || (track.object_index == channel.object_index
-                    && property_rank(track.property) < rank)
-        });
-        let end = self.tracks.partition_point(|track| {
-            track.object_index < channel.object_index
-                || (track.object_index == channel.object_index
-                    && property_rank(track.property) <= rank)
-        });
-        start..end
+            .expect("track locator index must match channel-local sorted storage")
     }
 
     fn validate_presence_edit(
@@ -582,12 +671,9 @@ impl CompiledScene {
 
         let mut inspected = 0;
         for object_index in affected_objects {
-            let range = self.object_track_range(object_index);
             let mut events = Vec::new();
-            for track in &self.tracks[range] {
-                if track.property != Property::Presence {
-                    break;
-                }
+            let presence_channel = CompiledChannelKey::new(object_index, Property::Presence);
+            for track in self.channel_tracks(presence_channel) {
                 if excluded == Some(track.id) {
                     continue;
                 }
@@ -635,11 +721,13 @@ impl CompiledScene {
             }
         }
         for object_index in unique {
-            let range = self.object_track_range(object_index);
             let mut dynamic = DynamicProperties::default();
-            for track in &self.tracks[range.clone()] {
-                dynamic.mark(track.property);
-                stats.dynamic_tracks_inspected += 1;
+            let channels: Vec<_> = self.channels_for_object_index(object_index).collect();
+            for channel in channels {
+                for track in self.channel_tracks(channel) {
+                    dynamic.mark(track.property);
+                    stats.dynamic_tracks_inspected += 1;
+                }
             }
             self.objects[object_index as usize].dynamic = dynamic;
             stats.dynamic_objects_recomputed += 1;
@@ -837,6 +925,12 @@ fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePa
             CompilePatchError::UnsafeFilledPathTransform(id)
         }
     }
+}
+
+fn track_insertion_position(tracks: &[CompiledTrack], track: &CompiledTrack) -> usize {
+    tracks
+        .binary_search_by(|existing| compare_tracks(existing, track))
+        .unwrap_or_else(|position| position)
 }
 
 fn compare_tracks(left: &CompiledTrack, right: &CompiledTrack) -> Ordering {
@@ -1331,11 +1425,52 @@ mod tests {
         assert_eq!(stats.presence_tracks_inspected, 0);
         assert_eq!(stats.dynamic_objects_recomputed, 0);
         assert_eq!(stats.dynamic_tracks_inspected, 0);
-        assert!(stats.dense_track_slots_shifted > 0);
+        assert_eq!(stats.dense_track_slots_shifted, 0);
+        assert_eq!(stats.unrelated_track_slots_shifted, 0);
         let target_index = compiled.object_index(target).unwrap() as usize;
         assert!(compiled.objects()[target_index].dynamic.position);
         assert!(compiled.objects()[target_index].dynamic.opacity);
         assert!(compiled.objects()[0].dynamic.position);
+    }
+
+    #[test]
+    fn unrelated_track_payload_address_survives_local_channel_edit() {
+        let mut scene = SceneDefinition::new();
+        let mut objects = Vec::with_capacity(10_000);
+        let mut track_ids = Vec::with_capacity(10_000);
+        for index in 0..10_000u32 {
+            let object = scene.add(GeometryRef::circle(1.0));
+            objects.push(object);
+            track_ids.push(
+                scene
+                    .animate_position(
+                        object,
+                        Vec2::ZERO,
+                        Vec2::ONE,
+                        TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                    )
+                    .unwrap(),
+            );
+        }
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let untouched = track_ids[9_999];
+        let before = compiled.track(untouched).unwrap() as *const CompiledTrack as usize;
+
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(100_001),
+                object: objects[5_000],
+                property: Property::Opacity,
+                values: TrackValues::Scalar { from: 1.0, to: 0.5 },
+                timing: TrackTiming::new(0.25, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+
+        let after = compiled.track(untouched).unwrap() as *const CompiledTrack as usize;
+        assert_eq!(before, after);
+        assert_eq!(stats.unrelated_track_slots_shifted, 0);
+        assert_eq!(compiled.track_count(), 10_001);
     }
 
     #[test]

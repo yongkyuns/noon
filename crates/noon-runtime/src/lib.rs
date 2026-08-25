@@ -177,7 +177,7 @@ impl SceneInstance {
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
         let groups = build_groups(&compiled);
-        let timeline_scheduler = TimelineEventScheduler::new(compiled.tracks());
+        let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
         let mut instance = Self {
             compiled,
             frame,
@@ -550,8 +550,7 @@ fn initial_bool_property(
     let mut values = vec![default; object_count];
     let mut initialized = vec![false; object_count];
     for track in compiled
-        .tracks()
-        .iter()
+        .tracks_iter()
         .filter(|track| track.property == property)
     {
         let index = track.object_index as usize;
@@ -576,8 +575,7 @@ fn initial_scalar_property(
     let mut values = vec![default; object_count];
     let mut initialized = vec![false; object_count];
     for track in compiled
-        .tracks()
-        .iter()
+        .tracks_iter()
         .filter(|track| track.property == property)
     {
         let index = track.object_index as usize;
@@ -605,11 +603,8 @@ const PROPERTY_ORDER: [Property; 8] = [
 ];
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
-    let tracks = compiled.tracks();
     let mut groups = BTreeMap::new();
-    let mut start = 0;
-    while start < tracks.len() {
-        let channel = CompiledChannelKey::new(tracks[start].object_index, tracks[start].property);
+    for channel in compiled.channels() {
         let channel_tracks = compiled.channel_tracks(channel);
         let mapped = channel_tracks
             .iter()
@@ -622,7 +617,6 @@ fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackG
                 mapped,
             },
         );
-        start += channel_tracks.len();
     }
     groups
 }
