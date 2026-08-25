@@ -18,7 +18,18 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - name: Apply renderer culling implementation
-        run: python .github/scripts/apply_i1_renderer_culling.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_i1_renderer_culling.py')
+          text = path.read_text()
+          text = text.replace(
+              'fn structural_incremental_delta_preserves_surviving_frame_rows()',
+              'fn structural_change_is_one_slot_delta_and_preserves_surviving_slot()',
+          )
+          path.write_text(text)
+          PY
+          python .github/scripts/apply_i1_renderer_culling.py
       - name: Format
         run: |
           cargo fmt --all
