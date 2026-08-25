@@ -119,6 +119,14 @@ struct RevealPoint {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct CubicRevealCurve {
+    start: Vec2,
+    control1: Vec2,
+    control2: Vec2,
+    end: Vec2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct TessellationVertex {
     position: Vec2,
     surface: PathSurface,
@@ -326,10 +334,12 @@ fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryEr
                     &mut points,
                     progress(curve_index),
                     progress(curve_index + 1),
-                    from,
-                    control1,
-                    control2,
-                    to,
+                    CubicRevealCurve {
+                        start: from,
+                        control1,
+                        control2,
+                        end: to,
+                    },
                     0,
                 );
                 curve_index += 1;
@@ -441,12 +451,15 @@ fn flatten_cubic_reveal(
     points: &mut Vec<RevealPoint>,
     start_progress: f32,
     end_progress: f32,
-    start: Vec2,
-    control1: Vec2,
-    control2: Vec2,
-    end: Vec2,
+    curve: CubicRevealCurve,
     depth: u8,
 ) {
+    let CubicRevealCurve {
+        start,
+        control1,
+        control2,
+        end,
+    } = curve;
     let flatness =
         point_line_distance(control1, start, end).max(point_line_distance(control2, start, end));
     if depth >= 16 || flatness <= PATH_TESSELLATION_TOLERANCE {
@@ -464,20 +477,24 @@ fn flatten_cubic_reveal(
         points,
         start_progress,
         mid_progress,
-        start,
-        a,
-        d,
-        center,
+        CubicRevealCurve {
+            start,
+            control1: a,
+            control2: d,
+            end: center,
+        },
         depth + 1,
     );
     flatten_cubic_reveal(
         points,
         mid_progress,
         end_progress,
-        center,
-        e,
-        c,
-        end,
+        CubicRevealCurve {
+            start: center,
+            control1: e,
+            control2: c,
+            end,
+        },
         depth + 1,
     );
 }
