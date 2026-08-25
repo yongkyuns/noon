@@ -19,11 +19,16 @@ _ir = _base._ir
 _INSTALLED = False
 
 
-def _manim_vmobject_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _manim_vmobject_kwargs(
+    kwargs: dict[str, Any], *, default_color: _base.Color = _base.WHITE
+) -> dict[str, Any]:
     """Apply ManimCE VMobject defaults without changing native Noon IR defaults."""
     result = dict(kwargs)
-    result.setdefault("fill", _base.Color(1.0, 1.0, 1.0, 0.0))
-    result.setdefault("stroke", _base.WHITE)
+    result.setdefault(
+        "fill",
+        _base.Color(default_color.red, default_color.green, default_color.blue, 0.0),
+    )
+    result.setdefault("stroke", default_color)
     result.setdefault("stroke_width", 4.0)
     result.setdefault("stroke_join", "miter")
     result.setdefault("stroke_cap", "butt")
@@ -113,7 +118,12 @@ class Circle(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Circle(radius, **_manim_vmobject_kwargs(kwargs)))
+        super().__init__(
+            _ir.Circle(
+                radius,
+                **_manim_vmobject_kwargs(kwargs, default_color=_base.RED),
+            )
+        )
         self.radius = float(radius)
         if color is not None:
             self.set_color(color)

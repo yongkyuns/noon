@@ -2,12 +2,13 @@ use noon_core::{GeometryRef, VectorPath};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnalyticRevealKey {
+    Circle(u32),
     Rectangle(u32, u32),
 }
 
 pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {
     match geometry {
-        GeometryRef::Circle { .. } => None,
+        GeometryRef::Circle { radius } => Some(AnalyticRevealKey::Circle(radius.to_bits())),
         GeometryRef::Rectangle { size } => Some(AnalyticRevealKey::Rectangle(
             size.x.to_bits(),
             size.y.to_bits(),
@@ -25,5 +26,6 @@ pub(crate) fn temporary_reveal_path(
     }
     let key = analytic_reveal_key(geometry)?;
     let path = noon_geometry::canonical_outline_path(geometry)?;
-    Some((key, path))
+    let partial = noon_geometry::pointwise_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0));
+    Some((key, partial))
 }
