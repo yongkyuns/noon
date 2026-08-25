@@ -47,6 +47,12 @@ class Demo(Scene):
         assert abs(rush_from(0.5) - (2.0 * smooth(0.75) - 1.0)) < 1e-12
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
 
+        defaults = Circle()
+        assert defaults.style["fill"] is None
+        assert defaults.style["stroke"] == WHITE.to_ir()
+        assert abs(defaults.style["stroke_width"] - 4.0) < 1e-12
+        assert defaults.style["stroke_width_mode"] == "screen_space"
+
         circle = Circle(radius=0.6, color=BLUE)
         square = Square(side_length=1.0, color=PINK).next_to(circle, RIGHT)
         assert isinstance(circle, Circle)

@@ -20,6 +20,7 @@ fn detached_transform_snapshots_round_trip_without_scene_identity() {
             fill: Some(Color::rgb(0.2, 0.5, 0.9)),
             stroke: Some(Color::WHITE),
             stroke_width: 0.2,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScaleWithObject,
             opacity: 0.6,
             stroke_join: noon_core::StrokeJoin::Round,
             stroke_cap: noon_core::StrokeCap::Round,

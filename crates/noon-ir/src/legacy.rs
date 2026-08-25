@@ -125,7 +125,8 @@ fn ensure_version(version: u32) -> Result<(), IrError> {
 mod tests {
     use noon_core::{
         CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, ObjectId, Property,
-        RateFunction, Style, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+        RateFunction, StrokeWidthMode, Style, TrackTiming, TrackValues, Transform2D, Vec2,
+        VectorPath,
     };
 
     use super::*;
@@ -278,6 +279,32 @@ mod tests {
         let decoded = decode_scene(&json).expect("path scene must deserialize");
 
         assert_eq!(decoded.objects()[0].geometry, GeometryRef::path(path));
+    }
+
+    #[test]
+    fn stroke_width_mode_round_trips_and_legacy_json_defaults_to_world_space() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene.object_mut(object).expect("object exists").style.stroke_width_mode =
+            StrokeWidthMode::ScreenSpace;
+
+        let json = encode_scene(&scene).expect("scene must serialize");
+        assert!(json.contains("\"stroke_width_mode\":\"screen_space\""));
+        let decoded = decode_scene(&json).expect("screen-space style must deserialize");
+        assert_eq!(
+            decoded.objects()[0].style.stroke_width_mode,
+            StrokeWidthMode::ScreenSpace
+        );
+
+        let legacy_json = json.replace(
+            ",\"stroke_width_mode\":\"screen_space\"",
+            "",
+        );
+        let legacy = decode_scene(&legacy_json).expect("legacy style must deserialize");
+        assert_eq!(
+            legacy.objects()[0].style.stroke_width_mode,
+            StrokeWidthMode::ScaleWithObject
+        );
     }
 
     #[test]

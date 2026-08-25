@@ -16,8 +16,8 @@ pub use render_order::*;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
-    Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, Style, Transform2D, Vec2,
-    VectorPath,
+    Color, GeometryRef, ObjectId, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Style,
+    Transform2D, Vec2, VectorPath,
 };
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
@@ -69,13 +69,17 @@ impl From<Style> for PackedStyle {
     fn from(value: Style) -> Self {
         let (fill, fill_enabled) = pack_optional_color(value.fill);
         let (stroke, stroke_enabled) = pack_optional_color(value.stroke);
+        let stroke_width_mode = match value.stroke_width_mode {
+            StrokeWidthMode::ScaleWithObject => 0,
+            StrokeWidthMode::ScreenSpace => 2,
+        };
         Self {
             fill,
             stroke,
             stroke_width: value.stroke_width,
             opacity: value.opacity,
             fill_enabled,
-            stroke_enabled,
+            stroke_enabled: stroke_enabled | stroke_width_mode,
         }
     }
 }
@@ -1939,6 +1943,7 @@ mod tests {
             fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.4)),
             stroke: Some(Color::rgb(0.8, 0.7, 0.6)),
             stroke_width: 3.0,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScaleWithObject,
             opacity: 0.5,
             stroke_join: noon_core::StrokeJoin::Round,
             stroke_cap: noon_core::StrokeCap::Round,
@@ -1959,6 +1964,24 @@ mod tests {
         assert_eq!(instance.style.stroke_enabled, 1);
         assert_eq!(instance.style.stroke_width, 3.0);
         assert_eq!(instance.style.opacity, 0.5);
+    }
+
+    #[test]
+    fn screen_space_stroke_mode_is_packed_without_expanding_style_layout() {
+        let mut state = object(70, GeometryRef::circle(1.0));
+        state.style.fill = None;
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 4.0;
+        state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        let packed = prepared.circles[0].style;
+
+        assert_eq!(packed.stroke_width, 4.0);
+        assert_eq!(packed.stroke_enabled, 3);
+        assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
     }
 
     #[test]
@@ -1984,6 +2007,7 @@ mod tests {
             fill: None,
             stroke: Some(Color::rgb(0.2, 0.8, 0.4)),
             stroke_width: 0.125,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScaleWithObject,
             opacity: 0.75,
             stroke_join: noon_core::StrokeJoin::Round,
             stroke_cap: noon_core::StrokeCap::Round,

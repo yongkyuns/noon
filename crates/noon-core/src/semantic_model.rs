@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, PathCommand, Style, Vec2, VectorPath};
+use crate::{Color, PathCommand, StrokeWidthMode, Style, Vec2, VectorPath};
 
 /// High-precision authoring vector. The current renderer remains 2D/f32; this
 /// type prevents frontend compatibility from being constrained by that backend.
@@ -67,16 +67,6 @@ pub enum SemanticPaint {
     Resource(u64),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StrokeWidthMode {
-    /// Compatibility mode: geometry/object scaling also scales stroke width.
-    #[default]
-    ScaleWithObject,
-    /// Stroke remains screen-space sized while geometry scales.
-    ScreenSpace,
-}
-
 /// Authoring-level style. Fill/stroke opacity and overall object opacity are
 /// independent rather than collapsed into one legacy opacity value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -114,7 +104,7 @@ impl SemanticStyle {
             stroke: style.stroke.map(SemanticPaint::Solid),
             stroke_opacity: 1.0,
             stroke_width: style.stroke_width as f64,
-            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            stroke_width_mode: style.stroke_width_mode,
             object_opacity: style.opacity as f64,
         }
     }

@@ -82,6 +82,17 @@ class _CompatAnimationBuilder:
         return invoke
 
 
+def _manim_vmobject_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Apply ManimCE VMobject paint defaults without world-unit conversion."""
+
+    result = dict(kwargs)
+    result.setdefault("fill", None)
+    result.setdefault("stroke", _base.WHITE)
+    result.setdefault("stroke_width", 4.0)
+    result.setdefault("stroke_width_mode", "screen_space")
+    return result
+
+
 class VMobject(_BaseMobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
@@ -102,7 +113,7 @@ class Circle(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Circle(radius, **kwargs))
+        super().__init__(_ir.Circle(radius, **_manim_vmobject_kwargs(kwargs)))
         self.radius = float(radius)
         if color is not None:
             self.set_color(color)
@@ -117,7 +128,7 @@ class Rectangle(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Rectangle(width, height, **kwargs))
+        super().__init__(_ir.Rectangle(width, height, **_manim_vmobject_kwargs(kwargs)))
         self.width_value = float(width)
         self.height_value = float(height)
         if color is not None:
@@ -147,7 +158,7 @@ class Line(VMobject):
     ) -> None:
         start_value = _base.LEFT if start is None else _as_vec2(start)
         end_value = _base.RIGHT if end is None else _as_vec2(end)
-        super().__init__(_ir.Line(start_value, end_value, **kwargs))
+        super().__init__(_ir.Line(start_value, end_value, **_manim_vmobject_kwargs(kwargs)))
         self.start = start_value
         self.end = end_value
         if color is not None:
@@ -162,7 +173,7 @@ class Path(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Path(path, **kwargs))
+        super().__init__(_ir.Path(path, **_manim_vmobject_kwargs(kwargs)))
         self.path = path
         if color is not None:
             self.set_color(color)

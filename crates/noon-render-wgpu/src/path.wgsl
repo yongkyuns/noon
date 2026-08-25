@@ -54,8 +54,8 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
 
-    let fill_enabled = input.flags.x != 0u;
-    let stroke_enabled = input.flags.y != 0u;
+    let fill_enabled = (input.flags.x & 1u) != 0u;
+    let stroke_enabled = (input.flags.y & 1u) != 0u;
     let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
     let authored_enabled = select(fill_enabled, stroke_enabled, is_stroke);
     let enabled = authored_enabled || (is_stroke && derive_creation_stroke);

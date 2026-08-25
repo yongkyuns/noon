@@ -426,11 +426,23 @@ pub enum StrokeCap {
     Square,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeWidthMode {
+    /// Geometry/object scaling also scales stroke width.
+    #[default]
+    ScaleWithObject,
+    /// Stroke width is authored in physical canvas pixels and does not scale with the object.
+    ScreenSpace,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    #[serde(default)]
+    pub stroke_width_mode: StrokeWidthMode,
     #[serde(default)]
     pub stroke_join: StrokeJoin,
     #[serde(default)]
@@ -444,6 +456,7 @@ impl Default for Style {
             fill: Some(Color::WHITE),
             stroke: None,
             stroke_width: 1.0,
+            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
             opacity: 1.0,

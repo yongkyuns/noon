@@ -81,8 +81,33 @@ fn local_axis_padding(scale: vec2<f32>, rotation: f32) -> vec2<f32> {
     );
 }
 
-fn stroke_half_width(metrics: vec2<f32>, flags: vec2<u32>) -> f32 {
-    return select(0.0, max(metrics.x, 0.0) * 0.5, flags.y != 0u);
+fn fill_is_enabled(flags: vec2<u32>) -> bool {
+    return (flags.x & 1u) != 0u;
+}
+
+fn stroke_is_enabled(flags: vec2<u32>) -> bool {
+    return (flags.y & 1u) != 0u;
+}
+
+fn stroke_is_screen_space(flags: vec2<u32>) -> bool {
+    return (flags.y & 2u) != 0u;
+}
+
+fn distance_units_per_pixel(signed_distance: f32) -> f32 {
+    return max(
+        length(vec2<f32>(dpdx(signed_distance), dpdy(signed_distance))),
+        0.000001,
+    );
+}
+
+fn stroke_half_width_at_distance(
+    stroke_width: f32,
+    screen_space: bool,
+    signed_distance: f32,
+) -> f32 {
+    let local_half_width = max(stroke_width, 0.0) * 0.5;
+    let pixel_half_width = local_half_width * distance_units_per_pixel(signed_distance);
+    return select(local_half_width, pixel_half_width, screen_space);
 }
 
 fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
@@ -102,25 +127,41 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
 @vertex
 fn vs_circle(input: VertexInput) -> VertexOutput {
     let radius = max(abs(input.geometry.x), 0.000001);
-    let padding = local_axis_padding(input.scale, input.rotation);
-    let stroke_padding = stroke_half_width(input.metrics, input.flags);
+    let pixel_padding = local_axis_padding(input.scale, input.rotation);
     let reveal = clamp(input.geometry.y, 0.0, 1.0);
-    let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;
-    let creation_padding = select(
-        stroke_padding,
-        max(input.metrics.x, 0.0) * 0.5,
-        derive_creation_stroke,
+    let fill_enabled = fill_is_enabled(input.flags);
+    let stroke_enabled = stroke_is_enabled(input.flags);
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
+    let has_outline = stroke_enabled || derive_creation_stroke;
+    let world_stroke_padding = vec2<f32>(max(input.metrics.x, 0.0) * 0.5);
+    let screen_stroke_padding = pixel_padding * (max(input.metrics.x, 0.0) * 0.5);
+    let stroke_padding = select(
+        world_stroke_padding,
+        screen_stroke_padding,
+        stroke_is_screen_space(input.flags),
     );
-    let local = input.unit * (vec2<f32>(radius + creation_padding) + padding);
+    let outline_padding = select(vec2<f32>(0.0), stroke_padding, has_outline);
+    let local = input.unit * (vec2<f32>(radius) + outline_padding + pixel_padding);
     return make_output(input, local);
 }
 
 @vertex
 fn vs_rectangle(input: VertexInput) -> VertexOutput {
     let half_size = abs(input.geometry) * 0.5;
-    let padding = local_axis_padding(input.scale, input.rotation);
-    let stroke_padding = stroke_half_width(input.metrics, input.flags);
-    let local = input.unit * (half_size + vec2<f32>(stroke_padding) + padding);
+    let pixel_padding = local_axis_padding(input.scale, input.rotation);
+    let world_stroke_padding = vec2<f32>(max(input.metrics.x, 0.0) * 0.5);
+    let screen_stroke_padding = pixel_padding * (max(input.metrics.x, 0.0) * 0.5);
+    let stroke_padding = select(
+        world_stroke_padding,
+        screen_stroke_padding,
+        stroke_is_screen_space(input.flags),
+    );
+    let outline_padding = select(
+        vec2<f32>(0.0),
+        stroke_padding,
+        stroke_is_enabled(input.flags),
+    );
+    let local = input.unit * (half_size + outline_padding + pixel_padding);
     return make_output(input, local);
 }
 
@@ -135,10 +176,15 @@ fn vs_line(input: LineVertexInput) -> VertexOutput {
         tangent = delta / segment_length;
     }
     let normal = vec2<f32>(-tangent.y, tangent.x);
-    let width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
-    let half_width = width * 0.5;
+    let authored_width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
     let tangent_padding = local_units_per_pixel(tangent, input.scale, input.rotation);
     let normal_padding = local_units_per_pixel(normal, input.scale, input.rotation);
+    let width = select(
+        authored_width,
+        authored_width * normal_padding,
+        stroke_is_screen_space(input.flags),
+    );
+    let half_width = width * 0.5;
     let proxy_half_size = vec2<f32>(
         segment_length * 0.5 + half_width + tangent_padding,
         half_width + normal_padding,
@@ -190,10 +236,15 @@ fn styled_shape_color(
     stroke_enabled: bool,
     signed_distance: f32,
     stroke_width: f32,
+    screen_space_stroke: bool,
 ) -> vec4<f32> {
     // Match VectorPath/Lyon semantics: the authored outline is the stroke centerline.
     // A stroke extends half its width outside and half inside the semantic boundary.
-    let half_stroke_width = max(stroke_width, 0.0) * 0.5;
+    let half_stroke_width = stroke_half_width_at_distance(
+        stroke_width,
+        screen_space_stroke,
+        signed_distance,
+    );
     let fill_coverage = inside_coverage(signed_distance);
     let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
     let stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
@@ -214,7 +265,7 @@ fn styled_shape_color(
 
 fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
     let coverage = inside_coverage(signed_distance);
-    if input.flags.y > 0.5 {
+    if input.flags.y == 1.0 || input.flags.y == 3.0 {
         return covered_color(input.stroke, input.metrics.y, coverage);
     }
     if input.flags.x > 0.5 {
@@ -239,8 +290,9 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let reveal = clamp(input.geometry.y, 0.0, 1.0);
     let signed_distance = length(input.local) - radius;
     let stroke_width = max(input.metrics.x, 0.0);
-    let fill_enabled = input.flags.x > 0.5;
-    let stroke_enabled = input.flags.y > 0.5;
+    let fill_enabled = input.flags.x >= 1.0;
+    let stroke_enabled = input.flags.y == 1.0 || input.flags.y == 3.0;
+    let screen_space_stroke = input.flags.y >= 2.0;
 
     // All derivative-dependent coverage is evaluated before reveal-dependent
     // control flow. `reveal` is interpolated, so WebGPU requires derivatives to
@@ -253,6 +305,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         stroke_enabled,
         signed_distance,
         stroke_width,
+        screen_space_stroke,
     );
     let tau = 6.283185307179586;
     var angle = atan2(input.local.y, input.local.x);
@@ -261,7 +314,11 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let progress = angle / tau;
     let progress_edge = max(fwidth(progress), 0.00001);
-    let half_stroke_width = stroke_width * 0.5;
+    let half_stroke_width = stroke_half_width_at_distance(
+        stroke_width,
+        screen_space_stroke,
+        signed_distance,
+    );
     let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
     let inner_coverage = outside_coverage(signed_distance + half_stroke_width);
     let ring_coverage = outer_coverage * inner_coverage;
@@ -321,9 +378,10 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
         input.stroke,
         input.metrics.y,
         input.flags.x > 0.5,
-        input.flags.y > 0.5,
+        input.flags.y == 1.0 || input.flags.y == 3.0,
         signed_distance,
         stroke_width,
+        input.flags.y >= 2.0,
     );
 }
 

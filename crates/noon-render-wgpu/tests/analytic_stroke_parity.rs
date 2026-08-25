@@ -53,7 +53,8 @@ fn canonical_create_strokes_match_centered_analytic_outer_bounds() {
 fn analytic_shader_uses_centered_vector_path_stroke_contract() {
     let shader = include_str!("../src/analytic.wgsl");
 
-    assert!(shader.contains("let stroke_padding = stroke_half_width(input.metrics, input.flags);"));
+    assert!(shader.contains("stroke_is_screen_space(input.flags)"));
+    assert!(shader.contains("stroke_half_width_at_distance("));
     assert!(shader.contains("inside_coverage(signed_distance - half_stroke_width)"));
     assert!(shader.contains("outside_coverage(signed_distance + half_stroke_width)"));
     assert!(shader.contains("let stroke_width = max(input.metrics.x, 0.0);"));

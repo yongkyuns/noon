@@ -10,6 +10,7 @@ fn stroke_style(color: Color) -> Style {
         fill: None,
         stroke: Some(color),
         stroke_width: 0.1,
+        stroke_width_mode: noon_core::StrokeWidthMode::ScaleWithObject,
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,
