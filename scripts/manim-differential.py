@@ -72,6 +72,10 @@ def _object_observation(obj: Any) -> dict[str, Any]:
     }
 
 
+def _point_observation(point: Any) -> list[float]:
+    return [_round_float(point[0]), _round_float(point[1])]
+
+
 def _members_observation(group: Any) -> dict[str, Any]:
     members = list(group.submobjects)
     center = group.get_center()
@@ -395,6 +399,119 @@ def _manim_replace_stretch() -> Any:
     return _object_observation(source)
 
 
+
+def _noon_critical_points() -> Any:
+    obj = noon.Rectangle(width=2.0, height=1.0).shift(noon.RIGHT * 0.7 + noon.UP * 0.3)
+    return {
+        "left": _point_observation(obj.get_left()),
+        "right": _point_observation(obj.get_right()),
+        "top": _point_observation(obj.get_top()),
+        "bottom": _point_observation(obj.get_bottom()),
+        "corner": _point_observation(obj.get_corner(noon.UR)),
+        "x_left": _round_float(obj.get_x(noon.LEFT)),
+        "y_top": _round_float(obj.get_y(noon.UP)),
+    }
+
+
+def _manim_critical_points() -> Any:
+    obj = manim.Rectangle(width=2.0, height=1.0).shift(manim.RIGHT * 0.7 + manim.UP * 0.3)
+    return {
+        "left": _point_observation(obj.get_left()),
+        "right": _point_observation(obj.get_right()),
+        "top": _point_observation(obj.get_top()),
+        "bottom": _point_observation(obj.get_bottom()),
+        "corner": _point_observation(obj.get_corner(manim.UR)),
+        "x_left": _round_float(obj.get_x(manim.LEFT)),
+        "y_top": _round_float(obj.get_y(manim.UP)),
+    }
+
+
+def _noon_set_coord_direction() -> Any:
+    obj = noon.Square(side_length=1.0).shift(noon.RIGHT * 0.25)
+    obj.set_coord(-1.5, 0, noon.LEFT).set_coord(1.25, 1, noon.UP)
+    return {"object": _object_observation(obj), "left": _point_observation(obj.get_left()), "top": _point_observation(obj.get_top())}
+
+
+def _manim_set_coord_direction() -> Any:
+    obj = manim.Square(side_length=1.0).shift(manim.RIGHT * 0.25)
+    obj.set_coord(-1.5, 0, manim.LEFT).set_coord(1.25, 1, manim.UP)
+    return {"object": _object_observation(obj), "left": _point_observation(obj.get_left()), "top": _point_observation(obj.get_top())}
+
+
+def _noon_scale_to_fit_width() -> Any:
+    return _object_observation(noon.Rectangle(width=2.0, height=1.0).scale_to_fit_width(3.0))
+
+
+def _manim_scale_to_fit_width() -> Any:
+    return _object_observation(manim.Rectangle(width=2.0, height=1.0).scale_to_fit_width(3.0))
+
+
+def _noon_stretch_to_fit_height() -> Any:
+    return _object_observation(noon.Rectangle(width=2.0, height=1.0).stretch_to_fit_height(2.5))
+
+
+def _manim_stretch_to_fit_height() -> Any:
+    return _object_observation(manim.Rectangle(width=2.0, height=1.0).stretch_to_fit_height(2.5))
+
+
+def _noon_match_xy() -> Any:
+    target = noon.Rectangle(width=1.5, height=0.8).shift(noon.RIGHT * 1.2 + noon.DOWN * 0.6)
+    obj = noon.Circle(radius=0.3).match_x(target, noon.RIGHT).match_y(target, noon.DOWN)
+    return {"target": _object_observation(target), "object": _object_observation(obj), "right": _point_observation(obj.get_right()), "bottom": _point_observation(obj.get_bottom())}
+
+
+def _manim_match_xy() -> Any:
+    target = manim.Rectangle(width=1.5, height=0.8).shift(manim.RIGHT * 1.2 + manim.DOWN * 0.6)
+    obj = manim.Circle(radius=0.3).match_x(target, manim.RIGHT).match_y(target, manim.DOWN)
+    return {"target": _object_observation(target), "object": _object_observation(obj), "right": _point_observation(obj.get_right()), "bottom": _point_observation(obj.get_bottom())}
+
+
+def _noon_match_width() -> Any:
+    target = noon.Rectangle(width=2.4, height=0.6)
+    return _object_observation(noon.Circle(radius=0.4).match_width(target))
+
+
+def _manim_match_width() -> Any:
+    target = manim.Rectangle(width=2.4, height=0.6)
+    return _object_observation(manim.Circle(radius=0.4).match_width(target))
+
+
+def _noon_match_height_stretch() -> Any:
+    target = noon.Rectangle(width=0.5, height=1.8)
+    return _object_observation(noon.Rectangle(width=1.4, height=0.7).match_height(target, stretch=True))
+
+
+def _manim_match_height_stretch() -> Any:
+    target = manim.Rectangle(width=0.5, height=1.8)
+    return _object_observation(manim.Rectangle(width=1.4, height=0.7).match_height(target, stretch=True))
+
+
+def _noon_dimension_properties() -> Any:
+    obj = noon.Rectangle(width=2.0, height=1.0)
+    obj.width = 3.0
+    obj.height = 1.5
+    return _object_observation(obj)
+
+
+def _manim_dimension_properties() -> Any:
+    obj = manim.Rectangle(width=2.0, height=1.0)
+    obj.width = 3.0
+    obj.height = 1.5
+    return _object_observation(obj)
+
+
+def _noon_rotate_about_origin() -> Any:
+    obj = noon.Rectangle(width=1.2, height=0.6).shift(noon.RIGHT * 1.5 + noon.UP * 0.5)
+    obj.rotate_about_origin(math.pi / 2.0)
+    return _object_observation(obj)
+
+
+def _manim_rotate_about_origin() -> Any:
+    obj = manim.Rectangle(width=1.2, height=0.6).shift(manim.RIGHT * 1.5 + manim.UP * 0.5)
+    obj.rotate_about_origin(math.pi / 2.0)
+    return _object_observation(obj)
+
+
 FIXTURES = [
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
@@ -429,6 +546,15 @@ FIXTURES = [
     Fixture("become", _noon_become, _manim_become),
     Fixture("replace_width", _noon_replace_width, _manim_replace_width),
     Fixture("replace_stretch", _noon_replace_stretch, _manim_replace_stretch),
+    Fixture("critical_points", _noon_critical_points, _manim_critical_points),
+    Fixture("set_coord_direction", _noon_set_coord_direction, _manim_set_coord_direction),
+    Fixture("scale_to_fit_width", _noon_scale_to_fit_width, _manim_scale_to_fit_width),
+    Fixture("stretch_to_fit_height", _noon_stretch_to_fit_height, _manim_stretch_to_fit_height),
+    Fixture("match_xy", _noon_match_xy, _manim_match_xy),
+    Fixture("match_width", _noon_match_width, _manim_match_width),
+    Fixture("match_height_stretch", _noon_match_height_stretch, _manim_match_height_stretch),
+    Fixture("dimension_properties", _noon_dimension_properties, _manim_dimension_properties),
+    Fixture("rotate_about_origin", _noon_rotate_about_origin, _manim_rotate_about_origin),
 ]
 
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
