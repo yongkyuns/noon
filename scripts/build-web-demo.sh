@@ -56,6 +56,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
   web/python/_manim_composition.py \
+  web/python/_manim_frame_sampling.py \
   web/python/_manim_lifecycle.py \
   web/python/_manim_reactive.py \
   web/python/_manim_updaters.py
