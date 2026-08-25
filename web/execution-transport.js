@@ -153,7 +153,7 @@ export class SharedExecutionDeltaReader {
         slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
       );
       if (length < 0 || length > this.#slotCapacity) {
-        Atomics.store(this.#header, stateIndex, SLOT_FREE);
+        this.#release(slot, stateIndex);
         throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
       }
       const offset = slot * this.#slotCapacity;
@@ -161,19 +161,32 @@ export class SharedExecutionDeltaReader {
       ready.push({ slot, stateIndex, json, metadata: executionDeltaMetadata(json) });
     }
     ready.sort((left, right) => left.metadata.sequence - right.metadata.sequence);
+
+    let consumed = 0;
     for (const item of ready) {
+      let accepted;
       try {
-        apply(item.json, item.metadata);
-      } finally {
-        Atomics.store(
-          this.#header,
-          item.slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
-          0,
-        );
-        Atomics.store(this.#header, item.stateIndex, SLOT_FREE);
+        accepted = apply(item.json, item.metadata) !== false;
+      } catch (error) {
+        this.#release(item.slot, item.stateIndex);
+        throw error;
       }
+      if (!accepted) {
+        break;
+      }
+      this.#release(item.slot, item.stateIndex);
+      consumed += 1;
     }
-    return ready.length;
+    return consumed;
+  }
+
+  #release(slot, stateIndex) {
+    Atomics.store(
+      this.#header,
+      slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
+      0,
+    );
+    Atomics.store(this.#header, stateIndex, SLOT_FREE);
   }
 }
 
@@ -254,6 +267,8 @@ export class TransferableExecutionDeltaReceiver {
   #port;
   #apply;
   #onWritable;
+  #pending = [];
+  #draining = false;
 
   constructor(port, apply, { onWritable = null } = {}) {
     if (!port || typeof port.postMessage !== "function") {
@@ -270,6 +285,37 @@ export class TransferableExecutionDeltaReceiver {
     port.start?.();
   }
 
+  drain() {
+    if (this.#draining) {
+      return 0;
+    }
+    this.#draining = true;
+    let consumed = 0;
+    try {
+      while (this.#pending.length > 0) {
+        const item = this.#pending[0];
+        if (this.#apply(item.json, item.metadata) === false) {
+          break;
+        }
+        this.#pending.shift();
+        this.#port.postMessage({
+          type: "execution_ack",
+          session: item.metadata.session,
+          sequence: item.metadata.sequence,
+        });
+        this.#onWritable?.();
+        consumed += 1;
+      }
+    } finally {
+      this.#draining = false;
+    }
+    return consumed;
+  }
+
+  pendingCount() {
+    return this.#pending.length;
+  }
+
   #handleMessage(message) {
     if (!isRecord(message) || message.type !== "execution_delta") {
       return;
@@ -279,16 +325,11 @@ export class TransferableExecutionDeltaReceiver {
     }
     const json = decoder.decode(new Uint8Array(message.buffer));
     const metadata = executionDeltaMetadata(json);
-    try {
-      this.#apply(json, metadata);
-    } finally {
-      this.#port.postMessage({
-        type: "execution_ack",
-        session: metadata.session,
-        sequence: metadata.sequence,
-      });
-      this.#onWritable?.();
+    if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
+      throw new Error("transferable execution delta metadata does not match its envelope");
     }
+    this.#pending.push({ json, metadata });
+    this.drain();
   }
 }
 
