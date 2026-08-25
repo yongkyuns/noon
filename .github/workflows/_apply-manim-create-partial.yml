@@ -1,0 +1,37 @@
+name: Apply Manim Create partial geometry
+
+on:
+  push:
+    branches:
+      - parity/manim-create-partial
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-create-partial
+          fetch-depth: 0
+      - name: Apply renderer integration
+        run: python3 scripts/_apply_manim_create_partial.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Test partial geometry
+        run: cargo test -p noon-geometry partial --lib
+      - name: Test renderer preparation
+        run: cargo test -p noon-render-wgpu --lib
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/_apply_manim_create_partial.py
+          rm .github/workflows/_apply-manim-create-partial.yml
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: render Manim Create as partial closed-shape geometry"
+          git push origin HEAD:parity/manim-create-partial
