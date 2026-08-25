@@ -143,6 +143,14 @@ def _height(self: _base.Mobject) -> float:
     return 0.0 if bounds is None else bounds[1].y - bounds[0].y
 
 
+def _set_width_property(self: _base.Mobject, width: float) -> None:
+    self.scale_to_fit_width(float(width))
+
+
+def _set_height_property(self: _base.Mobject, height: float) -> None:
+    self.scale_to_fit_height(float(height))
+
+
 def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
@@ -410,8 +418,8 @@ def install() -> None:
     _base.Mobject._apply = _apply
     _base.Mobject.copy = _copy_mobject
     _base.Mobject.get_center = _get_center
-    _base.Mobject.width = property(_width)
-    _base.Mobject.height = property(_height)
+    _base.Mobject.width = property(_width, _set_width_property)
+    _base.Mobject.height = property(_height, _set_height_property)
     _base.Mobject.shift = _shift
     _base.Mobject.move_to = _move_to
     _base.Mobject.scale = _scale
