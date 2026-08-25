@@ -345,10 +345,7 @@ def _set_stroke(
     elif width is None and opacity is None:
         handle.disableStroke()
     if width is not None:
-        value = _base._ir._finite_number("stroke width", width)
-        if value < 0.0:
-            raise ValueError("stroke width must be non-negative")
-        handle.setStrokeWidth(value)
+        handle.setStrokeWidth(_phase_b._manim_stroke_width(width))
     if opacity is not None:
         handle.setStrokeOpacity(_phase_b._opacity("stroke opacity", opacity))
     return self

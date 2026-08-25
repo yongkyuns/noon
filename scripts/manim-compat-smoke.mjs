@@ -108,6 +108,31 @@ class GroupAndSceneMembership(Scene):
         assert self.mobjects == []
 `;
 
+const defaultVmobjectStyleSource = `
+from noon import *
+
+class DefaultVmobjectStyle(Scene):
+    def construct(self):
+        circle = Circle()
+        assert abs(circle.get_fill_opacity() - 0.0) < 1e-12
+        assert abs(circle.get_stroke_opacity() - 1.0) < 1e-12
+        assert abs(circle.style["stroke_width"] - 0.04) < 1e-9
+        assert circle.style["stroke_join"] == "miter"
+        assert circle.style["stroke_cap"] == "butt"
+        assert circle.style["fill"]["red"] == 1.0
+        assert circle.style["stroke"]["red"] == 1.0
+
+        explicit = Square(stroke_width=10)
+        assert abs(explicit.style["stroke_width"] - 0.10) < 1e-9
+        explicit.set_stroke(width=20)
+        assert abs(explicit.style["stroke_width"] - 0.20) < 1e-9
+
+        filled = Circle(fill_color=PINK, fill_opacity=0.5)
+        assert abs(filled.get_fill_opacity() - 0.5) < 1e-12
+        assert abs(filled.style["stroke_width"] - 0.04) < 1e-9
+        self.add(circle, explicit, filled)
+`;
+
 const styleSource = `
 from noon import *
 
@@ -290,6 +315,19 @@ try {
     12,
     "scene membership and grouped fades should lower to deterministic presence events",
   );
+
+  const defaultVmobjectStyle = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    defaultVmobjectStyleSource,
+  );
+  assert.equal(defaultVmobjectStyle.kind, "scene_document");
+  assert.equal(defaultVmobjectStyle.document.objects.length, 3);
+  const defaultStyle = defaultVmobjectStyle.document.objects[0].style;
+  assert.equal(defaultStyle.fill.alpha, 0);
+  assert.equal(defaultStyle.stroke.alpha, 1);
+  assert.ok(Math.abs(defaultStyle.stroke_width - 0.04) < 1e-7);
+  assert.equal(defaultStyle.stroke_join, "miter");
+  assert.equal(defaultStyle.stroke_cap, "butt");
 
   const style = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
