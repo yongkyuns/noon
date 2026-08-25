@@ -1,0 +1,35 @@
+name: Apply Rust Manim defaults
+
+on:
+  push:
+    branches:
+      - parity/manim-vmobject-style-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-vmobject-style-fix
+          fetch-depth: 0
+      - name: Apply patch
+        run: python3 scripts/_apply_rust_manim_defaults.py
+      - name: Validate Rust formatting and focused tests
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test -p noon --test manim_style_defaults
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/_apply_rust_manim_defaults.py
+          rm .github/workflows/_apply-rust-manim-defaults.yml
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align Rust authoring VMobject defaults with Manim"
+          git push origin HEAD:parity/manim-vmobject-style-fix
