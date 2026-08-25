@@ -20,6 +20,8 @@ jobs:
         shell: bash
         run: |
           set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin master
           git merge --no-commit --no-ff origin/master
           status=$?
