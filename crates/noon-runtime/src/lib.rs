@@ -1508,6 +1508,7 @@ mod tests {
                 to: Vec2::new(8.0, 2.0),
             },
             timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
         let track_patch = ScenePatch::ReplaceTrack(replacement);
@@ -1552,6 +1553,7 @@ mod tests {
                 to: false,
             },
             timing: TrackTiming::instant(1.0),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
         let patch = ScenePatch::AddTrack(presence);

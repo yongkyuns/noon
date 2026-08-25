@@ -89,6 +89,8 @@ pub struct CompiledTrack {
     pub values: TrackValues,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
+    /// Retained semantic origin for local invalidation/debug/profiling.
+    pub animation_origin: Option<noon_core::AnimationTrackOrigin>,
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
@@ -468,6 +470,10 @@ impl CompiledScene {
 
     pub const fn track_count(&self) -> usize {
         self.track_count
+    }
+
+    pub fn track_origin(&self, id: TrackId) -> Option<noon_core::AnimationTrackOrigin> {
+        self.track(id).and_then(|track| track.animation_origin)
     }
 
     pub fn track(&self, id: TrackId) -> Option<&CompiledTrack> {
@@ -891,6 +897,7 @@ fn compile_track(
         values: track.values.clone(),
         timing: track.timing,
         time_map: track.time_map.clone(),
+        animation_origin: track.origin,
         transform_geometry_plan: compile_transform_geometry_plan(track)?,
     })
 }
@@ -1443,6 +1450,7 @@ mod tests {
                 to: true,
             },
             timing: TrackTiming::new(2.0, 0.0, Easing::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
         assert_eq!(
@@ -1563,6 +1571,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
             timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
         compiled
@@ -1596,6 +1605,7 @@ mod tests {
                 property: Property::Opacity,
                 values: TrackValues::Scalar { from: 1.0, to: 0.0 },
                 timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+                origin: None,
                 time_map: CompositionTimeMap::identity(),
             }))
             .expect("local track add must compile");
@@ -1642,6 +1652,7 @@ mod tests {
                 property: Property::Opacity,
                 values: TrackValues::Scalar { from: 1.0, to: 0.5 },
                 timing: TrackTiming::new(0.25, 1.0, Easing::Linear),
+                origin: None,
                 time_map: CompositionTimeMap::identity(),
             }))
             .unwrap();
@@ -1693,6 +1704,7 @@ mod tests {
                     to: 0.25,
                 },
                 timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+                origin: None,
                 time_map: CompositionTimeMap::identity(),
             }))
             .unwrap();
@@ -1741,6 +1753,7 @@ mod tests {
                     to: true,
                 },
                 timing: TrackTiming::instant(2.0),
+                origin: None,
                 time_map: CompositionTimeMap::identity(),
             }))
             .unwrap_err();
@@ -1818,6 +1831,7 @@ mod tests {
                 property: Property::Transform,
                 values: TrackValues::Object { from, to },
                 timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                origin: None,
                 time_map: CompositionTimeMap::identity(),
             }),
         ]);

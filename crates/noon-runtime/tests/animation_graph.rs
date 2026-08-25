@@ -37,12 +37,7 @@ fn local_graph_relower_matches_fresh_compile_across_seek_and_advance() {
 
     let mut lowering = AnimationLowering::new();
     lowering
-        .lower_root(
-            &graph,
-            &mut scene,
-            root,
-            AnimationLoweringContext::new(0.0),
-        )
+        .lower_root(&graph, &mut scene, root, AnimationLoweringContext::new(0.0))
         .unwrap();
     lowering
         .lower_root(
@@ -65,7 +60,12 @@ fn local_graph_relower_matches_fresh_compile_across_seek_and_advance() {
         .unwrap()
         .clone();
 
-    let mut live = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let compiled = CompiledScene::compile(&scene).unwrap();
+    assert_eq!(
+        compiled.track_origin(unrelated_track),
+        Some(unrelated_origin)
+    );
+    let mut live = SceneInstance::new(compiled);
     graph.set_lag_ratio(root, 0.5).unwrap();
     let relowered = lowering
         .relower_edited_subtree(&graph, &mut scene, second)
@@ -74,7 +74,10 @@ fn local_graph_relower_matches_fresh_compile_across_seek_and_advance() {
     assert_eq!(relowered.stats.tracks_added, 0);
     assert_eq!(relowered.stats.tracks_removed, 0);
     assert!(relowered.stats.tracks_replaced > 0);
-    assert_eq!(lowering.track_for_origin(unrelated_origin), Some(unrelated_track));
+    assert_eq!(
+        lowering.track_for_origin(unrelated_origin),
+        Some(unrelated_track)
+    );
     assert_eq!(
         scene
             .tracks()
@@ -149,12 +152,7 @@ fn lifecycle_leaf_events_land_on_exact_composition_boundaries() {
 
     let mut lowering = AnimationLowering::new();
     lowering
-        .lower_root(
-            &graph,
-            &mut scene,
-            root,
-            AnimationLoweringContext::new(1.0),
-        )
+        .lower_root(&graph, &mut scene, root, AnimationLoweringContext::new(1.0))
         .unwrap();
 
     let presence_times = scene

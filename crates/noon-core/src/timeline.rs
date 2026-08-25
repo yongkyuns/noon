@@ -162,6 +162,10 @@ pub struct TrackDefinition {
     pub timing: TrackTiming,
     #[serde(default, skip_serializing_if = "CompositionTimeMap::is_identity")]
     pub time_map: CompositionTimeMap,
+    /// Stable semantic leaf origin when this execution track was lowered from
+    /// a retained AnimationGraph. Omitted for legacy/directly-authored tracks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::AnimationTrackOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -292,6 +296,7 @@ impl SceneDefinition {
             values,
             timing,
             time_map,
+            origin: None,
         };
         validate_track_definition(&track)?;
         self.next_track_id = self

@@ -1553,6 +1553,7 @@ mod tests {
             property: Property::Transform,
             values: TrackValues::Object { from, to },
             timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            origin: None,
             time_map: noon_core::CompositionTimeMap::identity(),
         };
         SceneDefinition::from_parts(vec![object], vec![track]).expect("transform scene is valid")
@@ -1633,6 +1634,7 @@ mod tests {
                     property: Property::Transform,
                     values: TrackValues::Object { from, to },
                     timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                    origin: None,
                     time_map: noon_core::CompositionTimeMap::identity(),
                 }),
             ],

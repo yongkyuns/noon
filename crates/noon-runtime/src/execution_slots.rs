@@ -666,6 +666,7 @@ mod tests {
                 to: Vec2::new(3.0, 0.0),
             },
             timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            origin: None,
             time_map: noon_core::CompositionTimeMap::identity(),
         };
 
@@ -711,6 +712,7 @@ mod tests {
                     to: Vec2::new(3.0, 0.0),
                 },
                 timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+                origin: None,
                 time_map: noon_core::CompositionTimeMap::identity(),
             }),
         ]);

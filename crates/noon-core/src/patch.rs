@@ -477,6 +477,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
 
@@ -515,6 +516,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         }];
 
@@ -550,6 +552,7 @@ mod tests {
                 to: true,
             },
             timing: TrackTiming::instant(3.0),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
 
@@ -572,6 +575,7 @@ mod tests {
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         };
         assert!(matches!(

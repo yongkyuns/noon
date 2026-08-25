@@ -646,6 +646,7 @@ fn lower_node(
                         property: template.property,
                         values: template.values.clone(),
                         timing: TrackTiming::instant(start_time),
+                        origin: Some(origin),
                         time_map: CompositionTimeMap::identity(),
                     };
                     crate::validate_track_definition(&track)?;
@@ -670,6 +671,7 @@ fn lower_node(
                         root_duration,
                         template.timing.easing,
                     ),
+                    origin: Some(origin),
                     time_map: CompositionTimeMap::from_steps(steps),
                 };
                 crate::validate_track_definition(&track)?;
@@ -793,6 +795,7 @@ fn leaf_intrinsic_run_time(tracks: &[AnimationTrackTemplate]) -> Result<f64, Ani
             property: template.property,
             values: template.values.clone(),
             timing: template.timing,
+            origin: None,
             time_map: CompositionTimeMap::identity(),
         })?;
         end = end.max(template.timing.start_time + template.timing.duration);

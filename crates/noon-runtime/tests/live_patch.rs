@@ -77,6 +77,7 @@ fn create_add_track_and_remove_match_full_recompile() {
             to: Vec2::new(6.0, 3.0),
         },
         timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+        origin: None,
         time_map: CompositionTimeMap::identity(),
     };
     let add_track = ScenePatch::AddTrack(track);
@@ -115,6 +116,7 @@ fn rejected_patch_is_transactional() {
         property: Property::Opacity,
         values: TrackValues::Scalar { from: 1.0, to: 0.0 },
         timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        origin: None,
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -151,6 +153,7 @@ fn replacing_track_preserves_unrelated_object_identity_and_time() {
             to: Vec2::new(8.0, 2.0),
         },
         timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        origin: None,
         time_map: CompositionTimeMap::identity(),
     });
     live.apply_patch(&patch).expect("live patch must succeed");
@@ -193,6 +196,7 @@ fn timeline_patch_relowers_only_affected_runtime_channel() {
             to: 0.25,
         },
         timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        origin: None,
         time_map: CompositionTimeMap::identity(),
     });
     live.apply_patch(&patch)
@@ -236,6 +240,7 @@ fn moving_a_track_between_objects_relowers_only_old_and_new_channels() {
         property: Property::Rotation,
         values: TrackValues::Scalar { from: 0.0, to: 1.0 },
         timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        origin: None,
         time_map: CompositionTimeMap::identity(),
     };
     live.apply_patch(&ScenePatch::ReplaceTrack(replacement.clone()))

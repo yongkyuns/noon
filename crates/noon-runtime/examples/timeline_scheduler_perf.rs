@@ -126,6 +126,7 @@ fn position_track(id: u64, object: u32, start_time: f64, duration: f64) -> Compi
             easing: RateFunction::Linear,
         },
         time_map: CompositionTimeMap::default(),
+        animation_origin: None,
         transform_geometry_plan: None,
     }
 }

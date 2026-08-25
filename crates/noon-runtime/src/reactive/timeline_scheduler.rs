@@ -460,6 +460,7 @@ mod tests {
                 easing: RateFunction::Linear,
             },
             time_map: CompositionTimeMap::default(),
+            animation_origin: None,
             transform_geometry_plan: None,
         }
     }
