@@ -186,6 +186,7 @@ pub struct ExecutionDeltaEncoder {
     initialized: bool,
     slots: ExecutionSlotTable,
     previous_order: Vec<ObjectId>,
+    object_orders: HashMap<ObjectId, u32>,
 }
 
 impl ExecutionDeltaEncoder {
@@ -196,6 +197,7 @@ impl ExecutionDeltaEncoder {
             initialized: false,
             slots: ExecutionSlotTable::new(),
             previous_order: Vec::new(),
+            object_orders: HashMap::new(),
         }
     }
 
@@ -212,11 +214,21 @@ impl ExecutionDeltaEncoder {
         frame: &FrameState,
         changes: &FrameChanges,
     ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
+        let live_indices = (0..frame.objects.len()).collect::<Vec<_>>();
+        self.encode_live(frame, changes, &live_indices)
+    }
+
+    pub fn encode_live(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        live_indices: &[usize],
+    ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
         if !frame.time.is_finite() {
             return Err(ExecutionTransportError::InvalidTime(frame.time));
         }
 
-        let structural = self.sync_slots(frame)?;
+        let structural = self.sync_slots(frame, live_indices)?;
         let snapshot = !self.initialized || structural || changes.is_all();
         if !snapshot && changes.is_empty() {
             return Ok(None);
@@ -228,14 +240,32 @@ impl ExecutionDeltaEncoder {
             .checked_add(1)
             .ok_or(ExecutionTransportError::SequenceExhausted)?;
         let indices = if snapshot {
-            (0..frame.objects.len()).collect::<Vec<_>>()
+            live_indices.to_vec()
         } else {
             changes.object_indices().to_vec()
         };
         let mut objects = Vec::with_capacity(indices.len());
-        for index in indices {
-            let order =
-                u32::try_from(index).map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
+        for (snapshot_order, index) in indices.into_iter().enumerate() {
+            let object = frame
+                .objects
+                .get(index)
+                .ok_or(ExecutionTransportError::SlotSpaceExhausted)?;
+            let order = if snapshot {
+                u32::try_from(snapshot_order)
+                    .map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?
+            } else {
+                *self.object_orders.get(&object.id).ok_or_else(|| {
+                    ExecutionTransportError::UnknownSlot(
+                        self.slots
+                            .slot_for_object(object.id)
+                            .map(TransportSlotId::from)
+                            .unwrap_or(TransportSlotId {
+                                slot: u32::MAX,
+                                generation: 0,
+                            }),
+                    )
+                })?
+            };
             objects.push(self.object_state(frame, index, order)?);
         }
         self.initialized = true;
@@ -262,12 +292,32 @@ impl ExecutionDeltaEncoder {
             .transpose()
     }
 
-    fn sync_slots(&mut self, frame: &FrameState) -> Result<bool, ExecutionTransportError> {
-        let order = frame
-            .objects
+    pub fn encode_live_json(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        live_indices: &[usize],
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        self.encode_live(frame, changes, live_indices)?
+            .map(|delta| serde_json::to_string(&delta).map_err(ExecutionTransportError::from))
+            .transpose()
+    }
+
+    fn sync_slots(
+        &mut self,
+        frame: &FrameState,
+        live_indices: &[usize],
+    ) -> Result<bool, ExecutionTransportError> {
+        let order = live_indices
             .iter()
-            .map(|object| object.id)
-            .collect::<Vec<_>>();
+            .map(|index| {
+                frame
+                    .objects
+                    .get(*index)
+                    .map(|object| object.id)
+                    .ok_or(ExecutionTransportError::SlotSpaceExhausted)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let current = order.iter().copied().collect::<HashSet<_>>();
         if current.len() != order.len() {
             if let Some(duplicate) = order.iter().copied().find(|object| {
@@ -300,6 +350,12 @@ impl ExecutionDeltaEncoder {
             self.slots.insert_object(*object)?;
         }
         self.previous_order = order;
+        self.object_orders.clear();
+        for (order, object) in self.previous_order.iter().copied().enumerate() {
+            let order =
+                u32::try_from(order).map_err(|_| ExecutionTransportError::SlotSpaceExhausted)?;
+            self.object_orders.insert(object, order);
+        }
         Ok(structural)
     }
 
@@ -564,8 +620,9 @@ impl EngineScenePlayer {
 
     pub fn initial_delta_json(&mut self) -> Result<String, ExecutionTransportError> {
         let changes = self.player.take_frame_changes();
+        let live_indices = self.player.live_frame_indices();
         self.encoder
-            .encode_json(self.player.frame(), &changes)?
+            .encode_live_json(self.player.frame(), &changes, &live_indices)?
             .ok_or(ExecutionTransportError::StructuralDeltaRequiresSnapshot)
     }
 
@@ -632,12 +689,15 @@ impl EngineScenePlayer {
 
     fn take_delta_json(&mut self) -> Result<Option<String>, ExecutionTransportError> {
         let changes = self.player.take_frame_changes();
-        self.encoder.encode_json(self.player.frame(), &changes)
+        let live_indices = self.player.live_frame_indices();
+        self.encoder
+            .encode_live_json(self.player.frame(), &changes, &live_indices)
     }
 
     fn force_snapshot_json(&mut self) -> Result<String, ExecutionTransportError> {
+        let live_indices = self.player.live_frame_indices();
         self.encoder
-            .encode_json(self.player.frame(), &FrameChanges::all())?
+            .encode_live_json(self.player.frame(), &FrameChanges::all(), &live_indices)?
             .ok_or(ExecutionTransportError::StructuralDeltaRequiresSnapshot)
     }
 }
@@ -756,7 +816,11 @@ mod tests {
         player: &mut ScenePlayer,
     ) -> ExecutionDeltaEnvelope {
         let changes = player.take_frame_changes();
-        encoder.encode(player.frame(), &changes).unwrap().unwrap()
+        let live_indices = player.live_frame_indices();
+        encoder
+            .encode_live(player.frame(), &changes, &live_indices)
+            .unwrap()
+            .unwrap()
     }
 
     fn scene_json() -> String {
