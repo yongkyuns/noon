@@ -32,14 +32,24 @@ fn circle_path(radius: f32) -> VectorPath {
     let mut path = VectorPath::new().move_to(Vec2::new(radius, 0.0));
     for index in 0..CURVES {
         let start_angle = index as f32 * step;
-        let end_angle = (index + 1) as f32 * step;
         let (start_sin, start_cos) = start_angle.sin_cos();
-        let (end_sin, end_cos) = end_angle.sin_cos();
-
         let start = Vec2::new(radius * start_cos, radius * start_sin);
-        let end = Vec2::new(radius * end_cos, radius * end_sin);
         let start_tangent = Vec2::new(-start_sin, start_cos);
-        let end_tangent = Vec2::new(-end_sin, end_cos);
+
+        // The full-turn endpoint must be exactly the initial anchor. Computing
+        // sin(TAU) in f32 leaves a tiny residual, which makes VectorPath::close()
+        // look like a ninth curve to pointwise_partial_path. Manim's Circle has
+        // eight Bezier curves; the closing operation is not an extra reveal span.
+        let (end, end_tangent) = if index + 1 == CURVES {
+            (Vec2::new(radius, 0.0), Vec2::new(0.0, 1.0))
+        } else {
+            let end_angle = (index + 1) as f32 * step;
+            let (end_sin, end_cos) = end_angle.sin_cos();
+            (
+                Vec2::new(radius * end_cos, radius * end_sin),
+                Vec2::new(-end_sin, end_cos),
+            )
+        };
 
         path = path.cubic_to(
             start + start_tangent * handle_length,
@@ -127,6 +137,34 @@ mod tests {
                 assert_vec2_close(to, Vec2::new(diagonal, diagonal));
             }
             command => panic!("expected first cubic segment, got {command:?}"),
+        }
+
+        match commands[8] {
+            PathCommand::CubicTo { control2, to, .. } => {
+                assert_eq!(to, Vec2::new(radius, 0.0));
+                assert_vec2_close(control2, Vec2::new(radius, -radius * factor));
+            }
+            command => panic!("expected final cubic segment, got {command:?}"),
+        }
+    }
+
+    #[test]
+    fn half_circle_partial_uses_four_curves_without_phantom_close_span() {
+        let radius = 2.0;
+        let path = canonical_outline_path(&GeometryRef::circle(radius)).expect("circle path");
+        let partial = crate::pointwise_partial_path(&path, 0.0, 0.5);
+        let commands = partial.commands();
+
+        assert_eq!(commands.len(), 5, "move + exactly four cubic curves");
+        assert!(matches!(commands[0], PathCommand::MoveTo { .. }));
+        assert!(commands[1..]
+            .iter()
+            .all(|command| matches!(command, PathCommand::CubicTo { .. })));
+        match commands[4] {
+            PathCommand::CubicTo { to, .. } => {
+                assert_vec2_close(to, Vec2::new(-radius, 0.0));
+            }
+            command => panic!("expected fourth cubic segment, got {command:?}"),
         }
     }
 
