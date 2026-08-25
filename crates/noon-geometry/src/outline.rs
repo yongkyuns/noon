@@ -46,23 +46,20 @@ fn circle_path(radius: f32) -> VectorPath {
 
 fn rectangle_path(size: Vec2) -> VectorPath {
     let half = size * 0.5;
-    // Start at the right midpoint and include side midpoints so the ordering is
-    // identical to the canonical path used for Circle <-> Rectangle Transform.
+    // ManimCE Rectangle sets the vertices UR -> UL -> DL -> DR and closes back
+    // to UR. Preserve that exact four-curve ordering because Create distributes
+    // normalized progress by Bezier-curve count rather than by arc length.
     VectorPath::new()
-        .move_to(Vec2::new(half.x, 0.0))
-        .line_to(Vec2::new(half.x, half.y))
-        .line_to(Vec2::new(0.0, half.y))
+        .move_to(Vec2::new(half.x, half.y))
         .line_to(Vec2::new(-half.x, half.y))
-        .line_to(Vec2::new(-half.x, 0.0))
         .line_to(Vec2::new(-half.x, -half.y))
-        .line_to(Vec2::new(0.0, -half.y))
         .line_to(Vec2::new(half.x, -half.y))
         .close()
 }
 
 #[cfg(test)]
 mod tests {
-    use noon_core::GeometryId;
+    use noon_core::{GeometryId, PathCommand};
 
     use super::*;
 
@@ -78,6 +75,29 @@ mod tests {
             assert_eq!(first, second);
             assert!(!first.commands().is_empty());
         }
+    }
+
+    #[test]
+    fn rectangle_matches_manim_curve_order() {
+        let path = canonical_outline_path(&GeometryRef::rectangle(4.0, 2.0)).unwrap();
+        assert_eq!(path.commands().len(), 5);
+        let expected = [
+            Vec2::new(2.0, 1.0),
+            Vec2::new(-2.0, 1.0),
+            Vec2::new(-2.0, -1.0),
+            Vec2::new(2.0, -1.0),
+        ];
+        match path.commands()[0] {
+            PathCommand::MoveTo { to } => assert_eq!(to, expected[0]),
+            other => panic!("unexpected first command: {other:?}"),
+        }
+        for (command, expected) in path.commands()[1..4].iter().zip(expected[1..].iter()) {
+            match command {
+                PathCommand::LineTo { to } => assert_eq!(to, expected),
+                other => panic!("unexpected edge command: {other:?}"),
+            }
+        }
+        assert_eq!(path.commands()[4], PathCommand::Close);
     }
 
     #[test]
