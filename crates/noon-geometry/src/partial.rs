@@ -44,8 +44,12 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
 
     let mut result = VectorPath::new();
     let mut active_subpath = None;
-    for index in lower_index..=upper_index {
-        let curve = curves[index];
+    for (index, &curve) in curves
+        .iter()
+        .enumerate()
+        .take(upper_index + 1)
+        .skip(lower_index)
+    {
         let t0 = if index == lower_index { lower_t } else { 0.0 };
         let t1 = if index == upper_index { upper_t } else { 1.0 };
         if t1 <= t0 {
