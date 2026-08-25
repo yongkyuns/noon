@@ -1,0 +1,38 @@
+name: Diagnose O1 parity fixtures
+
+on:
+  push:
+    branches:
+      - agent/parity-o1-differential-expansion
+    paths:
+      - .github/workflows/diagnose-parity-o1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/parity-o1-differential-expansion
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev ffmpeg pkg-config
+          python -m pip install 'manim==0.21.0'
+      - name: Capture per-fixture results
+        run: python scripts/diagnose-parity-o1.py
+      - name: Commit diagnostics and cleanup
+        run: |
+          rm scripts/diagnose-parity-o1.py .github/workflows/diagnose-parity-o1.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Capture O1 parity fixture diagnostics"
+          git push origin HEAD:agent/parity-o1-differential-expansion
