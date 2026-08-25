@@ -16,8 +16,8 @@ use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
 };
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, Property, ScenePatch, Style, TrackValues,
-    Transform2D, Vec2,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
+    StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -956,9 +956,22 @@ fn apply_transform_track(
     } else {
         0.0
     };
-    let next_render_geometry = match plan {
-        TransformGeometryPlan::PathPair(prepared) => Some(prepared),
+    let owned_render_geometry = match plan {
+        TransformGeometryPlan::PathPair(prepared)
+            if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+                && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
+        {
+            screen_space_path_pair_relative_to_current(prepared, from, to, next_transform)
+        }
         _ => None,
+    };
+    let next_render_geometry = if let Some(geometry) = owned_render_geometry.as_ref() {
+        Some(geometry)
+    } else {
+        match plan {
+            TransformGeometryPlan::PathPair(prepared) => Some(prepared),
+            _ => None,
+        }
     };
 
     let object = &mut frame.objects[object_index];
@@ -980,6 +993,73 @@ fn apply_transform_track(
         next_render_geometry,
     );
     changed
+}
+
+fn screen_space_path_pair_relative_to_current(
+    prepared: &GeometryRef,
+    from: &ObjectSnapshot,
+    to: &ObjectSnapshot,
+    current: Transform2D,
+) -> Option<GeometryRef> {
+    let GeometryRef::VectorPath(source) = prepared else {
+        return None;
+    };
+    let target = source.morph_target()?;
+    let source = path_relative_to_current(source, from.transform, current)?;
+    let target = path_relative_to_current(target, to.transform, current)?;
+    Some(GeometryRef::path(source.with_morph_target(target)))
+}
+
+fn path_relative_to_current(
+    path: &VectorPath,
+    endpoint: Transform2D,
+    current: Transform2D,
+) -> Option<VectorPath> {
+    let mut transformed = VectorPath::new();
+    for command in path.commands() {
+        transformed = match *command {
+            PathCommand::MoveTo { to } => {
+                transformed.move_to(point_relative_to_current(to, endpoint, current)?)
+            }
+            PathCommand::LineTo { to } => {
+                transformed.line_to(point_relative_to_current(to, endpoint, current)?)
+            }
+            PathCommand::QuadraticTo { control, to } => transformed.quadratic_to(
+                point_relative_to_current(control, endpoint, current)?,
+                point_relative_to_current(to, endpoint, current)?,
+            ),
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => transformed.cubic_to(
+                point_relative_to_current(control1, endpoint, current)?,
+                point_relative_to_current(control2, endpoint, current)?,
+                point_relative_to_current(to, endpoint, current)?,
+            ),
+            PathCommand::Close => transformed.close(),
+        };
+    }
+    Some(transformed)
+}
+
+fn point_relative_to_current(
+    point: Vec2,
+    endpoint: Transform2D,
+    current: Transform2D,
+) -> Option<Vec2> {
+    const MIN_SCALE: f32 = 1.0e-7;
+    if !current.scale.x.is_finite()
+        || !current.scale.y.is_finite()
+        || current.scale.x.abs() <= MIN_SCALE
+        || current.scale.y.abs() <= MIN_SCALE
+    {
+        return None;
+    }
+    let world = endpoint.transform_point(point);
+    let relative = (world - current.translation).rotate(-current.rotation);
+    let result = Vec2::new(relative.x / current.scale.x, relative.y / current.scale.y);
+    (result.x.is_finite() && result.y.is_finite()).then_some(result)
 }
 
 fn apply_transform_geometry(

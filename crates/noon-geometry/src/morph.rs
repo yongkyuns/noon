@@ -175,6 +175,28 @@ pub fn plan_morph(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<MorphPlan, MorphError> {
+    plan_morph_impl(source, target, options, true)
+}
+
+/// Plan a morph while preserving the authored contour start point and winding.
+///
+/// ManimCE Transform aligns VMobject cubic arrays by index and does not cyclically
+/// rotate a closed contour to minimize geometric distance. This mode exists for
+/// the compatibility renderer; native Noon morph planning keeps geometric alignment.
+pub fn plan_morph_preserving_order(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<MorphPlan, MorphError> {
+    plan_morph_impl(source, target, options, false)
+}
+
+fn plan_morph_impl(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+    align_closed_correspondence: bool,
+) -> Result<MorphPlan, MorphError> {
     validate_options(options)?;
     let source_contours = flatten_path(source, options.flatten_tolerance)?;
     let target_contours = flatten_path(target, options.flatten_tolerance)?;
@@ -206,7 +228,7 @@ pub fn plan_morph(
             index,
             MorphSide::Target,
         )?;
-        if source.closed {
+        if source.closed && align_closed_correspondence {
             target_points = align_closed_contour(&source_points, &target_points);
         }
         contours.push(MorphContourPlan {
@@ -678,7 +700,25 @@ pub fn plan_filled_morph(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<FilledMorphPlan, FilledMorphError> {
-    let plan = plan_morph(source, target, options)?;
+    plan_filled_morph_impl(source, target, options, true)
+}
+
+/// Filled-path counterpart of [`plan_morph_preserving_order`].
+pub fn plan_filled_morph_preserving_order(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<FilledMorphPlan, FilledMorphError> {
+    plan_filled_morph_impl(source, target, options, false)
+}
+
+fn plan_filled_morph_impl(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+    align_closed_correspondence: bool,
+) -> Result<FilledMorphPlan, FilledMorphError> {
+    let plan = plan_morph_impl(source, target, options, align_closed_correspondence)?;
     if plan.contours.len() != 1 || !plan.contours[0].closed {
         return Err(FilledMorphError::RequiresSingleClosedContour);
     }
@@ -690,8 +730,10 @@ pub fn plan_filled_morph(
 
     canonicalize_ccw(&mut contour.source_points, MorphSide::Source)?;
     canonicalize_ccw(&mut contour.target_points, MorphSide::Target)?;
-    contour.target_points =
-        align_closed_contour_preserving_winding(&contour.source_points, &contour.target_points);
+    if align_closed_correspondence {
+        contour.target_points =
+            align_closed_contour_preserving_winding(&contour.source_points, &contour.target_points);
+    }
 
     if !polygon_is_simple(&contour.source_points) {
         return Err(FilledMorphError::SelfIntersecting {

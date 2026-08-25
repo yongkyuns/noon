@@ -158,6 +158,45 @@ pub fn tessellate_styled_with_fill(
     stroke_cap: StrokeCap,
     fill_enabled: bool,
 ) -> Result<TessellatedPath, GeometryError> {
+    tessellate_styled_with_fill_impl(
+        path,
+        stroke_width,
+        stroke_join,
+        stroke_cap,
+        fill_enabled,
+        false,
+    )
+}
+
+/// Tessellate a morph while retaining source/target contour point order.
+///
+/// This is used by the Manim compatibility path, whose Transform contract is
+/// index-based rather than Noon's native minimum-distance closed-contour matching.
+pub fn tessellate_styled_with_fill_preserving_morph_order(
+    path: &VectorPath,
+    stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, GeometryError> {
+    tessellate_styled_with_fill_impl(
+        path,
+        stroke_width,
+        stroke_join,
+        stroke_cap,
+        fill_enabled,
+        true,
+    )
+}
+
+fn tessellate_styled_with_fill_impl(
+    path: &VectorPath,
+    stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    fill_enabled: bool,
+    preserve_morph_order: bool,
+) -> Result<TessellatedPath, GeometryError> {
     if !stroke_width.is_finite() || stroke_width < 0.0 {
         return Err(GeometryError::InvalidStrokeWidth(stroke_width));
     }
@@ -169,6 +208,7 @@ pub fn tessellate_styled_with_fill(
             stroke_join,
             stroke_cap,
             fill_enabled,
+            preserve_morph_order,
         );
     }
     let reveal_points = build_reveal_points(path)?;
@@ -522,15 +562,21 @@ fn tessellate_morph_path(
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
     fill_enabled: bool,
+    preserve_morph_order: bool,
 ) -> Result<TessellatedPath, GeometryError> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let reveal_points = build_reveal_points(source)?;
 
     if fill_enabled {
-        let fill = crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT).map_err(
-            |error| GeometryError::Tessellation(format!("filled morph planning failed: {error}")),
-        )?;
+        let fill = if preserve_morph_order {
+            crate::plan_filled_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+        } else {
+            crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT)
+        }
+        .map_err(|error| {
+            GeometryError::Tessellation(format!("filled morph planning failed: {error}"))
+        })?;
         let vertex_start = u32::try_from(vertices.len()).map_err(|_| {
             GeometryError::Tessellation("filled morph vertex count overflow".into())
         })?;
@@ -574,8 +620,12 @@ fn tessellate_morph_path(
         });
     }
 
-    let plan = crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
-        .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
+    let plan = if preserve_morph_order {
+        crate::plan_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+    } else {
+        crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
+    }
+    .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
     let total_points = plan.point_count();
     let mut global_point = 0_usize;
     let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
