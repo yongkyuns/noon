@@ -71,6 +71,12 @@ jobs:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-differential.mjs
 
+      - name: Verify direct seek and incremental playback at Manim frame times
+        env:
+          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+        run: node scripts/manim-seek-playback-raster.mjs
+
       - name: Upload Manim/Noon/diff artifacts
         if: always()
         uses: actions/upload-artifact@v4
