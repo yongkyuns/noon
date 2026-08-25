@@ -76,6 +76,24 @@ impl PlaybackClock {
         })
     }
 
+    pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), ClockError> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(ClockError::InvalidLoopDuration(duration));
+        }
+
+        if let (Some(origin), Some(previous)) = (self.origin_ms, self.previous_ms) {
+            let elapsed = (previous - origin) / 1_000.0;
+            let current_time = match self.loop_duration {
+                Some(previous_duration) => elapsed.rem_euclid(previous_duration),
+                None => elapsed,
+            };
+            let phase = current_time.rem_euclid(duration);
+            self.origin_ms = Some(previous - phase * 1_000.0);
+        }
+        self.loop_duration = Some(duration);
+        Ok(())
+    }
+
     pub fn reset(&mut self) {
         self.origin_ms = None;
         self.previous_ms = None;
@@ -110,6 +128,31 @@ mod tests {
 
         assert_eq!(clock.scene_time(100.0).expect("valid frame"), 0.0);
         assert_eq!(clock.scene_time(2_600.0).expect("valid frame"), 0.5);
+    }
+
+    #[test]
+    fn changing_loop_duration_preserves_the_current_phase() {
+        let mut clock = PlaybackClock::looping(4.0).expect("valid loop");
+        assert_eq!(clock.scene_time(100.0).expect("valid frame"), 0.0);
+        assert_eq!(clock.scene_time(1_600.0).expect("valid frame"), 1.5);
+
+        clock
+            .set_loop_duration(3.0)
+            .expect("updated duration must be valid");
+        assert_eq!(clock.scene_time(1_600.0).expect("same frame"), 1.5);
+        assert_eq!(clock.scene_time(3_100.0).expect("valid frame"), 0.0);
+    }
+
+    #[test]
+    fn shrinking_loop_duration_normalizes_only_when_required() {
+        let mut clock = PlaybackClock::looping(5.0).expect("valid loop");
+        assert_eq!(clock.scene_time(100.0).expect("valid frame"), 0.0);
+        assert_eq!(clock.scene_time(3_600.0).expect("valid frame"), 3.5);
+
+        clock
+            .set_loop_duration(2.0)
+            .expect("updated duration must be valid");
+        assert_eq!(clock.scene_time(3_600.0).expect("same frame"), 1.5);
     }
 
     #[test]
