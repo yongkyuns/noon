@@ -153,6 +153,9 @@ pub struct RuntimePatchStats {
     pub scheduler_events_inserted: usize,
     pub objects_recomputed: usize,
     pub groups_evaluated: usize,
+    pub object_slots_appended: usize,
+    pub object_slots_retired: usize,
+    pub track_locators_removed: usize,
     pub full_group_rebuilds: usize,
     pub full_seeks: usize,
 }
@@ -210,6 +213,13 @@ impl SceneInstance {
         self.compiled.object_index(id).is_some()
     }
 
+    pub fn object_slot_is_live(&self, object_index: usize) -> bool {
+        let Ok(object_index) = u32::try_from(object_index) else {
+            return false;
+        };
+        self.compiled.object_slot_is_live(object_index)
+    }
+
     pub fn evaluate(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
@@ -259,17 +269,71 @@ impl SceneInstance {
             return Ok(&self.frame);
         }
 
-        let current_time = self.frame.time;
-        self.compiled.apply_patch(patch)?;
-        self.groups = build_groups(&self.compiled);
-        self.timeline_scheduler = TimelineEventScheduler::new(self.compiled.tracks());
-        self.seek_unchecked(current_time);
-        self.last_patch_stats = RuntimePatchStats {
-            full_group_rebuilds: 1,
-            full_seeks: 1,
+        if matches!(
+            patch,
+            ScenePatch::CreateObject(_) | ScenePatch::RemoveObject(_)
+        ) {
+            self.apply_structural_patch(patch)?;
+            return Ok(&self.frame);
+        }
+
+        unreachable!("all ScenePatch variants are handled above")
+    }
+
+    fn apply_structural_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+        let removed = match patch {
+            ScenePatch::RemoveObject(object) => {
+                let object_index = self
+                    .compiled
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                Some((object_index, self.compiled.object_channels(*object)))
+            }
+            ScenePatch::CreateObject(_) => None,
+            _ => unreachable!("structural patch helper accepts only create/remove"),
+        };
+
+        let compiled_stats = self.compiled.apply_patch_with_stats(patch)?;
+        let mut patch_stats = RuntimePatchStats {
+            object_slots_appended: compiled_stats.object_slots_appended,
+            object_slots_retired: compiled_stats.object_slots_retired,
+            track_locators_removed: compiled_stats.track_locators_removed,
             ..RuntimePatchStats::default()
         };
-        Ok(&self.frame)
+
+        match patch {
+            ScenePatch::CreateObject(object) => {
+                let object_index = self
+                    .compiled
+                    .object_index(object.id)
+                    .expect("compiled create must expose its appended slot")
+                    as usize;
+                debug_assert_eq!(object_index, self.frame.objects.len());
+                append_object_frame(&self.compiled, &mut self.frame, object_index);
+                self.rebind_reactive_object(object.id, object_index);
+                self.reapply_reactive_for_object(object_index);
+                self.changes.insert(object_index);
+            }
+            ScenePatch::RemoveObject(_) => {
+                let (object_index, old_channels) = removed.expect("remove context captured above");
+                for channel in old_channels {
+                    let scheduler_stats = self.timeline_scheduler.relower_channel(channel, &[]);
+                    patch_stats.channels_relowered += scheduler_stats.groups_relowered;
+                    patch_stats.scheduler_events_removed += scheduler_stats.events_removed;
+                    patch_stats.scheduler_events_inserted += scheduler_stats.events_inserted;
+                    self.groups.remove(&channel);
+                }
+                let object_index = object_index as usize;
+                self.frame.presences[object_index] = false;
+                self.frame.render_geometries[object_index] = None;
+                self.changes.insert(object_index);
+            }
+            _ => unreachable!("structural patch helper accepts only create/remove"),
+        }
+
+        self.last_stats = EvaluationStats::default();
+        self.last_patch_stats = patch_stats;
+        Ok(())
     }
 
     fn apply_timeline_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
@@ -461,9 +525,15 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
             appearance: appearances[index],
         })
         .collect();
+    let mut presences = initial_bool_property(compiled, objects.len(), Property::Presence, true);
+    for (index, object) in compiled.objects().iter().enumerate() {
+        if !object.live {
+            presences[index] = false;
+        }
+    }
     FrameState {
         time,
-        presences: initial_bool_property(compiled, objects.len(), Property::Presence, true),
+        presences,
         reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
         morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
         render_geometries: vec![None; objects.len()],
@@ -582,6 +652,38 @@ fn push_unique_object(slots: &mut [Option<usize>; 2], object: Option<usize>) {
     if let Some(slot) = slots.iter_mut().find(|slot| slot.is_none()) {
         *slot = Some(object);
     }
+}
+
+fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_index: usize) {
+    debug_assert_eq!(object_index, frame.objects.len());
+    let object = &compiled.objects()[object_index];
+    debug_assert!(object.live);
+    frame.objects.push(FrameObjectState {
+        id: object.id,
+        geometry: object.geometry.clone(),
+        transform: object.base_transform,
+        style: object.base_style,
+        appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
+    });
+    frame.presences.push(initial_channel_bool(
+        compiled,
+        object_index,
+        Property::Presence,
+        true,
+    ));
+    frame.reveals.push(initial_channel_scalar(
+        compiled,
+        object_index,
+        Property::Reveal,
+        1.0,
+    ));
+    frame.morphs.push(initial_channel_scalar(
+        compiled,
+        object_index,
+        Property::Morph,
+        0.0,
+    ));
+    frame.render_geometries.push(None);
 }
 
 fn reset_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_index: usize) {

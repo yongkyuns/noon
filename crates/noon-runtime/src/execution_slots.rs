@@ -85,7 +85,7 @@ impl ExecutionSlotTable {
 
     pub fn from_compiled(compiled: &CompiledScene) -> Self {
         let mut table = Self::new();
-        for object in compiled.objects() {
+        for object in compiled.objects().iter().filter(|object| object.live) {
             table
                 .insert_object(object.id)
                 .expect("compiled scene object identities are unique");
@@ -382,17 +382,13 @@ impl SlottedSceneInstance {
             | ScenePatch::SetStyle { object, .. } => {
                 context.primary_slot = self.slots.slot_for_object(*object);
                 if matches!(patch, ScenePatch::RemoveObject(_)) {
-                    for track in self.inner.compiled.tracks() {
-                        let compiled_object =
-                            &self.inner.compiled.objects()[track.object_index as usize];
-                        if compiled_object.id == *object {
-                            if let Some(slot) = context.primary_slot {
-                                push_context_channel(
-                                    &mut context.old_track_channels,
-                                    slot,
-                                    track.property,
-                                );
-                            }
+                    if let Some(slot) = context.primary_slot {
+                        for channel in self.inner.compiled.object_channels(*object) {
+                            push_context_channel(
+                                &mut context.old_track_channels,
+                                slot,
+                                channel.property,
+                            );
                         }
                     }
                 }
@@ -409,18 +405,14 @@ impl SlottedSceneInstance {
     }
 
     fn capture_track(&self, id: TrackId, channels: &mut Vec<ExecutionChannelDelta>) {
-        let Some(track) = self
-            .inner
-            .compiled
-            .tracks()
-            .iter()
-            .find(|track| track.id == id)
-        else {
+        let Some(channel) = self.inner.compiled.channel_for_track(id) else {
             return;
         };
-        let object = &self.inner.compiled.objects()[track.object_index as usize];
-        if let Some(slot) = self.slots.slot_for_object(object.id) {
-            push_context_channel(channels, slot, track.property);
+        let Some(object) = self.inner.compiled.track_object(id) else {
+            return;
+        };
+        if let Some(slot) = self.slots.slot_for_object(object) {
+            push_context_channel(channels, slot, channel.property);
         }
     }
 }
@@ -515,7 +507,10 @@ mod tests {
 
         assert_eq!(live.slot_for_object(second), Some(second_slot));
         assert_eq!(live.slot_for_object(third), Some(third_slot));
-        assert_eq!(live.frame().objects[0].id, second);
+        assert_eq!(live.frame().objects[0].id, first);
+        assert!(!live.frame().presences[0]);
+        assert_eq!(live.frame().objects[1].id, second);
+        assert_eq!(live.frame().objects[2].id, third);
         assert_eq!(
             live.last_execution_delta().slots(),
             &[ExecutionSlotId::new(0, 0)]
