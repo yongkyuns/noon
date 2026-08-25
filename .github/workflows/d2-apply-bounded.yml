@@ -16,6 +16,26 @@ jobs:
       - name: Apply bounded path replacement
         run: |
           python3 scripts/_d2_bounded_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-render-wgpu/src/lib.rs')
+          text = path.read_text()
+          text = text.replace(
+              '        push_dirty_range(&mut self.path_vertex_dirty_ranges, vertex_range_usize);\n',
+              '        self.path_vertex_dirty_ranges.push(vertex_range_usize);\n',
+              1,
+          )
+          text = text.replace(
+              '        push_dirty_range(&mut self.path_index_dirty_ranges, index_range_usize);\n',
+              '        self.path_index_dirty_ranges.push(index_range_usize);\n',
+              1,
+          )
+          old = '''        normalize_dirty_ranges(&mut self.path_dirty_ranges);\n\n        self.prepared_frame(\n'''
+          new = '''        normalize_dirty_ranges(&mut self.path_dirty_ranges);\n        normalize_dirty_ranges(&mut self.path_vertex_dirty_ranges);\n        normalize_dirty_ranges(&mut self.path_index_dirty_ranges);\n\n        self.prepared_frame(\n'''
+          if old not in text:
+              raise SystemExit('missing incremental dirty normalization anchor')
+          path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
       - name: Validate renderer
         run: |
