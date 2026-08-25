@@ -114,8 +114,22 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
     else {
         panic!("cross-kind closed analytic Transform must use a prepared path pair");
     };
-    assert!(!prepared.commands().is_empty());
-    assert!(prepared.morph_target().is_some());
+    let canonical_source =
+        noon_geometry::canonical_outline_path(&from.geometry).expect("canonical circle outline");
+    let canonical_target =
+        noon_geometry::canonical_outline_path(&to.geometry).expect("canonical rectangle outline");
+    assert_eq!(prepared.commands(), canonical_source.commands());
+    assert_eq!(prepared.morph_target(), Some(&canonical_target));
+    assert_eq!(
+        prepared.commands().len(),
+        10,
+        "Manim circle uses eight cubic curves"
+    );
+    assert_eq!(
+        canonical_target.commands().len(),
+        5,
+        "Manim rectangle uses four edges"
+    );
 
     let TrackValues::Object {
         from: compiled_from,

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use noon_core::{
     validate_track_definition, CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId,
     Property, SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    TrackTiming, TrackValues, Transform2D, VectorPath,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -952,9 +952,9 @@ fn compile_transform_geometry_plan(
         }
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
         | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {
-            let source = closed_analytic_path(&from.geometry)
+            let source = noon_geometry::canonical_outline_path(&from.geometry)
                 .expect("closed analytic source geometry must convert to a path");
-            let target = closed_analytic_path(&to.geometry)
+            let target = noon_geometry::canonical_outline_path(&to.geometry)
                 .expect("closed analytic target geometry must convert to a path");
             compile_path_pair(from, to, source, target)?
         }
@@ -988,55 +988,6 @@ fn compile_path_pair(
     Ok(TransformGeometryPlan::PathPair(GeometryRef::path(
         source.with_morph_target(target),
     )))
-}
-
-fn closed_analytic_path(geometry: &GeometryRef) -> Option<VectorPath> {
-    match geometry {
-        GeometryRef::Circle { radius } => Some(circle_path(*radius)),
-        GeometryRef::Rectangle { size } => Some(rectangle_path(*size)),
-        _ => None,
-    }
-}
-
-fn circle_path(radius: f32) -> VectorPath {
-    let handle = radius * 0.552_284_8;
-    VectorPath::new()
-        .move_to(Vec2::new(radius, 0.0))
-        .cubic_to(
-            Vec2::new(radius, handle),
-            Vec2::new(handle, radius),
-            Vec2::new(0.0, radius),
-        )
-        .cubic_to(
-            Vec2::new(-handle, radius),
-            Vec2::new(-radius, handle),
-            Vec2::new(-radius, 0.0),
-        )
-        .cubic_to(
-            Vec2::new(-radius, -handle),
-            Vec2::new(-handle, -radius),
-            Vec2::new(0.0, -radius),
-        )
-        .cubic_to(
-            Vec2::new(handle, -radius),
-            Vec2::new(radius, -handle),
-            Vec2::new(radius, 0.0),
-        )
-        .close()
-}
-
-fn rectangle_path(size: Vec2) -> VectorPath {
-    let half = size * 0.5;
-    VectorPath::new()
-        .move_to(Vec2::new(half.x, 0.0))
-        .line_to(Vec2::new(half.x, half.y))
-        .line_to(Vec2::new(0.0, half.y))
-        .line_to(Vec2::new(-half.x, half.y))
-        .line_to(Vec2::new(-half.x, 0.0))
-        .line_to(Vec2::new(-half.x, -half.y))
-        .line_to(Vec2::new(0.0, -half.y))
-        .line_to(Vec2::new(half.x, -half.y))
-        .close()
 }
 
 fn compile_error(id: TrackId, error: TransformCompileFailure) -> CompileError {
