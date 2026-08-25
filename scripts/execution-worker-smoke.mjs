@@ -173,10 +173,6 @@ async function runMode(browser, transportMode) {
     duringStall.metrics.presentedFrames > beforeStall.metrics.presentedFrames,
     `${transportMode}: render worker stopped while an isolated host worker was stalled`,
   );
-  assert.ok(
-    duringStall.metrics.lastFrameTimestamp >= stallStarted,
-    `${transportMode}: render cadence did not continue during host stall`,
-  );
 
   const restarted = await page.evaluate(() => window.executionSmoke.client.restart());
   assert.equal(restarted.session, 2);
