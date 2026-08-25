@@ -187,6 +187,11 @@ pub struct PreparedFrame<'a> {
     pub rectangle_dirty_ranges: &'a [Range<usize>],
     pub line_dirty_ranges: &'a [Range<usize>],
     pub path_dirty_ranges: &'a [Range<usize>],
+    /// Dirty packed path-geometry vertex ranges. Incremental path replacement
+    /// writes only these ranges instead of rewriting the full mesh arena.
+    pub path_vertex_dirty_ranges: &'a [Range<usize>],
+    /// Dirty packed path-geometry index ranges.
+    pub path_index_dirty_ranges: &'a [Range<usize>],
     pub mega_path_instance_dirty_ranges: &'a [Range<usize>],
     pub mega_path_index_dirty: bool,
     pub path_geometry_dirty: bool,
@@ -228,6 +233,13 @@ struct CachedPathMesh {
     last_used: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PathReplacementStats {
+    cache_miss: bool,
+    vertices_repacked: usize,
+    indices_repacked: usize,
+}
+
 #[derive(Debug)]
 struct PathGroup {
     cache_index: usize,
@@ -267,6 +279,12 @@ pub struct FramePreparer {
     rectangle_dirty_ranges: Vec<Range<usize>>,
     line_dirty_ranges: Vec<Range<usize>>,
     path_dirty_ranges: Vec<Range<usize>>,
+    path_vertex_dirty_ranges: Vec<Range<usize>>,
+    path_index_dirty_ranges: Vec<Range<usize>>,
+    // Incremental geometry edits never compact the arena: released chunks are
+    // first-fit reused, while full rebuilds are the explicit compaction barrier.
+    path_vertex_free_ranges: Vec<Range<u32>>,
+    path_index_free_ranges: Vec<Range<u32>>,
     mega_path_instance_dirty_ranges: Vec<Range<usize>>,
     mega_path_index_dirty: bool,
     path_geometry_dirty: bool,
@@ -291,18 +309,40 @@ impl FramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
     ) -> PreparedFrame<'a> {
-        if !self.initialized
-            || changes.is_all()
-            || self.slots.len() != frame.objects.len()
-            || !changes
-                .object_indices()
-                .iter()
-                .all(|&index| self.slot_matches(frame, index))
+        if !self.initialized || changes.is_all() || self.slots.len() != frame.objects.len() {
+            return self.rebuild(frame);
+        }
+
+        let replacement_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| !self.slot_matches(frame, index))
+            .collect::<Vec<_>>();
+        if !replacement_indices
+            .iter()
+            .all(|&index| self.can_replace_unique_path_geometry(frame, index))
         {
             return self.rebuild(frame);
         }
 
         self.clear_dirty_ranges();
+        let mut geometry_cache_misses = 0;
+        let mut path_vertices_repacked = 0;
+        let mut path_indices_repacked = 0;
+        for object_index in replacement_indices {
+            let replacement = self
+                .replace_unique_path_geometry(frame, object_index)
+                .expect("preflighted unique path replacement must tessellate");
+            geometry_cache_misses += usize::from(replacement.cache_miss);
+            path_vertices_repacked += replacement.vertices_repacked;
+            path_indices_repacked += replacement.indices_repacked;
+        }
+        if path_vertices_repacked > 0 || path_indices_repacked > 0 {
+            self.rebuild_ordered_render_batches();
+            self.rebuild_mega_path_draws();
+        }
+
         let mut instances_repacked = 0;
         for &object_index in changes.object_indices() {
             let object = &frame.objects[object_index];
@@ -368,8 +408,122 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.rectangle_dirty_ranges);
         normalize_dirty_ranges(&mut self.line_dirty_ranges);
         normalize_dirty_ranges(&mut self.path_dirty_ranges);
+        normalize_dirty_ranges(&mut self.path_vertex_dirty_ranges);
+        normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
 
-        self.prepared_frame(frame.time, 0, instances_repacked, 0, 0, 0)
+        self.prepared_frame(
+            frame.time,
+            0,
+            instances_repacked,
+            geometry_cache_misses,
+            path_vertices_repacked,
+            path_indices_repacked,
+        )
+    }
+
+    fn can_replace_unique_path_geometry(&self, frame: &FrameState, object_index: usize) -> bool {
+        let Some(object) = frame.objects.get(object_index) else {
+            return false;
+        };
+        if !frame.is_present(object_index) {
+            return false;
+        }
+        let Some(PreparedSlot::Path {
+            index,
+            batch,
+            analytic_reveal: None,
+            reveal_head,
+        }) = self.slots.get(object_index)
+        else {
+            return false;
+        };
+        let Some(path_batch) = self.path_batches.get(*batch) else {
+            return false;
+        };
+        if path_batch.instance_range.end != path_batch.instance_range.start + 1
+            || self.path_ids.get(*index) != Some(&object.id)
+            || !matches!(
+                frame.render_geometry(object_index),
+                GeometryRef::VectorPath(_)
+            )
+        {
+            return false;
+        }
+        reveal_head.is_some() || !should_create_path_reveal_head(object, frame.reveal(object_index))
+    }
+
+    fn replace_unique_path_geometry(
+        &mut self,
+        frame: &FrameState,
+        object_index: usize,
+    ) -> Result<PathReplacementStats, noon_geometry::GeometryError> {
+        let object = &frame.objects[object_index];
+        let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
+            unreachable!("unique path replacement preflight requires vector geometry");
+        };
+        let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
+            unreachable!("unique path replacement preflight requires a path slot");
+        };
+        let (cache_index, cache_miss) = self.cache_path_mesh(path, object.style)?;
+        let mesh = &self.path_mesh_cache[cache_index].mesh;
+        let packed_vertices = mesh
+            .vertices
+            .iter()
+            .map(|vertex| PathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                target_position: [vertex.target_position.x, vertex.target_position.y],
+                surface: pack_path_surface(vertex.surface, vertex.path_progress),
+            })
+            .collect::<Vec<_>>();
+        let local_indices = mesh.indices.clone();
+
+        let old_vertex_range = self.path_batch_vertex_ranges[batch].clone();
+        let old_index_range = self.path_batches[batch].index_range.clone();
+        let vertex_range = allocate_replacement_range(
+            old_vertex_range,
+            packed_vertices.len(),
+            &mut self.path_vertex_free_ranges,
+            self.path_vertices.len(),
+        );
+        let index_range = allocate_replacement_range(
+            old_index_range,
+            local_indices.len(),
+            &mut self.path_index_free_ranges,
+            self.path_indices.len(),
+        );
+
+        let vertex_range_usize = range_usize_u32(&vertex_range);
+        if self.path_vertices.len() < vertex_range_usize.end {
+            self.path_vertices
+                .resize(vertex_range_usize.end, PathVertex::zeroed());
+        }
+        self.path_vertices[vertex_range_usize.clone()].copy_from_slice(&packed_vertices);
+        self.path_vertex_dirty_ranges.push(vertex_range_usize);
+
+        let index_range_usize = range_usize_u32(&index_range);
+        if self.path_indices.len() < index_range_usize.end {
+            self.path_indices.resize(index_range_usize.end, 0);
+        }
+        let vertex_start = vertex_range.start;
+        for (target, local) in self.path_indices[index_range_usize.clone()]
+            .iter_mut()
+            .zip(local_indices.iter().copied())
+        {
+            *target = local
+                .checked_add(vertex_start)
+                .expect("path index exceeds renderer limits");
+        }
+        self.path_index_dirty_ranges.push(index_range_usize);
+
+        self.path_batch_vertex_ranges[batch] = vertex_range;
+        self.path_batches[batch].index_range = index_range;
+        self.path_batch_cache_indices[batch] = cache_index;
+        self.path_geometry_dirty = true;
+        Ok(PathReplacementStats {
+            cache_miss,
+            vertices_repacked: packed_vertices.len(),
+            indices_repacked: local_indices.len(),
+        })
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
@@ -386,6 +540,8 @@ impl FramePreparer {
         self.paths.clear();
         self.path_batches.clear();
         self.path_batch_vertex_ranges.clear();
+        self.path_vertex_free_ranges.clear();
+        self.path_index_free_ranges.clear();
         self.render_batches.clear();
         let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
@@ -565,6 +721,14 @@ impl FramePreparer {
                 self.path_vertices != next_vertices || self.path_indices != next_indices;
             self.path_vertices = next_vertices;
             self.path_indices = next_indices;
+            if !self.path_vertices.is_empty() {
+                self.path_vertex_dirty_ranges
+                    .push(0..self.path_vertices.len());
+            }
+            if !self.path_indices.is_empty() {
+                self.path_index_dirty_ranges
+                    .push(0..self.path_indices.len());
+            }
             self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
             repacked
         };
@@ -637,6 +801,8 @@ impl FramePreparer {
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
             line_dirty_ranges: &self.line_dirty_ranges,
             path_dirty_ranges: &self.path_dirty_ranges,
+            path_vertex_dirty_ranges: &self.path_vertex_dirty_ranges,
+            path_index_dirty_ranges: &self.path_index_dirty_ranges,
             mega_path_instance_dirty_ranges: &self.mega_path_instance_dirty_ranges,
             mega_path_index_dirty: self.mega_path_index_dirty,
             path_geometry_dirty: self.path_geometry_dirty,
@@ -672,6 +838,8 @@ impl FramePreparer {
         self.rectangle_dirty_ranges.clear();
         self.line_dirty_ranges.clear();
         self.path_dirty_ranges.clear();
+        self.path_vertex_dirty_ranges.clear();
+        self.path_index_dirty_ranges.clear();
         self.mega_path_instance_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
         self.path_geometry_dirty = false;
@@ -744,7 +912,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 25] {
+    fn capacities(&self) -> [usize; 29] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -771,6 +939,10 @@ impl FramePreparer {
             self.rectangle_dirty_ranges.capacity(),
             self.line_dirty_ranges.capacity(),
             self.path_dirty_ranges.capacity(),
+            self.path_vertex_dirty_ranges.capacity(),
+            self.path_index_dirty_ranges.capacity(),
+            self.path_vertex_free_ranges.capacity(),
+            self.path_index_free_ranges.capacity(),
         ]
     }
 
@@ -942,6 +1114,64 @@ impl FramePreparer {
     pub fn cached_path_mesh_count(&self) -> usize {
         self.path_mesh_cache.len()
     }
+}
+
+fn range_usize_u32(range: &Range<u32>) -> Range<usize> {
+    range.start as usize..range.end as usize
+}
+
+fn allocate_replacement_range(
+    old: Range<u32>,
+    required_len: usize,
+    free_ranges: &mut Vec<Range<u32>>,
+    arena_len: usize,
+) -> Range<u32> {
+    let required = u32::try_from(required_len).expect("path arena range exceeds renderer limits");
+    let old_len = old.end.saturating_sub(old.start);
+    if required == 0 {
+        insert_free_range(free_ranges, old);
+        return 0..0;
+    }
+    if required <= old_len {
+        let used = old.start..old.start + required;
+        insert_free_range(free_ranges, used.end..old.end);
+        return used;
+    }
+
+    insert_free_range(free_ranges, old);
+    if let Some(index) = free_ranges
+        .iter()
+        .position(|range| range.end.saturating_sub(range.start) >= required)
+    {
+        let start = free_ranges[index].start;
+        let used = start..start + required;
+        free_ranges[index].start += required;
+        if free_ranges[index].is_empty() {
+            free_ranges.remove(index);
+        }
+        return used;
+    }
+
+    let start = u32::try_from(arena_len).expect("path arena exceeds renderer limits");
+    start..start + required
+}
+
+fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
+    if range.is_empty() {
+        return;
+    }
+    free_ranges.push(range);
+    free_ranges.sort_unstable_by_key(|range| range.start);
+    let mut write = 0usize;
+    for read in 0..free_ranges.len() {
+        if write > 0 && free_ranges[write - 1].end >= free_ranges[read].start {
+            free_ranges[write - 1].end = free_ranges[write - 1].end.max(free_ranges[read].end);
+        } else {
+            free_ranges[write] = free_ranges[read].clone();
+            write += 1;
+        }
+    }
+    free_ranges.truncate(write);
 }
 
 fn path_mesh_key(
@@ -1924,6 +2154,121 @@ mod tests {
         let dirty = &prepared.mega_path_instance_dirty_ranges[0];
         assert!(!dirty.is_empty());
         assert!(dirty.len() < total_vertex_instances);
+    }
+
+    #[test]
+    fn unique_path_replacement_dirties_only_its_geometry_chunks() {
+        const OBJECT_COUNT: usize = 1_000;
+        const REPLACED: usize = 500;
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let y = index as f32 * 0.002;
+                let mut state = object(
+                    index as u64,
+                    GeometryRef::path(
+                        VectorPath::new()
+                            .move_to(Vec2::new(-0.5, y))
+                            .line_to(Vec2::new(0.5, y)),
+                    ),
+                );
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let mut frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+        let first_vertex_range = preparer.path_batch_vertex_ranges[0].clone();
+        let last_vertex_range = preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1].clone();
+        let first_index_range = preparer.path_batches[0].index_range.clone();
+        let last_index_range = preparer.path_batches[OBJECT_COUNT - 1].index_range.clone();
+        let original_vertex_count = preparer.path_vertices.len();
+        let original_index_count = preparer.path_indices.len();
+
+        frame.objects[REPLACED].geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 1.0))
+                .cubic_to(
+                    Vec2::new(-0.5, 2.0),
+                    Vec2::new(0.5, 0.0),
+                    Vec2::new(0.5, 1.0),
+                )
+                .cubic_to(
+                    Vec2::new(0.5, 2.0),
+                    Vec2::new(-0.5, 0.0),
+                    Vec2::new(-0.5, 1.0),
+                ),
+        );
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![REPLACED]));
+
+        assert_eq!(prepared.path_vertex_dirty_ranges.len(), 1);
+        assert_eq!(prepared.path_index_dirty_ranges.len(), 1);
+        assert!(prepared.stats.path_vertices_repacked > 0);
+        assert!(prepared.stats.path_indices_repacked > 0);
+        assert!(prepared.stats.path_vertices_repacked < original_vertex_count);
+        assert!(prepared.stats.path_indices_repacked < original_index_count);
+        assert!(prepared.path_geometry_dirty);
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
+        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT);
+        assert_eq!(preparer.path_batch_vertex_ranges[0], first_vertex_range);
+        assert_eq!(
+            preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1],
+            last_vertex_range
+        );
+        assert_eq!(preparer.path_batches[0].index_range, first_index_range);
+        assert_eq!(
+            preparer.path_batches[OBJECT_COUNT - 1].index_range,
+            last_index_range
+        );
+    }
+
+    #[test]
+    fn path_arena_reuses_released_chunks_without_shifting_other_batches() {
+        let make_path = |id: u64, y: f32| {
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.02;
+            state
+        };
+        let mut frame = frame(vec![
+            make_path(1, 0.0),
+            make_path(2, 0.5),
+            make_path(3, 1.0),
+        ]);
+        let mut preparer = FramePreparer::new();
+        preparer.prepare(&frame);
+
+        frame.objects[1].geometry =
+            GeometryRef::path(VectorPath::new().move_to(Vec2::new(-1.0, 0.5)).cubic_to(
+                Vec2::new(-0.5, 1.5),
+                Vec2::new(0.5, -0.5),
+                Vec2::new(1.0, 0.5),
+            ));
+        preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert!(!preparer.path_vertex_free_ranges.is_empty());
+        assert!(!preparer.path_index_free_ranges.is_empty());
+        let arena_vertices_after_growth = preparer.path_vertices.len();
+        let arena_indices_after_growth = preparer.path_indices.len();
+
+        frame.objects[0].geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.25, 0.0))
+                .line_to(Vec2::new(0.25, 0.0)),
+        );
+        preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(preparer.path_vertices.len(), arena_vertices_after_growth);
+        assert_eq!(preparer.path_indices.len(), arena_indices_after_growth);
     }
 
     #[test]

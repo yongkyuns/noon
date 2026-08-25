@@ -589,16 +589,18 @@ impl GpuRenderer {
             prepared.lines,
             prepared.line_dirty_ranges,
             line_reallocated,
-        ) + upload_full_if(
+        ) + upload_dirty(
             queue,
             &self.path_vertex_buffer,
             prepared.path_vertices,
-            prepared.path_geometry_dirty || path_vertex_reallocated,
-        ) + upload_full_if(
+            prepared.path_vertex_dirty_ranges,
+            path_vertex_reallocated,
+        ) + upload_dirty(
             queue,
             &self.path_index_buffer,
             prepared.path_indices,
-            prepared.path_geometry_dirty || path_index_reallocated,
+            prepared.path_index_dirty_ranges,
+            path_index_reallocated,
         ) + upload_dirty(
             queue,
             &self.path_instance_buffer,
