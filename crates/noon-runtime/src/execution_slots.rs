@@ -355,6 +355,22 @@ impl SlottedSceneInstance {
         self.slots.slot_for_object(object)
     }
 
+    pub fn slot_for_frame_index(&self, frame_index: usize) -> Option<ExecutionSlotId> {
+        if !self.inner.object_slot_is_live(frame_index) {
+            return None;
+        }
+        let object = self.inner.frame().objects.get(frame_index)?.id;
+        self.slots.slot_for_object(object)
+    }
+
+    pub fn frame_index_for_slot(&self, slot: ExecutionSlotId) -> Option<usize> {
+        let object = self.slots.object_for_slot(slot)?;
+        self.inner
+            .compiled
+            .object_index(object)
+            .map(|index| index as usize)
+    }
+
     pub fn last_execution_delta(&self) -> &ExecutionDelta {
         &self.last_delta
     }
