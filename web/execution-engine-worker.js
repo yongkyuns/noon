@@ -46,6 +46,7 @@ async function handleMainMessage(message) {
         return;
       case "replace_scene":
       case "reconcile_scene":
+      case "set_loop_duration":
       case "apply_patch":
       case "configure_callbacks":
         enqueueControl(message);
@@ -318,6 +319,12 @@ function executeControl(message) {
       });
       return;
     }
+    case "set_loop_duration": {
+      validateRequiredLoopDuration(message.loopDurationSeconds);
+      player.setLoopDurationSeconds(message.loopDurationSeconds);
+      respond(message.requestId, runtimeResult("set_loop_duration"));
+      return;
+    }
     case "apply_patch": {
       const delta = player.applyPatchBatchDeltaJson(message.patchBatchJson);
       if (delta !== undefined && delta !== null) {
@@ -340,13 +347,17 @@ function executeControl(message) {
   }
 }
 
+function validateRequiredLoopDuration(duration) {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("execution engine loop duration must be positive and finite");
+  }
+}
+
 function validateOptionalLoopDuration(duration) {
   if (duration === null || duration === undefined) {
     return;
   }
-  if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error("execution engine loop duration must be positive and finite");
-  }
+  validateRequiredLoopDuration(duration);
 }
 
 function applyOptionalLoopDuration(duration) {
