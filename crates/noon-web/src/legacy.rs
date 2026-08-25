@@ -115,6 +115,16 @@ impl ScenePlayer {
         self.instance.take_frame_changes()
     }
 
+    /// Apply host-callback mutations without consuming the interactive patch sequence.
+    pub(crate) fn apply_host_patch_batch_json(
+        &mut self,
+        json: &str,
+    ) -> Result<&FrameState, PlayerError> {
+        let batch = decode_patch_batch(json)?;
+        self.apply_patches_transactionally(&batch.patches)?;
+        Ok(self.instance.frame())
+    }
+
     pub fn apply_patch_batch_json(&mut self, json: &str) -> Result<&FrameState, PlayerError> {
         let batch = decode_patch_batch(json)?;
         if batch.sequence != self.next_sequence {

@@ -74,6 +74,17 @@ export class PythonAuthoringClient {
     return result;
   }
 
+  async attachEnginePort(port) {
+    if (!(port instanceof MessagePort)) {
+      throw new TypeError("engine host attachment requires a MessagePort");
+    }
+    await this.ready();
+    const requestId = this.#beginRequest();
+    const result = this.#resultFor(requestId);
+    this.#worker.postMessage(envelope("attach_engine_port", { requestId, port }), [port]);
+    return result;
+  }
+
   terminate() {
     if (this.#terminated) {
       return;
@@ -128,6 +139,11 @@ export class PythonAuthoringClient {
       if (message.type === "callback_result") {
         const batch = parsePatchBatchJson(message.patchBatchJson);
         this.#settle(message.requestId, ({ resolve }) => resolve(batch));
+        return;
+      }
+
+      if (message.type === "host_port_attached") {
+        this.#settle(message.requestId, ({ resolve }) => resolve(message));
         return;
       }
 

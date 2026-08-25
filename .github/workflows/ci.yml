@@ -186,6 +186,12 @@ jobs:
       - name: Test Python updater callback bridge
         run: node scripts/updater-callback-smoke.mjs
 
+      - name: Test engine/render worker transports
+        run: node scripts/execution-worker-smoke.mjs
+
+      - name: Test slow Python callbacks do not block rendering
+        run: node scripts/execution-worker-host-smoke.mjs
+
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs
 
