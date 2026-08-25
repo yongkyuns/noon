@@ -1,0 +1,111 @@
+name: Measure P1 local relowering before-after
+
+on:
+  push:
+    branches: [perf/evidence-p1-p2]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create common local-patch benchmark
+        shell: bash
+        run: |
+          cat > /tmp/local_patch_perf.rs <<'RS'
+          use std::{hint::black_box, time::Instant};
+          use noon_compile::CompiledScene;
+          use noon_core::{
+              CompositionTimeMap, Easing, GeometryRef, Property, SceneDefinition, ScenePatch,
+              TrackDefinition, TrackTiming, TrackValues, Vec2,
+          };
+          use noon_runtime::SceneInstance;
+
+          fn main() {
+              const TRACKS: usize = 10_000;
+              const WARMUPS: usize = 20;
+              const SAMPLES: usize = 300;
+              let mut definition = SceneDefinition::new();
+              let mut target = None;
+              for index in 0..TRACKS {
+                  let object = definition.add(GeometryRef::circle(0.25));
+                  let track = definition
+                      .animate_position(
+                          object,
+                          Vec2::ZERO,
+                          Vec2::new(1.0 + index as f32 * 0.0001, 0.0),
+                          TrackTiming::new(0.0, 4.0, Easing::Linear),
+                      )
+                      .expect("track must compile");
+                  if index == 0 {
+                      target = Some((object, track));
+                  }
+              }
+              let (object, track) = target.expect("target exists");
+              let compiled = CompiledScene::compile(&definition).expect("scene compiles");
+              let mut live = SceneInstance::new(compiled);
+              live.seek(2.0).expect("seek succeeds");
+
+              for sample in 0..WARMUPS {
+                  let patch = replacement(object, track, sample);
+                  black_box(live.apply_patch(&patch).expect("warm patch succeeds"));
+              }
+
+              let mut timings = Vec::with_capacity(SAMPLES);
+              for sample in 0..SAMPLES {
+                  let patch = replacement(object, track, sample + WARMUPS);
+                  let started = Instant::now();
+                  black_box(live.apply_patch(&patch).expect("patch succeeds"));
+                  timings.push(started.elapsed().as_secs_f64() * 1_000.0);
+              }
+              timings.sort_by(f64::total_cmp);
+              println!("tracks,p50_ms,p95_ms,p99_ms");
+              println!("{TRACKS},{:.6},{:.6},{:.6}", percentile(&timings, 0.50), percentile(&timings, 0.95), percentile(&timings, 0.99));
+          }
+
+          fn replacement(
+              object: noon_core::ObjectId,
+              track: noon_core::TrackId,
+              sample: usize,
+          ) -> ScenePatch {
+              let x = if sample % 2 == 0 { 2.0 } else { 3.0 };
+              ScenePatch::ReplaceTrack(TrackDefinition {
+                  id: track,
+                  object,
+                  property: Property::Position,
+                  values: TrackValues::Vec2 {
+                      from: Vec2::ZERO,
+                      to: Vec2::new(x, 0.5),
+                  },
+                  timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+                  time_map: CompositionTimeMap::identity(),
+              })
+          }
+
+          fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+              let rank = (fraction * sorted.len() as f64).ceil() as usize;
+              sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+          }
+          RS
+      - name: Benchmark before #152
+        shell: bash
+        run: |
+          git checkout -f 77a29b65262c662f2715264e17c094a09b20fdc2
+          mkdir -p crates/noon-runtime/examples
+          cp /tmp/local_patch_perf.rs crates/noon-runtime/examples/local_patch_perf.rs
+          cargo run --release -p noon-runtime --example local_patch_perf | tee /tmp/before.txt
+      - name: Benchmark #152 head
+        shell: bash
+        run: |
+          git checkout -f aa6795efc88662f3b8eaeabc5c0a74f22e04bdd9
+          cp /tmp/local_patch_perf.rs crates/noon-runtime/examples/local_patch_perf.rs
+          cargo run --release -p noon-runtime --example local_patch_perf | tee /tmp/after.txt
+      - name: Publish evidence
+        shell: bash
+        run: |
+          echo '### Before #152' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/before.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '### #152 head' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/after.txt >> "$GITHUB_STEP_SUMMARY"
