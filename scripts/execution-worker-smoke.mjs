@@ -152,12 +152,8 @@ async function runMode(browser, transportMode) {
   assert.match(errorMessage, /expected patch sequence 1, got 9/);
 
   const beforeRetime = await page.evaluate(() => window.executionSmoke.client.state());
-  const retimed = await page.evaluate(
-    ({ sceneJson, duration }) =>
-      window.executionSmoke.client.reconcileScene(sceneJson, {
-        loopDurationSeconds: duration,
-      }),
-    { sceneJson: beforeRetime.sceneJson, duration: 0.9 },
+  const retimed = await page.evaluate(() =>
+    window.executionSmoke.client.setLoopDurationSeconds(0.9),
   );
   assert.equal(retimed.nextPatchSequence, "1", `${transportMode}: retime reset patch sequence`);
   assert.ok(
