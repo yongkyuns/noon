@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "description": "Named physical-machine profiles for reproducible Noon browser performance runs. Hosted/shared CI is intentionally not a performance baseline.",
+  "profiles": [
+    {
+      "id": "legacy-macos-i7-9750h",
+      "status": "existing-baseline",
+      "platform": "darwin",
+      "cpuContains": "i7-9750H",
+      "reference": "docs/performance.md#baseline-2026-08-19",
+      "notes": "Existing documented baseline host. Browser adapter identity was not exposed reliably, so GPU attribution remains host-level."
+    }
+  ],
+  "requiredRunMetadata": [
+    "deviceId",
+    "commit",
+    "host.platform",
+    "host.release",
+    "host.arch",
+    "host.cpu",
+    "browser userAgent",
+    "rendererBackend",
+    "backingResolution",
+    "devicePixelRatio"
+  ],
+  "recommendedMatrix": {
+    "backends": ["webgpu", "webgl"],
+    "resolutions": [
+      [960, 540],
+      [1920, 1080]
+    ],
+    "targetHz": [60],
+    "diagnosticTargetHz": [120]
+  }
+}
