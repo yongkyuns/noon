@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate raster ratchet policy
+        run: node scripts/manim-raster-policy.test.mjs
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -70,6 +73,11 @@ jobs:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-differential.mjs
+
+      - name: Enforce per-fixture raster ratchet
+        env:
+          NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+        run: node scripts/manim-raster-enforce.mjs
 
       - name: Verify direct seek and incremental playback at Manim frame times
         env:

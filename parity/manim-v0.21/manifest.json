@@ -14,62 +14,114 @@
       "id": "create-circle",
       "scene": "CreateCircle",
       "expected_duration": 1.0,
-      "expected_default_stroke": "#FC6255"
+      "expected_default_stroke": "#FC6255",
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0011,
+        "max_mean_absolute_channel_error": 0.027
+      }
     },
     {
       "id": "square-to-circle",
       "scene": "SquareToCircle",
-      "expected_duration": 3.0
+      "expected_duration": 3.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": null,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.15
+      }
     },
     {
       "id": "square-and-circle",
       "scene": "SquareAndCircle",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0033,
+        "max_mean_absolute_channel_error": 0.075
+      }
     },
     {
       "id": "animated-square-to-circle",
       "scene": "AnimatedSquareToCircle",
-      "expected_duration": 4.0
+      "expected_duration": 4.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0033,
+        "max_mean_absolute_channel_error": 0.055
+      }
     },
     {
       "id": "create-line",
       "scene": "CreateLine",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.00065,
+        "max_mean_absolute_channel_error": 0.0065
+      }
     },
     {
       "id": "uncreate-line",
       "scene": "UncreateLine",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.00065,
+        "max_mean_absolute_channel_error": 0.0065
+      }
     },
     {
       "id": "create-styled-square",
       "scene": "CreateStyledSquare",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.00005,
+        "max_mean_absolute_channel_error": 0.022
+      }
     },
     {
       "id": "uncreate-styled-square",
       "scene": "UncreateStyledSquare",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0055,
+        "max_mean_absolute_channel_error": 0.07
+      }
     },
     {
       "id": "uncreate-square",
       "scene": "UncreateSquare",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0023,
+        "max_mean_absolute_channel_error": 0.055
+      }
     },
     {
       "id": "set-color-independent-opacity",
       "scene": "SetColorIndependentOpacity",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0044,
+        "max_mean_absolute_channel_error": 0.065
+      }
     },
     {
       "id": "palette-swatches",
       "scene": "PaletteSwatches",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.0049,
+        "max_mean_absolute_channel_error": 0.42
+      }
     },
     {
       "id": "translucent-painter-order",
       "scene": "TranslucentPainterOrder",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_differing_ratio": 0.0044,
+        "max_mean_absolute_channel_error": 0.18
+      }
     }
   ],
   "sample_fractions": [
@@ -86,6 +138,13 @@
   "policy": {
     "source_adaptation": "replace only `from manim import *` with `from noon import *`, then append a scene-selection wrapper for the browser authoring worker",
     "reference_frames": "compare Noon screenshots against Manim Cairo's native lossless PNG frame sequence; never derive parity references from compressed video",
-    "blocking": "oracle/tooling failures are blocking; visual/timing mismatches are reported until the parity ratchet is enabled"
+    "blocking": "tooling failures and per-fixture raster tolerance regressions are blocking; known unconverged metrics must be explicitly exempted",
+    "raster_tolerance": {
+      "max_duration_delta_seconds": 0.034,
+      "max_background_channel_delta_sum": 0,
+      "max_bounds_delta_px": 2,
+      "max_differing_ratio": 0.006,
+      "max_mean_absolute_channel_error": 0.5
+    }
   }
 }
