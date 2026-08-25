@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "reportingPolicy": {
+    "referenceTargetHz": 60,
+    "longFrameThreshold": "1.5x target interval (25 ms at 60 Hz)",
+    "diagnosticTargetHz": 120,
+    "diagnostic120IsGate": false,
+    "sharedRunnerWallClockGate": false,
+    "preserveVisualQualityAndSemantics": true
+  },
+  "tiers": {
+    "interactive60": {
+      "description": "Normal authoring/playback scenes expected to feel continuously interactive on the named baseline device.",
+      "budgets": {
+        "frameIntervalP95Ms": 20,
+        "frameIntervalP99Ms": 25,
+        "longFrameRateMax": 0.02,
+        "cpuFrameP95Ms": 8,
+        "gpuP95Ms": 8
+      }
+    },
+    "heavy60": {
+      "description": "Intentionally heavy but still user-facing scenes; modest frame misses are tolerated.",
+      "budgets": {
+        "frameIntervalP95Ms": 25,
+        "frameIntervalP99Ms": 40,
+        "longFrameRateMax": 0.08,
+        "cpuFrameP95Ms": 12,
+        "gpuP95Ms": 12
+      }
+    },
+    "scalability": {
+      "description": "Adversarial scale workloads used for diagnosis; not release FPS gates.",
+      "budgets": null
+    }
+  },
+  "cases": [
+    {
+      "id": "getting-started",
+      "source": "./python/demo_scene.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P1", "P2", "P6"],
+      "dimensions": ["python-authoring", "first-run-latency", "timeline", "analytic-primitives"]
+    },
+    {
+      "id": "tutorial-positioning",
+      "source": "./python/examples/tutorial_positioning.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P1", "P2"],
+      "dimensions": ["groups", "layout", "animate", "independent-transforms"]
+    },
+    {
+      "id": "staggered-choreography",
+      "source": "./python/examples/staggered_choreography.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P1", "P2"],
+      "dimensions": ["timeline-active-set", "easing", "analytic-primitives"]
+    },
+    {
+      "id": "tutorial-value-tracker",
+      "source": "./python/examples/tutorial_value_tracker.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P1", "P5"],
+      "dimensions": ["reactive", "ValueTracker", "native-reactive-evaluation", "browser-cadence"]
+    },
+    {
+      "id": "instanced-field",
+      "source": "./python/examples/instanced_field.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["batching", "dirty-upload", "many-analytic-objects"]
+    },
+    {
+      "id": "painter-order-overlap",
+      "source": "./python/examples/painter_order_overlap.py",
+      "tier": "heavy60",
+      "classification": "adversarial",
+      "domains": ["P2", "P3"],
+      "dimensions": ["mixed-transparency", "painter-order", "overdraw", "fixed-pixel-footprint"]
+    },
+    {
+      "id": "create-shapes",
+      "source": "./python/examples/create_shapes.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P2", "P4"],
+      "dimensions": ["reveal", "analytic-to-path", "path-cache"]
+    },
+    {
+      "id": "path-reveal",
+      "source": "./python/examples/path_reveal.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P4", "P7"],
+      "dimensions": ["vector-path", "reveal", "tessellation"]
+    },
+    {
+      "id": "filled-path-transform",
+      "source": "./python/examples/filled_path_transform.py",
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P4", "P7"],
+      "dimensions": ["vector-path", "morph", "fixed-topology"]
+    },
+    {
+      "id": "matching-shapes",
+      "source": "./python/examples/matching_shapes.py",
+      "tier": "heavy60",
+      "classification": "representative",
+      "domains": ["P1", "P2", "P4"],
+      "dimensions": ["composition", "semantic-matching", "mixed-primitives"]
+    },
+    {
+      "id": "morph-shared-1000",
+      "source": "./python/examples/morph_stress_test.py",
+      "context": { "object_count": 1000, "target_variant_count": 12 },
+      "cameraHeight": 4.4,
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P4", "P7"],
+      "dimensions": ["morph", "shared-geometry", "1000-objects"]
+    },
+    {
+      "id": "morph-unique-1000",
+      "source": "./python/examples/morph_stress_test.py",
+      "context": { "object_count": 1000, "target_variant_count": 1000 },
+      "cameraHeight": 4.4,
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P4", "P7"],
+      "dimensions": ["morph", "unique-geometry", "cache-pressure"]
+    }
+  ],
+  "auxiliaryCases": [
+    {
+      "id": "host-updater-follow",
+      "source": "web/python/examples/perf_host_updater.py",
+      "runner": "node scripts/updater-callback-smoke.mjs",
+      "classification": "representative",
+      "domains": ["P5", "P7"],
+      "dimensions": ["python-host-callback", "coherent-snapshot", "worker-round-trip", "batched-patch"]
+    },
+    {
+      "id": "authoring-edit-rerun-seek",
+      "source": "web/python/examples/authoring_perf_scene.py",
+      "runner": "node scripts/authoring-perf.mjs",
+      "classification": "scalability-only",
+      "domains": ["P6", "P7"],
+      "dimensions": ["warm-rerun", "one-object-edit", "identity-stabilization", "seek", "time-to-visible"]
+    }
+  ],
+  "domainCoverage": {
+    "P1": ["getting-started", "staggered-choreography", "tutorial-value-tracker"],
+    "P2": ["getting-started", "instanced-field", "painter-order-overlap"],
+    "P3": ["instanced-field", "painter-order-overlap"],
+    "P4": ["create-shapes", "path-reveal", "filled-path-transform"],
+    "P5": ["tutorial-value-tracker", "host-updater-follow"],
+    "P6": ["getting-started", "authoring-edit-rerun-seek"],
+    "P7": ["instanced-field", "path-reveal", "host-updater-follow", "authoring-edit-rerun-seek"]
+  },
+  "futureCoverage": [
+    {
+      "feature": "text-math",
+      "dependency": 83,
+      "note": "Add representative Text/MathTex cases without changing the harness schema."
+    },
+    {
+      "feature": "axes-plotting",
+      "dependency": 85,
+      "note": "Add static and reactive plotting cases without changing the harness schema."
+    }
+  ]
+}

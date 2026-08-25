@@ -5,7 +5,7 @@ use std::{
 };
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
-use noon_render_wgpu::{CircleInstance, FramePreparer};
+use noon_render_wgpu::{CircleInstance, FramePreparer, RenderOrderKey};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 
 const DEFAULT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -22,6 +22,7 @@ struct Config {
 struct Timing {
     median: Duration,
     p95: Duration,
+    p99: Duration,
 }
 
 fn main() {
@@ -31,8 +32,10 @@ fn main() {
         config.warmups, config.samples
     );
     println!();
-    println!("| Objects | Operation | Median | p95 | Repacked | Upload bytes | Full / operation |");
-    println!("|---:|---|---:|---:|---:|---:|---:|");
+    println!(
+        "| Objects | Operation | Median | p95 | p99 | Repacked | Upload bytes | Full / operation |"
+    );
+    println!("|---:|---|---:|---:|---:|---:|---:|---:|");
     for object_count in sizes {
         benchmark_size(object_count, config);
     }
@@ -45,6 +48,19 @@ fn benchmark_size(object_count: usize, config: Config) {
     full_preparer.prepare(&frame);
     let full = measure(config, |_| {
         let prepared = full_preparer.prepare(black_box(&frame));
+        black_box(prepared.stats.instances_repacked);
+    });
+
+    let mut keyed_preparer = FramePreparer::new();
+    let keyed_order = (0..object_count)
+        .map(|index| RenderOrderKey::new((index % 7) as i32, index as u64))
+        .collect::<Vec<_>>();
+    keyed_preparer
+        .set_render_order_keys(&frame, &keyed_order)
+        .expect("benchmark render-order key count must match frame");
+    keyed_preparer.prepare(&frame);
+    let explicit_order = measure(config, |_| {
+        let prepared = keyed_preparer.prepare(black_box(&frame));
         black_box(prepared.stats.instances_repacked);
     });
 
@@ -68,8 +84,16 @@ fn benchmark_size(object_count: usize, config: Config) {
 
     print_row(
         object_count,
-        "full rebuild",
+        "full rebuild / default order",
         full,
+        object_count,
+        object_count * size_of::<CircleInstance>(),
+        full,
+    );
+    print_row(
+        object_count,
+        "full rebuild / explicit z order",
+        explicit_order,
         object_count,
         object_count * size_of::<CircleInstance>(),
         full,
@@ -122,6 +146,7 @@ fn measure(config: Config, mut operation: impl FnMut(usize)) -> Timing {
     Timing {
         median: percentile(&durations, 0.50),
         p95: percentile(&durations, 0.95),
+        p99: percentile(&durations, 0.99),
     }
 }
 
@@ -140,9 +165,10 @@ fn print_row(
 ) {
     let speedup = full.median.as_secs_f64() / timing.median.as_secs_f64();
     println!(
-        "| {object_count} | {operation} | {:.6} ms | {:.6} ms | {repacked} | {upload_bytes} | {speedup:.1}x |",
+        "| {object_count} | {operation} | {:.6} ms | {:.6} ms | {:.6} ms | {repacked} | {upload_bytes} | {speedup:.1}x |",
         milliseconds(timing.median),
         milliseconds(timing.p95),
+        milliseconds(timing.p99),
     );
 }
 

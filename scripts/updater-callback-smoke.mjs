@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,10 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const port = 4182;
 const baseUrl = `http://127.0.0.1:${port}`;
+const source = await readFile(
+  path.join(repoRoot, "web/python/examples/perf_host_updater.py"),
+  "utf8",
+);
 
 let serverOutput = "";
 const server = spawn(
@@ -34,31 +39,6 @@ async function waitForServer() {
   }
   throw new Error(`Updater smoke server did not start: ${lastError}\n${serverOutput}`);
 }
-
-const source = `
-from noon import *
-
-class ArbitraryUpdaterScene(Scene):
-    def construct(self):
-        anchor = Circle(radius=0.4, color=RED).shift(RIGHT * 2)
-        follower = Square(side_length=0.5, color=BLUE).shift(LEFT)
-
-        def removed(mobject):
-            mobject.shift(LEFT * 99)
-
-        def follow(mobject, dt):
-            # This deliberately reads another mobject to verify the callback phase
-            # is a coherent scene snapshot rather than a target-only proxy.
-            mobject.move_to(anchor.get_center() + UP * dt)
-            mobject.set_opacity(0.5 + dt)
-
-        follower.add_updater(removed)
-        follower.remove_updater(removed)
-        follower.add_updater(follow)
-        assert follower.has_updaters()
-        assert follower.get_updaters() == [follow]
-        self.add(anchor, follower)
-`;
 
 let browser = null;
 try {

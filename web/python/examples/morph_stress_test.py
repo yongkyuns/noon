@@ -37,7 +37,17 @@ if requested_count <= 0 or requested_count > 10_000:
     raise ValueError("object_count must be between 1 and 10000")
 
 object_count = requested_count
-variant_count = 12
+requested_variants = (
+    authoring_context.get("target_variant_count", 12)
+    if isinstance(authoring_context, dict)
+    else 12
+)
+if isinstance(requested_variants, bool) or not isinstance(requested_variants, int):
+    raise TypeError("target_variant_count must be an integer")
+if requested_variants <= 0 or requested_variants > object_count:
+    raise ValueError("target_variant_count must be between 1 and object_count")
+
+variant_count = requested_variants
 aspect = 1.5
 columns = math.ceil(math.sqrt(object_count * aspect))
 rows = math.ceil(object_count / columns)
@@ -62,7 +72,6 @@ def rounded_source(radius: float) -> VectorPath:
 
 
 def star_target(variant: int) -> VectorPath:
-    # Twelve target variants create twelve reusable geometry-cache entries.
     phase = (variant / variant_count) * math.pi * 0.36
     outer = source_radius * (1.18 + 0.08 * math.sin(variant * 1.7))
     inner = outer * (0.42 + 0.05 * math.cos(variant * 0.9))

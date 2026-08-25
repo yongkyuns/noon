@@ -11,6 +11,16 @@ use serde::{Deserialize, Serialize};
 
 pub const FORMAT_VERSION: u32 = 1;
 
+#[derive(Deserialize)]
+struct VersionProbe {
+    version: u32,
+}
+
+pub(crate) fn preflight_version(json: &str) -> Result<(), IrError> {
+    let probe: VersionProbe = serde_json::from_str(json)?;
+    ensure_version(probe.version)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SceneDocument {
     pub version: u32,
@@ -86,6 +96,7 @@ pub fn encode_scene(scene: &SceneDefinition) -> Result<String, IrError> {
 }
 
 pub fn decode_scene(json: &str) -> Result<SceneDefinition, IrError> {
+    preflight_version(json)?;
     let document: SceneDocument = serde_json::from_str(json)?;
     document.into_scene()
 }
@@ -96,6 +107,7 @@ pub fn encode_patch_batch(batch: &PatchBatch) -> Result<String, IrError> {
 }
 
 pub fn decode_patch_batch(json: &str) -> Result<PatchBatch, IrError> {
+    preflight_version(json)?;
     let batch: PatchBatch = serde_json::from_str(json)?;
     batch.validate()?;
     Ok(batch)
@@ -303,6 +315,20 @@ mod tests {
         assert!(matches!(
             decode_patch_batch(json),
             Err(IrError::UnsupportedVersion(999))
+        ));
+    }
+
+    #[test]
+    fn future_versions_are_rejected_before_new_variants_are_decoded() {
+        let scene = r#"{"version":2,"objects":[{"id":0,"geometry":{"future_shape":{}},"transform":{},"style":{}}],"tracks":[]}"#;
+        let patches = r#"{"version":2,"sequence":0,"patches":[{"future_patch":{}}]}"#;
+        assert!(matches!(
+            decode_scene(scene),
+            Err(IrError::UnsupportedVersion(2))
+        ));
+        assert!(matches!(
+            decode_patch_batch(patches),
+            Err(IrError::UnsupportedVersion(2))
         ));
     }
 

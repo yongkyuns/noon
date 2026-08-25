@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use noon_core::{
@@ -88,11 +89,74 @@ pub struct CompiledTrack {
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledChannelKey {
+    pub object_index: u32,
+    pub property: Property,
+}
+
+impl CompiledChannelKey {
+    pub const fn new(object_index: u32, property: Property) -> Self {
+        Self {
+            object_index,
+            property,
+        }
+    }
+}
+
+impl PartialOrd for CompiledChannelKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompiledChannelKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.object_index
+            .cmp(&other.object_index)
+            .then_with(|| property_rank(self.property).cmp(&property_rank(other.property)))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CompiledTrackLocator {
+    object_index: u32,
+    property: Property,
+    start_time: f64,
+    id: TrackId,
+}
+
+impl CompiledTrackLocator {
+    fn from_track(track: &CompiledTrack) -> Self {
+        Self {
+            object_index: track.object_index,
+            property: track.property,
+            start_time: track.timing.start_time,
+            id: track.id,
+        }
+    }
+}
+
+/// Instrumentation for one compiled-scene patch.
+///
+/// Timeline edits intentionally report dense-vector shifts separately from semantic work:
+/// this slice removes full track payload clones and global dynamic sweeps, while the
+/// remaining dense storage migration is tracked by #58.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CompiledPatchStats {
+    pub track_vector_clones: usize,
+    pub presence_tracks_inspected: usize,
+    pub dynamic_objects_recomputed: usize,
+    pub dynamic_tracks_inspected: usize,
+    pub dense_track_slots_shifted: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     objects: Vec<CompiledObject>,
     tracks: Vec<CompiledTrack>,
     object_indices: BTreeMap<ObjectId, u32>,
+    track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,11 +289,16 @@ impl CompiledScene {
         sort_tracks(&mut tracks);
         validate_presence_chains(&tracks)
             .map_err(|(previous, next)| CompileError::DiscontinuousPresence { previous, next })?;
+        let track_locators = tracks
+            .iter()
+            .map(|track| (track.id, CompiledTrackLocator::from_track(track)))
+            .collect();
 
         Ok(Self {
             objects,
             tracks,
             object_indices,
+            track_locators,
         })
     }
 
@@ -245,7 +314,32 @@ impl CompiledScene {
         self.object_indices.get(&id).copied()
     }
 
+    pub fn channel_for_track(&self, id: TrackId) -> Option<CompiledChannelKey> {
+        let locator = self.track_locators.get(&id)?;
+        Some(CompiledChannelKey::new(
+            locator.object_index,
+            locator.property,
+        ))
+    }
+
+    pub fn channel_tracks(&self, channel: CompiledChannelKey) -> &[CompiledTrack] {
+        let range = self.channel_track_range(channel);
+        &self.tracks[range]
+    }
+
+    pub fn has_channel(&self, channel: CompiledChannelKey) -> bool {
+        !self.channel_tracks(channel).is_empty()
+    }
+
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
+        self.apply_patch_with_stats(patch).map(|_| ())
+    }
+
+    pub fn apply_patch_with_stats(
+        &mut self,
+        patch: &ScenePatch,
+    ) -> Result<CompiledPatchStats, CompilePatchError> {
+        let mut stats = CompiledPatchStats::default();
         match patch {
             ScenePatch::CreateObject(object) => {
                 if self.object_indices.contains_key(&object.id) {
@@ -274,7 +368,10 @@ impl CompiledScene {
                     }
                 }
                 self.rebuild_object_indices();
+                self.rebuild_track_locators();
                 self.recompute_dynamic();
+                stats.dynamic_objects_recomputed = self.objects.len();
+                stats.dynamic_tracks_inspected = self.tracks.len();
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
@@ -289,51 +386,62 @@ impl CompiledScene {
                 self.objects[index as usize].base_style = *style;
             }
             ScenePatch::AddTrack(track) => {
-                if self.tracks.iter().any(|existing| existing.id == track.id) {
+                if self.track_locators.contains_key(&track.id) {
                     return Err(CompilePatchError::DuplicateTrack(track.id));
                 }
                 let compiled = self.compile_patch_track(track)?;
-                let mut tracks = self.tracks.clone();
-                tracks.push(compiled);
-                sort_tracks(&mut tracks);
-                validate_presence_chains(&tracks).map_err(|(previous, next)| {
-                    CompilePatchError::DiscontinuousPresence { previous, next }
-                })?;
-                self.tracks = tracks;
-                self.recompute_dynamic();
+                stats.presence_tracks_inspected +=
+                    self.validate_presence_edit(None, Some(&compiled))?;
+                let locator = CompiledTrackLocator::from_track(&compiled);
+                let position = self.track_insertion_position(&compiled);
+                stats.dense_track_slots_shifted = self.tracks.len().saturating_sub(position);
+                self.tracks.insert(position, compiled);
+                self.track_locators.insert(track.id, locator);
+                self.objects[locator.object_index as usize]
+                    .dynamic
+                    .mark(locator.property);
             }
             ScenePatch::ReplaceTrack(track) => {
-                let position = self
-                    .tracks
-                    .iter()
-                    .position(|existing| existing.id == track.id)
+                let old_locator = self
+                    .track_locators
+                    .get(&track.id)
+                    .copied()
                     .ok_or(CompilePatchError::UnknownTrack(track.id))?;
+                let old_position = self.track_position(old_locator);
                 let compiled = self.compile_patch_track(track)?;
-                let mut tracks = self.tracks.clone();
-                tracks[position] = compiled;
-                sort_tracks(&mut tracks);
-                validate_presence_chains(&tracks).map_err(|(previous, next)| {
-                    CompilePatchError::DiscontinuousPresence { previous, next }
-                })?;
-                self.tracks = tracks;
-                self.recompute_dynamic();
+                stats.presence_tracks_inspected +=
+                    self.validate_presence_edit(Some(track.id), Some(&compiled))?;
+
+                let before_remove_len = self.tracks.len();
+                self.tracks.remove(old_position);
+                stats.dense_track_slots_shifted +=
+                    before_remove_len.saturating_sub(old_position + 1);
+                let new_locator = CompiledTrackLocator::from_track(&compiled);
+                let new_position = self.track_insertion_position(&compiled);
+                stats.dense_track_slots_shifted += self.tracks.len().saturating_sub(new_position);
+                self.tracks.insert(new_position, compiled);
+                self.track_locators.insert(track.id, new_locator);
+                self.recompute_dynamic_for_objects(
+                    &[old_locator.object_index, new_locator.object_index],
+                    &mut stats,
+                );
             }
             ScenePatch::RemoveTrack(id) => {
-                let position = self
-                    .tracks
-                    .iter()
-                    .position(|track| track.id == *id)
+                let old_locator = self
+                    .track_locators
+                    .get(id)
+                    .copied()
                     .ok_or(CompilePatchError::UnknownTrack(*id))?;
-                let mut tracks = self.tracks.clone();
-                tracks.remove(position);
-                validate_presence_chains(&tracks).map_err(|(previous, next)| {
-                    CompilePatchError::DiscontinuousPresence { previous, next }
-                })?;
-                self.tracks = tracks;
-                self.recompute_dynamic();
+                stats.presence_tracks_inspected += self.validate_presence_edit(Some(*id), None)?;
+                let position = self.track_position(old_locator);
+                let before_remove_len = self.tracks.len();
+                self.tracks.remove(position);
+                stats.dense_track_slots_shifted = before_remove_len.saturating_sub(position + 1);
+                self.track_locators.remove(id);
+                self.recompute_dynamic_for_objects(&[old_locator.object_index], &mut stats);
             }
         }
-        Ok(())
+        Ok(stats)
     }
 
     fn compile_patch_track(
@@ -352,6 +460,142 @@ impl CompiledScene {
         for (index, object) in self.objects.iter().enumerate() {
             let index = u32::try_from(index).expect("compiled object count already validated");
             self.object_indices.insert(object.id, index);
+        }
+    }
+
+    fn rebuild_track_locators(&mut self) {
+        self.track_locators.clear();
+        self.track_locators.extend(
+            self.tracks
+                .iter()
+                .map(|track| (track.id, CompiledTrackLocator::from_track(track))),
+        );
+    }
+
+    fn track_insertion_position(&self, track: &CompiledTrack) -> usize {
+        self.tracks
+            .binary_search_by(|existing| compare_tracks(existing, track))
+            .unwrap_or_else(|position| position)
+    }
+
+    fn track_position(&self, locator: CompiledTrackLocator) -> usize {
+        self.tracks
+            .binary_search_by(|track| compare_track_locator(track, locator))
+            .expect("track locator index must match sorted track storage")
+    }
+
+    fn object_track_range(&self, object_index: u32) -> std::ops::Range<usize> {
+        let start = self
+            .tracks
+            .partition_point(|track| track.object_index < object_index);
+        let end = self
+            .tracks
+            .partition_point(|track| track.object_index <= object_index);
+        start..end
+    }
+
+    fn channel_track_range(&self, channel: CompiledChannelKey) -> std::ops::Range<usize> {
+        let rank = property_rank(channel.property);
+        let start = self.tracks.partition_point(|track| {
+            track.object_index < channel.object_index
+                || (track.object_index == channel.object_index
+                    && property_rank(track.property) < rank)
+        });
+        let end = self.tracks.partition_point(|track| {
+            track.object_index < channel.object_index
+                || (track.object_index == channel.object_index
+                    && property_rank(track.property) <= rank)
+        });
+        start..end
+    }
+
+    fn validate_presence_edit(
+        &self,
+        excluded: Option<TrackId>,
+        candidate: Option<&CompiledTrack>,
+    ) -> Result<usize, CompilePatchError> {
+        let mut affected_objects = Vec::with_capacity(2);
+        if let Some(id) = excluded {
+            let locator = self
+                .track_locators
+                .get(&id)
+                .copied()
+                .expect("excluded track was resolved before presence validation");
+            if locator.property == Property::Presence {
+                affected_objects.push(locator.object_index);
+            }
+        }
+        if let Some(track) = candidate {
+            if track.property == Property::Presence
+                && !affected_objects.contains(&track.object_index)
+            {
+                affected_objects.push(track.object_index);
+            }
+        }
+
+        let mut inspected = 0;
+        for object_index in affected_objects {
+            let range = self.object_track_range(object_index);
+            let mut events = Vec::new();
+            for track in &self.tracks[range] {
+                if track.property != Property::Presence {
+                    break;
+                }
+                if excluded == Some(track.id) {
+                    continue;
+                }
+                let TrackValues::Bool { from, to } = track.values else {
+                    unreachable!("validated Presence track must contain bool values");
+                };
+                events.push((track.timing.start_time, track.id, from, to));
+                inspected += 1;
+            }
+            if let Some(track) = candidate.filter(|track| {
+                track.object_index == object_index && track.property == Property::Presence
+            }) {
+                let TrackValues::Bool { from, to } = track.values else {
+                    unreachable!("validated Presence track must contain bool values");
+                };
+                events.push((track.timing.start_time, track.id, from, to));
+                inspected += 1;
+            }
+            events.sort_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            for pair in events.windows(2) {
+                if pair[0].3 != pair[1].2 {
+                    return Err(CompilePatchError::DiscontinuousPresence {
+                        previous: pair[0].1,
+                        next: pair[1].1,
+                    });
+                }
+            }
+        }
+        Ok(inspected)
+    }
+
+    fn recompute_dynamic_for_objects(
+        &mut self,
+        object_indices: &[u32],
+        stats: &mut CompiledPatchStats,
+    ) {
+        let mut unique = Vec::with_capacity(object_indices.len());
+        for object_index in object_indices.iter().copied() {
+            if !unique.contains(&object_index) {
+                unique.push(object_index);
+            }
+        }
+        for object_index in unique {
+            let range = self.object_track_range(object_index);
+            let mut dynamic = DynamicProperties::default();
+            for track in &self.tracks[range.clone()] {
+                dynamic.mark(track.property);
+                stats.dynamic_tracks_inspected += 1;
+            }
+            self.objects[object_index as usize].dynamic = dynamic;
+            stats.dynamic_objects_recomputed += 1;
         }
     }
 
@@ -559,14 +803,25 @@ fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePa
     }
 }
 
+fn compare_tracks(left: &CompiledTrack, right: &CompiledTrack) -> Ordering {
+    left.object_index
+        .cmp(&right.object_index)
+        .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
+        .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_track_locator(track: &CompiledTrack, locator: CompiledTrackLocator) -> Ordering {
+    track
+        .object_index
+        .cmp(&locator.object_index)
+        .then_with(|| property_rank(track.property).cmp(&property_rank(locator.property)))
+        .then_with(|| track.timing.start_time.total_cmp(&locator.start_time))
+        .then_with(|| track.id.cmp(&locator.id))
+}
+
 fn sort_tracks(tracks: &mut [CompiledTrack]) {
-    tracks.sort_by(|left, right| {
-        left.object_index
-            .cmp(&right.object_index)
-            .then_with(|| property_rank(left.property).cmp(&property_rank(right.property)))
-            .then_with(|| left.timing.start_time.total_cmp(&right.timing.start_time))
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    tracks.sort_by(compare_tracks);
 }
 
 fn validate_presence_chains(tracks: &[CompiledTrack]) -> Result<(), (TrackId, TrackId)> {
@@ -1005,5 +1260,147 @@ mod tests {
             .apply_patch(&ScenePatch::AddTrack(track))
             .expect("valid patch");
         assert!(compiled.objects()[1].dynamic.opacity);
+    }
+
+    #[test]
+    fn large_add_track_patch_avoids_global_clone_and_dynamic_sweep() {
+        let mut scene = SceneDefinition::new();
+        let mut objects = Vec::with_capacity(10_000);
+        for index in 0..10_000u32 {
+            let object = scene.add(GeometryRef::circle(1.0));
+            objects.push(object);
+            scene
+                .animate_position(
+                    object,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                )
+                .expect("valid track");
+        }
+        let mut compiled = CompiledScene::compile(&scene).expect("large scene must compile");
+        let target = objects[5_000];
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(100_000),
+                object: target,
+                property: Property::Opacity,
+                values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+                timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .expect("local track add must compile");
+
+        assert_eq!(stats.track_vector_clones, 0);
+        assert_eq!(stats.presence_tracks_inspected, 0);
+        assert_eq!(stats.dynamic_objects_recomputed, 0);
+        assert_eq!(stats.dynamic_tracks_inspected, 0);
+        assert!(stats.dense_track_slots_shifted > 0);
+        let target_index = compiled.object_index(target).unwrap() as usize;
+        assert!(compiled.objects()[target_index].dynamic.position);
+        assert!(compiled.objects()[target_index].dynamic.opacity);
+        assert!(compiled.objects()[0].dynamic.position);
+    }
+
+    #[test]
+    fn replace_track_recomputes_only_affected_object_channels() {
+        let mut scene = SceneDefinition::new();
+        let first = scene.add(GeometryRef::circle(1.0));
+        let second = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_position(
+                first,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        scene
+            .animate_position(
+                second,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        let replaced = scene
+            .animate_scalar(
+                first,
+                Property::Opacity,
+                1.0,
+                0.0,
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .unwrap();
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let stats = compiled
+            .apply_patch_with_stats(&ScenePatch::ReplaceTrack(TrackDefinition {
+                id: replaced,
+                object: second,
+                property: Property::Opacity,
+                values: TrackValues::Scalar {
+                    from: 0.5,
+                    to: 0.25,
+                },
+                timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+
+        assert_eq!(stats.track_vector_clones, 0);
+        assert_eq!(stats.dynamic_objects_recomputed, 2);
+        assert_eq!(stats.dynamic_tracks_inspected, 3);
+        assert!(
+            !compiled.objects()[compiled.object_index(first).unwrap() as usize]
+                .dynamic
+                .opacity
+        );
+        assert!(
+            compiled.objects()[compiled.object_index(second).unwrap() as usize]
+                .dynamic
+                .opacity
+        );
+    }
+
+    #[test]
+    fn presence_patch_validation_inspects_only_affected_chain() {
+        let mut scene = SceneDefinition::new();
+        let target = scene.add(GeometryRef::circle(1.0));
+        let first = scene.set_presence_at(target, false, true, 1.0).unwrap();
+        for index in 0..5_000u32 {
+            let object = scene.add(GeometryRef::circle(1.0));
+            scene
+                .animate_position(
+                    object,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                )
+                .unwrap();
+        }
+        let mut compiled = CompiledScene::compile(&scene).unwrap();
+        let next = TrackId::new(50_000);
+        let before = compiled.tracks().to_vec();
+        let error = compiled
+            .apply_patch_with_stats(&ScenePatch::AddTrack(TrackDefinition {
+                id: next,
+                object: target,
+                property: Property::Presence,
+                values: TrackValues::Bool {
+                    from: false,
+                    to: true,
+                },
+                timing: TrackTiming::instant(2.0),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CompilePatchError::DiscontinuousPresence {
+                previous: first,
+                next,
+            }
+        );
+        assert_eq!(compiled.tracks(), before);
     }
 }

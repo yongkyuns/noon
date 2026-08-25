@@ -19,19 +19,6 @@ import _manim_compat as _compat
 import _manim_phase_b as _phase_b
 
 
-def _vec2_deepcopy(value: _base.Vec2, memo: dict[int, object]) -> _base.Vec2:
-    """Treat immutable Vec2 metadata as an atomic value during target-state copies."""
-
-    memo[id(value)] = value
-    return value
-
-
-# VMobject.copy() deep-copies wrapper metadata when `.animate` constructs its target.
-# Vec2 is an immutable tuple subclass with a scalar `(x, y)` constructor, so Python's
-# default tuple reconstruction incorrectly passes the whole tuple as `x`. Registering
-# an atomic deepcopy contract avoids that reconstruction without changing scene data.
-_base.Vec2.__deepcopy__ = _vec2_deepcopy
-
 
 class _AnimateBuilderMixin:
     """Mirror Manim's callable/chained ``_AnimationBuilder`` contract."""
