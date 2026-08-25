@@ -58,7 +58,7 @@ export class PythonAuthoringClient {
       throw new TypeError("callback frame must be an object");
     }
     if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      throw new TypeError("callback sequence must be a non-negative safe integer");
+      throw new TypeError("callback patch sequence must be a non-negative safe integer");
     }
     await this.ready();
     const requestId = this.#beginRequest();
