@@ -1,0 +1,52 @@
+name: I1 renderer culling validation
+
+on:
+  push:
+    branches:
+      - arch/i1-renderer-culling
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-validate:
+    if: ${{ !contains(github.event.head_commit.message, '[validated-i1-culling]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Apply renderer culling implementation
+        run: python .github/scripts/apply_i1_renderer_culling.py
+      - name: Format
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+      - name: Focused runtime renderer and browser tests
+        run: cargo test -p noon-runtime -p noon-render-wgpu -p noon-web
+      - name: Workspace clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: WASM check
+        run: cargo check -p noon-web --target wasm32-unknown-unknown
+      - name: JavaScript syntax
+        run: node --check web/execution-render-worker.js
+      - name: Publish validated source
+        run: |
+          rm .github/scripts/apply_i1_renderer_culling.py
+          rm .github/workflows/i1-renderer-culling-validation.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-runtime/src/spatial_index.rs \
+                  crates/noon-render-wgpu/src/render_order.rs \
+                  crates/noon-render-wgpu/src/lib.rs \
+                  crates/noon-render-wgpu/src/gpu.rs \
+                  crates/noon-web/src/execution_transport.rs \
+                  crates/noon-web/src/execution_canvas.rs \
+                  crates/noon-web/src/legacy.rs \
+                  web/execution-render-worker.js \
+                  docs/spatial-index.md \
+                  .github/scripts/apply_i1_renderer_culling.py \
+                  .github/workflows/i1-renderer-culling-validation.yml
+          git commit -m "Add retained viewport culling and browser hit queries [validated-i1-culling]"
+          git push origin HEAD:arch/i1-renderer-culling
