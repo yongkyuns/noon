@@ -22,15 +22,23 @@ jobs:
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt clippy
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Apply O1 query and transform patch
-        run: python .github/apply-o1-query-transform.py
-      - name: Compile Python facade
-        run: python -m compileall -q web/python scripts/manim-differential.py
+      - name: Apply shared semantic transform and O1 query patches
+        run: |
+          python .github/apply-g2-semantic-transform.py
+          python .github/apply-o1-query-transform.py
+      - name: Validate Rust and Python facade
+        run: |
+          cargo fmt --all
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          cargo test -p noon-web
+          cargo check -p noon-web --target wasm32-unknown-unknown
+          python -m compileall -q web/python scripts/manim-differential.py
       - name: Install ManimCE reference
         run: |
           sudo apt-get update
@@ -53,7 +61,7 @@ jobs:
           find web scripts -type d -name __pycache__ -prune -exec rm -rf {} +
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/python/_manim_compat.py web/python/_manim_semantic_handles.py scripts/manim-differential.py scripts/manim-compat-smoke.mjs
-          git rm .github/apply-o1-query-transform.py .github/workflows/apply-o1-query-transform.yml
-          git commit -m "Expand shared Mobject query and dimension transforms"
+          git add crates/noon-web/src/authoring_mobject.rs web/python/_manim_compat.py web/python/_manim_semantic_handles.py scripts/manim-differential.py scripts/manim-compat-smoke.mjs
+          git rm .github/apply-g2-semantic-transform.py .github/apply-o1-query-transform.py .github/workflows/apply-o1-query-transform.yml
+          git commit -m "Expand shared Mobject query and transform semantics"
           git push origin HEAD:agent/o1-shared-query-transform
