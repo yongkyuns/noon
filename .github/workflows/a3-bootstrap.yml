@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: arch/a3-animation-graph
-      - name: Wire graph and correct normalized leaf timing
+      - name: Wire graph and correct lowering helpers
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -34,6 +34,24 @@ jobs:
           new = '''            let rate_func = if node_id == root {\n                context\n                    .play_options\n                    .rate_func\n                    .or(node.options.rate_func)\n                    .unwrap_or(RateFunction::Linear)\n            } else {\n                node.options.rate_func.unwrap_or(RateFunction::Linear)\n            };\n'''
           if old not in text:
               raise SystemExit('leaf rate anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''        lower_node(\n            graph,\n            root,\n            root,\n            context,\n            root_duration,\n            &[],\n            &mut candidates,\n            &mut stats,\n        )?;\n'''
+          new = '''        lower_node(\n            graph,\n            root,\n            LowerRootContext {\n                root,\n                context,\n                root_duration,\n            },\n            &[],\n            &mut candidates,\n            &mut stats,\n        )?;\n'''
+          if old not in text:
+              raise SystemExit('initial lowering call anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''#[derive(Clone, Debug)]\nstruct CandidateTrack {\n    origin: AnimationTrackOrigin,\n    track: TrackDefinition,\n}\n\nfn lower_node(\n    graph: &AnimationGraph,\n    node_id: AnimationNodeId,\n    root: AnimationNodeId,\n    context: AnimationLoweringContext,\n    root_duration: f64,\n    inherited_steps: &[CompositionTimeMapStep],\n    output: &mut Vec<CandidateTrack>,\n    stats: &mut AnimationRelowerStats,\n) -> Result<(), AnimationGraphError> {\n'''
+          new = '''#[derive(Clone, Debug)]\nstruct CandidateTrack {\n    origin: AnimationTrackOrigin,\n    track: TrackDefinition,\n}\n\n#[derive(Clone, Copy)]\nstruct LowerRootContext {\n    root: AnimationNodeId,\n    context: AnimationLoweringContext,\n    root_duration: f64,\n}\n\nfn lower_node(\n    graph: &AnimationGraph,\n    node_id: AnimationNodeId,\n    lowering: LowerRootContext,\n    inherited_steps: &[CompositionTimeMapStep],\n    output: &mut Vec<CandidateTrack>,\n    stats: &mut AnimationRelowerStats,\n) -> Result<(), AnimationGraphError> {\n    let root = lowering.root;\n    let context = lowering.context;\n    let root_duration = lowering.root_duration;\n'''
+          if old not in text:
+              raise SystemExit('lower_node signature anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''                lower_node(\n                    graph,\n                    child,\n                    root,\n                    context,\n                    root_duration,\n                    &steps,\n                    output,\n                    stats,\n                )?;\n'''
+          new = '''                lower_node(\n                    graph,\n                    child,\n                    lowering,\n                    &steps,\n                    output,\n                    stats,\n                )?;\n'''
+          if old not in text:
+              raise SystemExit('recursive lowering call anchor missing')
           graph.write_text(text.replace(old, new, 1))
           PY
           cargo fmt --all
