@@ -655,11 +655,12 @@ impl GpuRenderer {
             prepared.paths,
             prepared.path_dirty_ranges,
             path_instance_reallocated,
-        ) + upload_full_if(
+        ) + upload_dirty(
             queue,
             &self.mega_path_index_buffer,
             prepared.mega_path_indices,
-            prepared.mega_path_index_dirty || mega_path_index_reallocated,
+            prepared.mega_path_index_dirty_ranges,
+            mega_path_index_reallocated,
         ) + upload_dirty(
             queue,
             &self.mega_path_vertex_instance_buffer,
@@ -1226,20 +1227,6 @@ fn ensure_capacity_with_usage(
     });
     *capacity_bytes = new_capacity;
     true
-}
-
-fn upload_full_if<T: Pod>(
-    queue: &wgpu::Queue,
-    buffer: &wgpu::Buffer,
-    values: &[T],
-    upload: bool,
-) -> usize {
-    if values.is_empty() || !upload {
-        return 0;
-    }
-    let bytes = bytemuck::cast_slice(values);
-    queue.write_buffer(buffer, 0, bytes);
-    bytes.len()
 }
 
 fn upload_dirty<T: Pod>(
