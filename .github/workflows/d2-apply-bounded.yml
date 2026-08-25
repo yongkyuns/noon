@@ -34,7 +34,20 @@ jobs:
           new = '''        normalize_dirty_ranges(&mut self.path_dirty_ranges);\n        normalize_dirty_ranges(&mut self.path_vertex_dirty_ranges);\n        normalize_dirty_ranges(&mut self.path_index_dirty_ranges);\n\n        self.prepared_frame(\n'''
           if old not in text:
               raise SystemExit('missing incremental dirty normalization anchor')
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+
+          function_start = text.index('    fn unique_path_replacement_dirties_only_its_geometry_chunks() {')
+          next_test = text.index('    #[test]\n    fn path_arena_reuses_released_chunks', function_start)
+          section = text[function_start:next_test]
+          block_start = section.index('        assert_eq!(preparer.path_batch_vertex_ranges[0], first_vertex_range);')
+          prepared_start = section.index('        assert_eq!(prepared.path_vertex_dirty_ranges.len(), 1);', block_start)
+          preparer_block = section[block_start:prepared_start]
+          section = section[:block_start] + section[prepared_start:]
+          insertion = '        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT);\n'
+          insertion_at = section.index(insertion) + len(insertion)
+          section = section[:insertion_at] + preparer_block + section[insertion_at:]
+          text = text[:function_start] + section + text[next_test:]
+          path.write_text(text)
           PY
           cargo fmt --all
       - name: Validate renderer
