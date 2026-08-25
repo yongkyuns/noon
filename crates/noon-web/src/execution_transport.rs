@@ -713,6 +713,11 @@ impl EngineScenePlayer {
         self.take_delta_json()
     }
 
+    pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), ExecutionTransportError> {
+        self.clock.set_loop_duration(duration)?;
+        Ok(())
+    }
+
     pub fn apply_patch_batch_delta_json(
         &mut self,
         json: &str,
@@ -819,6 +824,11 @@ mod wasm {
         #[wasm_bindgen(js_name = tickDeltaJson)]
         pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, JsValue> {
             self.inner.tick_delta_json(timestamp_ms).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setLoopDurationSeconds)]
+        pub fn set_loop_duration_seconds(&mut self, duration: f64) -> Result<(), JsValue> {
+            self.inner.set_loop_duration(duration).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = applyPatchBatchDeltaJson)]
@@ -1016,6 +1026,29 @@ mod tests {
                 sequence: 3
             })
         ));
+    }
+
+    #[test]
+    fn retiming_execution_clock_preserves_phase_and_patch_sequence() {
+        let mut player = EngineScenePlayer::new(&scene_json(), 4.0, 13).unwrap();
+        player.initial_delta_json().unwrap();
+        player.tick_delta_json(100.0).unwrap();
+        player.tick_delta_json(1_600.0).unwrap();
+        assert_eq!(player.time(), 1.5);
+
+        let patch = PatchBatch::new(0, Vec::new());
+        player
+            .apply_patch_batch_delta_json(&encode_patch_batch(&patch).unwrap())
+            .unwrap();
+        assert_eq!(player.next_patch_sequence(), 1);
+
+        player.set_loop_duration(3.0).unwrap();
+        assert_eq!(player.time(), 1.5);
+        assert_eq!(player.next_patch_sequence(), 1);
+
+        player.tick_delta_json(3_100.0).unwrap();
+        assert_eq!(player.time(), 0.0);
+        assert_eq!(player.next_patch_sequence(), 1);
     }
 
     #[test]

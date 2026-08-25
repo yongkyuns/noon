@@ -46,6 +46,7 @@ async function handleMainMessage(message) {
         return;
       case "replace_scene":
       case "reconcile_scene":
+      case "set_loop_duration":
       case "apply_patch":
       case "configure_callbacks":
         enqueueControl(message);
@@ -296,15 +297,19 @@ function drainWork() {
 function executeControl(message) {
   switch (message.type) {
     case "replace_scene": {
+      validateOptionalLoopDuration(message.loopDurationSeconds);
       clearHostCallbacks();
       const delta = player.replaceSceneDeltaJson(message.sceneJson);
+      applyOptionalLoopDuration(message.loopDurationSeconds);
       sendDeltaOrThrow(delta);
       respond(message.requestId, runtimeResult("replace_scene"));
       return;
     }
     case "reconcile_scene": {
+      validateOptionalLoopDuration(message.loopDurationSeconds);
       clearHostCallbacks();
       const result = JSON.parse(player.reconcileSceneDeltaJson(message.sceneJson));
+      applyOptionalLoopDuration(message.loopDurationSeconds);
       if (result.delta !== null && result.delta !== undefined) {
         sendDeltaOrThrow(result.delta);
       }
@@ -312,6 +317,12 @@ function executeControl(message) {
         ...runtimeResult("reconcile_scene"),
         incremental: result.incremental,
       });
+      return;
+    }
+    case "set_loop_duration": {
+      validateRequiredLoopDuration(message.loopDurationSeconds);
+      player.setLoopDurationSeconds(message.loopDurationSeconds);
+      respond(message.requestId, runtimeResult("set_loop_duration"));
       return;
     }
     case "apply_patch": {
@@ -333,6 +344,25 @@ function executeControl(message) {
     }
     default:
       throw new Error(`unknown queued engine command ${message.type}`);
+  }
+}
+
+function validateRequiredLoopDuration(duration) {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("execution engine loop duration must be positive and finite");
+  }
+}
+
+function validateOptionalLoopDuration(duration) {
+  if (duration === null || duration === undefined) {
+    return;
+  }
+  validateRequiredLoopDuration(duration);
+}
+
+function applyOptionalLoopDuration(duration) {
+  if (duration !== null && duration !== undefined) {
+    player.setLoopDurationSeconds(duration);
   }
 }
 

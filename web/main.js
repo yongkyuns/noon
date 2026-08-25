@@ -469,6 +469,7 @@ try {
       const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
         callbacks: authored.callbacks,
         authoringClient,
+        loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
       });
       if (result.time !== before.time) {
         throw new Error("Scene replacement changed the current playhead");

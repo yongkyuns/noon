@@ -55,9 +55,7 @@ export class ExecutionWorkerClient {
       throw new Error("ExecutionWorkerClient is already started");
     }
     validateSceneJson(sceneJson);
-    if (!Number.isFinite(loopDurationSeconds) || loopDurationSeconds <= 0) {
-      throw new TypeError("loop duration must be positive and finite");
-    }
+    validateLoopDurationSeconds(loopDurationSeconds);
     if (
       transportMode !== EXECUTION_TRANSPORT_SHARED &&
       transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
@@ -130,19 +128,48 @@ export class ExecutionWorkerClient {
     return this.#ready;
   }
 
-  async replaceScene(sceneJson, { callbacks = null, authoringClient = null } = {}) {
+  async replaceScene(
+    sceneJson,
+    { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
+  ) {
     validateSceneJson(sceneJson);
-    const result = await this.#requestEngine("replace_scene", { sceneJson });
+    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
+    const result = await this.#requestEngine("replace_scene", {
+      sceneJson,
+      loopDurationSeconds: duration,
+    });
     this.#sceneJson = result.sceneJson ?? sceneJson;
+    if (duration !== null) {
+      this.#loopDurationSeconds = duration;
+    }
     await this.configureHostCallbacks(callbacks, authoringClient);
     return result;
   }
 
-  async reconcileScene(sceneJson, { callbacks = null, authoringClient = null } = {}) {
+  async reconcileScene(
+    sceneJson,
+    { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
+  ) {
     validateSceneJson(sceneJson);
-    const result = await this.#requestEngine("reconcile_scene", { sceneJson });
+    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
+    const result = await this.#requestEngine("reconcile_scene", {
+      sceneJson,
+      loopDurationSeconds: duration,
+    });
     this.#sceneJson = result.sceneJson ?? sceneJson;
+    if (duration !== null) {
+      this.#loopDurationSeconds = duration;
+    }
     await this.configureHostCallbacks(callbacks, authoringClient);
+    return result;
+  }
+
+  async setLoopDurationSeconds(loopDurationSeconds) {
+    const duration = validateLoopDurationSeconds(loopDurationSeconds);
+    const result = await this.#requestEngine("set_loop_duration", {
+      loopDurationSeconds: duration,
+    });
+    this.#loopDurationSeconds = duration;
     return result;
   }
 
@@ -403,6 +430,20 @@ function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
   }
+}
+
+function validateLoopDurationSeconds(loopDurationSeconds) {
+  if (!Number.isFinite(loopDurationSeconds) || loopDurationSeconds <= 0) {
+    throw new TypeError("loop duration must be positive and finite");
+  }
+  return loopDurationSeconds;
+}
+
+function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
+  if (loopDurationSeconds === null || loopDurationSeconds === undefined) {
+    return null;
+  }
+  return validateLoopDurationSeconds(loopDurationSeconds);
 }
 
 function validateCallbacks(callbacks) {
