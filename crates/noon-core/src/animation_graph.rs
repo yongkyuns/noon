@@ -686,11 +686,16 @@ fn lower_node(
                 .copied()
                 .map(|child| node_duration(graph, child, None, stats))
                 .collect::<Result<Vec<_>, _>>()?;
+            let option_lag_ratio = if node_id == root {
+                context.play_options.lag_ratio.or(node.options.lag_ratio)
+            } else {
+                node.options.lag_ratio
+            };
             let lag_ratio = match &node.kind {
-                AnimationNodeKind::Parallel { .. } => node.options.lag_ratio.unwrap_or(0.0),
-                AnimationNodeKind::Sequence { .. } => 1.0,
+                AnimationNodeKind::Parallel { .. } => option_lag_ratio.unwrap_or(0.0),
+                AnimationNodeKind::Sequence { .. } => option_lag_ratio.unwrap_or(1.0),
                 AnimationNodeKind::Lagged { lag_ratio, .. } => {
-                    node.options.lag_ratio.unwrap_or(*lag_ratio)
+                    option_lag_ratio.unwrap_or(*lag_ratio)
                 }
                 AnimationNodeKind::Leaf { .. } => unreachable!(),
             };
@@ -754,11 +759,14 @@ fn node_duration(
                 .copied()
                 .map(|child| node_duration(graph, child, None, stats))
                 .collect::<Result<Vec<_>, _>>()?;
+            let option_lag_ratio = root_play_options
+                .and_then(|options| options.lag_ratio)
+                .or(node.options.lag_ratio);
             let lag_ratio = match &node.kind {
-                AnimationNodeKind::Parallel { .. } => node.options.lag_ratio.unwrap_or(0.0),
-                AnimationNodeKind::Sequence { .. } => 1.0,
+                AnimationNodeKind::Parallel { .. } => option_lag_ratio.unwrap_or(0.0),
+                AnimationNodeKind::Sequence { .. } => option_lag_ratio.unwrap_or(1.0),
                 AnimationNodeKind::Lagged { lag_ratio, .. } => {
-                    node.options.lag_ratio.unwrap_or(*lag_ratio)
+                    option_lag_ratio.unwrap_or(*lag_ratio)
                 }
                 AnimationNodeKind::Leaf { .. } => unreachable!(),
             };
@@ -1071,5 +1079,33 @@ mod tests {
             assert!(!track.time_map.is_identity());
             assert!(lowering.origin_for_track(track.id).is_some());
         }
+    }
+    #[test]
+    fn scene_play_lag_ratio_overrides_root_composition_option() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let mut graph = AnimationGraph::new();
+        let first = position_leaf(&mut graph, object, 0.0, 1.0, 1.0);
+        let second = position_leaf(&mut graph, object, 1.0, 2.0, 1.0);
+        let root = graph.insert_parallel(vec![first, second]).unwrap();
+        graph
+            .set_options(root, AnimationOptions::new().lag_ratio(0.25))
+            .unwrap();
+        let mut lowering = AnimationLowering::new();
+        lowering
+            .lower_root(
+                &graph,
+                &mut scene,
+                root,
+                AnimationLoweringContext::new(0.0)
+                    .with_play_options(AnimationOptions::new().lag_ratio(0.5)),
+            )
+            .unwrap();
+
+        assert_eq!(scene.tracks().len(), 2);
+        assert!(scene
+            .tracks()
+            .iter()
+            .all(|track| (track.timing.duration - 1.5).abs() < 1e-12));
     }
 }
