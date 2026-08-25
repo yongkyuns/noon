@@ -134,9 +134,7 @@ mod tests {
         assert_eq!(value["objects"][0]["bounds"]["height"], 1.0);
         assert!((value["objects"][0]["fill"]["alpha"].as_f64().unwrap() - 0.2).abs() < 1e-6);
         assert!((value["objects"][0]["stroke"]["alpha"].as_f64().unwrap() - 0.4).abs() < 1e-6);
-        assert!(
-            (value["objects"][0]["stroke_width"].as_f64().unwrap() - 0.04).abs() < 1e-6
-        );
+        assert!((value["objects"][0]["stroke_width"].as_f64().unwrap() - 0.04).abs() < 1e-6);
         assert_eq!(value["objects"][0]["reveal"], 1.0);
     }
 }
