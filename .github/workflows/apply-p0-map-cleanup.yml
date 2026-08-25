@@ -1,0 +1,41 @@
+name: Apply GPU timestamp map cleanup
+
+on:
+  push:
+    branches: [perf/p0-gpu-profiler-range]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/p0-gpu-profiler-range
+          fetch-depth: 0
+      - name: Apply failed-map cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/legacy.rs')
+          s = p.read_text()
+          old = '''                    } else {\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
+          new = '''                    } else {\n                        // wgpu records the requested map range before the backend\n                        // completes the async operation. A failed map therefore\n                        // still needs an explicit unmap before this ring slot can\n                        // safely be reused by a later GPU submission.\n                        readback.unmap();\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo fmt --all --check
+          cargo test -p noon-web --all-features
+          cargo clippy -p noon-web --all-targets --all-features -- -D warnings
+      - name: Commit clean fix
+        shell: bash
+        run: |
+          rm .github/workflows/apply-p0-map-cleanup.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add -A
+          git commit -m "Unmap failed GPU timing readbacks"
+          git push origin HEAD:perf/p0-gpu-profiler-range
