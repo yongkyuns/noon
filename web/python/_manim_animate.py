@@ -8,6 +8,7 @@ run during playback.
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any, Callable
 
@@ -38,6 +39,54 @@ def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
     """
 
     object.__setattr__(animation, "anim_args", dict(kwargs))
+
+
+def _fade_authoring_options(
+    target: object, kwargs: dict[str, Any]
+) -> tuple[dict[str, Any], _base.Vec2, float, bool]:
+    """Separate `_Fade` endpoint options from generic Animation options.
+
+    Manim resolves ``target_position`` during `_Fade.__init__`, while an explicitly
+    supplied ``shift`` takes precedence over it. Preserve that authoring-time behavior
+    and leave generic timing/rate options for the shared Rust option resolver.
+    """
+
+    if not isinstance(target, (_base.Mobject, _compat.Group)):
+        raise TypeError("FadeIn/FadeOut target must be a Mobject or Group")
+
+    animation_kwargs = dict(kwargs)
+    shift = animation_kwargs.pop("shift", None)
+    target_position = animation_kwargs.pop("target_position", None)
+    scale_factor = float(animation_kwargs.pop("scale", 1.0))
+    if not math.isfinite(scale_factor):
+        raise ValueError("fade scale must be finite")
+
+    point_target = False
+    if shift is not None:
+        shift_vector = _base._as_vec2(shift)
+    elif target_position is not None:
+        if isinstance(target_position, (_base.Mobject, _compat.Group)):
+            point = target_position.get_center()
+        else:
+            point = _base._as_vec2(target_position)
+        shift_vector = point - target.get_center()
+        point_target = True
+    else:
+        shift_vector = _base.ORIGIN
+
+    return animation_kwargs, shift_vector, scale_factor, point_target
+
+
+def _store_fade_options(
+    animation: object,
+    *,
+    shift_vector: _base.Vec2,
+    scale_factor: float,
+    point_target: bool,
+) -> None:
+    object.__setattr__(animation, "_fade_shift_vector", shift_vector)
+    object.__setattr__(animation, "_fade_scale_factor", scale_factor)
+    object.__setattr__(animation, "_fade_point_target", point_target)
 
 
 class Transform(_ORIGINAL_TRANSFORM):
@@ -96,14 +145,32 @@ class Create(_ORIGINAL_CREATE):
 
 class FadeIn(_ORIGINAL_FADE_IN):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
+        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
+            target, kwargs
+        )
         super().__init__(target, key)
-        _store_animation_args(self, kwargs)
+        _store_animation_args(self, animation_kwargs)
+        _store_fade_options(
+            self,
+            shift_vector=shift_vector,
+            scale_factor=scale_factor,
+            point_target=point_target,
+        )
 
 
 class FadeOut(_ORIGINAL_FADE_OUT):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
+        animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
+            target, kwargs
+        )
         super().__init__(target, key)
-        _store_animation_args(self, kwargs)
+        _store_animation_args(self, animation_kwargs)
+        _store_fade_options(
+            self,
+            shift_vector=shift_vector,
+            scale_factor=scale_factor,
+            point_target=point_target,
+        )
 
 
 # Replace only the public compatibility classes. Their frozen Noon bases remain the
@@ -300,6 +367,108 @@ def _expanded_schedule(
     ]
 
 
+def _snapshot_mobject(snapshot: dict[str, Any]) -> _base.Mobject:
+    return _base.Mobject(
+        _base._ir.Mobject(
+            geometry=copy.deepcopy(snapshot["geometry"]),
+            transform=copy.deepcopy(snapshot["transform"]),
+            style=copy.deepcopy(snapshot["style"]),
+        )
+    )
+
+
+def _fade_endpoint_snapshots(
+    scene: _compat.Scene,
+    animation: object,
+    *,
+    start_time: float,
+) -> dict[int, dict[str, Any]]:
+    """Build Manim's faded copy endpoint for each leaf at play start."""
+
+    if not isinstance(animation, (FadeIn, FadeOut)):
+        return {}
+
+    shift_vector = animation._fade_shift_vector
+    scale_factor = animation._fade_scale_factor
+    if shift_vector == _base.ORIGIN and math.isclose(scale_factor, 1.0, abs_tol=1e-15):
+        return {}
+
+    leaves = _compat._leaf_mobjects(animation.target)
+    temporary: list[_base.Mobject] = []
+    for member in leaves:
+        if member._object is None:
+            raise ValueError("fade target must be bound before endpoint construction")
+        snapshot = scene._snapshot_for_object_at(member._object, start_time)
+        temporary.append(_snapshot_mobject(snapshot))
+
+    endpoint: object
+    if isinstance(animation.target, _compat.Group):
+        endpoint = _compat.Group(*temporary)
+    else:
+        endpoint = temporary[0]
+
+    direction_modifier = -1.0 if isinstance(animation, FadeIn) and not animation._fade_point_target else 1.0
+    if shift_vector != _base.ORIGIN:
+        endpoint.shift(shift_vector * direction_modifier)  # type: ignore[attr-defined]
+    if not math.isclose(scale_factor, 1.0, abs_tol=1e-15):
+        endpoint.scale(scale_factor)  # type: ignore[attr-defined]
+
+    return {
+        id(member): faded.to_ir()
+        for member, faded in zip(leaves, temporary)
+    }
+
+
+def _schedule_fade_endpoint_transform(
+    scene: _compat.Scene,
+    animation: object,
+    member: _base.Mobject,
+    faded_snapshot: dict[str, Any],
+    *,
+    duration: float,
+    start_time: float,
+    easing: str,
+    key: str | None,
+) -> None:
+    """Lower Fade shift/scale to the ordinary deterministic Transform channel."""
+
+    if member._object is None:
+        raise ValueError("fade target must be bound before endpoint scheduling")
+    obj = member._object
+    previous_end = scene._scheduled_transform_ends.get(obj.id)
+    if previous_end is not None and start_time < previous_end:
+        raise ValueError("generic Transform tracks for one object must not overlap")
+
+    current_snapshot = scene._snapshot_for_object_at(obj, start_time)
+    fade_in = isinstance(animation, FadeIn)
+    from_snapshot = faded_snapshot if fade_in else current_snapshot
+    to_snapshot = current_snapshot if fade_in else faded_snapshot
+
+    object_key = scene._object_keys[obj.id]
+    direction = "in" if fade_in else "out"
+    transform_key = (
+        f"{key}.transform"
+        if key is not None
+        else f"@fade-{direction}:{object_key}:{start_time:g}.transform"
+    )
+    scene._add_track(
+        obj,
+        "transform",
+        {
+            "object": {
+                "from": copy.deepcopy(from_snapshot),
+                "to": copy.deepcopy(to_snapshot),
+            }
+        },
+        start_time,
+        duration,
+        easing,
+        transform_key,
+    )
+    scene._scheduled_transform_targets[obj.id] = copy.deepcopy(to_snapshot)
+    scene._scheduled_transform_ends[obj.id] = start_time + duration
+
+
 def _aligned_scene_play(
     self: _compat.Scene,
     *animations: Any,
@@ -366,6 +535,9 @@ def _aligned_scene_play(
                 play_lag_ratio=lag_ratio,
             )
 
+            fade_snapshots = _fade_endpoint_snapshots(
+                self, animation, start_time=base_start
+            )
             schedule = _expanded_schedule(
                 self,
                 animation,
@@ -375,6 +547,23 @@ def _aligned_scene_play(
                 lag_ratio=resolved.lag_ratio,
             )
             for lowered, child_start, child_duration, child_easing in schedule:
+                if isinstance(animation, (FadeIn, FadeOut)) and isinstance(
+                    lowered, (_base.FadeIn, _base.FadeOut)
+                ):
+                    member = lowered.target
+                    faded_snapshot = fade_snapshots.get(id(member))
+                    if faded_snapshot is not None:
+                        _schedule_fade_endpoint_transform(
+                            self,
+                            animation,
+                            member,
+                            faded_snapshot,
+                            duration=child_duration,
+                            start_time=child_start,
+                            easing=child_easing,
+                            key=lowered.key,
+                        )
+
                 # `noon.Scene` has already been replaced by the compatibility class
                 # during install, so use the original captured facade explicitly to
                 # avoid recursively re-entering this compatibility scheduler.
