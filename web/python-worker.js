@@ -400,7 +400,7 @@ function validateRequest(request) {
       throw new Error("Python callback request has an invalid session ID");
     }
     if (!Number.isSafeInteger(request.sequence) || request.sequence < 0) {
-      throw new Error("Python callback request must contain a non-negative sequence");
+      throw new Error("Python callback request has an invalid patch sequence");
     }
     if (!isRecord(request.frame)) {
       throw new Error("Python callback request must contain a frame object");
