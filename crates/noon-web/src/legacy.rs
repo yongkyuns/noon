@@ -427,7 +427,7 @@ mod wasm {
         Vec2, VectorPath,
     };
     use noon_ir::encode_scene;
-    use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
+    use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer, RenderVisibility};
     use wasm_bindgen::prelude::*;
     use web_sys::HtmlCanvasElement;
 
@@ -703,6 +703,11 @@ mod wasm {
         pub fn scene_json(&self) -> Result<String, JsValue> {
             self.inner.scene_json().map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = hitTestWorldJson)]
+        pub fn hit_test_world_json(&self, x: f32, y: f32) -> Result<String, JsValue> {
+            spatial_query_json(&self.inner, self.inner.hit_test(Vec2::new(x, y)))
+        }
     }
 
     #[wasm_bindgen(js_name = NoonCanvasPlayer)]
@@ -718,6 +723,7 @@ mod wasm {
         player: ScenePlayer,
         clock: PlaybackClock,
         preparer: FramePreparer,
+        visibility: RenderVisibility,
         renderer: GpuRenderer,
         camera_center: Vec2,
         camera_height: f32,
@@ -726,6 +732,10 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        last_visible_objects: usize,
+        last_spatial_candidates_tested: usize,
+        last_spatial_cells_visited: usize,
+        last_spatial_full_scan_fallbacks: usize,
         last_cpu_frame_ms: f64,
         last_runtime_evaluation_ms: f64,
         last_frame_prepare_ms: f64,
@@ -804,6 +814,7 @@ mod wasm {
                 player,
                 clock,
                 preparer: FramePreparer::new(),
+                visibility: RenderVisibility::default(),
                 renderer,
                 camera_center: Vec2::ZERO,
                 camera_height: noon_core::DEFAULT_FRAME_HEIGHT,
@@ -817,6 +828,10 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                last_visible_objects: 0,
+                last_spatial_candidates_tested: 0,
+                last_spatial_cells_visited: 0,
+                last_spatial_full_scan_fallbacks: 0,
                 last_cpu_frame_ms: f64::NAN,
                 last_runtime_evaluation_ms: f64::NAN,
                 last_frame_prepare_ms: f64::NAN,
@@ -949,6 +964,40 @@ mod wasm {
             self.last_geometry_cache_misses
         }
 
+        #[wasm_bindgen(js_name = lastVisibleObjects)]
+        pub fn last_visible_objects(&self) -> usize {
+            self.last_visible_objects
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialCandidatesTested)]
+        pub fn last_spatial_candidates_tested(&self) -> usize {
+            self.last_spatial_candidates_tested
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialCellsVisited)]
+        pub fn last_spatial_cells_visited(&self) -> usize {
+            self.last_spatial_cells_visited
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialFullScanFallbacks)]
+        pub fn last_spatial_full_scan_fallbacks(&self) -> usize {
+            self.last_spatial_full_scan_fallbacks
+        }
+
+        #[wasm_bindgen(js_name = hitTestWorldJson)]
+        pub fn hit_test_world_json(&self, x: f32, y: f32) -> Result<String, JsValue> {
+            spatial_query_json(&self.player, self.player.hit_test(Vec2::new(x, y)))
+        }
+
+        #[wasm_bindgen(js_name = hitTestCanvasJson)]
+        pub fn hit_test_canvas_json(&self, x: f32, y: f32) -> Result<String, JsValue> {
+            let point = self
+                .renderer
+                .camera()
+                .screen_to_world(self.renderer.viewport_size(), Vec2::new(x, y));
+            spatial_query_json(&self.player, self.player.hit_test(point))
+        }
+
         #[wasm_bindgen(js_name = lastCpuFrameMs)]
         pub fn last_cpu_frame_ms(&self) -> f64 {
             self.last_cpu_frame_ms
@@ -1069,17 +1118,37 @@ mod wasm {
                 return Ok(false);
             }
 
+            let query = self
+                .player
+                .query_viewport(self.renderer.camera().world_bounds());
+            let query_stats = query.stats();
+            let visible_indices = query
+                .slots()
+                .iter()
+                .filter_map(|&slot| self.player.frame_index_for_execution_slot(slot))
+                .collect::<Vec<_>>();
+            self.last_spatial_candidates_tested = query_stats.candidates_tested;
+            self.last_spatial_cells_visited = query_stats.cells_visited;
+            self.last_spatial_full_scan_fallbacks = query_stats.full_scan_fallbacks;
+
             let prepare_started_ms = performance_now_ms();
             let changes = self.player.take_frame_changes();
-            let prepared = self
-                .preparer
-                .prepare_incremental(self.player.frame(), &changes);
+            let frame_time = self.player.frame().time;
+            {
+                let prepared = self
+                    .preparer
+                    .prepare_incremental(self.player.frame(), &changes);
+                self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
+                let upload_started_ms = performance_now_ms();
+                let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
+                self.last_upload_ms = elapsed_ms(upload_started_ms);
+                self.last_bytes_uploaded = upload.bytes_uploaded;
+            }
+            self.preparer
+                .update_render_visibility(&mut self.visibility, &visible_indices);
+            self.last_visible_objects = self.visibility.stats().renderable_slots;
+            let prepared = self.preparer.prepared_view(frame_time);
             self.last_frame_prepare_ms = elapsed_ms(prepare_started_ms);
-            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let upload_started_ms = performance_now_ms();
-            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
-            self.last_upload_ms = elapsed_ms(upload_started_ms);
-            self.last_bytes_uploaded = upload.bytes_uploaded;
 
             let (surface_texture, reconfigure_after_present) =
                 match self.surface.get_current_texture() {
@@ -1121,16 +1190,22 @@ mod wasm {
                     .as_ref()
                     .expect("GPU profiler exists for an active sample")
                     .query_set(sample);
-                self.renderer.encode_profiled(
+                self.renderer.encode_profiled_visible(
                     &mut encoder,
                     &view,
                     &prepared,
+                    &self.visibility,
                     self.clear_color,
                     query_set,
                 )
             } else {
-                self.renderer
-                    .encode(&mut encoder, &view, &prepared, self.clear_color)
+                self.renderer.encode_visible(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.visibility,
+                    self.clear_color,
+                )
             };
             if let Some(sample) = gpu_sample {
                 self.gpu_profiler
@@ -1259,6 +1334,26 @@ mod wasm {
             )
             .map_err(js_error)?;
         encode_scene(&scene).map_err(js_error)
+    }
+
+    fn spatial_query_json(
+        player: &ScenePlayer,
+        result: noon_runtime::SpatialQueryResult,
+    ) -> Result<String, JsValue> {
+        let objects = result
+            .slots()
+            .iter()
+            .filter_map(|&slot| player.frame_index_for_execution_slot(slot))
+            .map(|index| player.frame().objects[index].id.get().to_string())
+            .collect::<Vec<_>>();
+        let stats = result.stats();
+        serde_json::to_string(&serde_json::json!({
+            "objects": objects,
+            "cellsVisited": stats.cells_visited,
+            "candidatesTested": stats.candidates_tested,
+            "fullScanFallbacks": stats.full_scan_fallbacks,
+        }))
+        .map_err(js_error)
     }
 
     fn performance_now_ms() -> f64 {

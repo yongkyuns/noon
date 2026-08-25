@@ -40,6 +40,10 @@ async function handleMainMessage(message) {
         width = normalizedDimension(message.width);
         height = normalizedDimension(message.height);
         renderer?.resize(width, height);
+        if (renderer !== null) {
+          needsPresent = true;
+          tryPresent();
+        }
         return;
       case "metrics":
         respond(message.requestId, {
@@ -253,6 +257,10 @@ function currentMetrics() {
     instancesDrawn: renderer.lastInstancesDrawn(),
     bytesUploaded: renderer.lastBytesUploaded(),
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    visibleObjects: renderer.lastVisibleObjects(),
+    spatialCandidatesTested: renderer.lastSpatialCandidatesTested(),
+    spatialCellsVisited: renderer.lastSpatialCellsVisited(),
+    spatialFullScanFallbacks: renderer.lastSpatialFullScanFallbacks(),
     presentedFrames,
     lastFrameTimestamp,
     bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),

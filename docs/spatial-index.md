@@ -39,8 +39,20 @@ result count, and explicit full-scan fallbacks.
 Scale regressions cover a 100,000-object point query without a scene scan, bounded
 single-leaf motion, painter-order hits, and localized viewport queries.
 
-## Next #66 slice
+## Renderer and browser integration
 
-Renderer viewport culling should consume `ScenePlayer::query_viewport` / the same
-execution index and filter ordered draw submission without repacking unrelated GPU
-instance or path geometry. Native hover/selection can consume `hit_test` directly.
+The renderer consumes retained viewport query results as stable execution slots and
+builds a reusable `RenderVisibility` draw indirection in `O(visible)` work. Camera
+changes do not repack instance buffers or path geometry, and offscreen vector paths
+no longer force multisampling or draw submission. The execution render worker keeps
+its own mirror-side `ExecutionSpatialIndex`, incrementally synchronized from transport
+`FrameChanges`, so culling never round-trips through the Python/engine worker.
+
+`ScenePlayer` remains the authoritative hit-test API. WASM `ScenePlayer` exposes
+world-coordinate hit results, while direct `NoonCanvasPlayer` also converts backing-
+store pixel coordinates through `Camera2D::screen_to_world`. Results keep topmost-first
+painter ordering and include candidate/cell/fallback counters for editor observability.
+
+Correctness now includes a deterministic indexed-vs-brute-force point/viewport corpus.
+Combined with the 100,000-object locality regressions, this completes #66's retained
+hit-testing and viewport-culling contract.

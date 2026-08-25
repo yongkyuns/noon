@@ -1,12 +1,12 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::Vec2;
+use noon_core::{Rect, Vec2};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,
-    RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,
+    PreparedFrame, RectangleInstance, RenderPrimitive, RenderVisibility,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -219,6 +219,21 @@ impl Camera2D {
             return Err(CameraError::InvalidWorldSize);
         }
         Ok(Self { center, world_size })
+    }
+
+    pub fn world_bounds(self) -> Rect {
+        let half = self.world_size * 0.5;
+        Rect::new(self.center - half, self.center + half)
+    }
+
+    /// Convert backing-store pixel coordinates to world coordinates.
+    pub fn screen_to_world(self, viewport_size: [u32; 2], point: Vec2) -> Vec2 {
+        let width = viewport_size[0].max(1) as f32;
+        let height = viewport_size[1].max(1) as f32;
+        Vec2::new(
+            self.center.x + (point.x / width - 0.5) * self.world_size.x,
+            self.center.y + (0.5 - point.y / height) * self.world_size.y,
+        )
     }
 
     fn uniform(self, viewport_size: [u32; 2]) -> CameraUniform {
@@ -729,7 +744,32 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, None)
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            prepared.render_batches,
+            clear_color,
+            None,
+        )
+    }
+
+    pub fn encode_visible(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedFrame<'_>,
+        visibility: &RenderVisibility,
+        clear_color: wgpu::Color,
+    ) -> DrawStats {
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            visibility.batches(),
+            clear_color,
+            None,
+        )
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
@@ -741,7 +781,33 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: &wgpu::QuerySet,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, Some(query_set))
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            prepared.render_batches,
+            clear_color,
+            Some(query_set),
+        )
+    }
+
+    pub fn encode_profiled_visible(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedFrame<'_>,
+        visibility: &RenderVisibility,
+        clear_color: wgpu::Color,
+        query_set: &wgpu::QuerySet,
+    ) -> DrawStats {
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            visibility.batches(),
+            clear_color,
+            Some(query_set),
+        )
     }
 
     fn encode_inner(
@@ -749,10 +815,11 @@ impl GpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
+        render_batches: &[OrderedRenderBatch],
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
-        let sample_count = ordered_render_sample_count(prepared.path_batches);
+        let sample_count = ordered_render_sample_count(render_batches);
         if sample_count == 1 {
             // Analytic SDF primitives already use derivative-based edge coverage. When
             // no visible vector path participates in painter order, avoid 4x sample
@@ -779,7 +846,7 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            return self.draw_ordered(&mut pass, prepared, true);
+            return self.draw_ordered(&mut pass, prepared, render_batches, true);
         }
 
         // Mixed vector/analytic content still shares one 4x multisampled target so
@@ -807,13 +874,14 @@ impl GpuRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        self.draw_ordered(&mut pass, prepared, false)
+        self.draw_ordered(&mut pass, prepared, render_batches, false)
     }
 
     fn draw_ordered<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
+        render_batches: &[OrderedRenderBatch],
         single_sample_analytics: bool,
     ) -> DrawStats {
         let mut stats = DrawStats::default();
@@ -834,7 +902,7 @@ impl GpuRenderer {
             &self.line_pipeline
         };
 
-        for batch in prepared.render_batches {
+        for batch in render_batches {
             match batch.primitive {
                 RenderPrimitive::Circle => {
                     pass.set_pipeline(circle_pipeline);
@@ -1065,11 +1133,13 @@ fn create_pipeline(
     })
 }
 
-fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
-    if path_batches
-        .iter()
-        .any(|batch| !batch.index_range.is_empty())
-    {
+fn ordered_render_sample_count(render_batches: &[OrderedRenderBatch]) -> u32 {
+    if render_batches.iter().any(|batch| {
+        matches!(
+            batch.primitive,
+            RenderPrimitive::Path { .. } | RenderPrimitive::MegaPath { .. }
+        )
+    }) {
         PATH_SAMPLE_COUNT
     } else {
         1
@@ -1339,15 +1409,15 @@ mod tests {
     fn analytic_only_rendering_avoids_multisampling_but_visible_paths_keep_it() {
         assert_eq!(ordered_render_sample_count(&[]), 1);
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..0,
+            ordered_render_sample_count(&[OrderedRenderBatch {
+                primitive: RenderPrimitive::Circle,
                 instance_range: 0..1,
             }]),
             1
         );
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..3,
+            ordered_render_sample_count(&[OrderedRenderBatch {
+                primitive: RenderPrimitive::Path { batch: 0 },
                 instance_range: 0..1,
             }]),
             PATH_SAMPLE_COUNT

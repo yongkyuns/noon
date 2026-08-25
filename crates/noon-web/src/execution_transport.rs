@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
 use noon_runtime::{
-    ExecutionSlotError, ExecutionSlotId, FrameChanges, FrameObjectState, FrameState,
+    ExecutionSlotError, ExecutionSlotId, ExecutionSpatialIndex, FrameChanges, FrameObjectState,
+    FrameState, SpatialIndexUpdateStats,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,12 @@ impl From<ExecutionSlotId> for TransportSlotId {
             slot: value.slot(),
             generation: value.generation(),
         }
+    }
+}
+
+impl From<TransportSlotId> for ExecutionSlotId {
+    fn from(value: TransportSlotId) -> Self {
+        ExecutionSlotId::new(value.slot, value.generation)
     }
 }
 
@@ -387,6 +394,71 @@ impl ExecutionFrameMirror {
 
     pub fn live_object_count(&self) -> usize {
         self.slot_indices.len()
+    }
+
+    pub fn execution_slot_for_frame_index(&self, frame_index: usize) -> Option<ExecutionSlotId> {
+        let slot = *self.slots.get(frame_index)?;
+        self.slot_indices
+            .contains_key(&slot)
+            .then_some(ExecutionSlotId::from(slot))
+    }
+
+    pub fn frame_index_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<usize> {
+        self.slot_indices.get(&TransportSlotId::from(slot)).copied()
+    }
+
+    fn retained_execution_slot_for_frame_index(
+        &self,
+        frame_index: usize,
+    ) -> Option<ExecutionSlotId> {
+        self.slots
+            .get(frame_index)
+            .copied()
+            .map(ExecutionSlotId::from)
+    }
+
+    pub fn live_frame_slots(&self) -> Vec<(ExecutionSlotId, usize)> {
+        let mut slots = self
+            .slot_indices
+            .iter()
+            .map(|(&slot, &index)| (ExecutionSlotId::from(slot), index))
+            .collect::<Vec<_>>();
+        slots.sort_unstable_by_key(|(_, index)| *index);
+        slots
+    }
+
+    pub fn sync_spatial_index(
+        &self,
+        index: &mut ExecutionSpatialIndex,
+        changes: &FrameChanges,
+    ) -> SpatialIndexUpdateStats {
+        let Some(frame) = self.frame() else {
+            return SpatialIndexUpdateStats::default();
+        };
+        if changes.is_all() {
+            return index.rebuild(frame, self.live_frame_slots());
+        }
+
+        let mut stats = SpatialIndexUpdateStats::default();
+        for &frame_index in changes.removed_indices() {
+            if let Some(slot) = self.retained_execution_slot_for_frame_index(frame_index) {
+                stats.merge_from(index.remove_slot(slot));
+            }
+        }
+        for &frame_index in changes.object_indices() {
+            if changes
+                .removed_indices()
+                .binary_search(&frame_index)
+                .is_ok()
+            {
+                continue;
+            }
+            let Some(slot) = self.execution_slot_for_frame_index(frame_index) else {
+                continue;
+            };
+            stats.merge_from(index.upsert_frame_slot(frame, slot, frame_index, frame_index as u64));
+        }
+        stats
     }
 
     pub fn apply_json(
@@ -957,6 +1029,56 @@ mod tests {
         assert_eq!(outcome, TransportApplyOutcome::Applied);
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame().unwrap(), player.frame());
+    }
+
+    #[test]
+    fn render_mirror_spatial_index_refits_only_delta_slots() {
+        let mut scene = noon_core::SceneDefinition::new();
+        let left = scene.add(GeometryRef::circle(0.5));
+        let right = scene.add(GeometryRef::circle(0.5));
+        scene.object_mut(left).unwrap().transform.translation = noon_core::Vec2::new(-4.0, 0.0);
+        scene.object_mut(right).unwrap().transform.translation = noon_core::Vec2::new(4.0, 0.0);
+        let scene_json = noon_ir::encode_scene(&scene).unwrap();
+        let mut engine = EngineScenePlayer::new(&scene_json, 4.0, 9).unwrap();
+        let initial: ExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        let mut mirror = ExecutionFrameMirror::default();
+        let (_, initial_changes) = mirror.apply(initial).unwrap();
+        let mut index = ExecutionSpatialIndex::default();
+        let initial_stats = mirror.sync_spatial_index(&mut index, &initial_changes);
+        assert_eq!(initial_stats.full_rebuilds, 1);
+        assert_eq!(index.len(), 2);
+
+        let slot = index.hit_test(noon_core::Vec2::new(4.0, 0.0)).slots()[0];
+        let frame_index = mirror.frame_index_for_execution_slot(slot).unwrap();
+        let object = mirror.frame().unwrap().objects[frame_index].id;
+        let patch = PatchBatch::new(
+            0,
+            vec![noon_core::ScenePatch::SetTransform {
+                object,
+                transform: noon_core::Transform2D {
+                    translation: noon_core::Vec2::new(7.0, 0.0),
+                    ..noon_core::Transform2D::IDENTITY
+                },
+            }],
+        );
+        let delta = engine
+            .apply_patch_batch_delta_json(&noon_ir::encode_patch_batch(&patch).unwrap())
+            .unwrap()
+            .unwrap();
+        let delta: ExecutionDeltaEnvelope = serde_json::from_str(&delta).unwrap();
+        let (_, changes) = mirror.apply(delta).unwrap();
+        let stats = mirror.sync_spatial_index(&mut index, &changes);
+        assert_eq!(stats.full_rebuilds, 0);
+        assert_eq!(stats.leaves_upserted, 1);
+        assert_eq!(
+            index.hit_test(noon_core::Vec2::new(7.0, 0.0)).slots(),
+            &[slot]
+        );
+        assert!(index
+            .hit_test(noon_core::Vec2::new(4.0, 0.0))
+            .slots()
+            .is_empty());
     }
 
     #[test]

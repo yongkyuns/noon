@@ -40,6 +40,30 @@ pub struct OrderedRenderBatch {
     pub instance_range: Range<u32>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderVisibilityStats {
+    pub requested_slots: usize,
+    pub renderable_slots: usize,
+    pub batch_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderVisibility {
+    frame_indices: Vec<usize>,
+    batches: Vec<OrderedRenderBatch>,
+    stats: RenderVisibilityStats,
+}
+
+impl RenderVisibility {
+    pub fn batches(&self) -> &[OrderedRenderBatch] {
+        &self.batches
+    }
+
+    pub const fn stats(&self) -> RenderVisibilityStats {
+        self.stats
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderOrderError {
     KeyCountMismatch { objects: usize, keys: usize },
@@ -89,6 +113,48 @@ impl FramePreparer {
             self.render_order_keys.clear();
             self.initialized = false;
         }
+    }
+
+    /// Rebuild a retained draw-selection list from already-indexed frame slots.
+    ///
+    /// Work is proportional to the requested/visible slots rather than total scene
+    /// size. Packed instance/mesh storage remains unchanged; this only changes the
+    /// draw indirection consumed by the GPU encoder.
+    pub fn update_render_visibility(
+        &self,
+        visibility: &mut RenderVisibility,
+        frame_indices: &[usize],
+    ) {
+        visibility.frame_indices.clear();
+        visibility.frame_indices.extend(
+            frame_indices
+                .iter()
+                .copied()
+                .filter(|&index| index < self.slots.len()),
+        );
+        if self.render_order_keys.len() == self.slots.len() {
+            visibility
+                .frame_indices
+                .sort_by_key(|&index| self.render_order_keys[index]);
+        } else {
+            visibility.frame_indices.sort_unstable();
+        }
+        visibility.frame_indices.dedup();
+
+        visibility.batches.clear();
+        let mut renderable_slots = 0;
+        for &index in &visibility.frame_indices {
+            let slot = self.slots[index];
+            if !matches!(slot, PreparedSlot::Absent | PreparedSlot::Unsupported(_)) {
+                renderable_slots += 1;
+            }
+            push_slot_batches(&mut visibility.batches, slot);
+        }
+        visibility.stats = RenderVisibilityStats {
+            requested_slots: frame_indices.len(),
+            renderable_slots,
+            batch_count: visibility.batches.len(),
+        };
     }
 
     pub(crate) fn append_ordered_render_slot(&mut self, slot: PreparedSlot) {
@@ -273,6 +339,33 @@ mod tests {
             RenderPrimitive::Circle
         );
         assert_eq!(prepared.render_batches[1].instance_range, 0..2);
+    }
+
+    #[test]
+    fn visibility_selection_touches_only_requested_slots_in_large_scene() {
+        let objects = (0..100_000usize)
+            .map(|index| object(index as u64, GeometryRef::circle(0.4)))
+            .collect::<Vec<_>>();
+        let frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+        let _ = preparer.prepare(&frame);
+        let mut visibility = RenderVisibility::default();
+        preparer.update_render_visibility(&mut visibility, &[10, 50_000, 99_999]);
+
+        assert_eq!(visibility.stats().requested_slots, 3);
+        assert_eq!(visibility.stats().renderable_slots, 3);
+        assert_eq!(visibility.batches().len(), 3);
+        assert_eq!(
+            visibility
+                .batches()
+                .iter()
+                .map(|batch| batch.instance_range.len())
+                .sum::<usize>(),
+            3
+        );
+        assert_eq!(visibility.batches()[0].instance_range, 10..11);
+        assert_eq!(visibility.batches()[1].instance_range, 50_000..50_001);
+        assert_eq!(visibility.batches()[2].instance_range, 99_999..100_000);
     }
 
     #[test]

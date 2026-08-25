@@ -14,8 +14,8 @@ mod wasm {
     use std::mem;
 
     use noon_core::Vec2;
-    use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
-    use noon_runtime::FrameChanges;
+    use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer, RenderVisibility};
+    use noon_runtime::{ExecutionSpatialIndex, FrameChanges};
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
@@ -44,8 +44,11 @@ mod wasm {
         drawable: bool,
         mirror: ExecutionFrameMirror,
         pending_changes: FrameChanges,
+        spatial_index: ExecutionSpatialIndex,
         preparer: FramePreparer,
+        visibility: RenderVisibility,
         renderer: GpuRenderer,
+        view_dirty: bool,
         camera_center: Vec2,
         camera_height: f32,
         clear_color: wgpu::Color,
@@ -53,6 +56,10 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        last_visible_objects: usize,
+        last_spatial_candidates_tested: usize,
+        last_spatial_cells_visited: usize,
+        last_spatial_full_scan_fallbacks: usize,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -108,6 +115,8 @@ mod wasm {
                 .ok_or_else(|| js_message("GPU adapter cannot present to this OffscreenCanvas"))?;
             surface.configure(&device, &config);
             let renderer = GpuRenderer::new(&device, config.format);
+            let mut spatial_index = ExecutionSpatialIndex::default();
+            mirror.sync_spatial_index(&mut spatial_index, &pending_changes);
 
             let mut result = Self {
                 instance,
@@ -120,8 +129,11 @@ mod wasm {
                 drawable: true,
                 mirror,
                 pending_changes,
+                spatial_index,
                 preparer: FramePreparer::new(),
+                visibility: RenderVisibility::default(),
                 renderer,
+                view_dirty: true,
                 camera_center: Vec2::ZERO,
                 camera_height: MANIM_DEFAULT_CAMERA_HEIGHT,
                 clear_color: MANIM_DEFAULT_CLEAR_COLOR,
@@ -129,6 +141,10 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                last_visible_objects: 0,
+                last_spatial_candidates_tested: 0,
+                last_spatial_cells_visited: 0,
+                last_spatial_full_scan_fallbacks: 0,
             };
             result.update_camera()?;
             Ok(result)
@@ -144,6 +160,8 @@ mod wasm {
             let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
             match outcome {
                 TransportApplyOutcome::Applied => {
+                    self.mirror
+                        .sync_spatial_index(&mut self.spatial_index, &changes);
                     self.pending_changes = changes;
                     Ok(true)
                 }
@@ -152,7 +170,7 @@ mod wasm {
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
-            if !self.drawable || self.pending_changes.is_empty() {
+            if !self.drawable || (self.pending_changes.is_empty() && !self.view_dirty) {
                 return Ok(false);
             }
 
@@ -183,10 +201,30 @@ mod wasm {
                 .mirror
                 .frame()
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
-            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
-            self.last_bytes_uploaded = upload.bytes_uploaded;
+            let frame_time = frame.time;
+            {
+                let prepared = self.preparer.prepare_incremental(frame, &changes);
+                self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
+                let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
+                self.last_bytes_uploaded = upload.bytes_uploaded;
+            }
+
+            let query = self
+                .spatial_index
+                .query_rect(self.renderer.camera().world_bounds());
+            let query_stats = query.stats();
+            let visible_indices = query
+                .slots()
+                .iter()
+                .filter_map(|&slot| self.mirror.frame_index_for_execution_slot(slot))
+                .collect::<Vec<_>>();
+            self.preparer
+                .update_render_visibility(&mut self.visibility, &visible_indices);
+            self.last_visible_objects = self.visibility.stats().renderable_slots;
+            self.last_spatial_candidates_tested = query_stats.candidates_tested;
+            self.last_spatial_cells_visited = query_stats.cells_visited;
+            self.last_spatial_full_scan_fallbacks = query_stats.full_scan_fallbacks;
+            let prepared = self.preparer.prepared_view(frame_time);
 
             let view = surface_texture
                 .texture
@@ -196,13 +234,18 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon execution render worker frame"),
                 });
-            let draw = self
-                .renderer
-                .encode(&mut encoder, &view, &prepared, self.clear_color);
+            let draw = self.renderer.encode_visible(
+                &mut encoder,
+                &view,
+                &prepared,
+                &self.visibility,
+                self.clear_color,
+            );
             self.queue.submit(Some(encoder.finish()));
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
+            self.view_dirty = false;
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
@@ -221,6 +264,7 @@ mod wasm {
                 self.config.height = height;
                 self.surface.configure(&self.device, &self.config);
                 self.update_camera()?;
+                self.view_dirty = true;
             }
             Ok(())
         }
@@ -236,7 +280,9 @@ mod wasm {
             Camera2D::new(center, Vec2::new(world_height, world_height)).map_err(js_error)?;
             self.camera_center = center;
             self.camera_height = world_height;
-            self.update_camera()
+            self.update_camera()?;
+            self.view_dirty = true;
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = rendererBackend)]
@@ -275,6 +321,26 @@ mod wasm {
         #[wasm_bindgen(js_name = lastGeometryCacheMisses)]
         pub fn last_geometry_cache_misses(&self) -> usize {
             self.last_geometry_cache_misses
+        }
+
+        #[wasm_bindgen(js_name = lastVisibleObjects)]
+        pub fn last_visible_objects(&self) -> usize {
+            self.last_visible_objects
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialCandidatesTested)]
+        pub fn last_spatial_candidates_tested(&self) -> usize {
+            self.last_spatial_candidates_tested
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialCellsVisited)]
+        pub fn last_spatial_cells_visited(&self) -> usize {
+            self.last_spatial_cells_visited
+        }
+
+        #[wasm_bindgen(js_name = lastSpatialFullScanFallbacks)]
+        pub fn last_spatial_full_scan_fallbacks(&self) -> usize {
+            self.last_spatial_full_scan_fallbacks
         }
     }
 

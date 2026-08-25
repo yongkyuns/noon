@@ -518,6 +518,62 @@ mod tests {
     }
 
     #[test]
+    fn indexed_queries_match_brute_force_reference_corpus() {
+        let mut index = ExecutionSpatialIndex::default();
+        let mut entries = Vec::new();
+        for object_index in 0..2_000usize {
+            let x = ((object_index * 37) % 211) as f32 * 0.73 - 70.0;
+            let y = ((object_index * 83) % 197) as f32 * 0.61 - 55.0;
+            let width = 0.2 + (object_index % 9) as f32 * 0.17;
+            let height = 0.2 + (object_index % 7) as f32 * 0.19;
+            let bounds = if object_index % 173 == 0 {
+                Rect::new(Vec2::new(x - 20.0, y - 20.0), Vec2::new(x + 20.0, y + 20.0))
+            } else {
+                Rect::new(Vec2::new(x, y), Vec2::new(x + width, y + height))
+            };
+            let slot = ExecutionSlotId::new(object_index as u32, 0);
+            index.upsert_bounds(
+                slot,
+                ObjectId::new(object_index as u64),
+                bounds,
+                object_index as u64,
+            );
+            entries.push((slot, bounds, object_index as u64));
+        }
+
+        for query_index in 0..120usize {
+            let x = ((query_index * 29) % 113) as f32 * 1.7 - 70.0;
+            let y = ((query_index * 47) % 109) as f32 * 1.3 - 55.0;
+            let query = Rect::new(Vec2::new(x, y), Vec2::new(x + 8.5, y + 6.5));
+            let mut expected = entries
+                .iter()
+                .filter(|(_, bounds, _)| rects_intersect(*bounds, query))
+                .map(|(slot, _, painter)| (*slot, *painter))
+                .collect::<Vec<_>>();
+            expected.sort_by_key(|(_, painter)| *painter);
+            let expected = expected
+                .into_iter()
+                .map(|(slot, _)| slot)
+                .collect::<Vec<_>>();
+            assert_eq!(index.query_rect(query).slots(), expected);
+
+            let point = Vec2::new(x + 1.25, y + 2.75);
+            let point_bounds = Rect::new(point, point);
+            let mut expected_hits = entries
+                .iter()
+                .filter(|(_, bounds, _)| rects_intersect(*bounds, point_bounds))
+                .map(|(slot, _, painter)| (*slot, *painter))
+                .collect::<Vec<_>>();
+            expected_hits.sort_by_key(|(_, painter)| std::cmp::Reverse(*painter));
+            let expected_hits = expected_hits
+                .into_iter()
+                .map(|(slot, _)| slot)
+                .collect::<Vec<_>>();
+            assert_eq!(index.hit_test(point).slots(), expected_hits);
+        }
+    }
+
+    #[test]
     fn viewport_query_visits_only_intersecting_grid_cells() {
         let mut index = ExecutionSpatialIndex::default();
         for object_index in 0..10_000usize {

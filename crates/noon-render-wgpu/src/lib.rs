@@ -334,6 +334,12 @@ impl FramePreparer {
         self.rebuild(frame)
     }
 
+    /// Borrow the already-prepared packed frame without doing preparation work.
+    /// Useful for camera-only visibility changes after GPU upload has completed.
+    pub fn prepared_view(&self, time: f64) -> PreparedFrame<'_> {
+        self.prepared_frame(time, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+
     /// Updates cached instance records using the runtime's consumed change set.
     ///
     /// Structural removals retire packed slots in place. Tail-appended objects,
