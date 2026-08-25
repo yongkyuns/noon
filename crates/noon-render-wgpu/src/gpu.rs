@@ -255,6 +255,7 @@ pub struct GpuRenderer {
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
+    mega_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -269,6 +270,8 @@ pub struct GpuRenderer {
     path_vertex_buffer: wgpu::Buffer,
     path_index_buffer: wgpu::Buffer,
     path_instance_buffer: wgpu::Buffer,
+    mega_path_index_buffer: wgpu::Buffer,
+    mega_path_vertex_instance_buffer: wgpu::Buffer,
     path_render_bundle: Option<wgpu::RenderBundle>,
     path_render_bundle_batches: Vec<PathBatch>,
     path_render_bundle_rebuilds: usize,
@@ -278,6 +281,8 @@ pub struct GpuRenderer {
     path_vertex_capacity_bytes: usize,
     path_index_capacity_bytes: usize,
     path_instance_capacity_bytes: usize,
+    mega_path_index_capacity_bytes: usize,
+    mega_path_vertex_instance_capacity_bytes: usize,
 }
 
 impl GpuRenderer {
@@ -368,6 +373,8 @@ impl GpuRenderer {
         let path_shader = device.create_shader_module(wgpu::include_wgsl!("path.wgsl"));
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let mega_path_pipeline =
+            create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Noon unit quad"),
             contents: bytemuck::cast_slice(&QUAD_VERTICES),
@@ -387,6 +394,13 @@ impl GpuRenderer {
             wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         );
         let path_instance_buffer = empty_instance_buffer(device, "Noon path instances");
+        let mega_path_index_buffer = empty_buffer(
+            device,
+            "Noon packed path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let mega_path_vertex_instance_buffer =
+            empty_instance_buffer(device, "Noon packed path vertex attributes");
         let (path_msaa_texture, path_msaa_view) =
             create_path_msaa_target(device, target_format, viewport_size);
 
@@ -395,6 +409,7 @@ impl GpuRenderer {
             rectangle_pipeline,
             line_pipeline,
             path_pipeline,
+            mega_path_pipeline,
             quad_buffer,
             camera_buffer,
             camera_bind_group,
@@ -409,6 +424,8 @@ impl GpuRenderer {
             path_vertex_buffer,
             path_index_buffer,
             path_instance_buffer,
+            mega_path_index_buffer,
+            mega_path_vertex_instance_buffer,
             path_render_bundle: None,
             path_render_bundle_batches: Vec::new(),
             path_render_bundle_rebuilds: 0,
@@ -418,6 +435,8 @@ impl GpuRenderer {
             path_vertex_capacity_bytes: 0,
             path_index_capacity_bytes: 0,
             path_instance_capacity_bytes: 0,
+            mega_path_index_capacity_bytes: 0,
+            mega_path_vertex_instance_capacity_bytes: 0,
         }
     }
 
@@ -467,6 +486,9 @@ impl GpuRenderer {
         let path_vertex_bytes = std::mem::size_of_val(prepared.path_vertices);
         let path_index_bytes = std::mem::size_of_val(prepared.path_indices);
         let path_instance_bytes = std::mem::size_of_val(prepared.paths);
+        let mega_path_index_bytes = std::mem::size_of_val(prepared.mega_path_indices);
+        let mega_path_vertex_instance_bytes =
+            std::mem::size_of_val(prepared.mega_path_vertex_instances);
         let mut buffer_reallocations = 0;
 
         let circle_reallocated = ensure_capacity(
@@ -525,6 +547,23 @@ impl GpuRenderer {
             "Noon path instances",
         );
         buffer_reallocations += usize::from(path_instance_reallocated);
+        let mega_path_index_reallocated = ensure_capacity_with_usage(
+            device,
+            &mut self.mega_path_index_buffer,
+            &mut self.mega_path_index_capacity_bytes,
+            mega_path_index_bytes,
+            "Noon packed path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        );
+        buffer_reallocations += usize::from(mega_path_index_reallocated);
+        let mega_path_vertex_instance_reallocated = ensure_capacity(
+            device,
+            &mut self.mega_path_vertex_instance_buffer,
+            &mut self.mega_path_vertex_instance_capacity_bytes,
+            mega_path_vertex_instance_bytes,
+            "Noon packed path vertex attributes",
+        );
+        buffer_reallocations += usize::from(mega_path_vertex_instance_reallocated);
 
         self.prepare_path_render_bundle(
             device,
@@ -566,6 +605,17 @@ impl GpuRenderer {
             prepared.paths,
             prepared.path_dirty_ranges,
             path_instance_reallocated,
+        ) + upload_full_if(
+            queue,
+            &self.mega_path_index_buffer,
+            prepared.mega_path_indices,
+            prepared.mega_path_index_dirty || mega_path_index_reallocated,
+        ) + upload_dirty(
+            queue,
+            &self.mega_path_vertex_instance_buffer,
+            prepared.mega_path_vertex_instances,
+            prepared.mega_path_instance_dirty_ranges,
+            mega_path_vertex_instance_reallocated,
         );
 
         UploadStats {
@@ -707,6 +757,25 @@ impl GpuRenderer {
                     pass.set_vertex_buffer(1, self.line_buffer.slice(..));
                     pass.draw(0..6, batch.instance_range.clone());
                 }
+                RenderPrimitive::MegaPath {
+                    batch: mega_batch_index,
+                } => {
+                    let mega_batch = &prepared.mega_path_batches[mega_batch_index];
+                    if mega_batch.index_range.is_empty() {
+                        continue;
+                    }
+                    pass.set_pipeline(&self.mega_path_pipeline);
+                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                    pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.mega_path_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.draw_indexed(mega_batch.index_range.clone(), 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.instances_drawn += mega_batch.path_count;
+                    continue;
+                }
                 RenderPrimitive::Path {
                     batch: path_batch_index,
                 } => {
@@ -800,6 +869,14 @@ impl GpuRenderer {
         self.path_instance_capacity_bytes
     }
 
+    pub const fn mega_path_index_capacity_bytes(&self) -> usize {
+        self.mega_path_index_capacity_bytes
+    }
+
+    pub const fn mega_path_vertex_instance_capacity_bytes(&self) -> usize {
+        self.mega_path_vertex_instance_capacity_bytes
+    }
+
     pub const fn path_render_bundle_rebuilds(&self) -> usize {
         self.path_render_bundle_rebuilds
     }
@@ -841,6 +918,14 @@ pub fn path_instance_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: size_of::<PathInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &PATH_INSTANCE_ATTRIBUTES,
+    }
+}
+
+pub fn mega_path_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<PathInstance>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &PATH_INSTANCE_ATTRIBUTES,
     }
 }
@@ -888,14 +973,48 @@ fn create_path_pipeline(
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
+    create_path_pipeline_with_instance_layout(
+        device,
+        layout,
+        shader,
+        target_format,
+        path_instance_layout(),
+        "Noon vector path pipeline",
+    )
+}
+
+fn create_mega_path_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    create_path_pipeline_with_instance_layout(
+        device,
+        layout,
+        shader,
+        target_format,
+        mega_path_instance_layout(),
+        "Noon packed mega-path pipeline",
+    )
+}
+
+fn create_path_pipeline_with_instance_layout(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    instance_layout: wgpu::VertexBufferLayout<'static>,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Noon vector path pipeline"),
+        label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
             entry_point: Some("vs_path"),
             compilation_options: Default::default(),
-            buffers: &[path_vertex_layout(), path_instance_layout()],
+            buffers: &[path_vertex_layout(), instance_layout],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1338,7 +1457,7 @@ mod tests {
         let prepared = preparer.prepare(&frame);
 
         let upload = renderer.upload(&device, &queue, &prepared);
-        assert_eq!(upload.buffer_reallocations, 4);
+        assert_eq!(upload.buffer_reallocations, 6);
         assert!(upload.bytes_uploaded > size_of::<CircleInstance>());
         assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
 

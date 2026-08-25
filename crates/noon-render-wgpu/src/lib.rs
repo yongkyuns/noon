@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod mega_mesh;
 mod render_order;
 mod reveal;
 
@@ -132,6 +133,13 @@ pub struct PathBatch {
     pub instance_range: Range<u32>,
 }
 
+/// One ordered draw slice in the packed unique-path index stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MegaPathBatch {
+    pub index_range: Range<u32>,
+    pub path_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
@@ -143,6 +151,14 @@ pub struct RenderStats {
     pub geometry_cache_misses: usize,
     pub path_vertices_repacked: usize,
     pub path_indices_repacked: usize,
+    /// Unique vector paths submitted through the packed mega-mesh path.
+    pub mega_path_count: usize,
+    /// Ordered packed draws after painter-order coalescing.
+    pub mega_path_batch_count: usize,
+    /// Index entries in the packed painter-order stream.
+    pub mega_path_index_count: usize,
+    /// Per-vertex instance records rewritten for dirty unique paths.
+    pub mega_path_instance_vertices_repacked: usize,
 }
 
 #[derive(Debug)]
@@ -159,12 +175,20 @@ pub struct PreparedFrame<'a> {
     pub path_vertices: &'a [PathVertex],
     pub path_indices: &'a [u32],
     pub path_batches: &'a [PathBatch],
+    /// Painter-ordered index stream for mostly-unique path geometry.
+    pub mega_path_indices: &'a [u32],
+    /// Path instance attributes repeated per geometry vertex so the packed path
+    /// pipeline works on both WebGPU and the WebGL2 fallback without SSBOs.
+    pub mega_path_vertex_instances: &'a [PathInstance],
+    pub mega_path_batches: &'a [MegaPathBatch],
     pub render_batches: &'a [OrderedRenderBatch],
     pub unsupported: &'a [ObjectId],
     pub circle_dirty_ranges: &'a [Range<usize>],
     pub rectangle_dirty_ranges: &'a [Range<usize>],
     pub line_dirty_ranges: &'a [Range<usize>],
     pub path_dirty_ranges: &'a [Range<usize>],
+    pub mega_path_instance_dirty_ranges: &'a [Range<usize>],
+    pub mega_path_index_dirty: bool,
     pub path_geometry_dirty: bool,
     pub stats: RenderStats,
 }
@@ -224,6 +248,10 @@ pub struct FramePreparer {
     path_vertices: Vec<PathVertex>,
     path_indices: Vec<u32>,
     path_batches: Vec<PathBatch>,
+    path_batch_vertex_ranges: Vec<Range<u32>>,
+    mega_path_indices: Vec<u32>,
+    mega_path_vertex_instances: Vec<PathInstance>,
+    mega_path_batches: Vec<MegaPathBatch>,
     render_batches: Vec<OrderedRenderBatch>,
     render_order_keys: Vec<RenderOrderKey>,
     path_batch_cache_indices: Vec<usize>,
@@ -239,6 +267,8 @@ pub struct FramePreparer {
     rectangle_dirty_ranges: Vec<Range<usize>>,
     line_dirty_ranges: Vec<Range<usize>>,
     path_dirty_ranges: Vec<Range<usize>>,
+    mega_path_instance_dirty_ranges: Vec<Range<usize>>,
+    mega_path_index_dirty: bool,
     path_geometry_dirty: bool,
     initialized: bool,
 }
@@ -314,6 +344,7 @@ impl FramePreparer {
                     if self.paths[index] != packed {
                         self.paths[index] = packed;
                         push_dirty_range(&mut self.path_dirty_ranges, index);
+                        self.update_mega_path_instance(batch, packed);
                     }
                     if let Some(head_index) = reveal_head {
                         let cache_index = self.path_batch_cache_indices[batch];
@@ -354,6 +385,7 @@ impl FramePreparer {
         self.path_ids.clear();
         self.paths.clear();
         self.path_batches.clear();
+        self.path_batch_vertex_ranges.clear();
         self.render_batches.clear();
         let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
@@ -501,8 +533,11 @@ impl FramePreparer {
             }
             vertex_count += mesh.vertices.len();
             index_count += mesh.indices.len();
+            let vertex_end =
+                u32::try_from(vertex_count).expect("path vertex count exceeds renderer limits");
             let index_end =
                 u32::try_from(index_count).expect("path index count exceeds renderer limits");
+            self.path_batch_vertex_ranges.push(vertex_start..vertex_end);
             let instance_end = u32::try_from(self.paths.len())
                 .expect("path instance count exceeds renderer limits");
             self.path_batches.push(PathBatch {
@@ -533,6 +568,7 @@ impl FramePreparer {
             self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
             repacked
         };
+        self.rebuild_mega_path_draws();
 
         if !self.circles.is_empty() {
             self.circle_dirty_ranges.push(0..self.circles.len());
@@ -592,12 +628,17 @@ impl FramePreparer {
             path_vertices: &self.path_vertices,
             path_indices: &self.path_indices,
             path_batches: &self.path_batches,
+            mega_path_indices: &self.mega_path_indices,
+            mega_path_vertex_instances: &self.mega_path_vertex_instances,
+            mega_path_batches: &self.mega_path_batches,
             render_batches: &self.render_batches,
             unsupported: &self.unsupported,
             circle_dirty_ranges: &self.circle_dirty_ranges,
             rectangle_dirty_ranges: &self.rectangle_dirty_ranges,
             line_dirty_ranges: &self.line_dirty_ranges,
             path_dirty_ranges: &self.path_dirty_ranges,
+            mega_path_instance_dirty_ranges: &self.mega_path_instance_dirty_ranges,
+            mega_path_index_dirty: self.mega_path_index_dirty,
             path_geometry_dirty: self.path_geometry_dirty,
             stats: RenderStats {
                 batch_count,
@@ -612,6 +653,16 @@ impl FramePreparer {
                 geometry_cache_misses,
                 path_vertices_repacked,
                 path_indices_repacked,
+                mega_path_count: self
+                    .mega_path_batches
+                    .iter()
+                    .map(|batch| batch.path_count)
+                    .sum(),
+                mega_path_batch_count: self.mega_path_batches.len(),
+                mega_path_index_count: self.mega_path_indices.len(),
+                mega_path_instance_vertices_repacked: dirty_len(
+                    &self.mega_path_instance_dirty_ranges,
+                ),
             },
         }
     }
@@ -621,6 +672,8 @@ impl FramePreparer {
         self.rectangle_dirty_ranges.clear();
         self.line_dirty_ranges.clear();
         self.path_dirty_ranges.clear();
+        self.mega_path_instance_dirty_ranges.clear();
+        self.mega_path_index_dirty = false;
         self.path_geometry_dirty = false;
     }
 
@@ -691,7 +744,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 20] {
+    fn capacities(&self) -> [usize; 25] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -704,6 +757,11 @@ impl FramePreparer {
             self.path_vertices.capacity(),
             self.path_indices.capacity(),
             self.path_batches.capacity(),
+            self.path_batch_vertex_ranges.capacity(),
+            self.mega_path_indices.capacity(),
+            self.mega_path_vertex_instances.capacity(),
+            self.mega_path_batches.capacity(),
+            self.mega_path_instance_dirty_ranges.capacity(),
             self.path_batch_cache_indices.capacity(),
             self.path_mesh_cache.capacity(),
             self.path_mesh_lookup.capacity(),
@@ -1768,5 +1826,148 @@ mod tests {
         assert!(prepared.circles.is_empty());
         assert_eq!(prepared.rectangle_dirty_ranges.len(), 1);
         assert_eq!(prepared.rectangle_dirty_ranges[0], 0..1);
+    }
+
+    #[test]
+    fn ten_thousand_unique_paths_collapse_into_one_mega_draw_batch() {
+        const OBJECT_COUNT: usize = 10_000;
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let y = index as f32 * 0.0001;
+                let geometry = GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                );
+                let mut state = object(index as u64, geometry);
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.path_batches.len(), OBJECT_COUNT);
+        assert_eq!(prepared.mega_path_batches.len(), 1);
+        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT);
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert_eq!(prepared.render_batches.len(), 1);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+    }
+
+    #[test]
+    fn repeated_paths_keep_true_instancing_instead_of_entering_mega_mesh() {
+        const OBJECT_COUNT: usize = 2_000;
+        let geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.0))
+                .line_to(Vec2::new(0.5, 0.0)),
+        );
+        let objects = (0..OBJECT_COUNT)
+            .map(|index| {
+                let mut state = object(index as u64, geometry.clone());
+                state.style.fill = None;
+                state.style.stroke = Some(Color::WHITE);
+                state.style.stroke_width = 0.01;
+                state
+            })
+            .collect();
+        let frame = frame(objects);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.path_batches.len(), 1);
+        assert!(prepared.mega_path_batches.is_empty());
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::Path { batch: 0 }
+        ));
+    }
+
+    #[test]
+    fn unique_path_transform_update_rewrites_attributes_not_geometry() {
+        let make_path = |id: u64, y: f32| {
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.01;
+            state
+        };
+        let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.2)]);
+        let mut preparer = FramePreparer::new();
+        let total_vertex_instances = preparer.prepare(&frame).mega_path_vertex_instances.len();
+
+        frame.objects[0].transform.translation = Vec2::new(1.25, -0.75);
+        frame.objects[0].style.stroke = Some(Color::rgb(0.2, 0.8, 0.4));
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+
+        assert_eq!(prepared.stats.path_vertices_repacked, 0);
+        assert_eq!(prepared.stats.path_indices_repacked, 0);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(prepared.mega_path_instance_dirty_ranges.len(), 1);
+        let dirty = &prepared.mega_path_instance_dirty_ranges[0];
+        assert!(!dirty.is_empty());
+        assert!(dirty.len() < total_vertex_instances);
+    }
+
+    #[test]
+    fn mega_paths_never_coalesce_across_an_analytic_painter_boundary() {
+        let mut first = object(
+            1,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, 0.0))
+                    .line_to(Vec2::new(-0.25, 0.0)),
+            ),
+        );
+        first.style.fill = None;
+        first.style.stroke = Some(Color::WHITE);
+        first.style.stroke_width = 0.02;
+        let middle = object(2, GeometryRef::circle(0.5));
+        let mut last = object(
+            3,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(0.25, 0.0))
+                    .line_to(Vec2::new(1.0, 0.0)),
+            ),
+        );
+        last.style.fill = None;
+        last.style.stroke = Some(Color::WHITE);
+        last.style.stroke_width = 0.02;
+        let frame = frame(vec![first, middle, last]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+
+        assert_eq!(prepared.render_batches.len(), 3);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+        assert_eq!(
+            prepared.render_batches[1].primitive,
+            RenderPrimitive::Circle
+        );
+        assert!(matches!(
+            prepared.render_batches[2].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
     }
 }
