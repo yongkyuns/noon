@@ -254,6 +254,9 @@ pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    circle_pipeline_single_sample: wgpu::RenderPipeline,
+    rectangle_pipeline_single_sample: wgpu::RenderPipeline,
+    line_pipeline_single_sample: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
@@ -334,6 +337,7 @@ impl GpuRenderer {
             &pipeline_layout,
             &shader,
             target_format,
+            PATH_SAMPLE_COUNT,
             AnalyticPipelineDescriptor {
                 vertex_entry: "vs_circle",
                 fragment_entry: "fs_circle",
@@ -346,6 +350,7 @@ impl GpuRenderer {
             &pipeline_layout,
             &shader,
             target_format,
+            PATH_SAMPLE_COUNT,
             AnalyticPipelineDescriptor {
                 vertex_entry: "vs_rectangle",
                 fragment_entry: "fs_rectangle",
@@ -358,10 +363,50 @@ impl GpuRenderer {
             &pipeline_layout,
             &shader,
             target_format,
+            PATH_SAMPLE_COUNT,
             AnalyticPipelineDescriptor {
                 vertex_entry: "vs_line",
                 fragment_entry: "fs_line",
                 label: "Noon line pipeline",
+                instance_layout: line_instance_layout(),
+            },
+        );
+        let circle_pipeline_single_sample = create_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            1,
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_circle",
+                fragment_entry: "fs_circle",
+                label: "Noon circle single-sample pipeline",
+                instance_layout: analytic_instance_layout(),
+            },
+        );
+        let rectangle_pipeline_single_sample = create_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            1,
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_rectangle",
+                fragment_entry: "fs_rectangle",
+                label: "Noon rectangle single-sample pipeline",
+                instance_layout: analytic_instance_layout(),
+            },
+        );
+        let line_pipeline_single_sample = create_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            1,
+            AnalyticPipelineDescriptor {
+                vertex_entry: "vs_line",
+                fragment_entry: "fs_line",
+                label: "Noon line single-sample pipeline",
                 instance_layout: line_instance_layout(),
             },
         );
@@ -394,6 +439,9 @@ impl GpuRenderer {
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,
+            circle_pipeline_single_sample,
+            rectangle_pipeline_single_sample,
+            line_pipeline_single_sample,
             path_pipeline,
             quad_buffer,
             camera_buffer,
@@ -651,9 +699,39 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
-        // All transparent primitives share one multisampled target so pipeline
-        // switches can follow semantic painter order. Splitting paths and
-        // analytic primitives into separate passes is not alpha-order safe.
+        let sample_count = ordered_render_sample_count(prepared.path_batches);
+        if sample_count == 1 {
+            // Analytic SDF primitives already use derivative-based edge coverage. When
+            // no visible vector path participates in painter order, avoid 4x sample
+            // shading and the multisample resolve without changing alpha ordering.
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Noon ordered single-sample analytic render pass"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            return self.draw_ordered(&mut pass, prepared, true);
+        }
+
+        // Mixed vector/analytic content still shares one 4x multisampled target so
+        // pipeline switches follow semantic painter order. Splitting these primitives
+        // into separate passes would not be alpha-order safe.
         let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &self.path_msaa_view,
             depth_slice: None,
@@ -676,33 +754,49 @@ impl GpuRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        self.draw_ordered(&mut pass, prepared)
+        self.draw_ordered(&mut pass, prepared, false)
     }
 
     fn draw_ordered<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
+        single_sample_analytics: bool,
     ) -> DrawStats {
         let mut stats = DrawStats::default();
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        let circle_pipeline = if single_sample_analytics {
+            &self.circle_pipeline_single_sample
+        } else {
+            &self.circle_pipeline
+        };
+        let rectangle_pipeline = if single_sample_analytics {
+            &self.rectangle_pipeline_single_sample
+        } else {
+            &self.rectangle_pipeline
+        };
+        let line_pipeline = if single_sample_analytics {
+            &self.line_pipeline_single_sample
+        } else {
+            &self.line_pipeline
+        };
 
         for batch in prepared.render_batches {
             match batch.primitive {
                 RenderPrimitive::Circle => {
-                    pass.set_pipeline(&self.circle_pipeline);
+                    pass.set_pipeline(circle_pipeline);
                     pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
                     pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
                     pass.draw(0..6, batch.instance_range.clone());
                 }
                 RenderPrimitive::Rectangle => {
-                    pass.set_pipeline(&self.rectangle_pipeline);
+                    pass.set_pipeline(rectangle_pipeline);
                     pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
                     pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
                     pass.draw(0..6, batch.instance_range.clone());
                 }
                 RenderPrimitive::Line => {
-                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_pipeline(line_pipeline);
                     pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
                     pass.set_vertex_buffer(1, self.line_buffer.slice(..));
                     pass.draw(0..6, batch.instance_range.clone());
@@ -850,6 +944,7 @@ fn create_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
+    sample_count: u32,
     descriptor: AnalyticPipelineDescriptor,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -874,12 +969,23 @@ fn create_pipeline(
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState {
-            count: PATH_SAMPLE_COUNT,
+            count: sample_count,
             ..Default::default()
         },
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
+    if path_batches
+        .iter()
+        .any(|batch| !batch.index_range.is_empty())
+    {
+        PATH_SAMPLE_COUNT
+    } else {
+        1
+    }
 }
 
 fn create_path_pipeline(
@@ -1119,6 +1225,25 @@ mod tests {
             morphs: vec![0.0; 2],
             render_geometries: vec![None; 2],
         }
+    }
+
+    #[test]
+    fn analytic_only_rendering_avoids_multisampling_but_visible_paths_keep_it() {
+        assert_eq!(ordered_render_sample_count(&[]), 1);
+        assert_eq!(
+            ordered_render_sample_count(&[PathBatch {
+                index_range: 0..0,
+                instance_range: 0..1,
+            }]),
+            1
+        );
+        assert_eq!(
+            ordered_render_sample_count(&[PathBatch {
+                index_range: 0..3,
+                instance_range: 0..1,
+            }]),
+            PATH_SAMPLE_COUNT
+        );
     }
 
     #[test]

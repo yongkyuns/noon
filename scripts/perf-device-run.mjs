@@ -67,6 +67,7 @@ const bundle = {
     suites,
     width: process.env.NOON_PERF_WIDTH ?? "960",
     height: process.env.NOON_PERF_HEIGHT ?? "540",
+    devicePixelRatio: process.env.NOON_PERF_DPR ?? "1",
     targetHz: process.env.NOON_PERF_TARGET_HZ ?? "60",
   },
   artifacts,
