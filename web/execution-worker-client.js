@@ -201,8 +201,8 @@ export class ExecutionWorkerClient {
     }
     const physicalWidth = Math.max(1, Math.round(width * devicePixelRatio));
     const physicalHeight = Math.max(1, Math.round(height * devicePixelRatio));
-    this.#canvas.width = physicalWidth;
-    this.#canvas.height = physicalHeight;
+    // Once control has moved to OffscreenCanvas, HTMLCanvasElement bitmap sizing
+    // belongs to the render worker. Writing width/height here throws InvalidStateError.
     this.#renderWorker.postMessage(
       renderEnvelope("resize", { width: physicalWidth, height: physicalHeight }),
     );
