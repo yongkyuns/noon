@@ -2,7 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use noon_core::{
