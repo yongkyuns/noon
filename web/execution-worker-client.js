@@ -79,6 +79,11 @@ export class ExecutionWorkerClient {
     this.#transportMode = transportMode;
     this.#session = checkedNextSession(this.#session);
 
+    // Size the bitmap before handing ownership to the render worker. Creating a
+    // WebGL surface from the browser-default 300×150 bitmap and immediately
+    // reconfiguring it after startup is observably unreliable on some Chromium/
+    // Linux WebGL paths, especially at fractional device scale factors.
+    const initialSurface = initializeCanvasBackingStore(this.#canvas);
     const channel = new MessageChannel();
     const offscreen = this.#canvas.transferControlToOffscreen();
     this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
@@ -104,8 +109,8 @@ export class ExecutionWorkerClient {
         canvas: offscreen,
         port: channel.port2,
         transportMode,
-        width: this.#canvas.width,
-        height: this.#canvas.height,
+        width: initialSurface.width,
+        height: initialSurface.height,
       }),
       [offscreen, channel.port2],
     );
@@ -367,6 +372,22 @@ export class ExecutionWorkerClient {
       throw new Error("ExecutionWorkerClient has not been started");
     }
   }
+}
+
+function initializeCanvasBackingStore(canvas) {
+  const cssWidth = canvas.clientWidth;
+  const cssHeight = canvas.clientHeight;
+  if (cssWidth <= 0 || cssHeight <= 0) {
+    return { width: canvas.width, height: canvas.height };
+  }
+
+  const reportedScale = globalThis.devicePixelRatio;
+  const scale = Number.isFinite(reportedScale) && reportedScale > 0 ? reportedScale : 1;
+  const width = Math.max(1, Math.round(cssWidth * scale));
+  const height = Math.max(1, Math.round(cssHeight * scale));
+  canvas.width = width;
+  canvas.height = height;
+  return { width, height };
 }
 
 function engineEnvelope(type, payload = {}) {
