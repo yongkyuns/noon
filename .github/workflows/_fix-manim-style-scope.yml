@@ -1,0 +1,26 @@
+name: Fix Manim style scope
+
+on:
+  push:
+    branches:
+      - parity/manim-vmobject-style
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-vmobject-style
+          fetch-depth: 0
+      - run: python3 scripts/_fix_manim_style_scope.py
+      - run: python3 -m py_compile web/python/_manim_compat.py web/python/_manim_phase_b.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: scope Manim style defaults to compatibility facade"
+          git push origin HEAD:parity/manim-vmobject-style
