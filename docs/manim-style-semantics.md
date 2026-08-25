@@ -46,10 +46,10 @@ The raster oracle is pinned to ManimCE v0.21.0 with Cairo, so compatibility foll
 
 The Manim facade therefore constructs its VMobject families with those defaults and converts an authored Manim stroke width `w` to Noon's legacy render width `0.01 * w`. The shared low-level IR emitter remains neutral, so native Noon constructors and Rust/Python cross-language parity retain Noon's existing style defaults and units.
 
-## Remaining stroke-scaling work
+## Object-transform-invariant stroke lowering
 
-This conversion fixes the effective width for unscaled and rotated VMobjects, including the canonical Quickstart parity corpus. It is not the end of #179.
+The Manim facade marks converted Cairo widths with `StrokeWidthMode::ScreenSpace`. In this compatibility mode, “screen space” means that object scale and rotation are applied to the VMobject points **before** the stroke is constructed; the width itself remains the converted scene-space quantity (`4 -> 0.04`) and therefore still changes pixel thickness when the camera projection changes. Native Noon styles remain `ScaleWithObject`.
 
-Manim applies Cairo stroke width after object point transforms, so ordinary object scaling does **not** multiply stroke thickness. Noon's current analytic and tessellated renderers interpret legacy `stroke_width` in local geometry units, so object scale still scales the stroke. Exact compatibility therefore still requires lowering `StrokeWidthMode::ScreenSpace` (or an equivalent transform-invariant width mode) through the renderer for scaled and non-uniformly-scaled objects.
+The renderer lowers this contract without changing the packed instance size. Analytic line strokes are widened after transforming their centerline into scene space; circle/rectangle SDF strokes compensate local width by the object transform; and vector paths bake scale/rotation into their contour before tessellation, then render the resulting mesh with translation only. This makes uniform and non-uniform object scaling stop multiplying Manim stroke thickness while preserving the existing fast transform-scaled path for native Noon.
 
-That remaining renderer work must be tested independently from the 0.01 frontend conversion: changing camera size affects world-to-pixel projection in both systems, while changing object geometry scale must not change a Manim stroke's authored thickness.
+Transform-invariant vector paths currently retessellate when their scale or rotation changes because exact non-uniform Cairo semantics require stroking the transformed contour. A future GPU path-extrusion representation can recover transform-only animation reuse without weakening parity. #179 still owns remaining cap/join/endpoint/AA convergence.

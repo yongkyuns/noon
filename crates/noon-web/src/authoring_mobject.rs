@@ -297,6 +297,7 @@ impl FrontendMobjectHandle {
             self.semantic_style.stroke_opacity,
         );
         self.snapshot.style.stroke_width = self.semantic_style.stroke_width as f32;
+        self.snapshot.style.stroke_width_mode = self.semantic_style.stroke_width_mode;
         self.snapshot.style.opacity = self.semantic_style.object_opacity as f32;
     }
 

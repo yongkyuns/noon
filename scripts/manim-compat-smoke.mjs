@@ -117,6 +117,7 @@ class DefaultVmobjectStyle(Scene):
         assert abs(circle.get_fill_opacity() - 0.0) < 1e-12
         assert abs(circle.get_stroke_opacity() - 1.0) < 1e-12
         assert abs(circle.style["stroke_width"] - 0.04) < 1e-9
+        assert circle.style["stroke_width_mode"] == "screen_space"
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
         assert circle.style["fill"]["red"] == 1.0
@@ -326,6 +327,7 @@ try {
   assert.equal(defaultStyle.fill.alpha, 0);
   assert.equal(defaultStyle.stroke.alpha, 1);
   assert.ok(Math.abs(defaultStyle.stroke_width - 0.04) < 1e-7);
+  assert.equal(defaultStyle.stroke_width_mode, "screen_space");
   assert.equal(defaultStyle.stroke_join, "miter");
   assert.equal(defaultStyle.stroke_cap, "butt");
 

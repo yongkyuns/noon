@@ -11,6 +11,7 @@ fn style() -> Style {
         fill: None,
         stroke: Some(Color::WHITE),
         stroke_width: 0.1,
+        stroke_width_mode: Default::default(),
         opacity: 1.0,
         stroke_join: noon_core::StrokeJoin::Round,
         stroke_cap: noon_core::StrokeCap::Round,

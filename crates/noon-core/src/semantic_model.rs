@@ -73,8 +73,15 @@ pub enum StrokeWidthMode {
     /// Compatibility mode: geometry/object scaling also scales stroke width.
     #[default]
     ScaleWithObject,
-    /// Stroke remains screen-space sized while geometry scales.
+    /// Stroke width is invariant to object transforms; camera projection still
+    /// maps the authored scene-space width to pixels.
     ScreenSpace,
+}
+
+impl StrokeWidthMode {
+    pub const fn is_scale_with_object(&self) -> bool {
+        matches!(self, Self::ScaleWithObject)
+    }
 }
 
 /// Authoring-level style. Fill/stroke opacity and overall object opacity are
@@ -114,7 +121,7 @@ impl SemanticStyle {
             stroke: style.stroke.map(SemanticPaint::Solid),
             stroke_opacity: 1.0,
             stroke_width: style.stroke_width as f64,
-            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            stroke_width_mode: style.stroke_width_mode,
             object_opacity: style.opacity as f64,
         }
     }

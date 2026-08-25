@@ -285,6 +285,7 @@ fn generated_property_patches(seed: u64, object_ids: &[ObjectId]) -> Vec<ScenePa
                 style: Style {
                     opacity: ((rng.next() % 1001) as f32) / 1000.0,
                     stroke_width: ((rng.next() % 500) as f32) / 100.0,
+                    stroke_width_mode: Default::default(),
                     ..Style::default()
                 },
             });
