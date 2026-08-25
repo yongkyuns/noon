@@ -44,7 +44,7 @@ The raster oracle is pinned to ManimCE v0.21.0 with Cairo, so compatibility foll
 - Cairo applies `cairo_line_width_multiple=0.01`, so the default stroke is **0.04 scene units** before camera projection;
 - `joint_type=AUTO` and `cap_style=AUTO` leave Cairo's default **miter join** and **butt cap** in effect.
 
-The Manim compatibility boundary therefore converts an authored Manim stroke width `w` to Noon's legacy render width `0.01 * w`. This translation is deliberately frontend-scoped: native Noon low-level style widths keep their existing units.
+The Manim facade therefore constructs its VMobject families with those defaults and converts an authored Manim stroke width `w` to Noon's legacy render width `0.01 * w`. The shared low-level IR emitter remains neutral, so native Noon constructors and Rust/Python cross-language parity retain Noon's existing style defaults and units.
 
 ## Remaining stroke-scaling work
 
