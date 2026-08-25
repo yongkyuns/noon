@@ -35,6 +35,8 @@ _ORIGINAL_SET_COLOR = _base.Mobject.set_color
 _ORIGINAL_NEXT_TO = _base.Mobject.next_to
 _ORIGINAL_ALIGN_TO = _base.Mobject.align_to
 _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
+_ORIGINAL_BECOME = _base.Mobject.become
+_ORIGINAL_REPLACE = _base.Mobject.replace
 
 _ORIGINAL_SET_FILL = _compat.VMobject.set_fill
 _ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
@@ -67,7 +69,7 @@ def _handle_for(value: object):
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
     _ORIGINAL_INIT(self, raw)
     if _create_handle is not None:
-        # Preserve the exact Python authoring values before the wire/render snapshot
+        # Preserve exact Python authoring opacity before the wire/render snapshot
         # lowers color alpha to f32. The semantic handle owns the f64 API contract.
         fill = raw.style.get("fill")
         stroke = raw.style.get("stroke")
@@ -111,7 +113,10 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
 
     for name, value in self.__dict__.items():
         if name not in {"_raw", "_scene", "_object", "_semantic_handle"}:
-            setattr(clone, name, copy.deepcopy(value))
+            if isinstance(value, _base.Mobject):
+                setattr(clone, name, value.copy())
+            else:
+                setattr(clone, name, copy.deepcopy(value))
     return clone
 
 
@@ -185,6 +190,51 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
         raise TypeError("color must be a Color")
     handle.setColor(color.red, color.green, color.blue, color.alpha)
     return self
+
+
+def _become(
+    self: _base.Mobject,
+    mobject: _base.Mobject,
+    match_height: bool = False,
+    match_width: bool = False,
+    match_depth: bool = False,
+    match_center: bool = False,
+    stretch: bool = False,
+) -> _base.Mobject:
+    handle = _handle_for(self)
+    other_handle = _handle_for(mobject)
+    if (
+        handle is not None
+        and other_handle is not None
+        and not (match_height or match_width or match_depth or match_center or stretch)
+    ):
+        handle.becomeHandle(other_handle)
+        return self
+    return _ORIGINAL_BECOME(
+        self,
+        mobject,
+        match_height=match_height,
+        match_width=match_width,
+        match_depth=match_depth,
+        match_center=match_center,
+        stretch=stretch,
+    )
+
+
+def _replace(
+    self: _base.Mobject,
+    mobject: _base.Mobject,
+    dim_to_match: int = 0,
+    stretch: bool = False,
+) -> _base.Mobject:
+    handle = _handle_for(self)
+    other_handle = _handle_for(mobject)
+    if handle is not None and other_handle is not None:
+        if dim_to_match not in (0, 1):
+            raise NotImplementedError("replace currently supports width (0) or height (1)")
+        handle.replaceHandle(other_handle, int(dim_to_match), bool(stretch))
+        return self
+    return _ORIGINAL_REPLACE(self, mobject, dim_to_match=dim_to_match, stretch=stretch)
 
 
 def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
@@ -367,6 +417,8 @@ def install() -> None:
     _base.Mobject.scale = _scale
     _base.Mobject.rotate = _rotate
     _base.Mobject.set_color = _set_color
+    _base.Mobject.become = _become
+    _base.Mobject.replace = _replace
     _base.Mobject.next_to = _next_to
     _base.Mobject.align_to = _align_to
     _base.Mobject._align_on_frame = _align_on_frame

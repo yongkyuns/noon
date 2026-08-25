@@ -329,6 +329,72 @@ def _manim_vgroup_rotate() -> Any:
     return _members_observation(group)
 
 
+def _noon_generate_target() -> Any:
+    source = noon.Circle(radius=0.4).shift(noon.LEFT * 0.6)
+    target = source.generate_target().shift(noon.RIGHT * 1.5).scale(1.5)
+    return {"source": _object_observation(source), "target": _object_observation(target)}
+
+
+def _manim_generate_target() -> Any:
+    source = manim.Circle(radius=0.4).shift(manim.LEFT * 0.6)
+    target = source.generate_target().shift(manim.RIGHT * 1.5).scale(1.5)
+    return {"source": _object_observation(source), "target": _object_observation(target)}
+
+
+def _noon_save_restore() -> Any:
+    obj = noon.Rectangle(width=1.2, height=0.6).shift(noon.LEFT * 0.5)
+    obj.save_state().shift(noon.RIGHT * 2.0).scale(1.75).restore()
+    return _object_observation(obj)
+
+
+def _manim_save_restore() -> Any:
+    obj = manim.Rectangle(width=1.2, height=0.6).shift(manim.LEFT * 0.5)
+    obj.save_state().shift(manim.RIGHT * 2.0).scale(1.75).restore()
+    return _object_observation(obj)
+
+
+def _noon_become() -> Any:
+    source = noon.Circle(radius=0.4).shift(noon.LEFT)
+    target = noon.Rectangle(width=1.6, height=0.8).shift(noon.RIGHT * 1.25 + noon.UP * 0.4)
+    source.become(target)
+    return _object_observation(source)
+
+
+def _manim_become() -> Any:
+    source = manim.Circle(radius=0.4).shift(manim.LEFT)
+    target = manim.Rectangle(width=1.6, height=0.8).shift(manim.RIGHT * 1.25 + manim.UP * 0.4)
+    source.become(target)
+    return _object_observation(source)
+
+
+def _noon_replace_width() -> Any:
+    source = noon.Circle(radius=0.25)
+    target = noon.Rectangle(width=2.0, height=1.0).shift(noon.RIGHT * 0.8 + noon.DOWN * 0.3)
+    source.replace(target)
+    return _object_observation(source)
+
+
+def _manim_replace_width() -> Any:
+    source = manim.Circle(radius=0.25)
+    target = manim.Rectangle(width=2.0, height=1.0).shift(manim.RIGHT * 0.8 + manim.DOWN * 0.3)
+    source.replace(target)
+    return _object_observation(source)
+
+
+def _noon_replace_stretch() -> Any:
+    source = noon.Circle(radius=0.25)
+    target = noon.Rectangle(width=2.0, height=1.0).shift(noon.LEFT * 0.7 + noon.UP * 0.2)
+    source.replace(target, stretch=True)
+    return _object_observation(source)
+
+
+def _manim_replace_stretch() -> Any:
+    source = manim.Circle(radius=0.25)
+    target = manim.Rectangle(width=2.0, height=1.0).shift(manim.LEFT * 0.7 + manim.UP * 0.2)
+    source.replace(target, stretch=True)
+    return _object_observation(source)
+
+
 FIXTURES = [
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
@@ -358,6 +424,11 @@ FIXTURES = [
     Fixture("vgroup_arrange_grid", _noon_vgroup_arrange_grid, _manim_vgroup_arrange_grid),
     Fixture("vgroup_scale", _noon_vgroup_scale, _manim_vgroup_scale),
     Fixture("vgroup_rotate", _noon_vgroup_rotate, _manim_vgroup_rotate),
+    Fixture("generate_target", _noon_generate_target, _manim_generate_target),
+    Fixture("save_restore", _noon_save_restore, _manim_save_restore),
+    Fixture("become", _noon_become, _manim_become),
+    Fixture("replace_width", _noon_replace_width, _manim_replace_width),
+    Fixture("replace_stretch", _noon_replace_stretch, _manim_replace_stretch),
 ]
 
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
