@@ -54,6 +54,15 @@ jobs:
               '"return_is_none": result is None',
               '"return_is_self": result is group',
           )
+          fixture_anchor = "FIXTURES = [\n"
+          duplicate_slice = '''def _noon_vgroup_duplicate_slice() -> Any:\n    first = noon.Circle(radius=0.2).shift(noon.LEFT)\n    second = noon.Square(side_length=0.4).shift(noon.RIGHT)\n    group = noon.VGroup(first, second)\n    group.insert(1, first)\n    subset = group[:2]\n    return {"length": len(subset), "centers": _member_centers(subset)}\n\n\ndef _manim_vgroup_duplicate_slice() -> Any:\n    first = manim.Circle(radius=0.2).shift(manim.LEFT)\n    second = manim.Square(side_length=0.4).shift(manim.RIGHT)\n    group = manim.VGroup(first, second)\n    group.insert(1, first)\n    subset = group[:2]\n    return {"length": len(subset), "centers": _member_centers(subset)}\n\n\n'''
+          text = text.replace(fixture_anchor, duplicate_slice + fixture_anchor, 1)
+          registration = '    Fixture("vgroup_slice", _noon_vgroup_slice, _manim_vgroup_slice),\n'
+          text = text.replace(
+              registration,
+              registration + '    Fixture("vgroup_duplicate_slice", _noon_vgroup_duplicate_slice, _manim_vgroup_duplicate_slice),\n',
+              1,
+          )
           path.write_text(text)
 
           path = Path("scripts/manim-compat-smoke.mjs")
@@ -61,6 +70,10 @@ jobs:
           text = text.replace(
               'assert len(family) == 2 and int(rust.memberCount) == 2',
               'assert len(family) == 3 and int(rust.memberCount) == 3',
+          )
+          text = text.replace(
+              'assert int(subset_rust.memberCount) == 2',
+              'assert int(subset_rust.memberCount) == 1',
           )
           text = text.replace(
               'assert.equal(semanticFamily.document.objects.length, 2);',
@@ -81,7 +94,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
           python -m pip install --disable-pip-version-check "manim==0.21.0"
-      - name: Run 39-case differential suite
+      - name: Run 40-case differential suite
         run: python scripts/manim-differential.py
       - name: Build browser package
         env:
