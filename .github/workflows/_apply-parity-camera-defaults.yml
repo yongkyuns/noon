@@ -1,0 +1,61 @@
+name: Apply parity camera defaults
+
+on:
+  push:
+    branches:
+      - parity/manim-camera-background
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-camera-background
+          fetch-depth: 0
+      - name: Apply browser canvas defaults
+        shell: python
+        run: |
+          from pathlib import Path
+
+          paths = [
+              Path("crates/noon-web/src/legacy.rs"),
+              Path("crates/noon-web/src/reactive_player.rs"),
+          ]
+          old_color = '''clear_color: wgpu::Color {
+                      r: 0.035,
+                      g: 0.047,
+                      b: 0.075,
+                      a: 1.0,
+                  },'''
+          new_color = '''clear_color: wgpu::Color {
+                      r: 0.0,
+                      g: 0.0,
+                      b: 0.0,
+                      a: 1.0,
+                  },'''
+          for path in paths:
+              text = path.read_text()
+              if "camera_height: 6.0," not in text:
+                  raise SystemExit(f"missing old camera height in {path}")
+              if old_color not in text:
+                  raise SystemExit(f"missing old clear color in {path}")
+              text = text.replace(
+                  "camera_height: 6.0,",
+                  "camera_height: noon_core::DEFAULT_FRAME_HEIGHT,",
+                  1,
+              )
+              text = text.replace(old_color, new_color, 1)
+              path.write_text(text)
+
+          Path(".github/workflows/_apply-parity-camera-defaults.yml").unlink()
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/legacy.rs crates/noon-web/src/reactive_player.rs .github/workflows/_apply-parity-camera-defaults.yml
+          git commit -m "fix: align all browser canvas defaults with Manim"
+          git push origin HEAD:parity/manim-camera-background
