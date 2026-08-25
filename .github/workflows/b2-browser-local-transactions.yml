@@ -21,6 +21,8 @@ jobs:
         run: python scripts/fix-b2-browser-local-bootstrap.py
       - name: Apply implementation
         run: python scripts/b2-browser-local-transactions.py
+      - name: Keep transport compatible with tombstoned frame slots
+        run: python scripts/b2-transport-tombstone-compat.py
       - name: Format
         run: cargo fmt --all
       - name: Focused tests
@@ -31,6 +33,7 @@ jobs:
         run: |
           rm scripts/b2-browser-local-transactions.py
           rm scripts/fix-b2-browser-local-bootstrap.py
+          rm scripts/b2-transport-tombstone-compat.py
           rm .github/workflows/b2-browser-local-transactions.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
