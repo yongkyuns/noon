@@ -13,9 +13,12 @@ const backends = list(process.env.NOON_PERF_BACKENDS ?? "webgpu,webgl");
 for (const backend of backends) {
   assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 }
-const suites = list(process.env.NOON_PERF_SUITES ?? "frame");
+const suites = list(process.env.NOON_PERF_SUITES ?? "frame,corpus");
 for (const suite of suites) {
-  assert.ok(suite === "frame" || suite === "authoring", `unknown suite: ${suite}`);
+  assert.ok(
+    suite === "frame" || suite === "authoring" || suite === "corpus",
+    `unknown suite: ${suite}`,
+  );
 }
 
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
@@ -32,6 +35,14 @@ for (const backend of backends) {
       NOON_PERF_ARTIFACT: relative,
     });
     artifacts.push({ suite: "frame", backend, path: relative });
+  }
+  if (suites.includes("corpus")) {
+    const relative = path.join(relativeDir, `corpus-${backend}.json`);
+    run("scripts/perf-corpus.mjs", {
+      NOON_CORPUS_BACKEND: backend,
+      NOON_CORPUS_ARTIFACT: relative,
+    });
+    artifacts.push({ suite: "corpus", backend, path: relative });
   }
   if (suites.includes("authoring")) {
     const relative = path.join(relativeDir, `authoring-${backend}.json`);
