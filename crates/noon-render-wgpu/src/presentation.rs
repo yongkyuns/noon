@@ -36,6 +36,17 @@ impl PresentationBridge {
         transfer: OutputTransfer,
         viewport_size: [u32; 2],
     ) -> Self {
+        // Browser WebGL exposes an ordinary `Rgba8Unorm` wgpu surface, but its
+        // drawing buffer still applies the browser's sRGB presentation transfer.
+        // Resolve that backend fact here so every canvas host gets the same color
+        // contract without duplicating adapter plumbing in noon-web.
+        #[cfg(target_arch = "wasm32")]
+        let transfer = if transfer == OutputTransfer::Direct {
+            OutputTransfer::for_browser_backend(device.adapter_info().backend)
+        } else {
+            transfer
+        };
+
         let scene_format = match transfer {
             OutputTransfer::Direct => surface_format,
             OutputTransfer::BrowserWebGlSrgb => surface_format.remove_srgb_suffix(),
@@ -92,7 +103,12 @@ impl PresentationBridge {
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.0,
+                }),
                 store: wgpu::StoreOp::Store,
             },
         })];
