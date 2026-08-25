@@ -37,7 +37,7 @@ def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
     Validation remains centralized in ``_manim_animation_options`` at play time.
     """
 
-    animation.anim_args = dict(kwargs)  # type: ignore[attr-defined]
+    object.__setattr__(animation, "anim_args", dict(kwargs))
 
 
 class Transform(_ORIGINAL_TRANSFORM):
