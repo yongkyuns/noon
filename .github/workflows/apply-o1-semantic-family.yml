@@ -32,6 +32,30 @@ jobs:
           python .github/apply-o1-semantic-family.py
           python - <<'PY'
           from pathlib import Path
+
+          path = Path("web/python/_manim_compat.py")
+          text = path.read_text()
+          text = text.replace(
+              "def insert(self, index: int, mobject: object) -> None:\n        self._validate_members(self, (mobject,))\n        self.submobjects.insert(int(index), mobject)",
+              "def insert(self, index: int, mobject: object) -> Group:\n        self._validate_members(self, (mobject,))\n        self.submobjects.insert(int(index), mobject)\n        return self",
+          )
+          path.write_text(text)
+
+          path = Path("web/python/_manim_semantic_handles.py")
+          text = path.read_text()
+          text = text.replace(
+              "def _group_insert(self: _compat.Group, index: int, mobject: object) -> None:\n    self._validate_members(self, (mobject,))\n    normalized = _normalized_insert_index(len(self.submobjects), index)\n    _family_insert_handle(self._semantic_family_handle, normalized, mobject)\n    _ORIGINAL_GROUP_INSERT(self, index, mobject)",
+              "def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.Group:\n    self._validate_members(self, (mobject,))\n    normalized = _normalized_insert_index(len(self.submobjects), index)\n    _family_insert_handle(self._semantic_family_handle, normalized, mobject)\n    return _ORIGINAL_GROUP_INSERT(self, index, mobject)",
+          )
+          path.write_text(text)
+
+          path = Path("scripts/manim-differential.py")
+          text = path.read_text().replace(
+              '"return_is_none": result is None',
+              '"return_is_self": result is group',
+          )
+          path.write_text(text)
+
           path = Path("scripts/manim-compat-smoke.mjs")
           text = path.read_text()
           text = text.replace(
