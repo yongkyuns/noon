@@ -1,0 +1,80 @@
+VectorPath,
+''',
+    1,
+)
+needle = '''    #[test]
+    fn patch_batch_round_trip_preserves_order_and_sequence() {
+'''
+test = '''    #[test]
+    fn stroke_width_mode_round_trips_and_legacy_json_defaults_to_world_space() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene.object_mut(object).expect("object exists").style.stroke_width_mode =
+            StrokeWidthMode::ScreenSpace;
+
+        let json = encode_scene(&scene).expect("scene must serialize");
+        assert!(json.contains("\\\"stroke_width_mode\\\":\\\"screen_space\\\""));
+        let decoded = decode_scene(&json).expect("screen-space style must deserialize");
+        assert_eq!(
+            decoded.objects()[0].style.stroke_width_mode,
+            StrokeWidthMode::ScreenSpace
+        );
+
+        let legacy_json = json.replace(
+            ",\\\"stroke_width_mode\\\":\\\"screen_space\\\"",
+            "",
+        );
+        let legacy = decode_scene(&legacy_json).expect("legacy style must deserialize");
+        assert_eq!(
+            legacy.objects()[0].style.stroke_width_mode,
+            StrokeWidthMode::ScaleWithObject
+        );
+    }
+
+'''
+assert needle in s
+p.write_text(s.replace(needle, test + needle, 1))
+
+p = Path('crates/noon-render-wgpu/src/lib.rs')
+s = p.read_text()
+needle = '''    #[test]
+    fn repeated_preparation_reuses_allocated_capacity() {
+'''
+test = '''    #[test]
+    fn screen_space_stroke_mode_is_packed_without_expanding_style_layout() {
+        let mut state = object(70, GeometryRef::circle(1.0));
+        state.style.fill = None;
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 4.0;
+        state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+        let frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+
+        let prepared = preparer.prepare(&frame);
+        let packed = prepared.circles[0].style;
+
+        assert_eq!(packed.stroke_width, 4.0);
+        assert_eq!(packed.stroke_enabled, 3);
+        assert_eq!(std::mem::size_of::<PackedStyle>(), 48);
+    }
+
+'''
+assert needle in s
+p.write_text(s.replace(needle, test + needle, 1))
+
+p = Path('scripts/manim-compat-smoke.mjs')
+s = p.read_text()
+needle = '''        circle = Circle(radius=0.6, color=BLUE)
+        square = Square(side_length=1.0, color=PINK).next_to(circle, RIGHT)
+'''
+repl = '''        defaults = Circle()
+        assert defaults.style["fill"] is None
+        assert defaults.style["stroke"] == WHITE.to_ir()
+        assert abs(defaults.style["stroke_width"] - 4.0) < 1e-12
+        assert defaults.style["stroke_width_mode"] == "screen_space"
+
+        circle = Circle(radius=0.6, color=BLUE)
+        square = Square(side_length=1.0, color=PINK).next_to(circle, RIGHT)
+'''
+assert needle in s
+p.write_text(s.replace(needle, repl, 1))
