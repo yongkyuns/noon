@@ -1,7 +1,6 @@
-import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
+import { ExecutionWorkerClient } from "./execution-worker-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { SceneIdentityMap } from "./scene-identity.js";
-import { SampleWindow } from "./frame-metrics.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -322,19 +321,22 @@ async function loadDemoAuthoringSource(path) {
   return response.text();
 }
 
+const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
+
 try {
-  await init();
-  const player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
-  const rendererBackend = player.rendererBackend();
+  const player = new ExecutionWorkerClient(canvas, {
+    onError(error) {
+      showError(error);
+    },
+  });
+  const ready = await player.start(EMPTY_SCENE_JSON, { loopDurationSeconds: 4.0 });
+  const rendererBackend = ready.render.backend;
   status.dataset.rendererBackend = rendererBackend;
-  const gpuProfilingSupported = player.gpuProfilingSupported();
-  player.setGpuProfilingEnabled(gpuProfilingSupported);
+  status.dataset.executionTopology = "engine-render-workers";
 
   function resize() {
     const scale = window.devicePixelRatio || 1;
-    const width = Math.round(canvas.clientWidth * scale);
-    const height = Math.round(canvas.clientHeight * scale);
-    player.resize(width, height);
+    player.resize(canvas.clientWidth, canvas.clientHeight, scale);
   }
 
   resize();
@@ -343,91 +345,6 @@ try {
   let paletteIndex = 0;
   let authoringClient = null;
   const sceneIdentities = new SceneIdentityMap();
-  const PERF_SAMPLE_CAPACITY = 180;
-  const PERF_WARMUP_FRAMES = 30;
-  const perfSamples = {
-    cpuFrame: new SampleWindow(PERF_SAMPLE_CAPACITY),
-    runtime: new SampleWindow(PERF_SAMPLE_CAPACITY),
-    prepare: new SampleWindow(PERF_SAMPLE_CAPACITY),
-    upload: new SampleWindow(PERF_SAMPLE_CAPACITY),
-    encode: new SampleWindow(PERF_SAMPLE_CAPACITY),
-  };
-  let perfWarmupRemaining = PERF_WARMUP_FRAMES;
-
-  function resetPerformanceProfile() {
-    Object.values(perfSamples).forEach((samples) => samples.reset());
-    perfWarmupRemaining = PERF_WARMUP_FRAMES;
-    player.resetGpuProfiling();
-  }
-
-  function recordPerformanceFrame() {
-    if (perfWarmupRemaining > 0) {
-      perfWarmupRemaining -= 1;
-      if (perfWarmupRemaining === 0) {
-        player.resetGpuProfiling();
-      }
-      return;
-    }
-    perfSamples.cpuFrame.record(player.lastCpuFrameMs());
-    perfSamples.runtime.record(player.lastRuntimeEvaluationMs());
-    perfSamples.prepare.record(player.lastFramePrepareMs());
-    perfSamples.upload.record(player.lastUploadMs());
-    perfSamples.encode.record(player.lastEncodeSubmitMs());
-  }
-
-  function formatPerfSummary(summary) {
-    if (summary === null) {
-      return "—";
-    }
-    return `${summary.p50.toFixed(2)} / ${summary.p95.toFixed(2)} ms`;
-  }
-
-  function formatGpuSummary() {
-    if (!gpuProfilingSupported) {
-      return "unsupported";
-    }
-    const p50 = player.gpuRenderP50Ms();
-    const p95 = player.gpuRenderP95Ms();
-    if (!Number.isFinite(p50) || !Number.isFinite(p95)) {
-      return "sampling…";
-    }
-    return `${p50.toFixed(2)} / ${p95.toFixed(2)} ms`;
-  }
-
-  function updatePerformanceMetrics() {
-    if (perfWarmupRemaining > 0) {
-      const warmup = `warming ${PERF_WARMUP_FRAMES - perfWarmupRemaining}/${PERF_WARMUP_FRAMES}`;
-      metricCpuFrame.value = warmup;
-      metricRuntime.value = warmup;
-      metricPrepare.value = warmup;
-      metricUploadMs.value = warmup;
-      metricEncode.value = warmup;
-      metricGpu.value = gpuProfilingSupported ? warmup : "unsupported";
-      return;
-    }
-
-    metricCpuFrame.value = formatPerfSummary(perfSamples.cpuFrame.summary());
-    metricRuntime.value = formatPerfSummary(perfSamples.runtime.summary());
-    metricPrepare.value = formatPerfSummary(perfSamples.prepare.summary());
-    metricUploadMs.value = formatPerfSummary(perfSamples.upload.summary());
-    metricEncode.value = formatPerfSummary(perfSamples.encode.summary());
-    metricGpu.value = formatGpuSummary();
-
-    status.dataset.profileSamples = String(perfSamples.cpuFrame.size);
-    status.dataset.cpuFrameP95Ms = String(perfSamples.cpuFrame.summary()?.p95 ?? "");
-    status.dataset.runtimeP95Ms = String(perfSamples.runtime.summary()?.p95 ?? "");
-    status.dataset.prepareP95Ms = String(perfSamples.prepare.summary()?.p95 ?? "");
-    status.dataset.uploadP95Ms = String(perfSamples.upload.summary()?.p95 ?? "");
-    status.dataset.encodeP95Ms = String(perfSamples.encode.summary()?.p95 ?? "");
-    status.dataset.gpuTimestampSupported = String(gpuProfilingSupported);
-    status.dataset.gpuP95Ms = String(
-      gpuProfilingSupported && Number.isFinite(player.gpuRenderP95Ms())
-        ? player.gpuRenderP95Ms()
-        : "",
-    );
-    status.dataset.gpuDroppedSamples = String(player.gpuDroppedSampleCount());
-    status.dataset.gpuFailedSamples = String(player.gpuFailedSampleCount());
-  }
 
   async function loadExample(kind, index, { run = false } = {}) {
     const examples = examplesFor(kind);
@@ -475,7 +392,8 @@ try {
     })
     .catch(showPatchError);
 
-  patchStatus.dataset.sequence = String(player.nextSequence());
+  const initialState = await player.state();
+  patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
 
   async function runScene() {
     setBusy(true);
@@ -483,33 +401,36 @@ try {
       patchStatus.value = "Building Scene in the Python worker…";
       patchStatus.dataset.state = "running";
       authoringClient ??= new PythonAuthoringClient();
-      const result = await authoringClient.run(
+      const authored = await authoringClient.run(
         sceneSourceEditor.value,
         currentExample("scene").context ?? {},
       );
-      if (result.kind !== "scene_document") {
+      if (authored.kind !== "scene_document") {
         throw new Error("Python scene source returned a PatchBatch");
       }
 
-      const playhead = player.time();
-      const stableDocument = sceneIdentities.stabilize(
-        result.document,
-        result.identities,
-      );
-      const incremental = player.reconcileScene(JSON.stringify(stableDocument));
-      const operation = incremental
-        ? "Scene updated incrementally"
-        : "Scene rebuilt atomically";
-      resetPerformanceProfile();
-
-      const preservedPlayhead = player.time();
-      if (preservedPlayhead !== playhead) {
+      const before = await player.state();
+      // Python updater closures retain authoring-local object IDs. Callback-aware
+      // stable identity reconciliation belongs to #64; callback-free scenes keep
+      // using the stable identity adapter today.
+      const runtimeDocument =
+        authored.callbacks === null
+          ? sceneIdentities.stabilize(authored.document, authored.identities)
+          : authored.document;
+      const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
+        callbacks: authored.callbacks,
+        authoringClient,
+      });
+      if (result.time !== before.time) {
         throw new Error("Scene replacement changed the current playhead");
       }
-      const nextSequence = Number(player.nextSequence());
-      patchStatus.value = `${operation} · ${player.objectCount()} objects · playhead ${preservedPlayhead.toFixed(2)} s preserved`;
+      const report = await player.metrics();
+      const operation = result.incremental
+        ? "Scene updated incrementally"
+        : "Scene rebuilt atomically";
+      patchStatus.value = `${operation} · ${report.metrics.objectCount} objects · playhead ${result.time.toFixed(2)} s preserved`;
       patchStatus.dataset.state = "applied";
-      patchStatus.dataset.sequence = String(nextSequence);
+      patchStatus.dataset.sequence = String(result.nextPatchSequence);
     } catch (error) {
       showPatchError(error);
     } finally {
@@ -520,7 +441,8 @@ try {
   async function runPatch() {
     setBusy(true);
     try {
-      const sequence = Number(player.nextSequence());
+      const before = await player.state();
+      const sequence = Number(before.nextPatchSequence);
       if (!Number.isSafeInteger(sequence)) {
         throw new Error("Patch sequence exceeds JavaScript's safe integer range");
       }
@@ -529,33 +451,24 @@ try {
       patchStatus.dataset.state = "running";
 
       authoringClient ??= new PythonAuthoringClient();
-      const result = await authoringClient.run(sourceEditor.value, {
-        sequence,
-        palette,
-      });
-      if (result.kind !== "patch_batch") {
+      const authored = await authoringClient.run(sourceEditor.value, { sequence, palette });
+      if (authored.kind !== "patch_batch") {
         throw new Error("Python patch source returned a complete Scene");
       }
-      const batch = result.document;
+      const batch = authored.document;
       if (batch.sequence !== sequence) {
-        throw new Error(
-          `Python returned patch sequence ${batch.sequence}; expected ${sequence}`,
-        );
+        throw new Error(`Python returned patch sequence ${batch.sequence}; expected ${sequence}`);
       }
-      const playhead = player.time();
-      player.applyPatchBatch(JSON.stringify(batch));
-
-      const nextSequence = Number(player.nextSequence());
-      if (nextSequence !== sequence + 1) {
+      const result = await player.applyPatchBatch(JSON.stringify(batch));
+      if (Number(result.nextPatchSequence) !== sequence + 1) {
         throw new Error("Runtime did not acknowledge the ordered patch batch");
       }
-      const preservedPlayhead = player.time();
-      if (preservedPlayhead !== playhead) {
+      if (result.time !== before.time) {
         throw new Error("Patch batch changed the current playhead");
       }
       patchStatus.value = `Patch ${sequence} accepted · ${currentExample("patch").name} · playhead preserved`;
       patchStatus.dataset.state = "applied";
-      patchStatus.dataset.sequence = String(nextSequence);
+      patchStatus.dataset.sequence = String(result.nextPatchSequence);
       patchStatus.dataset.theme = palette.name;
       paletteIndex = (paletteIndex + 1) % PALETTES.length;
     } catch (error) {
@@ -582,50 +495,62 @@ try {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
       if (activeEditor === "scene") {
-        runScene();
+        void runScene();
       } else {
-        runPatch();
+        void runPatch();
       }
     }
   });
 
-  window.addEventListener("pagehide", () => authoringClient?.terminate(), {
-    once: true,
-  });
+  window.addEventListener(
+    "pagehide",
+    () => {
+      authoringClient?.terminate();
+      player.terminate();
+    },
+    { once: true },
+  );
 
   let lastStatusUpdate = -Infinity;
-  function frame(timestamp) {
+  let metricsPending = false;
+  async function updateWorkerMetrics(timestamp) {
+    if (metricsPending || timestamp - lastStatusUpdate <= 200) {
+      return;
+    }
+    metricsPending = true;
     try {
-      const presented = player.renderFrame(timestamp);
-      if (presented) {
-        recordPerformanceFrame();
-      }
-      if (presented && timestamp - lastStatusUpdate > 200) {
-        const objectCount = player.objectCount();
-        const drawCalls = player.lastDrawCalls();
-        const uploadBytes = player.lastBytesUploaded();
-        const playhead = player.time();
-
-        setRuntimeStatus(`${objectCount} objects · ${rendererBackend} live`, "running");
-        metricObjects.value = String(objectCount);
-        metricDraws.value = String(drawCalls);
-        metricUpload.value = formatBytes(uploadBytes);
-        metricTime.value = `${playhead.toFixed(2)} s`;
-        updatePerformanceMetrics();
-
-        status.dataset.instances = String(player.lastInstancesDrawn());
-        status.dataset.uploadBytes = String(uploadBytes);
-        status.dataset.geometryCacheMisses = String(
-          player.lastGeometryCacheMisses(),
-        );
-        lastStatusUpdate = timestamp;
-      }
-      requestAnimationFrame(frame);
+      const report = await player.metrics();
+      const metrics = report.metrics;
+      const host = report.engineMetrics.host;
+      setRuntimeStatus(`${metrics.objectCount} objects · ${rendererBackend} worker`, "running");
+      metricObjects.value = String(metrics.objectCount);
+      metricDraws.value = String(metrics.drawCalls);
+      metricUpload.value = formatBytes(metrics.bytesUploaded);
+      metricTime.value = `${metrics.time.toFixed(2)} s`;
+      metricCpuFrame.value = "engine worker";
+      metricRuntime.value = host.enabled ? `${host.missedDeadlines} host misses` : "engine worker";
+      metricPrepare.value = "render worker";
+      metricUploadMs.value = "render worker";
+      metricEncode.value = "render worker";
+      metricGpu.value = rendererBackend;
+      status.dataset.instances = String(metrics.instancesDrawn);
+      status.dataset.uploadBytes = String(metrics.bytesUploaded);
+      status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
+      status.dataset.hostMissedDeadlines = String(host.missedDeadlines);
+      status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
+      status.dataset.presentedFrames = String(metrics.presentedFrames);
+      lastStatusUpdate = timestamp;
     } catch (error) {
       showError(error);
+    } finally {
+      metricsPending = false;
     }
   }
 
+  function frame(timestamp) {
+    void updateWorkerMetrics(timestamp);
+    requestAnimationFrame(frame);
+  }
   requestAnimationFrame(frame);
 } catch (error) {
   showError(error);

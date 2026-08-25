@@ -54,6 +54,10 @@ Renderer-side transient surface loss is recoverable because semantic/runtime sta
 
 The transport has native Rust tests for snapshot/partial round trips, stable slots, stale-message handling, sequence gaps, and session restart rules. JavaScript tests exercise SharedArrayBuffer and transferable backpressure. The browser worker smoke runs a cross-origin-isolated page, executes both transport modes with an `OffscreenCanvas`, applies ordered patches, verifies error containment, and restarts the worker pair.
 
-## Current migration boundary
+## Default browser path and host callbacks
 
-This change establishes the worker/render transport boundary without deleting the existing main-thread `NoonCanvasPlayer` compatibility path. The playground can migrate onto `ExecutionWorkerClient` once the worker path is green on WebGPU and WebGL2 and native-input/host-callback routing is connected to the engine worker. The existing Python authoring worker remains a separate frontend producer for now; arbitrary callback ownership can move behind the engine-worker boundary without changing the execution-delta protocol described here.
+The playground uses `ExecutionWorkerClient` by default. `NoonCanvasPlayer` remains as a compatibility/profiling path, but the normal UI thread no longer evaluates scene state or submits GPU work. It authors scenes, forwards explicit edits, collects DOM input, and polls worker metrics.
+
+Arbitrary Python updater closures remain in the lazy Pyodide authoring worker. When a scene registers callbacks, the UI transfers a dedicated `MessagePort` between that Python worker and the engine worker. Callback snapshots and patch results then travel directly between those workers; the main thread is not in the per-frame callback loop. The engine launches at most one callback phase at a time, records missed presentation deadlines, drops results that became stale while native time advanced, and commits on-time callback batches through a sequence domain separate from interactive user patches. The render worker never waits for that callback.
+
+Callback scenes currently retain authoring-local object IDs so Python closures and their coherent snapshot table refer to the same identities. Stable callback-aware hot-reload identity reconciliation belongs to #64; ordinary callback-free scenes continue using the playground stable identity adapter.

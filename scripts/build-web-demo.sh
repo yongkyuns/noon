@@ -9,6 +9,12 @@ node --check web/main.js
 node --check web/authoring-client.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
+node --check web/execution-transport.js
+node --check web/execution-engine-worker.js
+node --check web/execution-render-worker.js
+node --check web/execution-worker-client.js
+node --check scripts/execution-worker-smoke.mjs
+node --check scripts/execution-worker-host-smoke.mjs
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
 node --check web/morph-profile.js
@@ -32,6 +38,7 @@ node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
 node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
+node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
