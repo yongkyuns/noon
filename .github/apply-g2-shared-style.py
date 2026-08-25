@@ -4,7 +4,7 @@ from textwrap import dedent
 rust_path = Path("crates/noon-web/src/authoring_mobject.rs")
 rust = rust_path.read_text()
 
-frontend_marker = "    pub fn next_to_handle(\n"
+frontend_marker = "    pub fn next_to_handle(\n        &mut self,\n        other: &Self,\n"
 frontend_insert = dedent(
     '''
     pub fn disable_fill(&mut self) {
@@ -109,7 +109,7 @@ frontend_insert = dedent(
 )
 frontend_insert = "".join(f"    {line}\n" if line else "\n" for line in frontend_insert.splitlines())
 if rust.count(frontend_marker) != 1:
-    raise SystemExit("frontend insertion marker mismatch")
+    raise SystemExit(f"frontend insertion marker mismatch: {rust.count(frontend_marker)}")
 rust = rust.replace(frontend_marker, frontend_insert + frontend_marker, 1)
 
 helper_marker = "fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {\n"
@@ -126,7 +126,7 @@ fn unit_alpha(name: &str, value: f64) -> Result<f32, String> {
 '''
 )
 if rust.count(helper_marker) != 1:
-    raise SystemExit("alpha helper marker mismatch")
+    raise SystemExit(f"alpha helper marker mismatch: {rust.count(helper_marker)}")
 rust = rust.replace(helper_marker, helper_insert + helper_marker, 1)
 
 wasm_marker = "        #[wasm_bindgen(js_name = nextToHandle)]\n"
@@ -202,7 +202,7 @@ pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
 )
 wasm_insert = "".join(f"        {line}\n" if line else "\n" for line in wasm_insert.splitlines())
 if rust.count(wasm_marker) != 1:
-    raise SystemExit("wasm insertion marker mismatch")
+    raise SystemExit(f"wasm insertion marker mismatch: {rust.count(wasm_marker)}")
 rust = rust.replace(wasm_marker, wasm_insert + wasm_marker, 1)
 
 test_marker = "    #[test]\n    fn json_round_trip_preserves_wire_snapshot() {\n"
@@ -235,7 +235,7 @@ fn shared_style_mutations_preserve_independent_channels() {
 )
 test_insert = "".join(f"    {line}\n" if line else "\n" for line in test_insert.splitlines())
 if rust.count(test_marker) != 1:
-    raise SystemExit("test insertion marker mismatch")
+    raise SystemExit(f"test insertion marker mismatch: {rust.count(test_marker)}")
 rust = rust.replace(test_marker, test_insert + test_marker, 1)
 rust_path.write_text(rust)
 
@@ -243,7 +243,7 @@ py_path = Path("web/python/_manim_semantic_handles.py")
 py = py_path.read_text()
 import_marker = "import _manim_compat as _compat\n"
 if py.count(import_marker) != 1:
-    raise SystemExit("python import marker mismatch")
+    raise SystemExit(f"python import marker mismatch: {py.count(import_marker)}")
 py = py.replace(import_marker, import_marker + "import _manim_phase_b as _phase_b\n", 1)
 
 original_marker = "_ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame\n"
@@ -257,7 +257,7 @@ _ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
 '''
 )
 if py.count(original_marker) != 1:
-    raise SystemExit("python original marker mismatch")
+    raise SystemExit(f"python original marker mismatch: {py.count(original_marker)}")
 py = py.replace(original_marker, original_marker + originals, 1)
 
 bounds_marker = "def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:\n"
@@ -338,23 +338,23 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
 '''
 )
 if py.count(bounds_marker) != 1:
-    raise SystemExit("python style insertion marker mismatch")
+    raise SystemExit(f"python style insertion marker mismatch: {py.count(bounds_marker)}")
 py = py.replace(bounds_marker, style_functions + bounds_marker, 1)
 
 install_marker = "    _compat.VMobject.copy = _copy_mobject\n    _compat._bounds_for = _compat_bounds_for\n"
 install_replace = dedent(
     '''
-    _compat.VMobject.copy = _copy_mobject
-    _compat.VMobject.set_fill = _set_fill
-    _compat.VMobject.set_stroke = _set_stroke
-    _compat.VMobject.set_opacity = _set_opacity
-    _compat.VMobject.get_fill_opacity = _get_fill_opacity
-    _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
-    _compat._bounds_for = _compat_bounds_for
+_compat.VMobject.copy = _copy_mobject
+_compat.VMobject.set_fill = _set_fill
+_compat.VMobject.set_stroke = _set_stroke
+_compat.VMobject.set_opacity = _set_opacity
+_compat.VMobject.get_fill_opacity = _get_fill_opacity
+_compat.VMobject.get_stroke_opacity = _get_stroke_opacity
+_compat._bounds_for = _compat_bounds_for
 '''
 )
 install_replace = "".join(f"    {line}\n" if line else "\n" for line in install_replace.splitlines())
 if py.count(install_marker) != 1:
-    raise SystemExit("python install marker mismatch")
+    raise SystemExit(f"python install marker mismatch: {py.count(install_marker)}")
 py = py.replace(install_marker, install_replace, 1)
 py_path.write_text(py)
