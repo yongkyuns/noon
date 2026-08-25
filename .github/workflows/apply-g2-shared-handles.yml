@@ -1,0 +1,99 @@
+name: Apply G2 shared mobject handles
+
+on:
+  push:
+    branches:
+      - agent/g2-shared-mobject-handles
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/g2-shared-mobject-handles
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Use stable Rust and wasm target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt clippy
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Wire handle into Pyodide worker
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("web/python-worker.js")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  'import initNoonWeb, {\n  resolveAnimationOptions,',
+                  'import initNoonWeb, {\n  AuthoringMobjectHandle,\n  resolveAnimationOptions,',
+              ),
+              (
+                  'const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";\n',
+                  'const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";\nconst MANIM_SEMANTIC_HANDLES_MODULE_PATH = "/tmp/_manim_semantic_handles.py";\n',
+              ),
+              (
+                  '  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;\n',
+                  '  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>\n    new AuthoringMobjectHandle(snapshotJson);\n  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;\n',
+              ),
+              (
+                  '    compatResponse,\n    rateFunctionsResponse,',
+                  '    compatResponse,\n    semanticHandlesResponse,\n    rateFunctionsResponse,',
+              ),
+              (
+                  '    fetch(new URL("./python/_manim_compat.py", import.meta.url)),\n    fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),',
+                  '    fetch(new URL("./python/_manim_compat.py", import.meta.url)),\n    fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),\n    fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),',
+              ),
+              (
+                  '    [compatResponse, "Noon Manim compatibility layer"],\n    [rateFunctionsResponse, "Noon Manim rate functions"],',
+                  '    [compatResponse, "Noon Manim compatibility layer"],\n    [semanticHandlesResponse, "Noon shared semantic handle layer"],\n    [rateFunctionsResponse, "Noon Manim rate functions"],',
+              ),
+              (
+                  '    [MANIM_COMPAT_MODULE_PATH, compatResponse],\n    [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],',
+                  '    [MANIM_COMPAT_MODULE_PATH, compatResponse],\n    [MANIM_SEMANTIC_HANDLES_MODULE_PATH, semanticHandlesResponse],\n    [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],',
+              ),
+              (
+                  'import _manim_phase_b\nimport _manim_animate\n',
+                  'import _manim_phase_b\nimport _manim_semantic_handles\n_manim_semantic_handles.install()\nimport _manim_animate\n',
+              ),
+          ]
+          for before, after in replacements:
+              count = text.count(before)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one worker match, found {count}: {before!r}")
+              text = text.replace(before, after, 1)
+          path.write_text(text)
+          PY
+      - name: Validate Rust and Python integration
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          cargo test -p noon-web
+          cargo check -p noon-web --target wasm32-unknown-unknown
+          python -m compileall -q web/python
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Commit integrated change and remove helper
+        run: |
+          rm .github/workflows/apply-g2-shared-handles.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src web/python web/python-worker.js .github/workflows/apply-g2-shared-handles.yml
+          git commit -m "Wire Python mobjects to shared Rust semantic handles"
+          git push origin HEAD:agent/g2-shared-mobject-handles
