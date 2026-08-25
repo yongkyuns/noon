@@ -1,0 +1,37 @@
+name: Apply Manim VectorPath progress
+
+on:
+  push:
+    branches:
+      - parity/manim-vectorpath-uncreate
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity/manim-vectorpath-uncreate
+          fetch-depth: 1
+      - name: Apply shared-mesh progress patch
+        run: python3 scripts/_apply_manim_vectorpath_progress.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate geometry
+        run: cargo test -p noon-geometry
+      - name: Validate renderer integration
+        run: cargo test -p noon-render-wgpu
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/_apply_manim_vectorpath_progress.py
+          rm .github/workflows/_apply-manim-vectorpath-progress.yml
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: use Manim curve progress for VectorPath Create"
+          git push origin HEAD:parity/manim-vectorpath-uncreate
