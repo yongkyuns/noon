@@ -64,6 +64,7 @@ pub struct CompiledObject {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransformGeometryPlan {
     Static,
+    PointwiseRotation,
     Circle {
         from_radius: f32,
         to_radius: f32,
@@ -913,6 +914,11 @@ fn compile_transform_geometry_plan(
     }
 
     if from.geometry == to.geometry {
+        if from.transform.scale == to.transform.scale
+            && from.transform.rotation.to_bits() != to.transform.rotation.to_bits()
+        {
+            return Ok(Some(TransformGeometryPlan::PointwiseRotation));
+        }
         return Ok(Some(TransformGeometryPlan::Static));
     }
 

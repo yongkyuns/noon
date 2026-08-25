@@ -67,6 +67,24 @@ class ManimSemanticHandleLayoutBoundsTests(unittest.TestCase):
                 def rotate(self, angle):
                     self.snapshot[\"transform\"][\"rotation\"] += float(angle)
 
+                def rotateAboutPoint(self, angle, point_x, point_y):
+                    translation = self.snapshot[\"transform\"][\"translation\"]
+                    relative_x = translation[\"x\"] - float(point_x)
+                    relative_y = translation[\"y\"] - float(point_y)
+                    cosine = math.cos(float(angle))
+                    sine = math.sin(float(angle))
+                    translation[\"x\"] = (
+                        float(point_x)
+                        + relative_x * cosine
+                        - relative_y * sine
+                    )
+                    translation[\"y\"] = (
+                        float(point_y)
+                        + relative_x * sine
+                        + relative_y * cosine
+                    )
+                    self.snapshot[\"transform\"][\"rotation\"] += float(angle)
+
 
             handles._create_handle = FakeHandle
             handles.install()

@@ -348,11 +348,35 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     return self
 
 
-def _rotate(self: _base.Mobject, angle: float) -> _base.Mobject:
+def _rotate(
+    self: _base.Mobject,
+    angle: float,
+    axis: object = _compat.OUT,
+    *,
+    about_point: object | None = None,
+    about_edge: object | None = None,
+    **kwargs: Any,
+) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_ROTATE(self, angle)
-    handle.rotate(float(angle))
+        return _ORIGINAL_ROTATE(
+            self,
+            angle,
+            axis,
+            about_point=about_point,
+            about_edge=about_edge,
+            **kwargs,
+        )
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
+    signed_angle = _compat._rotation_angle_2d(angle, axis)
+    if about_point is not None:
+        pivot = _compat._as_vec2(about_point)
+    else:
+        edge = _base.ORIGIN if about_edge is None else _compat._as_vec2(about_edge)
+        pivot = _critical(self, edge)
+    handle.rotateAboutPoint(signed_angle, pivot.x, pivot.y)
     return self
 
 

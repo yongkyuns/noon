@@ -14,7 +14,11 @@ import noon as _base
 
 _BaseMobject = _base.Mobject
 _BaseScene = _base.Scene
+_NATIVE_MOBJECT_ROTATE = _BaseMobject.rotate
 _ir = _base._ir
+
+OUT = (0.0, 0.0, 1.0)
+IN = (0.0, 0.0, -1.0)
 
 _INSTALLED = False
 
@@ -230,6 +234,57 @@ def _critical_for(value: object, direction: _base.Vec2) -> _base.Vec2:
     )
 
 
+def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
+    try:
+        if len(axis) != 3:  # type: ignore[arg-type]
+            raise TypeError
+        x = float(axis[0])  # type: ignore[index]
+        y = float(axis[1])  # type: ignore[index]
+        z = float(axis[2])  # type: ignore[index]
+    except (TypeError, ValueError, IndexError) as error:
+        raise TypeError("rotation axis must be a three-component vector") from error
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        raise ValueError("rotation axis must be finite")
+    if not math.isclose(x, 0.0, abs_tol=1e-12) or not math.isclose(y, 0.0, abs_tol=1e-12):
+        raise NotImplementedError("2D authoring supports rotation about the z axis only")
+    if math.isclose(z, 0.0, abs_tol=1e-12):
+        raise ValueError("rotation axis must be non-zero")
+    value = float(angle)
+    if not math.isfinite(value):
+        raise ValueError("rotation angle must be finite")
+    return -value if z < 0.0 else value
+
+
+def _mobject_rotate(
+    self: _BaseMobject,
+    angle: float,
+    axis: object = OUT,
+    *,
+    about_point: object | None = None,
+    about_edge: object | None = None,
+    **kwargs: Any,
+) -> _BaseMobject:
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
+    signed_angle = _rotation_angle_2d(angle, axis)
+    if about_point is not None:
+        pivot = _as_vec2(about_point)
+    else:
+        edge = _base.ORIGIN if about_edge is None else _as_vec2(about_edge)
+        pivot = self.get_critical_point(edge)
+    center = self.get_center()
+    relative = center - pivot
+    cosine = math.cos(signed_angle)
+    sine = math.sin(signed_angle)
+    target_center = pivot + _base.Vec2(
+        relative.x * cosine - relative.y * sine,
+        relative.x * sine + relative.y * cosine,
+    )
+    _NATIVE_MOBJECT_ROTATE(self, signed_angle)
+    return self.move_to(target_center)
+
+
 class _GroupAnimationBuilder:
     def __init__(self, source: Group) -> None:
         leaves = _leaf_mobjects(source)
@@ -362,22 +417,23 @@ class Group(_base.Group, _BaseMobject):
             )
         return self
 
-    def rotate(self, angle: float) -> Group:
-        angle = float(angle)
-        center = self.get_center()
-        cosine = math.cos(angle)
-        sine = math.sin(angle)
+    def rotate(
+        self,
+        angle: float,
+        axis: object = OUT,
+        *,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+        **kwargs: Any,
+    ) -> Group:
+        signed_angle = _rotation_angle_2d(angle, axis)
+        if about_point is not None:
+            pivot = _as_vec2(about_point)
+        else:
+            edge = _base.ORIGIN if about_edge is None else _as_vec2(about_edge)
+            pivot = _critical_for(self, edge)
         for member in self.submobjects:
-            member_center = member.get_center()
-            relative = member_center - center
-            member.rotate(angle)
-            member.move_to(
-                center
-                + _base.Vec2(
-                    relative.x * cosine - relative.y * sine,
-                    relative.x * sine + relative.y * cosine,
-                )
-            )
+            member.rotate(signed_angle, OUT, about_point=pivot, **kwargs)
         return self
 
     def set_color(self, color: _base.Color) -> Group:
@@ -895,31 +951,9 @@ def _mobject_match_y(
 def _mobject_rotate_about_origin(
     self: _BaseMobject, angle: float, axis: object = None
 ) -> _BaseMobject:
-    if axis is not None:
-        try:
-            if len(axis) != 3:  # type: ignore[arg-type]
-                raise TypeError
-            x = float(axis[0])  # type: ignore[index]
-            y = float(axis[1])  # type: ignore[index]
-            z = float(axis[2])  # type: ignore[index]
-        except (TypeError, ValueError, IndexError) as error:
-            raise TypeError("rotation axis must be a three-component vector") from error
-        if not math.isclose(x, 0.0, abs_tol=1e-12) or not math.isclose(
-            y, 0.0, abs_tol=1e-12
-        ) or not math.isclose(abs(z), 1.0, abs_tol=1e-12):
-            raise NotImplementedError("2D authoring supports rotation about the z axis only")
-        if z < 0.0:
-            angle = -float(angle)
-    angle = float(angle)
-    center = self.get_center()
-    cosine = math.cos(angle)
-    sine = math.sin(angle)
-    target = _base.Vec2(
-        center.x * cosine - center.y * sine,
-        center.x * sine + center.y * cosine,
+    return self.rotate(
+        angle, OUT if axis is None else axis, about_point=_base.ORIGIN
     )
-    self.rotate(angle)
-    return self.move_to(target)
 
 
 def _set_width_property(self: _BaseMobject, width: float) -> None:
@@ -1056,6 +1090,7 @@ def install() -> None:
     _BaseMobject.match_coord = _mobject_match_coord
     _BaseMobject.match_x = _mobject_match_x
     _BaseMobject.match_y = _mobject_match_y
+    _BaseMobject.rotate = _mobject_rotate
     _BaseMobject.rotate_about_origin = _mobject_rotate_about_origin
     _BaseMobject.width = property(_BaseMobject.width.fget, _set_width_property)
     _BaseMobject.height = property(_BaseMobject.height.fget, _set_height_property)
@@ -1075,6 +1110,8 @@ def install() -> None:
         "Group": Group,
         "VGroup": VGroup,
         "Scene": Scene,
+        "OUT": OUT,
+        "IN": IN,
     }
     for name, value in public.items():
         setattr(_base, name, value)
