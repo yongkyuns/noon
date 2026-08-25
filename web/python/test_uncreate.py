@@ -7,14 +7,14 @@ class UncreateAuthoringTests(unittest.TestCase):
     def test_default_uncreate_reverses_reveal_and_removes_at_exact_end(self) -> None:
         scene = Scene()
         square = scene.add(Square(), key="square")
-        scene.play(Uncreate(square), run_time=2.0, easing="smooth")
+        scene.play(Uncreate(square), run_time=2.0, easing="linear")
 
         tracks = scene.to_document()["tracks"]
         reveal = next(track for track in tracks if track["property"] == "reveal")
         self.assertEqual(reveal["values"]["scalar"], {"from": 1.0, "to": 0.0})
         self.assertEqual(reveal["timing"]["start_time"], 0.0)
         self.assertEqual(reveal["timing"]["duration"], 2.0)
-        self.assertEqual(reveal["timing"]["easing"], "smooth")
+        self.assertEqual(reveal["timing"]["easing"], "linear")
 
         removal = next(track for track in tracks if track["property"] == "presence")
         self.assertEqual(removal["values"]["bool"], {"from": True, "to": False})
