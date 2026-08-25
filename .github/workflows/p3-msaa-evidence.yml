@@ -36,11 +36,21 @@ jobs:
           elif 'readback.unmap();\n                        let mut state = state.borrow_mut();' not in s:
               raise SystemExit('timestamp map cleanup anchor not found')
           PY
+          cat > /tmp/enable-timestamps.py <<'PY'
+          from pathlib import Path
+          p = Path('scripts/perf-profile.mjs')
+          s = p.read_text()
+          anchor = '''      "--enable-unsafe-webgpu",\n      "--use-gpu-in-tests",\n'''
+          replacement = '''      "--enable-unsafe-webgpu",\n      "--enable-dawn-features=allow_unsafe_apis",\n      "--enable-webgpu-developer-features",\n      "--use-webgpu-adapter=swiftshader",\n      "--use-gpu-in-tests",\n'''
+          assert s.count(anchor) == 1, s.count(anchor)
+          p.write_text(s.replace(anchor, replacement, 1))
+          PY
       - name: Measure before P3
         shell: bash
         run: |
           git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
           python3 /tmp/fix-map.py
+          python3 /tmp/enable-timestamps.py
           wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
           NOON_PERF_BACKEND=webgpu \
           NOON_PERF_COUNTS=10000 \
@@ -57,6 +67,7 @@ jobs:
         run: |
           git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
           python3 /tmp/fix-map.py
+          python3 /tmp/enable-timestamps.py
           git apply /tmp/p3.patch
           cargo fmt --all --check
           cargo test -p noon-render-wgpu --all-features
@@ -75,9 +86,11 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY' | tee /tmp/p3-summary.md
-          import json
+          import json, math
           before = json.load(open('/tmp/p3-before.json'))
           after = json.load(open('/tmp/p3-after.json'))
+          def fmt(v):
+              return '—' if v is None or not isinstance(v, (int, float)) or not math.isfinite(v) else f'{v:.3f} ms'
           print('| Layout | GPU p50 before | GPU p50 after | GPU p95 before | GPU p95 after | GPU p99 before | GPU p99 after | p95 gain | Frame p95 before | Frame p95 after |')
           print('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|')
           for b, a in zip(before['cases'], after['cases']):
@@ -87,7 +100,8 @@ jobs:
               ag = a['gpu']['renderPassMs']
               bc = b['cadence']['frameIntervalMs']
               ac = a['cadence']['frameIntervalMs']
-              gain = (bg['p95'] - ag['p95']) / bg['p95'] * 100 if bg.get('p95') and ag.get('p95') else float('nan')
-              print(f"| {layout} | {bg.get('p50', float('nan')):.3f} ms | {ag.get('p50', float('nan')):.3f} ms | {bg.get('p95', float('nan')):.3f} ms | {ag.get('p95', float('nan')):.3f} ms | {bg.get('p99', float('nan')):.3f} ms | {ag.get('p99', float('nan')):.3f} ms | {gain:.1f}% | {bc.get('p95', float('nan')):.3f} ms | {ac.get('p95', float('nan')):.3f} ms |")
+              bp, ap = bg.get('p95'), ag.get('p95')
+              gain = f'{(bp-ap)/bp*100:.1f}%' if isinstance(bp,(int,float)) and isinstance(ap,(int,float)) and bp else '—'
+              print(f"| {layout} | {fmt(bg.get('p50'))} | {fmt(ag.get('p50'))} | {fmt(bp)} | {fmt(ap)} | {fmt(bg.get('p99'))} | {fmt(ag.get('p99'))} | {gain} | {fmt(bc.get('p95'))} | {fmt(ac.get('p95'))} |")
           PY
           cat /tmp/p3-summary.md >> "$GITHUB_STEP_SUMMARY"
