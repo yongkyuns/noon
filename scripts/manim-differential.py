@@ -512,6 +512,119 @@ def _manim_rotate_about_origin() -> Any:
     return _object_observation(obj)
 
 
+
+def _member_centers(group: Any) -> list[list[float]]:
+    return [_point_observation(member.get_center()) for member in group.submobjects]
+
+
+def _noon_vgroup_duplicate_add() -> Any:
+    first = noon.Circle(radius=0.2).shift(noon.LEFT)
+    group = noon.VGroup(first).add(first, first)
+    return {"length": len(group), "centers": _member_centers(group)}
+
+
+def _manim_vgroup_duplicate_add() -> Any:
+    first = manim.Circle(radius=0.2).shift(manim.LEFT)
+    group = manim.VGroup(first).add(first, first)
+    return {"length": len(group), "centers": _member_centers(group)}
+
+
+def _noon_vgroup_insert() -> Any:
+    first = noon.Circle(radius=0.2).shift(noon.LEFT)
+    second = noon.Square(side_length=0.4).shift(noon.RIGHT)
+    group = noon.VGroup(first, second)
+    result = group.insert(1, first)
+    return {"return_is_self": result is group, "centers": _member_centers(group)}
+
+
+def _manim_vgroup_insert() -> Any:
+    first = manim.Circle(radius=0.2).shift(manim.LEFT)
+    second = manim.Square(side_length=0.4).shift(manim.RIGHT)
+    group = manim.VGroup(first, second)
+    result = group.insert(1, first)
+    return {"return_is_self": result is group, "centers": _member_centers(group)}
+
+
+def _noon_vgroup_add_to_back() -> Any:
+    first = noon.Circle(radius=0.2).shift(noon.LEFT)
+    second = noon.Square(side_length=0.4)
+    third = noon.Rectangle(width=0.4, height=0.2).shift(noon.RIGHT)
+    group = noon.VGroup(first, second, third).add_to_back(third, first)
+    return _member_centers(group)
+
+
+def _manim_vgroup_add_to_back() -> Any:
+    first = manim.Circle(radius=0.2).shift(manim.LEFT)
+    second = manim.Square(side_length=0.4)
+    third = manim.Rectangle(width=0.4, height=0.2).shift(manim.RIGHT)
+    group = manim.VGroup(first, second, third).add_to_back(third, first)
+    return _member_centers(group)
+
+
+def _noon_vgroup_slice() -> Any:
+    group = noon.VGroup(
+        noon.Circle(radius=0.2).shift(noon.LEFT),
+        noon.Square(side_length=0.4),
+        noon.Rectangle(width=0.4, height=0.2).shift(noon.RIGHT),
+    )
+    subset = group[1:]
+    return {"type": type(subset).__name__, "centers": _member_centers(subset)}
+
+
+def _manim_vgroup_slice() -> Any:
+    group = manim.VGroup(
+        manim.Circle(radius=0.2).shift(manim.LEFT),
+        manim.Square(side_length=0.4),
+        manim.Rectangle(width=0.4, height=0.2).shift(manim.RIGHT),
+    )
+    subset = group[1:]
+    return {"type": type(subset).__name__, "centers": _member_centers(subset)}
+
+
+def _noon_nested_family_alias() -> Any:
+    shared = noon.Circle(radius=0.2).shift(noon.LEFT)
+    inner = noon.VGroup(shared)
+    outer = noon.Group(inner, shared)
+    inner.shift(noon.RIGHT * 0.5)
+    return {
+        "outer_length": len(outer),
+        "inner_length": len(inner),
+        "shared": _point_observation(shared.get_center()),
+        "outer": _members_observation(outer),
+    }
+
+
+def _manim_nested_family_alias() -> Any:
+    shared = manim.Circle(radius=0.2).shift(manim.LEFT)
+    inner = manim.VGroup(shared)
+    outer = manim.Group(inner, shared)
+    inner.shift(manim.RIGHT * 0.5)
+    return {
+        "outer_length": len(outer),
+        "inner_length": len(inner),
+        "shared": _point_observation(shared.get_center()),
+        "outer": _members_observation(outer),
+    }
+
+
+def _noon_vgroup_duplicate_slice() -> Any:
+    first = noon.Circle(radius=0.2).shift(noon.LEFT)
+    second = noon.Square(side_length=0.4).shift(noon.RIGHT)
+    group = noon.VGroup(first, second)
+    group.insert(1, first)
+    subset = group[:2]
+    return {"length": len(subset), "centers": _member_centers(subset)}
+
+
+def _manim_vgroup_duplicate_slice() -> Any:
+    first = manim.Circle(radius=0.2).shift(manim.LEFT)
+    second = manim.Square(side_length=0.4).shift(manim.RIGHT)
+    group = manim.VGroup(first, second)
+    group.insert(1, first)
+    subset = group[:2]
+    return {"length": len(subset), "centers": _member_centers(subset)}
+
+
 FIXTURES = [
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
@@ -527,6 +640,12 @@ FIXTURES = [
     Fixture("set_xy", _noon_set_xy, _manim_set_xy),
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
+    Fixture("vgroup_duplicate_add", _noon_vgroup_duplicate_add, _manim_vgroup_duplicate_add),
+    Fixture("vgroup_insert", _noon_vgroup_insert, _manim_vgroup_insert),
+    Fixture("vgroup_add_to_back", _noon_vgroup_add_to_back, _manim_vgroup_add_to_back),
+    Fixture("vgroup_slice", _noon_vgroup_slice, _manim_vgroup_slice),
+    Fixture("vgroup_duplicate_slice", _noon_vgroup_duplicate_slice, _manim_vgroup_duplicate_slice),
+    Fixture("nested_family_alias", _noon_nested_family_alias, _manim_nested_family_alias),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
     Fixture(
         "mobject_copy_independence",
@@ -560,7 +679,6 @@ FIXTURES = [
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
-    "family_aliasing": "Python Group still flattens family identity pending shared semantic handles (#61)",
     "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",

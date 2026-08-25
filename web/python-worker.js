@@ -1,5 +1,5 @@
 import initNoonWeb, {
-  WasmAuthoringMobjectHandle,
+  WasmAuthoringStore,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -39,8 +39,10 @@ self.addEventListener("message", (event) => {
 
 async function initializePyodide() {
   await initNoonWeb();
+  const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
-    new WasmAuthoringMobjectHandle(snapshotJson);
+    authoringStore.createMobject(snapshotJson);
+  self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;

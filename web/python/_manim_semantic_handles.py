@@ -18,9 +18,13 @@ import _manim_phase_b as _phase_b
 _ir = _base._ir
 
 try:
-    from js import noonCreateAuthoringMobjectHandle as _create_handle
+    from js import (
+        noonCreateAuthoringFamilyHandle as _create_family_handle,
+        noonCreateAuthoringMobjectHandle as _create_handle,
+    )
 except ImportError:  # Native CPython tests do not have the browser bridge.
     _create_handle = None
+    _create_family_handle = None
 
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
@@ -43,6 +47,11 @@ _ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
 _ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
 _ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
 _ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
+_ORIGINAL_GROUP_INIT = _compat.Group.__init__
+_ORIGINAL_GROUP_ADD = _compat.Group.add
+_ORIGINAL_GROUP_INSERT = _compat.Group.insert
+_ORIGINAL_GROUP_ADD_TO_BACK = _compat.Group.add_to_back
+_ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 
 
 def _snapshot_json(raw: _ir.Mobject) -> str:
@@ -407,6 +416,103 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     )
 
 
+
+def _family_member_handle(value: object):
+    if isinstance(value, _compat.Group):
+        handle = getattr(value, "_semantic_family_handle", None)
+        return "family", handle
+    if isinstance(value, _base.Mobject):
+        handle = getattr(value, "_semantic_handle", None)
+        return "mobject", handle
+    return None, None
+
+
+def _family_add_handle(family_handle: object, value: object) -> None:
+    kind, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    if kind == "family":
+        family_handle.addFamily(handle)
+    else:
+        family_handle.addMobject(handle)
+
+
+def _family_insert_handle(family_handle: object, index: int, value: object) -> None:
+    kind, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    if kind == "family":
+        family_handle.insertFamily(index, handle)
+    else:
+        family_handle.insertMobject(index, handle)
+
+
+def _family_remove_handle(family_handle: object, value: object) -> None:
+    kind, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    if kind == "family":
+        family_handle.removeFamily(handle)
+    else:
+        family_handle.removeMobject(handle)
+
+
+def _group_init(self: _compat.Group, *mobjects: object) -> None:
+    self._semantic_family_handle = _create_family_handle()
+    _ORIGINAL_GROUP_INIT(self, *mobjects)
+
+
+def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    self._validate_members(self, mobjects)
+    family_handle = self._semantic_family_handle
+    for mobject in mobjects:
+        if any(existing is mobject for existing in self.submobjects):
+            continue
+        _family_add_handle(family_handle, mobject)
+    return _ORIGINAL_GROUP_ADD(self, *mobjects)
+
+
+def _normalized_insert_index(length: int, index: int) -> int:
+    index = int(index)
+    if index < 0:
+        return max(0, length + index)
+    return min(length, index)
+
+
+def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.Group:
+    self._validate_members(self, (mobject,))
+    normalized = _normalized_insert_index(len(self.submobjects), index)
+    _family_insert_handle(self._semantic_family_handle, normalized, mobject)
+    return _ORIGINAL_GROUP_INSERT(self, index, mobject)
+
+
+def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    self._validate_members(self, mobjects)
+    unique: list[object] = []
+    for mobject in mobjects:
+        if not any(existing is mobject for existing in unique):
+            unique.append(mobject)
+
+    family_handle = self._semantic_family_handle
+    # Match Manim's remove-then-prepend rule while keeping the Rust graph authoritative.
+    for mobject in unique:
+        if any(existing is mobject for existing in self.submobjects):
+            _family_remove_handle(family_handle, mobject)
+    for mobject in reversed(unique):
+        _family_insert_handle(family_handle, 0, mobject)
+    return _ORIGINAL_GROUP_ADD_TO_BACK(self, *mobjects)
+
+
+def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    family_handle = self._semantic_family_handle
+    shadow = list(self.submobjects)
+    for mobject in mobjects:
+        if mobject in shadow:
+            _family_remove_handle(family_handle, mobject)
+            shadow.remove(mobject)
+    return _ORIGINAL_GROUP_REMOVE(self, *mobjects)
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED or _create_handle is None:
@@ -441,3 +547,9 @@ def install() -> None:
     _compat.VMobject.get_fill_opacity = _get_fill_opacity
     _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for
+
+    _compat.Group.__init__ = _group_init
+    _compat.Group.add = _group_add
+    _compat.Group.insert = _group_insert
+    _compat.Group.add_to_back = _group_add_to_back
+    _compat.Group.remove = _group_remove

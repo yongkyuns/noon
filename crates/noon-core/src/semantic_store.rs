@@ -46,6 +46,10 @@ pub enum SourceIdentity {
 pub enum SemanticNodeKind {
     /// Compatibility payload while `SceneDefinition` consumers migrate.
     Object(ObjectDefinition),
+    /// Object identity whose authoring payload is held by another shared semantic
+    /// resource. This is used by frontend stores while detached snapshots migrate
+    /// away from the legacy `ObjectDefinition` shape.
+    AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
     Family,
 }
@@ -79,14 +83,14 @@ impl SemanticNode {
     pub fn object(&self) -> Option<&ObjectDefinition> {
         match &self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
         }
     }
 
     pub fn object_mut(&mut self) -> Option<&mut ObjectDefinition> {
         match &mut self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
         }
     }
 
@@ -148,6 +152,10 @@ impl SemanticStore {
         let id = self.insert_kind(SemanticNodeKind::Object(object));
         self.object_nodes.insert(legacy_id, id);
         id
+    }
+
+    pub fn insert_authoring_object(&mut self) -> SemanticNodeId {
+        self.insert_kind(SemanticNodeKind::AuthoringObject)
     }
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
@@ -299,6 +307,121 @@ impl SemanticStore {
         Ok(())
     }
 
+    /// Insert an ordered family edge at a specific position. Unlike `add_member`,
+    /// this intentionally preserves Manim's `Mobject.insert` behavior and therefore
+    /// may create a repeated direct member. Parent identity remains set-like.
+    pub fn insert_member(
+        &mut self,
+        family: SemanticNodeId,
+        index: usize,
+        member: SemanticNodeId,
+    ) -> Result<(), SemanticStoreError> {
+        if !matches!(
+            self.node(family).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Family)
+        ) {
+            return Err(SemanticStoreError::NotFamily(family));
+        }
+        if self.node(member).is_none() {
+            return Err(SemanticStoreError::UnknownNode(member));
+        }
+        let len = self
+            .node(family)
+            .expect("family validated above")
+            .members
+            .len();
+        if index > len {
+            return Err(SemanticStoreError::MemberIndexOutOfBounds { family, index, len });
+        }
+        if family == member {
+            return Err(SemanticStoreError::FamilyCycle { family, member });
+        }
+        let already_direct = self
+            .node(family)
+            .expect("family validated above")
+            .members
+            .contains(&member);
+        let (creates_cycle, visited) = if already_direct {
+            (false, 0)
+        } else {
+            self.reaches(member, family)
+        };
+        if creates_cycle {
+            self.last_mutation = SemanticMutationStats {
+                slots_written: 0,
+                cycle_nodes_visited: visited,
+            };
+            return Err(SemanticStoreError::FamilyCycle { family, member });
+        }
+
+        self.node_mut(family)
+            .expect("family validated above")
+            .members
+            .insert(index, member);
+        let mut writes = 1;
+        if !already_direct {
+            self.node_mut(member)
+                .expect("member validated above")
+                .parents
+                .push(family);
+            writes += 1;
+        }
+        self.last_mutation = SemanticMutationStats {
+            slots_written: writes,
+            cycle_nodes_visited: visited,
+        };
+        Ok(())
+    }
+
+    /// Reorder one direct member without changing semantic identity or parentage.
+    pub fn move_member(
+        &mut self,
+        family: SemanticNodeId,
+        from: usize,
+        to: usize,
+    ) -> Result<(), SemanticStoreError> {
+        if !matches!(
+            self.node(family).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Family)
+        ) {
+            return Err(SemanticStoreError::NotFamily(family));
+        }
+        let len = self
+            .node(family)
+            .expect("family validated above")
+            .members
+            .len();
+        if from >= len {
+            return Err(SemanticStoreError::MemberIndexOutOfBounds {
+                family,
+                index: from,
+                len,
+            });
+        }
+        if to >= len {
+            return Err(SemanticStoreError::MemberIndexOutOfBounds {
+                family,
+                index: to,
+                len,
+            });
+        }
+        if from != to {
+            let members = &mut self
+                .node_mut(family)
+                .expect("family validated above")
+                .members;
+            let member = members.remove(from);
+            members.insert(to, member);
+            self.last_mutation = SemanticMutationStats {
+                slots_written: 1,
+                cycle_nodes_visited: 0,
+            };
+        } else {
+            self.last_mutation = SemanticMutationStats::default();
+        }
+        Ok(())
+    }
+
     pub fn remove_member(
         &mut self,
         family: SemanticNodeId,
@@ -322,15 +445,24 @@ impl SemanticStore {
             return Ok(false);
         };
         family_members.remove(position);
-        let parents = &mut self
-            .node_mut(member)
-            .expect("member validated above")
-            .parents;
-        if let Some(position) = parents.iter().position(|id| *id == family) {
-            parents.remove(position);
+        let still_direct = self
+            .node(family)
+            .expect("family validated above")
+            .members
+            .contains(&member);
+        let mut writes = 1;
+        if !still_direct {
+            let parents = &mut self
+                .node_mut(member)
+                .expect("member validated above")
+                .parents;
+            if let Some(position) = parents.iter().position(|id| *id == family) {
+                parents.remove(position);
+                writes += 1;
+            }
         }
         self.last_mutation = SemanticMutationStats {
-            slots_written: 2,
+            slots_written: writes,
             cycle_nodes_visited: 0,
         };
         Ok(true)
@@ -426,6 +558,11 @@ pub enum SemanticStoreError {
         member: SemanticNodeId,
     },
     DuplicateSourceIdentity(SourceIdentity),
+    MemberIndexOutOfBounds {
+        family: SemanticNodeId,
+        index: usize,
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for SemanticStoreError {
@@ -454,6 +591,12 @@ impl std::fmt::Display for SemanticStoreError {
             Self::DuplicateSourceIdentity(source) => {
                 write!(formatter, "duplicate semantic source identity {source:?}")
             }
+            Self::MemberIndexOutOfBounds { family, index, len } => write!(
+                formatter,
+                "family {}:{} member index {index} is out of bounds for length {len}",
+                family.slot(),
+                family.generation()
+            ),
         }
     }
 }
@@ -481,6 +624,39 @@ mod tests {
         assert_eq!(store.node(tail).unwrap().id(), tail);
         assert_eq!(store.last_mutation_stats().slots_written, 1);
         assert_eq!(store.len(), 99_999);
+    }
+
+    #[test]
+    fn ordered_authoring_family_supports_aliasing_insertion_and_reorder() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        let alias_parent = store.insert_family();
+        let family = store.insert_family();
+
+        store.add_member(family, first).unwrap();
+        store.add_member(family, second).unwrap();
+        store.add_member(alias_parent, first).unwrap();
+        assert_eq!(store.node(first).unwrap().parents().len(), 2);
+
+        store.insert_member(family, 1, first).unwrap();
+        assert_eq!(
+            store.node(family).unwrap().members(),
+            &[first, first, second]
+        );
+        assert_eq!(store.node(first).unwrap().parents().len(), 2);
+
+        store.move_member(family, 2, 0).unwrap();
+        assert_eq!(
+            store.node(family).unwrap().members(),
+            &[second, first, first]
+        );
+
+        store.remove_member(family, first).unwrap();
+        assert!(store.node(first).unwrap().parents().contains(&family));
+        store.remove_member(family, first).unwrap();
+        assert!(!store.node(first).unwrap().parents().contains(&family));
+        assert!(store.node(first).unwrap().parents().contains(&alias_parent));
     }
 
     #[test]

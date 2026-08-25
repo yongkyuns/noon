@@ -236,10 +236,11 @@ class _GroupAnimationBuilder:
 
 
 class Group(_base.Group, _BaseMobject):
-    """Authoring-time Mobject-family group lowered to operations on member objects.
+    """Manim-compatible family wrapper.
 
-    Noon intentionally keeps runtime hierarchy flat. The group therefore has no single
-    serialized object ID; its transforms and animations lower to its leaf members.
+    The browser layer attaches this Python object-reference mirror to Noon's shared
+    Rust semantic family graph. Renderer lowering still targets leaf resources, but
+    membership identity and ordering are no longer Python-only semantics.
     """
 
     def __init__(self, *mobjects: object) -> None:
@@ -268,23 +269,47 @@ class Group(_base.Group, _BaseMobject):
     def __len__(self) -> int:
         return len(self.submobjects)
 
-    def __getitem__(self, index: int) -> object:
+    def __getitem__(self, index: int | slice) -> object:
+        if isinstance(index, slice):
+            return type(self)(*self.submobjects[index])
         return self.submobjects[index]
 
-    def add(self, *mobjects: object) -> Group:
+    @staticmethod
+    def _validate_members(owner: Group, mobjects: tuple[object, ...]) -> None:
         for mobject in mobjects:
             if not isinstance(mobject, (_BaseMobject, Group)):
                 raise TypeError("Group members must be Mobjects or Groups")
-            if mobject is self:
+            if mobject is owner:
                 raise ValueError("Group cannot contain itself")
-            self.submobjects.append(mobject)
+
+    def add(self, *mobjects: object) -> Group:
+        self._validate_members(self, mobjects)
+        for mobject in mobjects:
+            if not any(existing is mobject for existing in self.submobjects):
+                self.submobjects.append(mobject)
+        return self
+
+    def insert(self, index: int, mobject: object) -> Group:
+        self._validate_members(self, (mobject,))
+        self.submobjects.insert(int(index), mobject)
+        return self
+
+    def add_to_back(self, *mobjects: object) -> Group:
+        self._validate_members(self, mobjects)
+        unique: list[object] = []
+        for mobject in mobjects:
+            if not any(existing is mobject for existing in unique):
+                unique.append(mobject)
+        for mobject in unique:
+            if mobject in self.submobjects:
+                self.submobjects.remove(mobject)
+        self.submobjects = unique + self.submobjects
         return self
 
     def remove(self, *mobjects: object) -> Group:
-        identities = {id(mobject) for mobject in mobjects}
-        self.submobjects = [
-            mobject for mobject in self.submobjects if id(mobject) not in identities
-        ]
+        for mobject in mobjects:
+            if mobject in self.submobjects:
+                self.submobjects.remove(mobject)
         return self
 
     def copy(self) -> Group:

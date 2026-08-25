@@ -141,6 +141,47 @@ class IndependentStyleOpacity(Scene):
         self.play(Transform(square, target), run_time=0.4, rate_func=linear)
 `;
 
+const semanticFamilySource = `
+from noon import *
+
+class SemanticFamilyIdentity(Scene):
+    def construct(self):
+        left = Circle(radius=0.2).shift(LEFT)
+        middle = Square(side_length=0.4)
+        right = Rectangle(width=0.4, height=0.2).shift(RIGHT)
+        family = VGroup(left, middle, right)
+        rust = family._semantic_family_handle
+        assert int(rust.memberCount) == 3
+        assert int(rust.memberSlot(0)) == int(left._semantic_handle.semanticSlot)
+        assert int(rust.memberGeneration(0)) == int(left._semantic_handle.semanticGeneration)
+
+        # add() de-duplicates; insert() intentionally preserves Manim's duplicate rule.
+        family.add(left, left)
+        assert len(family) == 3 and int(rust.memberCount) == 3
+        family.insert(1, left)
+        assert len(family) == 4 and int(rust.memberCount) == 4
+        assert int(rust.memberSlot(0)) == int(rust.memberSlot(1))
+
+        family.add_to_back(right, left)
+        assert family[0] is right and family[1] is left
+        assert int(rust.memberSlot(0)) == int(right._semantic_handle.semanticSlot)
+        assert int(rust.memberSlot(1)) == int(left._semantic_handle.semanticSlot)
+
+        # A slice gets its own family identity while aliasing the same child identities.
+        subset = family[1:3]
+        subset_rust = subset._semantic_family_handle
+        assert int(subset_rust.memberCount) == 1
+        assert int(subset_rust.memberSlot(0)) == int(left._semantic_handle.semanticSlot)
+
+        # The same object may belong to multiple families without copying its semantic node.
+        alias = VGroup(left)
+        assert int(alias._semantic_family_handle.memberSlot(0)) == int(left._semantic_handle.semanticSlot)
+
+        family.remove(left)
+        assert len(family) == 3 and int(rust.memberCount) == 3
+        self.add(family)
+`;
+
 const animateParitySource = `
 from noon import *
 
@@ -305,6 +346,13 @@ try {
   assert.equal(styleTransform.values.object.to.style.fill.alpha, 0.8);
   assert.equal(styleTransform.values.object.to.style.stroke.alpha, 0.3);
 
+  const semanticFamily = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    semanticFamilySource,
+  );
+  assert.equal(semanticFamily.kind, "scene_document");
+  assert.equal(semanticFamily.document.objects.length, 3);
+
   const animateParity = await page.evaluate(
     (pythonSource) => window.noonManimCompat.run(pythonSource),
     animateParitySource,
@@ -381,7 +429,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, shared semantic family identity/order, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
