@@ -1,7 +1,7 @@
 use noon_compile::CompiledScene;
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, StrokeWidthMode, Style,
-    TrackTiming, Transform2D, Vec2, VectorPath,
+    Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, StrokeWidthMode,
+    Style, TrackTiming, Transform2D, Vec2, VectorPath,
 };
 use noon_runtime::SceneInstance;
 
@@ -67,10 +67,16 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     let render_target = render_source
         .morph_target()
         .expect("temporary PathPair must retain target");
-    let PathCommand::MoveTo { to: source_relative } = render_source.commands()[0] else {
+    let PathCommand::MoveTo {
+        to: source_relative,
+    } = render_source.commands()[0]
+    else {
         panic!("source path must start with MoveTo");
     };
-    let PathCommand::MoveTo { to: target_relative } = render_target.commands()[0] else {
+    let PathCommand::MoveTo {
+        to: target_relative,
+    } = render_target.commands()[0]
+    else {
         panic!("target path must start with MoveTo");
     };
 
