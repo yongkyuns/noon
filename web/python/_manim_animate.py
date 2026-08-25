@@ -25,6 +25,7 @@ _ORIGINAL_REPLACEMENT_TRANSFORM = _base.ReplacementTransform
 _ORIGINAL_TRANSFORM_FROM_COPY = _base.TransformFromCopy
 _ORIGINAL_TRANSFORM_MATCHING_SHAPES = _base.TransformMatchingShapes
 _ORIGINAL_CREATE = _base.Create
+_ORIGINAL_UNCREATE = _base.Uncreate
 _ORIGINAL_FADE_IN = _base.FadeIn
 _ORIGINAL_FADE_OUT = _base.FadeOut
 
@@ -143,6 +144,19 @@ class Create(_ORIGINAL_CREATE):
         _store_animation_args(self, kwargs)
 
 
+class Uncreate(_ORIGINAL_UNCREATE):
+    def __init__(
+        self,
+        target: object,
+        key: str | None = None,
+        reverse_rate_function: bool = True,
+        remover: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(target, key, bool(reverse_rate_function), bool(remover))
+        _store_animation_args(self, kwargs)
+
+
 class FadeIn(_ORIGINAL_FADE_IN):
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
         animation_kwargs, shift_vector, scale_factor, point_target = _fade_authoring_options(
@@ -182,6 +196,7 @@ for _name, _value in {
     "TransformFromCopy": TransformFromCopy,
     "TransformMatchingShapes": TransformMatchingShapes,
     "Create": Create,
+    "Uncreate": Uncreate,
     "FadeIn": FadeIn,
     "FadeOut": FadeOut,
 }.items():
@@ -304,6 +319,26 @@ def _bind_for_animation(
             )
 
     scene._register_top_level(value)
+
+
+def _uncreate_track_settings(easing: str, reverse_rate_function: bool) -> tuple[str, bool]:
+    """Represent Manim's `rate_func(1 - alpha)` using Noon's scalar track.
+
+    Most supported rate functions can be expressed by reversing the reveal endpoints
+    and using the complement-reversed easing. `there_and_back` is time-symmetric and
+    therefore keeps the forward endpoints instead.
+    """
+    if not reverse_rate_function:
+        return easing, False
+    if easing in {"linear", "smooth", "ease_in_out_cubic"}:
+        return easing, True
+    if easing == "rush_into":
+        return "rush_from", True
+    if easing == "rush_from":
+        return "rush_into", True
+    if easing == "there_and_back":
+        return easing, False
+    raise NotImplementedError(f"cannot reverse unsupported rate function {easing!r}")
 
 
 def _default_lag_ratio(animation: object) -> float:
@@ -519,6 +554,8 @@ def _aligned_scene_play(
             source = _builder_source(animation)
             if source is not None:
                 _bind_for_animation(self, source, start_time=base_start)
+            elif isinstance(animation, _base.Uncreate):
+                _bind_for_animation(self, animation.target, start_time=base_start)
             elif isinstance(animation, (_base.Create, _base.FadeIn)):
                 self._bind_introducer_target(animation.target)
             elif isinstance(animation, _base.FadeOut):
@@ -563,6 +600,17 @@ def _aligned_scene_play(
                             easing=child_easing,
                             key=lowered.key,
                         )
+
+                if isinstance(lowered, _base.Uncreate):
+                    child_easing, track_reverse = _uncreate_track_settings(
+                        child_easing, lowered.reverse_rate_function
+                    )
+                    lowered = type(lowered)(
+                        lowered.target,
+                        lowered.key,
+                        reverse_rate_function=track_reverse,
+                        remover=lowered.remover,
+                    )
 
                 # `noon.Scene` has already been replaced by the compatibility class
                 # during install, so use the original captured facade explicitly to

@@ -662,6 +662,18 @@ class Scene(_BaseScene):
                 for source, target in zip(sources, targets)
             ]
 
+        if isinstance(animation, _base.Uncreate) and isinstance(animation.target, Group):
+            leaves = _leaf_mobjects(animation.target)
+            return [
+                type(animation)(
+                    member,
+                    None if animation.key is None else f"{animation.key}.{index}",
+                    reverse_rate_function=animation.reverse_rate_function,
+                    remover=animation.remover,
+                )
+                for index, member in enumerate(leaves)
+            ]
+
         if isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut)) and isinstance(
             animation.target, Group
         ):
