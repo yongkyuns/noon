@@ -103,6 +103,28 @@ def _manim_next_to(
     return self.shift(_base.Vec2(delta.x * mask.x, delta.y * mask.y))
 
 
+def _manim_align_to(
+    self: _base.Mobject,
+    mobject_or_point: object,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Pinned Manim ``align_to`` semantics for Mobject and point targets."""
+
+    axis = _base._as_vec2(direction)
+    target = (
+        _alignment_critical(mobject_or_point, axis)
+        if _alignment_is_mobject(mobject_or_point)
+        else _base._as_vec2(mobject_or_point)
+    )
+    source = _alignment_critical(self, axis)
+    return self.shift(
+        _base.Vec2(
+            target.x - source.x if axis.x != 0.0 else 0.0,
+            target.y - source.y if axis.y != 0.0 else 0.0,
+        )
+    )
+
+
 def _manim_arrange(
     self: _compat.Group,
     direction: object = _base.RIGHT,
@@ -125,8 +147,10 @@ def _manim_arrange(
 # the same code mutates Rust/WASM-owned detached objects and ordinary scene objects.
 _base.Mobject.move_to = _manim_move_to
 _base.Mobject.next_to = _manim_next_to
+_base.Mobject.align_to = _manim_align_to
 _compat.Group.move_to = _manim_move_to
 _compat.Group.next_to = _manim_next_to
+_compat.Group.align_to = _manim_align_to
 _compat.Group.arrange = _manim_arrange
 
 _ir = _base._ir
@@ -425,20 +449,10 @@ def _next_to(
 
 def _align_to(
     self: _base.Mobject,
-    other: _base.Mobject,
+    mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is None:
-        return _ORIGINAL_ALIGN_TO(self, other, direction)
-    axis = _base._as_vec2(direction)
-    source = _critical(self, axis)
-    target = _critical(other, axis)
-    handle.shift(
-        0.0 if axis.x == 0.0 else target.x - source.x,
-        0.0 if axis.y == 0.0 else target.y - source.y,
-    )
-    return self
+    return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
 
 
 def _align_on_frame(
