@@ -1,0 +1,23 @@
+name: F2 merge latest master
+on:
+  push:
+    branches:
+      - arch/f2-engine-worker-transport
+permissions:
+  contents: write
+jobs:
+  merge:
+    if: github.event.head_commit.message == 'Merge latest master into F2 after smoke fix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/f2-engine-worker-transport
+          fetch-depth: 0
+      - name: Merge master
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin master
+          git merge --no-edit origin/master
+          git push origin HEAD:arch/f2-engine-worker-transport
