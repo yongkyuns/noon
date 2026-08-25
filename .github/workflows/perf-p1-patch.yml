@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - perf/p1-scene-request-slice
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
