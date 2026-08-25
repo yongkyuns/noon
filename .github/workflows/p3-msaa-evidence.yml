@@ -1,0 +1,93 @@
+name: Measure P3 analytic MSAA before-after
+
+on:
+  push:
+    branches: [perf/p3-msaa-evidence]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+      - name: Prepare common fixes and P3 patch
+        shell: bash
+        run: |
+          git diff fd7f8dafb1e53efc19e33ed004da974ef025a2a1 f9fe8ec9724177736a014633e52497348fa1acb3 -- crates/noon-render-wgpu/src/gpu.rs > /tmp/p3.patch
+          cat > /tmp/fix-map.py <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/legacy.rs')
+          s = p.read_text()
+          old = '''                    } else {\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
+          new = '''                    } else {\n                        readback.unmap();\n                        let mut state = state.borrow_mut();\n                        if state.generation == sample.generation {\n                            state.failed_samples += 1;\n                        }\n                    }\n                    pending.set(false);\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+              p.write_text(s)
+          elif 'readback.unmap();\n                        let mut state = state.borrow_mut();' not in s:
+              raise SystemExit('timestamp map cleanup anchor not found')
+          PY
+      - name: Measure before P3
+        shell: bash
+        run: |
+          git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
+          python3 /tmp/fix-map.py
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
+          NOON_PERF_BACKEND=webgpu \
+          NOON_PERF_COUNTS=10000 \
+          NOON_PERF_LAYOUTS=fixed,overdraw \
+          NOON_PERF_WARMUP=30 \
+          NOON_PERF_FRAMES=300 \
+          NOON_PERF_WIDTH=1920 \
+          NOON_PERF_HEIGHT=1080 \
+          NOON_PERF_PORT=4201 \
+          NOON_PERF_ARTIFACT=/tmp/p3-before.json \
+          node scripts/perf-profile.mjs
+      - name: Measure P3 single-sample analytics
+        shell: bash
+        run: |
+          git checkout -f f25f985d6f33612bd3e5ea9560910696e45df30b
+          python3 /tmp/fix-map.py
+          git apply /tmp/p3.patch
+          cargo fmt --all --check
+          cargo test -p noon-render-wgpu --all-features
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
+          NOON_PERF_BACKEND=webgpu \
+          NOON_PERF_COUNTS=10000 \
+          NOON_PERF_LAYOUTS=fixed,overdraw \
+          NOON_PERF_WARMUP=30 \
+          NOON_PERF_FRAMES=300 \
+          NOON_PERF_WIDTH=1920 \
+          NOON_PERF_HEIGHT=1080 \
+          NOON_PERF_PORT=4202 \
+          NOON_PERF_ARTIFACT=/tmp/p3-after.json \
+          node scripts/perf-profile.mjs
+      - name: Publish percentile evidence
+        shell: bash
+        run: |
+          python3 - <<'PY' | tee /tmp/p3-summary.md
+          import json
+          before = json.load(open('/tmp/p3-before.json'))
+          after = json.load(open('/tmp/p3-after.json'))
+          print('| Layout | GPU p50 before | GPU p50 after | GPU p95 before | GPU p95 after | GPU p95 gain | Frame p95 before | Frame p95 after |')
+          print('|---|---:|---:|---:|---:|---:|---:|---:|')
+          for b, a in zip(before['cases'], after['cases']):
+              assert b['workload']['layout'] == a['workload']['layout']
+              layout = b['workload']['layout']
+              bg = b['gpu']['renderPassMs']
+              ag = a['gpu']['renderPassMs']
+              bc = b['cadence']['frameIntervalMs']
+              ac = a['cadence']['frameIntervalMs']
+              gain = (bg['p95'] - ag['p95']) / bg['p95'] * 100 if bg.get('p95') and ag.get('p95') else float('nan')
+              print(f"| {layout} | {bg.get('p50', float('nan')):.3f} ms | {ag.get('p50', float('nan')):.3f} ms | {bg.get('p95', float('nan')):.3f} ms | {ag.get('p95', float('nan')):.3f} ms | {gain:.1f}% | {bc.get('p95', float('nan')):.3f} ms | {ac.get('p95', float('nan')):.3f} ms |")
+          PY
+          cat /tmp/p3-summary.md >> "$GITHUB_STEP_SUMMARY"
