@@ -60,6 +60,16 @@
       "id": "set-color-independent-opacity",
       "scene": "SetColorIndependentOpacity",
       "expected_duration": 1.0
+    },
+    {
+      "id": "palette-swatches",
+      "scene": "PaletteSwatches",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "translucent-painter-order",
+      "scene": "TranslucentPainterOrder",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
