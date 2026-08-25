@@ -351,7 +351,14 @@
         position: relative;
         width: 100%;
         max-width: 44rem;
-        aspect-ratio: 16 / 9;
+        align-self: center;
+        justify-self: center;
+      }
+
+      .canvas-frame::before {
+        display: block;
+        padding-top: 56.25%;
+        content: "";
       }
 
       canvas {
@@ -568,8 +575,8 @@
           padding: 0.55rem;
         }
 
-        .canvas-frame {
-          aspect-ratio: 4 / 3;
+        .canvas-frame::before {
+          padding-top: 75%;
         }
 
         .metrics,
