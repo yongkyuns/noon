@@ -74,6 +74,11 @@ jobs:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-differential.mjs
 
+      - name: Capture semantic state at raster frame times
+        env:
+          NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+        run: node scripts/manim-raster-semantic-state.mjs
+
       - name: Enforce per-fixture raster ratchet
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
