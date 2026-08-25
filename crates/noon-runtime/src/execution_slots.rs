@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
 use noon_compile::{CompilePatchError, CompiledScene, CompiledTransactionPreflightStats};
-use noon_core::{MutationTransaction, ObjectId, Property, ScenePatch, TrackId};
+use noon_core::{MutationTransaction, ObjectId, Property, Rect, ScenePatch, TrackId, Vec2};
 
-use crate::{EvaluationError, FrameChanges, FrameState, SceneInstance};
+use crate::{
+    EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, SceneInstance,
+    SpatialIndexUpdateStats, SpatialQueryResult,
+};
 
 /// Stable runtime identity independent of semantic IDs and dense frame indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -438,6 +441,8 @@ struct PatchContext {
 pub struct SlottedSceneInstance {
     inner: SceneInstance,
     slots: ExecutionSlotTable,
+    spatial_index: ExecutionSpatialIndex,
+    last_spatial_update: SpatialIndexUpdateStats,
     last_delta: ExecutionDelta,
     layout_generation: u64,
 }
@@ -445,9 +450,30 @@ pub struct SlottedSceneInstance {
 impl SlottedSceneInstance {
     pub fn new(compiled: CompiledScene) -> Self {
         let slots = ExecutionSlotTable::from_compiled(&compiled);
+        let mut inner = SceneInstance::new(compiled);
+        let live_slots = inner
+            .compiled
+            .objects()
+            .iter()
+            .enumerate()
+            .filter(|&(_index, object)| object.live)
+            .map(|(index, object)| {
+                (
+                    slots
+                        .slot_for_object(object.id)
+                        .expect("live object has slot"),
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut spatial_index = ExecutionSpatialIndex::default();
+        let last_spatial_update = spatial_index.rebuild(inner.frame(), live_slots);
+        let _ = inner.take_spatial_changes();
         Self {
-            inner: SceneInstance::new(compiled),
+            inner,
             slots,
+            spatial_index,
+            last_spatial_update,
             last_delta: ExecutionDelta::default(),
             layout_generation: 0,
         }
@@ -463,6 +489,22 @@ impl SlottedSceneInstance {
 
     pub fn slot_table(&self) -> &ExecutionSlotTable {
         &self.slots
+    }
+
+    pub fn spatial_index(&self) -> &ExecutionSpatialIndex {
+        &self.spatial_index
+    }
+
+    pub const fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {
+        self.last_spatial_update
+    }
+
+    pub fn hit_test(&self, point: Vec2) -> SpatialQueryResult {
+        self.spatial_index.hit_test(point)
+    }
+
+    pub fn query_viewport(&self, bounds: Rect) -> SpatialQueryResult {
+        self.spatial_index.query_rect(bounds)
     }
 
     pub fn slot_for_object(&self, object: ObjectId) -> Option<ExecutionSlotId> {
@@ -523,11 +565,15 @@ impl SlottedSceneInstance {
     }
 
     pub fn seek(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
-        self.inner.seek(time)
+        self.inner.seek(time)?;
+        self.sync_spatial_index();
+        Ok(self.inner.frame())
     }
 
     pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
-        self.inner.advance_to(time)
+        self.inner.advance_to(time)?;
+        self.sync_spatial_index();
+        Ok(self.inner.frame())
     }
 
     pub fn take_frame_changes(&mut self) -> FrameChanges {
@@ -598,6 +644,7 @@ impl SlottedSceneInstance {
         self.inner = replacement;
         self.layout_generation = next_generation;
         self.last_delta = ExecutionDelta::default();
+        self.sync_spatial_index();
 
         let after = self.frame_slot_capacity();
         debug_assert_eq!(after, live);
@@ -722,7 +769,56 @@ impl SlottedSceneInstance {
         }
 
         self.last_delta = delta;
+        self.sync_spatial_index();
         Ok(self.inner.frame())
+    }
+
+    fn sync_spatial_index(&mut self) {
+        let changes = self.inner.take_spatial_changes();
+        if changes.is_empty() {
+            self.last_spatial_update = SpatialIndexUpdateStats::default();
+            return;
+        }
+        if changes.is_all() {
+            let live_slots = self
+                .inner
+                .compiled
+                .objects()
+                .iter()
+                .enumerate()
+                .filter(|&(_index, object)| object.live)
+                .map(|(index, object)| {
+                    (
+                        self.slots
+                            .slot_for_object(object.id)
+                            .expect("live compiled object has an execution slot"),
+                        index,
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.last_spatial_update = self.spatial_index.rebuild(self.inner.frame(), live_slots);
+            return;
+        }
+
+        let mut stats = SpatialIndexUpdateStats::default();
+        for &object_index in changes.object_indices() {
+            let Some(object) = self.inner.frame().objects.get(object_index) else {
+                continue;
+            };
+            if self.inner.object_slot_is_live(object_index) {
+                if let Some(slot) = self.slots.slot_for_object(object.id) {
+                    stats.merge_from(self.spatial_index.upsert_frame_slot(
+                        self.inner.frame(),
+                        slot,
+                        object_index,
+                        object_index as u64,
+                    ));
+                }
+            } else {
+                stats.merge_from(self.spatial_index.remove_object(object.id));
+            }
+        }
+        self.last_spatial_update = stats;
     }
 
     fn capture_context(&self, patch: &ScenePatch) -> PatchContext {
@@ -1045,5 +1141,72 @@ mod tests {
         assert!(policy.recommends(7_500, 10_000));
         assert!(!policy.recommends(900, 1_000));
         assert!(!policy.recommends(10_000, 10_000));
+    }
+
+    #[test]
+    fn transform_patch_refits_one_spatial_leaf_without_rebuild() {
+        let mut definition = SceneDefinition::new();
+        let object = definition.add(GeometryRef::circle(0.5));
+        let compiled = CompiledScene::compile(&definition).unwrap();
+        let mut live = SlottedSceneInstance::new(compiled);
+        let slot = live.slot_for_object(object).unwrap();
+        assert_eq!(live.hit_test(Vec2::ZERO).slots(), &[slot]);
+
+        live.apply_patch(&ScenePatch::SetTransform {
+            object,
+            transform: noon_core::Transform2D {
+                translation: Vec2::new(20.0, 0.0),
+                ..noon_core::Transform2D::IDENTITY
+            },
+        })
+        .unwrap();
+
+        let stats = live.last_spatial_update_stats();
+        assert_eq!(stats.full_rebuilds, 0);
+        assert_eq!(stats.leaves_upserted, 1);
+        assert!(live.hit_test(Vec2::ZERO).slots().is_empty());
+        assert_eq!(live.hit_test(Vec2::new(20.0, 0.0)).slots(), &[slot]);
+    }
+
+    #[test]
+    fn forward_timeline_motion_refits_only_active_object_leaf() {
+        let mut definition = SceneDefinition::new();
+        let moving = definition.add(GeometryRef::circle(0.5));
+        let static_object = definition.add(GeometryRef::circle(0.5));
+        definition
+            .object_mut(static_object)
+            .unwrap()
+            .transform
+            .translation = Vec2::new(0.0, 10.0);
+        definition
+            .animate_position(
+                moving,
+                Vec2::ZERO,
+                Vec2::new(10.0, 0.0),
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .unwrap();
+        let mut live = SlottedSceneInstance::new(CompiledScene::compile(&definition).unwrap());
+        live.advance_to(1.0).unwrap();
+        let stats = live.last_spatial_update_stats();
+        assert_eq!(stats.full_rebuilds, 0);
+        assert_eq!(stats.leaves_upserted, 1);
+        assert_eq!(live.hit_test(Vec2::new(5.0, 0.0)).slots().len(), 1);
+    }
+
+    #[test]
+    fn structural_removal_retires_spatial_leaf_locally() {
+        let mut definition = SceneDefinition::new();
+        let first = definition.add(GeometryRef::circle(0.5));
+        let second = definition.add(GeometryRef::circle(0.5));
+        definition.object_mut(second).unwrap().transform.translation = Vec2::new(10.0, 0.0);
+        let mut live = SlottedSceneInstance::new(CompiledScene::compile(&definition).unwrap());
+        assert_eq!(live.spatial_index().len(), 2);
+        live.apply_patch(&ScenePatch::RemoveObject(first)).unwrap();
+        let stats = live.last_spatial_update_stats();
+        assert_eq!(stats.full_rebuilds, 0);
+        assert_eq!(stats.leaves_removed, 1);
+        assert_eq!(live.spatial_index().len(), 1);
+        assert!(live.hit_test(Vec2::ZERO).slots().is_empty());
     }
 }

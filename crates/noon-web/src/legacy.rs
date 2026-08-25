@@ -13,7 +13,8 @@ use noon_compile::{CompileError, CompilePatchError, CompiledScene};
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon_core::{
-    preflight_transaction, MutationTransaction, ObjectId, PatchError, SceneDefinition, ScenePatch,
+    preflight_transaction, MutationTransaction, ObjectId, PatchError, Rect, SceneDefinition,
+    ScenePatch, Vec2,
 };
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
 use noon_runtime::{
@@ -290,6 +291,14 @@ impl ScenePlayer {
 
     pub fn object_count(&self) -> usize {
         self.instance.live_object_count()
+    }
+
+    pub fn hit_test(&self, point: Vec2) -> noon_runtime::SpatialQueryResult {
+        self.instance.hit_test(point)
+    }
+
+    pub fn query_viewport(&self, bounds: Rect) -> noon_runtime::SpatialQueryResult {
+        self.instance.query_viewport(bounds)
     }
 
     pub(crate) fn live_frame_indices(&self) -> Vec<usize> {
