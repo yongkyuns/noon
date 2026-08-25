@@ -45,6 +45,46 @@ jobs:
               raise SystemExit('PatchBatch closing test anchor missing')
           path.write_text(text.replace(old, new, 1))
           PY
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-render-wgpu/src/gpu.rs')
+          text = path.read_text()
+          old = """        assert_eq!(ordered_render_sample_count(&[]), 1);
+        assert_eq!(
+            ordered_render_sample_count(&[PathBatch {
+                index_range: 0..0,
+                instance_range: 0..1,
+            }]),
+            1
+        );
+        assert_eq!(
+            ordered_render_sample_count(&[PathBatch {
+                index_range: 0..3,
+                instance_range: 0..1,
+            }]),
+            PATH_SAMPLE_COUNT
+        );
+"""
+          new = """        assert_eq!(ordered_render_sample_count(&[]), 1);
+        assert_eq!(
+            ordered_render_sample_count(&[OrderedRenderBatch {
+                primitive: RenderPrimitive::Circle,
+                instance_range: 0..1,
+            }]),
+            1
+        );
+        assert_eq!(
+            ordered_render_sample_count(&[OrderedRenderBatch {
+                primitive: RenderPrimitive::Path { batch: 0 },
+                instance_range: 0..1,
+            }]),
+            PATH_SAMPLE_COUNT
+        );
+"""
+          if old not in text:
+              raise SystemExit('ordered sample-count test anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Format
         run: |
           cargo fmt --all
