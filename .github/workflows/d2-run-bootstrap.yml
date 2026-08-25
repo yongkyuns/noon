@@ -1,0 +1,39 @@
+name: D2 run bootstrap
+on:
+  push:
+    branches:
+      - arch/d2-packed-mega-mesh
+permissions:
+  contents: write
+jobs:
+  bootstrap:
+    if: github.event.head_commit.message == 'Run D2 bootstrap implementation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/d2-packed-mega-mesh
+      - name: Extract and apply embedded implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/d2-bootstrap-mega-mesh.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(source) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(source)) if source[i].strip() == 'PY')
+          lines = source[start:end]
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/d2_bootstrap.py').write_text(script)
+          PY
+          python3 /tmp/d2_bootstrap.py
+          cargo fmt --all
+      - name: Validate renderer slice
+        run: |
+          cargo test -p noon-render-wgpu
+          cargo clippy -p noon-render-wgpu --all-targets -- -D warnings
+      - name: Commit implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-render-wgpu
+          git commit -m 'Pack unique vector paths into mega-mesh draws'
+          git push origin HEAD:arch/d2-packed-mega-mesh
