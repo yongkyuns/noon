@@ -154,3 +154,34 @@ class AnimateRotateOffsetSquare(Scene):
         ).shift(2 * RIGHT)
         self.add(square)
         self.play(square.animate(rate_func=linear).rotate(PI))
+
+
+class FillOpacityLadder(Scene):
+    def construct(self):
+        opacities = [0.0, 0.25, 0.5, 0.75, 1.0]
+        swatches = []
+        for index, opacity in enumerate(opacities):
+            swatch = Square(
+                side_length=0.9,
+                fill_color=PINK,
+                fill_opacity=opacity,
+                stroke_opacity=0.0,
+            )
+            swatch.move_to((index - 2) * 1.2 * RIGHT)
+            swatches.append(swatch)
+        self.add(*swatches)
+        self.play(swatches[-1].animate.shift(ORIGIN))
+
+
+class SetGlobalOpacity(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        square.set_opacity(0.5)
+        self.add(square)
+        self.play(square.animate.shift(ORIGIN))
