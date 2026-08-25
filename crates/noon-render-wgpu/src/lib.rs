@@ -159,6 +159,16 @@ pub struct RenderStats {
     pub mega_path_index_count: usize,
     /// Per-vertex instance records rewritten for dirty unique paths.
     pub mega_path_instance_vertices_repacked: usize,
+    /// Number of free vertex chunks retained until the next compaction rebuild.
+    pub path_vertex_free_range_count: usize,
+    /// Total unused vertex elements represented by the free chunks.
+    pub path_vertex_free_element_count: usize,
+    /// Number of free index chunks retained until the next compaction rebuild.
+    pub path_index_free_range_count: usize,
+    /// Total unused index elements represented by the free chunks.
+    pub path_index_free_element_count: usize,
+    /// Unique paths temporarily detached from the immutable mega stream.
+    pub mega_path_detached_count: usize,
 }
 
 #[derive(Debug)]
@@ -264,6 +274,10 @@ pub struct FramePreparer {
     mega_path_indices: Vec<u32>,
     mega_path_vertex_instances: Vec<PathInstance>,
     mega_path_batches: Vec<MegaPathBatch>,
+    // Stable slices in the immutable packed mega index stream. A live-edited
+    // path is detached rather than forcing a whole-stream rewrite.
+    mega_path_segments: Vec<Option<Range<u32>>>,
+    mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
     render_order_keys: Vec<RenderOrderKey>,
     path_batch_cache_indices: Vec<usize>,
@@ -340,7 +354,7 @@ impl FramePreparer {
         }
         if path_vertices_repacked > 0 || path_indices_repacked > 0 {
             self.rebuild_ordered_render_batches();
-            self.rebuild_mega_path_draws();
+            self.rebuild_mega_render_batches();
         }
 
         let mut instances_repacked = 0;
@@ -518,6 +532,7 @@ impl FramePreparer {
         self.path_batch_vertex_ranges[batch] = vertex_range;
         self.path_batches[batch].index_range = index_range;
         self.path_batch_cache_indices[batch] = cache_index;
+        self.detach_mega_path(batch);
         self.path_geometry_dirty = true;
         Ok(PathReplacementStats {
             cache_miss,
@@ -829,6 +844,23 @@ impl FramePreparer {
                 mega_path_instance_vertices_repacked: dirty_len(
                     &self.mega_path_instance_dirty_ranges,
                 ),
+                path_vertex_free_range_count: self.path_vertex_free_ranges.len(),
+                path_vertex_free_element_count: self
+                    .path_vertex_free_ranges
+                    .iter()
+                    .map(|range| (range.end - range.start) as usize)
+                    .sum(),
+                path_index_free_range_count: self.path_index_free_ranges.len(),
+                path_index_free_element_count: self
+                    .path_index_free_ranges
+                    .iter()
+                    .map(|range| (range.end - range.start) as usize)
+                    .sum(),
+                mega_path_detached_count: self
+                    .mega_path_detached
+                    .iter()
+                    .filter(|&&detached| detached)
+                    .count(),
             },
         }
     }
@@ -912,7 +944,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 29] {
+    fn capacities(&self) -> [usize; 31] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -929,6 +961,8 @@ impl FramePreparer {
             self.mega_path_indices.capacity(),
             self.mega_path_vertex_instances.capacity(),
             self.mega_path_batches.capacity(),
+            self.mega_path_segments.capacity(),
+            self.mega_path_detached.capacity(),
             self.mega_path_instance_dirty_ranges.capacity(),
             self.path_batch_cache_indices.capacity(),
             self.path_mesh_cache.capacity(),
@@ -2211,7 +2245,28 @@ mod tests {
         assert!(prepared.stats.path_indices_repacked < original_index_count);
         assert!(prepared.path_geometry_dirty);
         assert_eq!(prepared.stats.geometry_cache_misses, 1);
-        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT);
+        assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT - 1);
+        assert_eq!(prepared.stats.mega_path_batch_count, 2);
+        assert_eq!(prepared.stats.mega_path_detached_count, 1);
+        assert_eq!(prepared.render_batches.len(), 3);
+        assert!(matches!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+        assert!(matches!(
+            prepared.render_batches[1].primitive,
+            RenderPrimitive::Path { batch: REPLACED }
+        ));
+        assert!(matches!(
+            prepared.render_batches[2].primitive,
+            RenderPrimitive::MegaPath { .. }
+        ));
+        assert!(!prepared.mega_path_index_dirty);
+        assert!(prepared.mega_path_instance_dirty_ranges.is_empty());
+        assert!(prepared.stats.path_vertex_free_range_count > 0);
+        assert!(prepared.stats.path_vertex_free_element_count > 0);
+        assert!(prepared.stats.path_index_free_range_count > 0);
+        assert!(prepared.stats.path_index_free_element_count > 0);
         assert_eq!(preparer.path_batch_vertex_ranges[0], first_vertex_range);
         assert_eq!(
             preparer.path_batch_vertex_ranges[OBJECT_COUNT - 1],
@@ -2222,6 +2277,15 @@ mod tests {
             preparer.path_batches[OBJECT_COUNT - 1].index_range,
             last_index_range
         );
+
+        let compacted = preparer.prepare(&frame);
+        assert_eq!(compacted.stats.path_vertex_free_range_count, 0);
+        assert_eq!(compacted.stats.path_vertex_free_element_count, 0);
+        assert_eq!(compacted.stats.path_index_free_range_count, 0);
+        assert_eq!(compacted.stats.path_index_free_element_count, 0);
+        assert_eq!(compacted.stats.mega_path_detached_count, 0);
+        assert_eq!(compacted.stats.mega_path_count, OBJECT_COUNT);
+        assert_eq!(compacted.stats.mega_path_batch_count, 1);
     }
 
     #[test]
