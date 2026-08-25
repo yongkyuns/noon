@@ -17,8 +17,9 @@ use noon_core::{
 };
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
 use noon_runtime::{
-    EvaluationError, ExecutionDelta, ExecutionSlotId, ExecutionTransactionError, FrameChanges,
-    FrameState, SlottedSceneInstance,
+    EvaluationError, ExecutionCompactionError, ExecutionCompactionStats, ExecutionDelta,
+    ExecutionSlotId, ExecutionTransactionError, FrameChanges, FrameSlotId, FrameState,
+    RetiredSlotCompactionPolicy, SlottedSceneInstance,
 };
 
 #[derive(Debug)]
@@ -28,6 +29,7 @@ pub enum PlayerError {
     Patch(PatchError),
     CompilePatch(CompilePatchError),
     ExecutionTransaction(ExecutionTransactionError),
+    Compaction(ExecutionCompactionError),
     Evaluation(EvaluationError),
     Sequence { expected: u64, actual: u64 },
     SequenceExhausted,
@@ -43,6 +45,7 @@ impl std::fmt::Display for PlayerError {
             Self::ExecutionTransaction(error) => {
                 write!(formatter, "execution transaction failed: {error}")
             }
+            Self::Compaction(error) => write!(formatter, "execution compaction failed: {error}"),
             Self::Evaluation(error) => write!(formatter, "scene evaluation failed: {error}"),
             Self::Sequence { expected, actual } => {
                 write!(
@@ -84,6 +87,12 @@ impl From<CompilePatchError> for PlayerError {
 impl From<ExecutionTransactionError> for PlayerError {
     fn from(value: ExecutionTransactionError) -> Self {
         Self::ExecutionTransaction(value)
+    }
+}
+
+impl From<ExecutionCompactionError> for PlayerError {
+    fn from(value: ExecutionCompactionError) -> Self {
+        Self::Compaction(value)
     }
 }
 
@@ -215,6 +224,41 @@ impl ScenePlayer {
 
     pub fn frame(&self) -> &FrameState {
         self.instance.frame()
+    }
+
+    /// Explicitly reclaim retired compatibility frame slots.
+    ///
+    /// Ordinary edits remain append-only and never renumber frame rows. This method
+    /// recompiles the already-authoritative semantic definition at a maintenance
+    /// checkpoint, preserves all durable execution-slot identities, and marks the
+    /// frame for a full renderer/transport resynchronization.
+    pub fn compact_retired_slots(&mut self) -> Result<ExecutionCompactionStats, PlayerError> {
+        let compact = CompiledScene::compile(&self.definition)?;
+        Ok(self.instance.compact_with_compiled(compact)?)
+    }
+
+    pub const fn layout_generation(&self) -> u64 {
+        self.instance.layout_generation()
+    }
+
+    pub fn frame_slot_capacity(&self) -> usize {
+        self.instance.frame_slot_capacity()
+    }
+
+    pub fn retired_frame_slot_count(&self) -> usize {
+        self.instance.retired_frame_slot_count()
+    }
+
+    pub fn compaction_recommended(&self, policy: RetiredSlotCompactionPolicy) -> bool {
+        self.instance.compaction_recommended(policy)
+    }
+
+    pub fn frame_slot_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<FrameSlotId> {
+        self.instance.frame_slot_for_execution_slot(slot)
+    }
+
+    pub fn execution_slot_for_frame_slot(&self, slot: FrameSlotId) -> Option<ExecutionSlotId> {
+        self.instance.execution_slot_for_frame_slot(slot)
     }
 
     pub const fn next_sequence(&self) -> u64 {
@@ -619,6 +663,30 @@ mod wasm {
             self.inner.object_count()
         }
 
+        #[wasm_bindgen(js_name = compactRetiredSlots)]
+        pub fn compact_retired_slots(&mut self) -> Result<usize, JsValue> {
+            Ok(self
+                .inner
+                .compact_retired_slots()
+                .map_err(js_error)?
+                .frame_slots_reclaimed)
+        }
+
+        #[wasm_bindgen(js_name = layoutGeneration)]
+        pub fn layout_generation(&self) -> u64 {
+            self.inner.layout_generation()
+        }
+
+        #[wasm_bindgen(js_name = frameSlotCapacity)]
+        pub fn frame_slot_capacity(&self) -> usize {
+            self.inner.frame_slot_capacity()
+        }
+
+        #[wasm_bindgen(js_name = retiredFrameSlotCount)]
+        pub fn retired_frame_slot_count(&self) -> usize {
+            self.inner.retired_frame_slot_count()
+        }
+
         pub fn next_sequence(&self) -> u64 {
             self.inner.next_sequence()
         }
@@ -813,6 +881,15 @@ mod wasm {
                 self.player.reconcile_scene_json(json).map_err(js_error)?,
                 ReconcileOutcome::Incremental { .. }
             ))
+        }
+
+        #[wasm_bindgen(js_name = compactRetiredSlots)]
+        pub fn compact_retired_slots(&mut self) -> Result<usize, JsValue> {
+            Ok(self
+                .player
+                .compact_retired_slots()
+                .map_err(js_error)?
+                .frame_slots_reclaimed)
         }
 
         #[wasm_bindgen(js_name = resetClock)]
@@ -1665,5 +1742,53 @@ mod tests {
         assert_eq!(player.scene_json().expect("scene serializes"), before_scene);
         assert_eq!(player.frame(), &before_frame);
         assert_eq!(player.next_sequence(), 0);
+    }
+
+    #[test]
+    fn explicit_compaction_preserves_execution_identity_and_invalidates_old_frame_slots() {
+        let mut definition = SceneDefinition::new();
+        let mut ids = Vec::with_capacity(10_000);
+        for _ in 0..10_000 {
+            ids.push(definition.add(GeometryRef::circle(0.1)));
+        }
+        let scene_json = encode_scene(&definition).unwrap();
+        let mut player = ScenePlayer::from_scene_json(&scene_json).unwrap();
+        player.advance_to(0.5).unwrap();
+
+        let survivor_slot = player.execution_slot_for_frame_index(11).unwrap();
+        let last_slot = player.execution_slot_for_frame_index(9_999).unwrap();
+        let stale_frame_slot = player.frame_slot_for_execution_slot(survivor_slot).unwrap();
+
+        let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ids[10])]);
+        player
+            .apply_patch_batch_json(&encode_patch_batch(&batch).unwrap())
+            .unwrap();
+        assert_eq!(player.frame_slot_capacity(), 10_000);
+        assert_eq!(player.retired_frame_slot_count(), 1);
+
+        let stats = player.compact_retired_slots().unwrap();
+        assert_eq!(stats.frame_slots_before, 10_000);
+        assert_eq!(stats.frame_slots_after, 9_999);
+        assert_eq!(stats.frame_slots_reclaimed, 1);
+        assert_eq!(stats.execution_slots_rewritten, 0);
+        assert_eq!(player.layout_generation(), 1);
+        assert_eq!(player.frame().time, 0.5);
+        assert_eq!(player.frame().objects.len(), 9_999);
+        assert_eq!(player.execution_slot_for_frame_slot(stale_frame_slot), None);
+        assert_eq!(
+            player
+                .frame_slot_for_execution_slot(survivor_slot)
+                .unwrap()
+                .index(),
+            10
+        );
+        assert_eq!(
+            player
+                .frame_slot_for_execution_slot(last_slot)
+                .unwrap()
+                .index(),
+            9_998
+        );
+        assert!(player.take_frame_changes().is_all());
     }
 }

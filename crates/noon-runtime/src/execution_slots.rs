@@ -26,6 +26,118 @@ impl ExecutionSlotId {
     }
 }
 
+/// Compatibility frame-slot handle scoped to one compact layout generation.
+///
+/// `ExecutionSlotId` remains the durable object identity. Frame slots are an
+/// order-preserving renderer/runtime projection and may be renumbered only by an
+/// explicit compaction barrier. Carrying the layout generation prevents a stale
+/// pre-compaction frame row from silently aliasing a different object afterward.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FrameSlotId {
+    index: u32,
+    layout_generation: u64,
+}
+
+impl FrameSlotId {
+    pub const fn new(index: u32, layout_generation: u64) -> Self {
+        Self {
+            index,
+            layout_generation,
+        }
+    }
+
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    pub const fn layout_generation(self) -> u64 {
+        self.layout_generation
+    }
+}
+
+/// Heuristic for deciding when an explicit maintenance checkpoint is worthwhile.
+///
+/// The normal mutation path never compacts automatically: doing so would renumber
+/// source/painter-order frame rows in the middle of an edit. Callers can use this
+/// policy to decide when to request the explicit generation barrier instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetiredSlotCompactionPolicy {
+    pub min_retired_slots: usize,
+    pub min_retired_percent: u8,
+}
+
+impl RetiredSlotCompactionPolicy {
+    pub const fn new(min_retired_slots: usize, min_retired_percent: u8) -> Self {
+        Self {
+            min_retired_slots,
+            min_retired_percent,
+        }
+    }
+
+    pub fn recommends(self, live_slots: usize, slot_capacity: usize) -> bool {
+        let retired = slot_capacity.saturating_sub(live_slots);
+        if retired == 0 || retired < self.min_retired_slots || slot_capacity == 0 {
+            return false;
+        }
+        let percent = usize::from(self.min_retired_percent.min(100));
+        retired.saturating_mul(100) >= slot_capacity.saturating_mul(percent)
+    }
+}
+
+impl Default for RetiredSlotCompactionPolicy {
+    fn default() -> Self {
+        Self::new(1_024, 25)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionCompactionStats {
+    pub previous_layout_generation: u64,
+    pub layout_generation: u64,
+    pub frame_slots_before: usize,
+    pub frame_slots_after: usize,
+    pub frame_slots_reclaimed: usize,
+    pub execution_slot_capacity: usize,
+    /// Durable execution slots are never rewritten by compatibility compaction.
+    pub execution_slots_rewritten: usize,
+    /// Explicit compaction rebuilds the compatibility runtime once.
+    pub runtime_rebuilds: usize,
+    /// The rebuilt runtime is restored to the previous playhead once.
+    pub full_seeks: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionCompactionError {
+    LayoutGenerationExhausted,
+    SceneMismatch,
+    NonCompactInput {
+        live_slots: usize,
+        slot_capacity: usize,
+    },
+}
+
+impl std::fmt::Display for ExecutionCompactionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LayoutGenerationExhausted => {
+                formatter.write_str("frame-slot layout generation exhausted")
+            }
+            Self::SceneMismatch => formatter.write_str(
+                "compaction input does not match the current live compiled scene",
+            ),
+            Self::NonCompactInput {
+                live_slots,
+                slot_capacity,
+            } => write!(
+                formatter,
+                "compaction input still contains retired slots: {live_slots} live of {slot_capacity}",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionCompactionError {}
+
 #[derive(Clone, Debug)]
 struct ExecutionSlot {
     generation: u32,
@@ -327,6 +439,7 @@ pub struct SlottedSceneInstance {
     inner: SceneInstance,
     slots: ExecutionSlotTable,
     last_delta: ExecutionDelta,
+    layout_generation: u64,
 }
 
 impl SlottedSceneInstance {
@@ -336,6 +449,7 @@ impl SlottedSceneInstance {
             inner: SceneInstance::new(compiled),
             slots,
             last_delta: ExecutionDelta::default(),
+            layout_generation: 0,
         }
     }
 
@@ -353,6 +467,35 @@ impl SlottedSceneInstance {
 
     pub fn slot_for_object(&self, object: ObjectId) -> Option<ExecutionSlotId> {
         self.slots.slot_for_object(object)
+    }
+
+    pub const fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    pub fn frame_slot_capacity(&self) -> usize {
+        self.inner.compiled.objects().len()
+    }
+
+    pub fn retired_frame_slot_count(&self) -> usize {
+        self.frame_slot_capacity()
+            .saturating_sub(self.live_object_count())
+    }
+
+    pub fn compaction_recommended(&self, policy: RetiredSlotCompactionPolicy) -> bool {
+        policy.recommends(self.live_object_count(), self.frame_slot_capacity())
+    }
+
+    pub fn frame_slot_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<FrameSlotId> {
+        let index = u32::try_from(self.frame_index_for_slot(slot)?).ok()?;
+        Some(FrameSlotId::new(index, self.layout_generation))
+    }
+
+    pub fn execution_slot_for_frame_slot(&self, slot: FrameSlotId) -> Option<ExecutionSlotId> {
+        if slot.layout_generation() != self.layout_generation {
+            return None;
+        }
+        self.slot_for_frame_index(slot.index() as usize)
     }
 
     pub fn slot_for_frame_index(&self, frame_index: usize) -> Option<ExecutionSlotId> {
@@ -407,6 +550,68 @@ impl SlottedSceneInstance {
             .enumerate()
             .filter_map(|(index, object)| object.live.then_some(index))
             .collect()
+    }
+
+    /// Reclaim retired compatibility frame slots at an explicit maintenance barrier.
+    ///
+    /// The supplied scene must be a compact recompilation of the same live semantic
+    /// scene in the same source/painter order. Durable `ExecutionSlotId`s are kept
+    /// intact; only compiled/frame row positions are rebuilt. The fresh runtime leaves
+    /// `FrameChanges::all()` pending so renderer/worker consumers perform a deliberate
+    /// full resynchronization rather than observing hidden row renumbering.
+    pub fn compact_with_compiled(
+        &mut self,
+        compiled: CompiledScene,
+    ) -> Result<ExecutionCompactionStats, ExecutionCompactionError> {
+        let before = self.frame_slot_capacity();
+        let live = self.live_object_count();
+        if compiled.objects().len() != compiled.live_object_count() {
+            return Err(ExecutionCompactionError::NonCompactInput {
+                live_slots: compiled.live_object_count(),
+                slot_capacity: compiled.objects().len(),
+            });
+        }
+        if !compiled_scene_matches_live_projection(&self.inner.compiled, &compiled) {
+            return Err(ExecutionCompactionError::SceneMismatch);
+        }
+        if before == live {
+            return Ok(ExecutionCompactionStats {
+                previous_layout_generation: self.layout_generation,
+                layout_generation: self.layout_generation,
+                frame_slots_before: before,
+                frame_slots_after: before,
+                frame_slots_reclaimed: 0,
+                execution_slot_capacity: self.slots.slot_capacity(),
+                ..ExecutionCompactionStats::default()
+            });
+        }
+
+        let next_generation = self
+            .layout_generation
+            .checked_add(1)
+            .ok_or(ExecutionCompactionError::LayoutGenerationExhausted)?;
+        let time = self.inner.frame().time;
+        let mut replacement = SceneInstance::new(compiled);
+        replacement
+            .seek(time)
+            .expect("existing scene playhead must remain finite during compaction");
+        self.inner = replacement;
+        self.layout_generation = next_generation;
+        self.last_delta = ExecutionDelta::default();
+
+        let after = self.frame_slot_capacity();
+        debug_assert_eq!(after, live);
+        Ok(ExecutionCompactionStats {
+            previous_layout_generation: next_generation - 1,
+            layout_generation: next_generation,
+            frame_slots_before: before,
+            frame_slots_after: after,
+            frame_slots_reclaimed: before - after,
+            execution_slot_capacity: self.slots.slot_capacity(),
+            execution_slots_rewritten: 0,
+            runtime_rebuilds: 1,
+            full_seeks: 1,
+        })
     }
 
     pub fn preflight_transaction(
@@ -561,6 +766,42 @@ impl SlottedSceneInstance {
             push_context_channel(channels, slot, channel.property);
         }
     }
+}
+
+fn compiled_scene_matches_live_projection(
+    current: &CompiledScene,
+    compact: &CompiledScene,
+) -> bool {
+    if current.live_object_count() != compact.live_object_count()
+        || current.track_count() != compact.track_count()
+    {
+        return false;
+    }
+
+    let current_objects = current.objects().iter().filter(|object| object.live);
+    if !current_objects.zip(compact.objects()).all(|(left, right)| {
+        left.id == right.id
+            && left.geometry == right.geometry
+            && left.base_transform == right.base_transform
+            && left.base_style == right.base_style
+            && left.dynamic == right.dynamic
+            && right.live
+    }) {
+        return false;
+    }
+
+    current.tracks_iter().all(|track| {
+        let Some(candidate) = compact.track(track.id) else {
+            return false;
+        };
+        current.track_object(track.id) == compact.track_object(track.id)
+            && track.id == candidate.id
+            && track.property == candidate.property
+            && track.values == candidate.values
+            && track.timing == candidate.timing
+            && track.time_map == candidate.time_map
+            && track.transform_geometry_plan == candidate.transform_geometry_plan
+    })
 }
 
 fn push_context_channel(
@@ -742,5 +983,67 @@ mod tests {
         assert!(!delta.slots().contains(&second_slot));
         assert!(delta.effects().property);
         assert!(delta.effects().timeline);
+    }
+
+    #[test]
+    fn explicit_compaction_reclaims_frame_tombstones_without_rewriting_execution_slots() {
+        let mut definition = SceneDefinition::new();
+        let first = definition.add(GeometryRef::circle(1.0));
+        let second = definition.add(GeometryRef::rectangle(2.0, 1.0));
+        let third = definition.add(GeometryRef::circle(0.5));
+        let compiled = CompiledScene::compile(&definition).expect("valid scene");
+        let mut live = SlottedSceneInstance::new(compiled);
+        live.seek(0.75).unwrap();
+
+        let second_execution = live.slot_for_object(second).unwrap();
+        let third_execution = live.slot_for_object(third).unwrap();
+        let old_second_frame = live
+            .frame_slot_for_execution_slot(second_execution)
+            .unwrap();
+        let execution_capacity = live.slot_table().slot_capacity();
+
+        live.apply_patch(&ScenePatch::RemoveObject(first)).unwrap();
+        definition
+            .apply_patch(ScenePatch::RemoveObject(first))
+            .unwrap();
+        assert_eq!(live.frame_slot_capacity(), 3);
+        assert_eq!(live.retired_frame_slot_count(), 1);
+
+        let compact = CompiledScene::compile(&definition).unwrap();
+        let stats = live.compact_with_compiled(compact).unwrap();
+        assert_eq!(stats.frame_slots_before, 3);
+        assert_eq!(stats.frame_slots_after, 2);
+        assert_eq!(stats.frame_slots_reclaimed, 1);
+        assert_eq!(stats.execution_slots_rewritten, 0);
+        assert_eq!(stats.runtime_rebuilds, 1);
+        assert_eq!(stats.full_seeks, 1);
+        assert_eq!(live.layout_generation(), 1);
+        assert_eq!(live.slot_table().slot_capacity(), execution_capacity);
+        assert_eq!(live.slot_for_object(second), Some(second_execution));
+        assert_eq!(live.slot_for_object(third), Some(third_execution));
+        assert_eq!(live.frame().time, 0.75);
+        assert_eq!(live.frame().objects.len(), 2);
+        assert_eq!(live.frame().objects[0].id, second);
+        assert_eq!(live.frame().objects[1].id, third);
+        assert_eq!(live.execution_slot_for_frame_slot(old_second_frame), None);
+        let new_second_frame = live
+            .frame_slot_for_execution_slot(second_execution)
+            .unwrap();
+        assert_eq!(new_second_frame.index(), 0);
+        assert_eq!(new_second_frame.layout_generation(), 1);
+        assert_eq!(
+            live.execution_slot_for_frame_slot(new_second_frame),
+            Some(second_execution)
+        );
+        assert!(live.take_frame_changes().is_all());
+    }
+
+    #[test]
+    fn compaction_policy_requires_both_absolute_and_fractional_retirement() {
+        let policy = RetiredSlotCompactionPolicy::new(1_000, 25);
+        assert!(!policy.recommends(9_000, 10_000));
+        assert!(policy.recommends(7_500, 10_000));
+        assert!(!policy.recommends(900, 1_000));
+        assert!(!policy.recommends(10_000, 10_000));
     }
 }

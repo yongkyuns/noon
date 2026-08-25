@@ -733,6 +733,13 @@ impl EngineScenePlayer {
         self.force_snapshot_json()
     }
 
+    pub fn compact_retired_slots_delta_json(
+        &mut self,
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        self.player.compact_retired_slots()?;
+        self.take_delta_json()
+    }
+
     pub fn replace_scene_delta_json(
         &mut self,
         json: &str,
@@ -837,6 +844,13 @@ mod wasm {
         #[wasm_bindgen(js_name = snapshotDeltaJson)]
         pub fn snapshot_delta_json(&mut self) -> Result<String, JsValue> {
             self.inner.snapshot_delta_json().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = compactRetiredSlotsDeltaJson)]
+        pub fn compact_retired_slots_delta_json(&mut self) -> Result<Option<String>, JsValue> {
+            self.inner
+                .compact_retired_slots_delta_json()
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = replaceSceneDeltaJson)]
@@ -1002,5 +1016,41 @@ mod tests {
                 sequence: 3
             })
         ));
+    }
+
+    #[test]
+    fn compaction_resynchronizes_transport_with_same_execution_slots() {
+        let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
+        let mut encoder = ExecutionDeltaEncoder::new(11);
+        let mut mirror = ExecutionFrameMirror::default();
+
+        let initial = encode_current(&mut encoder, &mut player);
+        let surviving_slot = initial.objects[1].slot;
+        mirror.apply(initial.clone()).unwrap();
+
+        let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ObjectId::new(0))]);
+        player
+            .apply_patch_batch_json(&encode_patch_batch(&batch).unwrap())
+            .unwrap();
+        let removal = encode_current(&mut encoder, &mut player);
+        assert!(!removal.snapshot);
+        mirror.apply(removal).unwrap();
+        assert_eq!(mirror.frame().unwrap().objects.len(), 2);
+        assert_eq!(mirror.live_object_count(), 1);
+
+        let stats = player.compact_retired_slots().unwrap();
+        assert_eq!(stats.frame_slots_reclaimed, 1);
+        let compacted = encode_current(&mut encoder, &mut player);
+        assert!(compacted.snapshot);
+        assert_eq!(compacted.objects.len(), 1);
+        assert_eq!(compacted.objects[0].slot, surviving_slot);
+        assert_eq!(compacted.objects[0].order, 0);
+
+        let (_, changes) = mirror.apply(compacted).unwrap();
+        assert!(changes.is_all());
+        assert_eq!(mirror.live_object_count(), 1);
+        assert_eq!(mirror.frame().unwrap().objects.len(), 1);
+        assert_eq!(mirror.slots, vec![surviving_slot]);
+        assert_eq!(mirror.frame().unwrap(), player.frame());
     }
 }
