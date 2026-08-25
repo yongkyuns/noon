@@ -1,0 +1,54 @@
+name: A3 option precedence validation
+on:
+  push:
+    branches:
+      - arch/a3-animation-graph
+permissions:
+  contents: write
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'Align A3 play option precedence'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/a3-animation-graph
+      - name: Apply root lag option precedence
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-core/src/animation_graph.rs')
+          text = path.read_text()
+          old_lower = '''            let lag_ratio = match &node.kind {\n                AnimationNodeKind::Parallel { .. } => node.options.lag_ratio.unwrap_or(0.0),\n                AnimationNodeKind::Sequence { .. } => 1.0,\n                AnimationNodeKind::Lagged { lag_ratio, .. } => {\n                    node.options.lag_ratio.unwrap_or(*lag_ratio)\n                }\n                AnimationNodeKind::Leaf { .. } => unreachable!(),\n            };\n'''
+          new_lower = '''            let option_lag_ratio = if node_id == root {\n                context.play_options.lag_ratio.or(node.options.lag_ratio)\n            } else {\n                node.options.lag_ratio\n            };\n            let lag_ratio = match &node.kind {\n                AnimationNodeKind::Parallel { .. } => option_lag_ratio.unwrap_or(0.0),\n                AnimationNodeKind::Sequence { .. } => option_lag_ratio.unwrap_or(1.0),\n                AnimationNodeKind::Lagged { lag_ratio, .. } => option_lag_ratio.unwrap_or(*lag_ratio),\n                AnimationNodeKind::Leaf { .. } => unreachable!(),\n            };\n'''
+          if text.count(old_lower) != 2:
+              raise SystemExit(f'expected two lag-ratio lowering anchors, found {text.count(old_lower)}')
+          # First occurrence is lower_node and has access to root/context.
+          text = text.replace(old_lower, new_lower, 1)
+
+          old_duration = old_lower
+          new_duration = '''            let option_lag_ratio = root_play_options\n                .and_then(|options| options.lag_ratio)\n                .or(node.options.lag_ratio);\n            let lag_ratio = match &node.kind {\n                AnimationNodeKind::Parallel { .. } => option_lag_ratio.unwrap_or(0.0),\n                AnimationNodeKind::Sequence { .. } => option_lag_ratio.unwrap_or(1.0),\n                AnimationNodeKind::Lagged { lag_ratio, .. } => option_lag_ratio.unwrap_or(*lag_ratio),\n                AnimationNodeKind::Leaf { .. } => unreachable!(),\n            };\n'''
+          if old_duration not in text:
+              raise SystemExit('node_duration lag-ratio anchor missing')
+          text = text.replace(old_duration, new_duration, 1)
+
+          test = '''\n    #[test]\n    fn scene_play_lag_ratio_overrides_root_composition_option() {\n        let mut scene = SceneDefinition::new();\n        let object = scene.add(GeometryRef::circle(1.0));\n        let mut graph = AnimationGraph::new();\n        let first = position_leaf(&mut graph, object, 0.0, 1.0, 1.0);\n        let second = position_leaf(&mut graph, object, 1.0, 2.0, 1.0);\n        let root = graph.insert_parallel(vec![first, second]).unwrap();\n        graph\n            .set_options(root, AnimationOptions::new().lag_ratio(0.25))\n            .unwrap();\n        let mut lowering = AnimationLowering::new();\n        lowering\n            .lower_root(\n                &graph,\n                &mut scene,\n                root,\n                AnimationLoweringContext::new(0.0)\n                    .with_play_options(AnimationOptions::new().lag_ratio(0.5)),\n            )\n            .unwrap();\n\n        assert_eq!(scene.tracks().len(), 2);\n        assert!(scene\n            .tracks()\n            .iter()\n            .all(|track| (track.timing.duration - 1.5).abs() < 1e-12));\n    }\n'''
+          end = text.rfind('\n}')
+          if end < 0:
+              raise SystemExit('test module closing brace missing')
+          path.write_text(text[:end] + test + text[end:])
+          PY
+          cargo fmt --all
+      - name: Validate core and runtime integration
+        run: |
+          cargo test -p noon-core
+          cargo test -p noon-runtime --test animation_graph
+          cargo clippy -p noon-core -p noon-runtime --all-targets -- -D warnings
+      - name: Commit implementation
+        run: |
+          rm .github/workflows/a3-option-precedence.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-core .github/workflows/a3-option-precedence.yml
+          git commit -m 'Honor root play lag-ratio precedence in animation graph'
+          git push origin HEAD:arch/a3-animation-graph
