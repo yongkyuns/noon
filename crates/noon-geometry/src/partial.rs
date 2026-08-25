@@ -23,13 +23,17 @@ struct Curve {
 /// boundary curves. It does *not* use arc length. This function mirrors that
 /// contract while preserving explicit Noon subpath breaks.
 pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
+    let a = a.clamp(0.0, 1.0);
+    let b = b.clamp(a, 1.0);
+    if a <= 0.0 && b >= 1.0 {
+        return path.clone();
+    }
+
     let curves = collect_curves(path);
     if curves.is_empty() {
         return VectorPath::new();
     }
 
-    let a = a.clamp(0.0, 1.0);
-    let b = b.clamp(a, 1.0);
     let (lower_index, lower_t) = integer_interpolate(curves.len(), a);
     let (upper_index, upper_t) = integer_interpolate(curves.len(), b);
 
@@ -282,6 +286,16 @@ mod tests {
         let path = VectorPath::new().move_to(Vec2::ZERO).line_to(Vec2::ONE);
         let partial = pointwise_partial_path(&path, 0.25, 0.25);
         assert_eq!(partial.commands().len(), 1);
+    }
+
+    #[test]
+    fn full_partial_preserves_close_and_exact_commands() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-1.0, 1.0))
+            .line_to(Vec2::new(-1.0, -1.0))
+            .close();
+        assert_eq!(pointwise_partial_path(&path, 0.0, 1.0), path);
     }
 
     #[test]
