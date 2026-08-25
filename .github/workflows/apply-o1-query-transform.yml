@@ -1,0 +1,59 @@
+name: Apply O1 shared query transforms
+
+on:
+  push:
+    branches:
+      - agent/o1-shared-query-transform
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/o1-shared-query-transform
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Use stable Rust and wasm target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Apply O1 query and transform patch
+        run: python .github/apply-o1-query-transform.py
+      - name: Compile Python facade
+        run: python -m compileall -q web/python scripts/manim-differential.py
+      - name: Install ManimCE reference
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check "manim==0.21.0"
+      - name: Run 34-case differential suite
+        run: python scripts/manim-differential.py
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Run browser compatibility smoke
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          node scripts/manim-compat-smoke.mjs
+      - name: Commit validated migration and remove helpers
+        run: |
+          find web scripts -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/python/_manim_compat.py web/python/_manim_semantic_handles.py scripts/manim-differential.py scripts/manim-compat-smoke.mjs
+          git rm .github/apply-o1-query-transform.py .github/workflows/apply-o1-query-transform.yml
+          git commit -m "Expand shared Mobject query and dimension transforms"
+          git push origin HEAD:agent/o1-shared-query-transform
