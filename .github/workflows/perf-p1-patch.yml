@@ -1,0 +1,47 @@
+name: Apply P1 runtime patch
+
+on:
+  push:
+    branches:
+      - perf/p1-scene-request-slice
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/p1-scene-request-slice
+      - name: Remove per-frame requested-group copy
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-runtime/src/lib.rs')
+          text = path.read_text()
+          old = '''        let requested = self.timeline_scheduler.advance(time).to_vec();
+        let tracks = self.compiled.tracks();'''
+          new = '''        let requested = self.timeline_scheduler.advance(time);
+        let tracks = self.compiled.tracks();'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one requested copy site, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          old_loop = '        for group_index in requested {'
+          new_loop = '        for &group_index in requested {'
+          if text.count(old_loop) != 1:
+              raise SystemExit(f'expected one requested loop, found {text.count(old_loop)}')
+          text = text.replace(old_loop, new_loop, 1)
+          path.write_text(text)
+          PY
+          rm .github/workflows/perf-p1-patch.yml
+          cargo fmt --all
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-runtime/src/lib.rs .github/workflows/perf-p1-patch.yml
+          git commit -m 'Avoid copying requested timeline groups per frame'
+          git push origin HEAD:perf/p1-scene-request-slice
