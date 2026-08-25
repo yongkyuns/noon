@@ -2,6 +2,7 @@ import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
 
 const canvas = document.querySelector("#scene");
 const MANIM_DEFAULT_CAMERA_HEIGHT = 8.0;
+const MAX_PRESENT_ATTEMPTS = 4;
 const state = {
   ready: false,
   error: null,
@@ -60,7 +61,32 @@ function validateRenderTime(timeSeconds) {
   return time;
 }
 
-function presentAt(timeSeconds) {
+function recordPresent(timestampMs) {
+  const presented = player.renderFrame(timestampMs);
+  if (presented) {
+    state.frames += 1;
+  }
+  return presented;
+}
+
+function presentTimestamp(timestampMs) {
+  let presented = false;
+  for (let attempt = 0; attempt < MAX_PRESENT_ATTEMPTS && !presented; attempt += 1) {
+    presented = recordPresent(timestampMs);
+  }
+  return presented;
+}
+
+function waitForPaint() {
+  // requestAnimationFrame callbacks run before their frame is painted. Crossing
+  // two callbacks guarantees that the first callback's frame has completed its
+  // paint/compositor handoff before Playwright reads the canvas.
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
+async function presentAt(timeSeconds) {
   const time = validateRenderTime(timeSeconds);
 
   // PlaybackClock treats the first timestamp after reset as semantic time zero.
@@ -70,31 +96,28 @@ function presentAt(timeSeconds) {
   // twice; that would test renderer idempotence rather than seek/playback parity.
   player.resetClock();
   incrementalTime = null;
-  let presented = player.renderFrame(0);
-  if (presented) {
-    state.frames += 1;
-  }
+  let presented = presentTimestamp(0);
   if (time > 0) {
-    presented = player.renderFrame(time * 1000);
-    if (presented) {
-      state.frames += 1;
-    }
+    presented = presentTimestamp(time * 1000);
+  }
+  if (presented) {
+    await waitForPaint();
   }
   return { ...metrics(), presented };
 }
 
-function beginIncremental() {
+async function beginIncremental() {
   player.resetClock();
   incrementalTime = null;
-  const presented = player.renderFrame(0);
+  const presented = recordPresent(0);
   if (presented) {
-    state.frames += 1;
     incrementalTime = 0.0;
+    await waitForPaint();
   }
   return { ...metrics(), presented };
 }
 
-function presentIncrementalAt(timeSeconds) {
+async function presentIncrementalAt(timeSeconds) {
   const time = validateRenderTime(timeSeconds);
   if (incrementalTime === null) {
     throw new Error("incremental smoke playback must begin with a presented beginIncremental() frame");
@@ -105,10 +128,10 @@ function presentIncrementalAt(timeSeconds) {
   if (time === incrementalTime) {
     return { ...metrics(), presented: true };
   }
-  const presented = player.renderFrame(time * 1000);
+  const presented = recordPresent(time * 1000);
   if (presented) {
-    state.frames += 1;
     incrementalTime = time;
+    await waitForPaint();
   }
   return { ...metrics(), presented };
 }
