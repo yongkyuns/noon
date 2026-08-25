@@ -77,7 +77,7 @@ fn benchmark_case(total: usize, active: usize, warmups: usize, samples: usize) -
     for sample in 0..samples {
         let time = (warmups + sample + 1) as f64 / 60.0;
         let started = Instant::now();
-        requested_groups = black_box(scheduler.advance(time)).len();
+        requested_groups = black_box(scheduler.advance(time));
         timings.push(started.elapsed().as_secs_f64() * 1_000_000.0);
     }
     timings.sort_by(f64::total_cmp);

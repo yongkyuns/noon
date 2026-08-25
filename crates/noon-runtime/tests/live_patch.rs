@@ -131,3 +131,93 @@ fn replacing_track_preserves_unrelated_object_identity_and_time() {
     assert_eq!(live.frame().objects[1].id, untouched);
     assert_live_matches_definition(&mut live, &definition, 2.0);
 }
+
+#[test]
+fn timeline_patch_relowers_only_affected_runtime_channel() {
+    let mut definition = SceneDefinition::new();
+    let mut objects = Vec::with_capacity(10_000);
+    for index in 0..10_000u32 {
+        let object = definition.add(GeometryRef::circle(1.0));
+        objects.push(object);
+        definition
+            .animate_position(
+                object,
+                Vec2::ZERO,
+                Vec2::new(1.0, 0.0),
+                TrackTiming::new(1000.0 + index as f64, 1.0, Easing::Linear),
+            )
+            .expect("valid seed track");
+    }
+    let compiled = CompiledScene::compile(&definition).expect("large scene compiles");
+    let mut live = SceneInstance::new(compiled);
+    live.seek(0.5).expect("valid seek");
+
+    let target = objects[5_000];
+    let patch = ScenePatch::AddTrack(TrackDefinition {
+        id: TrackId::new(50_000),
+        object: target,
+        property: Property::Opacity,
+        values: TrackValues::Scalar {
+            from: 1.0,
+            to: 0.25,
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    live.apply_patch(&patch)
+        .expect("runtime timeline patch succeeds");
+    definition
+        .apply_patch(patch)
+        .expect("definition patch succeeds");
+
+    let stats = live.last_patch_stats();
+    assert_eq!(stats.channels_relowered, 1);
+    assert_eq!(stats.scheduler_events_removed, 0);
+    assert_eq!(stats.scheduler_events_inserted, 2);
+    assert_eq!(stats.objects_recomputed, 1);
+    assert_eq!(stats.full_group_rebuilds, 0);
+    assert_eq!(stats.full_seeks, 0);
+    assert!(stats.groups_evaluated <= 2);
+    assert_live_matches_definition(&mut live, &definition, 0.5);
+}
+
+#[test]
+fn moving_a_track_between_objects_relowers_only_old_and_new_channels() {
+    let mut definition = SceneDefinition::new();
+    let first = definition.add(GeometryRef::circle(1.0));
+    let second = definition.add(GeometryRef::circle(1.0));
+    let id = definition
+        .animate_scalar(
+            first,
+            Property::Opacity,
+            1.0,
+            0.0,
+            TrackTiming::new(0.0, 4.0, Easing::Linear),
+        )
+        .unwrap();
+    let compiled = CompiledScene::compile(&definition).unwrap();
+    let mut live = SceneInstance::new(compiled);
+    live.seek(2.0).unwrap();
+
+    let replacement = TrackDefinition {
+        id,
+        object: second,
+        property: Property::Rotation,
+        values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    };
+    live.apply_patch(&ScenePatch::ReplaceTrack(replacement.clone()))
+        .unwrap();
+    definition
+        .apply_patch(ScenePatch::ReplaceTrack(replacement))
+        .unwrap();
+    let stats = live.last_patch_stats();
+    assert_eq!(stats.channels_relowered, 2);
+    assert_eq!(stats.scheduler_events_removed, 2);
+    assert_eq!(stats.scheduler_events_inserted, 2);
+    assert_eq!(stats.objects_recomputed, 2);
+    assert_eq!(stats.full_group_rebuilds, 0);
+    assert_eq!(stats.full_seeks, 0);
+    assert_live_matches_definition(&mut live, &definition, 2.0);
+}
