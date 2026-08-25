@@ -1,0 +1,24 @@
+name: Probe P8 macOS hardware
+
+on:
+  push:
+    branches: [perf/p8-hosted-macos-probe]
+
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record exposed hardware
+        shell: bash
+        run: |
+          uname -a | tee /tmp/uname.txt
+          sysctl -n machdep.cpu.brand_string 2>/dev/null | tee /tmp/cpu.txt || true
+          system_profiler SPHardwareDataType SPDisplaysDataType | tee /tmp/system-profiler.txt
+          sw_vers | tee /tmp/sw-vers.txt
+          {
+            echo '## uname'; echo '```'; cat /tmp/uname.txt; echo '```'
+            echo '## CPU'; echo '```'; cat /tmp/cpu.txt; echo '```'
+            echo '## hardware/display'; echo '```'; cat /tmp/system-profiler.txt; echo '```'
+            echo '## macOS'; echo '```'; cat /tmp/sw-vers.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
