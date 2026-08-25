@@ -27,6 +27,11 @@ pub enum RenderPrimitive {
     Path {
         batch: usize,
     },
+    /// Index into `PreparedFrame::mega_path_batches` for a painter-ordered
+    /// packed draw containing one or more unique path meshes.
+    MegaPath {
+        batch: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
