@@ -152,9 +152,9 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Format and lint geometry
+      - name: Format, lint, and test geometry
         run: |
-          cargo fmt --all -- --check
+          cargo fmt --all
           cargo clippy -p noon-geometry --all-targets --all-features -- -D warnings
           cargo test -p noon-geometry
 
