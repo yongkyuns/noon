@@ -37,6 +37,13 @@ if old_generic not in text:
     raise SystemExit("generic SceneInstance replacement not found in bootstrap helper")
 text = text.replace(old_generic, new_contextual, 1)
 
+private_track_pattern = "UnsupportedTransformGeometry(TrackId(50))"
+if text.count(private_track_pattern) != 2:
+    raise SystemExit(
+        f"expected two private TrackId test patterns, found {text.count(private_track_pattern)}"
+    )
+text = text.replace(private_track_pattern, "UnsupportedTransformGeometry(_)")
+
 marker = "# Keep the migration document explicit about this end-to-end browser slice."
 if marker not in text:
     raise SystemExit("documentation bootstrap marker not found")
