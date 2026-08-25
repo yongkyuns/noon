@@ -695,6 +695,96 @@ class Scene(_BaseScene):
         )
 
 
+def _state_target(self: _BaseMobject, mobject: _BaseMobject, *, match_height: bool, match_width: bool, match_depth: bool, match_center: bool, stretch: bool) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("state target must be a Mobject")
+    if match_depth:
+        raise NotImplementedError("depth matching requires the shared 2.5D family model")
+    if not (match_height or match_width or match_center or stretch):
+        return mobject
+    target = mobject.copy()
+    if stretch:
+        if target.width == 0.0 or target.height == 0.0:
+            raise ValueError("cannot stretch a zero-width or zero-height target")
+        target.scale((self.width / target.width, self.height / target.height))
+    else:
+        if match_height:
+            if target.height == 0.0:
+                raise ValueError("cannot match height from a zero-height target")
+            target.scale(self.height / target.height)
+        if match_width:
+            if target.width == 0.0:
+                raise ValueError("cannot match width from a zero-width target")
+            target.scale(self.width / target.width)
+    if match_center:
+        target.move_to(self.get_center())
+    return target
+
+
+def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> _BaseMobject:
+    # Noon's copy already performs a deep semantic clone. In the browser the payload
+    # remains in the Rust/WASM handle, so both Manim modes avoid Python snapshot ownership.
+    del use_deepcopy
+    self.target = None
+    self.target = self.copy()
+    return self.target
+
+
+def _mobject_save_state(self: _BaseMobject) -> _BaseMobject:
+    if hasattr(self, "saved_state"):
+        self.saved_state = None
+    self.saved_state = self.copy()
+    return self
+
+
+def _mobject_restore(self: _BaseMobject) -> _BaseMobject:
+    if not hasattr(self, "saved_state") or self.saved_state is None:
+        raise Exception("Trying to restore without having saved")
+    return self.become(self.saved_state)
+
+
+def _mobject_become(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    match_height: bool = False,
+    match_width: bool = False,
+    match_depth: bool = False,
+    match_center: bool = False,
+    stretch: bool = False,
+) -> _BaseMobject:
+    target = _state_target(
+        self,
+        mobject,
+        match_height=match_height,
+        match_width=match_width,
+        match_depth=match_depth,
+        match_center=match_center,
+        stretch=stretch,
+    )
+    return self._apply(_base._raw_mobject(target._current_raw()))
+
+
+def _mobject_replace(
+    self: _BaseMobject, mobject: _BaseMobject, dim_to_match: int = 0, stretch: bool = False
+) -> _BaseMobject:
+    if not isinstance(mobject, _BaseMobject):
+        raise TypeError("replacement target must be a Mobject")
+    if dim_to_match not in (0, 1):
+        raise NotImplementedError("replace currently supports width (0) or height (1)")
+    if stretch:
+        if self.width == 0.0 or self.height == 0.0:
+            raise ValueError("cannot stretch-replace an object with zero width or height")
+        self.scale((mobject.width / self.width, mobject.height / self.height))
+    else:
+        source_length = self.width if dim_to_match == 0 else self.height
+        target_length = mobject.width if dim_to_match == 0 else mobject.height
+        if source_length == 0.0:
+            raise ValueError("cannot replace along a zero-length dimension")
+        self.scale(target_length / source_length)
+    self.move_to(mobject.get_center())
+    return self
+
+
 def install() -> None:
     """Install the compatibility surface into the public ``noon`` module."""
 
@@ -707,6 +797,11 @@ def install() -> None:
     # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
     _base._as_vec2 = _as_vec2
     _BaseMobject.animate = property(lambda self: _CompatAnimationBuilder(self))
+    _BaseMobject.generate_target = _mobject_generate_target
+    _BaseMobject.save_state = _mobject_save_state
+    _BaseMobject.restore = _mobject_restore
+    _BaseMobject.become = _mobject_become
+    _BaseMobject.replace = _mobject_replace
 
     public = {
         "VMobject": VMobject,
