@@ -37,4 +37,9 @@ if old_generic not in text:
     raise SystemExit("generic SceneInstance replacement not found in bootstrap helper")
 text = text.replace(old_generic, new_contextual, 1)
 
+marker = "# Keep the migration document explicit about this end-to-end browser slice."
+if marker not in text:
+    raise SystemExit("documentation bootstrap marker not found")
+text = text[: text.index(marker)] + 'print("applied browser-local transaction slice")\n'
+
 p.write_text(text)
