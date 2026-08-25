@@ -27,3 +27,4 @@ jobs:
           git add .github/workflows/f2-merge-master.yml
           git commit --amend --no-edit
           git push origin HEAD:arch/f2-engine-worker-transport
+# one-shot trigger
