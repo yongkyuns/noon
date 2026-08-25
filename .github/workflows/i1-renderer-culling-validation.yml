@@ -34,18 +34,13 @@ jobs:
           from pathlib import Path
           path = Path('crates/noon-web/src/execution_transport.rs')
           text = path.read_text()
-          old = '''        let patch = noon_ir::PatchBatch {
-            sequence: 0,
-            patches: vec![noon_core::ScenePatch::SetTransform {'''
-          new = '''        let patch = PatchBatch::new(0, vec![noon_core::ScenePatch::SetTransform {'''
+          old = "        let patch = noon_ir::PatchBatch {\n            sequence: 0,\n            patches: vec![noon_core::ScenePatch::SetTransform {"
+          new = "        let patch = PatchBatch::new(0, vec![noon_core::ScenePatch::SetTransform {"
           if old not in text:
               raise SystemExit('versioned PatchBatch test anchor missing')
           text = text.replace(old, new, 1)
-          old = '''            }],
-        };
-        let delta = engine'''
-          new = '''            }]);
-        let delta = engine'''
+          old = "            }],\n        };\n        let delta = engine"
+          new = "            }]);\n        let delta = engine"
           if old not in text:
               raise SystemExit('PatchBatch closing test anchor missing')
           path.write_text(text.replace(old, new, 1))
