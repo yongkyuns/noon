@@ -1,0 +1,30 @@
+name: Measure P7 identity stabilization before-after
+
+on:
+  push:
+    branches: [perf/evidence-p1-p2]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Benchmark before #146
+        shell: bash
+        run: |
+          git checkout -f 70c68e0b9e62e615dcd2b2a40323648af9b8adb3
+          node web/scene-pipeline-perf.mjs --warmups 5 --samples 20 100000 | tee /tmp/before.txt
+      - name: Benchmark #146 head
+        shell: bash
+        run: |
+          git checkout -f c9b93ffb943b31a60b0e6cfa53b854fcf448511b
+          node web/scene-pipeline-perf.mjs --warmups 5 --samples 20 100000 | tee /tmp/after.txt
+      - name: Publish evidence
+        shell: bash
+        run: |
+          echo '### Before #146' >> "$GITHUB_STEP_SUMMARY"
+          grep 'stabilize identities' /tmp/before.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '### #146 head' >> "$GITHUB_STEP_SUMMARY"
+          grep 'stabilize identities' /tmp/after.txt >> "$GITHUB_STEP_SUMMARY"
