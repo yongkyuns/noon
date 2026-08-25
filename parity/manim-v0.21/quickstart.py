@@ -51,3 +51,13 @@ class AnimatedSquareToCircle(Scene):
         self.play(square.animate.rotate(PI / 4))
         self.play(Transform(square, circle))
         self.play(square.animate.set_fill(PINK, opacity=0.5))
+
+
+# Supplemental source-equivalent parity probe. This is deliberately ordinary
+# Manim source (not a Noon-specific adaptation) and exercises the exact inverse
+# lifecycle/reveal contract paired with Create above.
+class UncreateSquare(Scene):
+    def construct(self):
+        square = Square()
+        self.add(square)
+        self.play(Uncreate(square))
