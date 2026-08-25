@@ -140,33 +140,39 @@ class _CallbackContext:
     def __init__(self, scene: _base.Scene, frame: dict[str, Any]) -> None:
         self.scene = scene
         self.delta_time = float(frame["delta_time"])
+        self._frame_items = {
+            int(item["object"]): item
+            for item in frame["objects"]
+        }
         self._baseline: dict[int, _ir.Mobject] = {}
         self._current: dict[int, _ir.Mobject] = {}
 
-        for item in frame["objects"]:
-            object_id = int(item["object"])
-            authored = scene._objects[object_id]
-            raw = _ir.Mobject(
-                geometry=copy.deepcopy(authored["geometry"]),
-                transform=copy.deepcopy(item["transform"]),
-                style=copy.deepcopy(item["style"]),
-            )
-            self._baseline[object_id] = raw
-            self._current[object_id] = copy.deepcopy(raw)
-
-    def current_raw(self, object_id: int) -> _ir.Mobject:
+    def _materialize(self, object_id: int) -> _ir.Mobject:
+        existing = self._current.get(object_id)
+        if existing is not None:
+            return existing
         try:
-            return self._current[object_id]
+            item = self._frame_items[object_id]
         except KeyError as error:
             raise RuntimeError(
                 f"host callback snapshot does not contain object {object_id}"
             ) from error
+        authored = self.scene._objects[object_id]
+        raw = _ir.Mobject(
+            geometry=copy.deepcopy(authored["geometry"]),
+            transform=copy.deepcopy(item["transform"]),
+            style=copy.deepcopy(item["style"]),
+        )
+        self._baseline[object_id] = raw
+        current = copy.deepcopy(raw)
+        self._current[object_id] = current
+        return current
+
+    def current_raw(self, object_id: int) -> _ir.Mobject:
+        return self._materialize(object_id)
 
     def replace_raw(self, object_id: int, raw: _ir.Mobject) -> None:
-        if object_id not in self._current:
-            raise RuntimeError(
-                f"host callback snapshot does not contain object {object_id}"
-            )
+        self._materialize(object_id)
         self._current[object_id] = _ir.Mobject(
             geometry=copy.deepcopy(raw.geometry),
             transform=copy.deepcopy(raw.transform),
@@ -236,7 +242,9 @@ def register_scene(scene: _base.Scene) -> dict[str, Any] | None:
 
     # Arbitrary Python closures may read any bound mobject. Observe the complete
     # semantic object table once per callback phase so all such reads are coherent
-    # and local inside Pyodide. The host runtime deduplicates this table globally.
+    # and local inside Pyodide. The Python callback context materializes the
+    # corresponding Mobject snapshots lazily, so cost scales with the closure's
+    # touched set rather than eagerly deep-copying every scene object.
     object_ids = [int(obj["id"]) for obj in scene._objects]
     return {
         "session_id": session_id,
