@@ -30,6 +30,11 @@
       "id": "animated-square-to-circle",
       "scene": "AnimatedSquareToCircle",
       "expected_duration": 4.0
+    },
+    {
+      "id": "uncreate-square",
+      "scene": "UncreateSquare",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [0.0, 0.25, 0.5, 0.75, 0.9, 0.95, 0.98, 0.99, 1.0],
