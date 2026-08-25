@@ -89,6 +89,35 @@ pub struct CompiledTrack {
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledChannelKey {
+    pub object_index: u32,
+    pub property: Property,
+}
+
+impl CompiledChannelKey {
+    pub const fn new(object_index: u32, property: Property) -> Self {
+        Self {
+            object_index,
+            property,
+        }
+    }
+}
+
+impl PartialOrd for CompiledChannelKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompiledChannelKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.object_index
+            .cmp(&other.object_index)
+            .then_with(|| property_rank(self.property).cmp(&property_rank(other.property)))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CompiledTrackLocator {
     object_index: u32,
@@ -285,6 +314,23 @@ impl CompiledScene {
         self.object_indices.get(&id).copied()
     }
 
+    pub fn channel_for_track(&self, id: TrackId) -> Option<CompiledChannelKey> {
+        let locator = self.track_locators.get(&id)?;
+        Some(CompiledChannelKey::new(
+            locator.object_index,
+            locator.property,
+        ))
+    }
+
+    pub fn channel_tracks(&self, channel: CompiledChannelKey) -> &[CompiledTrack] {
+        let range = self.channel_track_range(channel);
+        &self.tracks[range]
+    }
+
+    pub fn has_channel(&self, channel: CompiledChannelKey) -> bool {
+        !self.channel_tracks(channel).is_empty()
+    }
+
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
         self.apply_patch_with_stats(patch).map(|_| ())
     }
@@ -445,6 +491,21 @@ impl CompiledScene {
         let end = self
             .tracks
             .partition_point(|track| track.object_index <= object_index);
+        start..end
+    }
+
+    fn channel_track_range(&self, channel: CompiledChannelKey) -> std::ops::Range<usize> {
+        let rank = property_rank(channel.property);
+        let start = self.tracks.partition_point(|track| {
+            track.object_index < channel.object_index
+                || (track.object_index == channel.object_index
+                    && property_rank(track.property) < rank)
+        });
+        let end = self.tracks.partition_point(|track| {
+            track.object_index < channel.object_index
+                || (track.object_index == channel.object_index
+                    && property_rank(track.property) <= rank)
+        });
         start..end
     }
 

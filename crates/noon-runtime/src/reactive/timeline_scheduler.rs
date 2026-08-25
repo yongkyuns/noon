@@ -1,5 +1,11 @@
-use noon_compile::CompiledTrack;
-use noon_core::Property;
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    ops::Bound::{Excluded, Included},
+};
+
+use noon_compile::{CompiledChannelKey, CompiledTrack};
+use noon_core::{Property, TrackId};
 
 use crate::SceneInstance;
 
@@ -10,6 +16,13 @@ pub struct TimelineSchedulerStats {
     pub groups_requested: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimelineRelowerStats {
+    pub groups_relowered: usize,
+    pub events_removed: usize,
+    pub events_inserted: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EventKind {
     End,
@@ -18,96 +31,102 @@ enum EventKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct TimelineEvent {
-    time: f64,
+struct EventTime(f64);
+
+impl PartialEq for EventTime {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for EventTime {}
+
+impl PartialOrd for EventTime {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EventTime {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct TimelineEventKey {
+    time: EventTime,
+    rank: u8,
     group: usize,
-    kind: EventKind,
+    track: TrackId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ScheduledTrackGroup {
-    pub object_index: usize,
-    pub property: Property,
-    pub start: usize,
-    pub end: usize,
+struct ScheduledTrackGroup {
+    channel: CompiledChannelKey,
 }
 
-/// Event index for monotonic timeline playback.
+/// Event-driven scheduler with stable channel slots.
 ///
-/// The scheduler is deliberately independent of semantic scene identity. It
-/// consumes today's sorted `CompiledTrack` contract, so the semantic-store and
-/// execution-slot migrations can change their inputs later without replacing
-/// this scheduling algorithm.
+/// Forward playback remains proportional to active groups plus crossed events.
+/// Timeline mutation can replace one object/property channel without rebuilding
+/// unrelated groups or their events. Direct seek is intentionally O(events).
 #[derive(Clone, Debug)]
 pub struct TimelineEventScheduler {
-    groups: Vec<ScheduledTrackGroup>,
-    events: Vec<TimelineEvent>,
-    event_cursor: usize,
+    groups: Vec<Option<ScheduledTrackGroup>>,
+    group_indices: BTreeMap<CompiledChannelKey, usize>,
+    free_groups: Vec<usize>,
+    events: BTreeMap<TimelineEventKey, EventKind>,
+    group_events: Vec<Vec<TimelineEventKey>>,
     time: f64,
     active_counts: Vec<u32>,
     active_groups: Vec<usize>,
     active_positions: Vec<usize>,
     visit_epoch: Vec<u64>,
     epoch: u64,
-    requested: Vec<usize>,
+    requested: Vec<CompiledChannelKey>,
+    crossed: Vec<(TimelineEventKey, EventKind)>,
     last_stats: TimelineSchedulerStats,
 }
 
 impl TimelineEventScheduler {
     pub fn new(tracks: &[CompiledTrack]) -> Self {
-        let groups = build_groups(tracks);
-        let mut events = Vec::with_capacity(tracks.len().saturating_mul(2));
-        for (group_index, group) in groups.iter().enumerate() {
-            for track in &tracks[group.start..group.end] {
-                if track.property == Property::Presence {
-                    events.push(TimelineEvent {
-                        time: track.timing.start_time,
-                        group: group_index,
-                        kind: EventKind::Instant,
-                    });
-                    continue;
-                }
-                events.push(TimelineEvent {
-                    time: track.timing.start_time,
-                    group: group_index,
-                    kind: EventKind::Start,
-                });
-                events.push(TimelineEvent {
-                    time: track.timing.start_time + track.timing.duration,
-                    group: group_index,
-                    kind: EventKind::End,
-                });
-            }
-        }
-        // End before start at equal timestamps keeps a handoff active when one
-        // segment ends exactly where the next begins.
-        events.sort_by(|left, right| {
-            left.time
-                .total_cmp(&right.time)
-                .then_with(|| event_rank(left.kind).cmp(&event_rank(right.kind)))
-                .then_with(|| left.group.cmp(&right.group))
-        });
-        let group_count = groups.len();
-        Self {
-            groups,
-            events,
-            event_cursor: 0,
+        let mut scheduler = Self {
+            groups: Vec::new(),
+            group_indices: BTreeMap::new(),
+            free_groups: Vec::new(),
+            events: BTreeMap::new(),
+            group_events: Vec::new(),
             time: f64::NEG_INFINITY,
-            active_counts: vec![0; group_count],
+            active_counts: Vec::new(),
             active_groups: Vec::new(),
-            active_positions: vec![usize::MAX; group_count],
-            visit_epoch: vec![0; group_count],
+            active_positions: Vec::new(),
+            visit_epoch: Vec::new(),
             epoch: 0,
             requested: Vec::new(),
+            crossed: Vec::new(),
             last_stats: TimelineSchedulerStats::default(),
+        };
+
+        let mut start = 0;
+        while start < tracks.len() {
+            let channel =
+                CompiledChannelKey::new(tracks[start].object_index, tracks[start].property);
+            let mut end = start + 1;
+            while end < tracks.len()
+                && tracks[end].object_index == channel.object_index
+                && tracks[end].property == channel.property
+            {
+                end += 1;
+            }
+            scheduler.relower_channel(channel, &tracks[start..end]);
+            start = end;
         }
+        scheduler.last_stats = TimelineSchedulerStats::default();
+        scheduler
     }
 
-    pub fn groups(&self) -> &[ScheduledTrackGroup] {
-        &self.groups
-    }
-
-    pub fn last_stats(&self) -> TimelineSchedulerStats {
+    pub const fn last_stats(&self) -> TimelineSchedulerStats {
         self.last_stats
     }
 
@@ -115,52 +134,136 @@ impl TimelineEventScheduler {
         &self.active_groups
     }
 
+    pub fn requested(&self) -> &[CompiledChannelKey] {
+        &self.requested
+    }
+
+    pub fn live_group_count(&self) -> usize {
+        self.group_indices.len()
+    }
+
+    /// Replace the event/index lowering for exactly one object/property channel.
+    /// Empty tracks remove the channel and free its stable scheduler slot.
+    pub fn relower_channel(
+        &mut self,
+        channel: CompiledChannelKey,
+        tracks: &[CompiledTrack],
+    ) -> TimelineRelowerStats {
+        debug_assert!(tracks
+            .iter()
+            .all(|track| track.object_index == channel.object_index
+                && track.property == channel.property));
+
+        if tracks.is_empty() {
+            let Some(group) = self.group_indices.remove(&channel) else {
+                return TimelineRelowerStats::default();
+            };
+            let removed = self.remove_group_events(group);
+            self.active_counts[group] = 0;
+            self.deactivate(group);
+            self.groups[group] = None;
+            self.free_groups.push(group);
+            self.visit_epoch[group] = 0;
+            return TimelineRelowerStats {
+                groups_relowered: 1,
+                events_removed: removed,
+                events_inserted: 0,
+            };
+        }
+
+        let (group, events_removed) = if let Some(group) = self.group_indices.get(&channel).copied()
+        {
+            (group, self.remove_group_events(group))
+        } else {
+            (self.allocate_group(channel), 0)
+        };
+        self.groups[group] = Some(ScheduledTrackGroup { channel });
+        self.group_indices.insert(channel, group);
+
+        let mut inserted = 0;
+        for track in tracks {
+            if track.property == Property::Presence {
+                inserted +=
+                    self.insert_event(group, track.id, track.timing.start_time, EventKind::Instant);
+            } else {
+                inserted +=
+                    self.insert_event(group, track.id, track.timing.start_time, EventKind::Start);
+                inserted += self.insert_event(
+                    group,
+                    track.id,
+                    track.timing.start_time + track.timing.duration,
+                    EventKind::End,
+                );
+            }
+        }
+        self.recompute_group_activity(group, tracks);
+        TimelineRelowerStats {
+            groups_relowered: 1,
+            events_removed,
+            events_inserted: inserted,
+        }
+    }
+
     /// Rebuild scheduler state for direct seek. Direct seek is intentionally
     /// allowed to be O(events); the ordinary forward frame path is not.
     pub fn seek(&mut self, time: f64) {
-        self.event_cursor = 0;
-        self.time = f64::NEG_INFINITY;
+        self.time = time;
         self.active_counts.fill(0);
         self.active_groups.clear();
         self.active_positions.fill(usize::MAX);
-        while self.event_cursor < self.events.len() && self.events[self.event_cursor].time <= time {
-            let event = self.events[self.event_cursor];
-            self.apply_event(event);
-            self.event_cursor += 1;
+        let upper = time_upper_bound(time);
+        let mut events_crossed = 0;
+        for (key, kind) in self.events.range(..=upper) {
+            events_crossed += 1;
+            match kind {
+                EventKind::Instant => {}
+                EventKind::Start => self.active_counts[key.group] += 1,
+                EventKind::End => {
+                    self.active_counts[key.group] = self.active_counts[key.group].saturating_sub(1)
+                }
+            }
         }
-        self.time = time;
+        for group in 0..self.active_counts.len() {
+            if self.active_counts[group] > 0 && self.groups[group].is_some() {
+                self.activate(group);
+            }
+        }
         self.requested.clear();
         self.last_stats = TimelineSchedulerStats {
-            events_crossed: self.event_cursor,
+            events_crossed,
             active_groups: self.active_groups.len(),
             groups_requested: 0,
         };
     }
 
-    /// Return exactly the groups that may change at `time`: groups active after
-    /// crossing the interval plus groups touched by boundary events. Historical
-    /// and future inactive groups are not visited.
-    pub fn advance(&mut self, time: f64) -> &[usize] {
+    /// Build the reusable request buffer for groups that can change at `time`.
+    /// The return value is the request count; callers can read `requested()` one
+    /// channel at a time without cloning the active set.
+    pub fn advance(&mut self, time: f64) -> usize {
         if time < self.time {
             self.seek(time);
             self.begin_request_epoch();
             self.request_active_groups();
             self.last_stats.groups_requested = self.requested.len();
-            return &self.requested;
+            return self.requested.len();
         }
 
         self.begin_request_epoch();
-        let mut events_crossed = 0;
-        while self.event_cursor < self.events.len() && self.events[self.event_cursor].time <= time {
-            let event = self.events[self.event_cursor];
-            if event.time > self.time {
-                self.request(event.group);
-                self.apply_event(event);
-                events_crossed += 1;
-            }
-            self.event_cursor += 1;
+        self.crossed.clear();
+        let lower = time_upper_bound(self.time);
+        let upper = time_upper_bound(time);
+        self.crossed.extend(
+            self.events
+                .range((Excluded(lower), Included(upper)))
+                .map(|(key, kind)| (*key, *kind)),
+        );
+        for index in 0..self.crossed.len() {
+            let (key, kind) = self.crossed[index];
+            self.request(key.group);
+            self.apply_event(key.group, kind);
         }
 
+        let events_crossed = self.crossed.len();
         self.request_active_groups();
         self.time = time;
         self.last_stats = TimelineSchedulerStats {
@@ -168,7 +271,67 @@ impl TimelineEventScheduler {
             active_groups: self.active_groups.len(),
             groups_requested: self.requested.len(),
         };
-        &self.requested
+        self.requested.len()
+    }
+
+    fn allocate_group(&mut self, channel: CompiledChannelKey) -> usize {
+        if let Some(group) = self.free_groups.pop() {
+            self.groups[group] = Some(ScheduledTrackGroup { channel });
+            self.active_counts[group] = 0;
+            self.active_positions[group] = usize::MAX;
+            self.visit_epoch[group] = 0;
+            self.group_events[group].clear();
+            return group;
+        }
+        let group = self.groups.len();
+        self.groups.push(Some(ScheduledTrackGroup { channel }));
+        self.group_events.push(Vec::new());
+        self.active_counts.push(0);
+        self.active_positions.push(usize::MAX);
+        self.visit_epoch.push(0);
+        group
+    }
+
+    fn insert_event(&mut self, group: usize, track: TrackId, time: f64, kind: EventKind) -> usize {
+        let key = TimelineEventKey {
+            time: EventTime(time),
+            rank: event_rank(kind),
+            group,
+            track,
+        };
+        let previous = self.events.insert(key, kind);
+        debug_assert!(previous.is_none());
+        self.group_events[group].push(key);
+        usize::from(previous.is_none())
+    }
+
+    fn remove_group_events(&mut self, group: usize) -> usize {
+        let keys = std::mem::take(&mut self.group_events[group]);
+        let mut removed = 0;
+        for key in keys {
+            removed += usize::from(self.events.remove(&key).is_some());
+        }
+        removed
+    }
+
+    fn recompute_group_activity(&mut self, group: usize, tracks: &[CompiledTrack]) {
+        self.active_counts[group] = 0;
+        self.deactivate(group);
+        if self.time == f64::NEG_INFINITY {
+            return;
+        }
+        let count = tracks
+            .iter()
+            .filter(|track| {
+                track.property != Property::Presence
+                    && track.timing.start_time <= self.time
+                    && self.time < track.timing.start_time + track.timing.duration
+            })
+            .count();
+        self.active_counts[group] = u32::try_from(count).expect("active track count exceeds u32");
+        if count > 0 {
+            self.activate(group);
+        }
     }
 
     fn begin_request_epoch(&mut self) {
@@ -180,10 +343,6 @@ impl TimelineEventScheduler {
         }
     }
 
-    /// Request the current active set without cloning it. Indexing keeps the
-    /// immutable borrow of `active_groups` scoped to one statement, so
-    /// `request` can mutate the visit/request buffers without allocating a
-    /// per-frame snapshot proportional to the number of active groups.
     fn request_active_groups(&mut self) {
         for index in 0..self.active_groups.len() {
             let group = self.active_groups[index];
@@ -195,33 +354,33 @@ impl TimelineEventScheduler {
         if self.visit_epoch[group] == self.epoch {
             return;
         }
+        let Some(scheduled) = self.groups[group] else {
+            return;
+        };
         self.visit_epoch[group] = self.epoch;
-        self.requested.push(group);
+        self.requested.push(scheduled.channel);
     }
 
-    fn apply_event(&mut self, event: TimelineEvent) {
-        match event.kind {
+    fn apply_event(&mut self, group: usize, kind: EventKind) {
+        match kind {
             EventKind::Instant => {}
             EventKind::Start => {
-                let count = &mut self.active_counts[event.group];
-                *count += 1;
-                if *count == 1 {
-                    self.activate(event.group);
+                self.active_counts[group] += 1;
+                if self.active_counts[group] == 1 {
+                    self.activate(group);
                 }
             }
             EventKind::End => {
-                let count = &mut self.active_counts[event.group];
-                debug_assert!(*count > 0);
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    self.deactivate(event.group);
+                self.active_counts[group] = self.active_counts[group].saturating_sub(1);
+                if self.active_counts[group] == 0 {
+                    self.deactivate(group);
                 }
             }
         }
     }
 
     fn activate(&mut self, group: usize) {
-        if self.active_positions[group] != usize::MAX {
+        if self.active_positions[group] != usize::MAX || self.groups[group].is_none() {
             return;
         }
         self.active_positions[group] = self.active_groups.len();
@@ -251,7 +410,16 @@ impl SceneInstance {
     }
 }
 
-fn event_rank(kind: EventKind) -> u8 {
+fn time_upper_bound(time: f64) -> TimelineEventKey {
+    TimelineEventKey {
+        time: EventTime(time),
+        rank: u8::MAX,
+        group: usize::MAX,
+        track: TrackId::new(u64::MAX),
+    }
+}
+
+const fn event_rank(kind: EventKind) -> u8 {
     match kind {
         EventKind::End => 0,
         EventKind::Instant => 1,
@@ -259,33 +427,9 @@ fn event_rank(kind: EventKind) -> u8 {
     }
 }
 
-fn build_groups(tracks: &[CompiledTrack]) -> Vec<ScheduledTrackGroup> {
-    let mut groups = Vec::new();
-    let mut start = 0;
-    while start < tracks.len() {
-        let object_index = tracks[start].object_index as usize;
-        let property = tracks[start].property;
-        let mut end = start + 1;
-        while end < tracks.len()
-            && tracks[end].object_index as usize == object_index
-            && tracks[end].property == property
-        {
-            end += 1;
-        }
-        groups.push(ScheduledTrackGroup {
-            object_index,
-            property,
-            start,
-            end,
-        });
-        start = end;
-    }
-    groups
-}
-
 #[cfg(test)]
 mod tests {
-    use noon_compile::CompiledTrack;
+    use noon_compile::{CompiledChannelKey, CompiledTrack};
     use noon_core::{
         CompositionTimeMap, Property, RateFunction, TrackId, TrackTiming, TrackValues, Vec2,
     };
@@ -324,7 +468,8 @@ mod tests {
         }
         let mut scheduler = TimelineEventScheduler::new(&tracks);
         scheduler.seek(0.0);
-        assert!(scheduler.advance(1.0 / 60.0).is_empty());
+        assert_eq!(scheduler.advance(1.0 / 60.0), 0);
+        assert!(scheduler.requested().is_empty());
         let stats = scheduler.last_stats();
         assert_eq!(stats.events_crossed, 0);
         assert_eq!(stats.active_groups, 0);
@@ -344,8 +489,7 @@ mod tests {
         }
         let mut scheduler = TimelineEventScheduler::new(&tracks);
         scheduler.seek(0.0);
-        let requested = scheduler.advance(0.5);
-        assert_eq!(requested.len(), 10);
+        assert_eq!(scheduler.advance(0.5), 10);
         let stats = scheduler.last_stats();
         assert_eq!(stats.active_groups, 10);
         assert_eq!(stats.groups_requested, 10);
@@ -360,7 +504,11 @@ mod tests {
         ];
         let mut scheduler = TimelineEventScheduler::new(&tracks);
         scheduler.seek(0.0);
-        assert_eq!(scheduler.advance(3.0), &[0]);
+        assert_eq!(scheduler.advance(3.0), 1);
+        assert_eq!(
+            scheduler.requested(),
+            &[CompiledChannelKey::new(0, Property::Position)]
+        );
         let stats = scheduler.last_stats();
         assert_eq!(stats.events_crossed, 2);
         assert_eq!(stats.active_groups, 0);
@@ -374,7 +522,34 @@ mod tests {
         ];
         let mut scheduler = TimelineEventScheduler::new(&tracks);
         scheduler.seek(0.5);
-        assert_eq!(scheduler.advance(1.0), &[0]);
-        assert_eq!(scheduler.active_groups(), &[0]);
+        assert_eq!(scheduler.advance(1.0), 1);
+        assert_eq!(scheduler.active_groups().len(), 1);
+    }
+
+    #[test]
+    fn relowering_one_large_timeline_channel_does_not_rebuild_other_groups() {
+        let mut tracks = Vec::new();
+        for index in 0..100_000u32 {
+            tracks.push(position_track(
+                index as u64,
+                index,
+                1000.0 + index as f64,
+                1.0,
+            ));
+        }
+        let mut scheduler = TimelineEventScheduler::new(&tracks);
+        scheduler.seek(0.0);
+        let channel = CompiledChannelKey::new(50_000, Property::Position);
+        let replacement = [
+            position_track(200_000, 50_000, 2.0, 1.0),
+            position_track(200_001, 50_000, 4.0, 1.0),
+        ];
+        let stats = scheduler.relower_channel(channel, &replacement);
+        assert_eq!(stats.groups_relowered, 1);
+        assert_eq!(stats.events_removed, 2);
+        assert_eq!(stats.events_inserted, 4);
+        assert_eq!(scheduler.live_group_count(), 100_000);
+        assert_eq!(scheduler.advance(2.5), 1);
+        assert_eq!(scheduler.requested(), &[channel]);
     }
 }
