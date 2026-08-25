@@ -120,6 +120,7 @@ fn reconcile_and_full_replacement_match_fresh_compile_at_the_same_playhead() {
     desired.object_mut(first).unwrap().style = Style {
         opacity: 0.42,
         stroke_width: 2.5,
+        stroke_width_mode: Default::default(),
         ..Style::default()
     };
 

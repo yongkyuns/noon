@@ -10,6 +10,7 @@ fn style(join: StrokeJoin, cap: StrokeCap) -> Style {
         fill: None,
         stroke: Some(Color::WHITE),
         stroke_width: 0.2,
+        stroke_width_mode: Default::default(),
         stroke_join: join,
         stroke_cap: cap,
         opacity: 1.0,

@@ -123,6 +123,7 @@ fn manim_vmobject_snapshot(geometry: GeometryRef, default_color: Color) -> Objec
     snapshot.style.fill = Some(transparent_fill);
     snapshot.style.stroke = Some(default_color);
     snapshot.style.stroke_width = MANIM_CAIRO_DEFAULT_STROKE_WIDTH;
+    snapshot.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
     snapshot.style.stroke_join = StrokeJoin::Miter;
     snapshot.style.stroke_cap = StrokeCap::Butt;
     snapshot

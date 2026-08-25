@@ -13,6 +13,10 @@ fn rust_authoring_shapes_use_manim_vmobject_defaults() {
         assert_eq!(fill.alpha, 0.0);
         assert_eq!(snapshot.style.stroke, Some(WHITE));
         assert!((snapshot.style.stroke_width - 0.04).abs() < f32::EPSILON);
+        assert_eq!(
+            snapshot.style.stroke_width_mode,
+            noon_core::StrokeWidthMode::ScreenSpace
+        );
         assert_eq!(snapshot.style.stroke_join, noon_core::StrokeJoin::Miter);
         assert_eq!(snapshot.style.stroke_cap, noon_core::StrokeCap::Butt);
     }
@@ -32,6 +36,10 @@ fn rust_circle_uses_manim_specific_red_default() {
     assert_eq!(fill.alpha, 0.0);
     assert_eq!(snapshot.snapshot().style.stroke, Some(RED));
     assert!((snapshot.snapshot().style.stroke_width - 0.04).abs() < f32::EPSILON);
+    assert_eq!(
+        snapshot.snapshot().style.stroke_width_mode,
+        noon_core::StrokeWidthMode::ScreenSpace
+    );
 }
 
 #[test]

@@ -7,6 +7,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
         fill: None,
         stroke: Some(Color::WHITE),
         stroke_width: 0.08,
+        stroke_width_mode: Default::default(),
         ..Style::default()
     };
     FrameObjectState {

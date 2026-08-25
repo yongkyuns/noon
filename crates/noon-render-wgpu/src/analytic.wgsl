@@ -42,6 +42,7 @@ struct VertexOutput {
     @location(3) stroke: vec4<f32>,
     @location(4) metrics: vec2<f32>,
     @location(5) flags: vec2<f32>,
+    @location(6) object_scale: vec2<f32>,
 };
 
 fn rotate_vector(local: vec2<f32>, rotation: f32) -> vec2<f32> {
@@ -81,8 +82,38 @@ fn local_axis_padding(scale: vec2<f32>, rotation: f32) -> vec2<f32> {
     );
 }
 
-fn stroke_half_width(metrics: vec2<f32>, flags: vec2<u32>) -> f32 {
-    return select(0.0, max(metrics.x, 0.0) * 0.5, flags.y != 0u);
+fn fill_is_enabled(flags: vec2<u32>) -> bool {
+    return (flags.x & 1u) != 0u;
+}
+
+fn stroke_is_enabled(flags: vec2<u32>) -> bool {
+    return (flags.y & 1u) != 0u;
+}
+
+fn stroke_is_screen_space(flags: vec2<u32>) -> bool {
+    return (flags.y & 2u) != 0u;
+}
+
+fn safe_abs_scale(scale: vec2<f32>) -> vec2<f32> {
+    return max(abs(scale), vec2<f32>(0.000001));
+}
+
+fn local_stroke_width_for_normal(
+    authored_width: f32,
+    normal: vec2<f32>,
+    scale: vec2<f32>,
+    screen_space: bool,
+) -> f32 {
+    let local_width = max(authored_width, 0.0);
+    let normalized = normalize(select(vec2<f32>(1.0, 0.0), normal, length(normal) > 0.000001));
+    let inverse_scaled_normal = normalized / safe_abs_scale(scale);
+    return select(local_width, local_width * length(inverse_scaled_normal), screen_space);
+}
+
+fn world_units_per_pixel(direction: vec2<f32>) -> f32 {
+    let clip_vector = direction * camera.clip_scale;
+    let pixel_vector = clip_vector * camera.viewport_size * 0.5;
+    return 1.0 / max(length(pixel_vector), 0.000001);
 }
 
 fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
@@ -96,6 +127,7 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
     output.stroke = input.stroke;
     output.metrics = input.metrics;
     output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
+    output.object_scale = input.scale;
     return output;
 }
 
@@ -103,15 +135,21 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
 fn vs_circle(input: VertexInput) -> VertexOutput {
     let radius = max(abs(input.geometry.x), 0.000001);
     let padding = local_axis_padding(input.scale, input.rotation);
-    let stroke_padding = stroke_half_width(input.metrics, input.flags);
     let reveal = clamp(input.geometry.y, 0.0, 1.0);
-    let derive_creation_stroke = reveal < 1.0 && input.flags.x != 0u && input.flags.y == 0u;
-    let creation_padding = select(
-        stroke_padding,
-        max(input.metrics.x, 0.0) * 0.5,
-        derive_creation_stroke,
+    let fill_enabled = fill_is_enabled(input.flags);
+    let stroke_enabled = stroke_is_enabled(input.flags);
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
+    let has_outline = stroke_enabled || derive_creation_stroke;
+    let half_width = max(input.metrics.x, 0.0) * 0.5;
+    let scaled_padding = vec2<f32>(half_width);
+    let invariant_padding = vec2<f32>(half_width) / safe_abs_scale(input.scale);
+    let stroke_padding = select(
+        scaled_padding,
+        invariant_padding,
+        stroke_is_screen_space(input.flags),
     );
-    let local = input.unit * (vec2<f32>(radius + creation_padding) + padding);
+    let outline_padding = select(vec2<f32>(0.0), stroke_padding, has_outline);
+    let local = input.unit * (vec2<f32>(radius) + outline_padding + padding);
     return make_output(input, local);
 }
 
@@ -119,8 +157,20 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
 fn vs_rectangle(input: VertexInput) -> VertexOutput {
     let half_size = abs(input.geometry) * 0.5;
     let padding = local_axis_padding(input.scale, input.rotation);
-    let stroke_padding = stroke_half_width(input.metrics, input.flags);
-    let local = input.unit * (half_size + vec2<f32>(stroke_padding) + padding);
+    let half_width = max(input.metrics.x, 0.0) * 0.5;
+    let scaled_padding = vec2<f32>(half_width);
+    let invariant_padding = vec2<f32>(half_width) / safe_abs_scale(input.scale);
+    let stroke_padding = select(
+        scaled_padding,
+        invariant_padding,
+        stroke_is_screen_space(input.flags),
+    );
+    let outline_padding = select(
+        vec2<f32>(0.0),
+        stroke_padding,
+        stroke_is_enabled(input.flags),
+    );
+    let local = input.unit * (half_size + outline_padding + padding);
     return make_output(input, local);
 }
 
@@ -128,31 +178,56 @@ fn vs_rectangle(input: VertexInput) -> VertexOutput {
 fn vs_line(input: LineVertexInput) -> VertexOutput {
     let reveal = clamp(input.reveal, 0.0, 1.0);
     let revealed_end = mix(input.start, input.end, reveal);
-    let delta = revealed_end - input.start;
-    let segment_length = length(delta);
-    var tangent = vec2<f32>(1.0, 0.0);
-    if segment_length > 0.000001 {
-        tangent = delta / segment_length;
-    }
-    let normal = vec2<f32>(-tangent.y, tangent.x);
-    let width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
-    let half_width = width * 0.5;
-    let tangent_padding = local_units_per_pixel(tangent, input.scale, input.rotation);
-    let normal_padding = local_units_per_pixel(normal, input.scale, input.rotation);
-    let proxy_half_size = vec2<f32>(
-        segment_length * 0.5 + half_width + tangent_padding,
-        half_width + normal_padding,
-    );
-    let shape_position = input.unit * proxy_half_size;
-    let center = (input.start + revealed_end) * 0.5;
-    let local = center + tangent * shape_position.x + normal * shape_position.y;
+    let screen_space = stroke_is_screen_space(input.flags);
+    let authored_width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
 
     var output: VertexOutput;
-    let world = transform_point(local, input.translation, input.scale, input.rotation);
-    let clip = (world - camera.center) * camera.clip_scale;
-    output.position = vec4<f32>(clip, 0.0, 1.0);
-    output.local = shape_position;
-    output.geometry = vec2<f32>(segment_length, width);
+    if screen_space {
+        let world_start = transform_point(input.start, input.translation, input.scale, input.rotation);
+        let world_end = transform_point(revealed_end, input.translation, input.scale, input.rotation);
+        let delta = world_end - world_start;
+        let segment_length = length(delta);
+        var tangent = vec2<f32>(1.0, 0.0);
+        if segment_length > 0.000001 {
+            tangent = delta / segment_length;
+        }
+        let normal = vec2<f32>(-tangent.y, tangent.x);
+        let half_width = authored_width * 0.5;
+        let proxy_half_size = vec2<f32>(
+            segment_length * 0.5 + half_width + world_units_per_pixel(tangent),
+            half_width + world_units_per_pixel(normal),
+        );
+        let shape_position = input.unit * proxy_half_size;
+        let center = (world_start + world_end) * 0.5;
+        let world = center + tangent * shape_position.x + normal * shape_position.y;
+        output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+        output.local = shape_position;
+        output.geometry = vec2<f32>(segment_length, authored_width);
+        output.object_scale = vec2<f32>(1.0);
+    } else {
+        let delta = revealed_end - input.start;
+        let segment_length = length(delta);
+        var tangent = vec2<f32>(1.0, 0.0);
+        if segment_length > 0.000001 {
+            tangent = delta / segment_length;
+        }
+        let normal = vec2<f32>(-tangent.y, tangent.x);
+        let half_width = authored_width * 0.5;
+        let tangent_padding = local_units_per_pixel(tangent, input.scale, input.rotation);
+        let normal_padding = local_units_per_pixel(normal, input.scale, input.rotation);
+        let proxy_half_size = vec2<f32>(
+            segment_length * 0.5 + half_width + tangent_padding,
+            half_width + normal_padding,
+        );
+        let shape_position = input.unit * proxy_half_size;
+        let center = (input.start + revealed_end) * 0.5;
+        let local = center + tangent * shape_position.x + normal * shape_position.y;
+        let world = transform_point(local, input.translation, input.scale, input.rotation);
+        output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+        output.local = shape_position;
+        output.geometry = vec2<f32>(segment_length, authored_width);
+        output.object_scale = input.scale;
+    }
     output.fill = input.fill;
     output.stroke = input.stroke;
     output.metrics = input.metrics;
@@ -214,7 +289,7 @@ fn styled_shape_color(
 
 fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
     let coverage = inside_coverage(signed_distance);
-    if input.flags.y > 0.5 {
+    if (u32(input.flags.y) & 1u) != 0u {
         return covered_color(input.stroke, input.metrics.y, coverage);
     }
     if input.flags.x > 0.5 {
@@ -228,6 +303,17 @@ fn rectangle_signed_distance(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
     return length(max(offset, vec2<f32>(0.0))) + min(max(offset.x, offset.y), 0.0);
 }
 
+fn rectangle_local_normal(position: vec2<f32>, half_size: vec2<f32>) -> vec2<f32> {
+    let offset = abs(position) - half_size;
+    if offset.x > 0.0 && offset.y > 0.0 {
+        return normalize(vec2<f32>(sign(position.x) * offset.x, sign(position.y) * offset.y));
+    }
+    if offset.x > offset.y {
+        return vec2<f32>(sign(position.x), 0.0);
+    }
+    return vec2<f32>(0.0, sign(position.y));
+}
+
 fn capsule_signed_distance(position: vec2<f32>, half_length: f32, radius: f32) -> f32 {
     let offset = vec2<f32>(max(abs(position.x) - half_length, 0.0), position.y);
     return length(offset) - radius;
@@ -238,9 +324,16 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let radius = max(abs(input.geometry.x), 0.000001);
     let reveal = clamp(input.geometry.y, 0.0, 1.0);
     let signed_distance = length(input.local) - radius;
-    let stroke_width = max(input.metrics.x, 0.0);
+    let screen_space_stroke = (u32(input.flags.y) & 2u) != 0u;
+    let local_normal = normalize(select(vec2<f32>(1.0, 0.0), input.local, length(input.local) > 0.000001));
+    let stroke_width = local_stroke_width_for_normal(
+        input.metrics.x,
+        local_normal,
+        input.object_scale,
+        screen_space_stroke,
+    );
     let fill_enabled = input.flags.x > 0.5;
-    let stroke_enabled = input.flags.y > 0.5;
+    let stroke_enabled = (u32(input.flags.y) & 1u) != 0u;
 
     // All derivative-dependent coverage is evaluated before reveal-dependent
     // control flow. `reveal` is interpolated, so WebGPU requires derivatives to
@@ -269,8 +362,14 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let head_angle = reveal * tau;
     let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
     let start_center = vec2<f32>(radius, 0.0);
-    let head_cap = inside_coverage(length(input.local - head_center) - half_stroke_width);
-    let start_cap = inside_coverage(length(input.local - start_center) - half_stroke_width);
+    let local_head_distance = length(input.local - head_center) - half_stroke_width;
+    let local_start_distance = length(input.local - start_center) - half_stroke_width;
+    let world_head_distance = length((input.local - head_center) * input.object_scale)
+        - max(input.metrics.x, 0.0) * 0.5;
+    let world_start_distance = length((input.local - start_center) * input.object_scale)
+        - max(input.metrics.x, 0.0) * 0.5;
+    let head_cap = inside_coverage(select(local_head_distance, world_head_distance, screen_space_stroke));
+    let start_cap = inside_coverage(select(local_start_distance, world_start_distance, screen_space_stroke));
 
     if reveal >= 1.0 {
         return final_color;
@@ -315,13 +414,19 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
-    let stroke_width = max(input.metrics.x, 0.0);
+    let stroke_flags = u32(input.flags.y);
+    let stroke_width = local_stroke_width_for_normal(
+        input.metrics.x,
+        rectangle_local_normal(input.local, half_size),
+        input.object_scale,
+        (stroke_flags & 2u) != 0u,
+    );
     return styled_shape_color(
         input.fill,
         input.stroke,
         input.metrics.y,
         input.flags.x > 0.5,
-        input.flags.y > 0.5,
+        (stroke_flags & 1u) != 0u,
         signed_distance,
         stroke_width,
     );
