@@ -17,33 +17,41 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           root = Path('.')
           rust_files = list((root / 'crates').rglob('*.rs')) + list((root / 'fuzz').rglob('*.rs'))
 
+          def migrate_literals(text, type_name, field_anchor, insertion):
+              lines = text.splitlines(keepends=True)
+              i = 0
+              while i < len(lines):
+                  line = lines[i]
+                  if f'{type_name} {{' not in line or f'struct {type_name} {{' in line or f'impl {type_name} {{' in line:
+                      i += 1
+                      continue
+                  depth = line.count('{') - line.count('}')
+                  j = i + 1
+                  inserted = False
+                  already = False
+                  while j < len(lines) and depth > 0:
+                      stripped = lines[j].strip()
+                      if stripped.startswith(insertion.split(':', 1)[0] + ':'):
+                          already = True
+                      if stripped.startswith(field_anchor) and not already:
+                          indent = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                          lines.insert(j, f'{indent}{insertion}\n')
+                          inserted = True
+                          j += 1
+                      depth += lines[j].count('{') - lines[j].count('}')
+                      j += 1
+                  i = j if (inserted or already) else i + 1
+              return ''.join(lines)
+
           for path in rust_files:
               text = path.read_text()
-              original = text
-              # Every TrackDefinition literal already spells out time_map. Add a
-              # backwards-compatible optional semantic origin; the struct definition
-              # uses `pub time_map` and is intentionally not matched here.
-              text = re.sub(
-                  r'(TrackDefinition\s*\{.*?\n)(\s*)(time_map:)',
-                  lambda m: m.group(1) + m.group(2) + 'origin: None,\n' + m.group(2) + m.group(3),
-                  text,
-                  flags=re.S,
-              )
-              # Same mechanical migration for manually-constructed CompiledTrack
-              # values in scheduler/runtime tests and examples.
-              text = re.sub(
-                  r'(CompiledTrack\s*\{.*?\n)(\s*)(transform_geometry_plan:)',
-                  lambda m: m.group(1) + m.group(2) + 'animation_origin: None,\n' + m.group(2) + m.group(3),
-                  text,
-                  flags=re.S,
-              )
-              if text != original:
-                  path.write_text(text)
+              text = migrate_literals(text, 'TrackDefinition', 'time_map:', 'origin: None,')
+              text = migrate_literals(text, 'CompiledTrack', 'transform_geometry_plan:', 'animation_origin: None,')
+              path.write_text(text)
 
           timeline = Path('crates/noon-core/src/timeline.rs')
           text = timeline.read_text()
@@ -55,10 +63,13 @@ jobs:
 
           graph = Path('crates/noon-core/src/animation_graph.rs')
           text = graph.read_text()
-          if text.count('origin: None,') < 3:
-              raise SystemExit('expected migrated TrackDefinition literals in animation graph')
-          text = text.replace('origin: None,', 'origin: Some(origin),', 2)
-          graph.write_text(text)
+          start = text.index('fn lower_node(')
+          end = text.index('\nfn node_duration(', start)
+          section = text[start:end]
+          if section.count('origin: None,') != 2:
+              raise SystemExit(f'expected two lowered candidate origins, found {section.count("origin: None,")}')
+          section = section.replace('origin: None,', 'origin: Some(origin),')
+          graph.write_text(text[:start] + section + text[end:])
 
           compile_rs = Path('crates/noon-compile/src/lib.rs')
           text = compile_rs.read_text()
