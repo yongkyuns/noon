@@ -70,9 +70,25 @@ try {
   );
 
   await page.waitForFunction(
-    () => document.querySelector("#python-scene-source")?.value.includes("from noon import"),
+    () =>
+      document.querySelector("#python-scene-source")?.value.includes("from noon import") ||
+      document.querySelector("#status")?.dataset.state === "error",
     null,
     { timeout: 30_000 },
+  );
+  const startup = await page.evaluate(() => ({
+    sourceLoaded:
+      document.querySelector("#python-scene-source")?.value.includes("from noon import") ?? false,
+    state: document.querySelector("#status")?.dataset.state ?? null,
+    text:
+      document.querySelector("#status-text")?.textContent ??
+      document.querySelector("#status")?.textContent ??
+      "",
+  }));
+  assert.equal(
+    startup.sourceLoaded,
+    true,
+    `playground failed before loading editor source: ${JSON.stringify(startup)}\n${errors.join("\n")}`,
   );
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
