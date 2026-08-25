@@ -80,40 +80,16 @@ async function walkFiles(root) {
   return files;
 }
 
-async function findSingleFile(root, suffix, scene) {
-  const files = (await walkFiles(root)).filter(
-    (file) => file.endsWith(suffix) && path.basename(file).includes(scene),
-  );
-  assert.equal(
-    files.length,
-    1,
-    `${scene}: expected one ${suffix} under ${root}, found ${files.join(", ")}`,
-  );
-  return files[0];
-}
-
-function probeVideo(videoPath) {
-  const result = runChecked("ffprobe", [
-    "-v",
-    "error",
-    "-select_streams",
-    "v:0",
-    "-show_entries",
-    "stream=nb_frames,r_frame_rate,duration,width,height",
-    "-of",
-    "json",
-    videoPath,
-  ]);
-  const stream = JSON.parse(result.stdout).streams?.[0];
-  assert.ok(stream, `ffprobe returned no video stream for ${videoPath}`);
-  const [rateNum, rateDen] = String(stream.r_frame_rate).split("/").map(Number);
-  return {
-    frameCount: Number(stream.nb_frames),
-    frameRate: rateNum / rateDen,
-    duration: Number(stream.duration),
-    width: Number(stream.width),
-    height: Number(stream.height),
-  };
+async function findPngFrames(root, scene) {
+  const escapedScene = scene.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escapedScene}(\\d+)\\.png$`);
+  const frames = (await walkFiles(root))
+    .map((file) => ({ file, match: path.basename(file).match(pattern) }))
+    .filter(({ match }) => match)
+    .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
+    .map(({ file }) => file);
+  assert.ok(frames.length > 0, `${scene}: expected Manim PNG frames under ${root}`);
+  return frames;
 }
 
 function sampleFrames(frameCount) {
@@ -126,23 +102,6 @@ function sampleFrames(frameCount) {
     time: frameIndex / reference.frame_rate,
     label: `frame-${String(frameIndex).padStart(4, "0")}`,
   }));
-}
-
-function extractFrame(videoPath, frameIndex, outputPath) {
-  runChecked("ffmpeg", [
-    "-y",
-    "-v",
-    "error",
-    "-i",
-    videoPath,
-    "-vf",
-    `select=eq(n\\,${frameIndex})`,
-    "-vsync",
-    "0",
-    "-frames:v",
-    "1",
-    outputPath,
-  ]);
 }
 
 async function renderManimReferences() {
@@ -159,7 +118,7 @@ async function renderManimReferences() {
       "manim",
       "--renderer=cairo",
       "--disable_caching",
-      "--format=mp4",
+      "--format=png",
       "--media_dir",
       mediaDir,
       "-r",
@@ -170,23 +129,27 @@ async function renderManimReferences() {
       fixture.scene,
     ]);
 
-    const videoPath = await findSingleFile(mediaDir, ".mp4", fixture.scene);
-    const video = probeVideo(videoPath);
-    assert.equal(video.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
-    assert.equal(video.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
-    assert.ok(
-      Math.abs(video.frameRate - reference.frame_rate) < 1e-9,
-      `${fixture.id}: Manim reference FPS ${video.frameRate}`,
-    );
+    const frameFiles = await findPngFrames(mediaDir, fixture.scene);
+    const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
+    const frames = {
+      frameCount: frameFiles.length,
+      frameRate: reference.frame_rate,
+      duration: frameFiles.length / reference.frame_rate,
+      width: firstFrame.width,
+      height: firstFrame.height,
+      format: "png-sequence",
+    };
+    assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
+    assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(video.frameCount);
+    const samples = sampleFrames(frames.frameCount);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
-      extractFrame(videoPath, sample.frameIndex, outputPath);
+      await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
       sample.referencePath = outputPath;
     }
 
-    results.set(fixture.id, { fixture, video, samples });
+    results.set(fixture.id, { fixture, frames, samples });
   }
   return results;
 }
@@ -439,7 +402,7 @@ async function compareAll(references, backendResults) {
     const backendEntries = {};
     for (const backend of backends) {
       const actualResult = backendResults.get(backend).get(fixture.id);
-      const timingDelta = actualResult.duration - referenceResult.video.duration;
+      const timingDelta = actualResult.duration - referenceResult.frames.duration;
       const samples = [];
       for (const capture of actualResult.captures) {
         const referenceBuffer = await readFile(capture.referencePath);
@@ -478,7 +441,7 @@ async function compareAll(references, backendResults) {
       }
       backendEntries[backend] = {
         noonDuration: actualResult.duration,
-        manimVideoDuration: referenceResult.video.duration,
+        manimVideoDuration: referenceResult.frames.duration,
         durationDelta: timingDelta,
         objectCount: actualResult.objectCount,
         samples,
@@ -488,7 +451,7 @@ async function compareAll(references, backendResults) {
       id: fixture.id,
       scene: fixture.scene,
       expectedDuration: fixture.expected_duration,
-      manim: referenceResult.video,
+      manim: referenceResult.frames,
       backends: backendEntries,
     });
   }
