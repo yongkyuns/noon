@@ -17,6 +17,7 @@ node --check web/perf-profile.js
 node --check web/perf-workloads.js
 node --check web/authoring-perf.js
 node --check web/scene-perf.js
+node --check web/host-callback-perf.js
 node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/perf-profile.mjs
@@ -24,6 +25,7 @@ node --check scripts/authoring-perf.mjs
 node --check scripts/perf-device-run.mjs
 node --check scripts/perf-compare.mjs
 node --check scripts/perf-corpus.mjs
+node --check scripts/host-callback-perf.mjs
 node --check scripts/deterministic-replay-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
 node --check scripts/manim-tutorial-smoke.mjs
