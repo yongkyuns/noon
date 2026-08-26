@@ -19,6 +19,7 @@ jobs:
         run: |
           sed -i 's/2.0 + f64::EPSILON/2.0 + 1.0e-12/' scripts/tmp_rotation_updater_lifecycle.py
           python3 scripts/tmp_rotation_updater_lifecycle.py
+          python3 scripts/tmp_rotation_updater_lifecycle_fix.py
           python3 - <<'PY'
           from pathlib import Path
           path = Path("web/python/test_manim_updater_lifecycle.py")
@@ -43,6 +44,7 @@ jobs:
       - name: Commit implementation without temporary helpers
         run: |
           rm scripts/tmp_rotation_updater_lifecycle.py
+          rm scripts/tmp_rotation_updater_lifecycle_fix.py
           rm .github/workflows/tmp-rotation-updater-lifecycle.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
