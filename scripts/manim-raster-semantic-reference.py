@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Capture renderer-independent Manim scene state at every canonical raster frame.
+"""Capture Manim semantic state at the exact PNG-sequence sample frames.
 
-This intentionally runs Manim's real Scene/Cairo animation loop while replacing
-pixel/file output with a no-op renderer sink.  The resulting frame indices match
-Manim's rendered frame progression without duplicating the expensive Cairo raster
-work already performed by the differential oracle.
+Manim Cairo can encode a static wait as one materialized PNG frame with a repeat count
+while still advancing renderer time by the full wait duration.  This oracle therefore
+tracks materialized frame state and logical scene time separately.
 """
 
 from __future__ import annotations
@@ -56,7 +55,6 @@ class SemanticRenderer(CairoRenderer):
         return None
 
     def update_frame(self, _scene, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        # Semantic capture does not need a camera pixel buffer.
         return None
 
     def render(self, scene, time, moving_mobjects=None) -> None:  # type: ignore[no-untyped-def]
@@ -65,14 +63,13 @@ class SemanticRenderer(CairoRenderer):
         self.time += 1.0 / float(config.frame_rate)
 
     def freeze_current_frame(self, duration: float) -> None:
+        """Mirror Cairo PNG materialization: one state, full logical-time advance."""
         if self._active_scene is None:
             raise RuntimeError("semantic renderer has no active scene for frozen frame")
-        dt = 1.0 / float(config.frame_rate)
-        for _ in range(int(duration / dt)):
-            self.frames.append(
-                _scene_state(self._active_scene, len(self.frames), self.time, 0.0)
-            )
-            self.time += dt
+        self.frames.append(
+            _scene_state(self._active_scene, len(self.frames), self.time, 0.0)
+        )
+        self.time += float(duration)
 
 
 def _scalar(value: Any) -> float:
@@ -91,19 +88,30 @@ def _rgb(color: Any) -> list[float] | None:
     return [float(values[0]), float(values[1]), float(values[2])]
 
 
-def _rgba(mobject: Any, kind: str) -> dict[str, float] | None:
-    color_getter = getattr(mobject, f"get_{kind}_color", None)
-    opacity_getter = getattr(mobject, f"get_{kind}_opacity", None)
-    if color_getter is None or opacity_getter is None:
+def _safe_call(getter: Any) -> Any | None:
+    if getter is None:
         return None
-    rgb = _rgb(color_getter())
+    try:
+        return getter()
+    except AttributeError:
+        # Plain Manim Mobject instances used internally by Wait synthesize style
+        # getters through __getattr__, but have no VMobject paint attributes.
+        return None
+
+
+def _rgba(mobject: Any, kind: str) -> dict[str, float] | None:
+    color = _safe_call(getattr(mobject, f"get_{kind}_color", None))
+    opacity = _safe_call(getattr(mobject, f"get_{kind}_opacity", None))
+    if color is None or opacity is None:
+        return None
+    rgb = _rgb(color)
     if rgb is None:
         return None
     return {
         "red": rgb[0],
         "green": rgb[1],
         "blue": rgb[2],
-        "alpha": _scalar(opacity_getter()),
+        "alpha": _scalar(opacity),
     }
 
 
@@ -114,14 +122,15 @@ def _object_state(mobject: Any, index: int) -> dict[str, Any]:
     height = float(mobject.height)
     half_width = width * 0.5
     half_height = height * 0.5
-    stroke_width_getter = getattr(mobject, "get_stroke_width", None)
+    stroke_width_value = _safe_call(getattr(mobject, "get_stroke_width", None))
     stroke_width = (
-        _scalar(stroke_width_getter()) * CAIRO_STROKE_WIDTH_SCALE
-        if stroke_width_getter is not None
+        _scalar(stroke_width_value) * CAIRO_STROKE_WIDTH_SCALE
+        if stroke_width_value is not None
         else 0.0
     )
     family_getter = getattr(mobject, "get_family", None)
-    family_count = len(family_getter()) if family_getter is not None else 1
+    family = _safe_call(family_getter)
+    family_count = len(family) if family is not None else 1
     return {
         "index": index,
         "type": type(mobject).__name__,
@@ -139,7 +148,12 @@ def _object_state(mobject: Any, index: int) -> dict[str, Any]:
     }
 
 
-def _scene_state(scene: Any, frame_index: int, scene_time: float, animation_time: float) -> dict[str, Any]:
+def _scene_state(
+    scene: Any,
+    frame_index: int,
+    scene_time: float,
+    animation_time: float,
+) -> dict[str, Any]:
     objects = [_object_state(mobject, index) for index, mobject in enumerate(scene.mobjects)]
     return {
         "engine": "manim",
@@ -160,7 +174,11 @@ def _load_source(source_path: Path):
     return module
 
 
-def _render_fixture(module: Any, fixture: dict[str, Any], frame_rate: float) -> dict[str, Any]:
+def _render_fixture(
+    module: Any,
+    fixture: dict[str, Any],
+    frame_rate: float,
+) -> dict[str, Any]:
     scene_class = getattr(module, fixture["scene"])
     renderer = SemanticRenderer()
     scene = scene_class(renderer=renderer)
@@ -170,22 +188,29 @@ def _render_fixture(module: Any, fixture: dict[str, Any], frame_rate: float) -> 
     finally:
         scene.tear_down()
 
-    expected_frames = int(round(float(fixture["expected_duration"]) * frame_rate))
-    if len(renderer.frames) != expected_frames:
+    expected_duration = float(fixture["expected_duration"])
+    if not math.isclose(renderer.time, expected_duration, rel_tol=0.0, abs_tol=1e-9):
         raise RuntimeError(
-            f"{fixture['id']}: semantic frame count {len(renderer.frames)} != "
-            f"expected {expected_frames} from duration/fps"
+            f"{fixture['id']}: logical Manim duration {renderer.time} != "
+            f"expected {expected_duration}"
         )
+
+    previous_time = -math.inf
     for index, frame in enumerate(renderer.frames):
-        expected_time = index / frame_rate
-        if not math.isclose(float(frame["time"]), expected_time, rel_tol=0.0, abs_tol=1e-9):
+        time = float(frame["time"])
+        if time + 1e-12 < previous_time:
             raise RuntimeError(
-                f"{fixture['id']}: semantic frame {index} time {frame['time']} != {expected_time}"
+                f"{fixture['id']}: materialized frame {index} time {time} "
+                f"precedes {previous_time}"
             )
+        previous_time = time
+
     return {
         "id": fixture["id"],
         "scene": fixture["scene"],
         "frame_count": len(renderer.frames),
+        "logical_duration": float(renderer.time),
+        "frame_rate": frame_rate,
         "frames": renderer.frames,
     }
 
@@ -229,7 +254,10 @@ def main() -> int:
         "fixtures": fixtures,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(f"Captured semantic state for {len(fixtures)} Manim raster fixtures")
     return 0
 

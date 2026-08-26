@@ -49,6 +49,11 @@
       }
     },
     {
+      "id": "different-rotations",
+      "scene": "DifferentRotations",
+      "expected_duration": 3.0
+    },
+    {
       "id": "create-line",
       "scene": "CreateLine",
       "expected_duration": 1.0,

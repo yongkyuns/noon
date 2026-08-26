@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import {
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -131,10 +125,16 @@ async function renderManimReferences() {
 
     const frameFiles = await findPngFrames(mediaDir, fixture.scene);
     const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
+    const logicalDuration = Number(fixture.expected_duration);
+    assert.ok(Number.isFinite(logicalDuration) && logicalDuration >= 0, `${fixture.id}: logical duration`);
     const frames = {
       frameCount: frameFiles.length,
       frameRate: reference.frame_rate,
-      duration: frameFiles.length / reference.frame_rate,
+      // Cairo PNG output can materialize a static wait as one image with a repeat
+      // count. Logical duration is ratcheted separately by the semantic oracle, so
+      // never infer scene duration from the number of PNG files.
+      duration: logicalDuration,
+      materializedFrameSpan: frameFiles.length / reference.frame_rate,
       width: firstFrame.width,
       height: firstFrame.height,
       format: "png-sequence",
@@ -157,14 +157,6 @@ async function renderManimReferences() {
 function noonSourceFor(scene) {
   const adapted = fixtureSource.replace("from manim import *", "from noon import *");
   return `${adapted}\n\nresult = ${scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
-}
-
-function latestSceneEnd(document) {
-  const tracks = [...(document.tracks ?? []), ...(document.signal_tracks ?? [])];
-  if (tracks.length === 0) return 0;
-  return Math.max(
-    ...tracks.map((track) => Number(track.timing.start_time) + Number(track.timing.duration)),
-  );
 }
 
 async function authorNoonDocuments() {
@@ -248,10 +240,6 @@ async function captureNoonBackend(backend, documents, references) {
     for (const fixture of manifest.fixtures) {
       let page = null;
       try {
-        // Give every parity fixture an independent canvas player. WebGL drawing
-        // buffers may retain the last presented backbuffer while a new scene's
-        // first presentation becomes visible; reusing one player across fixtures
-        // therefore makes frame zero depend on fixture order instead of scene state.
         page = await createCapturePage(browser, expectedBackend, backend);
         const document = documents.get(fixture.id);
         const loaded = await page.evaluate(
@@ -321,9 +309,7 @@ function pixelStats(buffer) {
     }
   }
   const bounds = changedPixels === 0 ? null : { minX, minY, maxX, maxY };
-  const centroid = bounds
-    ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
-    : null;
+  const centroid = bounds ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } : null;
   return {
     width: png.width,
     height: png.height,
