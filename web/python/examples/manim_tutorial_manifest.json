@@ -174,6 +174,18 @@
       "parity_fixture": "grow-point-center-edge"
     },
     {
+      "id": "parity-uncreate-styled-square",
+      "title": "Exact parity: Uncreate styled square",
+      "status": "ready",
+      "path": "python/examples/manim_parity_uncreate_styled_square.py",
+      "category": "parity/creation",
+      "features": ["Uncreate", "Square", "style", "lifecycle", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.creation.Uncreate.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "uncreate-styled-square"
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
