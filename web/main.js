@@ -142,6 +142,14 @@ const SCENE_EXAMPLES = [
     parityFixture: "grow-point-center-edge",
   },
   {
+    name: "Manim parity · FocusOn",
+    path: "./python/examples/manim_parity_focus_on_point.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 FocusOn spotlight shrinking to a fixed point with remover lifecycle.",
+    features: "exact parity candidate · FocusOn · pixels + time",
+    parityFixture: "focus-on-point",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
