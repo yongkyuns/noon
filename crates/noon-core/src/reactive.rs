@@ -29,6 +29,10 @@ pub use semantic_model::*;
 mod resource_arena;
 pub use resource_arena::*;
 
+#[path = "text_resources.rs"]
+mod text_resources;
+pub use text_resources::*;
+
 include!("reactive_impl.rs");
 
 mod compute_ir;
