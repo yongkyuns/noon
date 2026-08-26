@@ -17,6 +17,18 @@ def load_parity_manifest():
     return json.loads(PARITY_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def noon_source_from_upstream(source: str, example_id: str) -> str:
+    upstream_import = "from manim import *"
+    noon_import = "from noon import *"
+    occurrences = source.count(upstream_import)
+    if occurrences != 1:
+        raise AssertionError(
+            f"{example_id}: canonical upstream source must contain exactly one "
+            f"{upstream_import!r}; found {occurrences}"
+        )
+    return source.replace(upstream_import, noon_import)
+
+
 class ManimTutorialExampleTests(unittest.TestCase):
     def test_manifest_is_versioned_and_has_unique_ids(self) -> None:
         manifest = load_manifest()
@@ -43,16 +55,18 @@ class ManimTutorialExampleTests(unittest.TestCase):
                 path = WEB_ROOT / relative_path
                 self.assertTrue(path.is_file())
                 self.assertTrue((WEB_ROOT / entry["thumbnail"]).is_file())
+                self.assertIn("upstream_source", entry)
+                upstream_path = REPO_ROOT / entry["upstream_source"]
+                self.assertTrue(upstream_path.is_file())
+
                 source = path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(path))
-                self.assertTrue(
-                    any(
-                        isinstance(node, ast.Assign)
-                        and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)
-                        for node in ast.walk(tree)
-                    ),
-                    f"{entry['id']} must assign result",
+                upstream_source = upstream_path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    source,
+                    noon_source_from_upstream(upstream_source, entry["id"]),
+                    f"{entry['id']} must match ManimCE v0.21 source except the import",
                 )
+                tree = ast.parse(source, filename=str(path))
                 compile(tree, str(path), "exec")
         self.assertEqual(len(paths), len(set(paths)))
 

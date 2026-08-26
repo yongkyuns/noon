@@ -128,6 +128,7 @@
       "features": ["Dot", "Ellipse", "geometry"],
       "upstream": "reference/manim.mobject.geometry.arc.html",
       "parity_fixture": "dot-ellipse-parity",
+      "dependency": "#91",
       "reason": "The current combined scene is a Noon parity probe, not either of Manim's upstream DotExample/EllipseExample snippets. Replace it with literal upstream source before exposing it."
     },
     {
@@ -139,6 +140,7 @@
       "features": ["Add", "Wait", "Succession", "LaggedStartMap", "FadeIn"],
       "upstream": "reference/manim.animation.composition.html",
       "parity_fixture": "add-wait-lagged-start-map",
+      "dependency": "#91",
       "reason": "The current combined composition scene is a Noon parity probe and has no matching Manim documentation example. Keep it internal until replaced by an actual upstream snippet."
     },
     {
@@ -150,6 +152,7 @@
       "features": ["GrowFromPoint", "GrowFromCenter", "GrowFromEdge", "LaggedStart"],
       "upstream": "reference/manim.animation.growing.html",
       "parity_fixture": "grow-point-center-edge",
+      "dependency": "#91",
       "reason": "The current staggered three-animation scene is Noon-specific. Manim documents separate GrowFromPointExample, GrowFromCenterExample, and GrowFromEdgeExample scenes."
     },
     {
@@ -161,6 +164,7 @@
       "features": ["Uncreate", "Square", "style", "lifecycle"],
       "upstream": "reference/manim.animation.creation.Uncreate.html",
       "parity_fixture": "uncreate-styled-square",
+      "dependency": "#91",
       "reason": "Manim's upstream example is ShowUncreate with self.play(Uncreate(Square())); the styled-square scene is an internal raster probe."
     },
     {
@@ -172,6 +176,7 @@
       "features": ["FocusOn", "Scene", "lifecycle"],
       "upstream": "reference/manim.animation.indication.FocusOn.html",
       "parity_fixture": "focus-on-point",
+      "dependency": "#91",
       "reason": "Manim's UsingFocusOn example contains Tex and a Dot target. The point-only scene is a Noon parity probe; keep it internal until exact Text/source support exists."
     },
     {
@@ -183,6 +188,7 @@
       "features": ["Rotating", "Square", "rotation"],
       "upstream": "reference/manim.animation.rotation.Rotating.html",
       "parity_fixture": "rotating-centered",
+      "dependency": "#91",
       "reason": "Manim's RotatingDemo uses Circle, Line, Arrow, VGroup, multiple pivots/axes, and several plays. The centered square is only an internal subset probe."
     },
     {
@@ -194,6 +200,7 @@
       "features": ["ShowIncreasingSubsets", "VGroup", "discrete-threshold"],
       "upstream": "reference/manim.animation.creation.ShowIncreasingSubsets.html",
       "parity_fixture": "show-increasing-subsets-two-shapes",
+      "dependency": "#91",
       "reason": "Manim's upstream ShowIncreasingSubsetsScene is VGroup(Dot(), Square(), Triangle()) plus add/play/wait. The two-shape styled scene is not that example."
     },
     {
@@ -205,6 +212,7 @@
       "features": ["ShowSubmobjectsOneByOne", "VGroup", "discrete-threshold"],
       "upstream": "reference/manim.animation.creation.ShowSubmobjectsOneByOne.html",
       "parity_fixture": "show-submobjects-one-by-one-two-shapes",
+      "dependency": "#91",
       "reason": "ManimCE v0.21 does not provide a documentation example for ShowSubmobjectsOneByOne on this reference page; this file is an internal parity probe."
     },
     {
@@ -216,6 +224,7 @@
       "features": ["Indicate", "Square", "there_and_back"],
       "upstream": "reference/manim.animation.indication.Indicate.html",
       "parity_fixture": "indicate-square",
+      "dependency": "#91",
       "reason": "Manim's UsingIndicate example uses Tex(\"Indicate\").scale(3), then Indicate and wait. The square scene is an internal parity probe until exact Text/source support exists."
     },
     {
