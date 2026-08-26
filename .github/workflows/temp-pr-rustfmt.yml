@@ -1,4 +1,4 @@
-name: Temporary PR rustfmt
+name: Temporary parity validation
 
 on:
   push:
@@ -34,8 +34,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.head_ref == 'gallery/manim-moving-around-trilang' ||
-       github.head_ref == 'arch/js-value-tracker')
+      github.head_ref == 'arch/js-value-tracker'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,5 +49,37 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add --all
-          git commit -m "Apply rustfmt to active parity branches"
+          git commit -m "Apply rustfmt to JS ValueTracker parity"
           git push origin HEAD:${{ github.head_ref }}
+
+  validate-js-value-tracker:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'arch/js-value-tracker'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build reactive browser package directly
+        run: wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --release --no-opt
+      - name: Validate generated WASM surface
+        run: node scripts/check-web-package.mjs
+      - name: Install parity browser dependency
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+      - name: Run Python Rust JavaScript parity corpus
+        run: node scripts/cross-language-parity.mjs
