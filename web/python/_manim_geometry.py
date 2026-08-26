@@ -7,6 +7,7 @@ contains small 2D wrappers needed by Manim's own documentation examples.
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any, Iterator
 
@@ -185,6 +186,39 @@ def _group_get_color(self: _compat.Group) -> _base.Color:
     return _base.WHITE if not leaves else _mobject_get_color(leaves[0])
 
 
+def _copy_group_without_constructor(self: _compat.Group) -> _compat.Group:
+    """Clone retained families without re-running arbitrary subclass constructors.
+
+    Manim group subclasses commonly keep named references to children (for example,
+    ``Arrow._shaft`` and ``Arrow._tip``). Reconstructing ``type(self)(*children)`` is
+    incorrect for such classes because their constructor arguments need not be child
+    mobjects. Seed ``deepcopy`` with the cloned family tree so subclass attributes are
+    remapped to the corresponding detached children while runtime/Scene ownership is
+    left behind by each leaf's normal ``copy`` implementation.
+    """
+
+    clone = object.__new__(type(self))
+    cloned_members = [member.copy() for member in self.submobjects]
+    clone.submobjects = cloned_members
+    memo: dict[int, object] = {id(self): clone}
+
+    def map_family(original: object, copied: object) -> None:
+        memo[id(original)] = copied
+        if isinstance(original, _compat.Group) and isinstance(copied, _compat.Group):
+            for original_child, copied_child in zip(
+                original.submobjects, copied.submobjects, strict=True
+            ):
+                map_family(original_child, copied_child)
+
+    for original, copied in zip(self.submobjects, cloned_members, strict=True):
+        map_family(original, copied)
+
+    for name, value in self.__dict__.items():
+        if name != "submobjects":
+            setattr(clone, name, copy.deepcopy(value, memo))
+    return clone
+
+
 class Arrow(_compat.Group):
     """2D Manim-style arrow composed from a Line and a triangular tip.
 
@@ -351,6 +385,7 @@ def install() -> None:
     _compat.Line.get_end = _line_get_end
     _base.Mobject.get_color = _mobject_get_color
     _compat.Group.get_color = _group_get_color
+    _compat.Group.copy = _copy_group_without_constructor
 
     # Existing compatibility layout methods resolve this module global at call time,
     # so the hook affects only Manim-facing authoring/layout and never renderer bounds.
