@@ -399,37 +399,42 @@ class PrimitiveGeometryMatrix(Scene):
         self.play(rotated.animate.shift(ORIGIN))
 
 
-class GrowPointCenterEdge(Scene):
+class AddWaitLaggedStartMap(Scene):
     def construct(self):
         left = Circle(
-            radius=0.6,
+            radius=0.35,
             fill_color=BLUE,
-            fill_opacity=0.8,
-            stroke_color=WHITE,
-            stroke_width=4,
-        ).shift(3.0 * LEFT)
-        center = Square(
-            side_length=1.2,
-            fill_color=PINK,
-            fill_opacity=0.8,
-            stroke_color=WHITE,
-            stroke_width=4,
-        )
-        right = Rectangle(
-            width=1.8,
-            height=1.0,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(2 * LEFT)
+        right = Circle(
+            radius=0.35,
             fill_color=GREEN,
-            fill_opacity=0.8,
-            stroke_color=WHITE,
-            stroke_width=4,
-        ).shift(3.0 * RIGHT)
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(2 * RIGHT)
+        self.play(Succession(Wait(0.4), Add(left), Wait(0.6), Add(right)))
 
+        mapped = VGroup(
+            Square(
+                side_length=0.7,
+                fill_color=PINK,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).shift(0.6 * LEFT + 1.5 * DOWN),
+            Square(
+                side_length=0.7,
+                fill_color=YELLOW,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).shift(0.6 * RIGHT + 1.5 * DOWN),
+        )
         self.play(
-            LaggedStart(
-                GrowFromPoint(left, 4.0 * LEFT + 2.0 * DOWN, point_color=YELLOW),
-                GrowFromCenter(center),
-                GrowFromEdge(right, DOWN),
-                lag_ratio=0.25,
-            ),
-            run_time=2.5,
+            LaggedStartMap(
+                FadeIn,
+                mapped,
+                run_time=2.2,
+                lag_ratio=0.1,
+                rate_func=linear,
+            )
         )

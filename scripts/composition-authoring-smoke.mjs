@@ -87,6 +87,32 @@ class CompositionScene(Scene):
             b.animate(rate_func=linear).shift(LEFT),
             rate_func=smooth,
         ))
+
+        # Manim's Wait/Add animation objects remain deterministic composition leaves.
+        # Add has zero intrinsic duration, so it introduces exactly between waits.
+        d = Circle(radius=0.18, color=BLUE).shift(DOWN * 2 + LEFT)
+        e = Circle(radius=0.18, color=GREEN).shift(DOWN * 2 + RIGHT)
+        self.play(Succession(
+            Wait(0.4),
+            Add(d),
+            Wait(0.6),
+            Add(e),
+        ))
+
+        # LaggedStartMap maps an animation constructor over direct group children and
+        # reuses the same shared composition scheduler as LaggedStart.
+        mapped = VGroup(
+            Square(side_length=0.25, color=PINK).shift(DOWN * 3 + LEFT * 0.4),
+            Square(side_length=0.25, color=PINK).shift(DOWN * 3 + RIGHT * 0.4),
+        )
+        self.play(LaggedStartMap(FadeIn, mapped, run_time=2.2, lag_ratio=0.1))
+
+        # Top-level Wait advances authored time while remaining trackless; top-level
+        # Add introduces immediately without consuming time.
+        self.play(Wait(0.25))
+        f = Square(side_length=0.2, color=YELLOW).shift(DOWN * 2.5)
+        self.play(Add(f))
+        self.play(f.animate(run_time=0.5, rate_func=linear).shift(UP))
 `;
 
 let browser = null;
@@ -116,7 +142,7 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
 
   const transforms = result.document.tracks.filter((track) => track.property === "transform");
-  assert.equal(transforms.length, 12);
+  assert.equal(transforms.length, 13);
   const byObject = new Map();
   for (const track of transforms) {
     const list = byObject.get(track.object) ?? [];
@@ -166,6 +192,32 @@ try {
     assert.ok(Math.abs(track.time_map.steps[0].duration - 1.0) < 1e-12);
     assert.equal(track.time_map.steps[0].rate_func, "smooth");
   }
+
+  // Wait/Add succession begins at 8.7. The zero-duration Add leaves land at
+  // 9.1 and 9.7 exactly; no synthetic continuous tracks are created for them.
+  const presence = result.document.tracks.filter((track) => track.property === "presence");
+  const addD = presence.find((track) => track.object === 3);
+  const addE = presence.find((track) => track.object === 4);
+  assert.ok(Math.abs(addD.timing.start_time - 9.1) < 1e-9);
+  assert.equal(addD.timing.duration, 0);
+  assert.ok(Math.abs(addE.timing.start_time - 9.7) < 1e-9);
+  assert.equal(addE.timing.duration, 0);
+
+  // LaggedStartMap([1,1], lag=.1, run_time=2.2) produces two 2-second fades
+  // starting at 9.7 and 9.9, matching ordinary LaggedStart timing geometry.
+  const appearances = result.document.tracks.filter((track) => track.property === "appearance");
+  const mappedFirst = appearances.find((track) => track.object === 5);
+  const mappedSecond = appearances.find((track) => track.object === 6);
+  assert.ok(Math.abs(mappedFirst.timing.start_time - 9.7) < 1e-9);
+  assert.ok(Math.abs(mappedFirst.timing.duration - 2.0) < 1e-9);
+  assert.ok(Math.abs(mappedSecond.timing.start_time - 9.9) < 1e-9);
+  assert.ok(Math.abs(mappedSecond.timing.duration - 2.0) < 1e-9);
+
+  // The top-level Wait pushes the final transform from 11.9 to 12.15; Add(f)
+  // consumes zero time and f's transform starts at that same instant.
+  const finalTransform = byObject.get(7)[0];
+  assert.ok(Math.abs(finalTransform.timing.start_time - 12.15) < 1e-9);
+  assert.ok(Math.abs(finalTransform.timing.duration - 0.5) < 1e-9);
 
   console.log("composition authoring smoke test passed");
 } finally {
