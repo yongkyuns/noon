@@ -184,6 +184,16 @@
         "max_differing_ratio": 0.0009,
         "max_mean_absolute_channel_error": 0.034
       }
+    },
+    {
+      "id": "fade-in-shift-scale-styled-square",
+      "scene": "FadeInShiftScaleStyledSquare",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "fade-out-shift-scale-styled-square",
+      "scene": "FadeOutShiftScaleStyledSquare",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
