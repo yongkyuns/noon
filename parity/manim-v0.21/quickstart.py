@@ -589,3 +589,26 @@ class SpinInFromNothingRectangle(Scene):
             stroke_opacity=0.0,
         ).rotate(PI / 7).shift(1.5 * RIGHT + 0.5 * UP)
         self.play(SpinInFromNothing(rectangle))
+
+
+class ScaleInPlaceSquare(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(LEFT * 1.25)
+        self.play(ScaleInPlace(square, 1.75))
+
+
+class ShrinkToCenterRectangle(Scene):
+    def construct(self):
+        rectangle = Rectangle(
+            width=2.0,
+            height=1.0,
+            fill_color=GREEN,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(RIGHT * 1.25)
+        self.play(ShrinkToCenter(rectangle))
