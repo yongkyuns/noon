@@ -1054,6 +1054,31 @@ def _mobject_replace(
     return self
 
 
+class MoveToTarget:
+    """ManimCE ``MoveToTarget`` over Noon's retained ``Transform`` path."""
+
+    def __new__(cls, mobject: object, **kwargs: Any):
+        if isinstance(mobject, Group):
+            raise NotImplementedError(
+                "MoveToTarget(Group/VGroup) requires retained family Transform semantics"
+            )
+        if not isinstance(mobject, _BaseMobject):
+            raise TypeError("MoveToTarget target must be a Mobject")
+        if not hasattr(mobject, "target"):
+            raise ValueError("MoveToTarget called on mobject without attribute 'target'")
+        target = mobject.target
+        if not isinstance(target, _BaseMobject) or isinstance(target, Group):
+            raise NotImplementedError(
+                "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
+            )
+        unsupported = sorted(set(kwargs) - {"key"})
+        if unsupported:
+            raise NotImplementedError(
+                "unsupported MoveToTarget option(s): " + ", ".join(unsupported)
+            )
+        return _base.Transform(mobject, target, key=kwargs.get("key"))
+
+
 def install() -> None:
     """Install the compatibility surface into the public ``noon`` module."""
 
@@ -1110,6 +1135,7 @@ def install() -> None:
         "Group": Group,
         "VGroup": VGroup,
         "Scene": Scene,
+        "MoveToTarget": MoveToTarget,
         "OUT": OUT,
         "IN": IN,
     }

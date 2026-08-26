@@ -409,6 +409,25 @@
       "order": 210
     },
     {
+      "id": "manim-move-to-target",
+      "title": "MoveToTargetExample",
+      "summary": "ManimCE v0.21 MoveToTarget reference example, unchanged except for the import module.",
+      "status": "ready",
+      "path": "python/examples/manim_example_move_to_target.py",
+      "category": "transform",
+      "features": ["MoveToTarget", "generate_target", "Circle", "Transform", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.transform.MoveToTarget.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/move_to_target_example.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "move-to-target-circle",
+      "expected_duration": 1.0,
+      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail_alt": "Exact-source Manim MoveToTargetExample",
+      "thumbnail_time": 0.5,
+      "order": 215
+    },
+    {
       "id": "parity-moving-around",
       "title": "MovingAround",
       "summary": "ManimCE v0.21 Example Gallery MovingAround, byte-for-byte except for the import module, with Rust and JavaScript semantic equivalents.",
