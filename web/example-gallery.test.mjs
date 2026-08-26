@@ -27,24 +27,26 @@ assert.ok(
   "ready gallery entries must use rendered WebP thumbnails",
 );
 assert.equal(
-  gallery.examples.find((entry) => entry.id === "parity-focus-on-point")?.parityStatus,
+  gallery.examples.find((entry) => entry.id === "parity-draw-border-then-fill-styled-square")
+    ?.parityStatus,
   "parity-qualified",
-  "FocusOn is promoted only after the canonical raster/timeline/direct-seek gate passes",
-);
-assert.equal(
-  gallery.examples.find((entry) => entry.id === "parity-indicate-square")?.parityStatus,
-  "parity-qualified",
-  "Indicate is promoted only after the canonical raster/timeline/direct-seek gate passes",
+  "the literal upstream DrawBorderThenFill example remains parity-qualified",
 );
 for (const id of [
+  "parity-dot-ellipse",
   "parity-add-wait-lagged-start-map",
   "parity-grow-point-center-edge",
   "parity-uncreate-styled-square",
+  "parity-focus-on-point",
+  "parity-rotating-centered",
+  "parity-show-increasing-subsets-two-shapes",
+  "parity-show-submobjects-one-by-one-two-shapes",
+  "parity-indicate-square",
 ]) {
   assert.equal(
-    gallery.examples.find((entry) => entry.id === id)?.parityStatus,
-    "parity-qualified",
-    `${id}: previously qualified examples must remain qualified`,
+    gallery.examples.some((entry) => entry.id === id),
+    false,
+    `${id}: internal parity probes must stay out of the public exact-source gallery`,
   );
 }
 
@@ -55,8 +57,9 @@ assert.equal(
   readyEntries.filter((entry) => entry.parity_status === "parity-qualified").length,
 );
 assert.equal(
-  filterGalleryExamples(gallery.examples, { category: "parity/composition" })[0].id,
-  "parity-add-wait-lagged-start-map",
+  filterGalleryExamples(gallery.examples, { category: "parity/composition" }).length,
+  0,
+  "Noon-specific composition probes are not public exact-source examples",
 );
 
 const syntheticManifest = {
