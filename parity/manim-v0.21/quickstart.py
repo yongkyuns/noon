@@ -587,3 +587,15 @@ class MoveToTargetExample(Scene):
         c.target.shift(2 * RIGHT + UP).scale(0.5)
         self.add(c)
         self.play(MoveToTarget(c))
+
+
+class SpinInFromNothingRectangle(Scene):
+    def construct(self):
+        rectangle = Rectangle(
+            width=2.2,
+            height=1.0,
+            fill_color=BLUE,
+            fill_opacity=0.8,
+            stroke_opacity=0.0,
+        ).rotate(PI / 7).shift(1.5 * RIGHT + 0.5 * UP)
+        self.play(SpinInFromNothing(rectangle))
