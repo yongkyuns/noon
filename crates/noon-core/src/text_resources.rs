@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{Color, GeometryResourceHandle, Rect, Transform2D, Vec2};
+use crate::{Color, GeometryResourceHandle, Rect, Vec2};
 
 /// Stable identity for one retained text/math resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -109,6 +109,74 @@ pub struct TextClusterIdentity {
     pub semantic_key: Option<Arc<str>>,
 }
 
+/// General 2D affine transform used by retained text layout.
+///
+/// Text backends can legitimately emit skewed or otherwise non-TRS groups. Keeping
+/// the complete matrix at this boundary avoids either baking transforms into glyph
+/// identities or silently dropping layout that cannot be represented by `Transform2D`.
+/// The matrix maps `(x, y)` to `(xx*x + xy*y + tx, yx*x + yy*y + ty)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextAffineTransform {
+    pub xx: f32,
+    pub yx: f32,
+    pub xy: f32,
+    pub yy: f32,
+    pub tx: f32,
+    pub ty: f32,
+}
+
+impl TextAffineTransform {
+    pub const IDENTITY: Self = Self {
+        xx: 1.0,
+        yx: 0.0,
+        xy: 0.0,
+        yy: 1.0,
+        tx: 0.0,
+        ty: 0.0,
+    };
+
+    pub const fn translation(x: f32, y: f32) -> Self {
+        Self {
+            tx: x,
+            ty: y,
+            ..Self::IDENTITY
+        }
+    }
+
+    pub fn transform_point(self, point: Vec2) -> Vec2 {
+        Vec2::new(
+            self.xx * point.x + self.xy * point.y + self.tx,
+            self.yx * point.x + self.yy * point.y + self.ty,
+        )
+    }
+
+    pub fn transform_vector(self, vector: Vec2) -> Vec2 {
+        Vec2::new(
+            self.xx * vector.x + self.xy * vector.y,
+            self.yx * vector.x + self.yy * vector.y,
+        )
+    }
+
+    /// Compose transforms such that `self.then(next)` applies `self` first and
+    /// `next` second.
+    pub fn then(self, next: Self) -> Self {
+        Self {
+            xx: next.xx * self.xx + next.xy * self.yx,
+            yx: next.yx * self.xx + next.yy * self.yx,
+            xy: next.xx * self.xy + next.xy * self.yy,
+            yy: next.yx * self.xy + next.yy * self.yy,
+            tx: next.xx * self.tx + next.xy * self.ty + next.tx,
+            ty: next.yx * self.tx + next.yy * self.ty + next.ty,
+        }
+    }
+}
+
+impl Default for TextAffineTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PositionedGlyph {
     pub glyph_id: u32,
@@ -126,6 +194,10 @@ pub struct GlyphRun {
     pub font_size: f32,
     pub direction: TextDirection,
     pub fill: Option<Color>,
+    /// Maps the run's backend-local glyph coordinates into the resource coordinate
+    /// system. Ordinary native text uses identity; math/layout engines can retain
+    /// arbitrary group transforms without outlining every glyph.
+    pub transform: TextAffineTransform,
     pub glyphs: Arc<[PositionedGlyph]>,
 }
 
@@ -154,7 +226,7 @@ impl Default for TextVectorStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextVectorItem {
     pub geometry: GeometryResourceHandle,
-    pub transform: Transform2D,
+    pub transform: TextAffineTransform,
     pub style: TextVectorStyle,
     pub source_span: Option<TextSourceSpan>,
     pub semantic_key: Option<Arc<str>>,
@@ -553,6 +625,7 @@ mod tests {
                 font_size: 48.0,
                 direction: TextDirection::LeftToRight,
                 fill: None,
+                transform: TextAffineTransform::IDENTITY,
                 glyphs,
             }]),
             vector_items: Arc::from([]),
@@ -618,6 +691,26 @@ mod tests {
     }
 
     #[test]
+    fn affine_text_transform_preserves_skew() {
+        let transform = TextAffineTransform {
+            xx: 1.0,
+            yx: 0.25,
+            xy: -0.5,
+            yy: 1.0,
+            tx: 3.0,
+            ty: -2.0,
+        };
+        assert_eq!(
+            transform.transform_point(Vec2::new(2.0, 4.0)),
+            Vec2::new(3.0, 2.5)
+        );
+        assert_eq!(
+            transform.transform_vector(Vec2::new(2.0, 4.0)),
+            Vec2::new(0.0, 4.5)
+        );
+    }
+
+    #[test]
     fn vector_math_items_share_geometry_resource_handles() {
         let geometry = GeometryResourceHandle {
             id: GeometryId::new(7),
@@ -625,7 +718,7 @@ mod tests {
         };
         let item = TextVectorItem {
             geometry,
-            transform: Transform2D::IDENTITY,
+            transform: TextAffineTransform::IDENTITY,
             style: TextVectorStyle::default(),
             source_span: Some(TextSourceSpan::new(0, 1)),
             semantic_key: Some(Arc::from("fraction-rule")),
