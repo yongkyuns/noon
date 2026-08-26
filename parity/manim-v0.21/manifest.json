@@ -218,7 +218,12 @@
     {
       "id": "camera-frame-edges",
       "scene": "CameraFrameEdges",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 0,
+        "max_differing_ratio": 0.00029,
+        "max_mean_absolute_channel_error": 0.0052
+      }
     },
     {
       "id": "primitive-geometry-matrix",
