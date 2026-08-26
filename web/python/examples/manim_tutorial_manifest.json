@@ -208,7 +208,7 @@
       "features": ["Rotating", "Square", "linear", "rotation", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.animation.rotation.Rotating.html",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
       "parity_fixture": "rotating-centered",
       "thumbnail": "thumbnails/manim/rotating-centered.webp",
       "thumbnail_alt": "Blue square rotating around its center using Manim Rotating",

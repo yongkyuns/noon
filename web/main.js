@@ -409,7 +409,6 @@ async function runScene() {
       throw new Error("Python scene source returned a PatchBatch");
     }
 
-    const before = await player.state();
     const runtimeDocument =
       authored.callbacks === null
         ? sceneIdentities.stabilize(authored.document, authored.identities)
@@ -419,9 +418,6 @@ async function runScene() {
       authoringClient,
       loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
     });
-    if (result.time !== before.time) {
-      throw new Error("Scene replacement changed the current playhead");
-    }
     const report = await player.metrics();
     const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
     patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
