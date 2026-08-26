@@ -19,32 +19,68 @@ assert.equal(
   readyEntries.length,
   "gallery must expose every ready manifest entry without a hard-coded catalog size",
 );
-assert.ok(gallery.examples.every((entry) => entry.path.startsWith("./python/examples/manim_parity_")));
+assert.ok(
+  gallery.examples.every((entry) => entry.path.startsWith("./python/examples/manim_")),
+  "public Manim gallery entries must come from the checked-in Manim example corpus",
+);
 assert.ok(
   gallery.examples.every(
-    (entry) => entry.thumbnail.startsWith("./thumbnails/manim/") && entry.thumbnail.endsWith(".webp"),
+    (entry) =>
+      entry.thumbnail.startsWith("./thumbnails/manim/") &&
+      (entry.thumbnail.endsWith(".webp") || entry.thumbnail.endsWith(".svg")),
   ),
-  "ready gallery entries must use rendered WebP thumbnails",
+  "ready gallery entries must use a checked-in Manim thumbnail/poster",
+);
+assert.ok(
+  readyEntries.every(
+    (entry) =>
+      typeof entry.upstream_source === "string" &&
+      entry.upstream_source.startsWith("parity/manim-v0.21/upstream-examples/"),
+  ),
+  "every public example must point to its canonical upstream source fixture",
 );
 assert.equal(
-  gallery.examples.find((entry) => entry.id === "parity-focus-on-point")?.parityStatus,
+  gallery.examples.find((entry) => entry.id === "parity-draw-border-then-fill-styled-square")
+    ?.parityStatus,
   "parity-qualified",
-  "FocusOn is promoted only after the canonical raster/timeline/direct-seek gate passes",
-);
-assert.equal(
-  gallery.examples.find((entry) => entry.id === "parity-indicate-square")?.parityStatus,
-  "parity-qualified",
-  "Indicate is promoted only after the canonical raster/timeline/direct-seek gate passes",
+  "exact-source DrawBorderThenFill keeps its qualified raster/timeline evidence",
 );
 for (const id of [
-  "parity-add-wait-lagged-start-map",
-  "parity-grow-point-center-edge",
-  "parity-uncreate-styled-square",
+  "manim-dot-example",
+  "manim-ellipse-example",
+  "manim-show-uncreate",
+  "manim-show-increasing-subsets",
+  "manim-add-with-run-time",
+  "manim-succession-example",
+  "manim-grow-from-point",
+  "manim-grow-from-center",
+  "manim-grow-from-edge",
+  "manim-spin-in-from-nothing",
+  "manim-using-focus-on",
+  "manim-using-indicate",
+  "manim-lagged-start-map",
 ]) {
   assert.equal(
     gallery.examples.find((entry) => entry.id === id)?.parityStatus,
-    "parity-qualified",
-    `${id}: previously qualified examples must remain qualified`,
+    "candidate",
+    `${id}: exact upstream source should be public before separate raster qualification`,
+  );
+}
+for (const syntheticProbeId of [
+  "parity-dot-ellipse",
+  "parity-add-wait-lagged-start-map",
+  "parity-grow-point-center-edge",
+  "parity-uncreate-styled-square",
+  "parity-focus-on-point",
+  "parity-rotating-centered",
+  "parity-show-increasing-subsets-two-shapes",
+  "parity-show-submobjects-one-by-one-two-shapes",
+  "parity-indicate-square",
+]) {
+  assert.equal(
+    gallery.examples.some((entry) => entry.id === syntheticProbeId),
+    false,
+    `${syntheticProbeId}: synthetic parity probes must not substitute for upstream gallery examples`,
   );
 }
 
@@ -54,9 +90,10 @@ assert.equal(
   filterGalleryExamples(gallery.examples, { parityStatus: "parity-qualified" }).length,
   readyEntries.filter((entry) => entry.parity_status === "parity-qualified").length,
 );
-assert.equal(
-  filterGalleryExamples(gallery.examples, { category: "parity/composition" })[0].id,
-  "parity-add-wait-lagged-start-map",
+assert.ok(
+  filterGalleryExamples(gallery.examples, { category: "composition" }).some(
+    (entry) => entry.id === "manim-add-with-run-time",
+  ),
 );
 
 const syntheticManifest = {
