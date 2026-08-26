@@ -21,6 +21,8 @@
     "Rectangle": {"status": "supported", "category": "geometry", "evidence": "#57"},
     "Square": {"status": "supported", "category": "geometry", "evidence": "#57"},
     "Line": {"status": "supported", "category": "geometry", "evidence": "#57"},
+    "Dot": {"status": "supported", "category": "geometry", "evidence": "canonical Dot/Ellipse semantic differential and Cairo raster/timeline fixture"},
+    "Ellipse": {"status": "supported", "category": "geometry", "evidence": "canonical Dot/Ellipse semantic differential and Cairo raster/timeline fixture"},
     "Create": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
     "Uncreate": {"status": "supported", "category": "animation", "evidence": "canonical Uncreate raster fixtures plus compatibility lifecycle/reverse/remover tests"},
     "DrawBorderThenFill": {"status": "partial", "category": "animation", "dependency": "#80", "reason": "Exact default double_smooth behavior is implemented for one leaf 2D VMobject and attached to the Cairo parity gate; retained groups, custom rate functions, and mixed top-level play remain pending."},

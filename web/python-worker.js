@@ -18,6 +18,7 @@ const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
 const MANIM_SEMANTIC_HANDLES_MODULE_PATH = "/tmp/_manim_semantic_handles.py";
 const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
+const MANIM_GEOMETRY_MODULE_PATH = "/tmp/_manim_geometry.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
 const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
@@ -58,6 +59,7 @@ async function initializePyodide() {
     semanticHandlesResponse,
     rateFunctionsResponse,
     phaseBResponse,
+    geometryResponse,
     animationOptionsResponse,
     animateResponse,
     rotateResponse,
@@ -74,6 +76,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
     fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
+    fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
     fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
@@ -91,6 +94,7 @@ async function initializePyodide() {
     [semanticHandlesResponse, "Noon shared semantic handle layer"],
     [rateFunctionsResponse, "Noon Manim rate functions"],
     [phaseBResponse, "Noon Manim Phase B layer"],
+    [geometryResponse, "Noon Manim geometry layer"],
     [animationOptionsResponse, "Noon Manim animation options"],
     [animateResponse, "Noon Manim animate layer"],
     [rotateResponse, "Noon Manim Rotate layer"],
@@ -114,6 +118,7 @@ async function initializePyodide() {
     [MANIM_SEMANTIC_HANDLES_MODULE_PATH, semanticHandlesResponse],
     [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
     [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
+    [MANIM_GEOMETRY_MODULE_PATH, geometryResponse],
     [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
     [MANIM_ANIMATE_MODULE_PATH, animateResponse],
     [MANIM_ROTATE_MODULE_PATH, rotateResponse],
@@ -136,6 +141,7 @@ _manim_compat.install()
 import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_phase_b
+import _manim_geometry
 import _manim_semantic_handles
 _manim_semantic_handles.install()
 import _manim_animate
