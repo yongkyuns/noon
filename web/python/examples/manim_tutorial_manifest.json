@@ -250,6 +250,23 @@
       "order": 130
     },
     {
+      "id": "parity-indicate-square",
+      "title": "Indicate square",
+      "summary": "Scale and recolor a square through Manim's default PURE_YELLOW there-and-back indication path, then return to the source state.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_indicate_square.py",
+      "category": "parity/indication",
+      "features": ["Indicate", "Square", "there_and_back", "style", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.indication.Indicate.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "indicate-square",
+      "thumbnail": "thumbnails/manim/indicate-square.webp",
+      "thumbnail_alt": "Yellow enlarged square at the midpoint of Manim's Indicate animation",
+      "thumbnail_time": 0.5,
+      "order": 140
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
