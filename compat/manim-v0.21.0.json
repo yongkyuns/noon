@@ -46,6 +46,7 @@
     "Transform": {"status": "supported", "category": "animation", "evidence": "generic transform tests"},
     "ReplacementTransform": {"status": "supported", "category": "animation", "evidence": "lifecycle tests"},
     "TransformFromCopy": {"status": "supported", "category": "animation", "evidence": "transform-from-copy tests"},
+    "MoveToTarget": {"status": "partial", "category": "animation-transform", "dependency": "#82", "reason": "Leaf 2D Mobjects using generate_target() lower to the retained Transform path and are attached to the canonical raster/timeline gate; retained Group/VGroup family targets and broader family alignment remain pending."},
     "TransformMatchingShapes": {"status": "supported", "category": "animation", "evidence": "matching-shapes tests"},
     "AnimationGroup": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
     "LaggedStart": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
