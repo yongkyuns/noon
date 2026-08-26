@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 import math
 from typing import Any
 
@@ -203,11 +204,50 @@ def Restore(mobject: object, **kwargs: Any) -> object:
     return builder
 
 
+def ApplyMethod(method: object, *args: Any, **kwargs: Any) -> object:
+    """Animate a supported bound Mobject mutator through deterministic target state.
+
+    This mirrors ManimCE v0.21's ``ApplyMethod.create_target`` contract: the last
+    positional dict, when present, is passed to the bound mutator while ordinary keyword
+    arguments configure the Transform animation itself. The mutator is executed only on
+    the detached target copy during authoring, never as a runtime Python callback.
+    """
+
+    if not inspect.ismethod(method):
+        raise ValueError(
+            "Whoops, looks like you accidentally invoked the method you want to animate"
+        )
+
+    source = method.__self__
+    if isinstance(source, _compat.Group):
+        raise NotImplementedError(
+            "ApplyMethod Group/VGroup family transforms are not yet supported"
+        )
+    assert isinstance(source, _base.Mobject)
+
+    method_args = list(args)
+    if method_args and isinstance(method_args[-1], dict):
+        method_kwargs = dict(method_args.pop())
+    else:
+        method_kwargs = {}
+
+    import _manim_animate as _animate
+
+    builder = _animate._AlignedAnimationBuilder(source)
+    builder.anim_args = dict(kwargs)
+    builder.cannot_pass_args = True
+    builder.method = method
+    builder.method_args = tuple(args)
+    method.__func__(builder.target, *method_args, **method_kwargs)
+    return builder
+
+
 for _name, _value in {
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
     "FadeToColor": FadeToColor,
     "Restore": Restore,
+    "ApplyMethod": ApplyMethod,
 }.items():
     setattr(_base, _name, _value)
     setattr(_compat, _name, _value)
