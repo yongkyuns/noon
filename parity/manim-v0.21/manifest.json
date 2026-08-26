@@ -239,6 +239,11 @@
       "id": "grow-point-center-edge",
       "scene": "GrowPointCenterEdge",
       "expected_duration": 2.5
+    },
+    {
+      "id": "focus-on-point",
+      "scene": "FocusOnPoint",
+      "expected_duration": 2.0
     }
   ],
   "sample_fractions": [
