@@ -268,7 +268,7 @@ impl FrameNormalizer<'_> {
                     }
                     let key = group
                         .label
-                        .map(|label| Arc::<str>::from(label.resolve()))
+                        .map(|label| Arc::<str>::from(label.resolve().as_str()))
                         .or_else(|| inherited_key.clone());
                     let first_cluster = self.clusters;
                     let first_vector = self.vectors.len() as u32;
