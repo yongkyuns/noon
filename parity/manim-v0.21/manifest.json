@@ -279,6 +279,11 @@
       "id": "spin-in-from-nothing-rectangle",
       "scene": "SpinInFromNothingRectangle",
       "expected_duration": 1.0
+    },
+    {
+      "id": "restore-example",
+      "scene": "RestoreExample",
+      "expected_duration": 6.0
     }
   ],
   "sample_fractions": [
