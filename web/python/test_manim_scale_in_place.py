@@ -101,6 +101,10 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             assert animation.anim_args["run_time"] == 2.0
             assert animation.anim_args["rate_func"] is linear
 
+            # Manim ApplyMethod creates its target in Transform.begin(), not in the
+            # animation constructor. Mutations after construction must therefore be
+            # reflected in both the source and scaled target when Scene.play begins.
+            rect.shift((0.5, 0.25)).scale(1.2)
             scene.play(animation)
             assert abs(scene.time - 2.0) < 1e-12
             assert rect._scene is scene
@@ -115,12 +119,44 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             assert track["timing"]["easing"] == "linear"
             start = track["values"]["object"]["from"]["transform"]
             target = track["values"]["object"]["to"]["transform"]
-            assert start["translation"] == {"x": 1.25, "y": -0.75}
+            assert start["translation"] == {"x": 1.75, "y": -0.5}
             assert target["translation"] == start["translation"]
             assert abs(start["rotation"] - 0.2) < 1e-12
             assert abs(target["rotation"] - 0.2) < 1e-12
             assert abs(target["scale"]["x"] - 1.75 * start["scale"]["x"]) < 1e-12
             assert abs(target["scale"]["y"] - 1.75 * start["scale"]["y"]) < 1e-12
+
+            # A retained animation authored after the ScaleInPlace object was created
+            # must also be visible. This proves target construction uses the retained
+            # play-begin snapshot rather than merely copying the Python wrapper lazily.
+            retained_scene = Scene()
+            retained = Square(
+                side_length=1.0,
+                fill_color=BLUE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).shift((-0.5, 0.25))
+            deferred = ScaleInPlace(retained, 2.0, run_time=0.75, rate_func=linear)
+            retained_scene.play(
+                retained.animate(rate_func=linear).shift((1.5, -0.25)),
+                run_time=0.25,
+            )
+            retained_scene.play(deferred)
+            assert abs(retained_scene.time - 1.0) < 1e-12
+            retained_tracks = [
+                track
+                for track in retained_scene.to_document()["tracks"]
+                if track["object"] == retained.id and track["property"] == "transform"
+            ]
+            assert len(retained_tracks) == 2
+            scale_track = max(retained_tracks, key=lambda item: item["timing"]["start"])
+            assert abs(scale_track["timing"]["start"] - 0.25) < 1e-12
+            retained_start = scale_track["values"]["object"]["from"]["transform"]
+            retained_target = scale_track["values"]["object"]["to"]["transform"]
+            assert retained_start["translation"] == {"x": 1.0, "y": 0.0}
+            assert retained_target["translation"] == retained_start["translation"]
+            assert abs(retained_target["scale"]["x"] - 2.0 * retained_start["scale"]["x"]) < 1e-12
+            assert abs(retained_target["scale"]["y"] - 2.0 * retained_start["scale"]["y"]) < 1e-12
 
             shrink_scene = Scene()
             square = Square(
