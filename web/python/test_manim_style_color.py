@@ -50,6 +50,17 @@ class ManimStyleColorTests(unittest.TestCase):
             assert abs(square.style["fill"]["alpha"] - 0.35) < 1e-12
             assert abs(square.style["stroke"]["alpha"] - 0.65) < 1e-12
 
+            explicit_square = Square(
+                fill_color=PINK,
+                fill_opacity=0.35,
+                stroke_color=BLUE,
+                stroke_opacity=0.65,
+                stroke_width=8,
+            )
+            explicit_square.set_fill(color=GREEN)
+            explicit_square.set_stroke(color=GREEN)
+            assert square.style == explicit_square.style
+
             # Manim VMobject.set_opacity sets both fill and stroke opacity to the
             # requested value; it does not multiply their previous independent
             # opacities. The normally zero-alpha default fill therefore becomes

@@ -198,3 +198,30 @@ class AnimateSetColor(Scene):
         )
         self.add(square)
         self.play(square.animate(rate_func=linear).set_color(GREEN))
+
+
+class SetColorExplicitEquivalent(Scene):
+    def construct(self):
+        set_color_square = Square(
+            side_length=1.2,
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=4,
+        ).shift(1.0 * LEFT)
+        set_color_square.set_color(GREEN)
+
+        explicit_square = Square(
+            side_length=1.2,
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=4,
+        ).shift(1.0 * RIGHT)
+        explicit_square.set_fill(color=GREEN)
+        explicit_square.set_stroke(color=GREEN)
+
+        self.add(set_color_square, explicit_square)
+        self.play(explicit_square.animate.shift(ORIGIN))
