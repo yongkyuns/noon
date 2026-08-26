@@ -877,7 +877,7 @@ mod tests {
         assert_eq!(scene.scene.definition().tracks().len(), 2);
         for track in scene.scene.definition().tracks() {
             assert_eq!(track.property, Property::Transform);
-            assert_eq!(track.timing.start, 0.0);
+            assert_eq!(track.timing.start_time, 0.0);
             assert_eq!(track.timing.duration, 2.0);
             assert_eq!(track.timing.easing, RateFunction::Linear);
         }
