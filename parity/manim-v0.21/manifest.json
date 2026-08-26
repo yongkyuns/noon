@@ -244,6 +244,11 @@
       "id": "draw-border-then-fill-styled-square",
       "scene": "DrawBorderThenFillStyledSquare",
       "expected_duration": 2.0
+    },
+    {
+      "id": "focus-on-point",
+      "scene": "FocusOnPoint",
+      "expected_duration": 2.0
     }
   ],
   "sample_fractions": [

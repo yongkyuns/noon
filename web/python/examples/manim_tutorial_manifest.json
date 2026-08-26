@@ -165,6 +165,23 @@
       "order": 90
     },
     {
+      "id": "parity-focus-on-point",
+      "title": "FocusOn point",
+      "summary": "Shrink Manim's temporary translucent spotlight onto a fixed point with canonical smooth timing and remover lifecycle.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_focus_on_point.py",
+      "category": "parity/indication",
+      "features": ["FocusOn", "Scene", "smooth", "lifecycle", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.indication.FocusOn.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "focus-on-point",
+      "thumbnail": "thumbnails/manim/focus-on-point.webp",
+      "thumbnail_alt": "Grey translucent FocusOn spotlight shrinking toward a point on the right",
+      "thumbnail_time": 1.0,
+      "order": 100
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
