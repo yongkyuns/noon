@@ -133,7 +133,7 @@ export function Transform(source: Mobject, target: Mobject): Animation;
 export class Scene {
   constructor();
   add(...mobjects: Mobject[]): this;
-  play(...items: [...Animation[], PlayOptions?]): this;
+  play(...items: Array<Animation | PlayOptions>): this;
   wait(duration?: number): this;
   readonly time: number;
   sceneJson(): string;
