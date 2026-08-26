@@ -1,9 +1,10 @@
 """Deterministic Manim-compatible growing animations.
 
-The supported subset mirrors ManimCE v0.21 ``GrowFromPoint``, ``GrowFromCenter``
-and ``GrowFromEdge`` by lowering the collapsed starting copy and final mobject into
-Noon's ordinary transform + lifecycle tracks. No Python callback runs during
-playback, and nested composition continues to use the shared composition scheduler.
+The supported subset mirrors ManimCE v0.21 ``GrowFromPoint``, ``GrowFromCenter``,
+``GrowFromEdge``, and ``SpinInFromNothing`` by lowering the collapsed starting copy
+and final mobject into Noon's ordinary transform + lifecycle tracks. No Python
+callback runs during playback, and nested composition continues to use the shared
+composition scheduler.
 """
 
 from __future__ import annotations
@@ -101,11 +102,38 @@ class GrowFromEdge(GrowFromPoint):
         self.edge = direction
 
 
+class SpinInFromNothing(GrowFromCenter):
+    """Grow one centered leaf while following Manim's exact spiral path."""
+
+    def __init__(
+        self,
+        mobject: object,
+        angle: float = math.pi / 2.0,
+        point_color: object | None = None,
+        **kwargs: Any,
+    ) -> None:
+        value = float(angle)
+        if not math.isfinite(value):
+            raise ValueError("SpinInFromNothing angle must be finite")
+        self.angle = value
+        super().__init__(mobject, point_color=point_color, **kwargs)
+
+
 def _starting_snapshot(animation: GrowFromPoint, final_snapshot: dict[str, Any]) -> dict[str, Any]:
     starting = _animate._snapshot_mobject(final_snapshot)
     starting.scale(0.0)
     starting.move_to(animation.point)
     snapshot = starting.to_ir()
+
+    if isinstance(animation, SpinInFromNothing):
+        # Manim's spiral_path(theta) for a GrowFromCenter collapsed source is
+        #   c + alpha * R((alpha - 1) * theta) * (p - c).
+        # Noon's transform interpolation produces the identical path when the
+        # collapsed snapshot starts theta radians behind the final orientation:
+        # scale 0->1 and rotation (r-theta)->r share the same eased alpha.
+        snapshot["transform"]["rotation"] = (
+            float(final_snapshot["transform"]["rotation"]) - animation.angle
+        )
 
     if animation.point_color is not None:
         parsed = animation.point_color
@@ -347,6 +375,7 @@ def install() -> None:
         "GrowFromPoint": GrowFromPoint,
         "GrowFromCenter": GrowFromCenter,
         "GrowFromEdge": GrowFromEdge,
+        "SpinInFromNothing": SpinInFromNothing,
     }
     for name, value in public.items():
         setattr(_base, name, value)
