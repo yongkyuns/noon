@@ -232,6 +232,12 @@ jobs:
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
         run: node scripts/browser-smoke.mjs
 
+      - name: Test camera backing-density invariance
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
+          NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/camera-density
+        run: node scripts/camera-density-smoke.mjs
+
       - name: Test mixed painter order in WebGPU
         if: matrix.backend == 'webgpu'
         run: node scripts/painter-order-browser-smoke.mjs
