@@ -204,26 +204,41 @@ def _handle_for(value: object):
     return getattr(value, "_semantic_handle", None)
 
 
+def _has_shared_layout_queries(handle: object) -> bool:
+    return handle is not None and all(
+        hasattr(handle, name)
+        for name in ("centerX", "centerY", "width", "height", "criticalX", "criticalY")
+    )
+
+
 def _layout_bounds(value: _base.Mobject) -> tuple[_base.Vec2, _base.Vec2] | None:
-    """Use the one Manim compatibility bounds contract for every object owner.
+    """Read exact world-space layout bounds from a detached shared handle."""
 
-    `_manim_phase_b` installs `_base._bounds` before this module is installed. It
-    evaluates transformed quadratic/cubic extrema and analytic primitive extents in
-    world space. Detached semantic handles remain authoritative for object state; we
-    materialize only their current snapshot for this compatibility query instead of
-    using the handle's older transformed-local-AABB shortcuts.
-    """
-
-    return _base._bounds(value._current_raw())
+    handle = _handle_for(value)
+    if not _has_shared_layout_queries(handle):
+        return _base._bounds(value._current_raw())
+    return (
+        _base.Vec2(
+            float(handle.criticalX(-1.0, 0.0)),
+            float(handle.criticalY(0.0, -1.0)),
+        ),
+        _base.Vec2(
+            float(handle.criticalX(1.0, 0.0)),
+            float(handle.criticalY(0.0, 1.0)),
+        ),
+    )
 
 
 def _layout_center(value: _base.Mobject) -> _base.Vec2:
-    raw = value._current_raw()
-    bounds = _base._bounds(raw)
-    if bounds is not None:
-        return (bounds[0] + bounds[1]) * 0.5
-    translation = raw.transform["translation"]
-    return _base.Vec2(float(translation["x"]), float(translation["y"]))
+    handle = _handle_for(value)
+    if not _has_shared_layout_queries(handle):
+        raw = value._current_raw()
+        bounds = _base._bounds(raw)
+        if bounds is not None:
+            return (bounds[0] + bounds[1]) * 0.5
+        translation = raw.transform["translation"]
+        return _base.Vec2(float(translation["x"]), float(translation["y"]))
+    return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
@@ -305,20 +320,18 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 
 
 def _width(self: _base.Mobject) -> float:
-    bounds = (
-        _layout_bounds(self)
-        if _handle_for(self) is not None
-        else _base._bounds(self._current_raw())
-    )
+    handle = _handle_for(self)
+    if _has_shared_layout_queries(handle):
+        return float(handle.width)
+    bounds = _base._bounds(self._current_raw())
     return 0.0 if bounds is None else bounds[1].x - bounds[0].x
 
 
 def _height(self: _base.Mobject) -> float:
-    bounds = (
-        _layout_bounds(self)
-        if _handle_for(self) is not None
-        else _base._bounds(self._current_raw())
-    )
+    handle = _handle_for(self)
+    if _has_shared_layout_queries(handle):
+        return float(handle.height)
+    bounds = _base._bounds(self._current_raw())
     return 0.0 if bounds is None else bounds[1].y - bounds[0].y
 
 
@@ -472,15 +485,11 @@ def _replace(
 
 
 def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
-    if _handle_for(value) is not None:
-        bounds = _layout_bounds(value)
-        if bounds is None:
-            return _layout_center(value)
-        minimum, maximum = bounds
-        center = (minimum + maximum) * 0.5
+    handle = _handle_for(value)
+    if _has_shared_layout_queries(handle):
         return _base.Vec2(
-            minimum.x if direction.x < 0 else maximum.x if direction.x > 0 else center.x,
-            minimum.y if direction.y < 0 else maximum.y if direction.y > 0 else center.y,
+            float(handle.criticalX(direction.x, direction.y)),
+            float(handle.criticalY(direction.x, direction.y)),
         )
     return _base._critical(value._current_raw(), direction)
 
@@ -521,20 +530,9 @@ def _align_on_frame(
     buff: float,
 ) -> _base.Mobject:
     handle = _handle_for(self)
-    if handle is None:
+    if handle is None or not hasattr(handle, "alignOnFrame"):
         return _ORIGINAL_ALIGN_ON_FRAME(self, direction, buff)
-    point = _critical(self, direction)
-    shift_x = 0.0
-    shift_y = 0.0
-    if direction.x != 0.0:
-        target_x = direction.x.__class__(_base.DEFAULT_FRAME_WIDTH / 2.0)
-        target_x = (1.0 if direction.x > 0.0 else -1.0) * float(target_x)
-        shift_x = target_x - point.x - direction.x * float(buff)
-    if direction.y != 0.0:
-        target_y = direction.y.__class__(_base.DEFAULT_FRAME_HEIGHT / 2.0)
-        target_y = (1.0 if direction.y > 0.0 else -1.0) * float(target_y)
-        shift_y = target_y - point.y - direction.y * float(buff)
-    handle.shift(shift_x, shift_y)
+    handle.alignOnFrame(direction.x, direction.y, float(buff))
     return self
 
 
