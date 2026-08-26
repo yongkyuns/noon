@@ -31,6 +31,11 @@ assert.equal(
   "parity-qualified",
   "FocusOn is promoted only after the canonical raster/timeline/direct-seek gate passes",
 );
+assert.equal(
+  gallery.examples.find((entry) => entry.id === "parity-indicate-square")?.parityStatus,
+  "parity-qualified",
+  "Indicate is promoted only after the canonical raster/timeline/direct-seek gate passes",
+);
 for (const id of [
   "parity-add-wait-lagged-start-map",
   "parity-grow-point-center-edge",
