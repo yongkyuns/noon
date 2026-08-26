@@ -5,7 +5,12 @@
     "license": "MIT",
     "tutorial_root": "https://docs.manim.community/en/stable/tutorials/index.html"
   },
-  "policy": "Examples are original Noon/browser adaptations of upstream learning goals unless reuse is explicitly marked. Preserve upstream MIT notices for substantial copied code and do not copy protected third-party assets.",
+  "policy": "Examples are original Noon/browser adaptations of upstream learning goals unless reuse is explicitly marked. Preserve upstream MIT notices for substantial copied code and do not copy protected third-party assets. `ready` means the tutorial executes; it does not imply output parity. Source-equivalent parity examples carry `parity_status` and `parity_fixture`; only `parity-qualified` means the canonical Manim raster + timeline gate passes.",
+  "parity_policy": {
+    "candidate": "Source-equivalent ManimCE v0.21.0 behavior is exposed in the demo and linked to the canonical parity fixture, but one or more exact-output gates remain open.",
+    "parity-qualified": "The source-equivalent fixture passes semantic, pixel, timing, lifecycle, intermediate-frame, seek/playback, and supported-backend gates defined by #185/#176.",
+    "adaptation": "Pedagogical Noon/browser adaptation; useful as a demo but not evidence of Manim output parity."
+  },
   "entries": [
     {
       "id": "quickstart-create",
@@ -15,7 +20,8 @@
       "category": "tutorial/quickstart",
       "features": ["Scene", "Circle", "Create", "style"],
       "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "square-to-circle",
@@ -25,7 +31,8 @@
       "category": "tutorial/quickstart",
       "features": ["Square", "Circle", "Create", "Transform"],
       "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "positioning",
@@ -35,7 +42,8 @@
       "category": "tutorial/quickstart",
       "features": ["VGroup", "arrange", "to_edge", "animate"],
       "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "animate",
@@ -45,7 +53,8 @@
       "category": "tutorial/quickstart",
       "features": ["animate", "shift", "rotate", "scale", "set_color"],
       "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "transform-lifecycle",
@@ -55,7 +64,8 @@
       "category": "tutorial/building-blocks",
       "features": ["Transform", "ReplacementTransform", "lifecycle"],
       "upstream": "tutorials/building_blocks.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "animation-composition",
@@ -65,7 +75,8 @@
       "category": "tutorial/building-blocks",
       "features": ["AnimationGroup", "LaggedStart", "VGroup"],
       "upstream": "reference/manim.animation.composition.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
     },
     {
       "id": "value-tracker",
@@ -75,7 +86,68 @@
       "category": "tutorial/reactivity",
       "features": ["ValueTracker", "bind_position", "native-reactive"],
       "upstream": "reference/manim.mobject.value_tracker.ValueTracker.html",
-      "reuse": "original-noon-adaptation"
+      "reuse": "original-noon-adaptation",
+      "parity_status": "adaptation"
+    },
+    {
+      "id": "parity-create-circle",
+      "title": "Exact parity: CreateCircle",
+      "status": "ready",
+      "path": "python/examples/manim_parity_create_circle.py",
+      "category": "parity/quickstart",
+      "features": ["Scene", "Circle", "Create", "style", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "create-circle"
+    },
+    {
+      "id": "parity-square-to-circle",
+      "title": "Exact parity: SquareToCircle",
+      "status": "ready",
+      "path": "python/examples/manim_parity_square_to_circle.py",
+      "category": "parity/quickstart",
+      "features": ["Square", "Circle", "Create", "Transform", "FadeOut", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "square-to-circle"
+    },
+    {
+      "id": "parity-square-and-circle",
+      "title": "Exact parity: SquareAndCircle",
+      "status": "ready",
+      "path": "python/examples/manim_parity_square_and_circle.py",
+      "category": "parity/quickstart",
+      "features": ["Circle", "Square", "next_to", "Create", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "square-and-circle"
+    },
+    {
+      "id": "parity-animated-square-to-circle",
+      "title": "Exact parity: AnimatedSquareToCircle",
+      "status": "ready",
+      "path": "python/examples/manim_parity_animated_square_to_circle.py",
+      "category": "parity/quickstart",
+      "features": ["Create", "animate", "Transform", "style", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "animated-square-to-circle"
+    },
+    {
+      "id": "parity-different-rotations",
+      "title": "Exact parity: DifferentRotations",
+      "status": "ready",
+      "path": "python/examples/manim_parity_different_rotations.py",
+      "category": "parity/quickstart",
+      "features": ["animate", "Rotate", "wait", "pixel-parity", "time-parity"],
+      "upstream": "tutorials/quickstart.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "different-rotations"
     },
     {
       "id": "text-and-math",
