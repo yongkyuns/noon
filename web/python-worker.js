@@ -20,6 +20,7 @@ const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
+const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
 const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
 const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
@@ -57,6 +58,7 @@ async function initializePyodide() {
     phaseBResponse,
     animationOptionsResponse,
     animateResponse,
+    rotateResponse,
     compositionResponse,
     lifecycleResponse,
     reactiveResponse,
@@ -70,6 +72,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
     fetch(new URL("./python/_manim_composition.py", import.meta.url)),
     fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
@@ -84,6 +87,7 @@ async function initializePyodide() {
     [phaseBResponse, "Noon Manim Phase B layer"],
     [animationOptionsResponse, "Noon Manim animation options"],
     [animateResponse, "Noon Manim animate layer"],
+    [rotateResponse, "Noon Manim Rotate layer"],
     [compositionResponse, "Noon Manim composition layer"],
     [lifecycleResponse, "Noon Manim lifecycle layer"],
     [reactiveResponse, "Noon reactive compatibility layer"],
@@ -104,6 +108,7 @@ async function initializePyodide() {
     [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
     [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
     [MANIM_ANIMATE_MODULE_PATH, animateResponse],
+    [MANIM_ROTATE_MODULE_PATH, rotateResponse],
     [MANIM_COMPOSITION_MODULE_PATH, compositionResponse],
     [MANIM_LIFECYCLE_MODULE_PATH, lifecycleResponse],
     [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
@@ -124,6 +129,8 @@ import _manim_phase_b
 import _manim_semantic_handles
 _manim_semantic_handles.install()
 import _manim_animate
+import _manim_rotate
+_manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle

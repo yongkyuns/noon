@@ -53,6 +53,16 @@ class AnimatedSquareToCircle(Scene):
         self.play(square.animate.set_fill(PINK, opacity=0.5))
 
 
+class DifferentRotations(Scene):
+    def construct(self):
+        left_square = Square(color=BLUE, fill_opacity=0.7).shift(2 * LEFT)
+        right_square = Square(color=GREEN, fill_opacity=0.7).shift(2 * RIGHT)
+        self.play(
+            left_square.animate.rotate(PI), Rotate(right_square, angle=PI), run_time=2
+        )
+        self.wait()
+
+
 # Supplemental source-equivalent parity probes. These are deliberately ordinary
 # Manim source (not Noon-specific adaptations) and exercise reveal/lifecycle
 # contracts that are not covered directly by the quickstart examples above.
