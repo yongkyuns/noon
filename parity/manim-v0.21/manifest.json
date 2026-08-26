@@ -163,7 +163,12 @@
     {
       "id": "set-color-explicit-equivalent",
       "scene": "SetColorExplicitEquivalent",
-      "expected_duration": 1.0
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 0,
+        "max_differing_ratio": 0.0032,
+        "max_mean_absolute_channel_error": 0.036
+      }
     }
   ],
   "sample_fractions": [
