@@ -150,6 +150,18 @@
       "parity_fixture": "different-rotations"
     },
     {
+      "id": "parity-indicate-square",
+      "title": "Exact parity: IndicateSquare",
+      "status": "ready",
+      "path": "python/examples/manim_parity_indicate_square.py",
+      "category": "parity/animation",
+      "features": ["Indicate", "there_and_back", "Square", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.indication.Indicate.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "indicate-square"
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
