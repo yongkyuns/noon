@@ -170,7 +170,7 @@
       "features": ["GrowFromPoint", "GrowFromCenter", "GrowFromEdge", "LaggedStart", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.animation.growing.html",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
       "parity_fixture": "grow-point-center-edge"
     },
     {
