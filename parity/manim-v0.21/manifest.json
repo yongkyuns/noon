@@ -259,6 +259,16 @@
       "id": "focus-on-point",
       "scene": "FocusOnPoint",
       "expected_duration": 2.0
+    },
+    {
+      "id": "show-increasing-subsets-two-shapes",
+      "scene": "ShowIncreasingSubsetsTwoShapes",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "show-submobjects-one-by-one-two-shapes",
+      "scene": "ShowSubmobjectsOneByOneTwoShapes",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
