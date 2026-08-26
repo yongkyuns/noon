@@ -279,6 +279,16 @@
       "id": "spin-in-from-nothing-rectangle",
       "scene": "SpinInFromNothingRectangle",
       "expected_duration": 1.0
+    },
+    {
+      "id": "scale-in-place-square",
+      "scene": "ScaleInPlaceSquare",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "shrink-to-center-rectangle",
+      "scene": "ShrinkToCenterRectangle",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
