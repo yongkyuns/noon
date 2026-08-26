@@ -313,14 +313,36 @@ class MathTex(Tex):
     """Source-compatible MathTex Mobject pending exact LaTeX glyph rendering."""
 
 
+def _public_bound_method_name(source: object, method: object) -> str:
+    """Recover the public attribute name for a bound compatibility method.
+
+    Compatibility helpers are often installed onto public methods after definition,
+    so ``method.__name__`` can expose an internal helper name such as
+    ``_vmobject_set_color``. ApplyMethod needs the public name to invoke the same
+    operation on its detached target copy.
+    """
+
+    implementation = getattr(method, "__func__", None)
+    if implementation is not None:
+        for owner in type(source).__mro__:
+            for candidate, attribute in owner.__dict__.items():
+                if not candidate.startswith("_") and attribute is implementation:
+                    return candidate
+
+    name = getattr(method, "__name__", None)
+    if not isinstance(name, str):
+        raise TypeError("ApplyMethod requires a bound Mobject/Group method")
+    return name
+
+
 class ApplyMethod:
     """Manim ApplyMethod adapter over Noon's existing target-state animation builder."""
 
     def __new__(cls, method: object, *args: Any, **kwargs: Any):
         source = getattr(method, "__self__", None)
-        name = getattr(method, "__name__", None)
-        if not isinstance(source, (_base.Mobject, _compat.Group)) or not isinstance(name, str):
+        if not isinstance(source, (_base.Mobject, _compat.Group)):
             raise TypeError("ApplyMethod requires a bound Mobject/Group method")
+        name = _public_bound_method_name(source, method)
 
         # Resolve lazily because _manim_geometry is installed before _manim_animate.
         import _manim_animate as _animate
