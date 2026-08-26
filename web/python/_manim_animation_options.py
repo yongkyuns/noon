@@ -153,9 +153,36 @@ def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
     return _scale_in_place_builder(mobject, 0.0, kwargs)
 
 
+def FadeToColor(mobject: object, color: object, **kwargs: Any) -> object:
+    """Animate one 2D leaf to ``color`` through the retained target-state transform.
+
+    ManimCE v0.21 defines ``FadeToColor`` as
+    ``ApplyMethod(mobject.set_color, color, **kwargs)``.  For a retained leaf, Noon's
+    aligned animation builder captures the same target style while keeping timing,
+    implicit scene binding, rollback, and deterministic seek behavior on the ordinary
+    Transform path.
+    """
+
+    if isinstance(mobject, _compat.Group):
+        raise NotImplementedError(
+            "FadeToColor Group/VGroup family recoloring is not yet supported"
+        )
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("FadeToColor target must be a Mobject")
+
+    import _manim_animate as _animate
+
+    builder = _animate._AlignedAnimationBuilder(mobject)
+    builder.anim_args = dict(kwargs)
+    builder.cannot_pass_args = True
+    builder.target.set_color(color)
+    return builder
+
+
 for _name, _value in {
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
+    "FadeToColor": FadeToColor,
 }.items():
     setattr(_base, _name, _value)
     setattr(_compat, _name, _value)
