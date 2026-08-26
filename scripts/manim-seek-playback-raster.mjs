@@ -22,6 +22,12 @@ const artifactRoot = path.resolve(
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
 );
 const rasterReport = JSON.parse(await readFile(path.join(artifactRoot, "report.json"), "utf8"));
+const semanticReference = JSON.parse(
+  await readFile(path.join(artifactRoot, "semantic", "manim-all-frames.json"), "utf8"),
+);
+const semanticByFixture = new Map(
+  semanticReference.fixtures.map((fixture) => [fixture.id, fixture]),
+);
 const backends = (process.env.NOON_MANIM_RASTER_BACKENDS ?? "webgpu,webgl")
   .split(",")
   .map((value) => value.trim())
@@ -40,6 +46,16 @@ assert.equal(
   rasterReport.reference.frame_rate,
   reference.frame_rate,
   "seek/playback oracle frame rate must match the pinned Manim report",
+);
+assert.equal(
+  semanticReference.manim_version,
+  reference.version,
+  "seek/playback oracle must consume the current semantic Manim reference",
+);
+assert.equal(
+  semanticReference.frame_rate,
+  reference.frame_rate,
+  "semantic Manim frame rate must match the pinned raster report",
 );
 for (const backend of backends) {
   assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend ${backend}`);
@@ -104,12 +120,32 @@ async function authorNoonDocuments() {
   }
 }
 
-function frameTimesThrough(frameIndex) {
-  assert.ok(Number.isSafeInteger(frameIndex) && frameIndex >= 0, "invalid Manim frame index");
-  return Array.from(
-    { length: frameIndex + 1 },
-    (_, index) => index / reference.frame_rate,
+function frameTimesThrough(frameTimes, frameIndex) {
+  assert.ok(
+    Number.isSafeInteger(frameIndex) && frameIndex >= 0 && frameIndex < frameTimes.length,
+    "invalid Manim frame index",
   );
+  return frameTimes.slice(0, frameIndex + 1);
+}
+
+function logicalFrameTimes(fixtureId) {
+  const semanticFixture = semanticByFixture.get(fixtureId);
+  assert.ok(semanticFixture, `${fixtureId}: missing semantic Manim frame reference`);
+  assert.equal(
+    semanticFixture.frame_count,
+    semanticFixture.frames.length,
+    `${fixtureId}: semantic Manim frame count`,
+  );
+  const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
+  frameTimes.reduce((last, time, index) => {
+    assert.ok(Number.isFinite(time) && time >= 0, `${fixtureId}/${index}: invalid Manim logical time`);
+    assert.ok(
+      time + 1e-12 >= last,
+      `${fixtureId}/${index}: Manim logical frame times move backwards`,
+    );
+    return time;
+  }, -Infinity);
+  return frameTimes;
 }
 
 async function nextAnimationFrame(page) {
@@ -220,6 +256,7 @@ async function verifyBackend(backend, documents) {
         assert.ok(reportBackend, `${fixture.id}: missing ${backend} raster report entry`);
         const samples = reportBackend.samples;
         assert.ok(samples.length > 0, `${fixture.id}: pinned Manim report has no samples`);
+        const frameTimes = logicalFrameTimes(fixture.id);
 
         const [loadedDirect, loadedIncremental] = await Promise.all([
           directPage.evaluate((json) => window.noonSmoke.loadScene(json), sceneJson),
@@ -243,10 +280,16 @@ async function verifyBackend(backend, documents) {
         const sampleResults = [];
 
         for (const sample of samples) {
-          const expectedTime = sample.frameIndex / reference.frame_rate;
+          assert.ok(
+            Number.isSafeInteger(sample.frameIndex) &&
+              sample.frameIndex >= 0 &&
+              sample.frameIndex < frameTimes.length,
+            `${fixture.id}: raster report has invalid Manim frame index ${sample.frameIndex}`,
+          );
+          const expectedTime = frameTimes[sample.frameIndex];
           assert.ok(
             Math.abs(sample.time - expectedTime) <= 1e-12,
-            `${fixture.id}/${sample.frameIndex}: raster report timestamp is not the pinned Manim frame time`,
+            `${fixture.id}/${sample.frameIndex}: raster report timestamp is not the semantic Manim frame time`,
           );
           const state = await directPage.evaluate(
             ({ json, time, times }) => ({
@@ -258,7 +301,7 @@ async function verifyBackend(backend, documents) {
             {
               json: sceneJson,
               time: sample.time,
-              times: frameTimesThrough(sample.frameIndex),
+              times: frameTimesThrough(frameTimes, sample.frameIndex),
             },
           );
           assert.deepEqual(
@@ -380,6 +423,7 @@ try {
         manimVersion: reference.version,
         frameRate: reference.frame_rate,
         sourceRasterReport: "report.json",
+        sourceSemanticReference: "semantic/manim-all-frames.json",
         maxPresentationAttempts: MAX_PRESENT_ATTEMPTS,
         independentCanvasPlayers: true,
         results,
