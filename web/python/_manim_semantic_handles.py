@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+from contextvars import ContextVar
 from typing import Any
 
 import noon as _base
@@ -190,6 +191,7 @@ _ORIGINAL_GROUP_INIT = _compat.Group.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _GROUP_COPY_DELEGATE = None
+_GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
 
 def _snapshot_json(raw: _ir.Mobject) -> str:
@@ -309,7 +311,7 @@ def _clone_mobject(
 
 
 def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
-    return _clone_mobject(self)
+    return _clone_mobject(self, target_state=bool(_GROUP_TARGET_COPY.get()))
 
 
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
@@ -706,7 +708,60 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
+def _family_target_accept(editor: object, source: object, target: object) -> None:
+    source_kind, source_handle = _family_member_handle(source)
+    target_kind, target_handle = _family_member_handle(target)
+    if source_kind != target_kind or source_handle is None or target_handle is None:
+        raise RuntimeError("Group target wrapper mirror diverged from shared family membership")
+    if source_kind == "family":
+        editor.acceptFamily(source_handle, target_handle)
+    elif source_kind == "mobject":
+        editor.acceptMobject(source_handle, target_handle)
+    else:
+        raise RuntimeError("unsupported Group target member kind")
+
+
+def _group_target_copy(self: _compat.Group) -> _compat.Group:
+    delegate = _GROUP_COPY_DELEGATE
+    if delegate is None:
+        raise RuntimeError("shared Group copy delegate is not installed")
+    source_family_handle = getattr(self, "_semantic_family_handle", None)
+    if source_family_handle is None:
+        raise RuntimeError("Group has no shared semantic family identity")
+
+    # Reuse the geometry layer's constructor-free wrapper clone so custom Group
+    # subclasses preserve named child references. During this call only, member
+    # `copy()` operations route leaf state through the shared target editor and
+    # nested Groups recursively construct their own shared target families.
+    token = _GROUP_TARGET_COPY.set(True)
+    family_handle = self.__dict__.pop("_semantic_family_handle", None)
+    try:
+        clone = delegate(self)
+    finally:
+        if family_handle is not None:
+            self._semantic_family_handle = family_handle
+        _GROUP_TARGET_COPY.reset(token)
+
+    if len(clone.submobjects) != len(self.submobjects):
+        raise RuntimeError("Group target wrapper copy changed direct membership")
+    editor = source_family_handle.targetEditor()
+    for source_member, target_member in zip(
+        self.submobjects, clone.submobjects, strict=True
+    ):
+        _family_target_accept(editor, source_member, target_member)
+    clone._semantic_family_handle = editor.finish()
+    return clone
+
+
+def _group_target_mobject(self: _compat.Group) -> _compat.Group:
+    """Build a Group.animate target through the shared family target editor."""
+
+    return _group_target_copy(self)
+
+
 def _group_copy(self: _compat.Group) -> _compat.Group:
+    if _GROUP_TARGET_COPY.get():
+        return _group_target_copy(self)
     delegate = _GROUP_COPY_DELEGATE
     if delegate is None:
         raise RuntimeError("shared Group copy delegate is not installed")
@@ -775,3 +830,4 @@ def install() -> None:
         _compat.Group.add = _group_add
         _compat.Group.remove = _group_remove
         _compat.Group.copy = _group_copy
+        _compat.Group._copy_for_animate_target = _group_target_mobject
