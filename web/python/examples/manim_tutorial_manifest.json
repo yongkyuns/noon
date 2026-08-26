@@ -97,6 +97,23 @@
       "order": 50
     },
     {
+      "id": "parity-dot-ellipse",
+      "title": "Dot and Ellipse",
+      "summary": "Compare Manim's default and explicit Dot geometry with wide and rotated Ellipse geometry using the canonical exact-output scene.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_dot_ellipse.py",
+      "category": "parity/geometry",
+      "features": ["Dot", "Ellipse", "transform", "geometry", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.mobject.geometry.arc.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "dot-ellipse-parity",
+      "thumbnail": "thumbnails/manim/dot-ellipse-parity.webp",
+      "thumbnail_alt": "Two dots and two ellipses from the canonical Manim Dot and Ellipse parity scene",
+      "thumbnail_time": 0.5,
+      "order": 55
+    },
+    {
       "id": "parity-add-wait-lagged-start-map",
       "title": "Add, Wait, and LaggedStartMap",
       "summary": "Source-equivalent composition coverage for zero-duration Add, Wait, Succession, FadeIn, and LaggedStartMap.",

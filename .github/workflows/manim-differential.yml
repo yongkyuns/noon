@@ -39,4 +39,5 @@ jobs:
       - name: Compare supported Noon semantics with ManimCE
         run: |
           python scripts/manim-differential.py
+          python scripts/manim-dot-ellipse-differential.py
           python scripts/manim-frame-sampling-differential.py
