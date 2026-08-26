@@ -159,6 +159,11 @@
         "max_differing_ratio": 0.0044,
         "max_mean_absolute_channel_error": 0.075
       }
+    },
+    {
+      "id": "set-color-explicit-equivalent",
+      "scene": "SetColorExplicitEquivalent",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
