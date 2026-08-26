@@ -262,3 +262,28 @@ class ThreeLayerPainterOrder(Scene):
         self.add(left_red, left_green, left_blue)
         self.add(right_blue, right_green, right_red)
         self.play(right_red.animate.shift(ORIGIN))
+
+
+class FadeInShiftScaleStyledSquare(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        self.play(FadeIn(square, shift=RIGHT, scale=0.5, rate_func=linear))
+
+
+class FadeOutShiftScaleStyledSquare(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        self.add(square)
+        self.play(FadeOut(square, shift=RIGHT, scale=0.5, rate_func=linear))
