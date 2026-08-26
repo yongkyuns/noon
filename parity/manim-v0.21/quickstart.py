@@ -358,3 +358,42 @@ class CameraFrameEdges(Scene):
         bottom = marker(YELLOW, half_height * DOWN)
         self.add(center, left, right, top, bottom)
         self.play(center.animate.shift(ORIGIN))
+
+
+class PrimitiveGeometryMatrix(Scene):
+    def construct(self):
+        circle = Circle(
+            radius=0.75,
+            fill_color=RED,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).move_to(4.5 * LEFT + 1.5 * UP)
+        rectangle = Rectangle(
+            width=2.4,
+            height=1.1,
+            fill_color=GREEN,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).move_to(1.6 * LEFT + 1.5 * UP)
+        square = Square(
+            side_length=1.3,
+            fill_color=BLUE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).move_to(1.2 * RIGHT + 1.5 * UP)
+        diagonal = Line(
+            1.0 * LEFT + 0.6 * DOWN,
+            1.2 * RIGHT + 0.8 * UP,
+            color=YELLOW,
+            stroke_width=4,
+        ).shift(3.8 * LEFT + 1.6 * DOWN)
+        rotated = Rectangle(
+            width=2.0,
+            height=1.0,
+            fill_color=PURPLE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).rotate(PI / 6).move_to(2.4 * RIGHT + 1.5 * DOWN)
+
+        self.add(circle, rectangle, square, diagonal, rotated)
+        self.play(rotated.animate.shift(ORIGIN))
