@@ -112,12 +112,19 @@
     },
     {
       "id": "mobject.layout-query",
-      "surface": "Mobject.center/width/height/critical_point",
+      "surface": "Detached and animate-target Mobject.center/width/height/critical_point",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::center/width/height/critical_point"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical"}]
+    },
+    {
+      "id": "mobject.scene-layout-query",
+      "surface": "Scene-bound Mobject.center/width/height/critical_point",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical"},
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical fallbacks"},
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::center/width/height/critical_point"},
-      "reason": "Python materializes handle snapshots and evaluates the compatibility bounds contract locally instead of using the shared query result.",
-      "replacement": "Finish #62 bounds integration and route these queries directly to shared semantic handles.",
+      "reason": "Scene-bound wrappers do not yet retain a stable shared semantic handle, so layout queries still evaluate their scene snapshot in Python.",
+      "replacement": "Bind scene-owned wrappers to stable shared handles and reuse the same Rust layout query path.",
       "migration_issue": "#61"
     },
     {
