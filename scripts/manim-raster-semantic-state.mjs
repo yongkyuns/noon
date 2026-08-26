@@ -12,7 +12,24 @@ const repoRoot = path.resolve(scriptDir, "..");
 const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
-const fixtureSource = await readFile(path.join(repoRoot, reference.source), "utf8");
+const fixtureSources = new Map();
+for (const fixture of manifest.fixtures) {
+  const relativeSource = fixture.source ?? reference.source;
+  if (!fixtureSources.has(relativeSource)) {
+    fixtureSources.set(relativeSource, await readFile(path.join(repoRoot, relativeSource), "utf8"));
+  }
+}
+
+function fixtureSourceFor(fixture) {
+  const relativeSource = fixture.source ?? reference.source;
+  const source = fixtureSources.get(relativeSource);
+  assert.ok(source, `${fixture.id}: missing canonical source ${relativeSource}`);
+  return source;
+}
+
+function fixtureSourcePathFor(fixture) {
+  return path.join(repoRoot, fixture.source ?? reference.source);
+}
 const artifactRoot = path.resolve(
   repoRoot,
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
@@ -38,9 +55,9 @@ function runChecked(command, args) {
   return result;
 }
 
-function noonSourceFor(scene) {
-  const adapted = fixtureSource.replace("from manim import *", "from noon import *");
-  return `${adapted}\n\nresult = ${scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
+function noonSourceFor(fixture) {
+  const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
+  return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
 }
 
 function maxAbs(values) {
@@ -198,7 +215,7 @@ try {
       assert.ok(fixture, `${fixtureReport.id}: raster fixture missing from manifest`);
       const authored = await page.evaluate(
         (source) => window.noonManimCompat.run(source),
-        noonSourceFor(fixture.scene),
+        noonSourceFor(fixture),
       );
       assert.equal(authored.kind, "scene_document", `${fixture.id}: Noon semantic authoring result`);
       assert.equal(authored.duration, fixture.expected_duration, `${fixture.id}: Noon semantic duration`);

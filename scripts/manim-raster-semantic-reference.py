@@ -237,7 +237,7 @@ def main() -> int:
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     reference = manifest["reference"]
-    source_path = (args.manifest.parent.parent.parent / reference["source"]).resolve()
+    repo_root = args.manifest.parent.parent.parent
     settings = {
         "renderer": "cairo",
         "frame_rate": float(reference["frame_rate"]),
@@ -249,11 +249,17 @@ def main() -> int:
         "write_to_movie": False,
     }
     with tempconfig(settings):
-        module = _load_source(source_path)
-        fixtures = [
-            _render_fixture(module, fixture, float(reference["frame_rate"]))
-            for fixture in manifest["fixtures"]
-        ]
+        modules: dict[Path, Any] = {}
+        fixtures = []
+        for fixture in manifest["fixtures"]:
+            source_path = (repo_root / fixture.get("source", reference["source"])).resolve()
+            module = modules.get(source_path)
+            if module is None:
+                module = _load_source(source_path)
+                modules[source_path] = module
+            fixtures.append(
+                _render_fixture(module, fixture, float(reference["frame_rate"]))
+            )
 
     payload = {
         "manim_version": manim.__version__,
