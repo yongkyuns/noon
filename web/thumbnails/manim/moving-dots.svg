@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Blue and green dots connected by a red updater line">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <line x1="250" y1="104" x2="174" y2="42" stroke="#fc6255" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="250" cy="104" r="7" fill="#58c4dd"/>
+  <circle cx="174" cy="42" r="7" fill="#83c167"/>
+</svg>

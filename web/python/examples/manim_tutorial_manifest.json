@@ -372,6 +372,25 @@
       "order": 190
     },
     {
+      "id": "parity-moving-dots",
+      "title": "MovingDots",
+      "summary": "ManimCE v0.21 Example Gallery MovingDots, byte-for-byte except for the import module.",
+      "status": "ready",
+      "path": "python/examples/manim_gallery_moving_dots.py",
+      "category": "animations",
+      "features": ["Dot", "VGroup", "arrange", "Line", "ValueTracker", "add_updater", "match_points", "pixel-parity", "time-parity"],
+      "upstream": "examples.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/moving_dots.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "moving-dots",
+      "expected_duration": 3.0,
+      "thumbnail": "thumbnails/manim/moving-dots.svg",
+      "thumbnail_alt": "Blue and green dots connected by a red updater line",
+      "thumbnail_time": 2.5,
+      "order": 200
+    },
+    {
       "id": "text-and-math",
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
