@@ -1,5 +1,6 @@
-# Source-equivalent ManimCE v0.21 geometry breadth example.
-# Upstream constructor semantics: manim/mobject/geometry/arc.py (v0.21.0).
+# Internal Noon Manim-v0.21 parity probe.
+# This is not an upstream Manim documentation example and must not be exposed as one.
+# It intentionally combines Dot/Ellipse cases for geometry/raster parity coverage.
 
 from noon import *
 
