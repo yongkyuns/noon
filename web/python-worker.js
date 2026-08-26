@@ -24,6 +24,7 @@ const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
 const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
 const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_GROWING_MODULE_PATH = "/tmp/_manim_growing.py";
+const MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH = "/tmp/_manim_draw_border_then_fill.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
 
@@ -63,6 +64,7 @@ async function initializePyodide() {
     compositionResponse,
     lifecycleResponse,
     growingResponse,
+    drawBorderThenFillResponse,
     reactiveResponse,
     updatersResponse,
   ] = await Promise.all([
@@ -78,6 +80,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_composition.py", import.meta.url)),
     fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
     fetch(new URL("./python/_manim_growing.py", import.meta.url)),
+    fetch(new URL("./python/_manim_draw_border_then_fill.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
   ]);
@@ -94,6 +97,7 @@ async function initializePyodide() {
     [compositionResponse, "Noon Manim composition layer"],
     [lifecycleResponse, "Noon Manim lifecycle layer"],
     [growingResponse, "Noon Manim growing layer"],
+    [drawBorderThenFillResponse, "Noon Manim DrawBorderThenFill layer"],
     [reactiveResponse, "Noon reactive compatibility layer"],
     [updatersResponse, "Noon Manim updater layer"],
   ];
@@ -116,6 +120,7 @@ async function initializePyodide() {
     [MANIM_COMPOSITION_MODULE_PATH, compositionResponse],
     [MANIM_LIFECYCLE_MODULE_PATH, lifecycleResponse],
     [MANIM_GROWING_MODULE_PATH, growingResponse],
+    [MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH, drawBorderThenFillResponse],
     [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
     [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
   ];
@@ -141,6 +146,8 @@ _manim_composition.install()
 import _manim_lifecycle
 import _manim_growing
 _manim_growing.install()
+import _manim_draw_border_then_fill
+_manim_draw_border_then_fill.install()
 import _manim_reactive
 import _manim_updaters
 _manim_updaters.install()
