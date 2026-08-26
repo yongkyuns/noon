@@ -104,6 +104,26 @@ class Transform(_ORIGINAL_TRANSFORM):
         _store_animation_args(self, kwargs)
 
 
+class Restore:
+    """Restore one leaf mobject to its latest saved state when playback is compiled.
+
+    Manim implements ``Restore`` as ``ApplyMethod(mobject.restore)``. The restore target
+    is therefore created by ``Transform.begin()``, rather than frozen when ``Restore``
+    itself is constructed. Noon mirrors that authoring contract while lowering the
+    result to its ordinary retained Transform track.
+    """
+
+    def __init__(self, mobject: object, **kwargs: Any) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError(
+                "Restore(Group/VGroup) requires generic retained-family Transform alignment"
+            )
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Restore target must be a Mobject")
+        self.mobject = mobject
+        _store_animation_args(self, kwargs)
+
+
 class Indicate:
     """ManimCE ``Indicate`` lowered without a Python-owned frame callback.
 
@@ -229,6 +249,7 @@ class FadeOut(_ORIGINAL_FADE_OUT):
 # continues to work because the module globals now point at these subclasses.
 for _name, _value in {
     "Transform": Transform,
+    "Restore": Restore,
     "Indicate": Indicate,
     "ReplacementTransform": ReplacementTransform,
     "TransformFromCopy": TransformFromCopy,
@@ -240,6 +261,9 @@ for _name, _value in {
 }.items():
     setattr(_base, _name, _value)
 
+setattr(_compat, "Restore", Restore)
+if "Restore" not in _base.__all__:
+    _base.__all__.append("Restore")
 if "Indicate" not in _base.__all__:
     _base.__all__.append("Indicate")
 
@@ -312,7 +336,7 @@ _compat._GroupAnimationBuilder = _AlignedGroupAnimationBuilder
 
 
 def _builder_source(animation: object) -> object | None:
-    if isinstance(animation, Indicate):
+    if isinstance(animation, (Indicate, Restore)):
         return animation.mobject
     if isinstance(animation, (_AlignedAnimationBuilder, _AlignedGroupAnimationBuilder)):
         return animation.source
@@ -430,7 +454,14 @@ def _expanded_schedule(
             run_time=run_time,
             easing=easing,
         )
-    if isinstance(animation, _AlignedAnimationBuilder):
+    if isinstance(animation, Restore):
+        saved_state = getattr(animation.mobject, "saved_state", None)
+        if saved_state is None:
+            raise Exception("Trying to restore without having saved")
+        if not isinstance(saved_state, _base.Mobject):
+            raise TypeError("saved_state must be a Mobject")
+        expanded = [_base.Transform(animation.mobject, saved_state.copy())]
+    elif isinstance(animation, _AlignedAnimationBuilder):
         expanded = [_base.Transform(animation.source, animation.target)]
     else:
         expanded = scene._expand_animation(animation)
