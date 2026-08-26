@@ -73,6 +73,17 @@ def _scene_time(mobject: _base.Mobject) -> float | None:
     return float(scene.time)
 
 
+def _registration_end_time(
+    mobject: _base.Mobject, registration: _UpdaterRegistration
+) -> float:
+    scene_time = _scene_time(mobject)
+    if scene_time is not None:
+        return scene_time
+    if registration.active_after is not None:
+        return registration.active_after
+    return 0.0
+
+
 def add_updater(
     self: _base.Mobject,
     update_function: Callable[..., Any],
@@ -112,7 +123,7 @@ def remove_updater(
         if callback is update_function:
             del callbacks[index]
             registration = registrations.pop(index)
-            registration.active_through = _scene_time(self)
+            registration.active_through = _registration_end_time(self, registration)
             break
     return self
 
@@ -121,9 +132,8 @@ def clear_updaters(self: _base.Mobject, recursive: bool = True) -> _base.Mobject
     # Noon has no persisted runtime hierarchy, but Group/VGroup recurse in their own
     # Python wrappers. The flag is accepted for Manim source compatibility.
     del recursive
-    end_time = _scene_time(self)
     for registration in _registrations(self):
-        registration.active_through = end_time
+        registration.active_through = _registration_end_time(self, registration)
     _updaters(self).clear()
     _registrations(self).clear()
     return self
