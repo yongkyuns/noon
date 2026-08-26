@@ -11,6 +11,7 @@ mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
+mod reactive_authoring_facade;
 mod reactive_player;
 mod semantic_snapshot;
 
@@ -25,5 +26,6 @@ pub use execution_transport::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
+pub use reactive_authoring_facade::*;
 pub use reactive_player::*;
 pub use semantic_snapshot::*;
