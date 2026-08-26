@@ -61,9 +61,35 @@ fn animated_square_to_circle() -> Scene {
     scene
 }
 
+fn different_rotations() -> Scene {
+    let mut scene = Scene::new();
+    let left_square = scene.add(
+        Square::default()
+            .color(BLUE)
+            .set_fill(Some(BLUE), Some(0.7))
+            .shift(LEFT * 2.0),
+    );
+    let right_square = scene.add(
+        Square::default()
+            .color(GREEN)
+            .set_fill(Some(GREEN), Some(0.7))
+            .shift(RIGHT * 2.0),
+    );
+    scene
+        .play((
+            left_square.animate().rotate(PI),
+            Rotate::new(right_square, PI),
+        ))
+        .run_time(2.0)
+        .unwrap();
+    scene.wait(1.0).unwrap();
+    scene
+}
+
 fn main() {
     emit("CreateCircle", &create_circle());
     emit("SquareToCircle", &square_to_circle());
     emit("SquareAndCircle", &square_and_circle());
     emit("AnimatedSquareToCircle", &animated_square_to_circle());
+    emit("DifferentRotations", &different_rotations());
 }
