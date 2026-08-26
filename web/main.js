@@ -126,6 +126,14 @@ const SCENE_EXAMPLES = [
     parityFixture: "different-rotations",
   },
   {
+    name: "Manim parity · Add / Wait / LaggedStartMap",
+    path: "./python/examples/manim_parity_add_wait_lagged_start_map.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 composition scene for zero-duration Add, duration Wait, and mapped stagger timing.",
+    features: "exact parity candidate · composition · pixels + time",
+    parityFixture: "add-wait-lagged-start-map",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
