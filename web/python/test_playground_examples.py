@@ -1,5 +1,4 @@
 import json
-import re
 import unittest
 from pathlib import Path
 
@@ -41,44 +40,37 @@ class PlaygroundExampleTests(unittest.TestCase):
         self.assertEqual(len(paths), len(set(paths)))
         self.assertTrue(all(path.startswith("python/") for path in paths))
 
-    def test_python_catalog_matches_javascript_picker(self) -> None:
+    def test_public_gallery_is_manifest_driven_and_manim_only(self) -> None:
         web_root = Path(__file__).parents[1]
         main_js = (web_root / "main.js").read_text(encoding="utf-8")
-        scene_block = main_js.split("const SCENE_EXAMPLES = [", 1)[1].split("\n];", 1)[0]
-        patch_block = main_js.split("const PATCH_EXAMPLES = [", 1)[1].split("\n];", 1)[0]
-
-        registered_scene_paths = re.findall(r'path:\s*"(\./python/[^\"]+\.py)"', scene_block)
-        registered_patch_paths = re.findall(r'path:\s*"(\./python/[^\"]+\.py)"', patch_block)
-
-        native_scene_paths = [
-            f"./{relative_path}" for _, relative_path, _ in PLAYGROUND_SCENE_EXAMPLES
-        ]
         manifest = json.loads(
             (web_root / "python" / "examples" / "manim_tutorial_manifest.json").read_text(
                 encoding="utf-8"
             )
         )
-        manim_scene_paths = [
-            f"./{entry['path']}"
-            for entry in manifest["entries"]
-            if entry["status"] == "ready"
-        ]
-        self.assertTrue(manim_scene_paths)
-        self.assertTrue(set(native_scene_paths).isdisjoint(manim_scene_paths))
+        ready = [entry for entry in manifest["entries"] if entry["status"] == "ready"]
 
-        # The gallery starts with Noon's basic scene, then teaches the browser-only
-        # Manim compatibility surface before continuing into renderer/perf examples.
-        expected_scene_paths = [
-            native_scene_paths[0],
-            *manim_scene_paths,
-            *native_scene_paths[1:],
-        ]
-        expected_patch_paths = [
-            f"./{relative_path}" for _, relative_path, _ in PLAYGROUND_PATCH_EXAMPLES
-        ]
+        self.assertTrue(ready)
+        self.assertNotIn("const SCENE_EXAMPLES = [", main_js)
+        self.assertNotIn("const PATCH_EXAMPLES = [", main_js)
+        self.assertIn("loadGalleryManifest", main_js)
+        self.assertIn("const SCENE_EXAMPLES = galleryManifest.examples", main_js)
 
-        self.assertEqual(registered_scene_paths, expected_scene_paths)
-        self.assertEqual(registered_patch_paths, expected_patch_paths)
+        for entry in ready:
+            with self.subTest(entry=entry["id"]):
+                self.assertEqual(entry["reuse"], "source-equivalent-manim-v0.21")
+                self.assertIn(entry["parity_status"], {"candidate", "parity-qualified"})
+                self.assertTrue(entry["parity_fixture"])
+                self.assertTrue((web_root / entry["path"]).is_file())
+                self.assertTrue((web_root / entry["thumbnail"]).is_file())
+
+        # Internal Noon-native examples remain useful for renderer/runtime regression
+        # tests, but they are intentionally disjoint from the public Manim gallery.
+        internal_scene_paths = {
+            relative_path for _, relative_path, _ in PLAYGROUND_SCENE_EXAMPLES
+        }
+        public_scene_paths = {entry["path"] for entry in ready}
+        self.assertTrue(internal_scene_paths.isdisjoint(public_scene_paths))
 
 
 if __name__ == "__main__":

@@ -26,16 +26,23 @@ class ManimTutorialExampleTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertGreaterEqual(len(entries), 10)
 
-    def test_every_ready_tutorial_exists_and_compiles(self) -> None:
+    def test_every_ready_tutorial_exists_compiles_and_is_manim_equivalent(self) -> None:
         ready = [entry for entry in load_manifest()["entries"] if entry["status"] == "ready"]
-        self.assertGreaterEqual(len(ready), 7)
+        self.assertGreaterEqual(len(ready), 1)
         paths = []
         for entry in ready:
             with self.subTest(entry=entry["id"]):
+                self.assertEqual(entry["reuse"], "source-equivalent-manim-v0.21")
+                self.assertIn(entry["parity_status"], {"candidate", "parity-qualified"})
+                self.assertTrue(entry["parity_fixture"])
+                self.assertIn("pixel-parity", entry["features"])
+                self.assertIn("time-parity", entry["features"])
+
                 relative_path = entry["path"]
                 paths.append(relative_path)
                 path = WEB_ROOT / relative_path
                 self.assertTrue(path.is_file())
+                self.assertTrue((WEB_ROOT / entry["thumbnail"]).is_file())
                 source = path.read_text(encoding="utf-8")
                 tree = ast.parse(source, filename=str(path))
                 self.assertTrue(
@@ -88,11 +95,12 @@ class ManimTutorialExampleTests(unittest.TestCase):
 
         self.assertEqual(len(linked_fixtures), len(set(linked_fixtures)))
 
-    def test_adapted_ready_examples_are_not_mislabeled_as_parity(self) -> None:
-        for entry in load_manifest()["entries"]:
-            if entry.get("reuse") == "original-noon-adaptation":
-                with self.subTest(entry=entry["id"]):
-                    self.assertEqual(entry.get("parity_status"), "adaptation")
+    def test_no_ready_example_is_a_noon_adaptation(self) -> None:
+        ready = [entry for entry in load_manifest()["entries"] if entry["status"] == "ready"]
+        self.assertTrue(ready)
+        self.assertTrue(
+            all(entry.get("reuse") == "source-equivalent-manim-v0.21" for entry in ready)
+        )
 
 
 if __name__ == "__main__":

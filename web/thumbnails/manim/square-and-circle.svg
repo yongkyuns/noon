@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Pink circle next to a blue square">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <circle cx="105" cy="90" r="42" fill="#d147bd" fill-opacity=".5" stroke="#ffffff" stroke-width="4"/>
+  <rect x="177" y="48" width="84" height="84" fill="#58c4dd" fill-opacity=".5" stroke="#ffffff" stroke-width="4"/>
+</svg>

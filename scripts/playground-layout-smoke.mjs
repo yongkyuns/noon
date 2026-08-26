@@ -27,9 +27,7 @@ async function waitForServer() {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
       const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) {
-        return;
-      }
+      if (response.ok) return;
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -71,10 +69,35 @@ function assertNoOverflow(result, label) {
     result.documentWidth <= result.viewportWidth + 1,
     `${label}: page overflowed horizontally (${result.documentWidth}px > ${result.viewportWidth}px)`,
   );
-  assert.ok(
-    result.canvas.width <= result.wrap.width + 1,
-    `${label}: canvas overflowed its wrapper`,
+  assert.ok(result.canvas.width <= result.wrap.width + 1, `${label}: canvas overflowed its wrapper`);
+}
+
+async function waitForAuthoredScene(page, expectedId, browserErrors) {
+  await page.waitForFunction(
+    (id) => {
+      const patch = document.querySelector("#patch-status");
+      const selected = document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId;
+      return selected === id && (patch?.dataset.state === "applied" || patch?.dataset.state === "error");
+    },
+    expectedId,
+    { timeout: 60_000 },
   );
+  const result = await page.evaluate(() => ({
+    state: document.querySelector("#patch-status")?.dataset.state,
+    text:
+      document.querySelector("#patch-status")?.value ??
+      document.querySelector("#patch-status")?.textContent ??
+      "",
+  }));
+  assert.equal(
+    result.state,
+    "applied",
+    `${expectedId}: initial authoring failed: ${result.text}\n${browserErrors.join("\n")}`,
+  );
+}
+
+async function sceneSource(page) {
+  return page.evaluate(() => document.querySelector("#python-scene-source")?.value ?? "");
 }
 
 let browser = null;
@@ -101,26 +124,36 @@ try {
   const browserErrors = [];
   page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
-    if (message.type() === "error") {
-      browserErrors.push(`console: ${message.text()}`);
-    }
+    if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
   });
-  await page.addInitScript(() => {
-    window.__noonReconciledScenes = [];
-    const originalPostMessage = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function postMessage(message, ...rest) {
-      if (message?.channel === "noon.engine" && message?.type === "reconcile_scene") {
-        window.__noonReconciledScenes.push(message.sceneJson);
-      }
-      return originalPostMessage.call(this, message, ...rest);
-    };
+
+  await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
+    waitUntil: "load",
   });
-  await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
   await page.waitForFunction(
-    () => document.querySelector("#status")?.dataset.rendererBackend === "WebGL2",
+    () =>
+      document.querySelector("#status")?.dataset.rendererBackend === "WebGL2" &&
+      document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ===
+        "parity-square-and-circle",
     null,
     { timeout: 30_000 },
   );
+  await waitForAuthoredScene(page, "parity-square-and-circle", browserErrors);
+
+  const galleryContract = await page.evaluate(() => ({
+    cards: document.querySelectorAll(".example-card").length,
+    canvases: document.querySelectorAll("canvas").length,
+    selected: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId,
+    patchHidden: document.querySelector("#patch-tab")?.hidden,
+    thumbnails: [...document.querySelectorAll(".example-thumb")].map((image) => image.getAttribute("src")),
+    href: location.href,
+  }));
+  assert.equal(galleryContract.cards, 8, "gallery must render all eight ready Manim parity examples");
+  assert.equal(galleryContract.canvases, 1, "thumbnail gallery must keep exactly one live canvas");
+  assert.equal(galleryContract.selected, "parity-square-and-circle");
+  assert.equal(galleryContract.patchHidden, true, "Noon-native patch examples must not be public examples");
+  assert.ok(galleryContract.thumbnails.every((src) => src?.includes("thumbnails/manim/")));
+  assert.match(galleryContract.href, /example=parity-square-and-circle/);
 
   const initialBacking = await page.evaluate(() => {
     const canvas = document.querySelector("#scene");
@@ -155,43 +188,22 @@ try {
   assertCentered(desktop.canvas, desktop.wrap, "desktop");
   assertNoOverflow(desktop, "desktop");
 
-  // Exercise the actual picker path that was reported as inert. The Python scene
-  // remains purely reactive; ExecutionWorkerClient must add a temporary legacy
-  // position track only in the JSON sent to EngineScenePlayer. Because the first
-  // gallery scene already claimed local object IDs, this also verifies that stable
-  // identity remapping reaches reactive bindings before projection.
-  const picker = page.locator(".example-picker select");
-  await picker.selectOption({ label: "Manim CE · ValueTracker" });
-  await page.waitForFunction(
-    () => document.querySelector("#patch-status")?.dataset.state === "applied",
-    null,
-    { timeout: 30_000 },
+  await page.locator(".gallery-controls input[type='search']").fill("DifferentRotations");
+  await page.waitForFunction(() => document.querySelectorAll(".example-card").length === 1);
+  assert.equal(
+    await page.locator(".example-card").getAttribute("data-example-id"),
+    "parity-different-rotations",
   );
-  const valueTrackerRuntime = await page.evaluate(() => {
-    const encoded = window.__noonReconciledScenes.at(-1);
-    return encoded ? JSON.parse(encoded) : null;
-  });
-  assert.ok(valueTrackerRuntime, "ValueTracker picker must reconcile a runtime scene");
-  assert.equal(valueTrackerRuntime.objects.length, 1);
-  const valueTrackerObject = valueTrackerRuntime.objects[0];
-  const valueTrackerPosition = valueTrackerRuntime.tracks.find(
-    (track) => track.object === valueTrackerObject.id && track.property === "position",
-  );
-  assert.ok(
-    valueTrackerPosition,
-    "ValueTracker picker must send visible position motion to the legacy engine",
-  );
-  assert.deepEqual(valueTrackerPosition.values, {
-    vec2: {
-      from: { x: 0, y: 0 },
-      to: { x: 2.5, y: 0 },
-    },
-  });
-  assert.deepEqual(valueTrackerPosition.timing, {
-    start_time: 0,
-    duration: 1.5,
-    easing: "linear",
-  });
+  await page.locator(".example-card").click();
+  await waitForAuthoredScene(page, "parity-different-rotations", browserErrors);
+  assert.match(page.url(), /example=parity-different-rotations/);
+  assert.match(await sceneSource(page), /Rotate\(right_square/);
+
+  await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true']");
+  await page.locator("#scene-editor-panel .cm-content").fill("# local draft\n");
+  assert.equal(await page.locator(".reset-example").isDisabled(), false);
+  await page.locator(".reset-example").click();
+  assert.match(await sceneSource(page), /from noon import \*/);
 
   await page.setViewportSize({ width: 900, height: 800 });
   const stacked = await layout(page);
@@ -211,15 +223,11 @@ try {
 
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ playground WebGL2 viewport + ValueTracker @ DPR ${deviceScaleFactor}: initial backing ` +
-      `${initialBacking.backingWidth}×${initialBacking.backingHeight}, ` +
-      `desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
-      `stacked ${stacked.canvas.width.toFixed(0)}×${stacked.canvas.height.toFixed(0)}, ` +
+    `✓ Manim gallery + WebGL2 viewport @ DPR ${deviceScaleFactor}: ` +
+      `${galleryContract.cards} cards, desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `mobile ${mobile.canvas.width.toFixed(0)}×${mobile.canvas.height.toFixed(0)}`,
   );
 } finally {
-  if (browser !== null) {
-    await browser.close();
-  }
+  if (browser !== null) await browser.close();
   server.kill("SIGTERM");
 }
