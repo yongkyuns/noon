@@ -96,6 +96,33 @@ class UncreateStyledSquare(Scene):
         self.play(Uncreate(square))
 
 
+class CreateTransformedSquare(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        square.scale(1.3).rotate(PI / 6).shift(1.5 * RIGHT + 0.75 * UP)
+        self.play(Create(square))
+
+
+class UncreateTransformedSquare(Scene):
+    def construct(self):
+        square = Square(
+            fill_color=PINK,
+            fill_opacity=0.35,
+            stroke_color=BLUE,
+            stroke_opacity=0.65,
+            stroke_width=8,
+        )
+        square.scale(1.3).rotate(PI / 6).shift(1.5 * RIGHT + 0.75 * UP)
+        self.add(square)
+        self.play(Uncreate(square))
+
+
 class UncreateSquare(Scene):
     def construct(self):
         square = Square()
