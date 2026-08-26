@@ -231,6 +231,8 @@ impl RateFunction {
             Self::RushFrom => "rush_from",
             Self::ThereAndBack => "there_and_back",
             Self::EaseInOutCubic => "ease_in_out_cubic",
+            Self::StepStart => "step_start",
+            Self::StepEnd => "step_end",
         }
     }
 
@@ -242,6 +244,8 @@ impl RateFunction {
             "rush_from" => Some(Self::RushFrom),
             "there_and_back" => Some(Self::ThereAndBack),
             "ease_in_out_cubic" => Some(Self::EaseInOutCubic),
+            "step_start" => Some(Self::StepStart),
+            "step_end" => Some(Self::StepEnd),
             _ => None,
         }
     }
@@ -323,6 +327,8 @@ mod tests {
             RateFunction::RushFrom,
             RateFunction::ThereAndBack,
             RateFunction::EaseInOutCubic,
+            RateFunction::StepStart,
+            RateFunction::StepEnd,
         ] {
             assert_eq!(
                 RateFunction::from_semantic_id(rate_func.semantic_id()),
