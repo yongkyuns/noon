@@ -118,6 +118,30 @@ class Ellipse(_compat.Circle):
         self.scale_to_fit_height(float(value))
 
 
+class Triangle(_compat.Path):
+    """Manim-compatible equilateral ``Triangle`` with RegularPolygon defaults.
+
+    ManimCE v0.21 implements Triangle as ``RegularPolygon(n=3)``.  The default
+    regular-vertex helper places the first vertex at +Y on the unit circle and the
+    remaining vertices counter-clockwise at 120 degree increments.  A closed Noon
+    vector path therefore represents the same authored 2D geometry without adding a
+    renderer-specific primitive.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        points = [
+            _base.Vec2(
+                math.cos(math.pi / 2.0 + index * _base.TAU / 3.0),
+                math.sin(math.pi / 2.0 + index * _base.TAU / 3.0),
+            )
+            for index in range(3)
+        ]
+        path = _base.VectorPath().move_to(points[0])
+        for point in points[1:]:
+            path.line_to(point)
+        super().__init__(path.close(), **kwargs)
+
+
 def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     """Use wrapper-specific Manim layout bounds while preserving flat runtime data."""
 
@@ -147,6 +171,7 @@ def install() -> None:
         "DEFAULT_DOT_RADIUS": DEFAULT_DOT_RADIUS,
         "Dot": Dot,
         "Ellipse": Ellipse,
+        "Triangle": Triangle,
     }
     for name, value in public.items():
         setattr(_base, name, value)
