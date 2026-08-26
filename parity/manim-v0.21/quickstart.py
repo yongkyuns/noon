@@ -398,7 +398,6 @@ class PrimitiveGeometryMatrix(Scene):
         self.add(circle, rectangle, square, diagonal, rotated)
         self.play(rotated.animate.shift(ORIGIN))
 
-
 class DotEllipseParity(Scene):
     def construct(self):
         default_dot = Dot(point=3 * LEFT + 1.5 * UP)
@@ -589,3 +588,15 @@ class WiggleSquare(Scene):
         )
         self.add(square)
         self.play(Wiggle(square))
+
+
+class SpinInFromNothingRectangle(Scene):
+    def construct(self):
+        rectangle = Rectangle(
+            width=2.2,
+            height=1.0,
+            fill_color=BLUE,
+            fill_opacity=0.8,
+            stroke_opacity=0.0,
+        ).rotate(PI / 7).shift(1.5 * RIGHT + 0.5 * UP)
+        self.play(SpinInFromNothing(rectangle))
