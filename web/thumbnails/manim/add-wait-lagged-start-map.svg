@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Two circles and two squares from the composition parity example">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <circle cx="92" cy="67" r="20" fill="#58c4dd"/>
+  <circle cx="228" cy="67" r="20" fill="#83c167"/>
+  <rect x="128" y="112" width="32" height="32" fill="#d147bd"/>
+  <rect x="164" y="112" width="32" height="32" fill="#ffff00"/>
+</svg>

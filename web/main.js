@@ -1,6 +1,14 @@
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { SceneIdentityMap } from "./scene-identity.js";
+import {
+  exampleUrl,
+  filterGalleryExamples,
+  galleryCategories,
+  loadGalleryManifest,
+  parityLabel,
+  requestedExampleId,
+} from "./example-gallery.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -12,7 +20,6 @@ const sceneSourceEditor = document.querySelector("#python-scene-source");
 const sourceEditor = document.querySelector("#python-source");
 const sceneTab = document.querySelector("#scene-tab");
 const patchTab = document.querySelector("#patch-tab");
-const scenePanel = document.querySelector("#scene-editor-panel");
 const patchPanel = document.querySelector("#patch-editor-panel");
 const metricObjects = document.querySelector("#metric-objects");
 const metricDraws = document.querySelector("#metric-draws");
@@ -24,379 +31,271 @@ const metricPrepare = document.querySelector("#metric-prepare");
 const metricUploadMs = document.querySelector("#metric-upload-ms");
 const metricEncode = document.querySelector("#metric-encode");
 const metricGpu = document.querySelector("#metric-gpu");
-const paneToolbar = document.querySelector(".pane-toolbar");
+const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
-const editorStack = document.querySelector(".editor-stack");
 
-const SCENE_EXAMPLES = [
-  {
-    name: "Getting started",
-    path: "./python/demo_scene.py",
-    summary:
-      "Three primitives introduce position, rotation, and opacity tracks with semantic layout helpers.",
-    features: "primitives · position · rotation · opacity",
-  },
-  {
-    name: "Manim CE · Create a circle",
-    path: "./python/examples/tutorial_quickstart.py",
-    summary:
-      "A Noon/browser adaptation of the Manim CE quickstart: create and reveal a styled circle.",
-    features: "Manim CE · Circle · Create · fill/stroke",
-  },
-  {
-    name: "Manim CE · Square → circle",
-    path: "./python/examples/tutorial_square_to_circle.py",
-    summary:
-      "The canonical Manim square-to-circle lesson, adapted to Noon's browser runtime.",
-    features: "Manim CE · Square · Circle · Transform",
-  },
-  {
-    name: "Manim CE · Positioning",
-    path: "./python/examples/tutorial_positioning.py",
-    summary:
-      "Arrange a circle, square, and line as a group, place them at an edge, then animate the group.",
-    features: "Manim CE · VGroup · arrange · to_edge",
-  },
-  {
-    name: "Manim CE · .animate",
-    path: "./python/examples/tutorial_animate.py",
-    summary:
-      "Chain shift, rotate, scale, and color changes through Manim-style .animate syntax.",
-    features: "Manim CE · .animate · shift · rotate · scale",
-  },
-  {
-    name: "Manim CE · Transform lifecycle",
-    path: "./python/examples/tutorial_transform_lifecycle.py",
-    summary:
-      "Compare Transform with ReplacementTransform and their different object-lifecycle semantics.",
-    features: "Manim CE · Transform · ReplacementTransform",
-  },
-  {
-    name: "Manim CE · Animation groups",
-    path: "./python/examples/tutorial_composition.py",
-    summary:
-      "Compose simultaneous and staggered motion with AnimationGroup and LaggedStart.",
-    features: "Manim CE · AnimationGroup · LaggedStart",
-  },
-  {
-    name: "Manim CE · ValueTracker",
-    path: "./python/examples/tutorial_value_tracker.py",
-    summary:
-      "Drive a native reactive binding from a Manim-style ValueTracker animation.",
-    features: "Manim CE · ValueTracker · native reactivity",
-  },
-  {
-    name: "Manim parity · CreateCircle",
-    path: "./python/examples/manim_parity_create_circle.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 CreateCircle with no Noon visual or timing tuning.",
-    features: "exact parity candidate · create-circle · pixels + time",
-    parityFixture: "create-circle",
-  },
-  {
-    name: "Manim parity · SquareToCircle",
-    path: "./python/examples/manim_parity_square_to_circle.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 Create → Transform → FadeOut sequence used by the parity oracle.",
-    features: "exact parity candidate · square-to-circle · pixels + time",
-    parityFixture: "square-to-circle",
-  },
-  {
-    name: "Manim parity · SquareAndCircle",
-    path: "./python/examples/manim_parity_square_and_circle.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 positioning scene with the canonical next_to(..., buff=0.5) contract.",
-    features: "exact parity candidate · layout · pixels + time",
-    parityFixture: "square-and-circle",
-  },
-  {
-    name: "Manim parity · AnimatedSquareToCircle",
-    path: "./python/examples/manim_parity_animated_square_to_circle.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 .animate and Transform sequence sampled by the raster/timeline oracle.",
-    features: "exact parity candidate · animate · pixels + time",
-    parityFixture: "animated-square-to-circle",
-  },
-  {
-    name: "Manim parity · DifferentRotations",
-    path: "./python/examples/manim_parity_different_rotations.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 comparison of target-state .animate.rotate and Rotate semantics.",
-    features: "exact parity candidate · Rotate · pixels + time",
-    parityFixture: "different-rotations",
-  },
-  {
-    name: "Manim parity · Add / Wait / LaggedStartMap",
-    path: "./python/examples/manim_parity_add_wait_lagged_start_map.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 composition scene for zero-duration Add, duration Wait, and mapped stagger timing.",
-    features: "exact parity candidate · composition · pixels + time",
-    parityFixture: "add-wait-lagged-start-map",
-  },
-  {
-    name: "Manim parity · GrowFromPoint / Center / Edge",
-    path: "./python/examples/manim_parity_grow_point_center_edge.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 growing scene covering point, center, edge, point color, and staggered composition.",
-    features: "exact parity candidate · growing · pixels + time",
-    parityFixture: "grow-point-center-edge",
-  },
-  {
-    name: "Manim parity · Uncreate styled square",
-    path: "./python/examples/manim_parity_uncreate_styled_square.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 Uncreate scene covering reverse Create timing, styled reveal removal, and lifecycle cleanup.",
-    features: "exact parity qualified · Uncreate · pixels + time",
-    parityFixture: "uncreate-styled-square",
-  },
-  {
-    name: "Analytic Transform",
-    path: "./python/examples/analytic_transform.py",
-    summary:
-      "Circle radius, rectangle size, and line endpoints interpolate directly without path conversion.",
-    features: "Transform · analytic geometry · zero tessellation",
-  },
-  {
-    name: "Lifecycle handoffs",
-    path: "./python/examples/lifecycle_handoffs.py",
-    summary:
-      "ReplacementTransform swaps stable scene identity while TransformFromCopy keeps its source present.",
-    features: "ReplacementTransform · TransformFromCopy · Presence",
-  },
-  {
-    name: "Fade & appearance",
-    path: "./python/examples/fade_appearance.py",
-    summary:
-      "A semitransparent object fades out and back in while authored semantic opacity stays unchanged.",
-    features: "FadeOut · FadeIn · Appearance · semantic opacity",
-  },
-  {
-    name: "Matching shapes",
-    path: "./python/examples/matching_shapes.py",
-    summary:
-      "Two reordered rows pair circles and a rectangle by semantic shape signature rather than list position.",
-    features: "TransformMatchingShapes · signatures · stable pairing",
-  },
-  {
-    name: "Create shapes",
-    path: "./python/examples/create_shapes.py",
-    summary:
-      "Circle, square, line, and arbitrary vector path draw progressively while analytic shapes return to their fast paths at completion.",
-    features: "Create · analytic outlines · cached reveal",
-  },
-  {
-    name: "Path reveal",
-    path: "./python/examples/path_reveal.py",
-    summary:
-      "One multi-contour vector path draws progressively over its deterministic ordered arc-length domain.",
-    features: "VectorPath · Reveal · multi-contour ordering",
-  },
-  {
-    name: "Filled path Transform",
-    path: "./python/examples/filled_path_transform.py",
-    summary:
-      "A parameterized rounded loop morphs into a five-point star using validated fixed fill topology.",
-    features: "Transform · filled path · fixed topology",
-  },
-  {
-    name: "Staggered timing",
-    path: "./python/examples/staggered_choreography.py",
-    summary:
-      "Seven identical circles share one motion while start_time alone creates a readable stagger.",
-    features: "start_time · easing · timeline composition",
-  },
-  {
-    name: "Instanced field · 180",
-    path: "./python/examples/instanced_field.py",
-    summary:
-      "A semantic 18×10 grid exercises analytic instancing, batching, and dirty-range uploads.",
-    features: "180 circles · instancing · GPU batching",
-  },
-  {
-    name: "Morph stress · 1,000",
-    path: "./python/examples/morph_stress_test.py",
-    context: { object_count: 1000 },
-    summary:
-      "One thousand simultaneous path morphs reuse twelve target geometries for focused stress profiling.",
-    features: "1,000 morphs · 12 meshes · CPU/GPU profile",
-  },
-];
-
-const PATCH_EXAMPLES = [
-  {
-    name: "Palette swap",
-    path: "./python/demo_patch.py",
-    summary:
-      "Changes styles on existing runtime objects using one ordered semantic PatchBatch.",
-    features: "style patch · dirty ranges · playhead preserved",
-  },
-  {
-    name: "Transform remix",
-    path: "./python/examples/transform_patch.py",
-    summary:
-      "Directly moves, rotates and scales the first three objects without rebuilding the scene.",
-    features: "transform patch · live mutation · no scene rebuild",
-  },
-];
-
-const PALETTES = [
-  {
-    name: "electric",
-    circle: [1.0, 0.78, 0.22],
-    rectangle: [0.72, 0.38, 0.96],
-    line: [0.22, 0.88, 0.96],
-  },
-  {
-    name: "original",
-    circle: [0.98, 0.38, 0.36],
-    rectangle: [0.27, 0.65, 0.96],
-    line: [0.3, 0.88, 0.57],
-  },
-];
+// The public demo is a Manim compatibility surface. Noon-native patch templates and
+// implementation/stress examples remain repository fixtures, but are not user-facing examples.
+patchButton.hidden = true;
+patchTab.hidden = true;
+patchPanel.hidden = true;
+sourceEditor.hidden = true;
+sceneTab.hidden = true;
+sceneButton.textContent = "Run";
 
 const galleryStyle = document.createElement("style");
 galleryStyle.textContent = `
-  .example-picker {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    gap: 0.42rem;
-    margin-left: auto;
-    margin-right: 0.45rem;
-    color: #7f8ca5;
-    font-size: 0.7rem;
+  .example-gallery {
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: rgb(7 10 16 / 78%);
+    overflow: hidden;
   }
-  .example-picker select {
-    max-width: 13.5rem;
+  .gallery-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .gallery-title { min-width: 0; }
+  .gallery-title strong {
+    display: block;
+    color: #e4e8f2;
+    font-size: 0.86rem;
+  }
+  .gallery-title span {
+    display: block;
+    margin-top: 0.18rem;
+    color: var(--muted-2);
+    font-size: 0.68rem;
+  }
+  .gallery-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .gallery-controls input,
+  .gallery-controls select {
     min-width: 0;
     border: 1px solid #303d58;
-    border-radius: 0.55rem;
-    padding: 0.43rem 1.8rem 0.43rem 0.58rem;
+    border-radius: 0.58rem;
     background: #111722;
     color: #dbe2ef;
+    padding: 0.48rem 0.62rem;
     font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .example-strip {
+  .gallery-controls input { width: min(15rem, 30vw); }
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr));
+    gap: 0.72rem;
+    padding: 0.85rem;
+  }
+  .gallery-empty {
+    padding: 1.4rem;
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+  .example-card {
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid #27334b;
+    border-radius: 0.78rem;
+    background: #0c111b;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .example-card:hover { border-color: #4a5e87; }
+  .example-card[aria-selected="true"] {
+    border-color: #8e7cff;
+    box-shadow: 0 0 0 1px rgb(142 124 255 / 45%);
+  }
+  .example-card:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+  }
+  .example-thumb {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: #1c1c1c;
+    border-bottom: 1px solid #222d41;
+  }
+  .example-card-copy { padding: 0.66rem 0.7rem 0.72rem; }
+  .example-card-title {
+    display: block;
+    overflow: hidden;
+    color: #e0e5f0;
+    font-size: 0.74rem;
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .example-card-meta {
     display: flex;
     align-items: center;
-    gap: 0.7rem;
-    min-height: 2.9rem;
-    padding: 0.52rem 0.82rem;
-    border-bottom: 1px solid #263149;
+    justify-content: space-between;
+    gap: 0.45rem;
+    margin-top: 0.42rem;
+  }
+  .example-category,
+  .example-parity {
+    overflow: hidden;
+    font-size: 0.61rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .example-category { color: #8390a8; }
+  .example-parity { color: #b4a8ff; }
+  .selected-example {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+    min-height: 3.8rem;
+    padding: 0.75rem 0.85rem;
+    border-bottom: 1px solid var(--border);
     background: rgba(11, 15, 24, 0.92);
   }
-  .example-copy {
-    min-width: 0;
-    flex: 1;
-  }
-  .example-name {
+  .selected-copy { min-width: 0; flex: 1; }
+  .selected-title {
     display: block;
-    color: #dce3f1;
-    font-size: 0.74rem;
-    font-weight: 700;
+    color: #e3e7f1;
+    font-size: 0.78rem;
+    font-weight: 750;
   }
-  .example-summary {
+  .selected-summary {
     display: block;
-    margin-top: 0.12rem;
-    overflow: hidden;
-    color: #7f8ca5;
+    margin-top: 0.18rem;
+    color: #8592aa;
     font-size: 0.68rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
-  .example-features {
-    flex: none;
-    max-width: 42%;
-    overflow: hidden;
-    color: #a79aff;
-    font: 0.66rem ui-monospace, SFMono-Regular, Menlo, monospace;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .selected-tags {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    max-width: 48%;
   }
-  @media (max-width: 74rem) {
-    .example-picker span { display: none; }
-    .example-picker select { max-width: 10.5rem; }
-    .example-features { display: none; }
+  .selected-tag {
+    padding: 0.22rem 0.4rem;
+    border: 1px solid #313d56;
+    border-radius: 999px;
+    color: #aab5ca;
+    font: 0.61rem ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  @media (max-width: 56rem) {
-    .example-picker { order: 3; width: 100%; margin: 0 0 0.55rem; }
-    .example-picker select { width: 100%; max-width: none; }
+  .selected-tag.parity { color: #c2b8ff; border-color: #514691; }
+  .reset-example { white-space: nowrap; }
+  @media (max-width: 68rem) {
+    .gallery-head { align-items: stretch; flex-direction: column; }
+    .gallery-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+    .gallery-controls input { width: 100%; }
+  }
+  @media (max-width: 44rem) {
+    .gallery-controls { grid-template-columns: 1fr; }
+    .gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; padding: 0.6rem; }
+    .selected-example { flex-direction: column; }
+    .selected-tags { justify-content: flex-start; max-width: none; }
+  }
+  @media (max-width: 28rem) {
+    .gallery-grid { grid-template-columns: 1fr; }
   }
 `;
 document.head.append(galleryStyle);
 
-const examplePicker = document.createElement("label");
-examplePicker.className = "example-picker";
-const examplePickerLabel = document.createElement("span");
-examplePickerLabel.textContent = "Example";
-const exampleSelect = document.createElement("select");
-exampleSelect.setAttribute("aria-label", "Playground example");
-examplePicker.append(examplePickerLabel, exampleSelect);
-paneToolbar.insertBefore(examplePicker, toolbarActions);
-
-const exampleStrip = document.createElement("div");
-exampleStrip.className = "example-strip";
-const exampleCopy = document.createElement("div");
-exampleCopy.className = "example-copy";
-const exampleName = document.createElement("span");
-exampleName.className = "example-name";
-const exampleSummary = document.createElement("span");
-exampleSummary.className = "example-summary";
-const exampleFeatures = document.createElement("span");
-exampleFeatures.className = "example-features";
-exampleCopy.append(exampleName, exampleSummary);
-exampleStrip.append(exampleCopy, exampleFeatures);
-editorStack.parentElement.insertBefore(exampleStrip, editorStack);
-
-let activeEditor = "scene";
-const selectedExample = { scene: 0, patch: 0 };
-
-function examplesFor(kind) {
-  return kind === "scene" ? SCENE_EXAMPLES : PATCH_EXAMPLES;
+const galleryManifest = await loadGalleryManifest();
+const SCENE_EXAMPLES = galleryManifest.examples;
+if (SCENE_EXAMPLES.length === 0) {
+  throw new Error("No source-equivalent ManimCE examples are ready for the gallery");
 }
 
-function currentExample(kind = activeEditor) {
-  return examplesFor(kind)[selectedExample[kind]];
+const gallerySection = document.createElement("section");
+gallerySection.className = "example-gallery";
+gallerySection.setAttribute("aria-label", "Manim compatible scene examples");
+const galleryHead = document.createElement("div");
+galleryHead.className = "gallery-head";
+const galleryTitle = document.createElement("div");
+galleryTitle.className = "gallery-title";
+galleryTitle.innerHTML = `<strong>ManimCE examples</strong><span>Source-equivalent v${galleryManifest.reference?.version ?? "0.21.0"} scenes</span>`;
+const galleryControls = document.createElement("div");
+galleryControls.className = "gallery-controls";
+const gallerySearch = document.createElement("input");
+gallerySearch.type = "search";
+gallerySearch.placeholder = "Search examples";
+gallerySearch.setAttribute("aria-label", "Search Manim examples");
+const categorySelect = document.createElement("select");
+categorySelect.setAttribute("aria-label", "Filter examples by category");
+categorySelect.append(new Option("All categories", "all"));
+for (const category of galleryCategories(SCENE_EXAMPLES)) {
+  categorySelect.append(new Option(category.replace(/^parity\//, ""), category));
 }
+const paritySelect = document.createElement("select");
+paritySelect.setAttribute("aria-label", "Filter examples by parity status");
+paritySelect.append(
+  new Option("All parity states", "all"),
+  new Option("Parity candidate", "candidate"),
+  new Option("Parity qualified", "parity-qualified"),
+);
+galleryControls.append(gallerySearch, categorySelect, paritySelect);
+galleryHead.append(galleryTitle, galleryControls);
+const galleryGrid = document.createElement("div");
+galleryGrid.className = "gallery-grid";
+gallerySection.append(galleryHead, galleryGrid);
+workspace.before(gallerySection);
 
-function refreshExampleChrome() {
-  const examples = examplesFor(activeEditor);
-  exampleSelect.replaceChildren();
-  examples.forEach((example, index) => {
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent = example.name;
-    option.selected = index === selectedExample[activeEditor];
-    exampleSelect.append(option);
-  });
-  const example = currentExample();
-  exampleName.textContent = example.name;
-  exampleSummary.textContent = example.summary;
-  exampleFeatures.textContent = example.features;
+const selectedExampleStrip = document.createElement("div");
+selectedExampleStrip.className = "selected-example";
+const selectedCopy = document.createElement("div");
+selectedCopy.className = "selected-copy";
+const selectedTitle = document.createElement("span");
+selectedTitle.className = "selected-title";
+const selectedSummary = document.createElement("span");
+selectedSummary.className = "selected-summary";
+selectedCopy.append(selectedTitle, selectedSummary);
+const selectedTags = document.createElement("div");
+selectedTags.className = "selected-tags";
+selectedExampleStrip.append(selectedCopy, selectedTags);
+document.querySelector(".editor-stack").before(selectedExampleStrip);
+
+const resetButton = document.createElement("button");
+resetButton.type = "button";
+resetButton.className = "secondary-button reset-example";
+resetButton.textContent = "Reset example";
+resetButton.disabled = true;
+toolbarActions.prepend(resetButton);
+
+let selectedExampleId = null;
+let canonicalSource = "";
+let authoringClient = null;
+const sceneIdentities = new SceneIdentityMap();
+const drafts = new Map();
+const sourceCache = new Map();
+let player = null;
+let rendererBackend = "";
+
+function currentExample() {
+  return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
 }
-
-function selectEditor(kind) {
-  activeEditor = kind;
-  const sceneActive = kind === "scene";
-  sceneTab.setAttribute("aria-selected", String(sceneActive));
-  patchTab.setAttribute("aria-selected", String(!sceneActive));
-  scenePanel.dataset.active = String(sceneActive);
-  patchPanel.dataset.active = String(!sceneActive);
-  refreshExampleChrome();
-}
-
-sceneTab.addEventListener("click", () => selectEditor("scene"));
-patchTab.addEventListener("click", () => selectEditor("patch"));
-refreshExampleChrome();
 
 function setRuntimeStatus(message, state) {
   statusText.textContent = message;
   status.dataset.state = state;
 }
+
 function setBusy(busy) {
   sceneButton.disabled = busy;
-  patchButton.disabled = busy;
-  exampleSelect.disabled = busy;
+  resetButton.disabled = busy || sceneSourceEditor.value === canonicalSource;
+  gallerySearch.disabled = busy;
+  categorySelect.disabled = busy;
+  paritySelect.disabled = busy;
+  for (const card of galleryGrid.querySelectorAll(".example-card")) {
+    card.disabled = busy;
+  }
 }
 
 function showError(error) {
@@ -406,43 +305,220 @@ function showError(error) {
   patchStatus.dataset.state = "error";
 }
 
-function showPatchError(error) {
+function showSceneError(error) {
   console.error(error);
   patchStatus.value = `Python failed: ${error}`;
   patchStatus.dataset.state = "error";
 }
 
 function formatBytes(bytes) {
-  if (bytes === 0) {
-    return "0 B";
-  }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KiB`;
-  }
+  if (bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 async function loadDemoAuthoringSource(path) {
+  if (sourceCache.has(path)) return sourceCache.get(path);
   const response = await fetch(path);
   if (!response.ok) {
     throw new Error(`Unable to load demo Python: HTTP ${response.status}`);
   }
-  return response.text();
+  const source = await response.text();
+  sourceCache.set(path, source);
+  return source;
 }
 
-const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
+function renderSelectedMetadata() {
+  const example = currentExample();
+  if (!example) return;
+  selectedTitle.textContent = example.title;
+  selectedSummary.textContent = example.summary;
+  selectedTags.replaceChildren();
+  const parity = document.createElement("span");
+  parity.className = "selected-tag parity";
+  parity.textContent = parityLabel(example.parityStatus);
+  selectedTags.append(parity);
+  for (const feature of example.features.slice(0, 6)) {
+    const tag = document.createElement("span");
+    tag.className = "selected-tag";
+    tag.textContent = feature;
+    selectedTags.append(tag);
+  }
+}
 
+function renderGallery() {
+  const visible = filterGalleryExamples(SCENE_EXAMPLES, {
+    query: gallerySearch.value,
+    category: categorySelect.value,
+    parityStatus: paritySelect.value,
+  });
+  galleryGrid.replaceChildren();
+  if (visible.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "gallery-empty";
+    empty.textContent = "No Manim examples match these filters.";
+    galleryGrid.append(empty);
+    return;
+  }
+  for (const example of visible) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "example-card";
+    card.dataset.exampleId = example.id;
+    card.setAttribute("aria-selected", String(example.id === selectedExampleId));
+    const image = document.createElement("img");
+    image.className = "example-thumb";
+    image.src = example.thumbnail;
+    image.alt = example.thumbnailAlt;
+    image.loading = "lazy";
+    image.decoding = "async";
+    const copy = document.createElement("span");
+    copy.className = "example-card-copy";
+    const title = document.createElement("span");
+    title.className = "example-card-title";
+    title.textContent = example.title;
+    const meta = document.createElement("span");
+    meta.className = "example-card-meta";
+    const category = document.createElement("span");
+    category.className = "example-category";
+    category.textContent = example.category.replace(/^parity\//, "");
+    const parity = document.createElement("span");
+    parity.className = "example-parity";
+    parity.textContent = parityLabel(example.parityStatus);
+    meta.append(category, parity);
+    copy.append(title, meta);
+    card.append(image, copy);
+    card.addEventListener("click", () => {
+      void selectExample(example.id, { run: true, updateUrl: true, scroll: true });
+    });
+    galleryGrid.append(card);
+  }
+}
+
+async function runScene() {
+  const example = currentExample();
+  if (!example || !player) return;
+  setBusy(true);
+  try {
+    patchStatus.value = `Building ${example.title} in the Python worker…`;
+    patchStatus.dataset.state = "running";
+    authoringClient ??= new PythonAuthoringClient();
+    const authored = await authoringClient.run(sceneSourceEditor.value, {});
+    if (authored.kind !== "scene_document") {
+      throw new Error("Python scene source returned a PatchBatch");
+    }
+
+    const before = await player.state();
+    const runtimeDocument =
+      authored.callbacks === null
+        ? sceneIdentities.stabilize(authored.document, authored.identities)
+        : authored.document;
+    const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
+      callbacks: authored.callbacks,
+      authoringClient,
+      loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+    });
+    if (result.time !== before.time) {
+      throw new Error("Scene replacement changed the current playhead");
+    }
+    const report = await player.metrics();
+    const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
+    patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
+    patchStatus.dataset.state = "applied";
+    patchStatus.dataset.exampleId = example.id;
+    patchStatus.dataset.parityStatus = example.parityStatus;
+    patchStatus.dataset.sequence = String(result.nextPatchSequence);
+  } catch (error) {
+    showSceneError(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function selectExample(
+  id,
+  { run = false, updateUrl = false, scroll = false } = {},
+) {
+  const example = SCENE_EXAMPLES.find((candidate) => candidate.id === id);
+  if (!example) {
+    throw new Error(`Unknown Manim example ${id}`);
+  }
+  if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
+    drafts.set(selectedExampleId, sceneSourceEditor.value);
+  }
+
+  setBusy(true);
+  try {
+    const source = await loadDemoAuthoringSource(example.path);
+    selectedExampleId = id;
+    canonicalSource = source;
+    sceneSourceEditor.value = drafts.get(id) ?? source;
+    resetButton.disabled = sceneSourceEditor.value === canonicalSource;
+    renderSelectedMetadata();
+    renderGallery();
+    patchStatus.value = `${example.title} loaded · ${parityLabel(example.parityStatus)}`;
+    patchStatus.dataset.state = "ready";
+    patchStatus.dataset.exampleId = example.id;
+    patchStatus.dataset.parityStatus = example.parityStatus;
+    if (updateUrl) {
+      history.pushState({ example: id }, "", exampleUrl(id));
+    }
+  } finally {
+    setBusy(false);
+  }
+
+  if (scroll) {
+    workspace.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (run) await runScene();
+}
+
+function refreshGalleryFilters() {
+  renderGallery();
+}
+
+gallerySearch.addEventListener("input", refreshGalleryFilters);
+categorySelect.addEventListener("change", refreshGalleryFilters);
+paritySelect.addEventListener("change", refreshGalleryFilters);
+sceneButton.addEventListener("click", runScene);
+resetButton.addEventListener("click", async () => {
+  const example = currentExample();
+  if (!example) return;
+  drafts.delete(example.id);
+  canonicalSource = await loadDemoAuthoringSource(example.path);
+  sceneSourceEditor.value = canonicalSource;
+  resetButton.disabled = true;
+  patchStatus.value = `${example.title} reset to canonical Manim source`;
+  patchStatus.dataset.state = "ready";
+});
+sceneSourceEditor.addEventListener("input", () => {
+  const example = currentExample();
+  if (example) drafts.set(example.id, sceneSourceEditor.value);
+  resetButton.disabled = sceneSourceEditor.value === canonicalSource;
+});
+window.addEventListener("popstate", () => {
+  const id = requestedExampleId();
+  if (id && id !== selectedExampleId) {
+    void selectExample(id, { run: true, updateUrl: false });
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    void runScene();
+  }
+});
+
+const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
-  const player = new ExecutionWorkerClient(canvas, {
+  player = new ExecutionWorkerClient(canvas, {
     onError(error) {
       showError(error);
     },
   });
   const ready = await player.start(EMPTY_SCENE_JSON, { loopDurationSeconds: 4.0 });
-  const rendererBackend = ready.render.backend;
+  rendererBackend = ready.render.backend;
   status.dataset.rendererBackend = rendererBackend;
   status.dataset.executionTopology = "engine-render-workers";
 
@@ -450,176 +526,37 @@ try {
     const scale = window.devicePixelRatio || 1;
     player.resize(canvas.clientWidth, canvas.clientHeight, scale);
   }
-
   resize();
   new ResizeObserver(resize).observe(canvas);
 
-  let paletteIndex = 0;
-  let authoringClient = null;
-  const sceneIdentities = new SceneIdentityMap();
-
-  async function loadExample(kind, index, { run = false } = {}) {
-    const examples = examplesFor(kind);
-    if (!Number.isInteger(index) || index < 0 || index >= examples.length) {
-      throw new Error(`Unknown ${kind} example index ${index}`);
-    }
-    const example = examples[index];
-    setBusy(true);
-    try {
-      const source = await loadDemoAuthoringSource(example.path);
-      selectedExample[kind] = index;
-      if (kind === "scene") {
-        sceneSourceEditor.value = source;
-      } else {
-        sourceEditor.value = source;
-      }
-      if (activeEditor === kind) {
-        refreshExampleChrome();
-      }
-      patchStatus.value = `${example.name} loaded · ${example.features}`;
-      patchStatus.dataset.state = "ready";
-    } finally {
-      setBusy(false);
-    }
-
-    if (run) {
-      if (kind === "scene") {
-        await runScene();
-      } else {
-        await runPatch();
-      }
-    }
-  }
-
-  Promise.all([
-    loadDemoAuthoringSource(SCENE_EXAMPLES[0].path),
-    loadDemoAuthoringSource(PATCH_EXAMPLES[0].path),
-  ])
-    .then(([sceneSource, patchSource]) => {
-      sceneSourceEditor.value = sceneSource;
-      sourceEditor.value = patchSource;
-      setBusy(false);
-      patchStatus.value = "Ready · choose a feature example or edit Python";
-      patchStatus.dataset.state = "ready";
-    })
-    .catch(showPatchError);
+  const requested = requestedExampleId();
+  const initialExample = SCENE_EXAMPLES.some((example) => example.id === requested)
+    ? requested
+    : SCENE_EXAMPLES[0].id;
+  history.replaceState({ example: initialExample }, "", exampleUrl(initialExample));
+  renderGallery();
+  await selectExample(initialExample, { run: true });
 
   const initialState = await player.state();
   patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
 
-  async function runScene() {
-    setBusy(true);
-    try {
-      patchStatus.value = "Building Scene in the Python worker…";
-      patchStatus.dataset.state = "running";
-      authoringClient ??= new PythonAuthoringClient();
-      const authored = await authoringClient.run(
-        sceneSourceEditor.value,
-        currentExample("scene").context ?? {},
-      );
-      if (authored.kind !== "scene_document") {
-        throw new Error("Python scene source returned a PatchBatch");
-      }
-
-      const before = await player.state();
-      // Python updater closures retain authoring-local object IDs. Callback-aware
-      // stable identity reconciliation belongs to #64; callback-free scenes keep
-      // using the stable identity adapter today.
-      const runtimeDocument =
-        authored.callbacks === null
-          ? sceneIdentities.stabilize(authored.document, authored.identities)
-          : authored.document;
-      const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
-        callbacks: authored.callbacks,
-        authoringClient,
-        loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-      });
-      if (result.time !== before.time) {
-        throw new Error("Scene replacement changed the current playhead");
-      }
-      const report = await player.metrics();
-      const operation = result.incremental
-        ? "Scene updated incrementally"
-        : "Scene rebuilt atomically";
-      patchStatus.value = `${operation} · ${report.metrics.objectCount} objects · playhead ${result.time.toFixed(2)} s preserved`;
-      patchStatus.dataset.state = "applied";
-      patchStatus.dataset.sequence = String(result.nextPatchSequence);
-    } catch (error) {
-      showPatchError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function runPatch() {
-    setBusy(true);
-    try {
-      const before = await player.state();
-      const sequence = Number(before.nextPatchSequence);
-      if (!Number.isSafeInteger(sequence)) {
-        throw new Error("Patch sequence exceeds JavaScript's safe integer range");
-      }
-      const palette = PALETTES[paletteIndex];
-      patchStatus.value = "Running patch in the Python worker…";
-      patchStatus.dataset.state = "running";
-
-      authoringClient ??= new PythonAuthoringClient();
-      const authored = await authoringClient.run(sourceEditor.value, { sequence, palette });
-      if (authored.kind !== "patch_batch") {
-        throw new Error("Python patch source returned a complete Scene");
-      }
-      const batch = authored.document;
-      if (batch.sequence !== sequence) {
-        throw new Error(`Python returned patch sequence ${batch.sequence}; expected ${sequence}`);
-      }
-      const result = await player.applyPatchBatch(JSON.stringify(batch));
-      if (Number(result.nextPatchSequence) !== sequence + 1) {
-        throw new Error("Runtime did not acknowledge the ordered patch batch");
-      }
-      if (result.time !== before.time) {
-        throw new Error("Patch batch changed the current playhead");
-      }
-      patchStatus.value = `Patch ${sequence} accepted · ${currentExample("patch").name} · playhead preserved`;
-      patchStatus.dataset.state = "applied";
-      patchStatus.dataset.sequence = String(result.nextPatchSequence);
-      patchStatus.dataset.theme = palette.name;
-      paletteIndex = (paletteIndex + 1) % PALETTES.length;
-    } catch (error) {
-      showPatchError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  sceneButton.addEventListener("click", runScene);
-  patchButton.addEventListener("click", runPatch);
-
-  exampleSelect.addEventListener("change", async () => {
-    const index = Number(exampleSelect.value);
-    try {
-      await loadExample(activeEditor, index, { run: activeEditor === "scene" });
-    } catch (error) {
-      showPatchError(error);
-      setBusy(false);
-    }
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      if (activeEditor === "scene") {
-        void runScene();
-      } else {
-        void runPatch();
-      }
-    }
-  });
+  window.__noonExampleGallery = {
+    get selectedExampleId() {
+      return selectedExampleId;
+    },
+    get exampleCount() {
+      return SCENE_EXAMPLES.length;
+    },
+    async select(id) {
+      await selectExample(id, { run: true, updateUrl: true });
+    },
+  };
 
   window.addEventListener(
     "pagehide",
     () => {
       authoringClient?.terminate();
-      player.terminate();
+      player?.terminate();
     },
     { once: true },
   );
@@ -627,9 +564,7 @@ try {
   let lastStatusUpdate = -Infinity;
   let metricsPending = false;
   async function updateWorkerMetrics(timestamp) {
-    if (metricsPending || timestamp - lastStatusUpdate <= 200) {
-      return;
-    }
+    if (metricsPending || timestamp - lastStatusUpdate <= 200) return;
     metricsPending = true;
     try {
       const report = await player.metrics();

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Rotated square morphing into a pink circle">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <path d="M160 38 C190 40 211 61 212 90 C211 120 190 141 160 142 C130 141 109 120 108 90 C109 61 130 40 160 38Z" fill="#d147bd" fill-opacity=".35" stroke="#ffffff" stroke-width="4"/>
+  <path d="M160 37 L213 90 L160 143 L107 90 Z" fill="none" stroke="#ffffff" stroke-opacity=".28" stroke-width="2"/>
+</svg>

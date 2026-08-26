@@ -62,27 +62,33 @@ const examples = generated.stdout
     };
   });
 
-const pickerSource = await readFile(path.join(repoRoot, "web/main.js"), "utf8");
-const scenePickerBlock = pickerSource
-  .split("const SCENE_EXAMPLES = [", 2)[1]
-  ?.split("\n];", 1)[0];
-assert.ok(scenePickerBlock, "browser picker must declare SCENE_EXAMPLES");
-const pickerSceneCount =
-  scenePickerBlock.match(/path:\s*"\.\/python\/[^\"]+\.py"/g)?.length ?? 0;
+const gallerySource = await readFile(path.join(repoRoot, "web/main.js"), "utf8");
+assert.ok(
+  gallerySource.includes("loadGalleryManifest"),
+  "public example gallery must load its catalog from the Manim manifest",
+);
+assert.ok(
+  !gallerySource.includes("const SCENE_EXAMPLES = ["),
+  "public example gallery must not restore a hard-coded scene catalog",
+);
 const manimManifest = JSON.parse(
   await readFile(
     path.join(repoRoot, "web/python/examples/manim_tutorial_manifest.json"),
     "utf8",
   ),
 );
-const browserAuthoredManimCount = manimManifest.entries.filter(
+const browserAuthoredManim = manimManifest.entries.filter(
   (entry) => entry.status === "ready",
-).length;
-assert.equal(
-  examples.length + browserAuthoredManimCount,
-  pickerSceneCount,
-  "native render smoke plus browser-authored Manim smoke must cover every picker scene",
 );
+assert.ok(browserAuthoredManim.length > 0, "public gallery must expose ready Manim examples");
+for (const entry of browserAuthoredManim) {
+  assert.equal(
+    entry.reuse,
+    "source-equivalent-manim-v0.21",
+    `${entry.id}: public example must remain source-equivalent ManimCE`,
+  );
+}
+const browserAuthoredManimCount = browserAuthoredManim.length;
 
 let serverOutput = "";
 const server = spawn(
@@ -398,7 +404,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} native picker scenes at four semantic checkpoints each; ${browserAuthoredManimCount} Manim picker scenes are validated by the browser authoring corpus.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} internal renderer fixtures at four semantic checkpoints each; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();

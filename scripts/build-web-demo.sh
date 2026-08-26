@@ -6,6 +6,7 @@ noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
 node --check web/main.js
+node --check web/example-gallery.js
 node --check web/authoring-client.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
@@ -37,11 +38,13 @@ node --check scripts/host-callback-perf.mjs
 node --check scripts/deterministic-replay-smoke.mjs
 node --check scripts/manim-compat-smoke.mjs
 node --check scripts/manim-tutorial-smoke.mjs
+node --check scripts/playground-layout-smoke.mjs
 node --check scripts/composition-authoring-smoke.mjs
 node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
 node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
+node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/scene-identity.test.mjs

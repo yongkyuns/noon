@@ -5,93 +5,16 @@
     "license": "MIT",
     "tutorial_root": "https://docs.manim.community/en/stable/tutorials/index.html"
   },
-  "policy": "Examples are original Noon/browser adaptations of upstream learning goals unless reuse is explicitly marked. Preserve upstream MIT notices for substantial copied code and do not copy protected third-party assets. `ready` means the tutorial executes; it does not imply output parity. Source-equivalent parity examples carry `parity_status` and `parity_fixture`; only `parity-qualified` means the canonical Manim raster + timeline gate passes.",
+  "policy": "Every runnable user-facing example is source-equivalent ManimCE v0.21.0 behavior. Noon-native adaptations, renderer demos, and performance/stress scenes are not part of the public example gallery. `ready` means the source-equivalent scene executes in Noon; `parity-qualified` additionally means the canonical semantic + raster + timeline gates in #176/#185 pass.",
   "parity_policy": {
     "candidate": "Source-equivalent ManimCE v0.21.0 behavior is exposed in the demo and linked to the canonical parity fixture, but one or more exact-output gates remain open.",
-    "parity-qualified": "The source-equivalent fixture passes semantic, pixel, timing, lifecycle, intermediate-frame, seek/playback, and supported-backend gates defined by #185/#176.",
-    "adaptation": "Pedagogical Noon/browser adaptation; useful as a demo but not evidence of Manim output parity."
+    "parity-qualified": "The source-equivalent fixture passes semantic, pixel, timing, lifecycle, intermediate-frame, seek/playback, and supported-backend gates defined by #185/#176."
   },
   "entries": [
     {
-      "id": "quickstart-create",
-      "title": "Quickstart: create a circle",
-      "status": "ready",
-      "path": "python/examples/tutorial_quickstart.py",
-      "category": "tutorial/quickstart",
-      "features": ["Scene", "Circle", "Create", "style"],
-      "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "square-to-circle",
-      "title": "Square to circle",
-      "status": "ready",
-      "path": "python/examples/tutorial_square_to_circle.py",
-      "category": "tutorial/quickstart",
-      "features": ["Square", "Circle", "Create", "Transform"],
-      "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "positioning",
-      "title": "Positioning and layout",
-      "status": "ready",
-      "path": "python/examples/tutorial_positioning.py",
-      "category": "tutorial/quickstart",
-      "features": ["VGroup", "arrange", "to_edge", "animate"],
-      "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "animate",
-      "title": "Animating methods with .animate",
-      "status": "ready",
-      "path": "python/examples/tutorial_animate.py",
-      "category": "tutorial/quickstart",
-      "features": ["animate", "shift", "rotate", "scale", "set_color"],
-      "upstream": "tutorials/quickstart.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "transform-lifecycle",
-      "title": "Transform vs ReplacementTransform",
-      "status": "ready",
-      "path": "python/examples/tutorial_transform_lifecycle.py",
-      "category": "tutorial/building-blocks",
-      "features": ["Transform", "ReplacementTransform", "lifecycle"],
-      "upstream": "tutorials/building_blocks.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "animation-composition",
-      "title": "Animation groups and staggered timing",
-      "status": "ready",
-      "path": "python/examples/tutorial_composition.py",
-      "category": "tutorial/building-blocks",
-      "features": ["AnimationGroup", "LaggedStart", "VGroup"],
-      "upstream": "reference/manim.animation.composition.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
-      "id": "value-tracker",
-      "title": "ValueTracker and native reactivity",
-      "status": "ready",
-      "path": "python/examples/tutorial_value_tracker.py",
-      "category": "tutorial/reactivity",
-      "features": ["ValueTracker", "bind_position", "native-reactive"],
-      "upstream": "reference/manim.mobject.value_tracker.ValueTracker.html",
-      "reuse": "original-noon-adaptation",
-      "parity_status": "adaptation"
-    },
-    {
       "id": "parity-create-circle",
-      "title": "Exact parity: CreateCircle",
+      "title": "CreateCircle",
+      "summary": "Create a Circle with Manim's default styling, then apply the canonical PINK half-opacity fill.",
       "status": "ready",
       "path": "python/examples/manim_parity_create_circle.py",
       "category": "parity/quickstart",
@@ -99,11 +22,16 @@
       "upstream": "tutorials/quickstart.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "parity_fixture": "create-circle"
+      "parity_fixture": "create-circle",
+      "thumbnail": "thumbnails/manim/create-circle.webp",
+      "thumbnail_alt": "Pink filled circle on the Manim scene background",
+      "thumbnail_time": 1.0,
+      "order": 10
     },
     {
       "id": "parity-square-to-circle",
-      "title": "Exact parity: SquareToCircle",
+      "title": "SquareToCircle",
+      "summary": "Create a rotated square, transform it into the canonical filled circle, then fade it out.",
       "status": "ready",
       "path": "python/examples/manim_parity_square_to_circle.py",
       "category": "parity/quickstart",
@@ -111,11 +39,16 @@
       "upstream": "tutorials/quickstart.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "parity_fixture": "square-to-circle"
+      "parity_fixture": "square-to-circle",
+      "thumbnail": "thumbnails/manim/square-to-circle.webp",
+      "thumbnail_alt": "Rotated square morphing into a pink circle",
+      "thumbnail_time": 1.5,
+      "order": 20
     },
     {
       "id": "parity-square-and-circle",
-      "title": "Exact parity: SquareAndCircle",
+      "title": "SquareAndCircle",
+      "summary": "Place a blue square next to a pink circle using Manim's canonical next_to(..., buff=0.5) layout.",
       "status": "ready",
       "path": "python/examples/manim_parity_square_and_circle.py",
       "category": "parity/quickstart",
@@ -123,11 +56,16 @@
       "upstream": "tutorials/quickstart.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "parity_fixture": "square-and-circle"
+      "parity_fixture": "square-and-circle",
+      "thumbnail": "thumbnails/manim/square-and-circle.webp",
+      "thumbnail_alt": "Pink circle next to a blue square",
+      "thumbnail_time": 1.0,
+      "order": 30
     },
     {
       "id": "parity-animated-square-to-circle",
-      "title": "Exact parity: AnimatedSquareToCircle",
+      "title": "AnimatedSquareToCircle",
+      "summary": "Exercise .animate rotation, Transform, and animated fill changes with source-equivalent Manim timing.",
       "status": "ready",
       "path": "python/examples/manim_parity_animated_square_to_circle.py",
       "category": "parity/quickstart",
@@ -135,11 +73,16 @@
       "upstream": "tutorials/quickstart.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "parity_fixture": "animated-square-to-circle"
+      "parity_fixture": "animated-square-to-circle",
+      "thumbnail": "thumbnails/manim/animated-square-to-circle.webp",
+      "thumbnail_alt": "Rotated square from the AnimatedSquareToCircle example",
+      "thumbnail_time": 2.0,
+      "order": 40
     },
     {
       "id": "parity-different-rotations",
-      "title": "Exact parity: DifferentRotations",
+      "title": "DifferentRotations",
+      "summary": "Compare target-state .animate.rotate with the Rotate animation using Manim's quickstart scene.",
       "status": "ready",
       "path": "python/examples/manim_parity_different_rotations.py",
       "category": "parity/quickstart",
@@ -147,11 +90,16 @@
       "upstream": "tutorials/quickstart.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "parity_fixture": "different-rotations"
+      "parity_fixture": "different-rotations",
+      "thumbnail": "thumbnails/manim/different-rotations.webp",
+      "thumbnail_alt": "Blue and green squares from the DifferentRotations example",
+      "thumbnail_time": 1.0,
+      "order": 50
     },
     {
       "id": "parity-add-wait-lagged-start-map",
-      "title": "Exact parity: Add, Wait, and LaggedStartMap",
+      "title": "Add, Wait, and LaggedStartMap",
+      "summary": "Source-equivalent composition coverage for zero-duration Add, Wait, Succession, FadeIn, and LaggedStartMap.",
       "status": "ready",
       "path": "python/examples/manim_parity_add_wait_lagged_start_map.py",
       "category": "parity/composition",
@@ -159,11 +107,16 @@
       "upstream": "reference/manim.animation.composition.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "parity-qualified",
-      "parity_fixture": "add-wait-lagged-start-map"
+      "parity_fixture": "add-wait-lagged-start-map",
+      "thumbnail": "thumbnails/manim/add-wait-lagged-start-map.webp",
+      "thumbnail_alt": "Two circles and two squares from the composition parity example",
+      "thumbnail_time": 2.4,
+      "order": 60
     },
     {
       "id": "parity-grow-point-center-edge",
-      "title": "Exact parity: GrowFromPoint, GrowFromCenter, and GrowFromEdge",
+      "title": "GrowFromPoint, Center, and Edge",
+      "summary": "Compare Manim's GrowFromPoint, GrowFromCenter, and GrowFromEdge inside the canonical staggered composition.",
       "status": "ready",
       "path": "python/examples/manim_parity_grow_point_center_edge.py",
       "category": "parity/growing",
@@ -171,11 +124,16 @@
       "upstream": "reference/manim.animation.growing.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "parity-qualified",
-      "parity_fixture": "grow-point-center-edge"
+      "parity_fixture": "grow-point-center-edge",
+      "thumbnail": "thumbnails/manim/grow-point-center-edge.webp",
+      "thumbnail_alt": "Blue circle, pink square, and green rectangle from the growing-animation parity example",
+      "thumbnail_time": 2.23,
+      "order": 70
     },
     {
       "id": "parity-uncreate-styled-square",
-      "title": "Exact parity: Uncreate styled square",
+      "title": "Uncreate styled square",
+      "summary": "Run Manim's reverse-Create Uncreate lifecycle on a styled square and remove it from the scene.",
       "status": "ready",
       "path": "python/examples/manim_parity_uncreate_styled_square.py",
       "category": "parity/creation",
@@ -183,7 +141,11 @@
       "upstream": "reference/manim.animation.creation.Uncreate.html",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "parity-qualified",
-      "parity_fixture": "uncreate-styled-square"
+      "parity_fixture": "uncreate-styled-square",
+      "thumbnail": "thumbnails/manim/uncreate-styled-square.webp",
+      "thumbnail_alt": "Partially uncreated styled square from the canonical Uncreate parity fixture",
+      "thumbnail_time": 0.5,
+      "order": 80
     },
     {
       "id": "text-and-math",

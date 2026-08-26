@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Blue and green squares from the DifferentRotations example">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <rect x="58" y="52" width="76" height="76" fill="#58c4dd" fill-opacity=".7" stroke="#58c4dd" stroke-width="4" transform="rotate(45 96 90)"/>
+  <rect x="186" y="52" width="76" height="76" fill="#83c167" fill-opacity=".7" stroke="#83c167" stroke-width="4" transform="rotate(-45 224 90)"/>
+</svg>

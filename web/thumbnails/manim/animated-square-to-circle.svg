@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Rotated square from the AnimatedSquareToCircle example">
+  <rect width="320" height="180" fill="#1c1c1c"/>
+  <rect x="122" y="52" width="76" height="76" fill="none" stroke="#ffffff" stroke-width="4" transform="rotate(45 160 90)"/>
+</svg>

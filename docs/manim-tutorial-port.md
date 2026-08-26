@@ -1,37 +1,59 @@
-# ManimCE tutorial and example port
+# ManimCE tutorial and example gallery
 
-Noon's learning path follows the concepts in Manim Community v0.21.0 while adapting the workflow to an interactive browser authoring tool.
+Noon's public learning/demo surface is a Manim Community v0.21.0 compatibility surface. Runnable examples shown to users must therefore be source-equivalent Manim scenes, not Noon-native lookalikes or implementation demonstrations.
 
-The executable source of truth is `web/python/examples/manim_tutorial_manifest.json`. Entries are either:
+The executable source of truth is `web/python/examples/manim_tutorial_manifest.json`.
 
-- `ready`: executable Noon scenes gated by unit/authoring tests;
-- `blocked`: part of the intended common-2D learning path but waiting on a named feature issue;
-- `deferred`: deliberately outside the current common-2D milestone.
+## Public example policy
 
-## First runnable path
+A manifest entry may be `ready` only when:
 
-The initial tranche covers:
+- its output-affecting scene code is source-equivalent to the referenced ManimCE v0.21.0 example;
+- `reuse` is `source-equivalent-manim-v0.21`;
+- it identifies the canonical parity fixture used by #176/#185;
+- it has an explicit parity state of `candidate` or `parity-qualified`;
+- its source executes through the browser authoring path;
+- it has a static gallery thumbnail/poster asset.
 
-1. creating a circle with `Create`;
-2. transforming a square into a circle;
-3. positioning objects with `VGroup`, `arrange`, and `to_edge`;
-4. animating mutating methods with `.animate`;
-5. the lifecycle difference between `Transform` and `ReplacementTransform`;
-6. `AnimationGroup` and `LaggedStart` composition;
-7. `ValueTracker` using Noon's native reactive binding path.
+`candidate` means the source-equivalent scene is runnable and is being converged against the canonical Manim oracle. `parity-qualified` means the semantic, pixel, timing, lifecycle, intermediate-frame, seek/playback, and supported-backend gates defined by #176/#185 pass.
 
-Each example is intentionally short enough for the browser demo loop and is executable through the same `Scene` document path as other playground examples.
+Noon-native renderer examples, performance/stress scenes, patch templates, and earlier pedagogical adaptations may remain as internal tests/fixtures where useful, but they are not part of the public example gallery and must not be presented as Manim examples.
 
-## Browser-specific adaptation
+## Gallery UX
 
-Manim tutorials that focus on CLI flags, filesystem movie output, or FFmpeg invocation should not be copied literally. Noon equivalents should teach editor execution, live scene replacement, timeline playback, profiling, and future browser export controls.
+The demo reads the manifest rather than maintaining an independent example list in `web/main.js`.
+
+The public flow is:
+
+1. browse source-equivalent Manim scenes as thumbnail cards;
+2. search/filter by title, capability/category, and parity status;
+3. select a stable example ID (also addressable through `?example=<id>`);
+4. edit the Python source and view the single live renderer side by side;
+5. reset the editable buffer to the canonical source when needed.
+
+Thumbnails are static/lazy assets. The page keeps one live GPU canvas regardless of the number of gallery cards.
+
+## Current runnable set
+
+The initial source-equivalent set covers ManimCE v0.21 quickstart/composition behavior including:
+
+- `CreateCircle`;
+- `SquareToCircle`;
+- `SquareAndCircle` positioning;
+- `AnimatedSquareToCircle`;
+- `DifferentRotations`;
+- `Add` / `Wait` / `Succession` / `LaggedStartMap` composition.
+
+Additional examples should be added as their compatibility lanes become executable and enter the #176/#185 corpus.
+
+## Browser-specific adaptation boundary
+
+The browser workflow itself may differ from Manim's CLI/file-output workflow: users run/edit scenes in the interactive editor and view them in the live canvas. That workflow difference must not change output-affecting scene semantics in a public example.
 
 ## Provenance and licensing
 
-Manim Community is MIT-licensed. The first tutorial tranche uses original Noon code that follows upstream learning goals rather than copying substantial upstream source or prose. The manifest records the upstream reference location and `reuse` mode for every ready example.
-
-If future ports substantially copy an upstream example, retain the required Manim MIT copyright/license notice with that redistributed material. Do not copy protected third-party artwork or assets merely because an upstream example uses them.
+Manim Community is MIT-licensed. Track the upstream version/source for every public example and preserve required Manim copyright/license notices when substantial upstream code is redistributed. Do not copy protected third-party artwork or assets merely because an upstream example uses them.
 
 ## Expansion rule
 
-Feature parity PRs should unlock or add at least one representative manifest entry. Text/math, axes/plots, graph networks, moving camera, and 3D are already represented as blocked/deferred entries so missing tutorial coverage remains visible while those implementations are pending.
+Feature-parity PRs should add or unlock at least one source-equivalent manifest entry when practical. Text/math, axes/plots, graph networks, moving camera, and 3D remain represented as blocked/deferred entries so missing learning coverage stays visible while their implementation work is pending.

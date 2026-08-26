@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,16 +18,27 @@ const manifestPath = path.join(
 );
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
-assert.ok(ready.length >= 7, "expected the initial tutorial tranche");
+assert.ok(ready.length >= 1, "expected source-equivalent Manim examples");
 
-const demoMainPath = path.join(repoRoot, "web", "main.js");
-const demoMainSource = await readFile(demoMainPath, "utf8");
+const ids = new Set();
+for (const entry of manifest.entries) {
+  assert.ok(!ids.has(entry.id), `${entry.id}: duplicate manifest id`);
+  ids.add(entry.id);
+}
 for (const entry of ready) {
-  const pickerPath = `./${entry.path}`;
-  assert.ok(
-    demoMainSource.includes(`path: "${pickerPath}"`),
-    `${entry.id}: ready tutorial is not exposed in the demo picker`,
+  assert.equal(
+    entry.reuse,
+    "source-equivalent-manim-v0.21",
+    `${entry.id}: every runnable public example must be source-equivalent ManimCE v0.21`,
   );
+  assert.ok(
+    entry.parity_status === "candidate" || entry.parity_status === "parity-qualified",
+    `${entry.id}: runnable examples require explicit parity status`,
+  );
+  assert.ok(entry.parity_fixture, `${entry.id}: runnable examples require a parity fixture`);
+  assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
+  await access(path.join(repoRoot, "web", entry.path));
+  await access(path.join(repoRoot, "web", entry.thumbnail));
 }
 
 const port = 4182;
@@ -57,16 +68,9 @@ async function waitForServer() {
 }
 
 function latestEnd(document) {
-  const tracks = [
-    ...(document.tracks ?? []),
-    ...(document.signal_tracks ?? []),
-  ];
+  const tracks = [...(document.tracks ?? []), ...(document.signal_tracks ?? [])];
   assert.ok(tracks.length > 0, "tutorial must exercise timed behavior");
-  return Math.max(
-    ...tracks.map(
-      (track) => track.timing.start_time + track.timing.duration,
-    ),
-  );
+  return Math.max(...tracks.map((track) => track.timing.start_time + track.timing.duration));
 }
 
 let browser = null;
@@ -104,7 +108,7 @@ try {
   }
 
   assert.equal(browserErrors.length, 0, browserErrors.join("\n"));
-  console.log(`${ready.length}/${ready.length} tutorial examples passed`);
+  console.log(`${ready.length}/${ready.length} source-equivalent Manim examples passed`);
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");

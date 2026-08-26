@@ -78,6 +78,14 @@ async function enhancePythonEditors() {
       ],
     });
 
+    // Keep the hidden textarea as the stable integration surface for the
+    // playground. Programmatic .value writes are projected into CodeMirror,
+    // while real user edits emit the textarea input event expected by gallery
+    // draft/reset state and any other existing consumers.
+    view.contentDOM.addEventListener("input", () => {
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
     Object.defineProperty(textarea, "value", {
       configurable: true,
       get() {
