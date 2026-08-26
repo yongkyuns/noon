@@ -211,12 +211,10 @@
     {
       "id": "animate.group-target-state",
       "surface": "Group.animate target derivation",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "_GroupAnimationBuilder/Group.copy"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor"},
-      "reason": "Group.animate still copies Python family structure and clones each member independently instead of editing one shared family target.",
-      "replacement": "Introduce stable shared family handles and route group target derivation through the shared target editor.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyTargetEditor/WasmAuthoringFamilyHandle::target_editor"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_target_mobject/_group_target_copy"}],
+      "reason": "Rust snapshots authoritative source-family order, validates every source/target wrapper pair, and constructs the target family graph; Python only mirrors wrapper identity while leaf target edits use the shared Mobject target editor."
     },
     {
       "id": "scene-bound-state",
