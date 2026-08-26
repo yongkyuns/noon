@@ -219,6 +219,11 @@
       "id": "camera-frame-edges",
       "scene": "CameraFrameEdges",
       "expected_duration": 1.0
+    },
+    {
+      "id": "primitive-geometry-matrix",
+      "scene": "PrimitiveGeometryMatrix",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
