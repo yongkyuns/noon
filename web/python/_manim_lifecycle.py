@@ -5,14 +5,15 @@ Rust. Presence legality, reintroduction/removal rules, source/target requirement
 and presence-chain validation are resolved by the shared core planner.
 
 The module also owns the deterministic subset-display creation slice. Manim's
-``ShowIncreasingSubsets`` and ``ShowSubmobjectsOneByOne`` change direct child opacity
-at exact threshold instants. Noon lowers those discontinuities to ordinary retained
-opacity tracks using shared ``step_start`` / ``step_end`` rate functions; no Python
-callback participates in playback.
+``ShowIncreasingSubsets`` and ``ShowSubmobjectsOneByOne`` overwrite direct-child
+fill/stroke opacity at exact threshold instants. Noon lowers those discontinuities to
+retained object-snapshot tracks using shared ``step_start`` / ``step_end`` rate
+functions; no Python callback participates in playback.
 """
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -405,7 +406,7 @@ def _int_func_mode(value: object) -> str:
     )
 
 
-def _direct_opaque_members(group: object) -> list[_base.Mobject]:
+def _direct_members(group: object) -> list[_base.Mobject]:
     if not isinstance(group, _compat.Group):
         raise TypeError("subset-display animation requires a Group or VGroup")
     if not group.submobjects:
@@ -420,21 +421,22 @@ def _direct_opaque_members(group: object) -> list[_base.Mobject]:
             raise NotImplementedError(
                 "subset-display parity currently requires detached direct members at animation construction"
             )
-        style = member._current_raw().style
-        if not math.isclose(float(style.get("opacity", 1.0)), 1.0, abs_tol=1e-12):
+        if not math.isclose(
+            float(member._current_raw().style.get("opacity", 1.0)),
+            1.0,
+            abs_tol=1e-12,
+        ):
             raise NotImplementedError(
-                "subset-display parity currently requires members with global opacity 1"
+                "Noon's low-level global opacity extension is not part of this Manim parity slice"
             )
-        for paint_name in ("fill", "stroke"):
-            paint = style.get(paint_name)
-            if paint is not None and not math.isclose(
-                float(paint.get("alpha", 1.0)), 1.0, abs_tol=1e-12
-            ):
-                raise NotImplementedError(
-                    "subset-display parity currently requires fully opaque fill/stroke paints"
-                )
         members.append(member)
     return members
+
+
+def _snapshot_with_manim_opacity(member: _base.Mobject, opacity: float) -> dict[str, Any]:
+    target = member.copy()
+    target.set_opacity(opacity)
+    return target.to_ir()
 
 
 class ShowIncreasingSubsets:
@@ -459,13 +461,16 @@ class ShowIncreasingSubsets:
         self.mode = _int_func_mode(int_func)
         self.group = group
         self.mobject = group
-        self.all_submobs = _direct_opaque_members(group)
+        self.all_submobs = _direct_members(group)
         self.anim_args = dict(kwargs)
+        self.visible_snapshots = [
+            _snapshot_with_manim_opacity(member, 1.0) for member in self.all_submobs
+        ]
         for member in self.all_submobs:
-            # Manim mutates every direct child to opacity 0 in the constructor.
-            # The qualified subset is detached here, so this does not rewrite prior
-            # authored history; binding happens only when Scene.play begins.
+            # Pinned ManimCE constructor semantics: set_opacity(0) overwrites fill
+            # and stroke alpha on the actual supplied direct submobject.
             member.set_opacity(0.0)
+        self.hidden_snapshots = [member.to_ir() for member in self.all_submobs]
 
 
 class ShowSubmobjectsOneByOne(ShowIncreasingSubsets):
@@ -505,6 +510,16 @@ def _inverse_monotonic_rate(rate_id: str, target: float) -> float:
         raise NotImplementedError(
             f"subset-display parity does not yet support rate function {rate_id}"
         )
+    # Preserve exact fixed points such as smooth(0.5) == 0.5. Boundary equality is
+    # observable for floor/ceil subset selection, so do not perturb it through a
+    # numerical inverse when the target itself is already the exact inverse.
+    if math.isclose(
+        _rate_functions.evaluate_rate_function(rate_id, value),
+        value,
+        rel_tol=0.0,
+        abs_tol=1e-15,
+    ):
+        return value
     low = 0.0
     high = 1.0
     for _ in range(80):
@@ -514,6 +529,33 @@ def _inverse_monotonic_rate(rate_id: str, target: float) -> float:
         else:
             high = middle
     return (low + high) * 0.5
+
+
+def _add_subset_transform_track(
+    scene: _compat.Scene,
+    obj: _ir.Object,
+    from_snapshot: dict[str, Any],
+    to_snapshot: dict[str, Any],
+    *,
+    start_time: float,
+    duration: float,
+    easing: str,
+    key: str,
+) -> None:
+    scene._add_track(
+        obj,
+        "transform",
+        {
+            "object": {
+                "from": copy.deepcopy(from_snapshot),
+                "to": copy.deepcopy(to_snapshot),
+            }
+        },
+        start_time,
+        duration,
+        easing,
+        key,
+    )
 
 
 def _schedule_subset_display(
@@ -536,21 +578,25 @@ def _schedule_subset_display(
             threshold = start + run_time * _inverse_monotonic_rate(
                 rate_id, (index + 1) / count
             )
-            scene._add_scalar_track(
+            _add_subset_transform_track(
+                scene,
                 member._object,
-                "opacity",
-                0.0,
-                1.0,
-                start,
-                threshold - start,
-                "step_end",
-                f"@show-increasing:{member._object.id}:{start:g}",
+                animation.hidden_snapshots[index],
+                animation.visible_snapshots[index],
+                start_time=start,
+                duration=threshold - start,
+                easing="step_end",
+                key=f"@show-increasing:{member._object.id}:{start:g}",
             )
+            scene._scheduled_transform_targets[member._object.id] = copy.deepcopy(
+                animation.visible_snapshots[index]
+            )
+            scene._scheduled_transform_ends[member._object.id] = end
         return
 
     # Ceil semantics are used by ShowSubmobjectsOneByOne. At each exact k/N
     # threshold the previous child remains visible; the new child appears only for
-    # progress strictly greater than that threshold. step_start encodes precisely
+    # progress strictly greater than that threshold. step_start preserves precisely
     # that left-open transition without epsilon-duration approximations.
     for index, member in enumerate(animation.all_submobs):
         assert member._object is not None
@@ -558,27 +604,31 @@ def _schedule_subset_display(
         show_end = start + run_time * _inverse_monotonic_rate(
             rate_id, (index + 1) / count
         )
-        scene._add_scalar_track(
+        _add_subset_transform_track(
+            scene,
             member._object,
-            "opacity",
-            0.0,
-            1.0,
-            show_start,
-            show_end - show_start,
-            "step_start",
-            f"@show-one:{member._object.id}:{start:g}.show",
+            animation.hidden_snapshots[index],
+            animation.visible_snapshots[index],
+            start_time=show_start,
+            duration=show_end - show_start,
+            easing="step_start",
+            key=f"@show-one:{member._object.id}:{start:g}.show",
         )
+        final_snapshot = animation.visible_snapshots[index]
         if index + 1 < count:
-            scene._add_scalar_track(
+            _add_subset_transform_track(
+                scene,
                 member._object,
-                "opacity",
-                1.0,
-                0.0,
-                show_end,
-                end - show_end,
-                "step_start",
-                f"@show-one:{member._object.id}:{start:g}.hide",
+                animation.visible_snapshots[index],
+                animation.hidden_snapshots[index],
+                start_time=show_end,
+                duration=end - show_end,
+                easing="step_start",
+                key=f"@show-one:{member._object.id}:{start:g}.hide",
             )
+            final_snapshot = animation.hidden_snapshots[index]
+        scene._scheduled_transform_targets[member._object.id] = copy.deepcopy(final_snapshot)
+        scene._scheduled_transform_ends[member._object.id] = end
 
 
 def _resolve_subset_options(
