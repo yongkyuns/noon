@@ -204,6 +204,16 @@
       "id": "fade-out-shift-scale-styled-square",
       "scene": "FadeOutShiftScaleStyledSquare",
       "expected_duration": 1.0
+    },
+    {
+      "id": "camera-unit-offsets",
+      "scene": "CameraUnitOffsets",
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.00033,
+        "max_mean_absolute_channel_error": 0.004
+      }
     }
   ],
   "sample_fractions": [
