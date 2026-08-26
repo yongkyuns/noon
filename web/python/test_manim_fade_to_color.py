@@ -141,8 +141,9 @@ class ManimFadeToColorTests(unittest.TestCase):
             assert abs(source_state["style"]["stroke"]["alpha"] - 0.25) < 1e-12
             assert abs(target_state["style"]["fill"]["alpha"] - 0.55) < 1e-12
             assert abs(target_state["style"]["stroke"]["alpha"] - 0.25) < 1e-12
-            assert abs(source_state["style"]["stroke_width"] - 7.0) < 1e-12
-            assert abs(target_state["style"]["stroke_width"] - 7.0) < 1e-12
+            # Manim-authored stroke widths are stored in Cairo scene units (7 -> 0.07).
+            assert abs(source_state["style"]["stroke_width"] - 0.07) < 1e-12
+            assert target_state["style"]["stroke_width"] == source_state["style"]["stroke_width"]
 
             try:
                 FadeToColor(VGroup(Square(), Square()), RED)
