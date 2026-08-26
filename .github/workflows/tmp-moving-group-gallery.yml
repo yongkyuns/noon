@@ -1,0 +1,38 @@
+name: Temporary MovingGroupToDestination validation
+
+on:
+  push:
+    branches:
+      - gallery/manim-moving-group-to-destination
+
+permissions:
+  contents: write
+
+jobs:
+  stage-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add demo manifest entry
+        run: python3 scripts/tmp_add_moving_group_gallery.py
+      - name: Validate exact-source demo contract
+        run: |
+          python3 -m unittest web/python/test_manim_tutorial_examples.py
+          python3 - <<'PY'
+          from pathlib import Path
+          upstream = Path('parity/manim-v0.21/upstream-examples/moving_group_to_destination.py').read_text()
+          noon = Path('web/python/examples/manim_gallery_moving_group_to_destination.py').read_text()
+          assert upstream.replace('from manim import *', 'from noon import *', 1) == noon
+          PY
+      - name: Commit candidate without temporary helpers
+        run: |
+          rm scripts/tmp_add_moving_group_gallery.py
+          rm .github/workflows/tmp-moving-group-gallery.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Add exact MovingGroupToDestination demo candidate"
+          git push origin HEAD:gallery/manim-moving-group-to-destination
