@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from js import noonResolveAnimationOptions as _resolve_shared_animation_options
 
+import noon as _base
 import _manim_compat as _compat
 
 
@@ -100,3 +102,63 @@ def resolve(
         path_arc=float(result.pathArc),
         reverse_rate_function=bool(result.reverseRateFunction),
     )
+
+
+def _scale_in_place_builder(
+    mobject: object,
+    scale_factor: float,
+    animation_kwargs: dict[str, Any],
+) -> object:
+    """Lower Manim's ApplyMethod-based scale helpers to the target-state builder.
+
+    ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``
+    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. For a single 2D leaf whose
+    authored geometry is centered on its transform origin, Noon's ordinary target-state
+    builder represents the same endpoint and interpolation without a new playback path.
+    """
+
+    if isinstance(mobject, _compat.Group):
+        raise NotImplementedError(
+            "ScaleInPlace/ShrinkToCenter Group/VGroup family scaling is not yet supported"
+        )
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("ScaleInPlace/ShrinkToCenter target must be a Mobject")
+
+    factor = float(scale_factor)
+    if not math.isfinite(factor):
+        raise ValueError("scale factor must be finite")
+
+    # Import lazily to avoid a cycle: this adapter is imported by _manim_animate.
+    # Calls happen only after the animation module has finished installing its aligned
+    # builder, so we reuse the exact same implicit-binding, rollback, option-resolution,
+    # and retained Transform lowering as ``mobject.animate.scale(...)``.
+    import _manim_animate as _animate
+
+    builder = _animate._AlignedAnimationBuilder(mobject)
+    builder.anim_args = dict(animation_kwargs)
+    builder.cannot_pass_args = True
+    builder.target.scale(factor)
+    return builder
+
+
+def ScaleInPlace(mobject: object, scale_factor: float, **kwargs: Any) -> object:
+    """Scale one detached or retained 2D leaf in place using Manim timing options."""
+
+    return _scale_in_place_builder(mobject, scale_factor, kwargs)
+
+
+def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
+    """Shrink one 2D leaf to its center, matching Manim's zero-scale helper."""
+
+    return _scale_in_place_builder(mobject, 0.0, kwargs)
+
+
+public = {
+    "ScaleInPlace": ScaleInPlace,
+    "ShrinkToCenter": ShrinkToCenter,
+}
+for _name, _value in public.items():
+    setattr(_base, _name, _value)
+    setattr(_compat, _name, _value)
+    if _name not in _base.__all__:
+        _base.__all__.append(_name)
