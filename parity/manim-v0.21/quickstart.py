@@ -474,3 +474,8 @@ class GrowPointCenterEdge(Scene):
             ),
             run_time=2.5,
         )
+
+
+class FocusOnPoint(Scene):
+    def construct(self):
+        self.play(FocusOn(2 * RIGHT))
