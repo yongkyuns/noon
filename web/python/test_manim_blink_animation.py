@@ -263,6 +263,15 @@ class ManimBlinkAnimationTests(unittest.TestCase):
             else:
                 raise AssertionError("Blink retained groups must remain explicitly partial")
 
+            updater_target = Square()
+            updater_target.add_updater(lambda mob: mob)
+            try:
+                Blink(updater_target)
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError("Blink with user updaters must remain explicitly partial")
+
             for bad_time in (0.0, -1.0, float("inf")):
                 try:
                     Blink(Square(), time_on=bad_time)
