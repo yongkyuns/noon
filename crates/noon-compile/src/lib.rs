@@ -1804,3 +1804,6 @@ mod tests {
         assert_eq!(stats.staged_compiled_scene_clones, 0);
     }
 }
+
+mod retained;
+pub use retained::*;
