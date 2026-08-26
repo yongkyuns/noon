@@ -52,7 +52,9 @@ pub fn preflight_transaction(
                 }
                 tracks.retain(|_, object| object != id);
             }
-            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
+            ScenePatch::SetGeometry { object, .. }
+            | ScenePatch::SetTransform { object, .. }
+            | ScenePatch::SetStyle { object, .. } => {
                 if !objects.contains(object) {
                     return Err(PatchError::UnknownObject(*object));
                 }

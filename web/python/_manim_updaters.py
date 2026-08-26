@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import _noon_ir as _ir
 import noon as _base
+import _manim_reactive as _reactive
 
 _INSTALLED = False
 _NEXT_SESSION_ID = 0
@@ -185,10 +186,7 @@ class _CallbackContext:
             before = self._baseline[object_id]
             after = self._current[object_id]
             if before.geometry != after.geometry:
-                raise NotImplementedError(
-                    "host updaters cannot mutate geometry yet; use transform/style "
-                    "mutations or native reactive expressions"
-                )
+                batch.set_geometry(object_id, after.geometry)
             if before.transform != after.transform:
                 translation = after.transform["translation"]
                 scale = after.transform["scale"]
@@ -272,11 +270,13 @@ def run_callback_phase(
     if scene_key in _ACTIVE_CONTEXTS:
         raise RuntimeError("nested Noon host callback phases are not supported")
     _ACTIVE_CONTEXTS[scene_key] = context
+    _reactive._enter_callback_signal_values(frame)
     try:
         for mobject in session.mobjects:
             for callback in list(_updaters(mobject)):
                 _invoke(callback, mobject, context.delta_time)
     finally:
+        _reactive._leave_callback_signal_values()
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
     return context.patch_batch(int(sequence)).to_json()
