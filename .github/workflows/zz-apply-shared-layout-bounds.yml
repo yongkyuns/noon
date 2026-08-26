@@ -5,7 +5,7 @@ on:
     branches:
       - agent/arch-shared-layout-bounds
     paths:
-      - scripts/apply_shared_layout_bounds_migration.py
+      - scripts/apply_shared_layout_bounds_migration_v2.py
       - .github/workflows/zz-apply-shared-layout-bounds.yml
 
 permissions:
@@ -28,13 +28,16 @@ jobs:
             Cargo.lock
             rust-toolchain.toml
       - name: Apply migration
-        run: python3 scripts/apply_shared_layout_bounds_migration.py
+        run: python3 scripts/apply_shared_layout_bounds_migration_v2.py
       - name: Format Rust
         run: cargo fmt --all
       - name: Validate focused Rust bounds
         run: cargo test -p noon-web authoring_mobject
       - name: Validate Python handle bounds
-        run: PYTHONPATH=web/python python3 -m unittest web.python.test_manim_semantic_handle_layout_bounds
+        run: >-
+          PYTHONPATH=web/python python3 -m unittest
+          web.python.test_manim_semantic_handle_layout_bounds
+          web.python.test_manim_shared_layout_queries
       - name: Validate semantic ownership inventory
         run: python3 scripts/semantic_ownership_check.py
       - name: Validate diff
@@ -44,6 +47,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/noon-web/src/authoring_mobject.rs web/python/_manim_semantic_handles.py web/python/test_manim_semantic_handle_layout_bounds.py compat/semantic-ownership-v1.json
+          git add crates/noon-web/src/authoring_mobject.rs web/python/_manim_semantic_handles.py compat/semantic-ownership-v1.json
           git commit -m "Apply shared layout bounds migration"
           git push origin HEAD:agent/arch-shared-layout-bounds
