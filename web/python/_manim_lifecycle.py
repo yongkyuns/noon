@@ -417,10 +417,6 @@ def _direct_members(group: object) -> list[_base.Mobject]:
             raise NotImplementedError(
                 "nested retained families are not yet supported by subset-display parity"
             )
-        if member._scene is not None:
-            raise NotImplementedError(
-                "subset-display parity currently requires detached direct members at animation construction"
-            )
         if not math.isclose(
             float(member._current_raw().style.get("opacity", 1.0)),
             1.0,
@@ -468,7 +464,8 @@ class ShowIncreasingSubsets:
         ]
         for member in self.all_submobs:
             # Pinned ManimCE constructor semantics: set_opacity(0) overwrites fill
-            # and stroke alpha on the actual supplied direct submobject.
+            # and stroke alpha on the actual supplied direct submobject. This remains
+            # valid after Scene.add: Manim mutates the same already-bound mobjects.
             member.set_opacity(0.0)
         self.hidden_snapshots = [member.to_ir() for member in self.all_submobs]
 
