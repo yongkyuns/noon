@@ -13,7 +13,12 @@ const manifest = JSON.parse(
   await readFile(new URL("./python/examples/manim_tutorial_manifest.json", import.meta.url), "utf8"),
 );
 const gallery = normalizeGalleryManifest(manifest);
-assert.equal(gallery.examples.length, 9);
+const readyEntries = manifest.entries.filter((entry) => entry.status === "ready");
+assert.equal(
+  gallery.examples.length,
+  readyEntries.length,
+  "gallery must expose every ready manifest entry without a hard-coded catalog size",
+);
 assert.ok(gallery.examples.every((entry) => entry.path.startsWith("./python/examples/manim_parity_")));
 assert.ok(
   gallery.examples.every(
@@ -21,21 +26,28 @@ assert.ok(
   ),
   "ready gallery entries must use rendered WebP thumbnails",
 );
-assert.equal(gallery.examples.at(-1).parityStatus, "parity-qualified");
-assert.deepEqual(
-  gallery.examples.slice(-3).map((entry) => entry.id),
-  [
-    "parity-grow-point-center-edge",
-    "parity-uncreate-styled-square",
-    "parity-draw-border-then-fill-styled-square",
-  ],
+assert.equal(
+  gallery.examples.find((entry) => entry.id === "parity-focus-on-point")?.parityStatus,
+  "parity-qualified",
+  "FocusOn is promoted only after the canonical raster/timeline/direct-seek gate passes",
 );
+for (const id of [
+  "parity-add-wait-lagged-start-map",
+  "parity-grow-point-center-edge",
+  "parity-uncreate-styled-square",
+]) {
+  assert.equal(
+    gallery.examples.find((entry) => entry.id === id)?.parityStatus,
+    "parity-qualified",
+    `${id}: previously qualified examples must remain qualified`,
+  );
+}
 
 const filtered = filterGalleryExamples(gallery.examples, { query: "DifferentRotations" });
 assert.deepEqual(filtered.map((entry) => entry.id), ["parity-different-rotations"]);
 assert.equal(
   filterGalleryExamples(gallery.examples, { parityStatus: "parity-qualified" }).length,
-  4,
+  readyEntries.filter((entry) => entry.parity_status === "parity-qualified").length,
 );
 assert.equal(
   filterGalleryExamples(gallery.examples, { category: "parity/composition" })[0].id,

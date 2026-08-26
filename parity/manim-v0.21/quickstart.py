@@ -479,3 +479,8 @@ class GrowPointCenterEdge(Scene):
 class DrawBorderThenFillStyledSquare(Scene):
     def construct(self):
         self.play(DrawBorderThenFill(Square(fill_opacity=1, fill_color=ORANGE)))
+
+
+class FocusOnPoint(Scene):
+    def construct(self):
+        self.play(FocusOn(2 * RIGHT))

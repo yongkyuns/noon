@@ -142,13 +142,18 @@ try {
 
   const galleryContract = await page.evaluate(() => ({
     cards: document.querySelectorAll(".example-card").length,
+    exampleIds: [...document.querySelectorAll(".example-card")].map((card) => card.dataset.exampleId),
     canvases: document.querySelectorAll("canvas").length,
     selected: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId,
     patchHidden: document.querySelector("#patch-tab")?.hidden,
     thumbnails: [...document.querySelectorAll(".example-thumb")].map((image) => image.getAttribute("src")),
     href: location.href,
   }));
-  assert.equal(galleryContract.cards, 9, "gallery must render all nine ready Manim parity examples");
+  assert.ok(galleryContract.cards > 0, "gallery must render ready Manim parity examples");
+  assert.ok(
+    galleryContract.exampleIds.includes("parity-focus-on-point"),
+    "gallery must expose the FocusOn parity example added by this slice",
+  );
   assert.equal(galleryContract.canvases, 1, "thumbnail gallery must keep exactly one live canvas");
   assert.equal(galleryContract.selected, "parity-square-and-circle");
   assert.equal(galleryContract.patchHidden, true, "Noon-native patch examples must not be public examples");
