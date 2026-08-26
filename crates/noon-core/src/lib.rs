@@ -700,9 +700,24 @@ impl ObjectSnapshot {
     }
 
     pub fn set_fill(mut self, color: Option<Color>, opacity: Option<f32>) -> Self {
-        self.style.fill = color;
-        if let Some(opacity) = opacity {
-            self.style.opacity = opacity;
+        match (color, opacity) {
+            (Some(mut color), Some(opacity)) => {
+                color.alpha = opacity;
+                self.style.fill = Some(color);
+            }
+            (Some(mut color), None) => {
+                if let Some(existing) = self.style.fill {
+                    color.alpha = existing.alpha;
+                }
+                self.style.fill = Some(color);
+            }
+            (None, Some(opacity)) => {
+                if let Some(mut fill) = self.style.fill {
+                    fill.alpha = opacity;
+                    self.style.fill = Some(fill);
+                }
+            }
+            (None, None) => {}
         }
         self
     }
