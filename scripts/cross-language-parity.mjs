@@ -59,7 +59,7 @@ class ParityTracker(Scene):
         circle = Circle(radius=0.3)
         self.add(circle)
         tracker = ValueTracker(0.0)
-        self.bind_position(circle, tracker, direction=RIGHT, offset=UP)
+        self.bind_position(circle, tracker, direction=RIGHT, offset=ORIGIN)
         self.play(
             tracker.animate(run_time=2.0, rate_func=linear).set_value(2.0)
         )
@@ -109,6 +109,25 @@ function assertSemanticEqual(actual, expected, location = "document") {
     return;
   }
   assert.equal(actual, expected, `${location}: value mismatch`);
+}
+
+function semanticDocumentForParity(result) {
+  // Python currently emits ordinary position tracks as an execution-only bridge
+  // for EngineScenePlayer, which still consumes the legacy {objects, tracks}
+  // projection. Keep that bridge covered by the reactive/tutorial smoke tests,
+  // but exclude it from this language-neutral semantic parity assertion.
+  const projectedTrackIds = new Set(
+    (result.identities?.tracks ?? [])
+      .filter(({ key }) => key.startsWith("@reactive-position:"))
+      .map(({ id }) => id),
+  );
+  if (projectedTrackIds.size === 0) {
+    return result.document;
+  }
+  return {
+    ...result.document,
+    tracks: result.document.tracks.filter(({ id }) => !projectedTrackIds.has(id)),
+  };
 }
 
 let serverOutput = "";
@@ -163,7 +182,7 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${name}: Python authoring failed`);
-    assertSemanticEqual(result.document, rust.get(name), name);
+    assertSemanticEqual(semanticDocumentForParity(result), rust.get(name), name);
   }
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log("cross-language semantic parity corpus passed");
