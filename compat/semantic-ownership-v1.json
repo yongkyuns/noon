@@ -240,13 +240,19 @@
     },
     {
       "id": "group-family",
-      "surface": "Group/VGroup family membership and flattening",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Group/VGroup"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore::add_member/remove_member"},
-      "reason": "Python groups still own child collections and flatten family operations before lowering, while Rust has family references in the semantic store.",
-      "replacement": "Retain family identity in shared semantic handles and lower group operations from that shared representation.",
-      "migration_issue": "#61"
+      "surface": "Group/VGroup direct family identity, membership, and order",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore::insert_family/add_member/remove_member"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_init/_group_add/_group_remove"}],
+      "reason": "The shared semantic store assigns stable object/family identities, owns duplicate suppression and direct-member order, and returns membership decisions that Python mirrors for wrapper identity."
+    },
+    {
+      "id": "group-family-wrapper-mirror",
+      "surface": "Python Group wrapper references and leaf iteration",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Group.submobjects/_leaf_mobjects"},
+      "reason": "Python retains object references for Manim class/protocol identity, but membership transitions are accepted or rejected by the shared family handle before this mirror changes.",
+      "replacement": "Keep the wrapper mirror as host-language identity metadata; deterministic family semantics remain shared."
     },
     {
       "id": "scene-play-lifecycle",

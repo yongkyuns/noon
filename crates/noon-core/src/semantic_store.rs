@@ -46,6 +46,9 @@ pub enum SourceIdentity {
 pub enum SemanticNodeKind {
     /// Compatibility payload while `SceneDefinition` consumers migrate.
     Object(ObjectDefinition),
+    /// Stable frontend object identity whose mutable authoring payload lives in a
+    /// shared frontend handle rather than the legacy SceneDefinition object shape.
+    AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
     Family,
 }
@@ -79,14 +82,14 @@ impl SemanticNode {
     pub fn object(&self) -> Option<&ObjectDefinition> {
         match &self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
         }
     }
 
     pub fn object_mut(&mut self) -> Option<&mut ObjectDefinition> {
         match &mut self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
         }
     }
 
@@ -148,6 +151,10 @@ impl SemanticStore {
         let id = self.insert_kind(SemanticNodeKind::Object(object));
         self.object_nodes.insert(legacy_id, id);
         id
+    }
+
+    pub fn insert_authoring_object(&mut self) -> SemanticNodeId {
+        self.insert_kind(SemanticNodeKind::AuthoringObject)
     }
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
@@ -468,6 +475,31 @@ mod tests {
 
     fn object(id: u64) -> ObjectDefinition {
         ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))
+    }
+
+    #[test]
+    fn authoring_objects_have_stable_shared_family_identity() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        let family = store.insert_family();
+        let alias = store.insert_family();
+
+        store.add_member(family, first).unwrap();
+        store.add_member(family, second).unwrap();
+        store.add_member(alias, first).unwrap();
+        assert_eq!(store.node(family).unwrap().members(), &[first, second]);
+        assert_eq!(store.node(first).unwrap().parents(), &[family, alias]);
+
+        // SemanticStore owns duplicate suppression and direct-member ordering.
+        store.add_member(family, first).unwrap();
+        assert_eq!(store.node(family).unwrap().members(), &[first, second]);
+        assert_eq!(store.node(first).unwrap().parents(), &[family, alias]);
+
+        assert!(store.remove_member(family, first).unwrap());
+        assert_eq!(store.node(family).unwrap().members(), &[second]);
+        assert_eq!(store.node(first).unwrap().parents(), &[alias]);
+        assert!(!store.remove_member(family, first).unwrap());
     }
 
     #[test]
