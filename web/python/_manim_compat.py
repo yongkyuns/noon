@@ -611,8 +611,8 @@ class Scene(_BaseScene):
         for index, member in enumerate(leaves):
             newly_bound = member._scene is None
             if newly_bound:
-                raw_object = super().add(
-                    member._current_raw(), key=key if index == 0 else None
+                raw_object = _ir.Scene.add(
+                    self, member._current_raw(), key=key if index == 0 else None
                 )
                 member._bind(self, raw_object)
             elif member._scene is not self:

@@ -729,7 +729,9 @@ impl SlottedSceneInstance {
                     ..ExecutionEffects::default()
                 };
             }
-            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
+            ScenePatch::SetGeometry { object, .. }
+            | ScenePatch::SetTransform { object, .. }
+            | ScenePatch::SetStyle { object, .. } => {
                 let slot = self
                     .slots
                     .slot_for_object(*object)
@@ -825,6 +827,7 @@ impl SlottedSceneInstance {
         let mut context = PatchContext::default();
         match patch {
             ScenePatch::RemoveObject(object)
+            | ScenePatch::SetGeometry { object, .. }
             | ScenePatch::SetTransform { object, .. }
             | ScenePatch::SetStyle { object, .. } => {
                 context.primary_slot = self.slots.slot_for_object(*object);

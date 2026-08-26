@@ -72,6 +72,22 @@ pub struct TimedSceneInstance {
 }
 
 impl TimedSceneInstance {
+    pub fn from_scene_instance(inner: SceneInstance) -> Self {
+        Self {
+            inner,
+            timeline: SignalTimelineDefinition::new(),
+            groups: Vec::new(),
+        }
+    }
+
+    pub fn scene(&self) -> &SceneInstance {
+        &self.inner
+    }
+
+    pub fn scene_mut(&mut self) -> &mut SceneInstance {
+        &mut self.inner
+    }
+
     pub fn from_timed(scene: &TimedSemanticScene) -> Result<Self, TimedSceneRuntimeError> {
         let inner = SceneInstance::from_semantic(scene.semantic())?;
         let timeline = SignalTimelineDefinition::from_parts(
