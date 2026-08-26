@@ -1,0 +1,51 @@
+name: Temporary shared placement Clippy validation
+
+on:
+  push:
+    branches:
+      - agent/arch-shared-manim-placement
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'Validate shared placement Clippy fix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/arch-shared-manim-placement
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt,clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply fix
+        run: python3 scripts/tmp_fix_shared_placement_clippy.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Rust semantic handle tests
+        run: cargo test -p noon-web authoring_mobject
+      - name: WASM compile
+        run: cargo check -p noon-web --target wasm32-unknown-unknown
+      - name: Python placement tests
+        run: |
+          PYTHONPATH=web/python python3 -m unittest \
+            web.python.test_manim_shared_placement_handles \
+            web.python.test_manim_layout_alignment \
+            web.python.test_manim_scene_bound_semantic_handles \
+            web.python.test_manim_shared_layout_queries
+      - name: Ownership audit
+        run: python3 scripts/semantic_ownership_check.py
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-web/src/authoring_mobject.rs
+          git commit -m 'Group shared Manim placement parameters'
+          git push origin HEAD:agent/arch-shared-manim-placement
