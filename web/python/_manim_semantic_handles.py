@@ -526,12 +526,40 @@ def _move_to(
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
-    return _ORIGINAL_MOVE_TO(
-        self,
-        point_or_mobject,
-        aligned_edge=aligned_edge,
-        coor_mask=coor_mask,
-    )
+    handle = _mutation_handle_for(self)
+    if handle is None:
+        return _ORIGINAL_MOVE_TO(
+            self,
+            point_or_mobject,
+            aligned_edge=aligned_edge,
+            coor_mask=coor_mask,
+        )
+
+    edge = _base._as_vec2(aligned_edge)
+    if _alignment_is_mobject(point_or_mobject):
+        target_handle = _handle_for(point_or_mobject)
+        if target_handle is None or not hasattr(handle, "manimMoveToHandle"):
+            return _ORIGINAL_MOVE_TO(
+                self,
+                point_or_mobject,
+                aligned_edge=aligned_edge,
+                coor_mask=coor_mask,
+            )
+        mask = _alignment_mask2(coor_mask)
+        handle.manimMoveToHandle(target_handle, edge.x, edge.y, mask.x, mask.y)
+    else:
+        if not hasattr(handle, "manimMoveToPoint"):
+            return _ORIGINAL_MOVE_TO(
+                self,
+                point_or_mobject,
+                aligned_edge=aligned_edge,
+                coor_mask=coor_mask,
+            )
+        point = _base._as_vec2(point_or_mobject)
+        mask = _alignment_mask2(coor_mask)
+        handle.manimMoveToPoint(point.x, point.y, edge.x, edge.y, mask.x, mask.y)
+    _sync_bound_transform(self, handle)
+    return self
 
 
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
@@ -678,16 +706,72 @@ def _next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
-    return _ORIGINAL_NEXT_TO(
-        self,
-        mobject_or_point,
-        direction,
-        buff,
-        aligned_edge=aligned_edge,
-        submobject_to_align=submobject_to_align,
-        index_of_submobject_to_align=index_of_submobject_to_align,
-        coor_mask=coor_mask,
-    )
+    handle = _mutation_handle_for(self)
+    if (
+        handle is None
+        or submobject_to_align is not None
+        or index_of_submobject_to_align is not None
+    ):
+        return _ORIGINAL_NEXT_TO(
+            self,
+            mobject_or_point,
+            direction,
+            buff,
+            aligned_edge=aligned_edge,
+            submobject_to_align=submobject_to_align,
+            index_of_submobject_to_align=index_of_submobject_to_align,
+            coor_mask=coor_mask,
+        )
+
+    vector = _base._as_vec2(direction)
+    edge = _base._as_vec2(aligned_edge)
+    if _alignment_is_mobject(mobject_or_point):
+        target_handle = _handle_for(mobject_or_point)
+        if target_handle is None or not hasattr(handle, "manimNextToHandle"):
+            return _ORIGINAL_NEXT_TO(
+                self,
+                mobject_or_point,
+                direction,
+                buff,
+                aligned_edge=aligned_edge,
+                coor_mask=coor_mask,
+            )
+        mask = _alignment_mask2(coor_mask)
+        handle.manimNextToHandle(
+            target_handle,
+            vector.x,
+            vector.y,
+            float(buff),
+            edge.x,
+            edge.y,
+            mask.x,
+            mask.y,
+        )
+    else:
+        if not hasattr(handle, "manimNextToPoint"):
+            return _ORIGINAL_NEXT_TO(
+                self,
+                mobject_or_point,
+                direction,
+                buff,
+                aligned_edge=aligned_edge,
+                coor_mask=coor_mask,
+            )
+        point = _base._as_vec2(mobject_or_point)
+        mask = _alignment_mask2(coor_mask)
+        handle.manimNextToPoint(
+            point.x,
+            point.y,
+            vector.x,
+            vector.y,
+            float(buff),
+            edge.x,
+            edge.y,
+            mask.x,
+            mask.y,
+        )
+    _sync_bound_transform(self, handle)
+    return self
 
 
 def _align_to(
@@ -695,7 +779,22 @@ def _align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _base.Mobject:
-    return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+    handle = _mutation_handle_for(self)
+    if handle is None:
+        return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+    axis = _base._as_vec2(direction)
+    if _alignment_is_mobject(mobject_or_point):
+        target_handle = _handle_for(mobject_or_point)
+        if target_handle is None or not hasattr(handle, "alignToHandle"):
+            return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+        handle.alignToHandle(target_handle, axis.x, axis.y)
+    else:
+        if not hasattr(handle, "alignToPoint"):
+            return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+        point = _base._as_vec2(mobject_or_point)
+        handle.alignToPoint(point.x, point.y, axis.x, axis.y)
+    _sync_bound_transform(self, handle)
+    return self
 
 
 def _align_on_frame(
