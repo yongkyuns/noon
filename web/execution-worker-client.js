@@ -77,6 +77,17 @@ export class ExecutionWorkerClient {
     this.#transportMode = transportMode;
     this.#session = checkedNextSession(this.#session);
 
+    // The OffscreenCanvas inherits the HTML canvas backing-store dimensions at
+    // transfer time. Size that backing store from the already-laid-out CSS box
+    // before handing control to the render worker; otherwise Chrome/WebGL can
+    // create its first surface at the HTML default 300×150 and only correct it
+    // after renderer startup.
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const initialWidth = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
+    const initialHeight = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
+    this.#canvas.width = initialWidth;
+    this.#canvas.height = initialHeight;
+
     const channel = new MessageChannel();
     const offscreen = this.#canvas.transferControlToOffscreen();
     this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
@@ -102,8 +113,8 @@ export class ExecutionWorkerClient {
         canvas: offscreen,
         port: channel.port2,
         transportMode,
-        width: this.#canvas.width,
-        height: this.#canvas.height,
+        width: initialWidth,
+        height: initialHeight,
       }),
       [offscreen, channel.port2],
     );
