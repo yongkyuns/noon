@@ -19,6 +19,16 @@ jobs:
         run: |
           sed -i 's/2.0 + f64::EPSILON/2.0 + 1.0e-12/' scripts/tmp_rotation_updater_lifecycle.py
           python3 scripts/tmp_rotation_updater_lifecycle.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("web/python/test_manim_updater_lifecycle.py")
+          text = path.read_text()
+          text = text.replace(
+              'msg=f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",',
+              'msg=f"stdout:\\n{completed.stdout}\\nstderr:\\n{completed.stderr}",',
+          )
+          path.write_text(text)
+          PY
       - name: Format Rust
         run: cargo fmt --all
       - name: Validate shared callback schedule
