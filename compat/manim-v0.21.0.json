@@ -45,6 +45,7 @@
     "Transform": {"status": "supported", "category": "animation", "evidence": "generic transform tests"},
     "ReplacementTransform": {"status": "supported", "category": "animation", "evidence": "lifecycle tests"},
     "TransformFromCopy": {"status": "supported", "category": "animation", "evidence": "transform-from-copy tests"},
+    "Restore": {"status": "partial", "category": "animation-transform", "dependency": "#82", "reason": "Leaf 2D Mobjects restore the latest save_state() snapshot at Scene.play time through the retained Transform path; retained Group/VGroup family restore and broader ApplyMethod family alignment remain pending."},
     "TransformMatchingShapes": {"status": "supported", "category": "animation", "evidence": "matching-shapes tests"},
     "AnimationGroup": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
     "LaggedStart": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},

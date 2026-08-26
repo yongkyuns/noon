@@ -68,15 +68,25 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Assemble exact raster source corpus
+        run: |
+          test "$(head -n 1 parity/manim-v0.21/upstream-examples/restore_example.py)" = "from manim import *"
+          printf '\n\n' >> parity/manim-v0.21/quickstart.py
+          tail -n +2 parity/manim-v0.21/upstream-examples/restore_example.py >> parity/manim-v0.21/quickstart.py
+
       - name: Render and compare canonical Manim scenes
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+          NOON_MANIM_MATERIALIZE_STATIC_WAITS: "1"
+          PYTHONPATH: ${{ github.workspace }}/scripts/manim-raster-sitecustomize
         run: node scripts/manim-raster-differential.mjs
 
       - name: Capture semantic state at raster frame times
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
+          NOON_MANIM_MATERIALIZE_STATIC_WAITS: "1"
+          PYTHONPATH: ${{ github.workspace }}/scripts/manim-raster-sitecustomize
         run: node scripts/manim-raster-semantic-state.mjs
 
       - name: Enforce per-fixture raster ratchet
