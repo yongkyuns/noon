@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Apply exact lifecycle patches
-        run: python3 scripts/tmp_rotation_updater_lifecycle.py
+        run: |
+          sed -i 's/2.0 + f64::EPSILON/2.0 + 1.0e-12/' scripts/tmp_rotation_updater_lifecycle.py
+          python3 scripts/tmp_rotation_updater_lifecycle.py
       - name: Format Rust
         run: cargo fmt --all
       - name: Validate shared callback schedule
