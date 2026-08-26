@@ -12,10 +12,7 @@ fn fill_with_opacity(mut color: Color, opacity: f32) -> Color {
 
 fn create_circle() -> Scene {
     let mut scene = Scene::new();
-    let circle = scene.add(Circle::default().set_fill(
-        Some(fill_with_opacity(PINK, 0.5)),
-        None,
-    ));
+    let circle = scene.add(Circle::default().set_fill(Some(fill_with_opacity(PINK, 0.5)), None));
     scene.play(Create::new(circle)).run_time(1.0).unwrap();
     scene
 }
@@ -35,12 +32,8 @@ fn square_to_circle() -> Scene {
 
 fn square_and_circle() -> Scene {
     let mut scene = Scene::new();
-    let circle = scene.add(
-        Circle::default().set_fill(Some(fill_with_opacity(PINK, 0.5)), None),
-    );
-    let square = scene.add(
-        Square::default().set_fill(Some(fill_with_opacity(BLUE, 0.5)), None),
-    );
+    let circle = scene.add(Circle::default().set_fill(Some(fill_with_opacity(PINK, 0.5)), None));
+    let square = scene.add(Square::default().set_fill(Some(fill_with_opacity(BLUE, 0.5)), None));
     scene
         .edit(square)
         .unwrap()
