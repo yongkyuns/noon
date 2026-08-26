@@ -26,10 +26,16 @@ pub struct HostCallbackSlot {
     pub id: HostCallbackId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<ObjectId>,
-    /// Callback is inactive at this exact time and becomes active immediately after it.
+    /// Registration time. The callback is active at this exact time.
+    ///
+    /// The serialized field name is retained for wire compatibility even though
+    /// Manim updater semantics use an inclusive start boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_after: Option<f64>,
-    /// Callback remains active through this exact time, then becomes inactive.
+    /// Removal time. The callback is inactive at this exact time.
+    ///
+    /// The serialized field name is retained for wire compatibility even though
+    /// Manim updater semantics use an exclusive end boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_through: Option<f64>,
 }
@@ -37,8 +43,8 @@ pub struct HostCallbackSlot {
 impl HostCallbackSlot {
     pub fn is_active_at(&self, time: f64) -> bool {
         time.is_finite()
-            && self.active_after.is_none_or(|start| time > start)
-            && self.active_through.is_none_or(|end| time <= end)
+            && self.active_after.is_none_or(|start| time >= start)
+            && self.active_through.is_none_or(|end| time < end)
     }
 
     fn validate_schedule(&self) -> Result<(), HostCallbackRegistryError> {
@@ -171,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_slot_uses_exclusive_start_and_inclusive_end() {
+    fn scheduled_slot_uses_inclusive_start_and_exclusive_end() {
         let slot = HostCallbackSlot {
             id: HostCallbackId::new(2),
             objects: vec![],
@@ -179,10 +185,23 @@ mod tests {
             active_through: Some(2.0),
         };
         HostCallbackRegistry::from_slots(vec![slot.clone()]).unwrap();
-        assert!(!slot.is_active_at(1.0));
-        assert!(slot.is_active_at(1.0 + f64::EPSILON));
-        assert!(slot.is_active_at(2.0));
-        assert!(!slot.is_active_at(2.0 + 1.0e-12));
+        assert!(!slot.is_active_at(1.0 - f64::EPSILON));
+        assert!(slot.is_active_at(1.0));
+        assert!(slot.is_active_at(2.0 - f64::EPSILON));
+        assert!(!slot.is_active_at(2.0));
+    }
+
+    #[test]
+    fn zero_width_slot_is_never_active() {
+        let slot = HostCallbackSlot {
+            id: HostCallbackId::new(4),
+            objects: vec![],
+            active_after: Some(0.0),
+            active_through: Some(0.0),
+        };
+        HostCallbackRegistry::from_slots(vec![slot.clone()]).unwrap();
+        assert!(!slot.is_active_at(0.0));
+        assert!(!slot.is_active_at(f64::EPSILON));
     }
 
     #[test]

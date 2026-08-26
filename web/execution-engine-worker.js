@@ -598,10 +598,10 @@ function freshHostMetrics() {
 }
 
 function callbackSlotActiveAt(slot, time) {
-  if (slot.active_after !== undefined && slot.active_after !== null && !(time > slot.active_after)) {
+  if (slot.active_after !== undefined && slot.active_after !== null && time < slot.active_after) {
     return false;
   }
-  if (slot.active_through !== undefined && slot.active_through !== null && time > slot.active_through) {
+  if (slot.active_through !== undefined && slot.active_through !== null && time >= slot.active_through) {
     return false;
   }
   return true;
