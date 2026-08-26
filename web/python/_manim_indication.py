@@ -139,7 +139,7 @@ class Flash(_composition.AnimationGroup):
         animations = self.create_line_anims()
         # Match Manim: timing/rate kwargs belong to each ShowPassingFlash child;
         # the containing AnimationGroup itself keeps its default linear, lag=0 map.
-        super().__init__(*animations, group=self.lines)
+        super().__init__(*animations, group=self.lines, run_time=duration)
 
     def create_lines(self) -> _compat.VGroup:
         lines = _compat.VGroup()
