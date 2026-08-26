@@ -367,6 +367,10 @@ def install() -> None:
     public = {
         "DEFAULT_DOT_RADIUS": DEFAULT_DOT_RADIUS,
         "PURE_YELLOW": PURE_YELLOW,
+        "SMALL_BUFF": _base.SMALL_BUFF,
+        "MED_SMALL_BUFF": _base.MED_SMALL_BUFF,
+        "MED_LARGE_BUFF": _base.MED_LARGE_BUFF,
+        "LARGE_BUFF": _base.LARGE_BUFF,
         "Dot": Dot,
         "Ellipse": Ellipse,
         "Triangle": Triangle,
