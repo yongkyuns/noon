@@ -1,0 +1,62 @@
+name: Apply shared family identity migration
+
+on:
+  push:
+    branches:
+      - agent/arch-shared-family-identity
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Apply shared family identity migration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/arch-shared-family-identity
+          fetch-depth: 1
+
+      - name: Apply migration
+        run: python3 scripts/apply_shared_family_identity_migration.py
+
+      - name: Format Rust
+        run: cargo fmt --all
+
+      - name: Validate semantic store
+        run: cargo test -p noon-core semantic_store
+
+      - name: Validate authoring handles
+        run: cargo test -p noon-web authoring_mobject
+
+      - name: Validate WASM compilation
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p noon-web --target wasm32-unknown-unknown
+
+      - name: Validate Python family mirror
+        run: |
+          PYTHONPATH=web/python python3 -m unittest \
+            web.python.test_manim_shared_family_identity \
+            web.python.test_manim_group_copy
+
+      - name: Validate semantic ownership inventory
+        run: python3 scripts/semantic_ownership_check.py
+
+      - name: Validate diff
+        run: git diff --check
+
+      - name: Commit migration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-core/src/semantic_store.rs \
+                  crates/noon-web/src/authoring_mobject.rs \
+                  web/python-worker.js \
+                  web/python/_manim_semantic_handles.py \
+                  web/python/test_manim_shared_family_identity.py \
+                  scripts/manim-compat-smoke.mjs \
+                  compat/semantic-ownership-v1.json
+          git commit -m 'Apply shared family identity migration'
+          git push origin HEAD:agent/arch-shared-family-identity
