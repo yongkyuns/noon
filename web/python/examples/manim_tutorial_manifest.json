@@ -300,6 +300,24 @@
       "order": 160
     },
     {
+      "id": "manim-rotating-demo",
+      "title": "RotatingDemo",
+      "summary": "ManimCE v0.21 Rotating reference example, unchanged except for the import module. Broader family/pivot/3D intermediate-frame parity remains a candidate.",
+      "status": "ready",
+      "path": "python/examples/manim_example_rotating_demo.py",
+      "category": "rotation",
+      "features": ["Rotating", "Arrow", "VGroup", "about_point", "about_edge", "axis"],
+      "upstream": "reference/manim.animation.rotation.Rotating.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/rotating_demo.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "expected_duration": 18.0,
+      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail_alt": "Exact-source Manim RotatingDemo",
+      "thumbnail_time": 9.0,
+      "order": 165
+    },
+    {
       "id": "manim-using-focus-on",
       "title": "UsingFocusOn",
       "summary": "ManimCE v0.21 FocusOn reference example, unchanged except for the import module. Text raster qualification remains separate.",
@@ -387,10 +405,10 @@
     },
     {
       "id": "three-d",
-      "title": "3D scenes and non-z-axis rotation",
+      "title": "3D scenes and full non-z-axis rotation parity",
       "status": "deferred",
       "category": "tutorial/3d",
-      "features": ["ThreeDScene", "ThreeDAxes", "Surface", "non-z-axis Rotating"],
+      "features": ["ThreeDScene", "ThreeDAxes", "Surface", "3D intermediate-frame projection"],
       "dependency": "#90"
     }
   ]
