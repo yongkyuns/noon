@@ -18,13 +18,26 @@ const manifestPath = path.join(
 );
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
-assert.ok(ready.length >= 1, "expected source-equivalent Manim examples");
+assert.ok(ready.length >= 1, "expected exact-source Manim examples");
 
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
 const parityFixtures = new Map(parityManifest.fixtures.map((fixture) => [fixture.id, fixture]));
 
+function noonSourceFromUpstream(source, id) {
+  const upstreamImport = "from manim import *";
+  const noonImport = "from noon import *";
+  const occurrences = source.split(upstreamImport).length - 1;
+  assert.equal(
+    occurrences,
+    1,
+    `${id}: canonical upstream source must contain exactly one '${upstreamImport}'`,
+  );
+  return source.replace(upstreamImport, noonImport);
+}
+
 const ids = new Set();
+const readySources = new Map();
 for (const entry of manifest.entries) {
   assert.ok(!ids.has(entry.id), `${entry.id}: duplicate manifest id`);
   ids.add(entry.id);
@@ -45,8 +58,24 @@ for (const entry of ready) {
     `${entry.id}: unknown parity fixture ${entry.parity_fixture}`,
   );
   assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
-  await access(path.join(repoRoot, "web", entry.path));
+  assert.ok(entry.upstream_source, `${entry.id}: runnable examples require canonical upstream source`);
+
+  const publicPath = path.join(repoRoot, "web", entry.path);
+  const upstreamPath = path.join(repoRoot, entry.upstream_source);
+  await access(publicPath);
+  await access(upstreamPath);
   await access(path.join(repoRoot, "web", entry.thumbnail));
+
+  const [publicSource, upstreamSource] = await Promise.all([
+    readFile(publicPath, "utf8"),
+    readFile(upstreamPath, "utf8"),
+  ]);
+  assert.equal(
+    publicSource,
+    noonSourceFromUpstream(upstreamSource, entry.id),
+    `${entry.id}: public source must match ManimCE v0.21 byte-for-byte except 'from manim import *' -> 'from noon import *'`,
+  );
+  readySources.set(entry.id, publicSource);
 }
 
 const port = 4182;
@@ -96,9 +125,6 @@ function sceneDuration(result) {
 }
 
 function assertDurationContract(entry, result) {
-  // Scene.time is authoritative because no-op waits advance semantic time without
-  // manufacturing renderer tracks. Source-equivalent gallery scenes are governed
-  // by their canonical Manim fixture duration, not by an arbitrary playground loop.
   const fixture = parityFixtures.get(entry.parity_fixture);
   assert.ok(fixture, `${entry.id}: missing parity fixture`);
   const actual = sceneDuration(result);
@@ -128,10 +154,8 @@ try {
   await page.evaluate(() => window.noonManimCompat.ready());
 
   for (const entry of ready) {
-    const sourceUrl = `${baseUrl}/web/${entry.path}`;
-    const response = await fetch(sourceUrl);
-    assert.equal(response.ok, true, `${entry.id}: unable to fetch ${sourceUrl}`);
-    const source = await response.text();
+    const source = readySources.get(entry.id);
+    assert.ok(source, `${entry.id}: exact source was not loaded`);
     const result = await page.evaluate(
       (pythonSource) => window.noonManimCompat.run(pythonSource),
       source,
@@ -143,7 +167,7 @@ try {
   }
 
   assert.equal(browserErrors.length, 0, browserErrors.join("\n"));
-  console.log(`${ready.length}/${ready.length} source-equivalent Manim examples passed`);
+  console.log(`${ready.length}/${ready.length} exact-source Manim examples passed`);
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
