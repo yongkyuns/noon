@@ -27,13 +27,13 @@ jobs:
           set -e
           if [ "$status" -ne 0 ]; then
             unresolved="$(git diff --name-only --diff-filter=U | sort)"
-            expected="$(printf '%s\n%s' web/python/_manim_geometry.py web/python/_manim_updaters.py | sort)"
+            expected="web/python/_manim_updaters.py"
             if [ "$unresolved" != "$expected" ]; then
               echo "Unexpected conflict set:" >&2
               printf '%s\n' "$unresolved" >&2
               exit 1
             fi
-            git checkout --ours web/python/_manim_geometry.py web/python/_manim_updaters.py
+            git checkout --ours web/python/_manim_updaters.py
             python3 scripts/tmp_resolve_reactive_host_294.py
             git add web/python/_manim_geometry.py web/python/_manim_updaters.py
             GIT_EDITOR=true git cherry-pick --continue
