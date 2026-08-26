@@ -380,11 +380,11 @@ def _install_rotating_breadth() -> None:
             return compat._critical_for(group, compat._as_vec2(animation.about_edge))
         return group.get_center()
 
-    def reflect_snapshot(
-        snapshot: dict[str, Any], *, axis: str, pivot_point: _base.Vec2
-    ) -> dict[str, Any]:
-        target = copy.deepcopy(snapshot)
-        transform = target["transform"]
+    def reflected_target(
+        current: _base.Mobject, *, axis: str, pivot_point: _base.Vec2
+    ) -> _base.Mobject:
+        target_snapshot = current.to_ir()
+        transform = target_snapshot["transform"]
         translation = transform["translation"]
         rotation = float(transform["rotation"])
         scale = transform["scale"]
@@ -398,7 +398,7 @@ def _install_rotating_breadth() -> None:
             scale["y"] = -float(scale["y"])
         else:
             raise ValueError(f"unsupported reflection axis {axis!r}")
-        return target
+        return animate._snapshot_mobject(target_snapshot)
 
     def schedule_family(
         scene: object,
@@ -421,37 +421,24 @@ def _install_rotating_breadth() -> None:
         for index, (source, current) in enumerate(zip(sources, detached, strict=True)):
             assert source._object is not None
             obj = source._object
-            snapshot = current.to_ir()
-            previous_end = scene._scheduled_transform_ends.get(obj.id)
-            if previous_end is not None and start_time < previous_end:
-                raise ValueError("Rotating family transforms for one object must not overlap")
-
             if axis == "z":
-                target = animate._snapshot_mobject(snapshot)
+                target = animate._snapshot_mobject(current.to_ir())
                 target.rotate(sign * animation.angle, compat.OUT, about_point=pivot_point)
-                target_snapshot = target.to_ir()
             else:
-                target_snapshot = reflect_snapshot(
-                    snapshot, axis=axis, pivot_point=pivot_point
-                )
+                target = reflected_target(current, axis=axis, pivot_point=pivot_point)
 
             object_key = scene._object_keys[obj.id]
-            scene._add_track(
-                obj,
-                "transform",
-                {
-                    "object": {
-                        "from": copy.deepcopy(snapshot),
-                        "to": copy.deepcopy(target_snapshot),
-                    }
-                },
-                start_time,
-                duration,
-                easing,
-                f"@rotating-family:{object_key}:{start_time:g}:{index}",
+            compat._BaseScene.play(
+                scene,
+                _base.Transform(
+                    source,
+                    target,
+                    key=f"@rotating-family:{object_key}:{start_time:g}:{index}",
+                ),
+                run_time=duration,
+                start_time=start_time,
+                easing=easing,
             )
-            scene._scheduled_transform_targets[obj.id] = copy.deepcopy(target_snapshot)
-            scene._scheduled_transform_ends[obj.id] = start_time + duration
 
     def schedule(
         scene: object,
