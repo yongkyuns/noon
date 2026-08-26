@@ -29,11 +29,31 @@ export class SceneIdentityMap {
               ? track
               : { ...track, id, object };
           });
+    const reactive = remapReactiveObjects(document.reactive, objectIds);
 
-    return objects === document.objects && tracks === document.tracks
+    return objects === document.objects && tracks === document.tracks && reactive === document.reactive
       ? document
-      : { ...document, objects, tracks };
+      : { ...document, objects, tracks, ...(reactive === undefined ? {} : { reactive }) };
   }
+}
+
+function remapReactiveObjects(reactive, objectIds) {
+  if (objectIds === null || reactive === undefined || reactive === null) {
+    return reactive;
+  }
+  if (!Array.isArray(reactive.bindings)) {
+    return reactive;
+  }
+  let changed = false;
+  const bindings = reactive.bindings.map((binding) => {
+    const object = requiredId(objectIds, binding.object, "reactive binding object");
+    if (object === binding.object) {
+      return binding;
+    }
+    changed = true;
+    return { ...binding, object };
+  });
+  return changed ? { ...reactive, bindings } : reactive;
 }
 
 class IdentityNamespace {

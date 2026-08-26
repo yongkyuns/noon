@@ -128,20 +128,33 @@ try {
       canvasBottomGap: wrap.bottom - canvas.bottom,
       canvasLeftGap: canvas.left - wrap.left,
       canvasRightGap: wrap.right - canvas.right,
+      canvasWidth: canvas.width,
     };
   });
   assert.ok(
     layout.editorTopInset <= 8,
     `CodeMirror should start near the top of its pane; got ${layout.editorTopInset}px`,
   );
-  for (const [name, gap] of Object.entries({
-    canvasTopGap: layout.canvasTopGap,
-    canvasBottomGap: layout.canvasBottomGap,
-    canvasLeftGap: layout.canvasLeftGap,
-    canvasRightGap: layout.canvasRightGap,
-  })) {
-    assert.ok(Math.abs(gap) <= 2, `desktop preview should fill its pane; ${name}=${gap}px`);
-  }
+  assert.ok(
+    layout.canvasWidth <= 44 * 16 + 1,
+    `desktop preview should respect the 44rem viewport cap; got ${layout.canvasWidth}px`,
+  );
+  assert.ok(
+    layout.canvasTopGap >= 0 && layout.canvasBottomGap >= 0,
+    `desktop preview must stay within its wrapper vertically: ${JSON.stringify(layout)}`,
+  );
+  assert.ok(
+    layout.canvasLeftGap >= 0 && layout.canvasRightGap >= 0,
+    `desktop preview must stay within its wrapper horizontally: ${JSON.stringify(layout)}`,
+  );
+  assert.ok(
+    Math.abs(layout.canvasTopGap - layout.canvasBottomGap) <= 2,
+    `desktop preview should remain vertically centered; ${JSON.stringify(layout)}`,
+  );
+  assert.ok(
+    Math.abs(layout.canvasLeftGap - layout.canvasRightGap) <= 2,
+    `desktop preview should remain horizontally centered; ${JSON.stringify(layout)}`,
+  );
 
   await page.evaluate(() => {
     document.querySelector("#python-scene-source").value =
@@ -155,7 +168,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   console.log(
-    `Python editor smoke passed: tight desktop layout, 2 CodeMirror editors, syntax highlighting, ${lintRanges} Ruff diagnostics.`,
+    `Python editor smoke passed: bounded centered preview, 2 CodeMirror editors, syntax highlighting, ${lintRanges} Ruff diagnostics.`,
   );
 } finally {
   await browser?.close();

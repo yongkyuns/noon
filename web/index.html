@@ -347,11 +347,26 @@
         padding: clamp(0.8rem, 2vw, 1.4rem);
       }
 
-      canvas {
-        display: block;
+      .canvas-frame {
+        position: relative;
         width: 100%;
         max-width: 44rem;
-        aspect-ratio: 16 / 9;
+        align-self: center;
+        justify-self: center;
+      }
+
+      .canvas-frame::before {
+        display: block;
+        padding-top: 56.25%;
+        content: "";
+      }
+
+      canvas {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
         border: 1px solid #202a3e;
         border-radius: 0.8rem;
         background: #090c13;
@@ -560,8 +575,8 @@
           padding: 0.55rem;
         }
 
-        canvas {
-          aspect-ratio: 4 / 3;
+        .canvas-frame::before {
+          padding-top: 75%;
         }
 
         .metrics,
@@ -676,7 +691,9 @@
             </div>
           </div>
           <div class="canvas-wrap">
-            <canvas id="scene" aria-label="Animated Noon scene"></canvas>
+            <div class="canvas-frame">
+              <canvas id="scene" aria-label="Animated Noon scene"></canvas>
+            </div>
           </div>
           <div class="metrics" aria-label="Runtime metrics">
             <div class="metric">

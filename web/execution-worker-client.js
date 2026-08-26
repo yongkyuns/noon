@@ -3,6 +3,7 @@ import {
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
+import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
@@ -55,6 +56,7 @@ export class ExecutionWorkerClient {
       throw new Error("ExecutionWorkerClient is already started");
     }
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     validateLoopDurationSeconds(loopDurationSeconds);
     if (
       transportMode !== EXECUTION_TRANSPORT_SHARED &&
@@ -76,6 +78,17 @@ export class ExecutionWorkerClient {
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
     this.#session = checkedNextSession(this.#session);
+
+    // The OffscreenCanvas inherits the HTML canvas backing-store dimensions at
+    // transfer time. Size that backing store from the already-laid-out CSS box
+    // before handing control to the render worker; otherwise Chrome/WebGL can
+    // create its first surface at the HTML default 300×150 and only correct it
+    // after renderer startup.
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const initialWidth = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
+    const initialHeight = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
+    this.#canvas.width = initialWidth;
+    this.#canvas.height = initialHeight;
 
     const channel = new MessageChannel();
     const offscreen = this.#canvas.transferControlToOffscreen();
@@ -102,8 +115,8 @@ export class ExecutionWorkerClient {
         canvas: offscreen,
         port: channel.port2,
         transportMode,
-        width: this.#canvas.width,
-        height: this.#canvas.height,
+        width: initialWidth,
+        height: initialHeight,
       }),
       [offscreen, channel.port2],
     );
@@ -133,6 +146,7 @@ export class ExecutionWorkerClient {
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     const result = await this.#requestEngine("replace_scene", {
       sceneJson,
@@ -151,6 +165,7 @@ export class ExecutionWorkerClient {
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     const result = await this.#requestEngine("reconcile_scene", {
       sceneJson,
