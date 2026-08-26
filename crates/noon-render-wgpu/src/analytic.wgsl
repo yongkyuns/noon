@@ -272,7 +272,7 @@ fn styled_shape_color(
     let fill_coverage = inside_coverage(signed_distance);
     let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
     let stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
-    let has_stroke = stroke_enabled && stroke_width > 0.0;
+    let has_stroke = stroke_enabled && stroke_width > 0.0 && stroke.a > 0.0;
     if has_stroke {
         if fill_enabled {
             let color = mix(premultiplied(fill), premultiplied(stroke), stroke_coverage);
