@@ -1,0 +1,37 @@
+name: Validate exact MovingDots gallery port
+
+on:
+  push:
+    branches:
+      - tmp/rebase-moving-dots-latest
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/rebase-moving-dots-latest
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate exact source and manifests
+        run: python3 scripts/tmp_add_moving_dots_latest.py
+      - name: Validate source and updater contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: web/python
+        run: |
+          git diff --check
+          python3 scripts/semantic_ownership_check.py
+          python3 -m unittest web.python.test_manim_tutorial_examples web.python.test_moving_dots_primitives web.python.test_updater_snapshot web.python.test_playground_examples
+      - name: Commit clean gallery result
+        run: |
+          rm .github/workflows/tmp-add-moving-dots-latest.yml scripts/tmp_add_moving_dots_latest.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add parity/manim-v0.21/manifest.json parity/manim-v0.21/quickstart.py parity/manim-v0.21/upstream-examples/moving_dots.py web/python/examples/manim_gallery_moving_dots.py web/python/examples/manim_tutorial_manifest.json web/thumbnails/manim/moving-dots.svg
+          git add -u .github/workflows/tmp-add-moving-dots-latest.yml scripts/tmp_add_moving_dots_latest.py
+          git commit -m "Add exact Manim MovingDots gallery example"
+          git push origin HEAD:tmp/rebase-moving-dots-latest
