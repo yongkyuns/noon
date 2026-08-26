@@ -19,10 +19,27 @@ fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
     Ok(lowered)
 }
 
+fn unit_f32(name: &str, value: f64) -> Result<f32, String> {
+    let value = finite_f32(name, value)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!("{name} must be between 0 and 1"));
+    }
+    Ok(value)
+}
+
 fn vec2(name: &str, x: f64, y: f64) -> Result<Vec2, String> {
     Ok(Vec2::new(
         finite_f32(&format!("{name}.x"), x)?,
         finite_f32(&format!("{name}.y"), y)?,
+    ))
+}
+
+fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Color, String> {
+    Ok(Color::rgba(
+        unit_f32("color.red", red)?,
+        unit_f32("color.green", green)?,
+        unit_f32("color.blue", blue)?,
+        unit_f32("color.alpha", alpha)?,
     ))
 }
 
@@ -66,21 +83,14 @@ impl FrontendDetachedMobject {
 
     pub fn rectangle(width: f64, height: f64) -> Result<Self, String> {
         Ok(Self::from_snapshot(
-            Rectangle::new(
-                finite_f32("width", width)?,
-                finite_f32("height", height)?,
-            )
-            .into_snapshot(),
+            Rectangle::new(finite_f32("width", width)?, finite_f32("height", height)?)
+                .into_snapshot(),
         ))
     }
 
     pub fn line(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Result<Self, String> {
         Ok(Self::from_snapshot(
-            Line::new(
-                vec2("start", start_x, start_y)?,
-                vec2("end", end_x, end_y)?,
-            )
-            .into_snapshot(),
+            Line::new(vec2("start", start_x, start_y)?, vec2("end", end_x, end_y)?).into_snapshot(),
         ))
     }
 
@@ -112,6 +122,18 @@ impl FrontendDetachedMobject {
         alpha: f64,
     ) -> Result<&mut Self, String> {
         self.handle.set_color(red, green, blue, alpha)?;
+        Ok(self)
+    }
+
+    pub fn set_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<&mut Self, String> {
+        self.handle.set_fill_color(red, green, blue, 1.0)?;
+        self.handle.set_fill_opacity(opacity)?;
         Ok(self)
     }
 
@@ -152,26 +174,17 @@ pub struct FrontendAnimate {
 
 impl FrontendAnimate {
     pub fn shift(&mut self, x: f64, y: f64) -> Result<&mut Self, String> {
-        self.animation = self
-            .animation
-            .clone()
-            .shift(vec2("shift", x, y)?);
+        self.animation = self.animation.clone().shift(vec2("shift", x, y)?);
         Ok(self)
     }
 
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<&mut Self, String> {
-        self.animation = self
-            .animation
-            .clone()
-            .move_to(vec2("move_to", x, y)?);
+        self.animation = self.animation.clone().move_to(vec2("move_to", x, y)?);
         Ok(self)
     }
 
     pub fn scale(&mut self, factor: f64) -> Result<&mut Self, String> {
-        self.animation = self
-            .animation
-            .clone()
-            .scale(finite_f32("scale", factor)?);
+        self.animation = self.animation.clone().scale(finite_f32("scale", factor)?);
         Ok(self)
     }
 
@@ -190,13 +203,24 @@ impl FrontendAnimate {
         blue: f64,
         alpha: f64,
     ) -> Result<&mut Self, String> {
-        let color = Color::rgba(
-            finite_f32("color.red", red)?,
-            finite_f32("color.green", green)?,
-            finite_f32("color.blue", blue)?,
-            finite_f32("color.alpha", alpha)?,
+        self.animation = self
+            .animation
+            .clone()
+            .set_color(color(red, green, blue, alpha)?);
+        Ok(self)
+    }
+
+    pub fn set_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<&mut Self, String> {
+        self.animation = self.animation.clone().set_fill(
+            Some(color(red, green, blue, 1.0)?),
+            Some(unit_f32("fill opacity", opacity)?),
         );
-        self.animation = self.animation.clone().set_color(color);
         Ok(self)
     }
 
@@ -204,7 +228,7 @@ impl FrontendAnimate {
         self.animation = self
             .animation
             .clone()
-            .set_opacity(finite_f32("opacity", opacity)?);
+            .set_opacity(unit_f32("opacity", opacity)?);
         Ok(self)
     }
 }
@@ -316,12 +340,7 @@ impl FrontendAuthoringScene {
         self.scene
             .edit(object)
             .map_err(|error| error.to_string())?
-            .set_color(Color::rgba(
-                finite_f32("color.red", red)?,
-                finite_f32("color.green", green)?,
-                finite_f32("color.blue", blue)?,
-                finite_f32("color.alpha", alpha)?,
-            ))
+            .set_color(color(red, green, blue, alpha)?)
             .map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -331,7 +350,7 @@ impl FrontendAuthoringScene {
         self.scene
             .edit(object)
             .map_err(|error| error.to_string())?
-            .set_opacity(finite_f32("opacity", opacity)?)
+            .set_opacity(unit_f32("opacity", opacity)?)
             .map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -390,11 +409,7 @@ impl FrontendAuthoringScene {
         Ok(())
     }
 
-    pub fn append_fade_in(
-        &self,
-        batch: &mut FrontendPlayBatch,
-        handle: u32,
-    ) -> Result<(), String> {
+    pub fn append_fade_in(&self, batch: &mut FrontendPlayBatch, handle: u32) -> Result<(), String> {
         batch
             .animations
             .push(FadeIn::new(self.object(handle)?).into());
@@ -407,9 +422,9 @@ impl FrontendAuthoringScene {
         handle: u32,
         target: &FrontendDetachedMobject,
     ) -> Result<(), String> {
-        batch.animations.push(
-            Transform::new(self.object(handle)?, target.handle.snapshot().clone()).into(),
-        );
+        batch
+            .animations
+            .push(Transform::new(self.object(handle)?, target.handle.snapshot().clone()).into());
         Ok(())
     }
 
@@ -474,14 +489,14 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
-    #[wasm_bindgen(js_name = DetachedMobjectCore)]
-    pub struct WasmDetachedMobject(FrontendDetachedMobject);
+    #[wasm_bindgen]
+    pub struct DetachedMobjectCore(FrontendDetachedMobject);
 
     #[wasm_bindgen]
-    impl WasmDetachedMobject {
+    impl DetachedMobjectCore {
         #[wasm_bindgen(js_name = cloneHandle)]
-        pub fn clone_handle(&self) -> WasmDetachedMobject {
-            WasmDetachedMobject(self.0.clone())
+        pub fn clone_handle(&self) -> DetachedMobjectCore {
+            DetachedMobjectCore(self.0.clone())
         }
 
         pub fn shift(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
@@ -515,6 +530,20 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .set_fill(red, green, blue, opacity)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setOpacity)]
         pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
             self.0.set_opacity(opacity).map(|_| ()).map_err(js_error)
@@ -523,7 +552,7 @@ mod wasm {
         #[wasm_bindgen(js_name = nextTo)]
         pub fn next_to(
             &mut self,
-            other: &WasmDetachedMobject,
+            other: &DetachedMobjectCore,
             direction_x: f64,
             direction_y: f64,
             buff: f64,
@@ -556,23 +585,23 @@ mod wasm {
     }
 
     #[wasm_bindgen(js_name = authoringCircle)]
-    pub fn authoring_circle(radius: f64) -> Result<WasmDetachedMobject, JsValue> {
+    pub fn authoring_circle(radius: f64) -> Result<DetachedMobjectCore, JsValue> {
         FrontendDetachedMobject::circle(radius)
-            .map(WasmDetachedMobject)
+            .map(DetachedMobjectCore)
             .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = authoringSquare)]
-    pub fn authoring_square(side_length: f64) -> Result<WasmDetachedMobject, JsValue> {
+    pub fn authoring_square(side_length: f64) -> Result<DetachedMobjectCore, JsValue> {
         FrontendDetachedMobject::square(side_length)
-            .map(WasmDetachedMobject)
+            .map(DetachedMobjectCore)
             .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = authoringRectangle)]
-    pub fn authoring_rectangle(width: f64, height: f64) -> Result<WasmDetachedMobject, JsValue> {
+    pub fn authoring_rectangle(width: f64, height: f64) -> Result<DetachedMobjectCore, JsValue> {
         FrontendDetachedMobject::rectangle(width, height)
-            .map(WasmDetachedMobject)
+            .map(DetachedMobjectCore)
             .map_err(js_error)
     }
 
@@ -582,17 +611,17 @@ mod wasm {
         start_y: f64,
         end_x: f64,
         end_y: f64,
-    ) -> Result<WasmDetachedMobject, JsValue> {
+    ) -> Result<DetachedMobjectCore, JsValue> {
         FrontendDetachedMobject::line(start_x, start_y, end_x, end_y)
-            .map(WasmDetachedMobject)
+            .map(DetachedMobjectCore)
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = AnimateCore)]
-    pub struct WasmAnimate(FrontendAnimate);
+    #[wasm_bindgen]
+    pub struct AnimateCore(FrontendAnimate);
 
     #[wasm_bindgen]
-    impl WasmAnimate {
+    impl AnimateCore {
         pub fn shift(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
             self.0.shift(x, y).map(|_| ()).map_err(js_error)
         }
@@ -624,26 +653,40 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .set_fill(red, green, blue, opacity)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setOpacity)]
         pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
             self.0.set_opacity(opacity).map(|_| ()).map_err(js_error)
         }
     }
 
-    #[wasm_bindgen(js_name = PlayBatchCore)]
-    pub struct WasmPlayBatch(FrontendPlayBatch);
-
-    #[wasm_bindgen(js_name = AuthoringSceneCore)]
-    pub struct WasmAuthoringScene(FrontendAuthoringScene);
+    #[wasm_bindgen]
+    pub struct PlayBatchCore(FrontendPlayBatch);
 
     #[wasm_bindgen]
-    impl WasmAuthoringScene {
+    pub struct AuthoringSceneCore(FrontendAuthoringScene);
+
+    #[wasm_bindgen]
+    impl AuthoringSceneCore {
         #[wasm_bindgen(constructor)]
-        pub fn new() -> WasmAuthoringScene {
-            WasmAuthoringScene(FrontendAuthoringScene::new())
+        pub fn new() -> AuthoringSceneCore {
+            AuthoringSceneCore(FrontendAuthoringScene::new())
         }
 
-        pub fn add(&mut self, object: &WasmDetachedMobject) -> Result<u32, JsValue> {
+        pub fn add(&mut self, object: &DetachedMobjectCore) -> Result<u32, JsValue> {
             self.0.add(&object.0).map_err(js_error)
         }
 
@@ -697,33 +740,29 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        pub fn animate(&self, handle: u32) -> Result<WasmAnimate, JsValue> {
-            self.0.animate(handle).map(WasmAnimate).map_err(js_error)
+        pub fn animate(&self, handle: u32) -> Result<AnimateCore, JsValue> {
+            self.0.animate(handle).map(AnimateCore).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createPlayBatch)]
-        pub fn create_play_batch(&self) -> WasmPlayBatch {
-            WasmPlayBatch(self.0.create_play_batch())
+        pub fn create_play_batch(&self) -> PlayBatchCore {
+            PlayBatchCore(self.0.create_play_batch())
         }
 
         #[wasm_bindgen(js_name = appendAnimate)]
-        pub fn append_animate(&self, batch: &mut WasmPlayBatch, animation: &WasmAnimate) {
+        pub fn append_animate(&self, batch: &mut PlayBatchCore, animation: &AnimateCore) {
             self.0.append_animate(&mut batch.0, &animation.0);
         }
 
         #[wasm_bindgen(js_name = appendCreate)]
-        pub fn append_create(
-            &self,
-            batch: &mut WasmPlayBatch,
-            handle: u32,
-        ) -> Result<(), JsValue> {
+        pub fn append_create(&self, batch: &mut PlayBatchCore, handle: u32) -> Result<(), JsValue> {
             self.0.append_create(&mut batch.0, handle).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = appendFadeOut)]
         pub fn append_fade_out(
             &self,
-            batch: &mut WasmPlayBatch,
+            batch: &mut PlayBatchCore,
             handle: u32,
         ) -> Result<(), JsValue> {
             self.0
@@ -734,7 +773,7 @@ mod wasm {
         #[wasm_bindgen(js_name = appendFadeIn)]
         pub fn append_fade_in(
             &self,
-            batch: &mut WasmPlayBatch,
+            batch: &mut PlayBatchCore,
             handle: u32,
         ) -> Result<(), JsValue> {
             self.0
@@ -745,9 +784,9 @@ mod wasm {
         #[wasm_bindgen(js_name = appendTransform)]
         pub fn append_transform(
             &self,
-            batch: &mut WasmPlayBatch,
+            batch: &mut PlayBatchCore,
             handle: u32,
-            target: &WasmDetachedMobject,
+            target: &DetachedMobjectCore,
         ) -> Result<(), JsValue> {
             self.0
                 .append_transform(&mut batch.0, handle, &target.0)
@@ -757,7 +796,7 @@ mod wasm {
         #[wasm_bindgen(js_name = playBatch)]
         pub fn play_batch(
             &mut self,
-            batch: &WasmPlayBatch,
+            batch: &PlayBatchCore,
             run_time: f64,
             rate_func: &str,
         ) -> Result<(), JsValue> {
@@ -811,15 +850,23 @@ mod tests {
     #[test]
     fn browser_facade_lowers_parallel_animate_through_noon_scene() {
         let mut scene = FrontendAuthoringScene::new();
-        let left = scene.add(&FrontendDetachedMobject::circle(0.4).unwrap()).unwrap();
-        let right = scene.add(&FrontendDetachedMobject::square(0.8).unwrap()).unwrap();
+        let left = scene
+            .add(&FrontendDetachedMobject::circle(0.4).unwrap())
+            .unwrap();
+        let right = scene
+            .add(&FrontendDetachedMobject::square(0.8).unwrap())
+            .unwrap();
         scene.shift(left, -1.0, 0.0).unwrap();
         scene.shift(right, 1.0, 0.0).unwrap();
 
         let mut left_animation = scene.animate(left).unwrap();
         left_animation.shift(0.0, 1.0).unwrap();
         let mut right_animation = scene.animate(right).unwrap();
-        right_animation.shift(0.0, -1.0).unwrap().rotate(0.25).unwrap();
+        right_animation
+            .shift(0.0, -1.0)
+            .unwrap()
+            .rotate(0.25)
+            .unwrap();
 
         let mut batch = scene.create_play_batch();
         scene.append_animate(&mut batch, &left_animation);
@@ -839,7 +886,9 @@ mod tests {
     #[test]
     fn browser_facade_lifecycle_uses_same_noon_animation_types() {
         let mut scene = FrontendAuthoringScene::new();
-        let circle = scene.add(&FrontendDetachedMobject::circle(0.5).unwrap()).unwrap();
+        let circle = scene
+            .add(&FrontendDetachedMobject::circle(0.5).unwrap())
+            .unwrap();
 
         let mut create = scene.create_play_batch();
         scene.append_create(&mut create, circle).unwrap();
