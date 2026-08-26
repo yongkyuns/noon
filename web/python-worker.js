@@ -27,6 +27,7 @@ const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
 const MANIM_GROWING_MODULE_PATH = "/tmp/_manim_growing.py";
 const MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH = "/tmp/_manim_draw_border_then_fill.py";
 const MANIM_INDICATION_MODULE_PATH = "/tmp/_manim_indication.py";
+const MANIM_INDICATION_THINNING_MODULE_PATH = "/tmp/_manim_indication_thinning.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
 
@@ -69,6 +70,7 @@ async function initializePyodide() {
     growingResponse,
     drawBorderThenFillResponse,
     indicationResponse,
+    indicationThinningResponse,
     reactiveResponse,
     updatersResponse,
   ] = await Promise.all([
@@ -87,6 +89,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_growing.py", import.meta.url)),
     fetch(new URL("./python/_manim_draw_border_then_fill.py", import.meta.url)),
     fetch(new URL("./python/_manim_indication.py", import.meta.url)),
+    fetch(new URL("./python/_manim_indication_thinning.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
   ]);
@@ -106,6 +109,7 @@ async function initializePyodide() {
     [growingResponse, "Noon Manim growing layer"],
     [drawBorderThenFillResponse, "Noon Manim DrawBorderThenFill layer"],
     [indicationResponse, "Noon Manim indication layer"],
+    [indicationThinningResponse, "Noon Manim thinning indication layer"],
     [reactiveResponse, "Noon reactive compatibility layer"],
     [updatersResponse, "Noon Manim updater layer"],
   ];
@@ -131,6 +135,7 @@ async function initializePyodide() {
     [MANIM_GROWING_MODULE_PATH, growingResponse],
     [MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH, drawBorderThenFillResponse],
     [MANIM_INDICATION_MODULE_PATH, indicationResponse],
+    [MANIM_INDICATION_THINNING_MODULE_PATH, indicationThinningResponse],
     [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
     [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
   ];
@@ -161,6 +166,8 @@ import _manim_draw_border_then_fill
 _manim_draw_border_then_fill.install()
 import _manim_indication
 _manim_indication.install()
+import _manim_indication_thinning
+_manim_indication_thinning.install()
 import _manim_reactive
 import _manim_updaters
 _manim_updaters.install()
