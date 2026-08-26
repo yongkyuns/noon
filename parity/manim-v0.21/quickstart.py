@@ -225,3 +225,30 @@ class SetColorExplicitEquivalent(Scene):
 
         self.add(set_color_square, explicit_square)
         self.play(explicit_square.animate.shift(ORIGIN))
+
+
+class ThreeLayerPainterOrder(Scene):
+    def construct(self):
+        def layer(color, offset):
+            return Square(
+                side_length=1.6,
+                fill_color=color,
+                fill_opacity=0.5,
+                stroke_opacity=0.0,
+            ).shift(offset)
+
+        left_center = 1.8 * LEFT
+        left_red = layer(RED, left_center + 0.3 * LEFT)
+        left_green = layer(GREEN, left_center + 0.3 * RIGHT)
+        left_blue = layer(BLUE, left_center + 0.3 * UP)
+
+        right_center = 1.8 * RIGHT
+        right_red = layer(RED, right_center + 0.3 * LEFT)
+        right_green = layer(GREEN, right_center + 0.3 * RIGHT)
+        right_blue = layer(BLUE, right_center + 0.3 * UP)
+
+        # Same colors and geometry, opposite painter order. Each cluster contains
+        # single-layer, pairwise-overlap, and true three-layer overlap regions.
+        self.add(left_red, left_green, left_blue)
+        self.add(right_blue, right_green, right_red)
+        self.play(right_red.animate.shift(ORIGIN))
