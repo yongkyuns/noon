@@ -7,6 +7,7 @@ const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_LAYOUT_PORT ?? "4174");
 const baseUrl = `http://127.0.0.1:${port}`;
 const desktopMaxCanvasWidth = 44 * 16;
+const deviceScaleFactor = 1.25;
 
 let serverOutput = "";
 const server = spawn(
@@ -79,13 +80,61 @@ function assertNoOverflow(result, label) {
 let browser = null;
 try {
   await waitForServer();
-  browser = await chromium.launch({ channel: "chromium", headless: true });
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: [
+      "--disable-features=WebGPU",
+      "--enable-unsafe-swiftshader",
+      "--ignore-gpu-blocklist",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
   const context = await browser.newContext({
-    javaScriptEnabled: false,
+    deviceScaleFactor,
     viewport: { width: 1440, height: 900 },
   });
   const page = await context.newPage();
+  const browserErrors = [];
+  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      browserErrors.push(`console: ${message.text()}`);
+    }
+  });
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
+  await page.waitForFunction(
+    () => document.querySelector("#status")?.dataset.rendererBackend === "WebGL2",
+    null,
+    { timeout: 30_000 },
+  );
+
+  const initialBacking = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene");
+    return {
+      backend: document.querySelector("#status")?.dataset.rendererBackend,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+      devicePixelRatio: window.devicePixelRatio,
+    };
+  });
+  assert.equal(initialBacking.backend, "WebGL2", "playground must exercise the WebGL2 fallback");
+  assert.equal(initialBacking.devicePixelRatio, deviceScaleFactor);
+  assert.equal(
+    initialBacking.backingWidth,
+    Math.max(1, Math.round(initialBacking.cssWidth * deviceScaleFactor)),
+    "initial offscreen backing width must match laid-out CSS width × DPR before transfer",
+  );
+  assert.equal(
+    initialBacking.backingHeight,
+    Math.max(1, Math.round(initialBacking.cssHeight * deviceScaleFactor)),
+    "initial offscreen backing height must match laid-out CSS height × DPR before transfer",
+  );
 
   const desktop = await layout(page);
   assert.ok(
@@ -112,8 +161,11 @@ try {
   assertCentered(mobile.canvas, mobile.wrap, "mobile");
   assertNoOverflow(mobile, "mobile");
 
+  assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ playground viewport: desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
+    `✓ playground WebGL2 viewport @ DPR ${deviceScaleFactor}: initial backing ` +
+      `${initialBacking.backingWidth}×${initialBacking.backingHeight}, ` +
+      `desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `stacked ${stacked.canvas.width.toFixed(0)}×${stacked.canvas.height.toFixed(0)}, ` +
       `mobile ${mobile.canvas.width.toFixed(0)}×${mobile.canvas.height.toFixed(0)}`,
   );
