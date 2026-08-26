@@ -21,11 +21,39 @@ impl HostCallbackId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HostCallbackSlot {
     pub id: HostCallbackId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<ObjectId>,
+    /// Callback is inactive at this exact time and becomes active immediately after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_after: Option<f64>,
+    /// Callback remains active through this exact time, then becomes inactive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_through: Option<f64>,
+}
+
+impl HostCallbackSlot {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        time.is_finite()
+            && self.active_after.is_none_or(|start| time > start)
+            && self.active_through.is_none_or(|end| time <= end)
+    }
+
+    fn validate_schedule(&self) -> Result<(), HostCallbackRegistryError> {
+        if self
+            .active_after
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+            || self
+                .active_through
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+            || matches!((self.active_after, self.active_through), (Some(start), Some(end)) if end < start)
+        {
+            return Err(HostCallbackRegistryError::InvalidActivationWindow(self.id));
+        }
+        Ok(())
+    }
 }
 
 /// Declarative host-dynamic participation for a semantic scene.
@@ -33,7 +61,7 @@ pub struct HostCallbackSlot {
 /// Slots contain no executable code. A Python/JS/native host owns the callable
 /// keyed by `HostCallbackId`; the runtime owns when the callback phase is required
 /// and which object state is captured for that phase.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HostCallbackRegistry {
     slots: Vec<HostCallbackSlot>,
     next_callback_id: u64,
@@ -51,6 +79,7 @@ impl HostCallbackRegistry {
         let mut ids = BTreeSet::new();
         let mut next_callback_id = 0;
         for slot in &slots {
+            slot.validate_schedule()?;
             if !ids.insert(slot.id) {
                 return Err(HostCallbackRegistryError::DuplicateCallback(slot.id));
             }
@@ -82,6 +111,8 @@ impl HostCallbackRegistry {
         self.slots.push(HostCallbackSlot {
             id,
             objects: unique,
+            active_after: None,
+            active_through: None,
         });
         id
     }
@@ -98,6 +129,7 @@ impl HostCallbackRegistry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostCallbackRegistryError {
     DuplicateCallback(HostCallbackId),
+    InvalidActivationWindow(HostCallbackId),
     CallbackIdExhausted,
 }
 
@@ -107,6 +139,11 @@ impl std::fmt::Display for HostCallbackRegistryError {
             Self::DuplicateCallback(id) => {
                 write!(formatter, "duplicate host callback id {}", id.get())
             }
+            Self::InvalidActivationWindow(id) => write!(
+                formatter,
+                "host callback {} has an invalid activation window",
+                id.get()
+            ),
             Self::CallbackIdExhausted => {
                 formatter.write_str("Noon host callback ID space exhausted")
             }
@@ -134,10 +171,43 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_slot_uses_exclusive_start_and_inclusive_end() {
+        let slot = HostCallbackSlot {
+            id: HostCallbackId::new(2),
+            objects: vec![],
+            active_after: Some(1.0),
+            active_through: Some(2.0),
+        };
+        HostCallbackRegistry::from_slots(vec![slot.clone()]).unwrap();
+        assert!(!slot.is_active_at(1.0));
+        assert!(slot.is_active_at(1.0 + f64::EPSILON));
+        assert!(slot.is_active_at(2.0));
+        assert!(!slot.is_active_at(2.0 + 1.0e-12));
+    }
+
+    #[test]
+    fn transported_slots_reject_invalid_activation_windows() {
+        let slot = HostCallbackSlot {
+            id: HostCallbackId::new(5),
+            objects: vec![],
+            active_after: Some(3.0),
+            active_through: Some(2.0),
+        };
+        assert_eq!(
+            HostCallbackRegistry::from_slots(vec![slot]),
+            Err(HostCallbackRegistryError::InvalidActivationWindow(
+                HostCallbackId::new(5)
+            ))
+        );
+    }
+
+    #[test]
     fn transported_slots_reject_duplicate_callback_ids() {
         let slot = HostCallbackSlot {
             id: HostCallbackId::new(3),
             objects: vec![ObjectId::new(1)],
+            active_after: None,
+            active_through: None,
         };
         assert_eq!(
             HostCallbackRegistry::from_slots(vec![slot.clone(), slot]),

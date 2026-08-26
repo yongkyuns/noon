@@ -229,12 +229,31 @@ fn decode_callback_registry(json_text: &str) -> Result<HostCallbackRegistry, Hos
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let active_after = optional_callback_time(record, "active_after")?;
+        let active_through = optional_callback_time(record, "active_through")?;
         decoded.push(HostCallbackSlot {
             id: HostCallbackId::new(id),
             objects,
+            active_after,
+            active_through,
         });
     }
     Ok(HostCallbackRegistry::from_slots(decoded)?)
+}
+
+fn optional_callback_time(
+    record: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<f64>, HostPlayerError> {
+    let Some(value) = record.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value.as_f64().map(Some).ok_or_else(|| {
+        HostPlayerError::CallbackJson(format!("callback slot {field} must be a number or null"))
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -327,6 +346,25 @@ mod tests {
         let frame: Value = serde_json::from_str(&player.callback_frame_json().unwrap()).unwrap();
         assert_eq!(frame["objects"][1]["transform"]["translation"]["x"], 2.0);
         assert_eq!(frame["objects"][1]["transform"]["translation"]["y"], -1.0);
+    }
+
+    #[test]
+    fn callback_frame_filters_scheduled_slots() {
+        let mut definition = SceneDefinition::new();
+        let object = definition.add(GeometryRef::circle(1.0));
+        let scene_json = encode_scene(&definition).unwrap();
+        let slots = format!(
+            r#"[{{"id":0,"objects":[{}],"active_after":0.0,"active_through":1.0}},{{"id":1,"objects":[{}],"active_after":1.0,"active_through":2.0}}]"#,
+            object.get(),
+            object.get()
+        );
+        let mut player = HostScenePlayer::from_json(&scene_json, &slots).unwrap();
+        player.advance_to(0.5).unwrap();
+        let frame: Value = serde_json::from_str(&player.callback_frame_json().unwrap()).unwrap();
+        assert_eq!(frame["invocations"][0]["callback"], 0);
+        player.advance_to(1.5).unwrap();
+        let frame: Value = serde_json::from_str(&player.callback_frame_json().unwrap()).unwrap();
+        assert_eq!(frame["invocations"][0]["callback"], 1);
     }
 
     #[test]

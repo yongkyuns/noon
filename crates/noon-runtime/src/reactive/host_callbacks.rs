@@ -108,7 +108,7 @@ impl From<CompilePatchError> for HostCommitError {
 pub struct HostDrivenScene {
     scene: TimedSceneInstance,
     watched_dense_indices: Vec<usize>,
-    invocations: Vec<HostCallbackInvocation>,
+    scheduled_invocations: Vec<(HostCallbackInvocation, Option<f64>, Option<f64>)>,
     last_callback_time: f64,
     last_commit_stats: HostCommitStats,
 }
@@ -134,7 +134,7 @@ impl HostDrivenScene {
             .collect::<BTreeMap<_, _>>();
         let mut watched_dense_indices = Vec::<usize>::new();
         let mut snapshot_index_by_object = BTreeMap::<ObjectId, u32>::new();
-        let mut invocations = Vec::with_capacity(registry.slots().len());
+        let mut scheduled_invocations = Vec::with_capacity(registry.slots().len());
 
         for slot in registry.slots() {
             let mut object_indices = Vec::with_capacity(slot.objects.len());
@@ -157,17 +157,21 @@ impl HostDrivenScene {
                 };
                 object_indices.push(snapshot_index);
             }
-            invocations.push(HostCallbackInvocation {
-                callback: slot.id,
-                object_indices,
-            });
+            scheduled_invocations.push((
+                HostCallbackInvocation {
+                    callback: slot.id,
+                    object_indices,
+                },
+                slot.active_after,
+                slot.active_through,
+            ));
         }
 
         let last_callback_time = scene.frame().time;
         Ok(Self {
             scene,
             watched_dense_indices,
-            invocations,
+            scheduled_invocations,
             last_callback_time,
             last_commit_stats: HostCommitStats::default(),
         })
@@ -226,11 +230,20 @@ impl HostDrivenScene {
                 }
             })
             .collect();
+        let invocations = self
+            .scheduled_invocations
+            .iter()
+            .filter(|(_, active_after, active_through)| {
+                active_after.is_none_or(|start| frame.time > start)
+                    && active_through.is_none_or(|end| frame.time <= end)
+            })
+            .map(|(invocation, _, _)| invocation.clone())
+            .collect();
         HostCallbackFrame {
             time: frame.time,
             delta_time,
             objects,
-            invocations: self.invocations.clone(),
+            invocations,
         }
     }
 
@@ -332,6 +345,51 @@ mod tests {
         assert_eq!(frame.invocations[0].object_indices, vec![0, 1]);
         assert_eq!(frame.invocations[1].callback, second);
         assert_eq!(frame.invocations[1].object_indices, vec![1, 2]);
+    }
+
+    #[test]
+    fn callback_invocations_follow_activation_windows() {
+        let (scene, objects) = plain_scene(1);
+        let registry = HostCallbackRegistry::from_slots(vec![
+            noon_core::HostCallbackSlot {
+                id: HostCallbackId::new(0),
+                objects: vec![objects[0]],
+                active_after: Some(0.0),
+                active_through: Some(1.0),
+            },
+            noon_core::HostCallbackSlot {
+                id: HostCallbackId::new(1),
+                objects: vec![objects[0]],
+                active_after: Some(1.0),
+                active_through: Some(2.0),
+            },
+        ])
+        .unwrap();
+        let mut driven = HostDrivenScene::new(scene, &registry).unwrap();
+
+        assert!(driven.callback_frame().invocations.is_empty());
+        driven.advance_to(0.5).unwrap();
+        assert_eq!(
+            driven.callback_frame().invocations[0].callback,
+            HostCallbackId::new(0)
+        );
+        driven.advance_to(1.0).unwrap();
+        assert_eq!(
+            driven.callback_frame().invocations[0].callback,
+            HostCallbackId::new(0)
+        );
+        driven.advance_to(1.5).unwrap();
+        assert_eq!(
+            driven.callback_frame().invocations[0].callback,
+            HostCallbackId::new(1)
+        );
+        driven.advance_to(2.0).unwrap();
+        assert_eq!(
+            driven.callback_frame().invocations[0].callback,
+            HostCallbackId::new(1)
+        );
+        driven.advance_to(2.1).unwrap();
+        assert!(driven.callback_frame().invocations.is_empty());
     }
 
     #[test]

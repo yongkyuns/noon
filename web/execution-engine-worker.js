@@ -460,6 +460,9 @@ function buildHostFrame(time) {
   const objectIndices = new Map();
   const invocations = [];
   for (const slot of hostCallbacks.slots) {
+    if (!callbackSlotActiveAt(slot, time)) {
+      continue;
+    }
     const indices = [];
     for (const objectId of slot.objects) {
       let index = objectIndices.get(objectId);
@@ -594,6 +597,16 @@ function freshHostMetrics() {
   };
 }
 
+function callbackSlotActiveAt(slot, time) {
+  if (slot.active_after !== undefined && slot.active_after !== null && !(time > slot.active_after)) {
+    return false;
+  }
+  if (slot.active_through !== undefined && slot.active_through !== null && time > slot.active_through) {
+    return false;
+  }
+  return true;
+}
+
 function validateCallbackConfig(callbacks) {
   if (!callbacks || typeof callbacks !== "object") {
     throw new Error("host callback configuration must be an object");
@@ -612,6 +625,19 @@ function validateCallbackConfig(callbacks) {
       if (!Number.isSafeInteger(object) || object < 0) {
         throw new Error("host callback slot contains an invalid object ID");
       }
+    }
+    for (const field of ["active_after", "active_through"]) {
+      const value = slot[field];
+      if (value !== undefined && value !== null && (!Number.isFinite(value) || value < 0)) {
+        throw new Error(`host callback slot contains invalid ${field}`);
+      }
+    }
+    if (
+      slot.active_after !== undefined && slot.active_after !== null &&
+      slot.active_through !== undefined && slot.active_through !== null &&
+      slot.active_through < slot.active_after
+    ) {
+      throw new Error("host callback slot has an invalid activation window");
     }
   }
 }
