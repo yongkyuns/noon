@@ -66,13 +66,17 @@ try {
   assert.equal(errors.length, 0, errors.join("\n"));
   assert.equal(output.result.kind, "scene_document");
   assert.ok(output.result.callbacks);
-  assert.deepEqual(output.result.callbacks.slots, [{ id: 0, objects: [0, 1] }]);
+  assert.deepEqual(output.result.callbacks.slots, [
+    { id: 0, objects: [0, 1], active_after: 0, active_through: 0 },
+    { id: 1, objects: [0, 1], active_after: 0 },
+  ]);
   assert.equal(output.phases.length, 2);
   assert.equal(output.nextSequence, 2);
 
   assert.equal(output.phases[0].frame.time, 0.25);
   assert.equal(output.phases[0].frame.delta_time, 0.25);
   assert.equal(output.phases[0].frame.objects.length, 2);
+  assert.deepEqual(output.phases[0].frame.invocations.map(({ callback }) => callback), [1]);
   assert.equal(output.phases[0].batch.sequence, 0);
   assert.equal(output.phases[0].batch.patches.length, 2);
   const firstTransform = output.phases[0].batch.patches[0].set_transform;
@@ -87,6 +91,7 @@ try {
   assert.equal(output.phases[1].frame.delta_time, 0.5);
   assert.equal(output.phases[1].frame.objects[1].transform.translation.x, 2);
   assert.equal(output.phases[1].frame.objects[1].transform.translation.y, 0.25);
+  assert.deepEqual(output.phases[1].frame.invocations.map(({ callback }) => callback), [1]);
   assert.equal(output.phases[1].batch.sequence, 1);
   const secondTransform = output.phases[1].batch.patches[0].set_transform;
   assert.equal(secondTransform.transform.translation.x, 2);
