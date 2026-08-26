@@ -22,6 +22,7 @@
     "Square": {"status": "supported", "category": "geometry", "evidence": "#57"},
     "Line": {"status": "supported", "category": "geometry", "evidence": "#57"},
     "Create": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
+    "Uncreate": {"status": "supported", "category": "animation", "evidence": "canonical Uncreate raster fixtures plus compatibility lifecycle/reverse/remover tests"},
     "FadeIn": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
     "FadeOut": {"status": "supported", "category": "animation", "evidence": "browser compatibility tests"},
     "Add": {"status": "supported", "category": "animation", "evidence": "composition authoring smoke tests"},
