@@ -130,9 +130,6 @@ async function renderManimReferences() {
     const frames = {
       frameCount: frameFiles.length,
       frameRate: reference.frame_rate,
-      // Cairo PNG output can materialize a static wait as one image with a repeat
-      // count. Logical duration is ratcheted separately by the semantic oracle, so
-      // never infer scene duration from the number of PNG files.
       duration: logicalDuration,
       materializedFrameSpan: frameFiles.length / reference.frame_rate,
       width: firstFrame.width,
@@ -148,7 +145,6 @@ async function renderManimReferences() {
       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
       sample.referencePath = outputPath;
     }
-
     results.set(fixture.id, { fixture, frames, samples });
   }
   return results;
@@ -159,7 +155,7 @@ function noonSourceFor(scene) {
   return `${adapted}\n\nresult = ${scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
 }
 
-async function authorNoonDocuments() {
+async function authorNoonScenes() {
   const browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -170,7 +166,7 @@ async function authorNoonDocuments() {
     await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
     await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
     await page.evaluate(() => window.noonManimCompat.ready());
-    const documents = new Map();
+    const scenes = new Map();
     for (const fixture of manifest.fixtures) {
       const result = await page.evaluate(
         (source) => window.noonManimCompat.run(source),
@@ -179,10 +175,13 @@ async function authorNoonDocuments() {
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
       assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
       assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
-      Object.defineProperty(result.document, "__noonAuthoredDuration", { value: result.duration });
-      documents.set(fixture.id, result.document);
+      scenes.set(fixture.id, {
+        document: result.document,
+        duration: Number(result.duration),
+        hasCallbacks: result.callbacks !== null,
+      });
     }
-    return documents;
+    return scenes;
   } finally {
     await browser.close();
   }
@@ -215,7 +214,7 @@ function browserArgs(backend) {
   ];
 }
 
-async function createCapturePage(browser, expectedBackend, backend) {
+async function createDeterministicCapturePage(browser, expectedBackend, backend) {
   const page = await browser.newPage({
     viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
   });
@@ -228,7 +227,90 @@ async function createCapturePage(browser, expectedBackend, backend) {
   return page;
 }
 
-async function captureNoonBackend(backend, documents, references) {
+async function createHostCapturePage(browser) {
+  const page = await browser.newPage({
+    viewport: { width: reference.pixel_width + 40, height: reference.pixel_height + 40 },
+  });
+  await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+  await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+  await page.evaluate(() => window.noonHostRaster.ready());
+  return page;
+}
+
+async function captureDeterministicFixture(
+  page,
+  fixture,
+  authored,
+  referenceResult,
+  fixtureDir,
+) {
+  const loaded = await page.evaluate(
+    (json) => window.noonSmoke.loadScene(json),
+    JSON.stringify(authored.document),
+  );
+  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: loaded object count`);
+  const captures = [];
+  for (const sample of referenceResult.samples) {
+    const metrics = await page.evaluate(
+      (time) => window.noonSmoke.renderAt(time),
+      sample.time,
+    );
+    assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
+    assert.equal(metrics.presented, true, `${fixture.id}: frame was not presented at ${sample.time}`);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const outputPath = path.join(fixtureDir, `${sample.label}.png`);
+    await page.locator("#scene").screenshot({ path: outputPath });
+    captures.push({ ...sample, noonPath: outputPath, metrics });
+  }
+  return {
+    duration: authored.duration,
+    objectCount: authored.document.objects.length,
+    captures,
+  };
+}
+
+async function captureHostFixture(
+  page,
+  fixture,
+  authored,
+  referenceResult,
+  fixtureDir,
+  expectedBackend,
+  backend,
+) {
+  const loaded = await page.evaluate(
+    ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
+    {
+      source: noonSourceFor(fixture.scene),
+      loopDuration: Math.max(1, fixture.expected_duration + 1),
+    },
+  );
+  assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
+  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
+  assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
+  assert.equal(loaded.rendererBackend, expectedBackend, `${backend}: host renderer backend`);
+
+  const captures = [];
+  for (const sample of referenceResult.samples) {
+    const metrics = await page.evaluate(
+      ({ frameIndex, frameRate }) => window.noonHostRaster.renderThrough(frameIndex, frameRate),
+      { frameIndex: sample.frameIndex, frameRate: reference.frame_rate },
+    );
+    assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
+    assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
+    assert.equal(metrics.frameIndex, sample.frameIndex, `${fixture.id}: host frame index`);
+    const outputPath = path.join(fixtureDir, `${sample.label}.png`);
+    await page.locator("#scene").screenshot({ path: outputPath });
+    captures.push({ ...sample, noonPath: outputPath, metrics });
+  }
+  return {
+    duration: authored.duration,
+    objectCount: authored.document.objects.length,
+    captures,
+  };
+}
+
+async function captureNoonBackend(backend, authoredScenes, references) {
   const browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -240,33 +322,32 @@ async function captureNoonBackend(backend, documents, references) {
     for (const fixture of manifest.fixtures) {
       let page = null;
       try {
-        page = await createCapturePage(browser, expectedBackend, backend);
-        const document = documents.get(fixture.id);
-        const loaded = await page.evaluate(
-          (json) => window.noonSmoke.loadScene(json),
-          JSON.stringify(document),
-        );
-        assert.equal(loaded.objectCount, document.objects.length, `${fixture.id}: loaded object count`);
+        const authored = authoredScenes.get(fixture.id);
+        const referenceResult = references.get(fixture.id);
         const fixtureDir = path.join(artifactRoot, backend, fixture.id);
         await mkdir(fixtureDir, { recursive: true });
-        const captures = [];
-        for (const sample of references.get(fixture.id).samples) {
-          const metrics = await page.evaluate(
-            (time) => window.noonSmoke.renderAt(time),
-            sample.time,
+
+        if (authored.hasCallbacks) {
+          page = await createHostCapturePage(browser);
+          output.set(
+            fixture.id,
+            await captureHostFixture(
+              page,
+              fixture,
+              authored,
+              referenceResult,
+              fixtureDir,
+              expectedBackend,
+              backend,
+            ),
           );
-          assert.equal(metrics.error, null, `${fixture.id}: Noon render error at ${sample.time}`);
-          assert.equal(metrics.presented, true, `${fixture.id}: frame was not presented at ${sample.time}`);
-          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-          const outputPath = path.join(fixtureDir, `${sample.label}.png`);
-          await page.locator("#scene").screenshot({ path: outputPath });
-          captures.push({ ...sample, noonPath: outputPath, metrics });
+        } else {
+          page = await createDeterministicCapturePage(browser, expectedBackend, backend);
+          output.set(
+            fixture.id,
+            await captureDeterministicFixture(page, fixture, authored, referenceResult, fixtureDir),
+          );
         }
-        output.set(fixture.id, {
-          duration: document.__noonAuthoredDuration,
-          objectCount: document.objects.length,
-          captures,
-        });
       } finally {
         await page?.close();
       }
@@ -505,10 +586,10 @@ async function waitForServer() {
 try {
   const references = await renderManimReferences();
   await waitForServer();
-  const documents = await authorNoonDocuments();
+  const authoredScenes = await authorNoonScenes();
   const backendResults = new Map();
   for (const backend of backends) {
-    backendResults.set(backend, await captureNoonBackend(backend, documents, references));
+    backendResults.set(backend, await captureNoonBackend(backend, authoredScenes, references));
   }
   const reportPath = await compareAll(references, backendResults);
   console.log(`ManimCE raster differential report: ${reportPath}`);
