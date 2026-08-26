@@ -11,4 +11,5 @@ observable behavior when callers continue mutating `mobject.target` after constr
 
 The first exact-output slice covers leaf 2D mobjects and the standard generated-target
 workflow. Retained groups/families remain partial until family alignment semantics are
-represented exactly.
+represented exactly. Qualification uses the unchanged canonical duration, semantic-state,
+Cairo raster, direct-seek/incremental-playback, WebGPU, and WebGL gates.
