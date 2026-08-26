@@ -314,3 +314,47 @@ class FadeOutShiftScaleStyledSquare(Scene):
         )
         self.add(square)
         self.play(FadeOut(square, shift=RIGHT, scale=0.5, rate_func=linear))
+
+
+class CameraUnitOffsets(Scene):
+    def construct(self):
+        def marker(position):
+            return Square(
+                side_length=0.4,
+                fill_color=WHITE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).move_to(position)
+
+        origin = marker(ORIGIN)
+        x_unit = marker(RIGHT)
+        y_unit = marker(UP)
+        self.add(origin, x_unit, y_unit)
+        # Keep a real one-second frame interval while leaving the camera/markers
+        # static so bounds and centroids isolate world-to-pixel mapping.
+        self.play(y_unit.animate.shift(ORIGIN))
+
+
+class CameraFrameEdges(Scene):
+    def construct(self):
+        # ManimCE v0.21's canonical 16:9 frame is 14.222... x 8 world units.
+        # Centering identical fill-only markers exactly on each frame boundary
+        # makes half of each marker visible and directly exercises clipping.
+        half_width = 64.0 / 9.0
+        half_height = 4.0
+
+        def marker(color, position):
+            return Square(
+                side_length=0.4,
+                fill_color=color,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).move_to(position)
+
+        center = marker(WHITE, ORIGIN)
+        left = marker(RED, half_width * LEFT)
+        right = marker(GREEN, half_width * RIGHT)
+        top = marker(BLUE, half_height * UP)
+        bottom = marker(YELLOW, half_height * DOWN)
+        self.add(center, left, right, top, bottom)
+        self.play(center.animate.shift(ORIGIN))
