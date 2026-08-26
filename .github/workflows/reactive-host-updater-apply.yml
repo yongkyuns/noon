@@ -26,6 +26,7 @@ jobs:
           python3 scripts/fix2-reactive-host-updater-slice.py
           python3 scripts/fix3-reactive-host-updater-slice.py
           python3 scripts/fix4-reactive-host-updater-slice.py
+          python3 scripts/fix5-reactive-host-updater-slice.py
       - name: Format
         run: |
           rustup default stable
@@ -47,6 +48,7 @@ jobs:
           rm scripts/fix2-reactive-host-updater-slice.py
           rm scripts/fix3-reactive-host-updater-slice.py
           rm scripts/fix4-reactive-host-updater-slice.py
+          rm scripts/fix5-reactive-host-updater-slice.py
           rm .github/workflows/reactive-host-updater-apply.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
