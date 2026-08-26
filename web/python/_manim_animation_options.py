@@ -104,6 +104,31 @@ def resolve(
     )
 
 
+def MoveToTarget(mobject: object, **kwargs: Any) -> object:
+    """Forward Manim ``MoveToTarget`` options through the shared Transform adapter."""
+
+    if isinstance(mobject, _compat.Group):
+        raise NotImplementedError(
+            "MoveToTarget(Group/VGroup) requires retained family Transform semantics"
+        )
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("MoveToTarget target must be a Mobject")
+    if not hasattr(mobject, "target"):
+        raise ValueError("MoveToTarget called on mobject without attribute 'target'")
+    target = mobject.target
+    if not isinstance(target, _base.Mobject) or isinstance(target, _compat.Group):
+        raise NotImplementedError(
+            "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
+        )
+
+    # _manim_animate imports this module, so resolve the compatibility Transform lazily.
+    # This mirrors ManimCE's MoveToTarget(mobject, **kwargs) ->
+    # Transform(mobject, mobject.target, **kwargs) without adding another scheduler path.
+    import _manim_animate as _animate
+
+    return _animate.Transform(mobject, target, **kwargs)
+
+
 def _scale_in_place_builder(
     mobject: object,
     scale_factor: float,
@@ -183,6 +208,7 @@ def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
 
 
 public = {
+    "MoveToTarget": MoveToTarget,
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
 }
