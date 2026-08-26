@@ -147,31 +147,37 @@ class ManimSubsetDisplayTests(unittest.TestCase):
                 there_and_back,
             )
 
-            def square(color):
+            def square(color, fill_opacity=1.0, stroke_opacity=1.0):
                 return Square(
                     side_length=0.8,
                     fill_color=color,
-                    fill_opacity=1.0,
+                    fill_opacity=fill_opacity,
                     stroke_color=WHITE,
-                    stroke_opacity=1.0,
+                    stroke_opacity=stroke_opacity,
                     stroke_width=2.0,
                 )
 
+            def alpha(snapshot, channel):
+                paint = snapshot["style"][channel]
+                return None if paint is None else paint["alpha"]
+
             # floor(smooth(alpha) * 2): first member switches exactly at alpha=0.5,
-            # second member switches exactly at alpha=1.0. Both discontinuities are
-            # ordinary retained opacity tracks, not Python callbacks or presence hacks.
+            # second at alpha=1.0. Constructor and retained tracks both use Manim's
+            # destructive VMobject.set_opacity paint semantics.
             increasing_scene = Scene()
             left = square(RED)
             right = square(BLUE)
             increasing = ShowIncreasingSubsets(VGroup(left, right))
-            assert left.style["opacity"] == 0.0
-            assert right.style["opacity"] == 0.0
+            assert left.get_fill_opacity() == 0.0
+            assert left.get_stroke_opacity() == 0.0
+            assert right.get_fill_opacity() == 0.0
+            assert right.get_stroke_opacity() == 0.0
             increasing_scene.play(increasing)
             assert abs(increasing_scene.time - 1.0) < 1e-12
             tracks = [
                 track
                 for track in increasing_scene.to_document()["tracks"]
-                if track["property"] == "opacity"
+                if track["property"] == "transform"
             ]
             assert len(tracks) == 2
             by_object = {track["object"]: track for track in tracks}
@@ -185,14 +191,18 @@ class ManimSubsetDisplayTests(unittest.TestCase):
                 "duration": 1.0,
                 "easing": "step_end",
             }
-            assert increasing_scene._snapshot_for_object_at(left._object, 0.499)["style"]["opacity"] == 0.0
-            assert increasing_scene._snapshot_for_object_at(left._object, 0.5)["style"]["opacity"] == 1.0
-            assert increasing_scene._snapshot_for_object_at(right._object, 0.999)["style"]["opacity"] == 0.0
-            assert increasing_scene._snapshot_for_object_at(right._object, 1.0)["style"]["opacity"] == 1.0
+            for track in tracks:
+                source = track["values"]["object"]["from"]
+                target = track["values"]["object"]["to"]
+                assert alpha(source, "fill") == 0.0
+                assert alpha(source, "stroke") == 0.0
+                assert alpha(target, "fill") == 1.0
+                assert alpha(target, "stroke") == 1.0
+            assert alpha(increasing_scene._snapshot_for_object_at(left._object, 1.0), "fill") == 1.0
+            assert alpha(increasing_scene._snapshot_for_object_at(right._object, 1.0), "fill") == 1.0
 
-            # ceil(linear(alpha) * 2): at the exact half-way boundary the first
-            # member remains visible and the second remains hidden; only immediately
-            # after the boundary do they swap. step_start preserves that left-open edge.
+            # ceil(linear(alpha) * 2): the first child remains selected at the exact
+            # 0.5 threshold; step_start switches both paint snapshots only after it.
             one_scene = Scene()
             first = square(GREEN)
             second = square(BLUE)
@@ -202,27 +212,47 @@ class ManimSubsetDisplayTests(unittest.TestCase):
             one_tracks = [
                 track
                 for track in one_scene.to_document()["tracks"]
-                if track["property"] == "opacity"
+                if track["property"] == "transform"
             ]
             assert len(one_tracks) == 3
             first_tracks = [track for track in one_tracks if track["object"] == first.id]
             second_tracks = [track for track in one_tracks if track["object"] == second.id]
-            assert [track["timing"]["easing"] for track in first_tracks] == [
-                "step_start",
-                "step_start",
+            assert [track["timing"] for track in first_tracks] == [
+                {"start_time": 0.0, "duration": 0.5, "easing": "step_start"},
+                {"start_time": 0.5, "duration": 0.5, "easing": "step_start"},
             ]
-            assert len(second_tracks) == 1
-            assert second_tracks[0]["timing"]["easing"] == "step_start"
-            assert one_scene._snapshot_for_object_at(first._object, 0.0)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(second._object, 0.0)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(first._object, 0.25)["style"]["opacity"] == 1.0
-            assert one_scene._snapshot_for_object_at(second._object, 0.25)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(first._object, 0.5)["style"]["opacity"] == 1.0
-            assert one_scene._snapshot_for_object_at(second._object, 0.5)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(first._object, 0.500001)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(second._object, 0.500001)["style"]["opacity"] == 1.0
-            assert one_scene._snapshot_for_object_at(first._object, 1.0)["style"]["opacity"] == 0.0
-            assert one_scene._snapshot_for_object_at(second._object, 1.0)["style"]["opacity"] == 1.0
+            assert [track["timing"] for track in second_tracks] == [
+                {"start_time": 0.5, "duration": 0.5, "easing": "step_start"}
+            ]
+            assert alpha(first_tracks[0]["values"]["object"]["from"], "fill") == 0.0
+            assert alpha(first_tracks[0]["values"]["object"]["to"], "fill") == 1.0
+            assert alpha(first_tracks[1]["values"]["object"]["from"], "fill") == 1.0
+            assert alpha(first_tracks[1]["values"]["object"]["to"], "fill") == 0.0
+            assert alpha(second_tracks[0]["values"]["object"]["from"], "fill") == 0.0
+            assert alpha(second_tracks[0]["values"]["object"]["to"], "fill") == 1.0
+            assert alpha(one_scene._snapshot_for_object_at(first._object, 1.0), "fill") == 0.0
+            assert alpha(one_scene._snapshot_for_object_at(second._object, 1.0), "fill") == 1.0
+
+            # Existing paint opacity is intentionally overwritten by Manim's
+            # constructor/update semantics, rather than multiplied through Noon's
+            # separate global-opacity channel.
+            mixed_scene = Scene()
+            mixed_a = square(RED, fill_opacity=0.35, stroke_opacity=0.65)
+            mixed_b = square(BLUE, fill_opacity=0.2, stroke_opacity=0.4)
+            mixed_scene.play(
+                ShowIncreasingSubsets(VGroup(mixed_a, mixed_b), rate_func=linear)
+            )
+            mixed_tracks = [
+                track
+                for track in mixed_scene.to_document()["tracks"]
+                if track["property"] == "transform"
+            ]
+            assert len(mixed_tracks) == 2
+            for track in mixed_tracks:
+                assert alpha(track["values"]["object"]["from"], "fill") == 0.0
+                assert alpha(track["values"]["object"]["from"], "stroke") == 0.0
+                assert alpha(track["values"]["object"]["to"], "fill") == 1.0
+                assert alpha(track["values"]["object"]["to"], "stroke") == 1.0
 
             # Nested composition uses the same retained tracks and normal composition
             # time-map infrastructure rather than falling back to a frame callback.
@@ -242,7 +272,7 @@ class ManimSubsetDisplayTests(unittest.TestCase):
             nested_tracks = [
                 track
                 for track in nested_scene.to_document()["tracks"]
-                if track["property"] == "opacity"
+                if track["property"] == "transform"
             ]
             assert len(nested_tracks) == 2
             assert max(
@@ -269,19 +299,14 @@ class ManimSubsetDisplayTests(unittest.TestCase):
             assert rejected_a._scene is None and rejected_a._object is None
             assert rejected_b._scene is None and rejected_b._object is None
 
-            # Mixed-opacity members would make global opacity differ from Manim's
-            # destructive set_opacity(0/1), so reject that breadth explicitly.
+            # Nested direct families remain explicitly outside this first retained
+            # subset rather than being flattened into incorrect threshold semantics.
             try:
-                ShowIncreasingSubsets(
-                    VGroup(
-                        Square(fill_color=RED, fill_opacity=0.5),
-                        square(BLUE),
-                    )
-                )
+                ShowIncreasingSubsets(VGroup(VGroup(square(RED)), square(BLUE)))
             except NotImplementedError:
                 pass
             else:
-                raise AssertionError("mixed-opacity subset members should be rejected")
+                raise AssertionError("nested subset-display families should be rejected")
             """
         )
 
