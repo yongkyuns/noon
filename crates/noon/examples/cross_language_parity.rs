@@ -40,7 +40,7 @@ fn value_tracker() -> String {
     let mut scene = ReactiveTimelineScene::new();
     let circle = scene.add(Circle::new(0.3));
     let tracker = scene.value_tracker(0.0);
-    let position = scene.position_from_tracker(tracker, RIGHT, ORIGIN);
+    let position = scene.position_from_tracker(tracker, RIGHT, UP);
     scene.bind_position(circle, position);
     scene
         .play_value(tracker, 2.0)

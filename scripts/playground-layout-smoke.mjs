@@ -105,6 +105,16 @@ try {
       browserErrors.push(`console: ${message.text()}`);
     }
   });
+  await page.addInitScript(() => {
+    window.__noonReconciledScenes = [];
+    const originalPostMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function postMessage(message, ...rest) {
+      if (message?.channel === "noon.engine" && message?.type === "reconcile_scene") {
+        window.__noonReconciledScenes.push(message.sceneJson);
+      }
+      return originalPostMessage.call(this, message, ...rest);
+    };
+  });
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
   await page.waitForFunction(
     () => document.querySelector("#status")?.dataset.rendererBackend === "WebGL2",
@@ -145,6 +155,44 @@ try {
   assertCentered(desktop.canvas, desktop.wrap, "desktop");
   assertNoOverflow(desktop, "desktop");
 
+  // Exercise the actual picker path that was reported as inert. The Python scene
+  // remains purely reactive; ExecutionWorkerClient must add a temporary legacy
+  // position track only in the JSON sent to EngineScenePlayer. Because the first
+  // gallery scene already claimed local object IDs, this also verifies that stable
+  // identity remapping reaches reactive bindings before projection.
+  const picker = page.locator(".example-picker select");
+  await picker.selectOption({ label: "Manim CE · ValueTracker" });
+  await page.waitForFunction(
+    () => document.querySelector("#patch-status")?.dataset.state === "applied",
+    null,
+    { timeout: 30_000 },
+  );
+  const valueTrackerRuntime = await page.evaluate(() => {
+    const encoded = window.__noonReconciledScenes.at(-1);
+    return encoded ? JSON.parse(encoded) : null;
+  });
+  assert.ok(valueTrackerRuntime, "ValueTracker picker must reconcile a runtime scene");
+  assert.equal(valueTrackerRuntime.objects.length, 1);
+  const valueTrackerObject = valueTrackerRuntime.objects[0];
+  const valueTrackerPosition = valueTrackerRuntime.tracks.find(
+    (track) => track.object === valueTrackerObject.id && track.property === "position",
+  );
+  assert.ok(
+    valueTrackerPosition,
+    "ValueTracker picker must send visible position motion to the legacy engine",
+  );
+  assert.deepEqual(valueTrackerPosition.values, {
+    vec2: {
+      from: { x: 0, y: 0 },
+      to: { x: 2.5, y: 0 },
+    },
+  });
+  assert.deepEqual(valueTrackerPosition.timing, {
+    start_time: 0,
+    duration: 1.5,
+    easing: "linear",
+  });
+
   await page.setViewportSize({ width: 900, height: 800 });
   const stacked = await layout(page);
   assert.ok(
@@ -163,7 +211,7 @@ try {
 
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ playground WebGL2 viewport @ DPR ${deviceScaleFactor}: initial backing ` +
+    `✓ playground WebGL2 viewport + ValueTracker @ DPR ${deviceScaleFactor}: initial backing ` +
       `${initialBacking.backingWidth}×${initialBacking.backingHeight}, ` +
       `desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `stacked ${stacked.canvas.width.toFixed(0)}×${stacked.canvas.height.toFixed(0)}, ` +

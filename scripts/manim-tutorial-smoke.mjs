@@ -100,30 +100,6 @@ try {
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
     assert.ok(result.document.objects.length > 0, `${entry.id}: expected scene objects`);
     assert.ok(latestEnd(result.document) < 4.0, `${entry.id}: exceeds interactive loop`);
-
-    if (entry.id === "value-tracker") {
-      assert.ok(result.document.reactive, "ValueTracker tutorial must retain its reactive graph");
-      assert.equal(result.document.signal_tracks?.length, 1);
-      const positionTrack = result.document.tracks.find(
-        (track) => track.object === 0 && track.property === "position",
-      );
-      assert.ok(
-        positionTrack,
-        "ValueTracker tutorial must include the position track consumed by EngineScenePlayer",
-      );
-      assert.deepEqual(positionTrack.values, {
-        vec2: {
-          from: { x: 0, y: 0 },
-          to: { x: 2.5, y: 0 },
-        },
-      });
-      assert.deepEqual(positionTrack.timing, {
-        start_time: 0,
-        duration: 1.5,
-        easing: "linear",
-      });
-    }
-
     console.log(`[PASS] ${entry.id}`);
   }
 

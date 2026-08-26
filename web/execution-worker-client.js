@@ -3,6 +3,7 @@ import {
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
+import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
@@ -55,6 +56,7 @@ export class ExecutionWorkerClient {
       throw new Error("ExecutionWorkerClient is already started");
     }
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     validateLoopDurationSeconds(loopDurationSeconds);
     if (
       transportMode !== EXECUTION_TRANSPORT_SHARED &&
@@ -144,6 +146,7 @@ export class ExecutionWorkerClient {
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     const result = await this.#requestEngine("replace_scene", {
       sceneJson,
@@ -162,6 +165,7 @@ export class ExecutionWorkerClient {
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
     validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     const result = await this.#requestEngine("reconcile_scene", {
       sceneJson,
