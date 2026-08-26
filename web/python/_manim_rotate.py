@@ -1,11 +1,14 @@
-"""ManimCE-compatible procedural ``Rotate`` animation for the exact 2D subset.
+"""ManimCE-compatible deterministic procedural animations for the exact 2D subset.
 
 ``mobject.animate.rotate`` is target-state interpolation and intentionally remains a
-regular Transform.  Manim's explicit ``Rotate`` instead follows a rotational path.
+regular Transform. Manim's explicit ``Rotate`` instead follows a rotational path.
 For geometry centered on its authored transform origin, Noon can represent that path
 exactly with the existing scalar rotation track, without adding a new IR primitive.
-External pivots and non-z axes require curved translation/3D support and are rejected
-until the runtime can represent them exactly.
+
+``FocusOn`` is likewise deterministic: Manim transforms a transparent frame-sized Dot
+into a zero-radius grey spotlight at the requested point and removes it at completion.
+Noon lowers that temporary object to an ordinary retained Transform plus a presence
+lifecycle edge. Neither animation requires Python on the frame-critical path.
 """
 
 from __future__ import annotations
@@ -69,6 +72,64 @@ class Rotate:
         self.anim_args = dict(kwargs)
 
 
+class FocusOn:
+    """Shrink Manim's temporary frame-sized spotlight to one fixed 2D point.
+
+    The supported subset is exact for explicit fixed points and for leaf Mobjects whose
+    center stays fixed for the duration of the FocusOn play. Moving focus targets require
+    updater semantics and are deliberately rejected by the top-level mixed-animation gate.
+    """
+
+    def __init__(
+        self,
+        focus_point: object,
+        opacity: float = 0.2,
+        color: _base.Color = _base.GREY,
+        run_time: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(focus_point, _compat.Group):
+            raise NotImplementedError(
+                "FocusOn(Group/VGroup) requires retained family center semantics and is not yet supported"
+            )
+        if isinstance(focus_point, _base.Mobject):
+            point = focus_point.get_center()
+            self.focus_mobject: _base.Mobject | None = focus_point
+        else:
+            point = _compat._as_vec2(focus_point)
+            self.focus_mobject = None
+
+        opacity_value = float(opacity)
+        if not math.isfinite(opacity_value) or not 0.0 <= opacity_value <= 1.0:
+            raise ValueError("FocusOn opacity must be finite and in [0, 1]")
+        run_time_value = float(run_time)
+        if not math.isfinite(run_time_value) or run_time_value <= 0.0:
+            raise ValueError("FocusOn run_time must be finite and positive")
+
+        # ManimCE v0.21 creates Dot(radius=frame_x_radius + frame_y_radius,
+        # stroke_width=0, fill_color=color, fill_opacity=0) at the origin.
+        radius = _base.DEFAULT_FRAME_WIDTH / 2.0 + _base.DEFAULT_FRAME_HEIGHT / 2.0
+        transparent = _base.Color(color.red, color.green, color.blue, 0.0)
+        source = _base.Circle(
+            radius=radius,
+            fill=transparent,
+            stroke=transparent,
+            stroke_width=0.0,
+        )
+        target = source.copy()
+        target.scale(0.0)
+        target.move_to(point)
+        target.set_fill(color, opacity=opacity_value)
+
+        self.focus_point = point
+        self.opacity = opacity_value
+        self.color = color
+        self.mobject = source
+        self.target = target
+        self.anim_args = dict(kwargs)
+        self.anim_args["run_time"] = run_time_value
+
+
 def _axis_sign(axis: object) -> float:
     try:
         if len(axis) != 3:  # type: ignore[arg-type]
@@ -115,9 +176,9 @@ def _validate_exact_pivot(
         float(translation["y"]),
     )
 
-    # A scalar Noon rotation is around the object's transform origin.  For centered
+    # A scalar Noon rotation is around the object's transform origin. For centered
     # analytic geometry (including the quickstart Square), that is exactly Manim's
-    # default Rotate pivot.  Offset local geometry would need a circular translation
+    # default Rotate pivot. Offset local geometry would need a circular translation
     # path to keep its center fixed, so do not approximate it with linear motion.
     if not _points_close(center, transform_origin):
         raise NotImplementedError(
@@ -131,7 +192,7 @@ def _validate_exact_pivot(
         )
 
     # Manim Rotate eagerly defaults about_point to mobject.get_center(); Mobject.rotate
-    # gives about_point precedence over about_edge.  Therefore about_edge does not
+    # gives about_point precedence over about_edge. Therefore about_edge does not
     # alter the supported default/centered Rotate path and can be accepted unchanged.
     return obj, snapshot
 
@@ -190,13 +251,53 @@ def _schedule_rotate(
     )
 
 
+def _schedule_focus_on(
+    scene: _compat.Scene,
+    animation: FocusOn,
+    *,
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    source = animation.mobject
+    if source._scene is not scene or source._object is None:
+        raise ValueError("FocusOn temporary object must be bound before scheduling")
+
+    if animation.focus_mobject is not None:
+        current = animation.focus_mobject.get_center()
+        if not _points_close(current, animation.focus_point):
+            raise NotImplementedError(
+                "FocusOn currently requires a fixed focus Mobject center during the animation"
+            )
+
+    _compat._BaseScene.play(
+        scene,
+        _base.Transform(source, animation.target),
+        run_time=duration,
+        start_time=start_time,
+        easing=easing,
+    )
+    obj = source._object
+    end_time = start_time + duration
+    scene._add_presence_track(
+        obj,
+        True,
+        False,
+        end_time,
+        key=f"@focus-on:{scene._object_keys[obj.id]}:{start_time:g}.hide",
+    )
+    scene._compat_top_level = [
+        value for value in scene._compat_top_level if id(value) != id(source)
+    ]
+
+
 def _builder_source(animation: object) -> object | None:
-    if isinstance(animation, Rotate):
+    if isinstance(animation, (Rotate, FocusOn)):
         return animation.mobject
     return _ORIGINAL_BUILDER_SOURCE(animation)
 
 
-def _rotate_scene_play(
+def _procedural_scene_play(
     self: _compat.Scene,
     *animations: Any,
     duration: float | None = None,
@@ -207,7 +308,7 @@ def _rotate_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
-    if not any(isinstance(animation, Rotate) for animation in animations):
+    if not any(isinstance(animation, (Rotate, FocusOn)) for animation in animations):
         return _ORIGINAL_SCENE_PLAY(
             self,
             *animations,
@@ -228,6 +329,10 @@ def _rotate_scene_play(
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if any(isinstance(animation, FocusOn) for animation in animations) and len(animations) != 1:
+        raise NotImplementedError(
+            "FocusOn mixed with another top-level animation requires dynamic focus-target composition semantics"
+        )
 
     play_run_time = run_time if run_time is not None else duration
     if play_run_time is not None:
@@ -252,7 +357,7 @@ def _rotate_scene_play(
     max_end = base_start
     try:
         for animation in animations:
-            if isinstance(animation, Rotate):
+            if isinstance(animation, (Rotate, FocusOn)):
                 _animate._bind_for_animation(
                     self,
                     animation.mobject,
@@ -266,13 +371,22 @@ def _rotate_scene_play(
                     play_rate_func=rate_func,
                     play_lag_ratio=lag_ratio,
                 )
-                _schedule_rotate(
-                    self,
-                    animation,
-                    start_time=base_start,
-                    duration=resolved.run_time,
-                    easing=resolved.rate_func,
-                )
+                if isinstance(animation, Rotate):
+                    _schedule_rotate(
+                        self,
+                        animation,
+                        start_time=base_start,
+                        duration=resolved.run_time,
+                        easing=resolved.rate_func,
+                    )
+                else:
+                    _schedule_focus_on(
+                        self,
+                        animation,
+                        start_time=base_start,
+                        duration=resolved.run_time,
+                        easing=resolved.rate_func,
+                    )
                 end = base_start + resolved.run_time
             else:
                 _ORIGINAL_SCENE_PLAY(
@@ -305,7 +419,7 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    public = {"Rotate": Rotate}
+    public = {"Rotate": Rotate, "FocusOn": FocusOn}
     for name, value in public.items():
         setattr(_base, name, value)
         setattr(_compat, name, value)
@@ -319,5 +433,7 @@ def install() -> None:
 
     # Composition imports this module before capturing Scene.play, so nested Rotate
     # leaves share the same timing resolver and rollback path as top-level plays.
+    # FocusOn intentionally remains top-level-only until dynamic target composition
+    # has a retained representation.
     _animate._builder_source = _builder_source
-    _compat.Scene.play = _rotate_scene_play
+    _compat.Scene.play = _procedural_scene_play
