@@ -217,23 +217,39 @@
       "reason": "Rust snapshots authoritative source-family order, validates every source/target wrapper pair, and constructs the target family graph; Python only mirrors wrapper identity while leaf target edits use the shared Mobject target editor."
     },
     {
-      "id": "scene-bound-state",
-      "surface": "Scene-bound Mobject snapshot and mutation state",
+      "id": "scene-bound-deterministic-state",
+      "surface": "Deterministic scene-bound Mobject transform/style/layout state and animate source seed",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_sync_bound_transform/_sync_bound_style/commit_transform_target"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"}],
+      "reason": "A fresh semantic handle survives scene binding, owns deterministic transform/style/layout math, seeds animate targets through targetEditor, and is committed only after successful Transform authoring. Python's existing scene table is a typed lowered transport mirror, not the semantic evaluator."
+    },
+    {
+      "id": "scene-bound-dynamic-state",
+      "surface": "Scene-bound arbitrary raw geometry mutation, low-level scalar tracks, and host-updater evaluated state",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._raw/_current_raw/_apply"},
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._current_raw/_apply and Scene._snapshot_for_object_at"},
       "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore/SemanticNode"},
-      "reason": "Scene-bound wrappers retain a Python ObjectSnapshot alongside the Rust semantic scene and reconcile the two during authoring.",
-      "replacement": "Bind scene wrappers to stable Rust semantic handles and remove Python-owned mutable snapshots from the normal authoring path.",
+      "reason": "Raw geometry replacement, low-level position/rotation/opacity tracks, and arbitrary host updater frames do not yet update the persistent authoring handle, so the adapter deliberately marks or treats that handle as stale and falls back to the evaluated scene snapshot.",
+      "replacement": "Move evaluated scene slots and geometry mutations behind stable shared scene handles; keep host callback bodies in Python but commit their transaction through shared semantic state.",
       "migration_issue": "#61"
     },
     {
       "id": "authoring-copy-snapshot",
-      "surface": "Mobject.copy and evaluated authoring snapshots",
+      "surface": "Detached and fresh deterministic scene-bound Mobject.copy / animate target seed",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::clone_handle/target_editor"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject/_target_mobject"}],
+      "reason": "Fresh detached and deterministic bound wrappers clone the shared handle directly; source state does not cross the bridge as JSON during copy or animate target construction."
+    },
+    {
+      "id": "authoring-copy-evaluated-fallback",
+      "surface": "Mobject.copy / animate target seed after dynamic or raw scene-owned state",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject.copy"},
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject fallback"},
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor"},
-      "reason": "Python copy/deepcopy and JSON snapshot materialization remain fallback ownership paths for targets and lifecycle handoffs.",
-      "replacement": "Use Rust handle cloning and shared evaluated snapshots; reserve JSON for the external document boundary.",
+      "reason": "When the persistent authoring handle is deliberately stale because runtime/raw state was not mirrored, Python still materializes the evaluated scene snapshot to seed a new detached shared handle.",
+      "replacement": "Expose shared evaluated scene handles so dynamic state can clone directly without snapshot materialization.",
       "migration_issue": "#61"
     },
     {

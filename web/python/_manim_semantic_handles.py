@@ -207,12 +207,49 @@ def _raw_from_json(value: str) -> _ir.Mobject:
     )
 
 
+def _is_bound(value: object) -> bool:
+    return (
+        isinstance(value, _base.Mobject)
+        and value._scene is not None
+        and value._object is not None
+    )
+
+
+def _has_unmirrored_tracks(value: _base.Mobject) -> bool:
+    if not _is_bound(value):
+        return False
+    scene = value._scene
+    obj = value._object
+    assert scene is not None and obj is not None
+    # Generic Transform tracks authored through the aligned scheduler are committed
+    # back to this handle after successful play. Low-level scalar position/rotation/
+    # opacity tracks still live only in the legacy scene timeline, so fall back to an
+    # evaluated snapshot if any of those have touched this object.
+    return any(
+        track["object"] == obj.id
+        and track["property"] in {"position", "rotation", "opacity"}
+        for track in scene._tracks
+    )
+
+
 def _handle_for(value: object):
     if not isinstance(value, _base.Mobject):
         return None
-    if value._scene is not None or value._object is not None:
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+        return None
+    # Once a bound object has arbitrary host updater state attached, the authoritative
+    # frame value is the runtime callback snapshot rather than this deterministic
+    # authoring handle. Detached objects still need the handle to materialize their
+    # initial scene snapshot before the runtime callback path exists.
+    if _is_bound(value) and hasattr(value, "_noon_updaters"):
+        return None
+    if _has_unmirrored_tracks(value):
         return None
     return getattr(value, "_semantic_handle", None)
+
+
+def _detached_handle_for(value: object):
+    return None if _is_bound(value) else _handle_for(value)
 
 
 def _has_shared_layout_queries(handle: object) -> bool:
@@ -262,6 +299,7 @@ def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
         fill_opacity = None if fill is None else float(fill["alpha"])
         stroke_opacity = None if stroke is None else float(stroke["alpha"])
         self._semantic_handle = _create_handle(_snapshot_json(raw))
+        self._semantic_handle_fresh = True
         if fill_opacity is not None:
             self._semantic_handle.setFillOpacity(fill_opacity)
         if stroke_opacity is not None:
@@ -272,18 +310,24 @@ def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
 
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:
-    handle = _handle_for(self)
+    handle = _detached_handle_for(self)
     if handle is not None:
         return _raw_from_json(str(handle.snapshotJson()))
     return _ORIGINAL_CURRENT_RAW(self)
 
 
 def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _detached_handle_for(self)
     if handle is not None:
         handle.replaceSnapshotJson(_snapshot_json(raw))
         return self
-    return _ORIGINAL_APPLY(self, raw)
+    result = _ORIGINAL_APPLY(self, raw)
+    if _is_bound(self):
+        # Arbitrary raw/geometry replacement bypasses the typed shared mutation API.
+        # Keep correctness by switching future copy/animate seeding to the evaluated
+        # scene snapshot until a shared geometry operation owns this path too.
+        self._semantic_handle_fresh = False
+    return result
 
 
 def _clone_mobject(
@@ -298,11 +342,18 @@ def _clone_mobject(
         clone._semantic_handle = (
             handle.targetEditor() if target_state else handle.cloneHandle()
         )
+        clone._semantic_handle_fresh = True
     else:
         _init(clone, self._current_raw())
 
     for name, value in self.__dict__.items():
-        if name not in {"_raw", "_scene", "_object", "_semantic_handle"}:
+        if name not in {
+            "_raw",
+            "_scene",
+            "_object",
+            "_semantic_handle",
+            "_semantic_handle_fresh",
+        }:
             if isinstance(value, _base.Mobject):
                 setattr(clone, name, value.copy())
             else:
@@ -354,12 +405,118 @@ def _set_height_property(self: _base.Mobject, height: float) -> None:
     self.scale_to_fit_height(float(height))
 
 
+def _has_wire_projection(handle: object) -> bool:
+    return handle is not None and all(
+        hasattr(handle, name)
+        for name in (
+            "wireTranslationX",
+            "wireTranslationY",
+            "wireScaleX",
+            "wireScaleY",
+            "wireRotation",
+            "wireHasFill",
+            "wireFillRed",
+            "wireFillGreen",
+            "wireFillBlue",
+            "wireFillAlpha",
+            "wireHasStroke",
+            "wireStrokeRed",
+            "wireStrokeGreen",
+            "wireStrokeBlue",
+            "wireStrokeAlpha",
+            "wireStrokeWidth",
+            "wireObjectOpacity",
+        )
+    )
+
+
+def _ensure_bound_static_mutation_available(value: _base.Mobject) -> None:
+    if not _is_bound(value):
+        return
+    scene = value._scene
+    obj = value._object
+    assert scene is not None and obj is not None
+    if any(track["object"] == obj.id for track in scene._tracks):
+        raise ValueError(
+            "direct Mobject mutation after animation authoring is ambiguous; use mobject.animate"
+        )
+
+
+def _mutation_handle_for(value: _base.Mobject):
+    handle = _handle_for(value)
+    if handle is None:
+        return None
+    if _is_bound(value):
+        if not _has_wire_projection(handle):
+            return None
+        _ensure_bound_static_mutation_available(value)
+    return handle
+
+
+def _sync_bound_transform(value: _base.Mobject, handle: object) -> None:
+    if not _is_bound(value):
+        return
+    scene = value._scene
+    obj = value._object
+    assert scene is not None and obj is not None
+    transform = scene._objects[obj.id]["transform"]
+    transform["translation"]["x"] = float(handle.wireTranslationX)
+    transform["translation"]["y"] = float(handle.wireTranslationY)
+    transform["scale"]["x"] = float(handle.wireScaleX)
+    transform["scale"]["y"] = float(handle.wireScaleY)
+    transform["rotation"] = float(handle.wireRotation)
+
+
+def _wire_color(handle: object, prefix: str) -> dict[str, float] | None:
+    if not bool(getattr(handle, f"wireHas{prefix}")):
+        return None
+    return {
+        "red": float(getattr(handle, f"wire{prefix}Red")),
+        "green": float(getattr(handle, f"wire{prefix}Green")),
+        "blue": float(getattr(handle, f"wire{prefix}Blue")),
+        "alpha": float(getattr(handle, f"wire{prefix}Alpha")),
+    }
+
+
+def _sync_bound_style(value: _base.Mobject, handle: object) -> None:
+    if not _is_bound(value):
+        return
+    scene = value._scene
+    obj = value._object
+    assert scene is not None and obj is not None
+    style = scene._objects[obj.id]["style"]
+    style["fill"] = _wire_color(handle, "Fill")
+    style["stroke"] = _wire_color(handle, "Stroke")
+    style["stroke_width"] = float(handle.wireStrokeWidth)
+    style["opacity"] = float(handle.wireObjectOpacity)
+
+
+def invalidate_semantic_handle(value: object) -> None:
+    if isinstance(value, _base.Mobject) and hasattr(value, "_semantic_handle"):
+        value._semantic_handle_fresh = False
+
+
+def commit_transform_target(source: object, target: object) -> None:
+    if not isinstance(source, _base.Mobject):
+        return
+    source_handle = _handle_for(source)
+    target_handle = _handle_for(target)
+    if source_handle is None:
+        return
+    if target_handle is None:
+        invalidate_semantic_handle(source)
+        return
+    source_handle.becomeHandle(target_handle)
+    source._semantic_handle_fresh = True
+
+
 def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
     handle.shift(offset.x, offset.y)
+    _sync_bound_transform(self, handle)
     return self
 
 
@@ -378,7 +535,7 @@ def _move_to(
 
 
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SCALE(self, factor)
     if isinstance(factor, (tuple, list, _base.Vec2)):
@@ -387,6 +544,7 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
         scalar = float(factor)
         value = _base.Vec2(scalar, scalar)
     handle.scale(value.x, value.y)
+    _sync_bound_transform(self, handle)
     return self
 
 
@@ -399,7 +557,7 @@ def _rotate(
     about_edge: object | None = None,
     **kwargs: Any,
 ) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_ROTATE(
             self,
@@ -424,29 +582,34 @@ def _rotate(
             float(handle.criticalY(edge.x, edge.y)),
         )
     handle.rotateAboutPoint(signed_angle, pivot.x, pivot.y)
+    _sync_bound_transform(self, handle)
     return self
 
 
 def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_COLOR(self, color)
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
 
     # Manim changes fill/stroke RGB independently of the channels' existing opacity.
-    # The semantic handle's broad setColor API intentionally applies one alpha to both
-    # channels, so use the channel-specific mutations here instead. Those preserve the
-    # current semantic opacity when the channel already exists.
-    style = self._current_raw().style
-    had_fill = style.get("fill") is not None
-    had_stroke = style.get("stroke") is not None
+    # The shared wire projection lets both detached and bound objects choose channels
+    # without materializing a JSON snapshot.
+    if _has_wire_projection(handle):
+        had_fill = bool(handle.wireHasFill)
+        had_stroke = bool(handle.wireHasStroke)
+    else:
+        style = self._current_raw().style
+        had_fill = style.get("fill") is not None
+        had_stroke = style.get("stroke") is not None
     if had_fill:
         handle.setFillColor(color.red, color.green, color.blue, color.alpha)
     if had_stroke:
         handle.setStrokeColor(color.red, color.green, color.blue, color.alpha)
     if not had_fill and not had_stroke:
         handle.setFillColor(color.red, color.green, color.blue, color.alpha)
+    _sync_bound_style(self, handle)
     return self
 
 
@@ -459,8 +622,8 @@ def _become(
     match_center: bool = False,
     stretch: bool = False,
 ) -> _base.Mobject:
-    handle = _handle_for(self)
-    other_handle = _handle_for(mobject)
+    handle = _detached_handle_for(self)
+    other_handle = _detached_handle_for(mobject)
     if (
         handle is not None
         and other_handle is not None
@@ -485,8 +648,8 @@ def _replace(
     dim_to_match: int = 0,
     stretch: bool = False,
 ) -> _base.Mobject:
-    handle = _handle_for(self)
-    other_handle = _handle_for(mobject)
+    handle = _detached_handle_for(self)
+    other_handle = _detached_handle_for(mobject)
     if handle is not None and other_handle is not None:
         if dim_to_match not in (0, 1):
             raise NotImplementedError("replace currently supports width (0) or height (1)")
@@ -540,10 +703,11 @@ def _align_on_frame(
     direction: _base.Vec2,
     buff: float,
 ) -> _base.Mobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         return _ORIGINAL_ALIGN_ON_FRAME(self, direction, buff)
     handle.alignOnFrame(direction.x, direction.y, float(buff))
+    _sync_bound_transform(self, handle)
     return self
 
 
@@ -553,7 +717,7 @@ def _set_fill(
     opacity: float | None = None,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
     if color is not None and opacity is not None:
@@ -564,6 +728,7 @@ def _set_fill(
             parsed.blue,
             _phase_b._opacity("fill opacity", opacity),
         )
+        _sync_bound_style(self, handle)
         return self
     if color is not None:
         parsed = _phase_b._as_color("fill color", color)
@@ -572,6 +737,7 @@ def _set_fill(
         handle.disableFill()
     if opacity is not None:
         handle.setFillOpacity(_phase_b._opacity("fill opacity", opacity))
+    _sync_bound_style(self, handle)
     return self
 
 
@@ -582,7 +748,7 @@ def _set_stroke(
     opacity: float | None = None,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_STROKE(
             self, color=color, width=width, opacity=opacity, family=family
@@ -596,6 +762,7 @@ def _set_stroke(
         handle.setStrokeWidth(_phase_b._manim_stroke_width(width))
     if opacity is not None:
         handle.setStrokeOpacity(_phase_b._opacity("stroke opacity", opacity))
+    _sync_bound_style(self, handle)
     return self
 
 
@@ -604,10 +771,11 @@ def _set_opacity(
     opacity: float,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _handle_for(self)
+    handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
     handle.setOpacity(_phase_b._opacity("opacity", opacity))
+    _sync_bound_style(self, handle)
     return self
 
 
