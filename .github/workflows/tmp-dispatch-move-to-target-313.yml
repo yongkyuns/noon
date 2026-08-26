@@ -19,6 +19,7 @@ jobs:
     steps:
       - name: Dispatch exact qualification workflows
         run: |
+          # Redispatch after MoveToTarget was added to the static public registry.
           gh workflow run ci.yml --ref "$TARGET_REF"
           gh workflow run test-coverage.yml --ref "$TARGET_REF"
           gh workflow run manim-api-coverage.yml --ref "$TARGET_REF"
