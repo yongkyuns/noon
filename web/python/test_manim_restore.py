@@ -128,7 +128,7 @@ class ManimRestoreTests(unittest.TestCase):
             assert source_state["transform"]["translation"]["x"] == 2.5
             assert target_state["transform"]["translation"]["x"] == 0.5
             assert target_state["transform"]["scale"] == {"x": 1.0, "y": 1.0}
-            assert abs(target_state["transform"]["rotation_radians"]) < 1e-12
+            assert abs(target_state["transform"]["rotation"]) < 1e-12
             assert target_state["style"]["fill"]["red"] == BLUE.red
             assert target_state["style"]["stroke"]["green"] == GREEN.green
             assert abs(target_state["style"]["fill"]["alpha"] - 0.4) < 1e-12
