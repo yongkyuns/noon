@@ -19,6 +19,8 @@ pub enum RateFunction {
     RushInto,
     RushFrom,
     ThereAndBack,
+    /// Manim's `wiggle(t, 6)` envelope used by the default `Wiggle` animation.
+    Wiggle6,
     EaseInOutCubic,
     /// Hold the source value at normalized progress 0, then switch to the target.
     StepStart,
@@ -42,6 +44,10 @@ impl RateFunction {
                     2.0 * (1.0 - progress)
                 };
                 manim_smooth(mirrored)
+            }
+            Self::Wiggle6 => {
+                Self::ThereAndBack.evaluate(progress)
+                    * (6.0 * std::f32::consts::PI * progress).sin()
             }
             Self::EaseInOutCubic => {
                 if progress < 0.5 {
@@ -447,6 +453,9 @@ mod tests {
         assert_eq!(RateFunction::ThereAndBack.evaluate(0.0), 0.0);
         assert_eq!(RateFunction::ThereAndBack.evaluate(0.5), 1.0);
         assert_eq!(RateFunction::ThereAndBack.evaluate(1.0), 0.0);
+        assert_eq!(RateFunction::Wiggle6.evaluate(0.0), 0.0);
+        assert_close(RateFunction::Wiggle6.evaluate(0.25), -0.5);
+        assert_close(RateFunction::Wiggle6.evaluate(1.0), 0.0);
         assert_eq!(RateFunction::StepStart.evaluate(0.0), 0.0);
         assert_eq!(RateFunction::StepStart.evaluate(f32::EPSILON), 1.0);
         assert_eq!(RateFunction::StepStart.evaluate(1.0), 1.0);
