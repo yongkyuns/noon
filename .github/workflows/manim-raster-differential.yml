@@ -54,6 +54,12 @@ jobs:
           tool: wasm-pack@0.15.0
           fallback: none
 
+      - name: Assemble exact raster source corpus
+        run: |
+          test "$(head -n 1 parity/manim-v0.21/upstream-examples/restore_example.py)" = "from manim import *"
+          printf '\n\n' >> parity/manim-v0.21/quickstart.py
+          tail -n +2 parity/manim-v0.21/upstream-examples/restore_example.py >> parity/manim-v0.21/quickstart.py
+
       - name: Build browser package
         run: bash scripts/build-web-demo.sh
 
@@ -67,12 +73,6 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
-      - name: Assemble exact raster source corpus
-        run: |
-          test "$(head -n 1 parity/manim-v0.21/upstream-examples/restore_example.py)" = "from manim import *"
-          printf '\n\n' >> parity/manim-v0.21/quickstart.py
-          tail -n +2 parity/manim-v0.21/upstream-examples/restore_example.py >> parity/manim-v0.21/quickstart.py
 
       - name: Render and compare canonical Manim scenes
         env:
