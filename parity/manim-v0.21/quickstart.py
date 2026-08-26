@@ -397,3 +397,15 @@ class PrimitiveGeometryMatrix(Scene):
 
         self.add(circle, rectangle, square, diagonal, rotated)
         self.play(rotated.animate.shift(ORIGIN))
+
+
+class IndicateSquare(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        )
+        self.add(square)
+        self.play(Indicate(square))
