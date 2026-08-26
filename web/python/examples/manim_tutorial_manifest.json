@@ -148,6 +148,23 @@
       "order": 80
     },
     {
+      "id": "parity-draw-border-then-fill-styled-square",
+      "title": "DrawBorderThenFill styled square",
+      "summary": "Draw Manim's default square border first, then transition into the final ORANGE fill with the canonical double_smooth timing.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_draw_border_then_fill_styled_square.py",
+      "category": "parity/creation",
+      "features": ["DrawBorderThenFill", "Square", "style", "reveal", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.creation.DrawBorderThenFill.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "draw-border-then-fill-styled-square",
+      "thumbnail": "thumbnails/manim/draw-border-then-fill-styled-square.webp",
+      "thumbnail_alt": "Orange square midway through Manim's DrawBorderThenFill transition",
+      "thumbnail_time": 1.47,
+      "order": 90
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",

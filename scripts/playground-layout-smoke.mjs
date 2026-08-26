@@ -148,7 +148,7 @@ try {
     thumbnails: [...document.querySelectorAll(".example-thumb")].map((image) => image.getAttribute("src")),
     href: location.href,
   }));
-  assert.equal(galleryContract.cards, 8, "gallery must render all eight ready Manim parity examples");
+  assert.equal(galleryContract.cards, 9, "gallery must render all nine ready Manim parity examples");
   assert.equal(galleryContract.canvases, 1, "thumbnail gallery must keep exactly one live canvas");
   assert.equal(galleryContract.selected, "parity-square-and-circle");
   assert.equal(galleryContract.patchHidden, true, "Noon-native patch examples must not be public examples");

@@ -13,7 +13,7 @@ const manifest = JSON.parse(
   await readFile(new URL("./python/examples/manim_tutorial_manifest.json", import.meta.url), "utf8"),
 );
 const gallery = normalizeGalleryManifest(manifest);
-assert.equal(gallery.examples.length, 8);
+assert.equal(gallery.examples.length, 9);
 assert.ok(gallery.examples.every((entry) => entry.path.startsWith("./python/examples/manim_parity_")));
 assert.ok(
   gallery.examples.every(
@@ -23,15 +23,19 @@ assert.ok(
 );
 assert.equal(gallery.examples.at(-1).parityStatus, "parity-qualified");
 assert.deepEqual(
-  gallery.examples.slice(-2).map((entry) => entry.id),
-  ["parity-grow-point-center-edge", "parity-uncreate-styled-square"],
+  gallery.examples.slice(-3).map((entry) => entry.id),
+  [
+    "parity-grow-point-center-edge",
+    "parity-uncreate-styled-square",
+    "parity-draw-border-then-fill-styled-square",
+  ],
 );
 
 const filtered = filterGalleryExamples(gallery.examples, { query: "DifferentRotations" });
 assert.deepEqual(filtered.map((entry) => entry.id), ["parity-different-rotations"]);
 assert.equal(
   filterGalleryExamples(gallery.examples, { parityStatus: "parity-qualified" }).length,
-  3,
+  4,
 );
 assert.equal(
   filterGalleryExamples(gallery.examples, { category: "parity/composition" })[0].id,

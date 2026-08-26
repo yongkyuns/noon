@@ -64,6 +64,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_frame_sampling.py \
   web/python/_manim_lifecycle.py \
   web/python/_manim_growing.py \
+  web/python/_manim_draw_border_then_fill.py \
   web/python/_manim_reactive.py \
   web/python/_manim_updaters.py
 PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
