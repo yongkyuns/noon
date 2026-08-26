@@ -1,0 +1,13 @@
+[package]
+name = "noon-typst"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Typst text and math layout backend for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+typst-as-lib = { version = "=0.16.0", default-features = false }
+typst-assets = { version = "=0.15.1", features = ["fonts"] }
+typst-layout = "=0.15.1"
+typst-svg = "=0.15.1"
