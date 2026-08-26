@@ -149,8 +149,8 @@ class ManimScaleInPlaceTests(unittest.TestCase):
                 if track["object"] == retained.id and track["property"] == "transform"
             ]
             assert len(retained_tracks) == 2
-            scale_track = max(retained_tracks, key=lambda item: item["timing"]["start"])
-            assert abs(scale_track["timing"]["start"] - 0.25) < 1e-12
+            scale_track = max(retained_tracks, key=lambda item: item["timing"]["start_time"])
+            assert abs(scale_track["timing"]["start_time"] - 0.25) < 1e-12
             retained_start = scale_track["values"]["object"]["from"]["transform"]
             retained_target = scale_track["values"]["object"]["to"]["transform"]
             assert retained_start["translation"] == {"x": 1.0, "y": 0.0}
