@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +66,11 @@ class ParityTracker(Scene):
         )
 `,
 };
+
+const movingAroundPython = readFileSync(
+  path.join(repoRoot, "web", "python", "examples", "manim_gallery_moving_around.py"),
+  "utf8",
+);
 
 const javascriptParityCases = new Set([
   "animate_options",
@@ -158,7 +164,13 @@ async function javascriptCorpora(page) {
       quickstart[name] = build().toJSON();
     }
 
-    return { parity, quickstart };
+    const galleryExamples = await import("/web/js/examples/manim-gallery-moving-around.js");
+    const gallery = {};
+    for (const [name, build] of Object.entries(galleryExamples.galleryMovingAround)) {
+      gallery[name] = build().toJSON();
+    }
+
+    return { parity, quickstart, gallery };
   });
 }
 
@@ -190,8 +202,10 @@ let browser = null;
 try {
   const rust = rustCorpus();
   const rustQuickstart = rustCorpus("manim_quickstart_equivalents");
+  const rustMovingAround = rustCorpus("manim_gallery_moving_around");
   assert.deepEqual([...rust.keys()].sort(), Object.keys(pythonCases).sort());
   assert.deepEqual([...rustQuickstart.keys()].sort(), [...quickstartEquivalentCases].sort());
+  assert.deepEqual([...rustMovingAround.keys()], ["MovingAround"]);
 
   await waitForServer();
   browser = await chromium.launch({
@@ -219,6 +233,17 @@ try {
     assertSemanticEqual(result.document, rust.get(name), `${name}: python/rust`);
   }
 
+  const movingAroundResult = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    movingAroundPython,
+  );
+  assert.equal(movingAroundResult.kind, "scene_document", "MovingAround: Python authoring failed");
+  assertSemanticEqual(
+    movingAroundResult.document,
+    rustMovingAround.get("MovingAround"),
+    "MovingAround: python/rust",
+  );
+
   const javascript = await javascriptCorpora(page);
   assert.deepEqual(Object.keys(javascript.parity).sort(), [...javascriptParityCases].sort());
   for (const [name, document] of Object.entries(javascript.parity)) {
@@ -232,8 +257,17 @@ try {
     assertSemanticEqual(document, rustQuickstart.get(name), `${name}: quickstart javascript/rust`);
   }
 
+  assert.deepEqual(Object.keys(javascript.gallery), ["MovingAround"]);
+  assertSemanticEqual(
+    javascript.gallery.MovingAround,
+    rustMovingAround.get("MovingAround"),
+    "MovingAround: javascript/rust",
+  );
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("Python/Rust parity, JavaScript parity, and Rust/JavaScript Quickstart equivalence passed");
+  console.log(
+    "Python/Rust parity, JavaScript parity, Rust/JavaScript Quickstart equivalence, and MovingAround tri-language equivalence passed",
+  );
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
