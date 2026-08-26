@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod authoring_facade;
 mod authoring_mobject;
 mod authoring_options;
 mod composition;
@@ -13,6 +14,7 @@ mod lifecycle;
 mod reactive_player;
 mod semantic_snapshot;
 
+pub use authoring_facade::*;
 pub use authoring_mobject::*;
 pub use authoring_options::*;
 pub use composition::*;
