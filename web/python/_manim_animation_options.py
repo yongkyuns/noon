@@ -179,10 +179,35 @@ def FadeToColor(mobject: object, color: object, **kwargs: Any) -> object:
     return builder
 
 
+def Restore(mobject: object, **kwargs: Any) -> object:
+    """Transform one 2D leaf back to its most recently saved Manim state.
+
+    ManimCE v0.21 defines ``Restore`` as ``ApplyMethod(mobject.restore, **kwargs)``.
+    The compatibility layer already owns ``save_state``/``restore`` and stores the
+    detached semantic clone on the mobject, so the ordinary target-state builder can
+    snapshot the same restore target without runtime host callbacks.
+    """
+
+    if isinstance(mobject, _compat.Group):
+        raise NotImplementedError("Restore Group/VGroup family state is not yet supported")
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("Restore target must be a Mobject")
+
+    import _manim_animate as _animate
+
+    builder = _animate._AlignedAnimationBuilder(mobject)
+    builder.anim_args = dict(kwargs)
+    builder.cannot_pass_args = True
+    # Let the compatibility method preserve Manim's missing-save error semantics.
+    builder.target.restore()
+    return builder
+
+
 for _name, _value in {
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
     "FadeToColor": FadeToColor,
+    "Restore": Restore,
 }.items():
     setattr(_base, _name, _value)
     setattr(_compat, _name, _value)
