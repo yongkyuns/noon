@@ -126,14 +126,6 @@ const SCENE_EXAMPLES = [
     parityFixture: "different-rotations",
   },
   {
-    name: "Manim parity · IndicateSquare",
-    path: "./python/examples/manim_parity_indicate_square.py",
-    summary:
-      "Source-equivalent ManimCE v0.21 Indicate: scale and recolor through the default there-and-back path.",
-    features: "exact parity candidate · Indicate · pixels + time",
-    parityFixture: "indicate-square",
-  },
-  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
