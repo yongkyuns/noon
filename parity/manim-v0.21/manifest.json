@@ -169,6 +169,11 @@
         "max_differing_ratio": 0.0032,
         "max_mean_absolute_channel_error": 0.036
       }
+    },
+    {
+      "id": "three-layer-painter-order",
+      "scene": "ThreeLayerPainterOrder",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
