@@ -229,6 +229,11 @@
       "id": "primitive-geometry-matrix",
       "scene": "PrimitiveGeometryMatrix",
       "expected_duration": 1.0
+    },
+    {
+      "id": "grow-point-center-edge",
+      "scene": "GrowPointCenterEdge",
+      "expected_duration": 2.5
     }
   ],
   "sample_fractions": [
