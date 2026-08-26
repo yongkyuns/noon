@@ -158,7 +158,7 @@
       "features": ["Add", "Wait", "Succession", "LaggedStartMap", "FadeIn", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.animation.composition.html",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
       "parity_fixture": "add-wait-lagged-start-map"
     },
     {
