@@ -519,3 +519,49 @@ class RotatingCentered(Scene):
         )
         self.add(square)
         self.play(Rotating(square))
+
+
+class ShowIncreasingSubsetsTwoShapes(Scene):
+    def construct(self):
+        group = VGroup(
+            Square(
+                side_length=1.2,
+                fill_color=RED,
+                fill_opacity=0.35,
+                stroke_color=WHITE,
+                stroke_opacity=0.65,
+                stroke_width=4,
+            ).shift(1.2 * LEFT),
+            Circle(
+                radius=0.65,
+                fill_color=BLUE,
+                fill_opacity=0.2,
+                stroke_color=WHITE,
+                stroke_opacity=0.4,
+                stroke_width=4,
+            ).shift(1.2 * RIGHT),
+        )
+        self.play(ShowIncreasingSubsets(group))
+
+
+class ShowSubmobjectsOneByOneTwoShapes(Scene):
+    def construct(self):
+        group = VGroup(
+            Square(
+                side_length=1.2,
+                fill_color=GREEN,
+                fill_opacity=0.35,
+                stroke_color=WHITE,
+                stroke_opacity=0.65,
+                stroke_width=4,
+            ).shift(1.2 * LEFT),
+            Circle(
+                radius=0.65,
+                fill_color=PINK,
+                fill_opacity=0.2,
+                stroke_color=WHITE,
+                stroke_opacity=0.4,
+                stroke_width=4,
+            ).shift(1.2 * RIGHT),
+        )
+        self.play(ShowSubmobjectsOneByOne(group))
