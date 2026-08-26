@@ -273,7 +273,7 @@ fn source_over(source: vec4<f32>, destination: vec4<f32>) -> vec4<f32> {
     return source + destination * (1.0 - source.a);
 }
 
-fn styled_shape_color(
+fn styled_shape_color_with_fill_coverage(
     fill: vec4<f32>,
     stroke: vec4<f32>,
     opacity: f32,
@@ -281,12 +281,12 @@ fn styled_shape_color(
     stroke_enabled: bool,
     signed_distance: f32,
     stroke_width: f32,
+    fill_coverage: f32,
 ) -> vec4<f32> {
     // Match Cairo/VMobject semantics: fill the semantic contour first, then
     // source-over a centered stroke onto the preserved path. Mixing the two
     // premultiplied colors is not equivalent when either layer is translucent.
     let half_stroke_width = max(stroke_width, 0.0) * 0.5;
-    let fill_coverage = inside_coverage(signed_distance);
     let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
     let inner_stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
     let stroke_band_coverage = outer_coverage * inner_stroke_coverage;
@@ -303,6 +303,27 @@ fn styled_shape_color(
     return fill_layer;
 }
 
+fn styled_shape_color(
+    fill: vec4<f32>,
+    stroke: vec4<f32>,
+    opacity: f32,
+    fill_enabled: bool,
+    stroke_enabled: bool,
+    signed_distance: f32,
+    stroke_width: f32,
+) -> vec4<f32> {
+    return styled_shape_color_with_fill_coverage(
+        fill,
+        stroke,
+        opacity,
+        fill_enabled,
+        stroke_enabled,
+        signed_distance,
+        stroke_width,
+        inside_coverage(signed_distance),
+    );
+}
+
 fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
     let coverage = inside_coverage(signed_distance);
     if (u32(input.flags.y) & 1u) != 0u {
@@ -317,6 +338,18 @@ fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
 fn rectangle_signed_distance(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
     let offset = abs(position) - half_size;
     return length(max(offset, vec2<f32>(0.0))) + min(max(offset.x, offset.y), 0.0);
+}
+
+fn rectangle_fill_coverage(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
+    // A nearest-edge SDF is a good edge AA approximation while opposite sides are
+    // separated by at least a pixel. Once a rectangle becomes subpixel, however,
+    // both sides of an axis occupy the same filter footprint and the SDF overcounts
+    // the covered area. Cairo rasterizes the box area instead. Independent axis masks
+    // preserve the existing large-rectangle edge profile and naturally collapse a
+    // tiny box toward its projected area without a geometry-size cutoff.
+    let x_coverage = inside_coverage(abs(position.x) - half_size.x);
+    let y_coverage = inside_coverage(abs(position.y) - half_size.y);
+    return x_coverage * y_coverage;
 }
 
 fn rectangle_local_normal(position: vec2<f32>, half_size: vec2<f32>) -> vec2<f32> {
@@ -430,6 +463,7 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
+    let fill_coverage = rectangle_fill_coverage(input.local, half_size);
     let stroke_flags = u32(input.flags.y);
     let stroke_width = local_stroke_width_for_normal(
         input.metrics.x,
@@ -437,7 +471,7 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
         input.object_scale,
         (stroke_flags & 2u) != 0u,
     );
-    return styled_shape_color(
+    return styled_shape_color_with_fill_coverage(
         input.fill,
         input.stroke,
         input.metrics.y,
@@ -445,6 +479,7 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
         (stroke_flags & 1u) != 0u,
         signed_distance,
         stroke_width,
+        fill_coverage,
     );
 }
 
