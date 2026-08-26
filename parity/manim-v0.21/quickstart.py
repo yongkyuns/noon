@@ -314,3 +314,17 @@ class FadeOutShiftScaleStyledSquare(Scene):
         )
         self.add(square)
         self.play(FadeOut(square, shift=RIGHT, scale=0.5, rate_func=linear))
+
+
+class CameraUnitOffsets(Scene):
+    def construct(self):
+        def marker(position):
+            return Square(
+                side_length=0.4,
+                fill_color=WHITE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).move_to(position)
+
+        self.add(marker(ORIGIN), marker(RIGHT), marker(UP))
+        self.wait(1)
