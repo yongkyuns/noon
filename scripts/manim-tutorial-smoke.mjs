@@ -20,6 +20,10 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const ready = manifest.entries.filter((entry) => entry.status === "ready");
 assert.ok(ready.length >= 1, "expected source-equivalent Manim examples");
 
+const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
+const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
+const parityFixtures = new Map(parityManifest.fixtures.map((fixture) => [fixture.id, fixture]));
+
 const ids = new Set();
 for (const entry of manifest.entries) {
   assert.ok(!ids.has(entry.id), `${entry.id}: duplicate manifest id`);
@@ -36,6 +40,10 @@ for (const entry of ready) {
     `${entry.id}: runnable examples require explicit parity status`,
   );
   assert.ok(entry.parity_fixture, `${entry.id}: runnable examples require a parity fixture`);
+  assert.ok(
+    parityFixtures.has(entry.parity_fixture),
+    `${entry.id}: unknown parity fixture ${entry.parity_fixture}`,
+  );
   assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
   await access(path.join(repoRoot, "web", entry.path));
   await access(path.join(repoRoot, "web", entry.thumbnail));
@@ -73,6 +81,33 @@ function latestEnd(document) {
   return Math.max(...tracks.map((track) => track.timing.start_time + track.timing.duration));
 }
 
+function sceneDuration(result) {
+  const duration = Number(result.duration);
+  assert.ok(
+    Number.isFinite(duration) && duration >= 0,
+    "authoring result must expose finite non-negative Scene time",
+  );
+  const trackEnd = latestEnd(result.document);
+  assert.ok(
+    duration + 1e-9 >= trackEnd,
+    `Scene time ${duration} precedes latest emitted track end ${trackEnd}`,
+  );
+  return duration;
+}
+
+function assertDurationContract(entry, result) {
+  // Scene.time is authoritative because no-op waits advance semantic time without
+  // manufacturing renderer tracks. Source-equivalent gallery scenes are governed
+  // by their canonical Manim fixture duration, not by an arbitrary playground loop.
+  const fixture = parityFixtures.get(entry.parity_fixture);
+  assert.ok(fixture, `${entry.id}: missing parity fixture`);
+  const actual = sceneDuration(result);
+  assert.ok(
+    Math.abs(actual - fixture.expected_duration) <= 1e-9,
+    `${entry.id}: expected parity duration ${fixture.expected_duration}, got ${actual}`,
+  );
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -103,7 +138,7 @@ try {
     );
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
     assert.ok(result.document.objects.length > 0, `${entry.id}: expected scene objects`);
-    assert.ok(latestEnd(result.document) <= 4.0, `${entry.id}: exceeds interactive loop`);
+    assertDurationContract(entry, result);
     console.log(`[PASS] ${entry.id}`);
   }
 

@@ -484,3 +484,15 @@ class DrawBorderThenFillStyledSquare(Scene):
 class FocusOnPoint(Scene):
     def construct(self):
         self.play(FocusOn(2 * RIGHT))
+
+
+class RotatingCentered(Scene):
+    def construct(self):
+        square = Square(
+            side_length=1.5,
+            fill_color=BLUE,
+            fill_opacity=0.7,
+            stroke_opacity=0.0,
+        )
+        self.add(square)
+        self.play(Rotating(square))
