@@ -49,6 +49,13 @@ impl FrontendMobjectHandle {
             .map_err(|error| format!("unable to serialize mobject snapshot: {error}"))
     }
 
+    /// Clone this semantic state into a detached target editor. The returned
+    /// handle is the editor: all target mutations stay in Rust until its final
+    /// snapshot is requested for animation lowering.
+    pub fn target_editor(&self) -> Self {
+        self.clone()
+    }
+
     pub fn replace_json(&mut self, snapshot_json: &str) -> Result<(), String> {
         *self = Self::from_json(snapshot_json)?;
         Ok(())
@@ -221,6 +228,26 @@ impl FrontendMobjectHandle {
         if self.semantic_style.fill.is_none() {
             self.semantic_style.fill = Some(SemanticPaint::Solid(Color::WHITE));
         }
+        self.semantic_style.fill_opacity = opacity;
+        self.sync_legacy_style();
+        Ok(())
+    }
+
+    /// Apply a Manim-style fill color and opacity as one target-state edit.
+    ///
+    /// This keeps the common `.animate.set_fill(...)` operation entirely inside
+    /// the shared handle. Validate both inputs before changing state so a bad
+    /// opacity cannot leave a partially edited target.
+    pub fn set_fill(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), String> {
+        let color = opaque_color("fill", red, green, blue)?;
+        let opacity = unit_opacity("fill opacity", opacity)?;
+        self.semantic_style.fill = Some(SemanticPaint::Solid(color));
         self.semantic_style.fill_opacity = opacity;
         self.sync_legacy_style();
         Ok(())
@@ -632,6 +659,14 @@ mod wasm {
             WasmAuthoringMobjectHandle(self.0.clone())
         }
 
+        /// Start a detached target-state edit from this handle without crossing
+        /// the JS boundary with a serialized snapshot. The existing handle type
+        /// is the editor; this alias makes that ownership explicit to frontends.
+        #[wasm_bindgen(js_name = targetEditor)]
+        pub fn target_editor(&self) -> WasmAuthoringMobjectHandle {
+            WasmAuthoringMobjectHandle(self.0.target_editor())
+        }
+
         #[wasm_bindgen(js_name = snapshotJson)]
         pub fn snapshot_json(&self) -> Result<String, JsValue> {
             self.0.snapshot_json().map_err(js_error)
@@ -733,6 +768,17 @@ mod wasm {
         #[wasm_bindgen(js_name = setFillOpacity)]
         pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
             self.0.set_fill_opacity(opacity).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
+            &mut self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            self.0.set_fill(red, green, blue, opacity).map_err(js_error)
         }
 
         #[wasm_bindgen(getter, js_name = fillOpacity)]
@@ -984,6 +1030,48 @@ mod tests {
         assert_eq!(handle.stroke_opacity(), 0.2);
         handle.disable_fill();
         assert_eq!(handle.fill_opacity(), 0.0);
+    }
+
+    #[test]
+    fn target_editor_alias_supports_moving_around_without_snapshot_round_trips() {
+        let base = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
+        let mut target = base.target_editor();
+
+        target.shift(-1.0, 0.0).unwrap();
+        target.set_fill(1.0, 0.525, 0.184, 0.5).unwrap();
+        target.scale(0.3, 0.3).unwrap();
+        target.rotate(0.4).unwrap();
+
+        assert_eq!(base.center(), (0.0, 0.0));
+        assert_eq!(target.semantic_transform.translation.x, -1.0);
+        assert_eq!(target.semantic_transform.scale.x, 0.3);
+        assert_eq!(target.semantic_transform.rotation_z, 0.4);
+        assert_eq!(target.fill_opacity(), 0.5);
+        let fill = target.snapshot().style.fill.unwrap();
+        assert_eq!(fill.red, 1.0);
+        assert_eq!(fill.green, 0.525);
+        assert_eq!(fill.blue, 0.184);
+        assert_eq!(fill.alpha, 0.5);
+    }
+
+    #[test]
+    fn target_editor_clone_alias_is_independent_and_set_fill_is_transactional() {
+        let base = FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::circle(1.0)));
+        let mut target = base.target_editor();
+        let sibling = target.target_editor();
+
+        target.shift(2.0, 0.0).unwrap();
+        target.set_fill(0.0, 1.0, 0.0, 0.25).unwrap();
+        assert_eq!(base.center(), (0.0, 0.0));
+        assert_eq!(sibling.center(), (0.0, 0.0));
+        assert_eq!(sibling.fill_opacity(), 1.0);
+        let sibling_fill = sibling.snapshot().style.fill.unwrap();
+        assert_eq!(sibling_fill.red, 1.0);
+        assert_eq!(sibling_fill.green, 1.0);
+
+        let before = target.clone();
+        assert!(target.set_fill(1.0, 0.0, 0.0, 2.0).is_err());
+        assert_eq!(target, before);
     }
 
     #[test]

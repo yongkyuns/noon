@@ -257,7 +257,12 @@ class _AnimateBuilderMixin:
     def _initialize_builder(self, source: object) -> None:
         self.source = source
         self.mobject = source
-        self.target = source.copy()  # type: ignore[attr-defined]
+        target_factory = getattr(source, "_copy_for_animate_target", None)
+        self.target = (
+            target_factory()
+            if target_factory is not None
+            else source.copy()  # type: ignore[attr-defined]
+        )
         self.anim_args = {}
         self.cannot_pass_args = False
         self.is_chaining = False
