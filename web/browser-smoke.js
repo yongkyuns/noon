@@ -3,6 +3,13 @@ import init, { NoonCanvasPlayer, demoSceneJson } from "./pkg/noon_web.js";
 const canvas = document.querySelector("#scene");
 const MANIM_DEFAULT_CAMERA_HEIGHT = 8.0;
 const MAX_PRESENT_ATTEMPTS = 4;
+// The browser smoke harness is used by exact-output oracles as well as the
+// four-second interactive playground. Do not encode the playground UX loop as a
+// semantic rendering limit: parity fixtures must be sampled at their real Manim
+// timestamps (for example Rotating's five-second default). This generous finite
+// horizon keeps the production PlaybackClock/renderFrame path while leaving scene
+// duration validation to the calling harness/fixture.
+const SMOKE_RENDER_HORIZON_SECONDS = 24 * 60 * 60;
 const state = {
   ready: false,
   error: null,
@@ -62,8 +69,10 @@ function metrics() {
 
 function validateRenderTime(timeSeconds) {
   const time = Number(timeSeconds);
-  if (!Number.isFinite(time) || time < 0 || time >= 4.0) {
-    throw new RangeError("smoke render time must be finite and in [0, 4)");
+  if (!Number.isFinite(time) || time < 0 || time >= SMOKE_RENDER_HORIZON_SECONDS) {
+    throw new RangeError(
+      `smoke render time must be finite and in [0, ${SMOKE_RENDER_HORIZON_SECONDS})`,
+    );
   }
   return time;
 }
@@ -164,7 +173,11 @@ async function resizeBacking(width, height) {
 
 async function start() {
   await init();
-  player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
+  player = await NoonCanvasPlayer.create(
+    canvas,
+    demoSceneJson(),
+    SMOKE_RENDER_HORIZON_SECONDS,
+  );
   player.resize(canvas.width, canvas.height);
   player.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
 

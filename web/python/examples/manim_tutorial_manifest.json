@@ -199,6 +199,23 @@
       "order": 100
     },
     {
+      "id": "parity-rotating-centered",
+      "title": "Rotating centered square",
+      "summary": "Run Manim's Rotating defaults: one centered full turn over five seconds with linear timing.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_rotating_centered.py",
+      "category": "parity/rotation",
+      "features": ["Rotating", "Square", "linear", "rotation", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.rotation.Rotating.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "rotating-centered",
+      "thumbnail": "thumbnails/manim/rotating-centered.webp",
+      "thumbnail_alt": "Blue square rotating around its center using Manim Rotating",
+      "thumbnail_time": 1.0,
+      "order": 110
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",

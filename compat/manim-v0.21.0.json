@@ -31,6 +31,7 @@
     "Add": {"status": "supported", "category": "animation", "evidence": "composition authoring smoke tests"},
     "Wait": {"status": "partial", "category": "animation", "dependency": "#81", "reason": "Duration-based Wait is deterministic and covered; stop_condition/runtime callback semantics remain in the dynamic animation lane."},
     "Rotate": {"status": "partial", "category": "animation", "dependency": "#183", "reason": "Centered 2D OUT/IN rotation is exact; external pivots, retained groups, path overrides, and non-z axes remain pending."},
+    "Rotating": {"status": "partial", "category": "animation", "dependency": "#80", "reason": "Centered 2D OUT/IN rotation is exact and attached to the canonical raster/timeline gate; external pivots/edges, retained groups, and non-z axes remain pending."},
     "FocusOn": {"status": "partial", "category": "animation-indication", "dependency": "#81", "reason": "Fixed 2D points and static leaf-mobject centers use exact deterministic Transform/remover semantics; moving focus targets, retained families, and mixed top-level composition remain pending."},
     "GrowFromPoint": {"status": "partial", "category": "animation", "dependency": "#80", "reason": "Exact deterministic leaf/2D subset is implemented and raster-gated; retained groups and mixed top-level play remain pending."},
     "GrowFromCenter": {"status": "partial", "category": "animation", "dependency": "#80", "reason": "Exact deterministic leaf/2D subset is implemented and raster-gated; retained groups and mixed top-level play remain pending."},

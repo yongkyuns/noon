@@ -1,14 +1,16 @@
 """ManimCE-compatible deterministic procedural animations for the exact 2D subset.
 
 ``mobject.animate.rotate`` is target-state interpolation and intentionally remains a
-regular Transform. Manim's explicit ``Rotate`` instead follows a rotational path.
-For geometry centered on its authored transform origin, Noon can represent that path
-exactly with the existing scalar rotation track, without adding a new IR primitive.
+regular Transform. Manim's explicit ``Rotate`` and ``Rotating`` instead follow
+rotational paths. For geometry centered on its authored transform origin, Noon can
+represent those paths exactly with the existing scalar rotation track, without adding
+a new IR primitive. External pivots and non-z axes require curved translation/3D
+support and are rejected until the runtime can represent them exactly.
 
 ``FocusOn`` is likewise deterministic: Manim transforms a transparent frame-sized Dot
 into a zero-radius grey spotlight at the requested point and removes it at completion.
 Noon lowers that temporary object to an ordinary retained Transform plus a presence
-lifecycle edge. Neither animation requires Python on the frame-critical path.
+lifecycle edge. None of these animations requires Python on the frame-critical path.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import noon as _base
 import _manim_animation_options as _options
 import _manim_animate as _animate
 import _manim_compat as _compat
+import _manim_rate_functions as _rate_functions
 
 
 _INSTALLED = False
@@ -70,6 +73,56 @@ class Rotate:
         self.about_point = mobject.get_center() if about_point is None else about_point
         self.about_edge = about_edge
         self.anim_args = dict(kwargs)
+
+
+class Rotating(Rotate):
+    """ManimCE ``Rotating`` for the exact centered 2D subset.
+
+    Unlike ``Rotate``, Manim's ``Rotating`` keeps ``about_point=None`` until frame
+    interpolation and defaults to a full turn over five seconds with linear timing.
+    The centered 2D case maps exactly to the same scalar rotation channel used by
+    ``Rotate``; unsupported pivot/family/3D cases fail instead of being approximated.
+    """
+
+    def __init__(
+        self,
+        mobject: object,
+        angle: float = math.tau,
+        axis: object = _compat.OUT,
+        about_point: object | None = None,
+        about_edge: object | None = None,
+        run_time: float = 5.0,
+        rate_func: object = _rate_functions.linear,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError(
+                "Rotating(Group/VGroup) requires retained family pivot motion and is not yet supported"
+            )
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Rotating target must be a Mobject")
+
+        path_options = sorted(_UNSUPPORTED_PATH_OPTIONS.intersection(kwargs))
+        if path_options:
+            raise NotImplementedError(
+                "Rotating path override(s) are not supported: " + ", ".join(path_options)
+            )
+
+        value = float(angle)
+        if not math.isfinite(value):
+            raise ValueError("Rotating angle must be finite")
+
+        self.mobject = mobject
+        self.angle = value
+        self.axis = axis
+        # ManimCE Rotating passes None through to Mobject.rotate, which resolves it
+        # against the frame's current mobject center. Preserve that distinction from
+        # Rotate, whose constructor eagerly captures the center.
+        self.about_point = about_point
+        self.about_edge = about_edge
+        self.anim_args = dict(kwargs)
+        self.anim_args["run_time"] = run_time
+        self.anim_args["rate_func"] = rate_func
 
 
 class FocusOn:
@@ -133,21 +186,21 @@ class FocusOn:
 def _axis_sign(axis: object) -> float:
     try:
         if len(axis) != 3:  # type: ignore[arg-type]
-            raise NotImplementedError("Rotate currently supports only 3D z-axis vectors")
+            raise NotImplementedError("rotation currently supports only 3D z-axis vectors")
         x = float(axis[0])  # type: ignore[index]
         y = float(axis[1])  # type: ignore[index]
         z = float(axis[2])  # type: ignore[index]
     except NotImplementedError:
         raise
     except (TypeError, ValueError, IndexError) as error:
-        raise TypeError("Rotate axis must be a three-component numeric vector") from error
+        raise TypeError("rotation axis must be a three-component numeric vector") from error
 
     if not all(math.isfinite(value) for value in (x, y, z)):
-        raise ValueError("Rotate axis must be finite")
+        raise ValueError("rotation axis must be finite")
     if not math.isclose(x, 0.0, abs_tol=1e-12) or not math.isclose(
         y, 0.0, abs_tol=1e-12
     ) or math.isclose(z, 0.0, abs_tol=1e-12):
-        raise NotImplementedError("Rotate currently supports only the 2D OUT/IN z axis")
+        raise NotImplementedError("rotation currently supports only the 2D OUT/IN z axis")
     return 1.0 if z > 0.0 else -1.0
 
 
@@ -164,8 +217,9 @@ def _validate_exact_pivot(
     start_time: float,
 ) -> tuple[object, dict[str, Any]]:
     mobject = animation.mobject
+    animation_name = type(animation).__name__
     if mobject._scene is not scene or mobject._object is None:
-        raise ValueError("Rotate target must belong to this Scene")
+        raise ValueError(f"{animation_name} target must belong to this Scene")
     obj = mobject._object
     snapshot = scene._snapshot_for_object_at(obj, start_time)
     detached = _animate._snapshot_mobject(snapshot)
@@ -178,22 +232,32 @@ def _validate_exact_pivot(
 
     # A scalar Noon rotation is around the object's transform origin. For centered
     # analytic geometry (including the quickstart Square), that is exactly Manim's
-    # default Rotate pivot. Offset local geometry would need a circular translation
+    # default rotation pivot. Offset local geometry would need a circular translation
     # path to keep its center fixed, so do not approximate it with linear motion.
     if not _points_close(center, transform_origin):
         raise NotImplementedError(
-            "Rotate currently requires geometry centered on its transform origin"
+            f"{animation_name} currently requires geometry centered on its transform origin"
         )
 
-    about_point = _compat._as_vec2(animation.about_point)
+    if animation.about_point is not None:
+        about_point = _compat._as_vec2(animation.about_point)
+    elif animation.about_edge is not None:
+        about_point = _compat._critical_for(
+            detached,
+            _compat._as_vec2(animation.about_edge),
+        )
+    else:
+        # Manim Mobject.rotate(..., about_point=None) rotates around the current center.
+        about_point = center
+
     if not _points_close(about_point, center):
         raise NotImplementedError(
-            "Rotate about an external point requires curved translation and is not yet supported"
+            f"{animation_name} about an external point/edge requires curved translation and is not yet supported"
         )
 
-    # Manim Rotate eagerly defaults about_point to mobject.get_center(); Mobject.rotate
-    # gives about_point precedence over about_edge. Therefore about_edge does not
-    # alter the supported default/centered Rotate path and can be accepted unchanged.
+    # Rotate eagerly defaults about_point to mobject.get_center(), so about_edge is
+    # ignored there exactly as in Manim. Rotating keeps about_point=None and therefore
+    # resolves about_edge above, rejecting it unless the requested edge is the center.
     return obj, snapshot
 
 
@@ -216,7 +280,7 @@ def _ensure_rotation_interval_available(
         track_end = track_start + float(track["timing"]["duration"])
         if track_start < end_time and start_time < track_end:
             raise ValueError(
-                "Rotate cannot overlap another rotation/generic Transform on the same object"
+                "rotation animation cannot overlap another rotation/generic Transform on the same object"
             )
 
 
@@ -419,7 +483,7 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    public = {"Rotate": Rotate, "FocusOn": FocusOn}
+    public = {"Rotate": Rotate, "Rotating": Rotating, "FocusOn": FocusOn}
     for name, value in public.items():
         setattr(_base, name, value)
         setattr(_compat, name, value)
@@ -432,8 +496,8 @@ def install() -> None:
     _base.__all__ = exports
 
     # Composition imports this module before capturing Scene.play, so nested Rotate
-    # leaves share the same timing resolver and rollback path as top-level plays.
-    # FocusOn intentionally remains top-level-only until dynamic target composition
-    # has a retained representation.
+    # and Rotating leaves share the same timing resolver and rollback path as top-level
+    # plays. FocusOn intentionally remains top-level-only until dynamic target
+    # composition has a retained representation.
     _animate._builder_source = _builder_source
     _compat.Scene.play = _procedural_scene_play
