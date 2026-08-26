@@ -64,12 +64,26 @@ def _ease_in_out_cubic(t: float) -> float:
     return 1.0 - ((-2.0 * value + 2.0) ** 3) / 2.0
 
 
+def _step_start(t: float) -> float:
+    """Internal retained step: source at t=0, target for every t>0."""
+
+    return 0.0 if float(t) <= 0.0 else 1.0
+
+
+def _step_end(t: float) -> float:
+    """Internal retained step: source for t<1, target exactly at t=1."""
+
+    return 0.0 if float(t) < 1.0 else 1.0
+
+
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
     "linear": linear,
     "smooth": smooth,
     "rush_into": rush_into,
     "rush_from": rush_from,
     "there_and_back": there_and_back,
+    "step_start": _step_start,
+    "step_end": _step_end,
 }
 
 
