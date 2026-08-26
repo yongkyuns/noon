@@ -133,7 +133,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             handles.install()
             import _manim_animate as animate
 
-            from noon import BLUE, LEFT, ORANGE, Scene, Square
+            from noon import BLUE, LEFT, ORANGE, Scene, Square, VGroup
 
             # Detached objects must create animation targets through the explicit
             # Rust target-editor boundary, with no Python snapshot round-trip.
@@ -210,6 +210,14 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             assert abs(target_ir["transform"]["rotation"] - 0.4) < 1e-12
             assert square.get_center().x == 0.0
             assert square.get_center().y == 0.0
+
+            # Groups inherit the Mobject protocol but do not yet have one stable
+            # shared family handle. They must keep their explicit member-copy path.
+            group = VGroup(Square(), Square().shift(LEFT))
+            group_builder = group.animate
+            assert isinstance(group_builder.target, VGroup)
+            assert group_builder.target is not group
+            assert len(group_builder.target.submobjects) == 2
             """
         )
         completed = subprocess.run(

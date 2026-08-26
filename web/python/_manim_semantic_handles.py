@@ -291,6 +291,10 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     """Clone a detached target through Rust's explicit target-editor boundary."""
 
+    # Group/VGroup inherit the Mobject protocol but intentionally retain their
+    # Python-owned family copy path until shared family handles land under #61.
+    if not hasattr(self, "_scene") or not hasattr(self, "_object"):
+        return self.copy()
     return _clone_mobject(self, target_state=True)
 
 
