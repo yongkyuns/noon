@@ -15,8 +15,24 @@ const repoRoot = path.resolve(scriptDir, "..");
 const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
-const fixtureSourcePath = path.join(repoRoot, reference.source);
-const fixtureSource = await readFile(fixtureSourcePath, "utf8");
+const fixtureSources = new Map();
+for (const fixture of manifest.fixtures) {
+  const relativeSource = fixture.source ?? reference.source;
+  if (!fixtureSources.has(relativeSource)) {
+    fixtureSources.set(relativeSource, await readFile(path.join(repoRoot, relativeSource), "utf8"));
+  }
+}
+
+function fixtureSourceFor(fixture) {
+  const relativeSource = fixture.source ?? reference.source;
+  const source = fixtureSources.get(relativeSource);
+  assert.ok(source, `${fixture.id}: missing canonical source ${relativeSource}`);
+  return source;
+}
+
+function fixtureSourcePathFor(fixture) {
+  return path.join(repoRoot, fixture.source ?? reference.source);
+}
 const artifactRoot = path.resolve(
   repoRoot,
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
@@ -36,7 +52,12 @@ for (const backend of backends) {
 }
 assert.equal(reference.version, "0.21.0", "raster oracle must stay pinned to ManimCE 0.21.0");
 assert.equal(reference.renderer, "cairo", "initial raster oracle is defined against Cairo");
-assert.ok(fixtureSource.includes("from manim import *"), "canonical source must import real Manim");
+for (const fixture of manifest.fixtures) {
+  assert.ok(
+    fixtureSourceFor(fixture).includes("from manim import *"),
+    `${fixture.id}: canonical source must import real Manim`,
+  );
+}
 
 await rm(artifactRoot, { recursive: true, force: true });
 await mkdir(artifactRoot, { recursive: true });
@@ -143,7 +164,7 @@ async function renderManimReferences() {
       `${reference.pixel_width},${reference.pixel_height}`,
       "--fps",
       String(reference.frame_rate),
-      fixtureSourcePath,
+      fixtureSourcePathFor(fixture),
       fixture.scene,
     ]);
 
@@ -182,9 +203,9 @@ async function renderManimReferences() {
   return results;
 }
 
-function noonSourceFor(scene) {
-  const adapted = fixtureSource.replace("from manim import *", "from noon import *");
-  return `${adapted}\n\nresult = ${scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
+function noonSourceFor(fixture) {
+  const adapted = fixtureSourceFor(fixture).replace("from manim import *", "from noon import *");
+  return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
 }
 
 async function authorNoonScenes() {
@@ -202,7 +223,7 @@ async function authorNoonScenes() {
     for (const fixture of manifest.fixtures) {
       const result = await page.evaluate(
         (source) => window.noonManimCompat.run(source),
-        noonSourceFor(fixture.scene),
+        noonSourceFor(fixture),
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
       assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
@@ -314,7 +335,7 @@ async function captureHostFixture(
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
     {
-      source: noonSourceFor(fixture.scene),
+      source: noonSourceFor(fixture),
       loopDuration: Math.max(1, fixture.expected_duration + 1),
     },
   );

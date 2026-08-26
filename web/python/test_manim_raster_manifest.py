@@ -15,6 +15,11 @@ class ManimRasterManifestTests(unittest.TestCase):
         self.source = self.source_path.read_text(encoding="utf-8")
         self.tree = ast.parse(self.source)
 
+    def source_path_for_fixture(self, fixture: dict[str, object]) -> pathlib.Path:
+        relative = fixture.get("source", self.manifest["reference"]["source"])
+        self.assertIsInstance(relative, str)
+        return REPO_ROOT / relative
+
     def test_reference_profile_is_pinned(self) -> None:
         reference = self.manifest["reference"]
         self.assertEqual(reference["version"], "0.21.0")
@@ -23,22 +28,30 @@ class ManimRasterManifestTests(unittest.TestCase):
         self.assertEqual(reference["frame_rate"], 30)
 
     def test_canonical_source_uses_real_manim_only(self) -> None:
-        self.assertIn("from manim import *", self.source)
-        self.assertNotIn("from noon import *", self.source)
-        imports = [node for node in self.tree.body if isinstance(node, ast.ImportFrom)]
-        self.assertTrue(any(node.module == "manim" for node in imports))
+        source_paths = {
+            self.source_path_for_fixture(fixture) for fixture in self.manifest["fixtures"]
+        }
+        for source_path in source_paths:
+            source = source_path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            self.assertIn("from manim import *", source, source_path)
+            self.assertNotIn("from noon import *", source, source_path)
+            imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
+            self.assertTrue(any(node.module == "manim" for node in imports), source_path)
 
     def test_every_fixture_selects_a_scene_class(self) -> None:
-        classes = {
-            node.name
-            for node in self.tree.body
-            if isinstance(node, ast.ClassDef)
-        }
         fixtures = self.manifest["fixtures"]
         self.assertGreaterEqual(len(fixtures), 4)
         self.assertEqual(len({fixture["id"] for fixture in fixtures}), len(fixtures))
         for fixture in fixtures:
-            self.assertIn(fixture["scene"], classes)
+            source_path = self.source_path_for_fixture(fixture)
+            source = source_path.read_text(encoding="utf-8")
+            classes = {
+                node.name
+                for node in ast.parse(source).body
+                if isinstance(node, ast.ClassDef)
+            }
+            self.assertIn(fixture["scene"], classes, source_path)
             self.assertGreater(float(fixture["expected_duration"]), 0.0)
 
     def test_samples_cover_animation_span(self) -> None:
@@ -51,9 +64,14 @@ class ManimRasterManifestTests(unittest.TestCase):
         self.assertEqual(fractions, sorted(set(fractions)))
 
     def test_noon_adaptation_changes_only_import_before_selection_wrapper(self) -> None:
-        adapted = self.source.replace("from manim import *", "from noon import *", 1)
-        restored = adapted.replace("from noon import *", "from manim import *", 1)
-        self.assertEqual(restored, self.source)
+        source_paths = {
+            self.source_path_for_fixture(fixture) for fixture in self.manifest["fixtures"]
+        }
+        for source_path in source_paths:
+            source = source_path.read_text(encoding="utf-8")
+            adapted = source.replace("from manim import *", "from noon import *", 1)
+            restored = adapted.replace("from noon import *", "from manim import *", 1)
+            self.assertEqual(restored, source, source_path)
 
 
 if __name__ == "__main__":
