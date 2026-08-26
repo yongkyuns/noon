@@ -1,183 +1,141 @@
-"""Thin Python adapters for Noon's shared deterministic rate-function vocabulary.
-
-Playback remains authoritative in Rust (`noon_core::RateFunction`). This module only
-provides Manim-compatible public callables, maps known callables to the shared semantic
-IDs written into scene IR, and mirrors those deterministic functions for authoring-time
-snapshot evaluation inside the Python frontend.
-"""
-
 from __future__ import annotations
 
+import copy
 import math
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-import noon as _base
 import _manim_compat as _compat
 import _noon_ir as _ir
+import noon as _base
 
 
-INFLECTION = 10.0
 _INSTALLED = False
-_ORIGINAL_ADD_TRACK = _ir.Scene._add_track
-_ORIGINAL_MOBJECT_SET_COLOR = _base.Mobject.set_color
 
 
 def linear(t: float) -> float:
-    """Manim's linear rate function."""
-
     return float(t)
 
 
-def _sigmoid(value: float) -> float:
-    return 1.0 / (1.0 + math.exp(-value))
+def smooth(t: float) -> float:
+    t = float(t)
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+    error = 1.0e-4
+    sigmoid = lambda x: 1.0 / (1.0 + math.exp(-x))
+    return float((sigmoid(-6.0 * t + 3.0) - error) / (1.0 - 2.0 * error))
 
 
-def smooth(t: float, inflection: float = INFLECTION) -> float:
-    """Manim-compatible normalized logistic smooth rate function."""
-
-    value = float(t)
-    sharpness = float(inflection)
-    error = _sigmoid(-sharpness / 2.0)
-    result = (
-        _sigmoid(sharpness * (value - 0.5)) - error
-    ) / (1.0 - 2.0 * error)
-    return min(max(result, 0.0), 1.0)
+def rush_into(t: float) -> float:
+    return float(2.0 * smooth(float(t) / 2.0))
 
 
-def rush_into(t: float, inflection: float = INFLECTION) -> float:
-    return 2.0 * smooth(float(t) / 2.0, inflection)
+def rush_from(t: float) -> float:
+    return float(2.0 * smooth(float(t) / 2.0 + 0.5) - 1.0)
 
 
-def rush_from(t: float, inflection: float = INFLECTION) -> float:
-    return 2.0 * smooth(float(t) / 2.0 + 0.5, inflection) - 1.0
+def there_and_back(t: float) -> float:
+    t = float(t)
+    new_t = 2.0 * t if t < 0.5 else 2.0 * (1.0 - t)
+    return float(smooth(new_t))
 
 
-def there_and_back(t: float, inflection: float = INFLECTION) -> float:
-    value = float(t)
-    mirrored = 2.0 * value if value < 0.5 else 2.0 * (1.0 - value)
-    return smooth(mirrored, inflection)
-
-
-def _ease_in_out_cubic(t: float) -> float:
-    value = min(max(float(t), 0.0), 1.0)
-    if value < 0.5:
-        return 4.0 * value * value * value
-    return 1.0 - ((-2.0 * value + 2.0) ** 3) / 2.0
-
-
-def _step_start(t: float) -> float:
-    """Internal retained step: source at t=0, target for every t>0."""
-
-    return 0.0 if float(t) <= 0.0 else 1.0
-
-
-def _step_end(t: float) -> float:
-    """Internal retained step: source for t<1, target exactly at t=1."""
-
-    return 0.0 if float(t) < 1.0 else 1.0
-
-
-_KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
-    "linear": linear,
-    "smooth": smooth,
-    "rush_into": rush_into,
-    "rush_from": rush_from,
-    "there_and_back": there_and_back,
-    "step_start": _step_start,
-    "step_end": _step_end,
-}
-
-
-def easing_from_rate_func(rate_func: object) -> str:
-    """Map a known Manim callable to the language-neutral core semantic ID."""
-
-    name = getattr(rate_func, "__name__", None)
-    for semantic_id, function in _KNOWN_RATE_FUNCTIONS.items():
-        if rate_func is function or rate_func == function or name == semantic_id:
-            return semantic_id
+def easing_from_rate_func(rate_func: Callable[[float], float] | None) -> str:
+    if rate_func is None or rate_func is smooth:
+        return "smooth"
+    if rate_func is linear:
+        return "linear"
+    if rate_func is rush_into:
+        return "rush_into"
+    if rate_func is rush_from:
+        return "rush_from"
+    if rate_func is there_and_back:
+        return "there_and_back"
     raise NotImplementedError(
-        "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
-        "rush_from, and there_and_back; arbitrary Python per-frame rate functions "
-        "are intentionally unsupported"
+        "custom Python rate functions are not supported by the native retained runtime; "
+        "use a supported Noon/Manim rate function"
     )
 
 
-def evaluate_rate_function(semantic_id: str, progress: float) -> float:
-    """Mirror core RateFunction evaluation for authoring-time snapshots only."""
-
-    value = min(max(float(progress), 0.0), 1.0)
-    if semantic_id == "ease_in_out_cubic":
-        return _ease_in_out_cubic(value)
-    function = _KNOWN_RATE_FUNCTIONS.get(semantic_id)
-    if function is None:
-        raise ValueError(f"unsupported easing: {semantic_id}")
-    return function(value)
-
-
-def _track_progress(timing: dict[str, Any], time: float) -> float:
-    raw = max(
-        0.0,
-        min(1.0, (time - timing["start_time"]) / timing["duration"]),
-    )
-    return evaluate_rate_function(timing["easing"], raw)
+def _track_progress(
+    easing: str,
+    value: Any,
+) -> float:
+    t = float(value)
+    if easing == "linear":
+        return t
+    if easing == "smooth":
+        return smooth(t)
+    if easing == "rush_into":
+        return rush_into(t)
+    if easing == "rush_from":
+        return rush_from(t)
+    if easing == "there_and_back":
+        return there_and_back(t)
+    return float(_ir._ORIGINAL_TRACK_PROGRESS(easing, t))
 
 
 def _add_track(
     self: _ir.Scene,
-    obj: _ir.Object,
-    property_name: str,
-    values: dict[str, Any],
+    object_id: int,
+    prop: _ir.Property,
     start_time: float,
     duration: float,
     easing: str,
-    key: str | None,
+    from_value: Any,
+    to_value: Any,
+    *,
+    replace: bool,
+    presence: str | None,
+    time_map: dict[str, Any] | None = None,
 ) -> None:
-    """Bridge the legacy Python IR whitelist to the shared core vocabulary.
-
-    The old IR builder validates only ``linear`` and ``ease_in_out_cubic``. For a
-    known shared semantic ID, reuse all of its existing structural validation with
-    ``linear`` as the temporary accepted token, then restore the semantic ID in the
-    emitted track. Unknown values still flow through the original validator and fail.
-    """
-
-    if easing in _KNOWN_RATE_FUNCTIONS and easing != "linear":
-        _ORIGINAL_ADD_TRACK(
-            self,
-            obj,
-            property_name,
-            values,
-            start_time,
-            duration,
-            "linear",
-            key,
-        )
-        self._tracks[-1]["timing"]["easing"] = easing
-        return
-    _ORIGINAL_ADD_TRACK(
-        self,
-        obj,
-        property_name,
-        values,
-        start_time,
-        duration,
-        easing,
-        key,
-    )
+    from_value = copy.deepcopy(from_value)
+    to_value = copy.deepcopy(to_value)
+    if replace:
+        self._tracks = [
+            track
+            for track in self._tracks
+            if not (track["object"] == object_id and track["property"] == prop)
+        ]
+    track = {
+        "object": object_id,
+        "property": prop,
+        "timing": {
+            "start": float(start_time),
+            "duration": float(duration),
+            "easing": easing,
+        },
+        "values": {
+            "from": from_value,
+            "to": to_value,
+        },
+    }
+    if presence is not None:
+        track["presence"] = presence
+    if time_map is not None:
+        track["time_map"] = copy.deepcopy(time_map)
+    self._tracks.append(track)
 
 
-def _set_color_preserving_opacity(
-    self: _base.Mobject, color: _base.Color
-) -> _base.Mobject:
-    """Match Manim ``set_color`` without coupling RGB to fill/stroke opacity."""
-
-    before = self._current_raw().style
-    result = _ORIGINAL_MOBJECT_SET_COLOR(self, color)
-    raw = _base._raw_mobject(self._current_raw())
-    for channel in ("fill", "stroke"):
-        previous = before[channel]
-        current = raw.style[channel]
-        if previous is not None and current is not None:
-            current["alpha"] = previous["alpha"]
+def _set_color_preserving_opacity(self: _base.Mobject, color: str) -> _base.Mobject:
+    result = self
+    raw = copy.deepcopy(result._raw)
+    style = raw.setdefault("style", {})
+    fill = style.get("fill")
+    stroke = style.get("stroke")
+    previous_fill_alpha = fill.get("alpha") if isinstance(fill, dict) else None
+    previous_stroke_alpha = stroke.get("alpha") if isinstance(stroke, dict) else None
+    result._apply(raw)
+    result.set_fill(color=color)
+    result.set_stroke(color=color)
+    raw = copy.deepcopy(result._raw)
+    style = raw.setdefault("style", {})
+    if previous_fill_alpha is not None and isinstance(style.get("fill"), dict):
+        style["fill"]["alpha"] = previous_fill_alpha
+    if previous_stroke_alpha is not None and isinstance(style.get("stroke"), dict):
+        style["stroke"]["alpha"] = previous_stroke_alpha
     result._apply(raw)
     return result
 
@@ -216,6 +174,7 @@ def install() -> None:
         "rush_into": rush_into,
         "rush_from": rush_from,
         "there_and_back": there_and_back,
+        "MoveToTarget": MoveToTarget,
     }
     for name, value in public.items():
         setattr(_compat, name, value)
@@ -228,17 +187,13 @@ def install() -> None:
     # a transparent stroke must not become visible while the color interpolates.
     _base.Mobject.set_color = _set_color_preserving_opacity
 
-    # Construction is Python syntax adaptation only; the animation itself is the same
-    # retained Transform used by Rust-backed playback.
-    _base.MoveToTarget = MoveToTarget
-
     # `_noon_ir` needs progress only while materializing authoring-time snapshots.
     # Runtime playback never calls this mirror; Rust RateFunction remains authoritative.
     _ir._track_progress = _track_progress
     _ir.Scene._add_track = _add_track
 
     exports = list(_base.__all__)
-    for name in [*public, "MoveToTarget"]:
+    for name in public:
         if name not in exports:
             exports.append(name)
     _base.__all__ = exports
