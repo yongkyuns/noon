@@ -21,6 +21,7 @@ class ManimGroupCopyTests(unittest.TestCase):
             """
             import _manim_compat
             _manim_compat.install()
+            import _manim_phase_b  # noqa: F401 - installs pinned style/geometry semantics
             import _manim_geometry  # noqa: F401
 
             from noon import Arrow, ORIGIN, RIGHT, VGroup
