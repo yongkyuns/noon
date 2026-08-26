@@ -66,10 +66,22 @@ class ParityTracker(Scene):
 `,
 };
 
-function rustCorpus() {
+const javascriptParityCases = new Set([
+  "animate_options",
+  "lifecycle",
+]);
+
+const quickstartEquivalentCases = new Set([
+  "CreateCircle",
+  "SquareToCircle",
+  "SquareAndCircle",
+  "AnimatedSquareToCircle",
+]);
+
+function rustCorpus(example = "cross_language_parity") {
   const output = execFileSync(
     "cargo",
-    ["run", "--quiet", "-p", "noon", "--example", "cross_language_parity"],
+    ["run", "--quiet", "-p", "noon", "--example", example],
     { cwd: repoRoot, encoding: "utf8" },
   );
   const corpus = new Map();
@@ -111,6 +123,44 @@ function assertSemanticEqual(actual, expected, location = "document") {
   assert.equal(actual, expected, `${location}: value mismatch`);
 }
 
+async function javascriptCorpora(page) {
+  return page.evaluate(async () => {
+    const noon = await import("/web/noon-authoring.js");
+    await noon.initNoon();
+
+    const parity = {};
+
+    {
+      const scene = new noon.Scene();
+      const circle = new noon.Circle(1.0);
+      scene.add(circle);
+      scene.play(
+        circle.animate().shift(noon.RIGHT).rotate(0.25),
+        { runTime: 2.0, rateFunc: noon.smooth },
+      );
+      parity.animate_options = scene.toJSON();
+    }
+
+    {
+      const scene = new noon.Scene();
+      const circle = new noon.Circle(0.5);
+      scene.add(circle);
+      scene.play(noon.Create(circle), { runTime: 1.0 });
+      scene.play(noon.FadeOut(circle), { runTime: 0.5 });
+      scene.play(noon.FadeIn(circle), { runTime: 0.5 });
+      parity.lifecycle = scene.toJSON();
+    }
+
+    const examples = await import("/web/js/examples/manim-quickstart-equivalents.js");
+    const quickstart = {};
+    for (const [name, build] of Object.entries(examples.quickstartEquivalents)) {
+      quickstart[name] = build().toJSON();
+    }
+
+    return { parity, quickstart };
+  });
+}
+
 let serverOutput = "";
 const server = spawn(
   "python3",
@@ -138,7 +188,9 @@ async function waitForServer() {
 let browser = null;
 try {
   const rust = rustCorpus();
+  const rustQuickstart = rustCorpus("manim_quickstart_equivalents");
   assert.deepEqual([...rust.keys()].sort(), Object.keys(pythonCases).sort());
+  assert.deepEqual([...rustQuickstart.keys()].sort(), [...quickstartEquivalentCases].sort());
 
   await waitForServer();
   browser = await chromium.launch({
@@ -163,10 +215,24 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${name}: Python authoring failed`);
-    assertSemanticEqual(result.document, rust.get(name), name);
+    assertSemanticEqual(result.document, rust.get(name), `${name}: python/rust`);
   }
+
+  const javascript = await javascriptCorpora(page);
+  assert.deepEqual(Object.keys(javascript.parity).sort(), [...javascriptParityCases].sort());
+  for (const [name, document] of Object.entries(javascript.parity)) {
+    assert.ok(rust.has(name), `${name}: missing Rust parity reference`);
+    assertSemanticEqual(document, rust.get(name), `${name}: javascript/rust`);
+  }
+
+  assert.deepEqual(Object.keys(javascript.quickstart).sort(), [...quickstartEquivalentCases].sort());
+  for (const [name, document] of Object.entries(javascript.quickstart)) {
+    assert.ok(rustQuickstart.has(name), `${name}: missing Rust Quickstart reference`);
+    assertSemanticEqual(document, rustQuickstart.get(name), `${name}: quickstart javascript/rust`);
+  }
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("cross-language semantic parity corpus passed");
+  console.log("Python/Rust parity, JavaScript parity, and Rust/JavaScript Quickstart equivalence passed");
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
