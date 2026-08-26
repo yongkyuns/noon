@@ -8,9 +8,9 @@ use std::{fmt, sync::Arc};
 
 use noon_core::{
     Color, FontFaceIdentity, GeometryResourceArena, GlyphRun, PositionedGlyph, Rect,
-    TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact,
-    TextLayoutBackend, TextLayoutBackendKind, TextPart, TextResource, TextResourceValidationError,
-    TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+    TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
+    TextLayoutBackendKind, TextPart, TextResource, TextResourceValidationError, TextSourceKind,
+    TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
 };
 use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
@@ -86,7 +86,9 @@ impl fmt::Display for TypstBackendError {
                 formatter,
                 "Typst text/math resources must produce one page, got {pages}"
             ),
-            Self::SourceTooLarge => write!(formatter, "Typst source exceeds Noon's text span space"),
+            Self::SourceTooLarge => {
+                write!(formatter, "Typst source exceeds Noon's text span space")
+            }
             Self::UnsupportedGradientOrTiling => write!(
                 formatter,
                 "Typst gradients/tilings are not yet representable by retained text styles"
@@ -99,7 +101,9 @@ impl fmt::Display for TypstBackendError {
                 formatter,
                 "Typst clipped text groups are not yet representable by retained text resources"
             ),
-            Self::InvalidResource(error) => write!(formatter, "invalid normalized text resource: {error}"),
+            Self::InvalidResource(error) => {
+                write!(formatter, "invalid normalized text resource: {error}")
+            }
         }
     }
 }
@@ -224,9 +228,8 @@ fn one_page(document: &PagedDocument) -> Result<&typst_layout::Page, TypstBacken
 }
 
 fn layout_artifact(prepared_source: &str) -> TextLayoutArtifact {
-    let artifact_identity = format!(
-        "{TYPST_BACKEND_VERSION}\0{TEMPLATE_VERSION}\0{prepared_source}"
-    );
+    let artifact_identity =
+        format!("{TYPST_BACKEND_VERSION}\0{TEMPLATE_VERSION}\0{prepared_source}");
     TextLayoutArtifact {
         backend: TextLayoutBackend {
             kind: TextLayoutBackendKind::Typst,
@@ -372,9 +375,7 @@ impl FrameNormalizer<'_> {
             yy: -1.0,
             ..TextAffineTransform::IDENTITY
         };
-        let transform = font_y_up_to_frame
-            .then(state)
-            .then(self.page_to_noon);
+        let transform = font_y_up_to_frame.then(state).then(self.page_to_noon);
 
         self.runs.push(GlyphRun {
             font: FontFaceIdentity {
@@ -400,9 +401,17 @@ impl FrameNormalizer<'_> {
     ) -> Result<(), TypstBackendError> {
         let path = geometry_path(&shape.geometry);
         let handle = self.geometry.insert_path(path);
-        let fill = shape.fill.as_ref().map(inherited_color).transpose()?.flatten();
+        let fill = shape
+            .fill
+            .as_ref()
+            .map(inherited_color)
+            .transpose()?
+            .flatten();
         let (stroke, stroke_width) = match &shape.stroke {
-            Some(stroke) => (inherited_color(&stroke.paint)?, stroke.thickness.to_pt() as f32),
+            Some(stroke) => (
+                inherited_color(&stroke.paint)?,
+                stroke.thickness.to_pt() as f32,
+            ),
             None => (None, 0.0),
         };
         self.vectors.push(TextVectorItem {
@@ -559,7 +568,13 @@ mod tests {
         assert!(artifact.resource.bounds.width() > 0.0);
         assert!(artifact.resource.bounds.height() > 0.0);
         assert_eq!(
-            artifact.resource.layout_artifact.as_ref().unwrap().backend.kind,
+            artifact
+                .resource
+                .layout_artifact
+                .as_ref()
+                .unwrap()
+                .backend
+                .kind,
             TextLayoutBackendKind::Typst
         );
     }
@@ -590,11 +605,8 @@ mod tests {
 
     #[test]
     fn labeled_groups_become_stable_semantic_parts() {
-        let artifact = compile_typst_resource(
-            "#box([#label(\"lhs\") x]) + y",
-            TypstMode::Markup,
-        )
-        .unwrap();
+        let artifact =
+            compile_typst_resource("#box([#label(\"lhs\") x]) + y", TypstMode::Markup).unwrap();
         assert!(artifact
             .resource
             .parts
@@ -608,8 +620,18 @@ mod tests {
         let second = compile_typst_resource("$ x^2 $", TypstMode::Markup).unwrap();
         assert_eq!(first.resource.runs, second.resource.runs);
         assert_eq!(
-            first.resource.layout_artifact.as_ref().unwrap().artifact_fingerprint,
-            second.resource.layout_artifact.as_ref().unwrap().artifact_fingerprint
+            first
+                .resource
+                .layout_artifact
+                .as_ref()
+                .unwrap()
+                .artifact_fingerprint,
+            second
+                .resource
+                .layout_artifact
+                .as_ref()
+                .unwrap()
+                .artifact_fingerprint
         );
     }
 
