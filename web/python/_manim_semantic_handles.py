@@ -260,14 +260,18 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     return _ORIGINAL_APPLY(self, raw)
 
 
-def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
+def _clone_mobject(
+    self: _base.Mobject, *, target_state: bool = False
+) -> _base.Mobject:
     clone = object.__new__(type(self))
     handle = _handle_for(self)
     if handle is not None:
         clone._raw = None
         clone._scene = None
         clone._object = None
-        clone._semantic_handle = handle.cloneHandle()
+        clone._semantic_handle = (
+            handle.targetEditor() if target_state else handle.cloneHandle()
+        )
     else:
         _init(clone, self._current_raw())
 
@@ -278,6 +282,16 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
             else:
                 setattr(clone, name, copy.deepcopy(value))
     return clone
+
+
+def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
+    return _clone_mobject(self)
+
+
+def _target_mobject(self: _base.Mobject) -> _base.Mobject:
+    """Clone a detached target through Rust's explicit target-editor boundary."""
+
+    return _clone_mobject(self, target_state=True)
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
@@ -373,9 +387,14 @@ def _rotate(
     signed_angle = _compat._rotation_angle_2d(angle, axis)
     if about_point is not None:
         pivot = _compat._as_vec2(about_point)
+    elif about_edge is None:
+        pivot = _base.Vec2(float(handle.centerX), float(handle.centerY))
     else:
-        edge = _base.ORIGIN if about_edge is None else _compat._as_vec2(about_edge)
-        pivot = _critical(self, edge)
+        edge = _compat._as_vec2(about_edge)
+        pivot = _base.Vec2(
+            float(handle.criticalX(edge.x, edge.y)),
+            float(handle.criticalY(edge.x, edge.y)),
+        )
     handle.rotateAboutPoint(signed_angle, pivot.x, pivot.y)
     return self
 
@@ -524,6 +543,15 @@ def _set_fill(
     handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
+    if color is not None and opacity is not None:
+        parsed = _phase_b._as_color("fill color", color)
+        handle.setFill(
+            parsed.red,
+            parsed.green,
+            parsed.blue,
+            _phase_b._opacity("fill opacity", opacity),
+        )
+        return self
     if color is not None:
         parsed = _phase_b._as_color("fill color", color)
         handle.setFillColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
@@ -619,6 +647,7 @@ def install() -> None:
     _base.Mobject._current_raw = _current_raw
     _base.Mobject._apply = _apply
     _base.Mobject.copy = _copy_mobject
+    _base.Mobject._copy_for_animate_target = _target_mobject
     _base.Mobject.get_center = _get_center
     _base.Mobject.width = property(_width, _set_width_property)
     _base.Mobject.height = property(_height, _set_height_property)
@@ -637,6 +666,7 @@ def install() -> None:
     # the same Rust-owned handle so `.animate` does not recreate Python snapshots.
 
     _compat.VMobject.copy = _copy_mobject
+    _compat.VMobject._copy_for_animate_target = _target_mobject
     _compat.VMobject.set_fill = _set_fill
     _compat.VMobject.set_stroke = _set_stroke
     _compat.VMobject.set_opacity = _set_opacity

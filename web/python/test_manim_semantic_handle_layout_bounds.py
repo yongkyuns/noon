@@ -44,6 +44,14 @@ class ManimSemanticHandleLayoutBoundsTests(unittest.TestCase):
                 def cloneHandle(self):
                     return FakeHandle(self.snapshotJson())
 
+                @property
+                def centerX(self):
+                    return float(self.snapshot[\"transform\"][\"translation\"][\"x\"])
+
+                @property
+                def centerY(self):
+                    return float(self.snapshot[\"transform\"][\"translation\"][\"y\"])
+
                 def setFillOpacity(self, opacity):
                     fill = self.snapshot[\"style\"][\"fill\"]
                     if fill is not None:

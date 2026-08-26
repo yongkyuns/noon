@@ -62,6 +62,34 @@ class ManimRotateSemanticsTests(unittest.TestCase):
           self.snapshot = json.loads(snapshot_json)
       def cloneHandle(self):
           return FakeHandle(self.snapshotJson())
+      @property
+      def centerX(self):
+          line = self.snapshot[\"geometry\"][\"line\"]
+          local_x = (float(line[\"start\"][\"x\"]) + float(line[\"end\"][\"x\"])) * 0.5
+          local_y = (float(line[\"start\"][\"y\"]) + float(line[\"end\"][\"y\"])) * 0.5
+          transform = self.snapshot[\"transform\"]
+          x = local_x * float(transform[\"scale\"][\"x\"])
+          y = local_y * float(transform[\"scale\"][\"y\"])
+          angle = float(transform[\"rotation\"])
+          return (
+              x * math.cos(angle)
+              - y * math.sin(angle)
+              + float(transform[\"translation\"][\"x\"])
+          )
+      @property
+      def centerY(self):
+          line = self.snapshot[\"geometry\"][\"line\"]
+          local_x = (float(line[\"start\"][\"x\"]) + float(line[\"end\"][\"x\"])) * 0.5
+          local_y = (float(line[\"start\"][\"y\"]) + float(line[\"end\"][\"y\"])) * 0.5
+          transform = self.snapshot[\"transform\"]
+          x = local_x * float(transform[\"scale\"][\"x\"])
+          y = local_y * float(transform[\"scale\"][\"y\"])
+          angle = float(transform[\"rotation\"])
+          return (
+              x * math.sin(angle)
+              + y * math.cos(angle)
+              + float(transform[\"translation\"][\"y\"])
+          )
       def setFillOpacity(self, opacity):
           if self.snapshot[\"style\"][\"fill\"] is not None:
               self.snapshot[\"style\"][\"fill\"][\"alpha\"] = float(opacity)

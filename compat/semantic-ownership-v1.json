@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "issue": "#61",
+  "description": "Ownership inventory for the supported Manim-compatible authoring surface.",
+  "classifications": [
+    "host-language-required",
+    "python-adapter-only",
+    "python-semantic-duplicate",
+    "shared-rust"
+  ],
+  "duplicate_debt_budgets": [
+    {"path": "web/python/_manim_animate.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_compat.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/_manim_draw_border_then_fill.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
+    {"path": "web/python/_manim_draw_border_then_fill.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_growing.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
+    {"path": "web/python/_manim_growing.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_rotate.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_semantic_handles.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_semantic_handles.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_updaters.py", "token": "copy.deepcopy", "maximum": 7, "migration_issue": "#61"},
+    {"path": "web/python/_manim_updaters.py", "token": "_ir.Mobject(", "maximum": 2, "migration_issue": "#61"},
+    {"path": "web/python/_noon_ir.py", "token": "copy.deepcopy", "maximum": 11, "migration_issue": "#61"},
+    {"path": "web/python/_noon_ir.py", "token": "_snapshot_for_object_at", "maximum": 6, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_snapshot_for_object_at", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 2, "migration_issue": "#61"}
+  ],
+  "operations": [
+    {
+      "id": "mobject.circle",
+      "surface": "Circle",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Circle.__init__"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::circle"},
+      "reason": "Python still constructs the authoritative circle transport snapshot before creating a shared handle.",
+      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.square",
+      "surface": "Square",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Square.__init__"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::square"},
+      "reason": "Python still constructs the authoritative square transport snapshot before creating a shared handle.",
+      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.rectangle",
+      "surface": "Rectangle",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Rectangle.__init__"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::rectangle"},
+      "reason": "Python still constructs the authoritative rectangle transport snapshot before creating a shared handle.",
+      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.line",
+      "surface": "Line",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Line.__init__"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::line"},
+      "reason": "Python still constructs the authoritative line transport snapshot before creating a shared handle.",
+      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.shift",
+      "surface": "Detached and animate-target Mobject.shift",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::shift"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_shift"}]
+    },
+    {
+      "id": "mobject.move-to",
+      "surface": "Mobject.move_to",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_move_to/_move_to"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::move_to"},
+      "reason": "The Python compatibility formula still chooses critical points and masks before delegating only the final shift.",
+      "replacement": "Move the complete compatibility placement operation behind the shared handle.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.scale",
+      "surface": "Detached and animate-target Mobject.scale",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::scale"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_scale"}]
+    },
+    {
+      "id": "mobject.rotate",
+      "surface": "Detached and animate-target Mobject.rotate",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::rotate_about_point"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rotate"}]
+    },
+    {
+      "id": "mobject.style",
+      "surface": "Detached and animate-target Mobject.set_color/set_fill/set_stroke/set_opacity",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::set_*"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_set_color/_set_fill/_set_stroke/_set_opacity"}]
+    },
+    {
+      "id": "mobject.layout-query",
+      "surface": "Mobject.center/width/height/critical_point",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::center/width/height/critical_point"},
+      "reason": "Python materializes handle snapshots and evaluates the compatibility bounds contract locally instead of using the shared query result.",
+      "replacement": "Finish #62 bounds integration and route these queries directly to shared semantic handles.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "geometry.path-layout-query",
+      "surface": "Vector-path and Manim-specialized geometry layout bounds",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_phase_b.py", "symbol": "_vector_path_world_bounds/_manim_layout_bounds"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_model.rs", "symbol": "semantic_path_bounds"},
+      "reason": "Python still evaluates vector-path extrema and Manim-specific control-hull bounds instead of querying one shared geometry model.",
+      "replacement": "Represent compatibility bounds policy in Rust and expose the resulting layout bounds through semantic handles.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.next-to",
+      "surface": "Mobject.next_to",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_next_to"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::next_to_handle/next_to_point"},
+      "reason": "Python still owns direction, aligner, critical-point, mask, and buffer composition for the compatibility operation.",
+      "replacement": "Pass normalized arguments to the shared next-to operation without recomputing placement in Python.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.align",
+      "surface": "Mobject.align_to/align_on_border",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_align_to/_align_to/_align_on_frame"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::align_to_handle/align_to_point/align_on_frame"},
+      "reason": "Python still computes alignment and frame-edge deltas for compatibility wrappers.",
+      "replacement": "Delegate normalized alignment requests to the shared handle operations.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "mobject.become-replace",
+      "surface": "Detached Mobject.become/replace",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::become_handle/replace_handle"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_become/_replace"}]
+    },
+    {
+      "id": "animation.transform",
+      "surface": "Transform/ReplacementTransform/TransformFromCopy",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_transform"},
+      "reason": "Python still expands transform variants and authors their object-snapshot tracks even though the Rust facade has the shared lowering.",
+      "replacement": "Pass transform intent and handles to the shared Rust authoring scene.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "animation.lifecycle",
+      "surface": "Create/Uncreate/FadeIn/FadeOut",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create/_subset_scene_play"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::append_create/append_fade_in/append_fade_out"},
+      "reason": "Shared lifecycle policy is consulted, but Python still constructs endpoint snapshots, presence tracks, and final handoff state.",
+      "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "animation.composition",
+      "surface": "AnimationGroup/LaggedStart/LaggedStartMap/Succession",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_composition.py", "symbol": "_schedule_composition"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/composition.rs", "symbol": "CompositionSchedule/resolve_composition_schedule"},
+      "reason": "Rust resolves child intervals, but Python still recursively flattens the composition tree and authors the resulting time-map steps.",
+      "replacement": "Move composition tree lowering and time-map attachment to the shared Rust authoring facade; Python should retain only syntax adaptation.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "animation.options",
+      "surface": "Animation and Scene.play timing/rate options",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/authoring.rs", "symbol": "resolve_animation_options"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_animation_options.py", "symbol": "resolve"}]
+    },
+    {
+      "id": "animate.target-state",
+      "surface": "Mobject.animate shift/set_fill/scale/rotate target edits",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor/shift/set_fill/scale/rotate"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_AnimateBuilderMixin._initialize_builder"}, {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_target_mobject"}]
+    },
+    {
+      "id": "animate.group-target-state",
+      "surface": "Group.animate target derivation",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "_GroupAnimationBuilder/Group.copy"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor"},
+      "reason": "Group.animate still copies Python family structure and clones each member independently instead of editing one shared family target.",
+      "replacement": "Introduce stable shared family handles and route group target derivation through the shared target editor.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "scene-bound-state",
+      "surface": "Scene-bound Mobject snapshot and mutation state",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._raw/_current_raw/_apply"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore/SemanticNode"},
+      "reason": "Scene-bound wrappers retain a Python ObjectSnapshot alongside the Rust semantic scene and reconcile the two during authoring.",
+      "replacement": "Bind scene wrappers to stable Rust semantic handles and remove Python-owned mutable snapshots from the normal authoring path.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "authoring-copy-snapshot",
+      "surface": "Mobject.copy and evaluated authoring snapshots",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject.copy"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::target_editor"},
+      "reason": "Python copy/deepcopy and JSON snapshot materialization remain fallback ownership paths for targets and lifecycle handoffs.",
+      "replacement": "Use Rust handle cloning and shared evaluated snapshots; reserve JSON for the external document boundary.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "group-family",
+      "surface": "Group/VGroup family membership and flattening",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Group/VGroup"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore::add_member/remove_member"},
+      "reason": "Python groups still own child collections and flatten family operations before lowering, while Rust has family references in the semantic store.",
+      "replacement": "Retain family identity in shared semantic handles and lower group operations from that shared representation.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "scene-play-lifecycle",
+      "surface": "Scene.add/play/wait cursor and lifecycle authoring",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Scene.add/play/wait"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendAuthoringScene::add/play_batch/wait"},
+      "reason": "The Python facade still owns scene cursor and object binding decisions before serializing a Rust scene document.",
+      "replacement": "Make the Rust authoring scene authoritative and keep Python Scene as a thin call-shape adapter.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "scene-membership-lifecycle",
+      "surface": "Scene.remove/replace/clear and top-level ordering",
+      "classification": "python-semantic-duplicate",
+      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Scene.remove/replace/clear"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/lifecycle.rs", "symbol": "LifecyclePlan/validate_presence_transition"},
+      "reason": "Python still chooses presence transitions and mutates top-level wrapper ordering for scene membership changes.",
+      "replacement": "Author membership and presence changes through a stable shared scene handle, retaining only Python wrapper identity bookkeeping.",
+      "migration_issue": "#61"
+    },
+    {
+      "id": "layout.arrange",
+      "surface": "Group.arrange",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange"},
+      "reason": "The operation is Manim collection syntax: it iterates Python children and delegates each placement to shared next_to semantics.",
+      "replacement": "Keep only until shared family handles can express collection iteration directly."
+    },
+    {
+      "id": "rate-function.lookup",
+      "surface": "Known Manim rate-function callable lookup",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/_manim_rate_functions.py", "symbol": "easing_from_rate_func"},
+      "reason": "Python must map a callable object to a stable shared semantic identifier; numerical evaluation belongs to Rust.",
+      "replacement": "Emit the identifier to the shared resolver."
+    },
+    {
+      "id": "scene.updater-callback",
+      "surface": "Mobject.add_updater/remove_updater/clear_updaters",
+      "classification": "host-language-required",
+      "owner": {"language": "python", "path": "web/python/_manim_updaters.py", "symbol": "run_callback_phase"},
+      "reason": "Arbitrary user callback code is intentionally executed by the host language through the callback bridge.",
+      "host_callback": true
+    },
+    {
+      "id": "reactive.tracker-binding-adapter",
+      "surface": "ValueTracker, native signal, and property-binding declarations",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "ValueTracker/_register_native_state/_bind"},
+      "reason": "Python normalizes Manim call shapes and records language-neutral signal and binding declarations; it does not evaluate the graph or mutate rendered objects per frame.",
+      "replacement": "Keep the adapter thin and route any new deterministic reactive policy into Rust."
+    },
+    {
+      "id": "reactive.deterministic-evaluation",
+      "surface": "Reactive graph validation, evaluation, invalidation, and native input dispatch",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive_impl.rs", "symbol": "ReactiveProgram/ReactiveState"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "_to_document"}]
+    }
+  ]
+}
