@@ -3,7 +3,9 @@
 This module never evaluates dependencies or mutates rendered objects per frame. It records
 signal declarations, deterministic signal tracks, native input bindings, and property bindings
 in the language-neutral semantic document; Rust validates, lowers, evaluates, and invalidates
-runtime state.
+runtime state. Deterministic ValueTracker position bindings are also lowered to ordinary
+position tracks so the legacy execution-worker transport can play them until it consumes the
+reactive timeline natively.
 """
 
 from __future__ import annotations
@@ -107,6 +109,7 @@ class ValueTracker:
             self._scene._reactive_signals[self._signal_id]["source"]["input"][
                 "scalar"
             ] = value
+            _update_position_fallback_initial(self._scene, self._signal_id, value)
         self._value = value
         return self
 
@@ -147,6 +150,7 @@ def _scene_init(self: _ir.Scene) -> None:
     self._reactive_signals: list[dict[str, Any]] = []
     self._reactive_bindings: list[dict[str, Any]] = []
     self._reactive_signal_tracks: list[dict[str, Any]] = []
+    self._reactive_position_fallbacks: dict[int, list[dict[str, Any]]] = {}
     self._native_inputs: list[dict[str, Any]] = []
 
 
@@ -208,6 +212,59 @@ def _bind(scene: _base.Scene, signal_id: int, mobject: object, property_name: st
             "property": property_name,
         }
     )
+
+
+def _position_from_tracker(
+    fallback: dict[str, Any], value: float
+) -> tuple[float, float]:
+    direction = fallback["direction"]
+    offset = fallback["offset"]
+    return (
+        float(offset["x"]) + value * float(direction["x"]),
+        float(offset["y"]) + value * float(direction["y"]),
+    )
+
+
+def _update_position_fallback_initial(
+    scene: _ir.Scene, signal_id: int, value: float
+) -> None:
+    for fallback in getattr(scene, "_reactive_position_fallbacks", {}).get(
+        signal_id, []
+    ):
+        x, y = _position_from_tracker(fallback, value)
+        scene._objects[fallback["object"].id]["transform"]["translation"] = {
+            "x": x,
+            "y": y,
+        }
+
+
+def _lower_position_fallback_tracks(
+    scene: _base.Scene,
+    signal_id: int,
+    from_value: float,
+    to_value: float,
+    *,
+    start_time: float,
+    run_time: float,
+    easing: str,
+    signal_track_index: int,
+) -> None:
+    for binding_index, fallback in enumerate(
+        getattr(scene, "_reactive_position_fallbacks", {}).get(signal_id, [])
+    ):
+        _ir.Scene.animate_position(
+            scene,
+            fallback["object"],
+            _position_from_tracker(fallback, from_value),
+            _position_from_tracker(fallback, to_value),
+            duration=run_time,
+            start_time=start_time,
+            easing=easing,
+            key=(
+                f"@reactive-position:{signal_id}:{fallback['object'].id}:"
+                f"{signal_track_index}:{binding_index}"
+            ),
+        )
 
 
 def _native_drives_signal(scene: _ir.Scene, signal_id: int) -> bool:
@@ -297,6 +354,7 @@ def _schedule_value_builder(
         previous_end = previous["timing"]["start_time"] + previous["timing"]["duration"]
         if start_time < previous_end:
             raise ValueError("ValueTracker animations for one tracker must not overlap")
+    signal_track_index = len(scene._reactive_signal_tracks)
     scene._reactive_signal_tracks.append(
         {
             "signal": signal_id,
@@ -308,6 +366,16 @@ def _schedule_value_builder(
                 "easing": easing,
             },
         }
+    )
+    _lower_position_fallback_tracks(
+        scene,
+        signal_id,
+        from_value,
+        builder.target_value,
+        start_time=start_time,
+        run_time=run_time,
+        easing=easing,
+        signal_track_index=signal_track_index,
     )
     builder.tracker._value = builder.target_value
 
@@ -583,6 +651,19 @@ def bind_position(
     }
     derived = _append_derived(scene, expression)
     _bind(scene, derived, mobject, "position")
+
+    # EngineScenePlayer currently consumes the legacy object/track projection of
+    # the authored document. Keep an equivalent deterministic position projection
+    # until that worker transport consumes TimedSemanticScene directly.
+    raw = scene._raw_object(mobject)
+    scene._reactive_position_fallbacks.setdefault(tracker_id, []).append(
+        {
+            "object": raw,
+            "direction": direction_ir,
+            "offset": offset_ir,
+        }
+    )
+    _update_position_fallback_initial(scene, tracker_id, tracker.get_value())
     return scene
 
 
