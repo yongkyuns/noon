@@ -293,6 +293,7 @@
     {
       "id": "restore-example",
       "scene": "RestoreExample",
+      "source": "parity/manim-v0.21/upstream-examples/restore_example.py",
       "expected_duration": 6.0
     }
   ],
