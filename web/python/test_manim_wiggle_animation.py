@@ -100,7 +100,7 @@ class ManimWiggleAnimationTests(unittest.TestCase):
             transforms = [track for track in tracks if track["property"] == "transform"]
             rotations = [track for track in tracks if track["property"] == "rotation"]
             assert len(transforms) == 2
-            assert len(rotations) == 1
+            assert len(rotations) == 2
 
             transforms.sort(key=lambda track: track["id"])
             outward, returning = transforms
@@ -122,7 +122,8 @@ class ManimWiggleAnimationTests(unittest.TestCase):
             assert abs(restored["transform"]["scale"]["x"] - 1.0) < 1e-12
             assert abs(restored["transform"]["scale"]["y"] - 1.0) < 1e-12
 
-            rotation = rotations[0]
+            rotations.sort(key=lambda track: track["id"])
+            rotation, restore_rotation = rotations
             assert rotation["timing"]["easing"] == "wiggle_6"
             assert abs(rotation["timing"]["start_time"] - 0.0) < 1e-12
             assert abs(rotation["timing"]["duration"] - 2.0) < 1e-12
@@ -132,6 +133,16 @@ class ManimWiggleAnimationTests(unittest.TestCase):
             values = rotation["values"]["scalar"]
             assert abs(values["from"] - 0.0) < 1e-12
             assert abs(values["to"] - 0.01 * math.tau) < 1e-12
+
+            # The later restore track is intentionally unbegun for every t < end:
+            # step_end maps all pre-end samples to 0, which lies before its child
+            # interval. At the exact endpoint mapped-track cleanup selects its base
+            # target, matching Manim Wiggle.finish() returning to source rotation.
+            assert restore_rotation["timing"]["easing"] == "linear"
+            assert restore_rotation["values"]["scalar"] == {"from": 0.0, "to": 0.0}
+            assert restore_rotation["time_map"] == {
+                "steps": [{"start": 0.5, "duration": 0.5, "rate_func": "step_end"}]
+            }
 
             # The retained evaluator mirrors Manim's internal wiggle(alpha, 6).
             assert abs(_manim_rate_functions._wiggle_6(0.25) + 0.5) < 1e-12
