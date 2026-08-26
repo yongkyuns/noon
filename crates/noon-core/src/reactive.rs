@@ -33,6 +33,10 @@ pub use resource_arena::*;
 mod text_resources;
 pub use text_resources::*;
 
+#[path = "object_content.rs"]
+mod object_content;
+pub use object_content::*;
+
 include!("reactive_impl.rs");
 
 mod compute_ir;
