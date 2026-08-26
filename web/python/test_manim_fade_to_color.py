@@ -103,6 +103,13 @@ class ManimFadeToColorTests(unittest.TestCase):
             assert animation.anim_args["run_time"] == 2.0
             assert animation.anim_args["rate_func"] is linear
 
+            # FadeToColor is ApplyMethod(mobject.set_color, ...), whose target is copied
+            # in Transform.begin(). Later mutations must therefore supply the source
+            # alpha/transform state while only color channels change in the target.
+            square.set_fill(BLUE, opacity=0.55)
+            square.set_stroke(GREEN, opacity=0.25, width=7)
+            square.shift((0.5, 0.25))
+
             scene.play(animation)
             assert abs(scene.time - 2.0) < 1e-12
             assert square._scene is scene
@@ -122,6 +129,7 @@ class ManimFadeToColorTests(unittest.TestCase):
 
             source_state = track["values"]["object"]["from"]
             target_state = track["values"]["object"]["to"]
+            assert source_state["transform"]["translation"] == {"x": 1.75, "y": -0.25}
             assert target_state["transform"] == source_state["transform"]
             assert target_state["style"]["fill"]["red"] == RED.red
             assert target_state["style"]["fill"]["green"] == RED.green
@@ -129,8 +137,12 @@ class ManimFadeToColorTests(unittest.TestCase):
             assert target_state["style"]["stroke"]["red"] == RED.red
             assert target_state["style"]["stroke"]["green"] == RED.green
             assert target_state["style"]["stroke"]["blue"] == RED.blue
-            assert abs(target_state["style"]["fill"]["alpha"] - 0.35) < 1e-12
-            assert abs(target_state["style"]["stroke"]["alpha"] - 0.65) < 1e-12
+            assert abs(source_state["style"]["fill"]["alpha"] - 0.55) < 1e-12
+            assert abs(source_state["style"]["stroke"]["alpha"] - 0.25) < 1e-12
+            assert abs(target_state["style"]["fill"]["alpha"] - 0.55) < 1e-12
+            assert abs(target_state["style"]["stroke"]["alpha"] - 0.25) < 1e-12
+            assert abs(source_state["style"]["stroke_width"] - 7.0) < 1e-12
+            assert abs(target_state["style"]["stroke_width"] - 7.0) < 1e-12
 
             try:
                 FadeToColor(VGroup(Square(), Square()), RED)
