@@ -162,6 +162,18 @@
       "parity_fixture": "add-wait-lagged-start-map"
     },
     {
+      "id": "parity-grow-point-center-edge",
+      "title": "Exact parity: GrowFromPoint, GrowFromCenter, and GrowFromEdge",
+      "status": "ready",
+      "path": "python/examples/manim_parity_grow_point_center_edge.py",
+      "category": "parity/growing",
+      "features": ["GrowFromPoint", "GrowFromCenter", "GrowFromEdge", "LaggedStart", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.growing.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "grow-point-center-edge"
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
