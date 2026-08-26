@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use noon::{
     Animate, Animation, Circle, Create, FadeIn, FadeOut, IntoSnapshot, Line, Mobject, Rectangle,
-    Scene, Square, Transform,
+    Rotate, Scene, Square, Transform,
 };
 use noon_core::{Color, RateFunction, Vec2};
 
@@ -428,6 +428,18 @@ impl FrontendAuthoringScene {
         Ok(())
     }
 
+    pub fn append_rotate(
+        &self,
+        batch: &mut FrontendPlayBatch,
+        handle: u32,
+        angle: f64,
+    ) -> Result<(), String> {
+        batch.animations.push(
+            Rotate::new(self.object(handle)?, finite_f32("rotation angle", angle)?).into(),
+        );
+        Ok(())
+    }
+
     pub fn play_batch(
         &mut self,
         batch: &FrontendPlayBatch,
@@ -790,6 +802,18 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.0
                 .append_transform(&mut batch.0, handle, &target.0)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = appendRotate)]
+        pub fn append_rotate(
+            &self,
+            batch: &mut PlayBatchCore,
+            handle: u32,
+            angle: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .append_rotate(&mut batch.0, handle, angle)
                 .map_err(js_error)
         }
 
