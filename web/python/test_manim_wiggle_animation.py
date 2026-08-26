@@ -134,6 +134,8 @@ class ManimWiggleAnimationTests(unittest.TestCase):
             assert abs(values["from"] - 0.0) < 1e-12
             assert abs(values["to"] - 0.01 * math.tau) < 1e-12
 
+            # Keep endpoint restoration separately ratcheted from the waveform:
+            # the mapped waveform intentionally owns every sample before t=end.
             # The later restore track is intentionally unbegun for every t < end:
             # step_end maps all pre-end samples to 0, which lies before its child
             # interval. At the exact endpoint mapped-track cleanup selects its base
