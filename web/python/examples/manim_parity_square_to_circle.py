@@ -1,18 +1,14 @@
-# Source-equivalent ManimCE v0.21.0 quickstart parity demo.
-# Upstream: https://docs.manim.community/en/v0.21.0/tutorials/quickstart.html
-# Output-affecting scene code intentionally matches the canonical parity fixture.
-
 from noon import *
 
-scene = Scene()
-circle = Circle()
-circle.set_fill(PINK, opacity=0.5)
 
-square = Square()
-square.rotate(PI / 4)
+class SquareToCircle(Scene):
+    def construct(self):
+        circle = Circle()  # create a circle
+        circle.set_fill(PINK, opacity=0.5)  # set color and transparency
 
-scene.play(Create(square))
-scene.play(Transform(square, circle))
-scene.play(FadeOut(square))
+        square = Square()  # create a square
+        square.rotate(PI / 4)  # rotate a certain amount
 
-result = scene
+        self.play(Create(square))  # animate the creation of the square
+        self.play(Transform(square, circle))  # interpolate the square into the circle
+        self.play(FadeOut(square))  # fade out animation
