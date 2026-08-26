@@ -109,12 +109,14 @@ def _scale_in_place_builder(
     scale_factor: float,
     animation_kwargs: dict[str, Any],
 ) -> object:
-    """Lower Manim's ApplyMethod-based scale helpers to the target-state builder.
+    """Lower Manim's ApplyMethod-based scale helpers to a deferred target builder.
 
     ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``
-    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. For a single 2D leaf whose
-    authored geometry is centered on its transform origin, Noon's ordinary target-state
-    builder represents the same endpoint and interpolation without a new playback path.
+    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. ``ApplyMethod.create_target``
+    runs from ``Transform.begin()``, so the target must be copied from the mobject state
+    that exists when ``Scene.play`` begins rather than when the animation is constructed.
+    For a single 2D leaf, Noon's retained scene snapshot plus the ordinary target-state
+    Transform path represents the same endpoint/interpolation without a new playback path.
     """
 
     if isinstance(mobject, _compat.Group):
@@ -130,15 +132,42 @@ def _scale_in_place_builder(
 
     # Import lazily to avoid a cycle: this adapter is imported by _manim_animate.
     # Calls happen only after the animation module has finished installing its aligned
-    # builder, so we reuse the exact same implicit-binding, rollback, option-resolution,
-    # and retained Transform lowering as ``mobject.animate.scale(...)``.
+    # builder. Subclassing that builder keeps implicit binding, rollback, shared option
+    # resolution, and retained Transform lowering unchanged while deferring only target
+    # materialization to the point where the scheduler asks for ``animation.target``.
     import _manim_animate as _animate
 
-    builder = _animate._AlignedAnimationBuilder(mobject)
-    builder.anim_args = dict(animation_kwargs)
-    builder.cannot_pass_args = True
-    builder.target.scale(factor)
-    return builder
+    class _DeferredScaleBuilder(_animate._AlignedAnimationBuilder):
+        def __init__(self) -> None:
+            # Do not call _AlignedAnimationBuilder.__init__: its normal .animate path
+            # eagerly copies the source because chained methods are authored immediately.
+            # ApplyMethod-family wrappers instead copy at Transform.begin/play time.
+            self.source = mobject
+            self.mobject = mobject
+            self.scale_factor = factor
+            self.anim_args = dict(animation_kwargs)
+            self.cannot_pass_args = True
+            self.is_chaining = False
+
+        @property
+        def target(self) -> _base.Mobject:
+            source = self.source
+            scene = source._scene
+            obj = source._object
+            if scene is not None and obj is not None:
+                # _aligned_scene_play binds method-animation sources before expanding
+                # them. The cursor is therefore the Manim-compatible play-begin time and
+                # the retained snapshot includes all earlier authored animations.
+                snapshot = scene._snapshot_for_object_at(obj, scene._cursor)
+                target = _animate._snapshot_mobject(snapshot)
+            else:
+                # This fallback is mainly useful for introspection outside Scene.play;
+                # normal scheduling reaches the bound retained-snapshot branch above.
+                target = source.copy()
+            target.scale(self.scale_factor)
+            return target
+
+    return _DeferredScaleBuilder()
 
 
 def ScaleInPlace(mobject: object, scale_factor: float, **kwargs: Any) -> object:
