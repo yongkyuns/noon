@@ -234,8 +234,8 @@ impl HostDrivenScene {
             .scheduled_invocations
             .iter()
             .filter(|(_, active_after, active_through)| {
-                active_after.is_none_or(|start| frame.time > start)
-                    && active_through.is_none_or(|end| frame.time <= end)
+                active_after.is_none_or(|start| frame.time >= start)
+                    && active_through.is_none_or(|end| frame.time < end)
             })
             .map(|(invocation, _, _)| invocation.clone())
             .collect();
@@ -367,7 +367,10 @@ mod tests {
         .unwrap();
         let mut driven = HostDrivenScene::new(scene, &registry).unwrap();
 
-        assert!(driven.callback_frame().invocations.is_empty());
+        assert_eq!(
+            driven.callback_frame().invocations[0].callback,
+            HostCallbackId::new(0)
+        );
         driven.advance_to(0.5).unwrap();
         assert_eq!(
             driven.callback_frame().invocations[0].callback,
@@ -376,7 +379,7 @@ mod tests {
         driven.advance_to(1.0).unwrap();
         assert_eq!(
             driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(0)
+            HostCallbackId::new(1)
         );
         driven.advance_to(1.5).unwrap();
         assert_eq!(
@@ -384,11 +387,6 @@ mod tests {
             HostCallbackId::new(1)
         );
         driven.advance_to(2.0).unwrap();
-        assert_eq!(
-            driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(1)
-        );
-        driven.advance_to(2.1).unwrap();
         assert!(driven.callback_frame().invocations.is_empty());
     }
 
