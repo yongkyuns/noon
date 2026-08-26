@@ -13,9 +13,11 @@ export const DEFAULT_FRAME_WIDTH = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0;
 export class MovingCameraScene extends Scene {
   constructor() {
     super();
-    const frame = new Rectangle(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT)
-      .setOpacity(0.0);
+    const frame = new Rectangle(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT);
     this.add(frame);
+    // Hide the semantic camera frame through the bound Rust scene editor so its
+    // canonical object opacity matches Rust/Python and is preserved by transforms.
+    frame.setOpacity(0.0);
     this.camera = Object.freeze({ frame });
   }
 
