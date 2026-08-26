@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::{
-    validate_track_definition, ObjectDefinition, ObjectId, SceneDefinition, Style, TimelineError,
-    TrackDefinition, TrackId, Transform2D,
+    validate_track_definition, GeometryRef, ObjectDefinition, ObjectId, SceneDefinition, Style,
+    TimelineError, TrackDefinition, TrackId, Transform2D,
 };
 
 mod transaction_preflight;
@@ -28,6 +28,10 @@ pub enum MutationImpact {
 pub enum ScenePatch {
     CreateObject(ObjectDefinition),
     RemoveObject(ObjectId),
+    SetGeometry {
+        object: ObjectId,
+        geometry: GeometryRef,
+    },
     SetTransform {
         object: ObjectId,
         transform: Transform2D,
@@ -44,7 +48,9 @@ pub enum ScenePatch {
 impl ScenePatch {
     pub const fn impact(&self) -> MutationImpact {
         match self {
-            Self::SetTransform { .. } | Self::SetStyle { .. } => MutationImpact::Property,
+            Self::SetGeometry { .. } | Self::SetTransform { .. } | Self::SetStyle { .. } => {
+                MutationImpact::Property
+            }
             Self::AddTrack(_) | Self::ReplaceTrack(_) | Self::RemoveTrack(_) => {
                 MutationImpact::Timeline
             }
@@ -167,6 +173,12 @@ impl SceneDefinition {
         match patch {
             ScenePatch::CreateObject(object) => self.insert_object(object),
             ScenePatch::RemoveObject(id) => self.remove_object(id),
+            ScenePatch::SetGeometry { object, geometry } => {
+                self.object_mut(object)
+                    .ok_or(PatchError::UnknownObject(object))?
+                    .geometry = geometry;
+                Ok(())
+            }
             ScenePatch::SetTransform { object, transform } => {
                 self.object_mut(object)
                     .ok_or(PatchError::UnknownObject(object))?
@@ -197,7 +209,8 @@ impl SceneDefinition {
         if transaction.impact() == Some(MutationImpact::Property) {
             for mutation in transaction.mutations() {
                 let object = match mutation {
-                    ScenePatch::SetTransform { object, .. }
+                    ScenePatch::SetGeometry { object, .. }
+                    | ScenePatch::SetTransform { object, .. }
                     | ScenePatch::SetStyle { object, .. } => *object,
                     _ => unreachable!("property transaction contains only property mutations"),
                 };
@@ -326,6 +339,14 @@ mod tests {
             ScenePatch::SetTransform {
                 object,
                 transform: Transform2D::IDENTITY,
+            }
+            .impact(),
+            MutationImpact::Property
+        );
+        assert_eq!(
+            ScenePatch::SetGeometry {
+                object,
+                geometry: GeometryRef::line(Vec2::ZERO, Vec2::ONE),
             }
             .impact(),
             MutationImpact::Property

@@ -1431,6 +1431,19 @@ class PatchBatch:
         )
         return self
 
+    def set_geometry(self, object_id: int, geometry: dict[str, Any]) -> PatchBatch:
+        if not isinstance(geometry, dict) or len(geometry) != 1:
+            raise TypeError("geometry must be a single-variant Noon geometry dictionary")
+        self._patches.append(
+            {
+                "set_geometry": {
+                    "object": _identifier("object_id", object_id),
+                    "geometry": geometry,
+                }
+            }
+        )
+        return self
+
     def set_transform(
         self,
         object_id: int,
