@@ -138,6 +138,27 @@ try {
     },
   ]);
 
+  assert.deepEqual(
+    result.document.objects[1].transform.translation,
+    { x: 0, y: 1 },
+    "legacy execution projection must start from the bound tracker position",
+  );
+  const positionFallback = result.document.tracks.find(
+    (track) => track.object === 1 && track.property === "position",
+  );
+  assert.ok(positionFallback, "ValueTracker position must be projected onto the execution timeline");
+  assert.deepEqual(positionFallback.values, {
+    vec2: {
+      from: { x: 0, y: 1 },
+      to: { x: 2, y: 1 },
+    },
+  });
+  assert.deepEqual(positionFallback.timing, {
+    start_time: 2,
+    duration: 1,
+    easing: "smooth",
+  });
+
   const transform = result.document.tracks.find(
     (track) => track.object === 0 && track.property === "transform",
   );
