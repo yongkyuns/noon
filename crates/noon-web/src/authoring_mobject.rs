@@ -175,6 +175,99 @@ impl FrontendMobjectHandle {
         self.shift(x - center.0, y - center.1)
     }
 
+    /// ManimCE-compatible move_to for a leaf mobject target.
+    ///
+    /// `aligned_edge` selects matching critical points and `coor_mask` suppresses
+    /// translation components. Frontends only coerce host vectors; placement math
+    /// stays in this shared semantic handle.
+    pub fn manim_move_to_handle(
+        &mut self,
+        other: &Self,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), String> {
+        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
+        let mask = semantic_xy_f64(mask_x, mask_y)?;
+        let source = self.critical_point(edge.x, edge.y);
+        let target = other.critical_point(edge.x, edge.y);
+        self.shift(
+            (target.0 - source.0) * mask.x,
+            (target.1 - source.1) * mask.y,
+        )
+    }
+
+    /// ManimCE-compatible move_to for a point target.
+    pub fn manim_move_to_point(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), String> {
+        let point = semantic_xy_f64(point_x, point_y)?;
+        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
+        let mask = semantic_xy_f64(mask_x, mask_y)?;
+        let source = self.critical_point(edge.x, edge.y);
+        self.shift((point.x - source.0) * mask.x, (point.y - source.1) * mask.y)
+    }
+
+    /// ManimCE-compatible next_to for a leaf mobject target.
+    ///
+    /// Unlike Noon's generic `next_to_handle`, Manim intentionally does not
+    /// normalize `direction`: both critical-point selection and `direction * buff`
+    /// use the supplied vector directly.
+    pub fn manim_next_to_handle(
+        &mut self,
+        other: &Self,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), String> {
+        let direction = semantic_xy_f64(direction_x, direction_y)?;
+        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
+        let mask = semantic_xy_f64(mask_x, mask_y)?;
+        let buff = render_f64("buffer", buff)?;
+        let source = self.critical_point(edge.x - direction.x, edge.y - direction.y);
+        let target = other.critical_point(edge.x + direction.x, edge.y + direction.y);
+        self.shift(
+            (target.0 - source.0 + direction.x * buff) * mask.x,
+            (target.1 - source.1 + direction.y * buff) * mask.y,
+        )
+    }
+
+    /// ManimCE-compatible next_to for a point target.
+    pub fn manim_next_to_point(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), String> {
+        let point = semantic_xy_f64(point_x, point_y)?;
+        let direction = semantic_xy_f64(direction_x, direction_y)?;
+        let edge = semantic_xy_f64(aligned_edge_x, aligned_edge_y)?;
+        let mask = semantic_xy_f64(mask_x, mask_y)?;
+        let buff = render_f64("buffer", buff)?;
+        let source = self.critical_point(edge.x - direction.x, edge.y - direction.y);
+        self.shift(
+            (point.x - source.0 + direction.x * buff) * mask.x,
+            (point.y - source.1 + direction.y * buff) * mask.y,
+        )
+    }
+
     pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
         let x = render_f64("scale.x", x)?;
         let y = render_f64("scale.y", y)?;
@@ -1360,6 +1453,96 @@ mod wasm {
             self.0.move_to(x, y).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = manimMoveToHandle)]
+        pub fn manim_move_to_handle(
+            &mut self,
+            other: &WasmAuthoringMobjectHandle,
+            aligned_edge_x: f64,
+            aligned_edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .manim_move_to_handle(&other.0, aligned_edge_x, aligned_edge_y, mask_x, mask_y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = manimMoveToPoint)]
+        pub fn manim_move_to_point(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            aligned_edge_x: f64,
+            aligned_edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .manim_move_to_point(
+                    point_x,
+                    point_y,
+                    aligned_edge_x,
+                    aligned_edge_y,
+                    mask_x,
+                    mask_y,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = manimNextToHandle)]
+        pub fn manim_next_to_handle(
+            &mut self,
+            other: &WasmAuthoringMobjectHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            aligned_edge_x: f64,
+            aligned_edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .manim_next_to_handle(
+                    &other.0,
+                    direction_x,
+                    direction_y,
+                    buff,
+                    aligned_edge_x,
+                    aligned_edge_y,
+                    mask_x,
+                    mask_y,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = manimNextToPoint)]
+        pub fn manim_next_to_point(
+            &mut self,
+            point_x: f64,
+            point_y: f64,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+            aligned_edge_x: f64,
+            aligned_edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.0
+                .manim_next_to_point(
+                    point_x,
+                    point_y,
+                    direction_x,
+                    direction_y,
+                    buff,
+                    aligned_edge_x,
+                    aligned_edge_y,
+                    mask_x,
+                    mask_y,
+                )
+                .map_err(js_error)
+        }
+
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
             self.0.scale(x, y).map_err(js_error)
         }
@@ -1676,6 +1859,35 @@ mod tests {
         assert!(
             (bounds.max_y - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - 0.5)).abs() < 1e-6
         );
+    }
+
+    #[test]
+    fn manim_leaf_placement_preserves_raw_direction_edges_and_masks() {
+        let reference =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 2.0)));
+        let mut diagonal =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(2.0, 2.0)));
+        diagonal
+            .manim_next_to_handle(&reference, 1.0, 1.0, 0.25, 0.0, 0.0, 1.0, 1.0)
+            .unwrap();
+        assert!((diagonal.center().0 - 2.25).abs() < 1e-12);
+        assert!((diagonal.center().1 - 2.25).abs() < 1e-12);
+
+        let mut moved =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        moved.shift(0.0, -2.0).unwrap();
+        moved
+            .manim_move_to_handle(&reference, -1.0, 1.0, 1.0, 0.0)
+            .unwrap();
+        assert!((moved.center().0 + 0.5).abs() < 1e-12);
+        assert!((moved.center().1 + 2.0).abs() < 1e-12);
+
+        let mut aligned =
+            FrontendMobjectHandle::from_snapshot(snapshot(GeometryRef::rectangle(1.0, 1.0)));
+        aligned.shift(0.0, -1.0).unwrap();
+        aligned.align_to_handle(&reference, 1.0, 0.0).unwrap();
+        assert!((aligned.center().0 - 0.5).abs() < 1e-12);
+        assert!((aligned.center().1 + 1.0).abs() < 1e-12);
     }
 
     #[test]
