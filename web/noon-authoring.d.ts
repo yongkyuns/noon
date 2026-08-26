@@ -129,6 +129,7 @@ export function Create(mobject: Mobject): Animation;
 export function FadeOut(mobject: Mobject): Animation;
 export function FadeIn(mobject: Mobject): Animation;
 export function Transform(source: Mobject, target: Mobject): Animation;
+export function Rotate(mobject: Mobject, angle?: number): Animation;
 
 export class Scene {
   constructor();
