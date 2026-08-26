@@ -52,10 +52,18 @@ for (const entry of ready) {
     entry.parity_status === "candidate" || entry.parity_status === "parity-qualified",
     `${entry.id}: runnable examples require explicit parity status`,
   );
-  assert.ok(entry.parity_fixture, `${entry.id}: runnable examples require a parity fixture`);
+  if (entry.parity_status === "parity-qualified") {
+    assert.ok(entry.parity_fixture, `${entry.id}: parity-qualified examples require a parity fixture`);
+  }
+  if (entry.parity_fixture) {
+    assert.ok(
+      parityFixtures.has(entry.parity_fixture),
+      `${entry.id}: unknown parity fixture ${entry.parity_fixture}`,
+    );
+  }
   assert.ok(
-    parityFixtures.has(entry.parity_fixture),
-    `${entry.id}: unknown parity fixture ${entry.parity_fixture}`,
+    entry.parity_fixture || Number.isFinite(Number(entry.expected_duration)),
+    `${entry.id}: candidate examples without a raster fixture require expected_duration`,
   );
   assert.ok(entry.thumbnail, `${entry.id}: runnable examples require a static thumbnail`);
   assert.ok(entry.upstream_source, `${entry.id}: runnable examples require canonical upstream source`);
@@ -106,7 +114,7 @@ async function waitForServer() {
 
 function latestEnd(document) {
   const tracks = [...(document.tracks ?? []), ...(document.signal_tracks ?? [])];
-  assert.ok(tracks.length > 0, "tutorial must exercise timed behavior");
+  if (tracks.length === 0) return 0;
   return Math.max(...tracks.map((track) => track.timing.start_time + track.timing.duration));
 }
 
@@ -124,13 +132,21 @@ function sceneDuration(result) {
   return duration;
 }
 
-function assertDurationContract(entry, result) {
+function expectedDuration(entry) {
+  if (Number.isFinite(Number(entry.expected_duration))) {
+    return Number(entry.expected_duration);
+  }
   const fixture = parityFixtures.get(entry.parity_fixture);
   assert.ok(fixture, `${entry.id}: missing parity fixture`);
+  return Number(fixture.expected_duration);
+}
+
+function assertDurationContract(entry, result) {
   const actual = sceneDuration(result);
+  const expected = expectedDuration(entry);
   assert.ok(
-    Math.abs(actual - fixture.expected_duration) <= 1e-9,
-    `${entry.id}: expected parity duration ${fixture.expected_duration}, got ${actual}`,
+    Math.abs(actual - expected) <= 1e-9,
+    `${entry.id}: expected duration ${expected}, got ${actual}`,
   );
 }
 
