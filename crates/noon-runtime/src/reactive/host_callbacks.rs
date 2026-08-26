@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use noon_compile::CompilePatchError;
 use noon_core::{
     HostCallbackId, HostCallbackRegistry, MutationImpact, MutationTransaction, ObjectId,
-    ScenePatch, Style, Transform2D,
+    ReactiveValue, ScenePatch, SignalId, Style, Transform2D,
 };
 
-use crate::{EvaluationError, FrameState, SceneInstance};
+use crate::{FrameState, SceneInstance, TimedSceneInstance, TimedSceneRuntimeError};
 
 /// Dynamic object state captured once for one host callback phase.
 ///
@@ -106,7 +106,7 @@ impl From<CompilePatchError> for HostCommitError {
 
 #[derive(Clone, Debug)]
 pub struct HostDrivenScene {
-    scene: SceneInstance,
+    scene: TimedSceneInstance,
     watched_dense_indices: Vec<usize>,
     invocations: Vec<HostCallbackInvocation>,
     last_callback_time: f64,
@@ -116,6 +116,13 @@ pub struct HostDrivenScene {
 impl HostDrivenScene {
     pub fn new(
         scene: SceneInstance,
+        registry: &HostCallbackRegistry,
+    ) -> Result<Self, HostCallbackAttachError> {
+        Self::from_timed(TimedSceneInstance::from_scene_instance(scene), registry)
+    }
+
+    pub fn from_timed(
+        scene: TimedSceneInstance,
         registry: &HostCallbackRegistry,
     ) -> Result<Self, HostCallbackAttachError> {
         let dense_index_by_object = scene
@@ -167,26 +174,30 @@ impl HostDrivenScene {
     }
 
     pub fn scene(&self) -> &SceneInstance {
-        &self.scene
+        self.scene.scene()
     }
 
     pub fn scene_mut(&mut self) -> &mut SceneInstance {
-        &mut self.scene
+        self.scene.scene_mut()
+    }
+
+    pub fn reactive_value(&self, signal: SignalId) -> Option<&ReactiveValue> {
+        self.scene.reactive_value(signal)
     }
 
     pub const fn last_commit_stats(&self) -> HostCommitStats {
         self.last_commit_stats
     }
 
-    pub fn evaluate(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+    pub fn evaluate(&mut self, time: f64) -> Result<&FrameState, TimedSceneRuntimeError> {
         self.scene.evaluate(time)
     }
 
-    pub fn seek(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+    pub fn seek(&mut self, time: f64) -> Result<&FrameState, TimedSceneRuntimeError> {
         self.scene.seek(time)
     }
 
-    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, TimedSceneRuntimeError> {
         self.scene.advance_to(time)
     }
 
@@ -243,11 +254,12 @@ impl HostDrivenScene {
         if impact == Some(MutationImpact::Property) {
             for patch in transaction.mutations() {
                 let object = match patch {
-                    ScenePatch::SetTransform { object, .. }
+                    ScenePatch::SetGeometry { object, .. }
+                    | ScenePatch::SetTransform { object, .. }
                     | ScenePatch::SetStyle { object, .. } => *object,
                     _ => unreachable!("property-impact transaction must contain property patches"),
                 };
-                if !self.scene.contains_object(object) {
+                if !self.scene.scene().contains_object(object) {
                     return Err(HostCommitError::Patch(CompilePatchError::UnknownObject(
                         object,
                     )));
@@ -255,6 +267,7 @@ impl HostDrivenScene {
             }
             for patch in transaction.mutations() {
                 self.scene
+                    .scene_mut()
                     .apply_patch(patch)
                     .expect("property callback transaction was preflighted");
             }
@@ -266,17 +279,17 @@ impl HostDrivenScene {
             return Ok(self.scene.frame());
         }
 
-        if self.scene.reactive.is_some() {
+        if self.scene.scene().reactive.is_some() {
             return Err(HostCommitError::ReactiveReloweringRequired(
                 impact.expect("non-empty transaction has impact"),
             ));
         }
 
-        let mut staged = self.scene.clone();
+        let mut staged = self.scene.scene().clone();
         for patch in transaction.mutations() {
             staged.apply_patch(patch)?;
         }
-        self.scene = staged;
+        self.scene = TimedSceneInstance::from_scene_instance(staged);
         self.last_commit_stats = HostCommitStats {
             mutations: transaction.mutations().len(),
             impact,
@@ -396,6 +409,36 @@ mod tests {
         ]);
         assert!(driven.commit(&invalid).is_err());
         assert_eq!(driven.scene().frame(), &before);
+    }
+
+    #[test]
+    fn timed_host_scene_exposes_evaluated_signal_values() {
+        let mut semantic = SemanticScene::new();
+        let object = semantic.add(GeometryRef::circle(0.5));
+        let tracker = semantic.add_input(0.0_f32);
+        semantic.bind(tracker, object, noon_core::Property::Rotation);
+        let mut timeline = noon_core::SignalTimelineDefinition::new();
+        timeline
+            .add_scalar_track(
+                semantic.reactive(),
+                tracker,
+                0.0,
+                4.0,
+                noon_core::TrackTiming::new(0.0, 2.0, noon_core::RateFunction::Linear),
+            )
+            .unwrap();
+        let timed = noon_core::TimedSemanticScene::from_parts(semantic, timeline).unwrap();
+        let instance = TimedSceneInstance::from_timed(&timed).unwrap();
+        let mut registry = HostCallbackRegistry::new();
+        registry.register([object]);
+        let mut driven = HostDrivenScene::from_timed(instance, &registry).unwrap();
+
+        driven.advance_to(1.0).unwrap();
+        assert_eq!(
+            driven.reactive_value(tracker),
+            Some(&ReactiveValue::Scalar(2.0))
+        );
+        assert_eq!(driven.callback_frame().objects[0].transform.rotation, 2.0);
     }
 
     #[test]

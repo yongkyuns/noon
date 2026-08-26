@@ -352,7 +352,9 @@ impl SceneInstance {
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
             patch,
-            ScenePatch::SetTransform { .. } | ScenePatch::SetStyle { .. }
+            ScenePatch::SetGeometry { .. }
+                | ScenePatch::SetTransform { .. }
+                | ScenePatch::SetStyle { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
@@ -497,10 +499,10 @@ impl SceneInstance {
 
     fn apply_value_patch(&mut self, patch: &ScenePatch) -> Result<(), CompilePatchError> {
         let object = match patch {
-            ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
-                *object
-            }
-            _ => unreachable!("value patch helper only accepts transform or style patches"),
+            ScenePatch::SetGeometry { object, .. }
+            | ScenePatch::SetTransform { object, .. }
+            | ScenePatch::SetStyle { object, .. } => *object,
+            _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
             .compiled
@@ -510,6 +512,13 @@ impl SceneInstance {
         self.compiled.apply_patch(patch)?;
 
         match patch {
+            ScenePatch::SetGeometry { geometry, .. } => {
+                self.frame.objects[index].geometry = geometry.clone();
+                // Host callbacks run after ordinary timeline/reactive evaluation for the frame.
+                // Clearing a transient render override makes the callback geometry authoritative
+                // for this phase without rebuilding unrelated runtime slots.
+                self.frame.render_geometries[index] = None;
+            }
             ScenePatch::SetTransform { transform, .. } => {
                 self.frame.objects[index].transform = *transform;
                 self.reapply_properties(
@@ -521,7 +530,7 @@ impl SceneInstance {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(index, &[Property::Transform, Property::Opacity]);
             }
-            _ => unreachable!("value patch helper only accepts transform or style patches"),
+            _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
         self.reapply_reactive_for_object(index);
         if self.frame.objects[index] != before {

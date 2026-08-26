@@ -19,6 +19,7 @@ _INSTALLED = False
 _ORIGINAL_SCENE_INIT = _ir.Scene.__init__
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_SCENE_PLAY = _base.Scene.play
+_ACTIVE_CALLBACK_SIGNAL_VALUES: dict[int, dict[str, Any]] | None = None
 
 
 def _finite_scalar(name: str, value: object) -> float:
@@ -49,6 +50,20 @@ def _button(value: object) -> int:
     if value < 0 or value > 255:
         raise ValueError("button must be in the range 0..255")
     return value
+
+
+def _enter_callback_signal_values(frame: dict[str, Any]) -> None:
+    global _ACTIVE_CALLBACK_SIGNAL_VALUES
+    if _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
+        raise RuntimeError("nested Noon callback signal contexts are not supported")
+    _ACTIVE_CALLBACK_SIGNAL_VALUES = {
+        int(item["signal"]): item["value"] for item in frame.get("signals", [])
+    }
+
+
+def _leave_callback_signal_values() -> None:
+    global _ACTIVE_CALLBACK_SIGNAL_VALUES
+    _ACTIVE_CALLBACK_SIGNAL_VALUES = None
 
 
 class _ValueAnimationBuilder:
@@ -87,6 +102,12 @@ class ValueTracker:
         self._signal_id: int | None = None
 
     def get_value(self) -> float:
+        if self._signal_id is not None and _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
+            payload = _ACTIVE_CALLBACK_SIGNAL_VALUES.get(self._signal_id)
+            if payload is not None:
+                if "scalar" not in payload:
+                    raise TypeError("ValueTracker runtime signal is not scalar")
+                return float(payload["scalar"])
         return self._value
 
     def set_value(self, value: float) -> ValueTracker:

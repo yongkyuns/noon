@@ -1,21 +1,21 @@
-use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
     HostCallbackId, HostCallbackRegistry, HostCallbackRegistryError, HostCallbackSlot,
-    MutationTransaction, ObjectId,
+    MutationTransaction, ObjectId, SignalId,
 };
-use noon_ir::{decode_patch_batch, decode_scene, IrError};
+use noon_ir::{decode_patch_batch, decode_timed_semantic_scene, IrError, TimedSemanticIrError};
 use noon_runtime::{
-    EvaluationError, HostCallbackAttachError, HostCommitError, HostDrivenScene, SceneInstance,
+    HostCallbackAttachError, HostCommitError, HostDrivenScene, TimedSceneInstance,
+    TimedSceneRuntimeError,
 };
 use serde_json::{json, Value};
 
 #[derive(Debug)]
 pub enum HostPlayerError {
     Ir(IrError),
-    Compile(CompileError),
+    TimedIr(TimedSemanticIrError),
     Attach(HostCallbackAttachError),
     Registry(HostCallbackRegistryError),
-    Evaluation(EvaluationError),
+    Runtime(TimedSceneRuntimeError),
     Commit(HostCommitError),
     CallbackJson(String),
     Sequence { expected: u64, actual: u64 },
@@ -26,10 +26,10 @@ impl std::fmt::Display for HostPlayerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ir(error) => error.fmt(formatter),
-            Self::Compile(error) => error.fmt(formatter),
+            Self::TimedIr(error) => error.fmt(formatter),
             Self::Attach(error) => error.fmt(formatter),
             Self::Registry(error) => error.fmt(formatter),
-            Self::Evaluation(error) => error.fmt(formatter),
+            Self::Runtime(error) => error.fmt(formatter),
             Self::Commit(error) => error.fmt(formatter),
             Self::CallbackJson(message) => formatter.write_str(message),
             Self::Sequence { expected, actual } => {
@@ -53,9 +53,9 @@ impl From<IrError> for HostPlayerError {
     }
 }
 
-impl From<CompileError> for HostPlayerError {
-    fn from(value: CompileError) -> Self {
-        Self::Compile(value)
+impl From<TimedSemanticIrError> for HostPlayerError {
+    fn from(value: TimedSemanticIrError) -> Self {
+        Self::TimedIr(value)
     }
 }
 
@@ -71,9 +71,9 @@ impl From<HostCallbackRegistryError> for HostPlayerError {
     }
 }
 
-impl From<EvaluationError> for HostPlayerError {
-    fn from(value: EvaluationError) -> Self {
-        Self::Evaluation(value)
+impl From<TimedSceneRuntimeError> for HostPlayerError {
+    fn from(value: TimedSceneRuntimeError) -> Self {
+        Self::Runtime(value)
     }
 }
 
@@ -92,17 +92,26 @@ impl From<HostCommitError> for HostPlayerError {
 #[derive(Clone, Debug)]
 pub struct HostScenePlayer {
     driven: HostDrivenScene,
+    signal_ids: Vec<SignalId>,
     next_sequence: u64,
 }
 
 impl HostScenePlayer {
     pub fn from_json(scene_json: &str, callback_slots_json: &str) -> Result<Self, HostPlayerError> {
-        let definition = decode_scene(scene_json)?;
-        let compiled = CompiledScene::compile(&definition)?;
+        let scene = decode_timed_semantic_scene(scene_json)?;
+        let signal_ids = scene
+            .semantic()
+            .reactive()
+            .signals()
+            .iter()
+            .map(|signal| signal.id)
+            .collect();
         let registry = decode_callback_registry(callback_slots_json)?;
-        let driven = HostDrivenScene::new(SceneInstance::new(compiled), &registry)?;
+        let instance = TimedSceneInstance::from_timed(&scene)?;
+        let driven = HostDrivenScene::from_timed(instance, &registry)?;
         Ok(Self {
             driven,
+            signal_ids,
             next_sequence: 0,
         })
     }
@@ -134,6 +143,18 @@ impl HostScenePlayer {
                 })
             })
             .collect::<Vec<_>>();
+        let signals = self
+            .signal_ids
+            .iter()
+            .filter_map(|signal| {
+                self.driven.reactive_value(*signal).map(|value| {
+                    json!({
+                        "signal": signal.get(),
+                        "value": value,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         let invocations = frame
             .invocations
             .into_iter()
@@ -148,6 +169,7 @@ impl HostScenePlayer {
             "time": frame.time,
             "delta_time": frame.delta_time,
             "objects": objects,
+            "signals": signals,
             "invocations": invocations,
         }))
         .map_err(|error| HostPlayerError::CallbackJson(error.to_string()))
@@ -305,6 +327,31 @@ mod tests {
         let frame: Value = serde_json::from_str(&player.callback_frame_json().unwrap()).unwrap();
         assert_eq!(frame["objects"][1]["transform"]["translation"]["x"], 2.0);
         assert_eq!(frame["objects"][1]["transform"]["translation"]["y"], -1.0);
+    }
+
+    #[test]
+    fn callback_frame_reports_timeline_evaluated_signal_values() {
+        let mut semantic = noon_core::SemanticScene::new();
+        let object = semantic.add(GeometryRef::circle(0.5));
+        let tracker = semantic.add_input(0.0_f32);
+        let mut timeline = noon_core::SignalTimelineDefinition::new();
+        timeline
+            .add_scalar_track(
+                semantic.reactive(),
+                tracker,
+                0.0,
+                10.0,
+                noon_core::TrackTiming::new(0.0, 2.0, noon_core::RateFunction::Linear),
+            )
+            .unwrap();
+        let scene = noon_core::TimedSemanticScene::from_parts(semantic, timeline).unwrap();
+        let scene_json = noon_ir::encode_timed_semantic_scene(&scene).unwrap();
+        let slots = format!(r#"[{{"id":0,"objects":[{}]}}]"#, object.get());
+        let mut player = HostScenePlayer::from_json(&scene_json, &slots).unwrap();
+        player.advance_to(0.5).unwrap();
+        let frame: Value = serde_json::from_str(&player.callback_frame_json().unwrap()).unwrap();
+        assert_eq!(frame["signals"][0]["signal"], tracker.get());
+        assert_eq!(frame["signals"][0]["value"]["scalar"], 2.5);
     }
 
     #[test]
