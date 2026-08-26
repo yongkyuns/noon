@@ -66,6 +66,11 @@ class ParityTracker(Scene):
 `,
 };
 
+const javascriptParityCases = new Set([
+  "animate_options",
+  "lifecycle",
+]);
+
 function rustCorpus() {
   const output = execFileSync(
     "cargo",
@@ -109,6 +114,38 @@ function assertSemanticEqual(actual, expected, location = "document") {
     return;
   }
   assert.equal(actual, expected, `${location}: value mismatch`);
+}
+
+async function javascriptCorpus(page) {
+  return page.evaluate(async () => {
+    const noon = await import("/web/noon-authoring.js");
+    await noon.initNoon();
+
+    const corpus = {};
+
+    {
+      const scene = new noon.Scene();
+      const circle = new noon.Circle(1.0);
+      scene.add(circle);
+      scene.play(
+        circle.animate().shift(noon.RIGHT).rotate(0.25),
+        { runTime: 2.0, rateFunc: noon.smooth },
+      );
+      corpus.animate_options = scene.toJSON();
+    }
+
+    {
+      const scene = new noon.Scene();
+      const circle = new noon.Circle(0.5);
+      scene.add(circle);
+      scene.play(noon.Create(circle), { runTime: 1.0 });
+      scene.play(noon.FadeOut(circle), { runTime: 0.5 });
+      scene.play(noon.FadeIn(circle), { runTime: 0.5 });
+      corpus.lifecycle = scene.toJSON();
+    }
+
+    return corpus;
+  });
 }
 
 let serverOutput = "";
@@ -163,10 +200,18 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${name}: Python authoring failed`);
-    assertSemanticEqual(result.document, rust.get(name), name);
+    assertSemanticEqual(result.document, rust.get(name), `${name}: python/rust`);
   }
+
+  const javascript = await javascriptCorpus(page);
+  assert.deepEqual(Object.keys(javascript).sort(), [...javascriptParityCases].sort());
+  for (const [name, document] of Object.entries(javascript)) {
+    assert.ok(rust.has(name), `${name}: missing Rust parity reference`);
+    assertSemanticEqual(document, rust.get(name), `${name}: javascript/rust`);
+  }
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("cross-language semantic parity corpus passed");
+  console.log("Python/Rust parity corpus and initial JavaScript parity subset passed");
 } finally {
   if (browser !== null) await browser.close();
   server.kill("SIGTERM");
