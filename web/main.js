@@ -134,6 +134,14 @@ const SCENE_EXAMPLES = [
     parityFixture: "add-wait-lagged-start-map",
   },
   {
+    name: "Manim parity · GrowFromPoint / Center / Edge",
+    path: "./python/examples/manim_parity_grow_point_center_edge.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 growing scene covering point, center, edge, point color, and staggered composition.",
+    features: "exact parity candidate · growing · pixels + time",
+    parityFixture: "grow-point-center-edge",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
@@ -377,7 +385,6 @@ function setRuntimeStatus(message, state) {
   statusText.textContent = message;
   status.dataset.state = state;
 }
-
 function setBusy(busy) {
   sceneButton.disabled = busy;
   patchButton.disabled = busy;
