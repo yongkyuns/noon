@@ -434,9 +434,9 @@ impl FrontendAuthoringScene {
         handle: u32,
         angle: f64,
     ) -> Result<(), String> {
-        batch.animations.push(
-            Rotate::new(self.object(handle)?, finite_f32("rotation angle", angle)?).into(),
-        );
+        batch
+            .animations
+            .push(Rotate::new(self.object(handle)?, finite_f32("rotation angle", angle)?).into());
         Ok(())
     }
 

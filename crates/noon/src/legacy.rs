@@ -19,7 +19,8 @@ pub use composition_authoring::{AnimationGroup, LaggedStart, Succession};
 pub mod prelude {
     pub use crate::{
         Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
-        Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession, Transform,
+        Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession,
+        Transform,
     };
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
@@ -433,7 +434,9 @@ impl std::fmt::Display for AuthoringError {
         match self {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::InvalidDuration(value) => write!(formatter, "invalid animation duration {value}"),
-            Self::InvalidRotationAngle(value) => write!(formatter, "invalid rotation angle {value}"),
+            Self::InvalidRotationAngle(value) => {
+                write!(formatter, "invalid rotation angle {value}")
+            }
             Self::RotateRequiresCenteredGeometry(id) => write!(
                 formatter,
                 "Rotate currently requires object {} geometry centered on its transform origin",
@@ -915,10 +918,7 @@ mod tests {
         assert_eq!(tracks[1].timing.duration, 2.0);
         assert_eq!(tracks[0].timing.easing, RateFunction::Smooth);
         assert_eq!(tracks[1].timing.easing, RateFunction::Smooth);
-        assert_eq!(
-            tracks[1].values,
-            TrackValues::Scalar { from: 0.0, to: PI }
-        );
+        assert_eq!(tracks[1].values, TrackValues::Scalar { from: 0.0, to: PI });
         assert!((scene.snapshot(left).unwrap().transform.rotation - PI).abs() < 1e-6);
         assert!((scene.snapshot(right).unwrap().transform.rotation - PI).abs() < 1e-6);
         assert_eq!(scene.time(), 2.0);
