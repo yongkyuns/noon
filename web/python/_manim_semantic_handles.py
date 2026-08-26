@@ -386,7 +386,20 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
         return _ORIGINAL_SET_COLOR(self, color)
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
-    handle.setColor(color.red, color.green, color.blue, color.alpha)
+
+    # Manim changes fill/stroke RGB independently of the channels' existing opacity.
+    # The semantic handle's broad setColor API intentionally applies one alpha to both
+    # channels, so use the channel-specific mutations here instead. Those preserve the
+    # current semantic opacity when the channel already exists.
+    style = self._current_raw().style
+    had_fill = style.get("fill") is not None
+    had_stroke = style.get("stroke") is not None
+    if had_fill:
+        handle.setFillColor(color.red, color.green, color.blue, color.alpha)
+    if had_stroke:
+        handle.setStrokeColor(color.red, color.green, color.blue, color.alpha)
+    if not had_fill and not had_stroke:
+        handle.setFillColor(color.red, color.green, color.blue, color.alpha)
     return self
 
 

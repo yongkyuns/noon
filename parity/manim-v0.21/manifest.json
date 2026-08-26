@@ -59,6 +59,11 @@
       "expected_duration": 5.0
     },
     {
+      "id": "indicate-square",
+      "scene": "IndicateSquare",
+      "expected_duration": 1.0
+    },
+    {
       "id": "create-line",
       "scene": "CreateLine",
       "expected_duration": 1.0,
