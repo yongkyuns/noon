@@ -144,7 +144,6 @@ pub fn compile_typst_resource(
     let full_span = TextSourceSpan::new(0, source_len);
 
     let mut normalizer = FrameNormalizer {
-        source,
         full_span,
         page_to_noon: TextAffineTransform {
             xx: 1.0,
@@ -241,8 +240,7 @@ fn layout_artifact(prepared_source: &str) -> TextLayoutArtifact {
     }
 }
 
-struct FrameNormalizer<'a> {
-    source: &'a str,
+struct FrameNormalizer {
     full_span: TextSourceSpan,
     page_to_noon: TextAffineTransform,
     runs: Vec<GlyphRun>,
@@ -252,7 +250,7 @@ struct FrameNormalizer<'a> {
     clusters: u32,
 }
 
-impl FrameNormalizer<'_> {
+impl FrameNormalizer {
     fn walk_frame(
         &mut self,
         frame: &Frame,
@@ -585,7 +583,7 @@ mod tests {
         assert_eq!(artifact.resource.kind, TextSourceKind::MathTypst);
         assert!(artifact.resource.glyph_count() >= 2);
         assert!(artifact.resource.vector_count() >= 1);
-        assert!(artifact.geometry.len() >= 1);
+        assert!(!artifact.geometry.is_empty());
         for item in artifact.resource.vector_items.iter() {
             assert!(matches!(
                 artifact.geometry.get(item.geometry),
