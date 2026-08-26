@@ -14,6 +14,8 @@ node --check web/execution-transport.js
 node --check web/execution-engine-worker.js
 node --check web/execution-render-worker.js
 node --check web/execution-worker-client.js
+node --check web/noon-authoring.js
+node --check web/js/examples/manim-quickstart-equivalents.js
 node --check scripts/execution-worker-smoke.mjs
 node --check scripts/execution-worker-host-smoke.mjs
 node --check web/scene-pipeline-perf.mjs
@@ -36,6 +38,7 @@ node --check scripts/perf-compare.mjs
 node --check scripts/perf-corpus.mjs
 node --check scripts/host-callback-perf.mjs
 node --check scripts/deterministic-replay-smoke.mjs
+node --check scripts/cross-language-parity.mjs
 node --check scripts/manim-compat-smoke.mjs
 node --check scripts/manim-tutorial-smoke.mjs
 node --check scripts/playground-layout-smoke.mjs
