@@ -10,7 +10,7 @@ use super::{
     CompiledChannelKey, CompiledTrack, CompiledTracks, DynamicProperties,
 };
 
-/// Dense compiler output for a retained object payload.
+/// Dense compiler output for one retained semantic object payload.
 ///
 /// Unlike the legacy `CompiledObject`, this representation is not constrained to
 /// geometry. Geometry and retained text share one stable object/dense-slot domain,
