@@ -1,0 +1,36 @@
+name: Temporary RotationUpdater PR finalizer
+
+on:
+  push:
+    branches:
+      - parity/manim-rotation-updater-lifecycle
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore cache artifacts after validation
+        run: |
+          git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+          git checkout origin/master -- \
+            web/python/__pycache__/_manim_compat.cpython-312.pyc \
+            web/python/__pycache__/_manim_phase_b.cpython-312.pyc \
+            web/python/__pycache__/_noon_ir.cpython-312.pyc \
+            web/python/__pycache__/noon.cpython-312.pyc
+          git rm -f \
+            web/python/__pycache__/_manim_updaters.cpython-312.pyc \
+            web/python/__pycache__/test_manim_updater_lifecycle.cpython-312.pyc \
+            web/python/__pycache__/test_updater_snapshot.cpython-312.pyc
+      - name: Commit clean final tree
+        run: |
+          rm .github/workflows/tmp-finalize-rotation-updater-pr.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Remove generated Python cache artifacts"
+          git push origin HEAD:parity/manim-rotation-updater-lifecycle
