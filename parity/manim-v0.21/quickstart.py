@@ -417,7 +417,6 @@ class DotEllipseParity(Scene):
             fill_opacity=1.0,
             stroke_opacity=0.0,
         ).rotate(PI / 6).move_to(2.5 * RIGHT + 1.5 * DOWN)
-
         self.add(default_dot, blue_dot, wide, tall)
         self.play(tall.animate.shift(ORIGIN))
 
@@ -628,3 +627,14 @@ class MovingDots(Scene):
         self.play(x.animate.set_value(5))
         self.play(y.animate.set_value(4))
         self.wait()
+
+
+class MovingCameraCenter(MovingCameraScene):
+    def construct(self):
+        s = Square(color=RED, fill_opacity=0.5).move_to(2 * LEFT)
+        t = Triangle(color=GREEN, fill_opacity=0.5).move_to(2 * RIGHT)
+        self.wait(0.3)
+        self.add(s, t)
+        self.play(self.camera.frame.animate.move_to(s))
+        self.wait(0.3)
+        self.play(self.camera.frame.animate.move_to(t))

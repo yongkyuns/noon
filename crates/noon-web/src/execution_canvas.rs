@@ -70,6 +70,7 @@ mod wasm {
                     "execution renderer must start from an applied transport snapshot",
                 ));
             }
+            let camera = mirror.camera();
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
@@ -122,8 +123,8 @@ mod wasm {
                 pending_changes,
                 preparer: FramePreparer::new(),
                 renderer,
-                camera_center: Vec2::ZERO,
-                camera_height: MANIM_DEFAULT_CAMERA_HEIGHT,
+                camera_center: camera.center,
+                camera_height: camera.height,
                 clear_color: MANIM_DEFAULT_CLEAR_COLOR,
                 last_draw_calls: 0,
                 last_instances_drawn: 0,
@@ -144,6 +145,12 @@ mod wasm {
             let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
             match outcome {
                 TransportApplyOutcome::Applied => {
+                    let camera = self.mirror.camera();
+                    if camera.center != self.camera_center || camera.height != self.camera_height {
+                        self.camera_center = camera.center;
+                        self.camera_height = camera.height;
+                        self.update_camera()?;
+                    }
                     self.pending_changes = changes;
                     Ok(true)
                 }
@@ -225,6 +232,8 @@ mod wasm {
             Ok(())
         }
 
+        /// Manual camera control remains as a low-level host API. Semantic scene
+        /// deltas automatically overwrite it with their shared Rust camera state.
         #[wasm_bindgen(js_name = setCamera)]
         pub fn set_camera(
             &mut self,

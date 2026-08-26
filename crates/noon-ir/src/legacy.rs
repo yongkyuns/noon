@@ -6,7 +6,9 @@
 
 #![forbid(unsafe_code)]
 
-use noon_core::{ObjectDefinition, PatchError, SceneDefinition, ScenePatch, TrackDefinition};
+use noon_core::{
+    ObjectDefinition, ObjectId, PatchError, SceneDefinition, ScenePatch, TrackDefinition,
+};
 use serde::{Deserialize, Serialize};
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -26,6 +28,8 @@ pub struct SceneDocument {
     pub version: u32,
     pub objects: Vec<ObjectDefinition>,
     pub tracks: Vec<TrackDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_object: Option<ObjectId>,
 }
 
 impl SceneDocument {
@@ -34,12 +38,20 @@ impl SceneDocument {
             version: FORMAT_VERSION,
             objects: scene.objects().to_vec(),
             tracks: scene.tracks().to_vec(),
+            camera_object: scene.camera_object(),
         }
     }
 
     pub fn into_scene(self) -> Result<SceneDefinition, IrError> {
         ensure_version(self.version)?;
-        SceneDefinition::from_parts(self.objects, self.tracks).map_err(IrError::Patch)
+        let mut scene =
+            SceneDefinition::from_parts(self.objects, self.tracks).map_err(IrError::Patch)?;
+        if let Some(camera_object) = self.camera_object {
+            if !scene.set_camera_object(camera_object) {
+                return Err(IrError::Patch(PatchError::UnknownObject(camera_object)));
+            }
+        }
+        Ok(scene)
     }
 }
 
@@ -126,6 +138,7 @@ mod tests {
     use noon_core::{
         CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, ObjectId, Property,
         RateFunction, Style, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+        DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
     };
 
     use super::*;
@@ -157,6 +170,24 @@ mod tests {
         assert_eq!(decoded.objects(), scene.objects());
         assert_eq!(decoded.tracks(), scene.tracks());
         assert_eq!(decoded.add(GeometryRef::circle(1.0)), ObjectId::new(1));
+    }
+
+    #[test]
+    fn camera_object_is_additive_on_version_one_wire_format() {
+        let mut scene = SceneDefinition::new();
+        let frame = scene.add(GeometryRef::rectangle(
+            DEFAULT_FRAME_WIDTH,
+            DEFAULT_FRAME_HEIGHT,
+        ));
+        assert!(scene.set_camera_object(frame));
+        let json = encode_scene(&scene).expect("camera scene must serialize");
+        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"camera_object\":0"));
+        let decoded = decode_scene(&json).expect("camera scene must decode");
+        assert_eq!(decoded.camera_object(), Some(frame));
+
+        let ordinary = encode_scene(&sample_scene()).expect("ordinary scene must serialize");
+        assert!(!ordinary.contains("camera_object"));
     }
 
     #[test]

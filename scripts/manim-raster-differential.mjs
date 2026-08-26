@@ -21,6 +21,8 @@ const artifactRoot = path.resolve(
   repoRoot,
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
 );
+const semanticRoot = path.join(artifactRoot, "semantic");
+const manimSemanticPath = path.join(semanticRoot, "manim-all-frames.json");
 const port = Number(process.env.NOON_MANIM_RASTER_PORT ?? "4191");
 const baseUrl = `http://127.0.0.1:${port}`;
 const enforce = process.env.NOON_MANIM_RASTER_ENFORCE === "1";
@@ -86,20 +88,42 @@ async function findPngFrames(root, scene) {
   return frames;
 }
 
-function sampleFrames(frameCount) {
+function sampleFrames(frameTimes) {
+  const frameCount = frameTimes.length;
   assert.ok(Number.isSafeInteger(frameCount) && frameCount > 0, "invalid reference frame count");
+  const previous = frameTimes.reduce((last, time, index) => {
+    assert.ok(Number.isFinite(time) && time >= 0, `invalid logical time for reference frame ${index}`);
+    assert.ok(time + 1e-12 >= last, `reference frame ${index} moves backwards in logical time`);
+    return time;
+  }, -Infinity);
+  void previous;
   const indices = manifest.sample_fractions.map((fraction) =>
     Math.round((frameCount - 1) * Number(fraction)),
   );
   return [...new Set(indices)].map((frameIndex) => ({
     frameIndex,
-    time: frameIndex / reference.frame_rate,
+    time: frameTimes[frameIndex],
     label: `frame-${String(frameIndex).padStart(4, "0")}`,
   }));
 }
 
 async function renderManimReferences() {
   verifyManimVersion();
+  await mkdir(semanticRoot, { recursive: true });
+  runChecked("python3", [
+    path.join("scripts", "manim-raster-semantic-reference.py"),
+    "--manifest",
+    manifestPath,
+    "--output",
+    manimSemanticPath,
+  ]);
+  const semantic = JSON.parse(await readFile(manimSemanticPath, "utf8"));
+  assert.equal(semantic.manim_version, reference.version, "raster semantic Manim version");
+  assert.equal(semantic.frame_rate, reference.frame_rate, "raster semantic frame rate");
+  const semanticByFixture = new Map(
+    semantic.fixtures.map((fixture) => [fixture.id, fixture]),
+  );
+
   const results = new Map();
   for (const fixture of manifest.fixtures) {
     const mediaDir = path.join(artifactRoot, "manim-media", fixture.id);
@@ -124,6 +148,14 @@ async function renderManimReferences() {
     ]);
 
     const frameFiles = await findPngFrames(mediaDir, fixture.scene);
+    const semanticFixture = semanticByFixture.get(fixture.id);
+    assert.ok(semanticFixture, `${fixture.id}: missing semantic reference fixture`);
+    assert.equal(
+      semanticFixture.frame_count,
+      frameFiles.length,
+      `${fixture.id}: semantic/PNG Manim frame count`,
+    );
+    const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
     const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
     const logicalDuration = Number(fixture.expected_duration);
     assert.ok(Number.isFinite(logicalDuration) && logicalDuration >= 0, `${fixture.id}: logical duration`);
@@ -139,13 +171,13 @@ async function renderManimReferences() {
     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(frames.frameCount);
+    const samples = sampleFrames(frameTimes);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
       sample.referencePath = outputPath;
     }
-    results.set(fixture.id, { fixture, frames, samples });
+    results.set(fixture.id, { fixture, frames, frameTimes, samples });
   }
   return results;
 }
@@ -179,6 +211,7 @@ async function authorNoonScenes() {
         document: result.document,
         duration: Number(result.duration),
         hasCallbacks: result.callbacks !== null,
+        hasSemanticCamera: Number.isInteger(result.document.camera_object),
       });
     }
     return scenes;
@@ -287,18 +320,26 @@ async function captureHostFixture(
   );
   assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
   assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
-  assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
+  if (authored.hasCallbacks) {
+    assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
+  } else {
+    assert.equal(loaded.callbackSlots, 0, `${fixture.id}: deterministic host callback slots`);
+  }
   assert.equal(loaded.rendererBackend, expectedBackend, `${backend}: host renderer backend`);
 
   const captures = [];
   for (const sample of referenceResult.samples) {
     const metrics = await page.evaluate(
-      ({ frameIndex, frameRate }) => window.noonHostRaster.renderThrough(frameIndex, frameRate),
-      { frameIndex: sample.frameIndex, frameRate: reference.frame_rate },
+      ({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes),
+      { frameIndex: sample.frameIndex, frameTimes: referenceResult.frameTimes },
     );
     assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
     assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
     assert.equal(metrics.frameIndex, sample.frameIndex, `${fixture.id}: host frame index`);
+    assert.ok(
+      Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
+      `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,
+    );
     const outputPath = path.join(fixtureDir, `${sample.label}.png`);
     await page.locator("#scene").screenshot({ path: outputPath });
     captures.push({ ...sample, noonPath: outputPath, metrics });
@@ -327,7 +368,7 @@ async function captureNoonBackend(backend, authoredScenes, references) {
         const fixtureDir = path.join(artifactRoot, backend, fixture.id);
         await mkdir(fixtureDir, { recursive: true });
 
-        if (authored.hasCallbacks) {
+        if (authored.hasCallbacks || authored.hasSemanticCamera) {
           page = await createHostCapturePage(browser);
           output.set(
             fixture.id,

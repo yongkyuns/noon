@@ -427,6 +427,24 @@
       "order": 220
     },
     {
+      "id": "manim-moving-camera-center",
+      "title": "MovingCameraCenter",
+      "summary": "ManimCE v0.21 MovingCameraScene reference example, unchanged except for the import module.",
+      "status": "ready",
+      "path": "python/examples/manim_example_moving_camera_center.py",
+      "category": "tutorial/scene-camera",
+      "features": ["MovingCameraScene", "camera.frame", "animate", "move_to", "Square", "Triangle"],
+      "upstream": "reference/manim.scene.moving_camera_scene.MovingCameraScene.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/moving_camera_center.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "expected_duration": 2.6,
+      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail_alt": "Exact-source Manim MovingCameraCenter",
+      "thumbnail_time": 1.8,
+      "order": 230
+    },
+    {
       "id": "text-and-math",
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
@@ -451,11 +469,11 @@
       "dependency": "#87/#77/#83"
     },
     {
-      "id": "moving-camera",
-      "title": "Moving and zoomed camera",
+      "id": "zoomed-camera",
+      "title": "Zoomed camera inset support",
       "status": "blocked",
       "category": "tutorial/scene-camera",
-      "features": ["MovingCameraScene", "ZoomedScene"],
+      "features": ["ZoomedScene", "zoomed_camera", "zoomed_display"],
       "dependency": "#89"
     },
     {
