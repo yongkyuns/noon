@@ -8,4 +8,5 @@ detached semantic copy; `MoveToTarget` therefore lowers to the existing retained
 The first exact-output slice covers leaf 2D mobjects and the standard generated-target
 workflow. Group/VGroup family alignment remains partial under #82 and is rejected rather
 than approximated. Qualification uses the unchanged canonical duration, semantic-state,
-Cairo raster, direct-seek/incremental-playback, WebGPU, and WebGL gates.
+Cairo raster, direct-seek/incremental-playback, WebGPU, and WebGL gates. No fixture-specific
+raster tolerance or scheduler exception is introduced by this slice.
