@@ -86,6 +86,46 @@ const SCENE_EXAMPLES = [
     features: "Manim CE · ValueTracker · native reactivity",
   },
   {
+    name: "Manim parity · CreateCircle",
+    path: "./python/examples/manim_parity_create_circle.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 CreateCircle with no Noon visual or timing tuning.",
+    features: "exact parity candidate · create-circle · pixels + time",
+    parityFixture: "create-circle",
+  },
+  {
+    name: "Manim parity · SquareToCircle",
+    path: "./python/examples/manim_parity_square_to_circle.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 Create → Transform → FadeOut sequence used by the parity oracle.",
+    features: "exact parity candidate · square-to-circle · pixels + time",
+    parityFixture: "square-to-circle",
+  },
+  {
+    name: "Manim parity · SquareAndCircle",
+    path: "./python/examples/manim_parity_square_and_circle.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 positioning scene with the canonical next_to(..., buff=0.5) contract.",
+    features: "exact parity candidate · layout · pixels + time",
+    parityFixture: "square-and-circle",
+  },
+  {
+    name: "Manim parity · AnimatedSquareToCircle",
+    path: "./python/examples/manim_parity_animated_square_to_circle.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 .animate and Transform sequence sampled by the raster/timeline oracle.",
+    features: "exact parity candidate · animate · pixels + time",
+    parityFixture: "animated-square-to-circle",
+  },
+  {
+    name: "Manim parity · DifferentRotations",
+    path: "./python/examples/manim_parity_different_rotations.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 comparison of target-state .animate.rotate and Rotate semantics.",
+    features: "exact parity candidate · Rotate · pixels + time",
+    parityFixture: "different-rotations",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:

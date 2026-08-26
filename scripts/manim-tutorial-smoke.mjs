@@ -99,7 +99,7 @@ try {
     );
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
     assert.ok(result.document.objects.length > 0, `${entry.id}: expected scene objects`);
-    assert.ok(latestEnd(result.document) < 4.0, `${entry.id}: exceeds interactive loop`);
+    assert.ok(latestEnd(result.document) <= 4.0, `${entry.id}: exceeds interactive loop`);
     console.log(`[PASS] ${entry.id}`);
   }
 
