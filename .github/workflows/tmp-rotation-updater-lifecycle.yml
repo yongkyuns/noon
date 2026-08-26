@@ -38,6 +38,8 @@ jobs:
           cargo test -p noon-runtime host_callbacks
           cargo test -p noon-web host_player
       - name: Validate Python updater lifecycle
+        env:
+          PYTHONPATH: web/python
         run: python3 -m unittest web/python/test_manim_updater_lifecycle.py web/python/test_updater_snapshot.py
       - name: Validate worker syntax
         run: node --check web/execution-engine-worker.js
