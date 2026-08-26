@@ -20,6 +20,10 @@ pub enum RateFunction {
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    /// Hold the source value at normalized progress 0, then switch to the target.
+    StepStart,
+    /// Hold the source value until normalized progress reaches 1, then switch.
+    StepEnd,
 }
 
 impl RateFunction {
@@ -44,6 +48,20 @@ impl RateFunction {
                     4.0 * progress * progress * progress
                 } else {
                     1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+                }
+            }
+            Self::StepStart => {
+                if progress <= 0.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            Self::StepEnd => {
+                if progress < 1.0 {
+                    0.0
+                } else {
+                    1.0
                 }
             }
         }
@@ -429,6 +447,12 @@ mod tests {
         assert_eq!(RateFunction::ThereAndBack.evaluate(0.0), 0.0);
         assert_eq!(RateFunction::ThereAndBack.evaluate(0.5), 1.0);
         assert_eq!(RateFunction::ThereAndBack.evaluate(1.0), 0.0);
+        assert_eq!(RateFunction::StepStart.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::StepStart.evaluate(f32::EPSILON), 1.0);
+        assert_eq!(RateFunction::StepStart.evaluate(1.0), 1.0);
+        assert_eq!(RateFunction::StepEnd.evaluate(0.0), 0.0);
+        assert_eq!(RateFunction::StepEnd.evaluate(1.0 - f32::EPSILON), 0.0);
+        assert_eq!(RateFunction::StepEnd.evaluate(1.0), 1.0);
     }
 
     #[test]
