@@ -547,7 +547,9 @@ impl CompiledScene {
                         .ok_or(CompilePatchError::UnknownObject(*id))?;
                     tracks.retain(|track| track.object_index != object_index);
                 }
-                ScenePatch::SetTransform { object, .. } | ScenePatch::SetStyle { object, .. } => {
+                ScenePatch::SetGeometry { object, .. }
+                | ScenePatch::SetTransform { object, .. }
+                | ScenePatch::SetStyle { object, .. } => {
                     if !object_indices.contains_key(object) {
                         return Err(CompilePatchError::UnknownObject(*object));
                     }
@@ -661,6 +663,12 @@ impl CompiledScene {
                 stats.object_indices_rewritten = 0;
                 stats.track_object_indices_rewritten = 0;
                 stats.unrelated_track_slots_shifted = 0;
+            }
+            ScenePatch::SetGeometry { object, geometry } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                self.objects[index as usize].geometry = geometry.clone();
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self

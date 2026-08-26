@@ -185,10 +185,7 @@ class _CallbackContext:
             before = self._baseline[object_id]
             after = self._current[object_id]
             if before.geometry != after.geometry:
-                raise NotImplementedError(
-                    "host updaters cannot mutate geometry yet; use transform/style "
-                    "mutations or native reactive expressions"
-                )
+                batch.set_geometry(object_id, after.geometry)
             if before.transform != after.transform:
                 translation = after.transform["translation"]
                 scale = after.transform["scale"]
@@ -272,11 +269,23 @@ def run_callback_phase(
     if scene_key in _ACTIVE_CONTEXTS:
         raise RuntimeError("nested Noon host callback phases are not supported")
     _ACTIVE_CONTEXTS[scene_key] = context
+
+    # Keep the updater adapter usable by native Python tests and non-reactive scenes:
+    # importing the reactive facade eagerly would require Pyodide's `js` bridge even
+    # when this callback phase has no signals. Only enter the ValueTracker signal
+    # context when the runtime actually supplied signal values.
+    reactive = None
+    if frame.get("signals"):
+        import _manim_reactive as reactive
+
+        reactive._enter_callback_signal_values(frame)
     try:
         for mobject in session.mobjects:
             for callback in list(_updaters(mobject)):
                 _invoke(callback, mobject, context.delta_time)
     finally:
+        if reactive is not None:
+            reactive._leave_callback_signal_values()
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
     return context.patch_batch(int(sequence)).to_json()

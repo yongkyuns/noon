@@ -7,6 +7,7 @@ renderer-only geometry path and keeps source compatibility in the thin Python fa
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any
 
@@ -142,6 +143,29 @@ def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     )
 
 
+def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("match_points expects a Mobject")
+    source = self._current_raw()
+    target = mobject._current_raw()
+    source_kind = next(iter(source.geometry), None)
+    target_kind = next(iter(target.geometry), None)
+    if source_kind != target_kind or source_kind not in {"line", "vector_path"}:
+        raise NotImplementedError(
+            "match_points currently supports Line/VMobject-path pairs with matching geometry kinds"
+        )
+    # Manim stores transformed VMobject points directly. Noon separates affine placement,
+    # so copying the target point state also copies its affine placement while source style
+    # (notably MovingDots' red line color) remains untouched. _ir snapshots are immutable,
+    # therefore construct one replacement value rather than mutating a frozen dataclass.
+    raw = _base._ir.Mobject(
+        geometry=copy.deepcopy(target.geometry),
+        transform=copy.deepcopy(target.transform),
+        style=copy.deepcopy(source.style),
+    )
+    return self._apply(raw)
+
+
 def install() -> None:
     public = {
         "DEFAULT_DOT_RADIUS": DEFAULT_DOT_RADIUS,
@@ -156,6 +180,7 @@ def install() -> None:
     # Existing compatibility layout methods resolve this module global at call time,
     # so the hook affects only Manim-facing authoring/layout and never renderer bounds.
     _compat._bounds_for = _bounds_for
+    _base.Mobject.match_points = match_points
 
     exports = list(_base.__all__)
     for name in public:
