@@ -1,12 +1,13 @@
 [workspace]
 members = [
-	"crates/noon",
-	"crates/noon-core",
-	"crates/noon-geometry",
-	"crates/noon-ir",
-	"crates/noon-compile",
-	"crates/noon-runtime",
-	"crates/noon-render-wgpu",
-	"crates/noon-web",
+    "crates/noon",
+    "crates/noon-core",
+    "crates/noon-geometry",
+    "crates/noon-ir",
+    "crates/noon-compile",
+    "crates/noon-runtime",
+    "crates/noon-render-wgpu",
+    "crates/noon-web",
+    "crates/noon-typst",
 ]
 resolver = "2"
