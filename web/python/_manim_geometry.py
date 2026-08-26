@@ -1,20 +1,20 @@
 """ManimCE v0.21 geometry/source-compatibility breadth over Noon primitives.
 
 The public wrappers in this module stay on Noon's existing semantic geometry and
-flat retained scene model.  Besides exact affine Circle specializations, the module
-contains small 2D composite wrappers needed by Manim's own documentation examples.
-Those composites are ordinary Groups/VectorPaths rather than renderer-only objects.
+flat retained scene model. Besides exact affine Circle specializations, the module
+contains small 2D wrappers needed by Manim's own documentation examples.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Iterator
 
 import noon as _base
 import _manim_compat as _compat
 
 DEFAULT_DOT_RADIUS = 0.08
+PURE_YELLOW = _base.color_from_hex("#FFFF00")
 
 
 class Dot(_compat.Circle):
@@ -188,10 +188,9 @@ def _group_get_color(self: _compat.Group) -> _base.Color:
 class Arrow(_compat.Group):
     """2D Manim-style arrow composed from a Line and a triangular tip.
 
-    This gives documentation examples a real retained family rather than a special
-    renderer primitive.  The exact arrow-tip geometry/raster contract remains a
-    separate parity item; source execution and group transforms use ordinary Noon
-    leaves immediately.
+    This gives documentation examples a retained family rather than a special renderer
+    primitive. Exact arrow-tip raster parity remains tracked separately from source
+    compatibility and family transforms.
     """
 
     def __init__(
@@ -228,13 +227,13 @@ class Arrow(_compat.Group):
         return self._tip.get_center()
 
 
-class Text(_compat.Group):
-    """Browser-safe retained text-family placeholder for source compatibility.
+class Text(_compat.Rectangle):
+    """Single retained text handle used until the glyph backend lands.
 
-    Each non-space character is a normal filled rectangle leaf and each space an
-    invisible spacing leaf.  This deliberately does not claim text raster parity;
-    it supplies family/layout/animation semantics so upstream examples remain literal
-    while the dedicated font/glyph renderer tracked by the text milestone is built.
+    The important compatibility property for the upstream examples is that a text
+    object behaves as one Mobject for animations such as Indicate while remaining
+    iterable for LaggedStartMap. Rendering is intentionally not marked parity-qualified
+    until the dedicated text/glyph implementation replaces this temporary geometry.
     """
 
     def __init__(
@@ -244,40 +243,40 @@ class Text(_compat.Group):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        if kwargs:
-            # Common Manim text kwargs should not silently affect unrelated geometry.
-            # Keep source execution permissive for font/style selectors until the real
-            # text backend consumes them.
-            kwargs = dict(kwargs)
         value = str(text)
         scale = max(float(font_size), 1.0) / 48.0
-        glyph_height = 0.72 * scale
-        x = 0.0
-        glyphs: list[_base.Mobject] = []
-        for character in value or " ":
-            width = (0.30 if character.isspace() else 0.46) * scale
-            glyph = _compat.Rectangle(
-                width=width,
-                height=glyph_height,
-                color=color,
-                fill_opacity=0.0 if character.isspace() else 1.0,
-                stroke_opacity=0.0,
-            )
-            glyph.move_to(_base.Vec2(x + width / 2.0, 0.0))
-            glyphs.append(glyph)
-            x += width + 0.08 * scale
-        super().__init__(*glyphs)
+        visible = max(len(value), 1)
+        width = max(0.46 * visible + 0.08 * max(visible - 1, 0), 0.3) * scale
+        height = 0.72 * scale
+        super().__init__(
+            width=width,
+            height=height,
+            color=color,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        )
         self.text = value
         self.font_size = float(font_size)
-        self.center()
+        self._text_kwargs = dict(kwargs)
+
+    def __iter__(self) -> Iterator[_base.Mobject]:
+        yield self
+
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, index: int) -> _base.Mobject:
+        if index in (0, -1):
+            return self
+        raise IndexError(index)
 
 
 class Tex(Text):
-    """Source-compatible Tex family pending exact LaTeX glyph rendering."""
+    """Source-compatible Tex Mobject pending exact LaTeX glyph rendering."""
 
 
 class MathTex(Tex):
-    """Source-compatible MathTex family pending exact LaTeX glyph rendering."""
+    """Source-compatible MathTex Mobject pending exact LaTeX glyph rendering."""
 
 
 class ApplyMethod:
@@ -333,6 +332,7 @@ def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
 def install() -> None:
     public = {
         "DEFAULT_DOT_RADIUS": DEFAULT_DOT_RADIUS,
+        "PURE_YELLOW": PURE_YELLOW,
         "Dot": Dot,
         "Ellipse": Ellipse,
         "Triangle": Triangle,
@@ -344,7 +344,7 @@ def install() -> None:
     }
     for name, value in public.items():
         setattr(_base, name, value)
-        if name != "DEFAULT_DOT_RADIUS":
+        if name not in {"DEFAULT_DOT_RADIUS", "PURE_YELLOW"}:
             setattr(_compat, name, value)
 
     _compat.Line.get_start = _line_get_start
