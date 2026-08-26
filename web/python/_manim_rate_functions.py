@@ -19,6 +19,7 @@ import _noon_ir as _ir
 INFLECTION = 10.0
 _INSTALLED = False
 _ORIGINAL_ADD_TRACK = _ir.Scene._add_track
+_ORIGINAL_MOBJECT_SET_COLOR = _base.Mobject.set_color
 
 
 def linear(t: float) -> float:
@@ -150,6 +151,23 @@ def _add_track(
     )
 
 
+def _set_color_preserving_opacity(
+    self: _base.Mobject, color: _base.Color
+) -> _base.Mobject:
+    """Match Manim ``set_color`` without coupling RGB to fill/stroke opacity."""
+
+    before = self._current_raw().style
+    result = _ORIGINAL_MOBJECT_SET_COLOR(self, color)
+    raw = _base._raw_mobject(self._current_raw())
+    for channel in ("fill", "stroke"):
+        previous = before[channel]
+        current = raw.style[channel]
+        if previous is not None and current is not None:
+            current["alpha"] = previous["alpha"]
+    result._apply(raw)
+    return result
+
+
 def install() -> None:
     """Install thin public adapters without creating a second playback engine."""
 
@@ -170,6 +188,11 @@ def install() -> None:
         setattr(_base, name, value)
 
     _compat._easing_from_rate_func = easing_from_rate_func
+
+    # Manim's set_color changes fill/stroke RGB while preserving each channel's
+    # independent opacity. This matters for Transform-style effects such as Indicate:
+    # a transparent stroke must not become visible while the color interpolates.
+    _base.Mobject.set_color = _set_color_preserving_opacity
 
     # `_noon_ir` needs progress only while materializing authoring-time snapshots.
     # Runtime playback never calls this mirror; Rust RateFunction remains authoritative.
