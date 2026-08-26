@@ -1,8 +1,9 @@
-"""ManimCE v0.21 geometry breadth over Noon's qualified analytic primitives.
+"""ManimCE v0.21 geometry/source-compatibility breadth over Noon primitives.
 
-This module intentionally reuses the Circle semantic/render representation for shapes
-whose observable Manim behavior is an affine circle specialization. It adds no
-renderer-only geometry path and keeps source compatibility in the thin Python facade.
+The public wrappers in this module stay on Noon's existing semantic geometry and
+flat retained scene model.  Besides exact affine Circle specializations, the module
+contains small 2D composite wrappers needed by Manim's own documentation examples.
+Those composites are ordinary Groups/VectorPaths rather than renderer-only objects.
 """
 
 from __future__ import annotations
@@ -119,14 +120,7 @@ class Ellipse(_compat.Circle):
 
 
 class Triangle(_compat.Path):
-    """Manim-compatible equilateral ``Triangle`` with RegularPolygon defaults.
-
-    ManimCE v0.21 implements Triangle as ``RegularPolygon(n=3)``.  The default
-    regular-vertex helper places the first vertex at +Y on the unit circle and the
-    remaining vertices counter-clockwise at 120 degree increments.  A closed Noon
-    vector path therefore represents the same authored 2D geometry without adding a
-    renderer-specific primitive.
-    """
+    """Manim-compatible equilateral ``Triangle`` with RegularPolygon defaults."""
 
     def __init__(self, **kwargs: Any) -> None:
         points = [
@@ -140,6 +134,176 @@ class Triangle(_compat.Path):
         for point in points[1:]:
             path.line_to(point)
         super().__init__(path.close(), **kwargs)
+
+
+def _world_point(mobject: _base.Mobject, point: _base.Vec2) -> _base.Vec2:
+    raw = mobject._current_raw()
+    transform = raw.transform
+    sx = float(transform["scale"]["x"])
+    sy = float(transform["scale"]["y"])
+    rotation = float(transform["rotation"])
+    tx = float(transform["translation"]["x"])
+    ty = float(transform["translation"]["y"])
+    x = point.x * sx
+    y = point.y * sy
+    cosine = math.cos(rotation)
+    sine = math.sin(rotation)
+    return _base.Vec2(
+        x * cosine - y * sine + tx,
+        x * sine + y * cosine + ty,
+    )
+
+
+def _line_get_start(self: _compat.Line) -> _base.Vec2:
+    raw = self._current_raw()
+    point = raw.geometry["line"]["start"]
+    return _world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+
+
+def _line_get_end(self: _compat.Line) -> _base.Vec2:
+    raw = self._current_raw()
+    point = raw.geometry["line"]["end"]
+    return _world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+
+
+def _mobject_get_color(self: _base.Mobject) -> _base.Color:
+    style = self._current_raw().style
+    for channel in ("stroke", "fill"):
+        color = style.get(channel)
+        if color is not None:
+            return _base.Color(
+                float(color["red"]),
+                float(color["green"]),
+                float(color["blue"]),
+                float(color.get("alpha", 1.0)),
+            )
+    return _base.WHITE
+
+
+def _group_get_color(self: _compat.Group) -> _base.Color:
+    leaves = _compat._leaf_mobjects(self)
+    return _base.WHITE if not leaves else _mobject_get_color(leaves[0])
+
+
+class Arrow(_compat.Group):
+    """2D Manim-style arrow composed from a Line and a triangular tip.
+
+    This gives documentation examples a real retained family rather than a special
+    renderer primitive.  The exact arrow-tip geometry/raster contract remains a
+    separate parity item; source execution and group transforms use ordinary Noon
+    leaves immediately.
+    """
+
+    def __init__(
+        self,
+        start: object = _base.LEFT,
+        end: object = _base.RIGHT,
+        buff: float = 0.25,
+        color: _base.Color = _base.WHITE,
+        **kwargs: Any,
+    ) -> None:
+        start_point = _compat._as_vec2(start)
+        end_point = _compat._as_vec2(end)
+        delta = end_point - start_point
+        length = delta.length()
+        if length <= 0.0:
+            raise ValueError("Arrow start and end must differ")
+        direction = delta / length
+        trim = min(max(float(buff), 0.0), length * 0.49)
+        shaft_start = start_point + direction * trim
+        shaft_end = end_point - direction * trim
+        shaft = _compat.Line(shaft_start, shaft_end, color=color, **kwargs)
+        tip = Triangle(color=color, fill_opacity=1.0, stroke_opacity=0.0)
+        tip.scale(min(0.18, length * 0.12))
+        tip.rotate(math.atan2(direction.y, direction.x) - math.pi / 2.0)
+        tip.move_to(shaft_end)
+        self._shaft = shaft
+        self._tip = tip
+        super().__init__(shaft, tip)
+
+    def get_start(self) -> _base.Vec2:
+        return _line_get_start(self._shaft)
+
+    def get_end(self) -> _base.Vec2:
+        return self._tip.get_center()
+
+
+class Text(_compat.Group):
+    """Browser-safe retained text-family placeholder for source compatibility.
+
+    Each non-space character is a normal filled rectangle leaf and each space an
+    invisible spacing leaf.  This deliberately does not claim text raster parity;
+    it supplies family/layout/animation semantics so upstream examples remain literal
+    while the dedicated font/glyph renderer tracked by the text milestone is built.
+    """
+
+    def __init__(
+        self,
+        text: object,
+        font_size: float = 48.0,
+        color: _base.Color = _base.WHITE,
+        **kwargs: Any,
+    ) -> None:
+        if kwargs:
+            # Common Manim text kwargs should not silently affect unrelated geometry.
+            # Keep source execution permissive for font/style selectors until the real
+            # text backend consumes them.
+            kwargs = dict(kwargs)
+        value = str(text)
+        scale = max(float(font_size), 1.0) / 48.0
+        glyph_height = 0.72 * scale
+        x = 0.0
+        glyphs: list[_base.Mobject] = []
+        for character in value or " ":
+            width = (0.30 if character.isspace() else 0.46) * scale
+            glyph = _compat.Rectangle(
+                width=width,
+                height=glyph_height,
+                color=color,
+                fill_opacity=0.0 if character.isspace() else 1.0,
+                stroke_opacity=0.0,
+            )
+            glyph.move_to(_base.Vec2(x + width / 2.0, 0.0))
+            glyphs.append(glyph)
+            x += width + 0.08 * scale
+        super().__init__(*glyphs)
+        self.text = value
+        self.font_size = float(font_size)
+        self.center()
+
+
+class Tex(Text):
+    """Source-compatible Tex family pending exact LaTeX glyph rendering."""
+
+
+class MathTex(Tex):
+    """Source-compatible MathTex family pending exact LaTeX glyph rendering."""
+
+
+class ApplyMethod:
+    """Manim ApplyMethod adapter over Noon's existing target-state animation builder."""
+
+    def __new__(cls, method: object, *args: Any, **kwargs: Any):
+        source = getattr(method, "__self__", None)
+        name = getattr(method, "__name__", None)
+        if not isinstance(source, (_base.Mobject, _compat.Group)) or not isinstance(name, str):
+            raise TypeError("ApplyMethod requires a bound Mobject/Group method")
+
+        # Resolve lazily because _manim_geometry is installed before _manim_animate.
+        import _manim_animate as _animate
+
+        builder = (
+            _animate._AlignedGroupAnimationBuilder(source)
+            if isinstance(source, _compat.Group)
+            else _animate._AlignedAnimationBuilder(source)
+        )
+        target_method = getattr(builder.target, name)
+        result = target_method(*args)
+        if result is not None and result is not builder.target:
+            raise TypeError("ApplyMethod target method must mutate and return self or None")
+        builder.anim_args = dict(kwargs)
+        builder.cannot_pass_args = True
+        return builder
 
 
 def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
@@ -172,11 +336,21 @@ def install() -> None:
         "Dot": Dot,
         "Ellipse": Ellipse,
         "Triangle": Triangle,
+        "Arrow": Arrow,
+        "Text": Text,
+        "Tex": Tex,
+        "MathTex": MathTex,
+        "ApplyMethod": ApplyMethod,
     }
     for name, value in public.items():
         setattr(_base, name, value)
         if name != "DEFAULT_DOT_RADIUS":
             setattr(_compat, name, value)
+
+    _compat.Line.get_start = _line_get_start
+    _compat.Line.get_end = _line_get_end
+    _base.Mobject.get_color = _mobject_get_color
+    _compat.Group.get_color = _group_get_color
 
     # Existing compatibility layout methods resolve this module global at call time,
     # so the hook affects only Manim-facing authoring/layout and never renderer bounds.
