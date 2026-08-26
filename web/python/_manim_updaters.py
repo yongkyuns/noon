@@ -32,12 +32,45 @@ def _track(mobject: _base.Mobject) -> None:
         _TRACKED_MOBJECTS.append(mobject)
 
 
+@dataclass(slots=True)
+class _UpdaterRegistration:
+    mobject: _base.Mobject
+    callback: Callable[..., Any]
+    active_after: float | None
+    active_through: float | None = None
+
+
 def _updaters(mobject: _base.Mobject) -> list[Callable[..., Any]]:
     value = getattr(mobject, "_noon_updaters", None)
     if value is None:
         value = []
         setattr(mobject, "_noon_updaters", value)
     return value
+
+
+def _registrations(mobject: _base.Mobject) -> list[_UpdaterRegistration]:
+    """Active updater occurrences, kept index-aligned with ``_updaters``."""
+    value = getattr(mobject, "_noon_updater_registrations", None)
+    if value is None:
+        value = []
+        setattr(mobject, "_noon_updater_registrations", value)
+    return value
+
+
+def _registration_history(mobject: _base.Mobject) -> list[_UpdaterRegistration]:
+    """All authored updater intervals, including registrations later removed."""
+    value = getattr(mobject, "_noon_updater_registration_history", None)
+    if value is None:
+        value = []
+        setattr(mobject, "_noon_updater_registration_history", value)
+    return value
+
+
+def _scene_time(mobject: _base.Mobject) -> float | None:
+    scene = getattr(mobject, "_scene", None)
+    if scene is None:
+        return None
+    return float(scene.time)
 
 
 def add_updater(
@@ -49,12 +82,21 @@ def add_updater(
     if not callable(update_function):
         raise TypeError("updater must be callable")
     callbacks = _updaters(self)
+    registrations = _registrations(self)
+    registration = _UpdaterRegistration(
+        mobject=self,
+        callback=update_function,
+        active_after=_scene_time(self),
+    )
     if index is None:
         callbacks.append(update_function)
+        registrations.append(registration)
     else:
         if isinstance(index, bool) or not isinstance(index, int):
             raise TypeError("updater index must be an integer")
         callbacks.insert(index, update_function)
+        registrations.insert(index, registration)
+    _registration_history(self).append(registration)
     _track(self)
     if call_updater:
         _invoke(update_function, self, 0.0)
@@ -65,9 +107,12 @@ def remove_updater(
     self: _base.Mobject, update_function: Callable[..., Any]
 ) -> _base.Mobject:
     callbacks = _updaters(self)
+    registrations = _registrations(self)
     for index, callback in enumerate(callbacks):
         if callback is update_function:
             del callbacks[index]
+            registration = registrations.pop(index)
+            registration.active_through = _scene_time(self)
             break
     return self
 
@@ -76,7 +121,11 @@ def clear_updaters(self: _base.Mobject, recursive: bool = True) -> _base.Mobject
     # Noon has no persisted runtime hierarchy, but Group/VGroup recurse in their own
     # Python wrappers. The flag is accepted for Manim source compatibility.
     del recursive
+    end_time = _scene_time(self)
+    for registration in _registrations(self):
+        registration.active_through = end_time
     _updaters(self).clear()
+    _registrations(self).clear()
     return self
 
 
@@ -135,7 +184,7 @@ def _invoke(callback: Callable[..., Any], mobject: _base.Mobject, dt: float) -> 
 @dataclass(slots=True)
 class _UpdaterSession:
     scene: _base.Scene
-    mobjects: list[_base.Mobject]
+    registrations: dict[int, _UpdaterRegistration]
 
 
 class _CallbackContext:
@@ -225,30 +274,43 @@ def _color(value: dict[str, float] | None) -> _ir.Color | None:
 def register_scene(scene: _base.Scene) -> dict[str, Any] | None:
     global _NEXT_SESSION_ID
 
-    mobjects = [
-        mobject
-        for mobject in _TRACKED_MOBJECTS
-        if mobject._scene is scene
-        and mobject._object is not None
-        and bool(_updaters(mobject))
-    ]
-    mobjects.sort(key=lambda value: value.id)
-    if not mobjects:
+    history: list[_UpdaterRegistration] = []
+    for mobject in _TRACKED_MOBJECTS:
+        if mobject._scene is not scene or mobject._object is None:
+            continue
+        history.extend(_registration_history(mobject))
+    if not history:
         return None
+
+    # Detached mobjects commonly receive updaters before Scene.add at authored time
+    # zero. Resolve that pending start once the object is known to belong to this
+    # scene; removals recorded after binding retain their exact scene-time endpoint.
+    for registration in history:
+        if registration.active_after is None:
+            registration.active_after = 0.0
 
     session_id = _NEXT_SESSION_ID
     _NEXT_SESSION_ID += 1
-    _SESSIONS[session_id] = _UpdaterSession(scene=scene, mobjects=mobjects)
+    registrations = {slot_id: registration for slot_id, registration in enumerate(history)}
+    _SESSIONS[session_id] = _UpdaterSession(scene=scene, registrations=registrations)
 
-    # Arbitrary Python closures may read any bound mobject. Observe the complete
-    # semantic object table once per callback phase so all such reads are coherent
-    # and local inside Pyodide. The Python callback context materializes the
-    # corresponding Mobject snapshots lazily, so cost scales with the closure's
-    # touched set rather than eagerly deep-copying every scene object.
+    # Arbitrary Python closures may read any bound mobject. Every scheduled slot
+    # observes the same complete semantic table; the Rust runtime deduplicates that
+    # table once per phase and owns which callback slots are active at the frame time.
     object_ids = [int(obj["id"]) for obj in scene._objects]
+    slots = []
+    for slot_id, registration in registrations.items():
+        slot = {
+            "id": slot_id,
+            "objects": object_ids,
+            "active_after": registration.active_after,
+        }
+        if registration.active_through is not None:
+            slot["active_through"] = registration.active_through
+        slots.append(slot)
     return {
         "session_id": session_id,
-        "slots": [{"id": 0, "objects": object_ids}],
+        "slots": slots,
     }
 
 
@@ -263,9 +325,6 @@ def run_callback_phase(
         raise ValueError(f"unknown Noon updater session {session_id}") from error
 
     invocations = frame.get("invocations", [])
-    if len(invocations) != 1 or int(invocations[0]["callback"]) != 0:
-        raise RuntimeError("updater session received an unexpected callback invocation set")
-
     context = _CallbackContext(session.scene, frame)
     scene_key = id(session.scene)
     if scene_key in _ACTIVE_CONTEXTS:
@@ -282,9 +341,15 @@ def run_callback_phase(
 
         reactive._enter_callback_signal_values(frame)
     try:
-        for mobject in session.mobjects:
-            for callback in list(_updaters(mobject)):
-                _invoke(callback, mobject, context.delta_time)
+        for invocation in invocations:
+            slot_id = int(invocation["callback"])
+            try:
+                registration = session.registrations[slot_id]
+            except KeyError as error:
+                raise RuntimeError(
+                    f"updater session received unknown callback slot {slot_id}"
+                ) from error
+            _invoke(registration.callback, registration.mobject, context.delta_time)
     finally:
         if reactive is not None:
             reactive._leave_callback_signal_values()
