@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - name: Apply exact lifecycle patches
         run: python3 scripts/tmp_rotation_updater_lifecycle.py
