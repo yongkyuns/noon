@@ -1,0 +1,87 @@
+name: Temporary RotationUpdater gallery validation
+
+on:
+  push:
+    branches:
+      - parity/manim-gallery-rotation-updater
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add exact-source gallery manifest entry
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("web/python/examples/manim_tutorial_manifest.json")
+          text = path.read_text(encoding="utf-8")
+          marker = '''    {
+                "id": "text-and-math",'''.replace('            ', '      ')
+          if '"id": "parity-rotation-updater"' in text:
+              raise SystemExit("RotationUpdater manifest entry already exists")
+          block = '''    {
+                "id": "parity-rotation-updater",
+                "title": "RotationUpdater",
+                "summary": "ManimCE v0.21 Example Gallery RotationUpdater, byte-for-byte except for the import module.",
+                "status": "ready",
+                "path": "python/examples/manim_gallery_rotation_updater.py",
+                "category": "animations",
+                "features": ["Line", "add_updater", "remove_updater", "rotate_about_origin", "wait", "host-callback-lifecycle"],
+                "upstream": "examples.html",
+                "upstream_source": "parity/manim-v0.21/upstream-examples/rotation_updater.py",
+                "reuse": "source-equivalent-manim-v0.21",
+                "parity_status": "candidate",
+                "expected_duration": 4.5,
+                "thumbnail": "thumbnails/manim/exact-source.svg",
+                "thumbnail_alt": "Exact-source Manim RotationUpdater",
+                "thumbnail_time": 2.0,
+                "order": 210
+              },
+'''.replace('            ', '      ')
+          if marker not in text:
+              raise SystemExit("manifest insertion marker not found")
+          path.write_text(text.replace(marker, block + marker, 1), encoding="utf-8")
+          PY
+      - name: Verify import-only source equivalence
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          upstream = Path("parity/manim-v0.21/upstream-examples/rotation_updater.py").read_text()
+          public = Path("web/python/examples/manim_gallery_rotation_updater.py").read_text()
+          expected = upstream.replace("from manim import *", "from noon import *", 1)
+          assert upstream.count("from manim import *") == 1
+          assert public == expected
+          PY
+      - name: Use stable Rust and wasm target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Execute exact-source tutorial corpus
+        run: node scripts/manim-tutorial-smoke.mjs
+      - name: Commit gallery entry without temporary workflow
+        run: |
+          rm .github/workflows/tmp-rotation-updater-gallery-validation.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add web/python/examples/manim_tutorial_manifest.json
+          git commit -m "Add exact Manim RotationUpdater gallery example"
+          git push origin HEAD:parity/manim-gallery-rotation-updater
