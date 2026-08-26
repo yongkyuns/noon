@@ -150,9 +150,14 @@ try {
     href: location.href,
   }));
   assert.ok(galleryContract.cards > 0, "gallery must render ready Manim parity examples");
-  assert.ok(
+  assert.equal(
     galleryContract.exampleIds.includes("parity-focus-on-point"),
-    "gallery must expose the FocusOn parity example added by this slice",
+    false,
+    "Noon-specific FocusOn probe must stay out of the public exact-source gallery",
+  );
+  assert.ok(
+    galleryContract.exampleIds.includes("parity-draw-border-then-fill-styled-square"),
+    "gallery must retain literal upstream parity-qualified examples",
   );
   assert.equal(galleryContract.canvases, 1, "thumbnail gallery must keep exactly one live canvas");
   assert.equal(galleryContract.selected, "parity-square-and-circle");
