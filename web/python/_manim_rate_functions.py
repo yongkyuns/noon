@@ -182,6 +182,26 @@ def _set_color_preserving_opacity(
     return result
 
 
+class MoveToTarget:
+    """ManimCE ``MoveToTarget`` as a thin adapter over retained ``Transform``."""
+
+    def __new__(cls, mobject: object, **kwargs: Any):
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError(
+                "MoveToTarget(Group/VGroup) requires retained family Transform semantics and is not yet supported"
+            )
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("MoveToTarget target must be a Mobject")
+        if not hasattr(mobject, "target"):
+            raise ValueError("MoveToTarget called on mobjectwithout attribute 'target'")
+        target = mobject.target
+        if not isinstance(target, _base.Mobject) or isinstance(target, _compat.Group):
+            raise NotImplementedError(
+                "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
+            )
+        return _base.Transform(mobject, target, **kwargs)
+
+
 def install() -> None:
     """Install thin public adapters without creating a second playback engine."""
 
@@ -208,13 +228,17 @@ def install() -> None:
     # a transparent stroke must not become visible while the color interpolates.
     _base.Mobject.set_color = _set_color_preserving_opacity
 
+    # Construction is Python syntax adaptation only; the animation itself is the same
+    # retained Transform used by Rust-backed playback.
+    _base.MoveToTarget = MoveToTarget
+
     # `_noon_ir` needs progress only while materializing authoring-time snapshots.
     # Runtime playback never calls this mirror; Rust RateFunction remains authoritative.
     _ir._track_progress = _track_progress
     _ir.Scene._add_track = _add_track
 
     exports = list(_base.__all__)
-    for name in public:
+    for name in [*public, "MoveToTarget"]:
         if name not in exports:
             exports.append(name)
     _base.__all__ = exports
