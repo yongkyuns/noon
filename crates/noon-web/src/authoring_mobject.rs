@@ -795,6 +795,9 @@ fn snapshot_layout_bounds(
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use std::{cell::RefCell, rc::Rc};
+
+    use noon_core::{SemanticNodeId, SemanticStore};
     use wasm_bindgen::prelude::*;
 
     use super::FrontendMobjectHandle;
@@ -803,21 +806,215 @@ mod wasm {
         JsValue::from_str(&error)
     }
 
+    type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
+
     #[wasm_bindgen]
-    pub struct WasmAuthoringMobjectHandle(FrontendMobjectHandle);
+    pub struct WasmAuthoringStore {
+        semantics: SharedSemanticStore,
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringStore {
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> Self {
+            Self {
+                semantics: Rc::new(RefCell::new(SemanticStore::new())),
+            }
+        }
+
+        #[wasm_bindgen(js_name = createMobject)]
+        pub fn create_mobject(
+            &self,
+            snapshot_json: &str,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            let handle = FrontendMobjectHandle::from_json(snapshot_json).map_err(js_error)?;
+            let id = self.semantics.borrow_mut().insert_authoring_object();
+            Ok(WasmAuthoringMobjectHandle(
+                handle,
+                Some(Rc::clone(&self.semantics)),
+                Some(id),
+            ))
+        }
+
+        #[wasm_bindgen(js_name = createFamily)]
+        pub fn create_family(&self) -> WasmAuthoringFamilyHandle {
+            let id = self.semantics.borrow_mut().insert_family();
+            WasmAuthoringFamilyHandle {
+                semantics: Rc::clone(&self.semantics),
+                id,
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmAuthoringFamilyHandle {
+        semantics: SharedSemanticStore,
+        id: SemanticNodeId,
+    }
+
+    impl WasmAuthoringFamilyHandle {
+        fn object_member_id(
+            &self,
+            member: &WasmAuthoringMobjectHandle,
+        ) -> Result<SemanticNodeId, JsValue> {
+            let store = member.1.as_ref().ok_or_else(|| {
+                JsValue::from_str("mobject is not attached to a shared authoring store")
+            })?;
+            if !Rc::ptr_eq(&self.semantics, store) {
+                return Err(JsValue::from_str(
+                    "family and mobject belong to different authoring stores",
+                ));
+            }
+            member
+                .2
+                .ok_or_else(|| JsValue::from_str("mobject has no semantic identity"))
+        }
+
+        fn family_member_id(
+            &self,
+            member: &WasmAuthoringFamilyHandle,
+        ) -> Result<SemanticNodeId, JsValue> {
+            if !Rc::ptr_eq(&self.semantics, &member.semantics) {
+                return Err(JsValue::from_str(
+                    "families belong to different authoring stores",
+                ));
+            }
+            Ok(member.id)
+        }
+
+        fn add_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
+            let before = self.member_count();
+            self.semantics
+                .borrow_mut()
+                .add_member(self.id, member)
+                .map_err(|error| js_error(error.to_string()))?;
+            Ok(self.member_count() != before)
+        }
+
+        fn remove_id(&mut self, member: SemanticNodeId) -> Result<bool, JsValue> {
+            self.semantics
+                .borrow_mut()
+                .remove_member(self.id, member)
+                .map_err(|error| js_error(error.to_string()))
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(getter, js_name = semanticSlot)]
+        pub fn semantic_slot(&self) -> u32 {
+            self.id.slot()
+        }
+
+        #[wasm_bindgen(getter, js_name = semanticGeneration)]
+        pub fn semantic_generation(&self) -> u32 {
+            self.id.generation()
+        }
+
+        #[wasm_bindgen(getter, js_name = memberCount)]
+        pub fn member_count(&self) -> usize {
+            self.semantics
+                .borrow()
+                .node(self.id)
+                .map_or(0, |node| node.members().len())
+        }
+
+        #[wasm_bindgen(js_name = memberSlot)]
+        pub fn member_slot(&self, index: usize) -> Result<u32, JsValue> {
+            self.semantics
+                .borrow()
+                .node(self.id)
+                .and_then(|node| node.members().get(index).copied())
+                .map(SemanticNodeId::slot)
+                .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
+        }
+
+        #[wasm_bindgen(js_name = memberGeneration)]
+        pub fn member_generation(&self, index: usize) -> Result<u32, JsValue> {
+            self.semantics
+                .borrow()
+                .node(self.id)
+                .and_then(|node| node.members().get(index).copied())
+                .map(SemanticNodeId::generation)
+                .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
+        }
+
+        #[wasm_bindgen(js_name = addMobject)]
+        pub fn add_mobject(
+            &mut self,
+            member: &WasmAuthoringMobjectHandle,
+        ) -> Result<bool, JsValue> {
+            let id = self.object_member_id(member)?;
+            self.add_id(id)
+        }
+
+        #[wasm_bindgen(js_name = addFamily)]
+        pub fn add_family(&mut self, member: &WasmAuthoringFamilyHandle) -> Result<bool, JsValue> {
+            let id = self.family_member_id(member)?;
+            self.add_id(id)
+        }
+
+        #[wasm_bindgen(js_name = removeMobject)]
+        pub fn remove_mobject(
+            &mut self,
+            member: &WasmAuthoringMobjectHandle,
+        ) -> Result<bool, JsValue> {
+            let id = self.object_member_id(member)?;
+            self.remove_id(id)
+        }
+
+        #[wasm_bindgen(js_name = removeFamily)]
+        pub fn remove_family(
+            &mut self,
+            member: &WasmAuthoringFamilyHandle,
+        ) -> Result<bool, JsValue> {
+            let id = self.family_member_id(member)?;
+            self.remove_id(id)
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmAuthoringMobjectHandle(
+        FrontendMobjectHandle,
+        Option<SharedSemanticStore>,
+        Option<SemanticNodeId>,
+    );
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
         #[wasm_bindgen(constructor)]
         pub fn new(snapshot_json: &str) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             FrontendMobjectHandle::from_json(snapshot_json)
-                .map(WasmAuthoringMobjectHandle)
+                .map(|handle| WasmAuthoringMobjectHandle(handle, None, None))
                 .map_err(js_error)
+        }
+
+        fn clone_with_handle(&self, handle: FrontendMobjectHandle) -> WasmAuthoringMobjectHandle {
+            if let Some(store) = &self.1 {
+                let id = store.borrow_mut().insert_authoring_object();
+                WasmAuthoringMobjectHandle(handle, Some(Rc::clone(store)), Some(id))
+            } else {
+                WasmAuthoringMobjectHandle(handle, None, None)
+            }
+        }
+
+        #[wasm_bindgen(getter, js_name = semanticSlot)]
+        pub fn semantic_slot(&self) -> Result<u32, JsValue> {
+            self.2
+                .map(SemanticNodeId::slot)
+                .ok_or_else(|| JsValue::from_str("mobject has no shared semantic identity"))
+        }
+
+        #[wasm_bindgen(getter, js_name = semanticGeneration)]
+        pub fn semantic_generation(&self) -> Result<u32, JsValue> {
+            self.2
+                .map(SemanticNodeId::generation)
+                .ok_or_else(|| JsValue::from_str("mobject has no shared semantic identity"))
         }
 
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> WasmAuthoringMobjectHandle {
-            WasmAuthoringMobjectHandle(self.0.clone())
+            self.clone_with_handle(self.0.clone())
         }
 
         /// Start a detached target-state edit from this handle without crossing
@@ -825,7 +1022,7 @@ mod wasm {
         /// is the editor; this alias makes that ownership explicit to frontends.
         #[wasm_bindgen(js_name = targetEditor)]
         pub fn target_editor(&self) -> WasmAuthoringMobjectHandle {
-            WasmAuthoringMobjectHandle(self.0.target_editor())
+            self.clone_with_handle(self.0.target_editor())
         }
 
         #[wasm_bindgen(js_name = snapshotJson)]

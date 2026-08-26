@@ -156,9 +156,13 @@ _compat.Group.arrange = _manim_arrange
 _ir = _base._ir
 
 try:
-    from js import noonCreateAuthoringMobjectHandle as _create_handle
+    from js import (
+        noonCreateAuthoringFamilyHandle as _create_family_handle,
+        noonCreateAuthoringMobjectHandle as _create_handle,
+    )
 except ImportError:  # Native CPython tests do not have the browser bridge.
     _create_handle = None
+    _create_family_handle = None
 
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
@@ -181,6 +185,9 @@ _ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
 _ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
 _ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
 _ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
+_ORIGINAL_GROUP_INIT = _compat.Group.__init__
+_ORIGINAL_GROUP_ADD = _compat.Group.add
+_ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 
 
 def _snapshot_json(raw: _ir.Mobject) -> str:
@@ -639,6 +646,64 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     )
 
 
+def _family_member_handle(value: object) -> tuple[str | None, object | None]:
+    if isinstance(value, _compat.Group):
+        return "family", getattr(value, "_semantic_family_handle", None)
+    if isinstance(value, _base.Mobject):
+        # Family identity survives scene binding even though ordinary detached-state
+        # mutations stop using this handle after binding.
+        return "mobject", getattr(value, "_semantic_handle", None)
+    return None, None
+
+
+def _family_add_handle(family_handle: object, value: object) -> bool:
+    kind, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    if kind == "family":
+        return bool(family_handle.addFamily(handle))
+    return bool(family_handle.addMobject(handle))
+
+
+def _family_remove_handle(family_handle: object, value: object) -> bool:
+    kind, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    if kind == "family":
+        return bool(family_handle.removeFamily(handle))
+    return bool(family_handle.removeMobject(handle))
+
+
+def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) -> None:
+    for mobject in mobjects:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("Group members must be Mobjects or Groups")
+        if mobject is owner:
+            raise ValueError("Group cannot contain itself")
+
+
+def _group_init(self: _compat.Group, *mobjects: object) -> None:
+    self._semantic_family_handle = _create_family_handle()
+    _ORIGINAL_GROUP_INIT(self, *mobjects)
+
+
+def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    _validate_group_members(self, mobjects)
+    family_handle = self._semantic_family_handle
+    for mobject in mobjects:
+        if _family_add_handle(family_handle, mobject):
+            _ORIGINAL_GROUP_ADD(self, mobject)
+    return self
+
+
+def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
+    family_handle = self._semantic_family_handle
+    for mobject in mobjects:
+        if _family_remove_handle(family_handle, mobject):
+            _ORIGINAL_GROUP_REMOVE(self, mobject)
+    return self
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED or _create_handle is None:
@@ -675,3 +740,8 @@ def install() -> None:
     _compat.VMobject.get_fill_opacity = _get_fill_opacity
     _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for
+
+    if _create_family_handle is not None:
+        _compat.Group.__init__ = _group_init
+        _compat.Group.add = _group_add
+        _compat.Group.remove = _group_remove

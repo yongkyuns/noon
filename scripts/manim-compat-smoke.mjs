@@ -76,6 +76,13 @@ class GroupAndSceneMembership(Scene):
         right = Square(side_length=0.7, color=PINK)
         pair = VGroup(left, right).arrange(RIGHT, buff=0.4)
 
+        assert int(pair._semantic_family_handle.memberCount) == 2
+        pair.add(left)
+        assert len(pair) == 2
+        assert int(pair._semantic_family_handle.memberCount) == 2
+        alias = VGroup(left)
+        assert int(alias._semantic_family_handle.memberCount) == 1
+
         assert isinstance(pair, Mobject)
         assert isinstance(pair, Group)
         self.add(pair)
