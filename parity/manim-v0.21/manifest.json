@@ -26,8 +26,8 @@
       "expected_duration": 3.0,
       "raster_tolerance": {
         "max_bounds_delta_px": null,
-        "max_differing_ratio": 0.02,
-        "max_mean_absolute_channel_error": 1.15
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.08
       }
     },
     {
