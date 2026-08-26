@@ -10,8 +10,9 @@ support and are rejected until the runtime can represent them exactly.
 ``Wiggle`` resets the starting geometry on every frame, scales it with
 ``there_and_back(alpha)``, and adds ``wiggle(alpha, 6)`` rotation after Manim's outer
 ``smooth`` rate function. Noon represents the exact default leaf behavior as two
-retained scale Transforms carrying composition time maps plus one narrow rotation
-track; the frame-critical path remains entirely in Rust.
+retained scale Transforms carrying composition time maps, a narrow waveform rotation
+track, and a retained endpoint-restore track; the frame-critical path remains entirely
+in Rust.
 
 ``FocusOn`` is likewise deterministic: Manim transforms a transparent frame-sized Dot
 into a zero-radius grey spotlight at the requested point and removes it at completion.
@@ -490,6 +491,33 @@ def _schedule_wiggle(
                 "start": 0.0,
                 "duration": 1.0,
                 "rate_func": "smooth",
+            }
+        ]
+    }
+
+    # Mapped tracks normally settle to their authored target at the exact endpoint
+    # so reversing composition groups can model Manim finish/cleanup semantics. Wiggle
+    # itself is different: wiggle(smooth(1), 6) == 0 and the object must finish at its
+    # starting rotation. A later same-channel restore track stays unbegun for every
+    # t < end (StepEnd maps those samples before its child interval), then becomes the
+    # selected target exactly at/after end. This preserves every intermediate waveform
+    # sample while making direct seek and persistent post-animation state exact.
+    scene._add_scalar_track(
+        obj,
+        "rotation",
+        from_rotation,
+        from_rotation,
+        start_time,
+        duration,
+        "linear",
+        f"@wiggle:{object_key}:{start_time:g}.rotation-restore",
+    )
+    scene._tracks[-1]["time_map"] = {
+        "steps": [
+            {
+                "start": 0.5,
+                "duration": 0.5,
+                "rate_func": "step_end",
             }
         ]
     }
