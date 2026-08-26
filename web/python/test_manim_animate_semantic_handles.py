@@ -171,6 +171,8 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             scene = Scene()
             scene.add(square)
             source_before = square._current_raw().to_ir()
+            source_handle.snapshot_requests = 0
+            source_handle.calls.clear()
             builder = animate._AlignedAnimationBuilder(square)
             target = builder.target
             target_handle = target._semantic_handle
@@ -188,8 +190,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             builder.rotate(0.4)
 
             assert target_handle.calls == [
-                "setFillOpacity",
-                "setStrokeOpacity",
+                "targetEditor",
                 ("shift", -1.0, 0.0),
                 "setFillColor",
                 ("scale", 0.3, 0.3),
@@ -197,11 +198,8 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                 "centerY",
                 ("rotateAboutPoint", 0.4),
             ], target_handle.calls
-            assert source_handle.calls == [
-                "setFillOpacity",
-                "setStrokeOpacity",
-                "replaceSnapshotJson",
-            ], source_handle.calls
+            assert source_handle.calls == ["targetEditor"], source_handle.calls
+            assert source_handle.snapshot_requests == 0
             assert target_handle.snapshot_requests == 0
             assert square._current_raw().to_ir() == source_before
             target_ir = target._current_raw().to_ir()
@@ -211,8 +209,8 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             assert square.get_center().x == 0.0
             assert square.get_center().y == 0.0
 
-            # Groups inherit the Mobject protocol but do not yet have one stable
-            # shared family handle. They must keep their explicit member-copy path.
+            # Group wrapper identity remains Python metadata while the installed
+            # shared-family adapter owns membership and target topology in browsers.
             group = VGroup(Square(), Square().shift(LEFT))
             group_builder = group.animate
             assert isinstance(group_builder.target, VGroup)

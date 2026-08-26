@@ -50,6 +50,50 @@ impl FrontendMobjectHandle {
             .map_err(|error| format!("unable to serialize mobject snapshot: {error}"))
     }
 
+    pub fn wire_translation(&self) -> (f64, f64) {
+        let value = self.snapshot.transform.translation;
+        (f64::from(value.x), f64::from(value.y))
+    }
+
+    pub fn wire_scale(&self) -> (f64, f64) {
+        let value = self.snapshot.transform.scale;
+        (f64::from(value.x), f64::from(value.y))
+    }
+
+    pub fn wire_rotation(&self) -> f64 {
+        f64::from(self.snapshot.transform.rotation)
+    }
+
+    pub fn wire_fill(&self) -> Option<(f64, f64, f64, f64)> {
+        self.snapshot.style.fill.map(|color| {
+            (
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                f64::from(color.alpha),
+            )
+        })
+    }
+
+    pub fn wire_stroke(&self) -> Option<(f64, f64, f64, f64)> {
+        self.snapshot.style.stroke.map(|color| {
+            (
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                f64::from(color.alpha),
+            )
+        })
+    }
+
+    pub fn wire_stroke_width(&self) -> f64 {
+        f64::from(self.snapshot.style.stroke_width)
+    }
+
+    pub fn wire_object_opacity(&self) -> f64 {
+        f64::from(self.snapshot.style.opacity)
+    }
+
     /// Clone this semantic state into a detached target editor. The returned
     /// handle is the editor: all target mutations stay in Rust until its final
     /// snapshot is requested for animation lowering.
@@ -1187,6 +1231,91 @@ mod wasm {
             self.0.snapshot_json().map_err(js_error)
         }
 
+        #[wasm_bindgen(getter, js_name = wireTranslationX)]
+        pub fn wire_translation_x(&self) -> f64 {
+            self.0.wire_translation().0
+        }
+
+        #[wasm_bindgen(getter, js_name = wireTranslationY)]
+        pub fn wire_translation_y(&self) -> f64 {
+            self.0.wire_translation().1
+        }
+
+        #[wasm_bindgen(getter, js_name = wireScaleX)]
+        pub fn wire_scale_x(&self) -> f64 {
+            self.0.wire_scale().0
+        }
+
+        #[wasm_bindgen(getter, js_name = wireScaleY)]
+        pub fn wire_scale_y(&self) -> f64 {
+            self.0.wire_scale().1
+        }
+
+        #[wasm_bindgen(getter, js_name = wireRotation)]
+        pub fn wire_rotation(&self) -> f64 {
+            self.0.wire_rotation()
+        }
+
+        #[wasm_bindgen(getter, js_name = wireHasFill)]
+        pub fn wire_has_fill(&self) -> bool {
+            self.0.wire_fill().is_some()
+        }
+
+        #[wasm_bindgen(getter, js_name = wireFillRed)]
+        pub fn wire_fill_red(&self) -> f64 {
+            self.0.wire_fill().map_or(0.0, |value| value.0)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireFillGreen)]
+        pub fn wire_fill_green(&self) -> f64 {
+            self.0.wire_fill().map_or(0.0, |value| value.1)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireFillBlue)]
+        pub fn wire_fill_blue(&self) -> f64 {
+            self.0.wire_fill().map_or(0.0, |value| value.2)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireFillAlpha)]
+        pub fn wire_fill_alpha(&self) -> f64 {
+            self.0.wire_fill().map_or(0.0, |value| value.3)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireHasStroke)]
+        pub fn wire_has_stroke(&self) -> bool {
+            self.0.wire_stroke().is_some()
+        }
+
+        #[wasm_bindgen(getter, js_name = wireStrokeRed)]
+        pub fn wire_stroke_red(&self) -> f64 {
+            self.0.wire_stroke().map_or(0.0, |value| value.0)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireStrokeGreen)]
+        pub fn wire_stroke_green(&self) -> f64 {
+            self.0.wire_stroke().map_or(0.0, |value| value.1)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireStrokeBlue)]
+        pub fn wire_stroke_blue(&self) -> f64 {
+            self.0.wire_stroke().map_or(0.0, |value| value.2)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireStrokeAlpha)]
+        pub fn wire_stroke_alpha(&self) -> f64 {
+            self.0.wire_stroke().map_or(0.0, |value| value.3)
+        }
+
+        #[wasm_bindgen(getter, js_name = wireStrokeWidth)]
+        pub fn wire_stroke_width(&self) -> f64 {
+            self.0.wire_stroke_width()
+        }
+
+        #[wasm_bindgen(getter, js_name = wireObjectOpacity)]
+        pub fn wire_object_opacity(&self) -> f64 {
+            self.0.wire_object_opacity()
+        }
+
         #[wasm_bindgen(js_name = replaceSnapshotJson)]
         pub fn replace_snapshot_json(&mut self, snapshot_json: &str) -> Result<(), JsValue> {
             self.0.replace_json(snapshot_json).map_err(js_error)
@@ -1700,6 +1829,42 @@ mod tests {
         stretched.replace_handle(&target, 0, true).unwrap();
         assert!((stretched.width() - 2.0).abs() < 1e-6);
         assert!((stretched.height() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wire_projection_matches_lowered_snapshot_after_shared_edits() {
+        let mut value = snapshot(GeometryRef::rectangle(2.0, 1.0));
+        value.style.fill = Some(Color::rgba(0.2, 0.3, 0.4, 0.5));
+        value.style.stroke = Some(Color::rgba(0.6, 0.7, 0.8, 0.9));
+        let mut handle = FrontendMobjectHandle::from_snapshot(value);
+
+        handle.shift(0.7, -0.3).unwrap();
+        handle.scale(1.1, 0.9).unwrap();
+        handle.rotate(0.2).unwrap();
+        handle.set_fill_opacity(0.25).unwrap();
+        handle.set_stroke_width(3.5).unwrap();
+
+        let snapshot = handle.snapshot();
+        assert_eq!(
+            handle.wire_translation(),
+            (
+                f64::from(snapshot.transform.translation.x),
+                f64::from(snapshot.transform.translation.y),
+            )
+        );
+        assert_eq!(
+            handle.wire_scale(),
+            (
+                f64::from(snapshot.transform.scale.x),
+                f64::from(snapshot.transform.scale.y),
+            )
+        );
+        assert_eq!(
+            handle.wire_rotation(),
+            f64::from(snapshot.transform.rotation)
+        );
+        assert_eq!(handle.wire_fill().unwrap().3, 0.25_f32 as f64);
+        assert_eq!(handle.wire_stroke_width(), 3.5_f32 as f64);
     }
 
     #[test]

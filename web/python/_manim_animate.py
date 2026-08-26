@@ -19,6 +19,7 @@ import _manim_animation_options as _options
 import _manim_compat as _compat
 import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
+import _manim_semantic_handles as _semantic_handles
 
 
 _ORIGINAL_TRANSFORM = _base.Transform
@@ -633,6 +634,7 @@ def _aligned_scene_play(
             _record_wrapper_state(animation.target, wrapper_states)
 
     max_end = base_start
+    semantic_targets: dict[int, tuple[_base.Mobject, _base.Mobject]] = {}
     try:
         # Introducing animations bind their target; method animations and FadeOut
         # match Manim's normal Scene.play behavior by implicitly adding their mobject.
@@ -698,6 +700,12 @@ def _aligned_scene_play(
                         remover=lowered.remover,
                     )
 
+                if isinstance(lowered, _base.Transform):
+                    source = lowered.source
+                    target = lowered.target
+                    if isinstance(source, _base.Mobject) and isinstance(target, _base.Mobject):
+                        semantic_targets[id(source)] = (source, target)
+
                 # `noon.Scene` has already been replaced by the compatibility class
                 # during install, so use the original captured facade explicitly to
                 # avoid recursively re-entering this compatibility scheduler.
@@ -711,6 +719,8 @@ def _aligned_scene_play(
             max_end = max(max_end, base_start + resolved.run_time)
 
         self._cursor = max(cursor_before, max_end)
+        for source, target in semantic_targets.values():
+            _semantic_handles.commit_transform_target(source, target)
         return self
     except Exception:
         self._restore_authoring_checkpoint(checkpoint)
