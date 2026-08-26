@@ -150,6 +150,18 @@
       "parity_fixture": "different-rotations"
     },
     {
+      "id": "parity-add-wait-lagged-start-map",
+      "title": "Exact parity: Add, Wait, and LaggedStartMap",
+      "status": "ready",
+      "path": "python/examples/manim_parity_add_wait_lagged_start_map.py",
+      "category": "parity/composition",
+      "features": ["Add", "Wait", "Succession", "LaggedStartMap", "FadeIn", "pixel-parity", "time-parity"],
+      "upstream": "reference/manim.animation.composition.html",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "add-wait-lagged-start-map"
+    },
+    {
       "id": "text-and-math",
       "title": "Text and mathematical notation",
       "status": "blocked",
