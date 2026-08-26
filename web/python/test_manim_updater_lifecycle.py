@@ -87,6 +87,29 @@ class ManimUpdaterLifecycleTests(unittest.TestCase):
             backward_batch = json.loads(updaters.run_callback_phase(session, frame(3.0, 0.25, 1), 1))
             backward_rotation = backward_batch["patches"][0]["set_transform"]["transform"]["rotation"]
             assert abs(backward_rotation + 0.25) < 1e-6, backward_rotation
+
+            detached_scene = Scene()
+            detached = Line(ORIGIN, LEFT)
+
+            def removed_before_bind(mobject):
+                mobject.shift(LEFT * 99)
+
+            def live_after_bind(mobject, dt):
+                mobject.rotate_about_origin(dt)
+
+            detached.add_updater(removed_before_bind)
+            detached.remove_updater(removed_before_bind)
+            detached.add_updater(live_after_bind)
+            detached_scene.add(detached)
+
+            detached_config = updaters.register_scene(detached_scene)
+            assert detached_config is not None
+            assert len(detached_config["slots"]) == 2, detached_config
+            removed_slot, live_slot = detached_config["slots"]
+            assert removed_slot["active_after"] == 0.0
+            assert removed_slot["active_through"] == 0.0
+            assert live_slot["active_after"] == 0.0
+            assert "active_through" not in live_slot
             """
         )
         completed = subprocess.run(
