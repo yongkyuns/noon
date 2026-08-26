@@ -23,6 +23,7 @@ const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
 const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
 const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
 const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
+const MANIM_GROWING_MODULE_PATH = "/tmp/_manim_growing.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
 
@@ -61,6 +62,7 @@ async function initializePyodide() {
     rotateResponse,
     compositionResponse,
     lifecycleResponse,
+    growingResponse,
     reactiveResponse,
     updatersResponse,
   ] = await Promise.all([
@@ -75,6 +77,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
     fetch(new URL("./python/_manim_composition.py", import.meta.url)),
     fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
+    fetch(new URL("./python/_manim_growing.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
   ]);
@@ -90,6 +93,7 @@ async function initializePyodide() {
     [rotateResponse, "Noon Manim Rotate layer"],
     [compositionResponse, "Noon Manim composition layer"],
     [lifecycleResponse, "Noon Manim lifecycle layer"],
+    [growingResponse, "Noon Manim growing layer"],
     [reactiveResponse, "Noon reactive compatibility layer"],
     [updatersResponse, "Noon Manim updater layer"],
   ];
@@ -111,6 +115,7 @@ async function initializePyodide() {
     [MANIM_ROTATE_MODULE_PATH, rotateResponse],
     [MANIM_COMPOSITION_MODULE_PATH, compositionResponse],
     [MANIM_LIFECYCLE_MODULE_PATH, lifecycleResponse],
+    [MANIM_GROWING_MODULE_PATH, growingResponse],
     [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
     [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
   ];
@@ -134,6 +139,8 @@ _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
+import _manim_growing
+_manim_growing.install()
 import _manim_reactive
 import _manim_updaters
 _manim_updaters.install()
