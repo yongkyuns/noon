@@ -1,20 +1,25 @@
 """Deterministic ManimCE v0.21 indication compatibility.
 
-The first retained slice is ``ShowPassingFlash`` for one leaf ``Line``.  Manim's
-``ShowPartial`` implementation exposes a moving partial-path window
+``ShowPassingFlash`` qualifies one retained ``Line`` by lowering Manim's moving
+partial-path window to ordinary Position and Reveal tracks. ``Flash`` then reuses
+that exact leaf implementation through Noon's existing ``AnimationGroup`` scheduler:
+its radial lines are static authoring geometry and no Python callback participates in
+playback.
+
+For ``ShowPassingFlash`` Manim's ``ShowPartial`` implementation exposes
 
     lower = max((1 + time_width) * alpha - time_width, 0)
     upper = min((1 + time_width) * alpha, 1)
 
-where ``alpha`` has already passed through the animation rate function.  A line
-window can be represented exactly without changing semantic geometry: translate the
-line by ``lower`` times its transformed direction and reveal a prefix of length
-``upper - lower``.  Noon authors those two quantities as ordinary retained Position
+where ``alpha`` has already passed through the animation rate function. A line window
+can be represented exactly without changing semantic geometry: translate the line by
+``lower`` times its transformed direction and reveal a prefix of length
+``upper - lower``. Noon authors those two quantities as ordinary retained Position
 and Reveal tracks with shared composition time maps, so seeking/playback never wakes
 Python.
 
 At the remover boundary constant cleanup tracks restore the original translation and
-full reveal before the object is hidden.  This mirrors Manim's
+full reveal before the object is hidden. This mirrors Manim's
 ``ShowPassingFlash.clean_up_from_scene`` restoration and makes reusing the same Line
 after the animation deterministic.
 """
@@ -31,12 +36,14 @@ import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
 import _manim_lifecycle as _lifecycle
+import _manim_phase_b as _phase_b
 
 
 _INSTALLED = False
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 _ORIGINAL_COMPOSITION_PLAY_LEAF = _composition._play_leaf
 _ORIGINAL_RECORD_COMPOSITION_WRAPPER_STATE = _composition._record_composition_wrapper_state
+_PURE_YELLOW = _base.color_from_hex("#FFFF00")
 
 
 class ShowPassingFlash:
@@ -78,6 +85,87 @@ class ShowPassingFlash:
         self.remover = True
         self.introducer = True
         self.anim_args = dict(kwargs)
+
+
+class Flash(_composition.AnimationGroup):
+    """Send retained passing-flash Lines radially from a fixed 2D point."""
+
+    def __init__(
+        self,
+        point: object,
+        line_length: float = 0.2,
+        num_lines: int = 12,
+        flash_radius: float = 0.1,
+        line_stroke_width: float = 3.0,
+        color: object = _PURE_YELLOW,
+        time_width: float = 1.0,
+        run_time: float = 1.0,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(point, (_base.Mobject, _compat.Group)):
+            center = point.get_center()
+        else:
+            center = _compat._as_vec2(point)
+
+        if isinstance(num_lines, bool) or not isinstance(num_lines, int):
+            raise TypeError("Flash num_lines must be an integer")
+        if num_lines <= 0:
+            raise ValueError("Flash num_lines must be positive")
+
+        length = float(line_length)
+        radius = float(flash_radius)
+        stroke_width = float(line_stroke_width)
+        duration = float(run_time)
+        if not math.isfinite(length):
+            raise ValueError("Flash line_length must be finite")
+        if not math.isfinite(radius):
+            raise ValueError("Flash flash_radius must be finite")
+        if not math.isfinite(stroke_width) or stroke_width < 0.0:
+            raise ValueError("Flash line_stroke_width must be finite and non-negative")
+        if not math.isfinite(duration) or duration <= 0.0:
+            raise ValueError("Flash run_time must be finite and positive")
+
+        self.point = center
+        self.color = _phase_b._as_color("color", color)
+        self.line_length = length
+        self.num_lines = num_lines
+        self.flash_radius = radius
+        self.line_stroke_width = stroke_width
+        self.run_time = duration
+        self.time_width = float(time_width)
+        self.animation_config = dict(kwargs)
+
+        self.lines = self.create_lines()
+        animations = self.create_line_anims()
+        # Match Manim: timing/rate kwargs belong to each ShowPassingFlash child;
+        # the containing AnimationGroup itself keeps its default linear, lag=0 map.
+        super().__init__(*animations, group=self.lines)
+
+    def create_lines(self) -> _compat.VGroup:
+        lines = _compat.VGroup()
+        for index in range(self.num_lines):
+            angle = _base.TAU * index / self.num_lines
+            line = _compat.Line(
+                self.point,
+                self.point + self.line_length * _base.RIGHT,
+            )
+            line.shift(self.flash_radius * _base.RIGHT)
+            line.rotate(angle, about_point=self.point)
+            lines.add(line)
+        lines.set_color(self.color)
+        lines.set_stroke(width=self.line_stroke_width)
+        return lines
+
+    def create_line_anims(self) -> list[ShowPassingFlash]:
+        return [
+            ShowPassingFlash(
+                line,
+                time_width=self.time_width,
+                run_time=self.run_time,
+                **self.animation_config,
+            )
+            for line in self.lines
+        ]
 
 
 def _track_key(scene: _compat.Scene, track: dict[str, Any]) -> str:
@@ -269,7 +357,7 @@ def _schedule_show_passing_flash(
         )
 
     # Match ordinary Scene.play implicit addition plus ShowPassingFlash's
-    # introducer/remover behavior.  The shared lifecycle planner remains the source
+    # introducer/remover behavior. The shared lifecycle planner remains the source
     # of truth for reintroduction and exact-end removal.
     _animate._bind_for_animation(scene, member, start_time=start)
     assert member._object is not None
@@ -306,7 +394,7 @@ def _schedule_show_passing_flash(
     root_key = f"@show-passing-flash:{object_key}:{start:g}"
 
     # Window width: ramp 0 -> min(time_width, 1), hold while both clamps are
-    # inactive/active, then ramp back to zero.  The hold needs no track: the first
+    # inactive/active, then ramp back to zero. The hold needs no track: the first
     # mapped segment remains at its `to` value until the later segment has begun.
     _add_mapped_scalar(
         scene,
@@ -340,7 +428,7 @@ def _schedule_show_passing_flash(
     )
 
     # The lower bound starts moving at time_width / (1 + time_width) in *warped*
-    # animation alpha.  Translating by one transformed line direction as local
+    # animation alpha. Translating by one transformed line direction as local
     # progress goes 0 -> 1 is therefore exactly lower(alpha).
     _add_mapped_position(
         scene,
@@ -373,7 +461,7 @@ def _schedule_show_passing_flash(
         )
 
     # Manim finishes the zero-width partial state, restores the full starting
-    # VMobject in clean_up_from_scene, then removes it.  Position/Reveal are
+    # VMobject in clean_up_from_scene, then removes it. Position/Reveal are
     # continuous properties in Noon, so use constant hidden cleanup holds beginning
     # at the exact remover boundary. They do not advance Scene.time and later authored
     # tracks at the same boundary supersede them deterministically by track ID.
@@ -576,10 +664,15 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    _base.ShowPassingFlash = ShowPassingFlash
-    _compat.ShowPassingFlash = ShowPassingFlash
-    if "ShowPassingFlash" not in _base.__all__:
-        _base.__all__.append("ShowPassingFlash")
+    public = {
+        "Flash": Flash,
+        "ShowPassingFlash": ShowPassingFlash,
+    }
+    for name, value in public.items():
+        setattr(_base, name, value)
+        setattr(_compat, name, value)
+        if name not in _base.__all__:
+            _base.__all__.append(name)
     _compat.Scene.play = _show_passing_flash_scene_play
     _composition._play_leaf = _composition_play_leaf
     _composition._record_composition_wrapper_state = _record_composition_wrapper_state

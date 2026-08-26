@@ -186,7 +186,7 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_rate_functions
             _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
+            import _manim_phase_b
             import _manim_animate  # noqa: F401
             import _manim_composition
             _manim_composition.install()
@@ -196,7 +196,7 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             import _manim_updaters
             _manim_updaters.install()
 
-            from noon import AnimationGroup, Line, Scene, ShowPassingFlash, Square
+            from noon import AnimationGroup, Flash, Line, RED, Scene, ShowPassingFlash, Square
 
             def mapped_step(track):
                 steps = track["time_map"]["steps"]
@@ -321,6 +321,97 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             assert grouped[0]["time_map"]["steps"][0]["rate_func"] == "linear"
             assert grouped[0]["time_map"]["steps"][1]["rate_func"] == "smooth"
 
+            # Flash is the upstream radial VGroup plus simultaneous
+            # ShowPassingFlash children. Geometry is authored once, and the existing
+            # AnimationGroup scheduler owns playback timing.
+            burst = Flash((1.0, 2.0))
+            assert isinstance(burst, AnimationGroup)
+            assert burst.point == (1.0, 2.0)
+            assert burst.line_length == 0.2
+            assert burst.num_lines == 12
+            assert burst.flash_radius == 0.1
+            assert burst.line_stroke_width == 3.0
+            assert burst.time_width == 1.0
+            assert burst.run_time == 1.0
+            assert len(burst.lines) == 12
+            assert len(burst.animations) == 12
+            assert all(isinstance(animation, ShowPassingFlash) for animation in burst.animations)
+            assert abs(burst.lines[0].get_center().x - 1.2) < 1e-12
+            assert abs(burst.lines[0].get_center().y - 2.0) < 1e-12
+            assert abs(burst.lines[3].get_center().x - 1.0) < 1e-12
+            assert abs(burst.lines[3].get_center().y - 2.2) < 1e-12
+            default_style = burst.lines[0]._current_raw().style
+            assert default_style["stroke"] == {
+                "red": 1.0,
+                "green": 1.0,
+                "blue": 0.0,
+                "alpha": 1.0,
+            }
+            assert abs(
+                default_style["stroke_width"]
+                - _manim_phase_b._manim_stroke_width(3.0)
+            ) < 1e-12
+
+            flash_scene = Scene()
+            flash_scene.play(burst)
+            assert abs(flash_scene.time - 1.0) < 1e-12
+            flash_document = flash_scene.to_document()
+            assert len(flash_document["objects"]) == 12
+            assert all(line not in flash_scene.mobjects for line in burst.lines)
+            for line in burst.lines:
+                line_tracks = [
+                    track
+                    for track in flash_document["tracks"]
+                    if track["object"] == line.id
+                ]
+                mapped_reveals = [
+                    track
+                    for track in line_tracks
+                    if track["property"] == "reveal" and "time_map" in track
+                ]
+                assert len(mapped_reveals) == 2
+                # Flash's containing AnimationGroup is linear; the child's default
+                # ShowPassingFlash curve remains smooth inside that shared interval.
+                assert mapped_reveals[0]["time_map"]["steps"][0]["rate_func"] == "linear"
+                assert mapped_reveals[0]["time_map"]["steps"][-1]["rate_func"] == "smooth"
+                hide = [track for track in line_tracks if track["property"] == "presence"]
+                assert len(hide) == 1
+                assert hide[0]["timing"]["start_time"] == 1.0
+
+            custom = Flash(
+                (0.0, 0.0),
+                line_length=1.0,
+                num_lines=4,
+                flash_radius=2.0,
+                line_stroke_width=7,
+                color=RED,
+                time_width=0.3,
+                run_time=2.0,
+                rate_func=_manim_rate_functions.rush_from,
+            )
+            assert len(custom.lines) == 4
+            assert abs(custom.lines[0].get_center().x - 2.5) < 1e-12
+            assert abs(custom.lines[1].get_center().y - 2.5) < 1e-12
+            custom_style = custom.lines[0]._current_raw().style
+            assert custom_style["stroke"] == RED.to_ir()
+            assert abs(
+                custom_style["stroke_width"]
+                - _manim_phase_b._manim_stroke_width(7.0)
+            ) < 1e-12
+            custom_scene = Scene()
+            custom_scene.play(custom)
+            assert abs(custom_scene.time - 2.0) < 1e-12
+            custom_first_id = custom.lines[0].id
+            custom_reveals = [
+                track
+                for track in custom_scene.to_document()["tracks"]
+                if track["object"] == custom_first_id
+                and track["property"] == "reveal"
+                and "time_map" in track
+            ]
+            assert len(custom_reveals) == 2
+            assert custom_reveals[0]["time_map"]["steps"][-1]["rate_func"] == "rush_from"
+
             try:
                 ShowPassingFlash(Square())
             except NotImplementedError:
@@ -344,6 +435,14 @@ class ManimShowPassingFlashTests(unittest.TestCase):
                 pass
             else:
                 raise AssertionError("reversed rate semantics must not be approximated")
+
+            for invalid_count in (0, -1):
+                try:
+                    Flash((0.0, 0.0), num_lines=invalid_count)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("Flash must reject non-positive num_lines")
             """
         )
 
