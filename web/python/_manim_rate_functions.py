@@ -58,6 +58,13 @@ def there_and_back(t: float, inflection: float = INFLECTION) -> float:
     return smooth(mirrored, inflection)
 
 
+def _wiggle_6(t: float) -> float:
+    """Internal exact Manim ``wiggle(t, 6)`` used by default ``Wiggle``."""
+
+    value = float(t)
+    return there_and_back(value) * math.sin(6.0 * math.pi * value)
+
+
 def _ease_in_out_cubic(t: float) -> float:
     value = min(max(float(t), 0.0), 1.0)
     if value < 0.5:
@@ -83,6 +90,7 @@ _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
     "rush_into": rush_into,
     "rush_from": rush_from,
     "there_and_back": there_and_back,
+    "wiggle_6": _wiggle_6,
     "step_start": _step_start,
     "step_end": _step_end,
 }
