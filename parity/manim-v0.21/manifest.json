@@ -92,6 +92,16 @@
       }
     },
     {
+      "id": "create-transformed-square",
+      "scene": "CreateTransformedSquare",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "uncreate-transformed-square",
+      "scene": "UncreateTransformedSquare",
+      "expected_duration": 1.0
+    },
+    {
       "id": "uncreate-square",
       "scene": "UncreateSquare",
       "expected_duration": 1.0,
