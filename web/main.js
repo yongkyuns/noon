@@ -142,6 +142,14 @@ const SCENE_EXAMPLES = [
     parityFixture: "grow-point-center-edge",
   },
   {
+    name: "Manim parity · Uncreate styled square",
+    path: "./python/examples/manim_parity_uncreate_styled_square.py",
+    summary:
+      "Source-equivalent ManimCE v0.21 Uncreate scene covering reverse Create timing, styled reveal removal, and lifecycle cleanup.",
+    features: "exact parity qualified · Uncreate · pixels + time",
+    parityFixture: "uncreate-styled-square",
+  },
+  {
     name: "Analytic Transform",
     path: "./python/examples/analytic_transform.py",
     summary:
