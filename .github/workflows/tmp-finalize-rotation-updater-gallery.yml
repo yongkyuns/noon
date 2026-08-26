@@ -1,0 +1,30 @@
+name: Temporary RotationUpdater gallery finalizer
+
+on:
+  push:
+    branches:
+      - parity/manim-gallery-rotation-updater
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove generated validation artifacts
+        run: |
+          git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+          rm -rf node_modules web/python/examples/__pycache__
+          git rm -rf --ignore-unmatch web/python/__pycache__
+          git checkout origin/master -- web/python/__pycache__
+      - name: Commit clean gallery tree
+        run: |
+          rm .github/workflows/tmp-finalize-rotation-updater-gallery.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Remove generated gallery validation artifacts"
+          git push origin HEAD:parity/manim-gallery-rotation-updater
