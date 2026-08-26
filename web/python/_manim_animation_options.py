@@ -104,17 +104,34 @@ def resolve(
     )
 
 
+def _play_begin_target(
+    source: _base.Mobject,
+    *,
+    animate_module: Any,
+) -> _base.Mobject:
+    """Copy the retained mobject state visible when Scene.play begins."""
+
+    scene = source._scene
+    obj = source._object
+    if scene is not None and obj is not None:
+        snapshot = scene._snapshot_for_object_at(obj, scene._cursor)
+        return animate_module._snapshot_mobject(snapshot)
+    return source.copy()
+
+
 def _scale_in_place_builder(
     mobject: object,
     scale_factor: float,
     animation_kwargs: dict[str, Any],
 ) -> object:
-    """Lower Manim's ApplyMethod-based scale helpers to the target-state builder.
+    """Lower Manim's ApplyMethod-based scale helpers to a deferred target builder.
 
     ManimCE v0.21 implements ``ScaleInPlace`` as ``ApplyMethod(mobject.scale, factor)``
-    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. For a single 2D leaf whose
-    authored geometry is centered on its transform origin, Noon's ordinary target-state
-    builder represents the same endpoint and interpolation without a new playback path.
+    and ``ShrinkToCenter`` as ``ScaleInPlace(..., 0)``. ``ApplyMethod.create_target``
+    runs from ``Transform.begin()``, so the target must be copied from the mobject state
+    that exists when ``Scene.play`` begins rather than when the animation is constructed.
+    For a single 2D leaf, Noon's retained scene snapshot plus the ordinary target-state
+    Transform path represents the same endpoint/interpolation without a new playback path.
     """
 
     if isinstance(mobject, _compat.Group):
@@ -128,17 +145,24 @@ def _scale_in_place_builder(
     if not math.isfinite(factor):
         raise ValueError("scale factor must be finite")
 
-    # Import lazily to avoid a cycle: this adapter is imported by _manim_animate.
-    # Calls happen only after the animation module has finished installing its aligned
-    # builder, so we reuse the exact same implicit-binding, rollback, option-resolution,
-    # and retained Transform lowering as ``mobject.animate.scale(...)``.
     import _manim_animate as _animate
 
-    builder = _animate._AlignedAnimationBuilder(mobject)
-    builder.anim_args = dict(animation_kwargs)
-    builder.cannot_pass_args = True
-    builder.target.scale(factor)
-    return builder
+    class _DeferredScaleBuilder(_animate._AlignedAnimationBuilder):
+        def __init__(self) -> None:
+            self.source = mobject
+            self.mobject = mobject
+            self.scale_factor = factor
+            self.anim_args = dict(animation_kwargs)
+            self.cannot_pass_args = True
+            self.is_chaining = False
+
+        @property
+        def target(self) -> _base.Mobject:
+            target = _play_begin_target(self.source, animate_module=_animate)
+            target.scale(self.scale_factor)
+            return target
+
+    return _DeferredScaleBuilder()
 
 
 def ScaleInPlace(mobject: object, scale_factor: float, **kwargs: Any) -> object:
@@ -154,13 +178,14 @@ def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
 
 
 def FadeToColor(mobject: object, color: object, **kwargs: Any) -> object:
-    """Animate one 2D leaf to ``color`` through the retained target-state transform.
+    """Animate one 2D leaf to ``color`` through a play-begin ApplyMethod target.
 
     ManimCE v0.21 defines ``FadeToColor`` as
-    ``ApplyMethod(mobject.set_color, color, **kwargs)``.  For a retained leaf, Noon's
-    aligned animation builder captures the same target style while keeping timing,
-    implicit scene binding, rollback, and deterministic seek behavior on the ordinary
-    Transform path.
+    ``ApplyMethod(mobject.set_color, color, **kwargs)``. Its target copy is created from
+    the mobject in ``Transform.begin()``, so style/transform mutations that happen after
+    animation construction must be visible. Noon reconstructs that play-begin retained
+    snapshot, applies ``set_color`` to the detached copy, then uses the ordinary retained
+    Transform path for interpolation and deterministic seek.
     """
 
     if isinstance(mobject, _compat.Group):
@@ -172,18 +197,29 @@ def FadeToColor(mobject: object, color: object, **kwargs: Any) -> object:
 
     import _manim_animate as _animate
 
-    builder = _animate._AlignedAnimationBuilder(mobject)
-    builder.anim_args = dict(kwargs)
-    builder.cannot_pass_args = True
-    builder.target.set_color(color)
-    return builder
+    class _DeferredFadeToColorBuilder(_animate._AlignedAnimationBuilder):
+        def __init__(self) -> None:
+            self.source = mobject
+            self.mobject = mobject
+            self.anim_args = dict(kwargs)
+            self.cannot_pass_args = True
+            self.is_chaining = False
+
+        @property
+        def target(self) -> _base.Mobject:
+            target = _play_begin_target(self.source, animate_module=_animate)
+            target.set_color(color)
+            return target
+
+    return _DeferredFadeToColorBuilder()
 
 
-for _name, _value in {
+public = {
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
     "FadeToColor": FadeToColor,
-}.items():
+}
+for _name, _value in public.items():
     setattr(_base, _name, _value)
     setattr(_compat, _name, _value)
     if _name not in _base.__all__:
