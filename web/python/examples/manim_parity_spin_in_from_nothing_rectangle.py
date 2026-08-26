@@ -1,6 +1,7 @@
 # Source-equivalent ManimCE v0.21.0 growing-animation parity demo.
 # Upstream: https://docs.manim.community/en/v0.21.0/reference/manim.animation.growing.SpinInFromNothing.html
 # Output-affecting scene code intentionally matches the canonical parity fixture.
+# The fill-only style isolates animation parity from the separate default-stroke raster contract.
 
 from noon import *
 
