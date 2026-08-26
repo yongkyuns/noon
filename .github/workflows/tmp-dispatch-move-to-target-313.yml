@@ -1,0 +1,26 @@
+name: Temporary dispatch MoveToTarget qualification
+
+on:
+  push:
+    branches:
+      - ci/dispatch-move-to-target-313
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: yongkyuns/noon
+      TARGET_REF: parity/manim-move-to-target-current-v2
+    steps:
+      - name: Dispatch exact qualification workflows
+        run: |
+          gh workflow run ci.yml --ref "$TARGET_REF"
+          gh workflow run test-coverage.yml --ref "$TARGET_REF"
+          gh workflow run manim-api-coverage.yml --ref "$TARGET_REF"
+          gh workflow run manim-differential.yml --ref "$TARGET_REF"
+          gh workflow run manim-raster-differential.yml --ref "$TARGET_REF"
