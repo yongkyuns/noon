@@ -1,11 +1,14 @@
 import {
   BLUE,
+  GREEN,
+  LEFT,
   PINK,
   PI,
   RIGHT,
   Circle,
   Create,
   FadeOut,
+  Rotate,
   Scene,
   Square,
   Transform,
@@ -52,9 +55,30 @@ export function animatedSquareToCircle() {
   return scene;
 }
 
+export function differentRotations() {
+  const scene = new Scene();
+  const leftSquare = new Square()
+    .setColor(BLUE)
+    .setFill(BLUE, 0.7)
+    .shift(LEFT.mul(2));
+  const rightSquare = new Square()
+    .setColor(GREEN)
+    .setFill(GREEN, 0.7)
+    .shift(RIGHT.mul(2));
+  scene.add(leftSquare, rightSquare);
+  scene.play(
+    leftSquare.animate().rotate(PI),
+    Rotate(rightSquare, PI),
+    { runTime: 2 },
+  );
+  scene.wait();
+  return scene;
+}
+
 export const quickstartEquivalents = Object.freeze({
   CreateCircle: createCircle,
   SquareToCircle: squareToCircle,
   SquareAndCircle: squareAndCircle,
   AnimatedSquareToCircle: animatedSquareToCircle,
+  DifferentRotations: differentRotations,
 });

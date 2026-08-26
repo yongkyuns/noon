@@ -398,6 +398,18 @@ class TransformAnimation extends MobjectAnimation {
   }
 }
 
+class RotateAnimation extends MobjectAnimation {
+  constructor(mobject, angle) {
+    super(mobject);
+    this.angle = Number(angle);
+  }
+
+  _append(scene, batch) {
+    scene._assertOwns(this.mobject);
+    scene._core.appendRotate(batch, this.mobject._handle, this.angle);
+  }
+}
+
 export function Create(mobject) {
   return new CreateAnimation(mobject);
 }
@@ -412,6 +424,10 @@ export function FadeIn(mobject) {
 
 export function Transform(source, target) {
   return new TransformAnimation(source, target);
+}
+
+export function Rotate(mobject, angle = PI) {
+  return new RotateAnimation(mobject, angle);
 }
 
 export class Scene {

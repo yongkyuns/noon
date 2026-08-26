@@ -19,7 +19,7 @@ pub use composition_authoring::{AnimationGroup, LaggedStart, Succession};
 pub mod prelude {
     pub use crate::{
         Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
-        Line, Mobject, MobjectEditor, Path, Rectangle, Scene, Square, Succession, Transform,
+        Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession, Transform,
     };
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
@@ -289,6 +289,23 @@ impl Transform {
     }
 }
 
+/// Procedurally rotate a centered 2D mobject around its current center.
+///
+/// Unlike [`Animate::rotate`], which builds a target-state transform, `Rotate`
+/// lowers to the scalar rotation channel. This preserves Manim's distinction
+/// between target-state point interpolation and procedural angular motion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rotate {
+    object: Mobject,
+    angle: f32,
+}
+
+impl Rotate {
+    pub const fn new(object: Mobject, angle: f32) -> Self {
+        Self { object, angle }
+    }
+}
+
 /// Progressively draw a shape while preserving its steady-state semantic geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Create(pub Mobject);
@@ -321,6 +338,7 @@ impl FadeIn {
 pub enum Animation {
     Animate(Animate),
     Transform(Transform),
+    Rotate(Rotate),
     Create(Create),
     FadeOut(FadeOut),
     FadeIn(FadeIn),
@@ -336,6 +354,12 @@ impl From<Animate> for Animation {
 impl From<Transform> for Animation {
     fn from(value: Transform) -> Self {
         Self::Transform(value)
+    }
+}
+
+impl From<Rotate> for Animation {
+    fn from(value: Rotate) -> Self {
+        Self::Rotate(value)
     }
 }
 
@@ -393,6 +417,8 @@ tuple_animations!(A, B, C, D);
 pub enum AuthoringError {
     UnknownObject(ObjectId),
     InvalidDuration(f64),
+    InvalidRotationAngle(f32),
+    RotateRequiresCenteredGeometry(ObjectId),
     StaticMutationAfterAnimation(ObjectId),
     CreateRequiresAbsent(ObjectId),
     CreateUnsupportedGeometry(ObjectId),
@@ -407,6 +433,12 @@ impl std::fmt::Display for AuthoringError {
         match self {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::InvalidDuration(value) => write!(formatter, "invalid animation duration {value}"),
+            Self::InvalidRotationAngle(value) => write!(formatter, "invalid rotation angle {value}"),
+            Self::RotateRequiresCenteredGeometry(id) => write!(
+                formatter,
+                "Rotate currently requires object {} geometry centered on its transform origin",
+                id.get()
+            ),
             Self::StaticMutationAfterAnimation(id) => write!(
                 formatter,
                 "object {} already has authored animation; use .animate for later changes",
@@ -572,6 +604,31 @@ impl Scene {
                         timing,
                     )?;
                     self.authored.insert(animation.source.id, animation.target);
+                }
+                Animation::Rotate(animation) => {
+                    if !animation.angle.is_finite() {
+                        return Err(AuthoringError::InvalidRotationAngle(animation.angle));
+                    }
+                    let from = self.snapshot(animation.object)?.clone();
+                    let center = from.center();
+                    let origin = from.transform.translation;
+                    if (center - origin).length() > 1e-5 {
+                        return Err(AuthoringError::RotateRequiresCenteredGeometry(
+                            animation.object.id,
+                        ));
+                    }
+                    let from_rotation = from.transform.rotation;
+                    let to_rotation = from_rotation + animation.angle;
+                    self.definition.animate_scalar(
+                        animation.object.id,
+                        Property::Rotation,
+                        from_rotation,
+                        to_rotation,
+                        timing,
+                    )?;
+                    let mut to = from;
+                    to.transform.rotation = to_rotation;
+                    self.authored.insert(animation.object.id, to);
                 }
                 Animation::Create(Create(object)) => {
                     let snapshot = self.snapshot(object)?;
@@ -835,6 +892,36 @@ mod tests {
         assert_eq!(target.transform.translation, RIGHT + UP);
         assert_eq!(target.style.fill, Some(PURPLE));
         assert!((target.transform.rotation - PI / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn explicit_rotate_uses_scalar_rotation_while_animate_rotate_uses_transform() {
+        let mut scene = Scene::new();
+        let left = scene.add(Square::default().shift(LEFT * 2.0));
+        let right = scene.add(Square::default().shift(RIGHT * 2.0));
+
+        scene
+            .play((left.animate().rotate(PI), Rotate::new(right, PI)))
+            .run_time(2.0)
+            .unwrap();
+
+        let tracks = scene.definition().tracks();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].property, Property::Transform);
+        assert_eq!(tracks[1].property, Property::Rotation);
+        assert_eq!(tracks[0].timing.start_time, 0.0);
+        assert_eq!(tracks[1].timing.start_time, 0.0);
+        assert_eq!(tracks[0].timing.duration, 2.0);
+        assert_eq!(tracks[1].timing.duration, 2.0);
+        assert_eq!(tracks[0].timing.easing, RateFunction::Smooth);
+        assert_eq!(tracks[1].timing.easing, RateFunction::Smooth);
+        assert_eq!(
+            tracks[1].values,
+            TrackValues::Scalar { from: 0.0, to: PI }
+        );
+        assert!((scene.snapshot(left).unwrap().transform.rotation - PI).abs() < 1e-6);
+        assert!((scene.snapshot(right).unwrap().transform.rotation - PI).abs() < 1e-6);
+        assert_eq!(scene.time(), 2.0);
     }
 
     #[test]

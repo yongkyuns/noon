@@ -76,6 +76,7 @@ const quickstartEquivalentCases = new Set([
   "SquareToCircle",
   "SquareAndCircle",
   "AnimatedSquareToCircle",
+  "DifferentRotations",
 ]);
 
 function rustCorpus(example = "cross_language_parity") {
