@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - validate/retained-object-content
   workflow_dispatch:
 
 permissions:
