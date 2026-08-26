@@ -397,3 +397,39 @@ class PrimitiveGeometryMatrix(Scene):
 
         self.add(circle, rectangle, square, diagonal, rotated)
         self.play(rotated.animate.shift(ORIGIN))
+
+
+class GrowPointCenterEdge(Scene):
+    def construct(self):
+        left = Circle(
+            radius=0.6,
+            fill_color=BLUE,
+            fill_opacity=0.8,
+            stroke_color=WHITE,
+            stroke_width=4,
+        ).shift(3.0 * LEFT)
+        center = Square(
+            side_length=1.2,
+            fill_color=PINK,
+            fill_opacity=0.8,
+            stroke_color=WHITE,
+            stroke_width=4,
+        )
+        right = Rectangle(
+            width=1.8,
+            height=1.0,
+            fill_color=GREEN,
+            fill_opacity=0.8,
+            stroke_color=WHITE,
+            stroke_width=4,
+        ).shift(3.0 * RIGHT)
+
+        self.play(
+            LaggedStart(
+                GrowFromPoint(left, 4.0 * LEFT + 2.0 * DOWN, point_color=YELLOW),
+                GrowFromCenter(center),
+                GrowFromEdge(right, DOWN),
+                lag_ratio=0.25,
+            ),
+            run_time=2.5,
+        )
