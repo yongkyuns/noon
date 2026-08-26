@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    ObjectContentRef, ObjectId, Property, RetainedObjectDefinition, SceneDefinition,
-    TextResourceHandle, TrackDefinition,
+    validate_track_definition, ObjectContentRef, ObjectId, Property, RetainedObjectDefinition,
+    SceneDefinition, TextResourceHandle, TimelineError, TrackDefinition,
 };
 
 use super::{
@@ -43,11 +43,12 @@ pub struct RetainedCompiledScene {
     object_indices: BTreeMap<ObjectId, u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RetainedCompileError {
     TooManyObjects(usize),
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
+    InvalidTrack(TimelineError),
     TextTransformTrack(noon_core::TrackId),
     Track(CompileError),
 }
@@ -64,6 +65,7 @@ impl std::fmt::Display for RetainedCompileError {
             Self::UnknownObject(id) => {
                 write!(formatter, "track references unknown retained object {}", id.get())
             }
+            Self::InvalidTrack(error) => write!(formatter, "invalid retained track: {error}"),
             Self::TextTransformTrack(id) => write!(
                 formatter,
                 "transform track {} still carries geometry snapshots and cannot target retained text",
@@ -106,6 +108,7 @@ impl RetainedCompiledScene {
             let object_index = *object_indices
                 .get(&track.object)
                 .ok_or(RetainedCompileError::UnknownObject(track.object))?;
+            validate_track_definition(track).map_err(RetainedCompileError::InvalidTrack)?;
             let object = &mut compiled_objects[object_index as usize];
             if object.text().is_some() && track.property == Property::Transform {
                 return Err(RetainedCompileError::TextTransformTrack(track.id));
@@ -184,7 +187,8 @@ impl RetainedCompiledScene {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, RateFunction, TextResourceId, TrackId, TrackTiming, TrackValues, Vec2,
+        GeometryRef, RateFunction, TextResourceId, TrackId, TrackTiming, TrackValues, ValueKind,
+        Vec2,
     };
 
     use super::*;
@@ -248,6 +252,31 @@ mod tests {
         assert!(compiled.objects()[0].dynamic.position);
         assert!(compiled.objects()[0].dynamic.opacity);
         assert_eq!(compiled.track_count(), 2);
+    }
+
+    #[test]
+    fn malformed_retained_track_returns_validation_error() {
+        let object = ObjectId::new(4);
+        let text = RetainedObjectDefinition::text(object, text_handle(2, 0));
+        let invalid = TrackDefinition {
+            id: TrackId::new(3),
+            object,
+            property: Property::Position,
+            values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+        };
+
+        assert_eq!(
+            RetainedCompiledScene::compile(&[text], &[invalid]),
+            Err(RetainedCompileError::InvalidTrack(
+                TimelineError::ValueTypeMismatch {
+                    property: Property::Position,
+                    expected: ValueKind::Vec2,
+                    actual: ValueKind::Scalar,
+                }
+            ))
+        );
     }
 
     #[test]
