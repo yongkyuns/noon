@@ -5,16 +5,24 @@ fn emit(name: &str, scene: &Scene) {
     println!("{name}\t{}", encode_scene(scene.definition()).unwrap());
 }
 
+fn fill_with_opacity(mut color: Color, opacity: f32) -> Color {
+    color.alpha = opacity;
+    color
+}
+
 fn create_circle() -> Scene {
     let mut scene = Scene::new();
-    let circle = scene.add(Circle::default().set_fill(Some(PINK), Some(0.5)));
+    let circle = scene.add(Circle::default().set_fill(
+        Some(fill_with_opacity(PINK, 0.5)),
+        None,
+    ));
     scene.play(Create::new(circle)).run_time(1.0).unwrap();
     scene
 }
 
 fn square_to_circle() -> Scene {
     let mut scene = Scene::new();
-    let circle = Circle::default().set_fill(Some(PINK), Some(0.5));
+    let circle = Circle::default().set_fill(Some(fill_with_opacity(PINK, 0.5)), None);
     let square = scene.add(Square::default().rotate(PI / 4.0));
     scene.play(Create::new(square)).run_time(1.0).unwrap();
     scene
@@ -27,8 +35,12 @@ fn square_to_circle() -> Scene {
 
 fn square_and_circle() -> Scene {
     let mut scene = Scene::new();
-    let circle = scene.add(Circle::default().set_fill(Some(PINK), Some(0.5)));
-    let square = scene.add(Square::default().set_fill(Some(BLUE), Some(0.5)));
+    let circle = scene.add(
+        Circle::default().set_fill(Some(fill_with_opacity(PINK, 0.5)), None),
+    );
+    let square = scene.add(
+        Square::default().set_fill(Some(fill_with_opacity(BLUE, 0.5)), None),
+    );
     scene
         .edit(square)
         .unwrap()
