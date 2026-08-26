@@ -7,6 +7,12 @@ represent those paths exactly with the existing scalar rotation track, without a
 a new IR primitive. External pivots and non-z axes require curved translation/3D
 support and are rejected until the runtime can represent them exactly.
 
+``Wiggle`` resets the starting geometry on every frame, scales it with
+``there_and_back(alpha)``, and adds ``wiggle(alpha, 6)`` rotation after Manim's outer
+``smooth`` rate function. Noon represents the exact default leaf behavior as two
+retained scale Transforms carrying composition time maps plus one narrow rotation
+track; the frame-critical path remains entirely in Rust.
+
 ``FocusOn`` is likewise deterministic: Manim transforms a transparent frame-sized Dot
 into a zero-radius grey spotlight at the requested point and removes it at completion.
 Noon lowers that temporary object to an ordinary retained Transform plus a presence
@@ -123,6 +129,58 @@ class Rotating(Rotate):
         self.anim_args = dict(kwargs)
         self.anim_args["run_time"] = run_time
         self.anim_args["rate_func"] = rate_func
+
+
+class Wiggle:
+    """Exact retained ManimCE default ``Wiggle`` for one centered 2D leaf mobject.
+
+    Manim applies its ordinary Animation ``smooth`` rate first, then scales with
+    ``there_and_back`` and rotates with ``wiggle(alpha, n_wiggles)``. The first exact
+    subset keeps the canonical ``n_wiggles=6`` and centered scale/rotation pivots;
+    unsupported family, custom-rate, nondefault wiggle-count, and external-pivot cases
+    fail explicitly instead of being approximated.
+    """
+
+    def __init__(
+        self,
+        mobject: object,
+        scale_value: float = 1.1,
+        rotation_angle: float = 0.01 * math.tau,
+        n_wiggles: int = 6,
+        scale_about_point: object | None = None,
+        rotate_about_point: object | None = None,
+        run_time: float = 2.0,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError(
+                "Wiggle(Group/VGroup) requires retained family interpolation and is not yet supported"
+            )
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Wiggle target must be a Mobject")
+
+        scale = float(scale_value)
+        angle = float(rotation_angle)
+        wiggles = float(n_wiggles)
+        if not math.isfinite(scale):
+            raise ValueError("Wiggle scale_value must be finite")
+        if not math.isfinite(angle):
+            raise ValueError("Wiggle rotation_angle must be finite")
+        if not math.isfinite(wiggles):
+            raise ValueError("Wiggle n_wiggles must be finite")
+        if not math.isclose(wiggles, 6.0, abs_tol=1e-12):
+            raise NotImplementedError(
+                "Wiggle currently supports the canonical n_wiggles=6 retained rate function only"
+            )
+
+        self.mobject = mobject
+        self.scale_value = scale
+        self.rotation_angle = angle
+        self.n_wiggles = 6
+        self.scale_about_point = scale_about_point
+        self.rotate_about_point = rotate_about_point
+        self.anim_args = dict(kwargs)
+        self.anim_args["run_time"] = float(run_time)
 
 
 class FocusOn:
@@ -261,6 +319,38 @@ def _validate_exact_pivot(
     return obj, snapshot
 
 
+def _validate_wiggle_pivots(
+    scene: _compat.Scene,
+    animation: Wiggle,
+    *,
+    start_time: float,
+) -> tuple[object, dict[str, Any]]:
+    mobject = animation.mobject
+    if mobject._scene is not scene or mobject._object is None:
+        raise ValueError("Wiggle target must belong to this Scene")
+    obj = mobject._object
+    snapshot = scene._snapshot_for_object_at(obj, start_time)
+    detached = _animate._snapshot_mobject(snapshot)
+    center = detached.get_center()
+    translation = snapshot["transform"]["translation"]
+    transform_origin = _base.Vec2(float(translation["x"]), float(translation["y"]))
+    if not _points_close(center, transform_origin):
+        raise NotImplementedError(
+            "Wiggle currently requires geometry centered on its transform origin"
+        )
+
+    for label, configured in (
+        ("scale_about_point", animation.scale_about_point),
+        ("rotate_about_point", animation.rotate_about_point),
+    ):
+        point = center if configured is None else _compat._as_vec2(configured)
+        if not _points_close(point, center):
+            raise NotImplementedError(
+                f"Wiggle {label} outside the object center requires curved translation and is not yet supported"
+            )
+    return obj, snapshot
+
+
 def _ensure_rotation_interval_available(
     scene: _compat.Scene,
     obj: object,
@@ -315,6 +405,96 @@ def _schedule_rotate(
     )
 
 
+def _schedule_wiggle(
+    scene: _compat.Scene,
+    animation: Wiggle,
+    *,
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    if easing != "smooth":
+        raise NotImplementedError(
+            "Wiggle currently supports Manim's canonical outer rate_func=smooth only"
+        )
+    obj, snapshot = _validate_wiggle_pivots(
+        scene,
+        animation,
+        start_time=start_time,
+    )
+    _ensure_rotation_interval_available(
+        scene,
+        obj,
+        start_time=start_time,
+        duration=duration,
+    )
+
+    source = _animate._snapshot_mobject(snapshot)
+    scaled = source.copy()
+    scaled.scale(animation.scale_value)
+    half = duration / 2.0
+    track_start = len(scene._tracks)
+    _compat._BaseScene.play(
+        scene,
+        _base.Transform(animation.mobject, scaled),
+        run_time=half,
+        start_time=start_time,
+        easing="smooth",
+    )
+    _compat._BaseScene.play(
+        scene,
+        _base.Transform(animation.mobject, source),
+        run_time=half,
+        start_time=start_time + half,
+        easing="smooth",
+    )
+    scale_tracks = scene._tracks[track_start:]
+    if len(scale_tracks) != 2 or any(track["property"] != "transform" for track in scale_tracks):
+        raise RuntimeError("Wiggle scale lowering must emit exactly two Transform tracks")
+
+    # These are exactly a two-child Succession under Wiggle's outer smooth rate.
+    # CompositionTimeMap applies the outer rate first and remaps into each half;
+    # each Transform then applies its own smooth rate. This is algebraically the
+    # same as Manim's there_and_back(smooth(raw_alpha)) scale factor while retaining
+    # an exact source endpoint for subsequent animations.
+    for track, child_start in zip(scale_tracks, (0.0, 0.5), strict=True):
+        track["timing"]["start_time"] = start_time
+        track["timing"]["duration"] = duration
+        track["time_map"] = {
+            "steps": [
+                {
+                    "start": child_start,
+                    "duration": 0.5,
+                    "rate_func": "smooth",
+                }
+            ]
+        }
+
+    from_rotation = float(snapshot["transform"]["rotation"])
+    object_key = scene._object_keys[obj.id]
+    scene._add_scalar_track(
+        obj,
+        "rotation",
+        from_rotation,
+        from_rotation + animation.rotation_angle,
+        start_time,
+        duration,
+        "wiggle_6",
+        f"@wiggle:{object_key}:{start_time:g}.rotation",
+    )
+    # Manim Animation applies smooth before Wiggle.interpolate_submobject receives
+    # alpha. The narrow rotation then evaluates wiggle(alpha, 6) on that mapped alpha.
+    scene._tracks[-1]["time_map"] = {
+        "steps": [
+            {
+                "start": 0.0,
+                "duration": 1.0,
+                "rate_func": "smooth",
+            }
+        ]
+    }
+
+
 def _schedule_focus_on(
     scene: _compat.Scene,
     animation: FocusOn,
@@ -356,7 +536,7 @@ def _schedule_focus_on(
 
 
 def _builder_source(animation: object) -> object | None:
-    if isinstance(animation, (Rotate, FocusOn)):
+    if isinstance(animation, (Rotate, Wiggle, FocusOn)):
         return animation.mobject
     return _ORIGINAL_BUILDER_SOURCE(animation)
 
@@ -372,7 +552,7 @@ def _procedural_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
-    if not any(isinstance(animation, (Rotate, FocusOn)) for animation in animations):
+    if not any(isinstance(animation, (Rotate, Wiggle, FocusOn)) for animation in animations):
         return _ORIGINAL_SCENE_PLAY(
             self,
             *animations,
@@ -421,7 +601,7 @@ def _procedural_scene_play(
     max_end = base_start
     try:
         for animation in animations:
-            if isinstance(animation, (Rotate, FocusOn)):
+            if isinstance(animation, (Rotate, Wiggle, FocusOn)):
                 _animate._bind_for_animation(
                     self,
                     animation.mobject,
@@ -435,7 +615,15 @@ def _procedural_scene_play(
                     play_rate_func=rate_func,
                     play_lag_ratio=lag_ratio,
                 )
-                if isinstance(animation, Rotate):
+                if isinstance(animation, Wiggle):
+                    _schedule_wiggle(
+                        self,
+                        animation,
+                        start_time=base_start,
+                        duration=resolved.run_time,
+                        easing=resolved.rate_func,
+                    )
+                elif isinstance(animation, Rotate):
                     _schedule_rotate(
                         self,
                         animation,
@@ -483,7 +671,12 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    public = {"Rotate": Rotate, "Rotating": Rotating, "FocusOn": FocusOn}
+    public = {
+        "Rotate": Rotate,
+        "Rotating": Rotating,
+        "Wiggle": Wiggle,
+        "FocusOn": FocusOn,
+    }
     for name, value in public.items():
         setattr(_base, name, value)
         setattr(_compat, name, value)
@@ -495,9 +688,9 @@ def install() -> None:
             exports.append(name)
     _base.__all__ = exports
 
-    # Composition imports this module before capturing Scene.play, so nested Rotate
-    # and Rotating leaves share the same timing resolver and rollback path as top-level
-    # plays. FocusOn intentionally remains top-level-only until dynamic target
-    # composition has a retained representation.
+    # Composition imports this module before capturing Scene.play, so nested Rotate,
+    # Rotating, and default Wiggle leaves share the same timing resolver and rollback
+    # path as top-level plays. FocusOn intentionally remains top-level-only until
+    # dynamic target composition has a retained representation.
     _animate._builder_source = _builder_source
     _compat.Scene.play = _procedural_scene_play
