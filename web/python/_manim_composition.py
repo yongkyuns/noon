@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import math
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from js import noonResolveCompositionSchedule as _resolve_shared_composition
 
@@ -25,6 +25,52 @@ import _manim_compat as _compat
 
 DEFAULT_LAGGED_START_LAG_RATIO = 0.05
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
+
+
+def _nonnegative_run_time(value: object, label: str) -> float:
+    run_time = float(value)
+    if not math.isfinite(run_time) or run_time < 0.0:
+        raise ValueError(f"{label} run_time must be finite and non-negative")
+    return run_time
+
+
+class Wait:
+    """Manim-compatible no-op animation that only occupies timeline duration."""
+
+    def __init__(
+        self,
+        run_time: float = 1.0,
+        stop_condition: Callable[[], bool] | None = None,
+        frozen_frame: bool | None = None,
+        rate_func: object = None,
+        **kwargs: Any,
+    ) -> None:
+        if stop_condition is not None:
+            raise NotImplementedError(
+                "Wait(stop_condition=...) requires runtime polling and is not deterministic"
+            )
+        self.run_time = _nonnegative_run_time(run_time, "Wait")
+        self.stop_condition = None
+        self.frozen_frame = frozen_frame
+        self.rate_func = _compat.linear if rate_func is None else rate_func
+        self.anim_args = dict(kwargs)
+        if rate_func is not None:
+            self.anim_args["rate_func"] = rate_func
+
+
+class Add:
+    """Introduce one or more mobjects at an exact authored timeline instant."""
+
+    def __init__(self, *mobjects: object, run_time: float = 0.0, **kwargs: Any) -> None:
+        if not mobjects:
+            raise ValueError("Add requires at least one Mobject")
+        for mobject in mobjects:
+            if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+                raise TypeError("Add targets must be Mobjects or Groups")
+        self.mobjects = tuple(mobjects)
+        self.mobject = mobjects[0] if len(mobjects) == 1 else _compat.Group(*mobjects)
+        self.run_time = _nonnegative_run_time(run_time, "Add")
+        self.anim_args = dict(kwargs)
 
 
 def _flatten_animations(values: Iterable[object]) -> list[object]:
@@ -82,6 +128,42 @@ class LaggedStart(AnimationGroup):
         super().__init__(*animations, lag_ratio=lag_ratio, **kwargs)
 
 
+class LaggedStartMap(LaggedStart):
+    """Apply one animation constructor to every direct child of a group."""
+
+    def __init__(
+        self,
+        animation_class: Callable[..., object],
+        mobject: object,
+        arg_creator: Callable[[object], object] | None = None,
+        run_time: float = 2.0,
+        lag_ratio: float = DEFAULT_LAGGED_START_LAG_RATIO,
+        **kwargs: Any,
+    ) -> None:
+        if not callable(animation_class):
+            raise TypeError("animation_class must be callable")
+        try:
+            members = list(mobject)  # type: ignore[arg-type]
+        except TypeError as error:
+            raise TypeError("LaggedStartMap mobject must be iterable") from error
+
+        animation_kwargs = dict(kwargs)
+        animation_kwargs.pop("lag_ratio", None)
+        animations: list[object] = []
+        for member in members:
+            created = member if arg_creator is None else arg_creator(member)
+            if isinstance(created, (_base.Mobject, _compat.Group)):
+                args = (created,)
+            else:
+                try:
+                    args = tuple(created)  # type: ignore[arg-type]
+                except TypeError:
+                    args = (created,)
+            animations.append(animation_class(*args, **animation_kwargs))
+
+        super().__init__(*animations, run_time=run_time, lag_ratio=lag_ratio)
+
+
 def _resolve_schedule(
     child_run_times: list[float],
     lag_ratio: float,
@@ -100,6 +182,9 @@ def _resolve_schedule(
 
 
 def _simple_runtime(animation: object) -> float:
+    if isinstance(animation, (Wait, Add)):
+        _options.builder_args(animation)
+        return animation.run_time
     builder_args = _options.builder_args(animation)
     resolved = _options.resolve(
         builder_args=builder_args,
@@ -136,6 +221,10 @@ def _record_composition_wrapper_state(
         for child in animation.animations:
             _record_composition_wrapper_state(child, states)
         return
+    if isinstance(animation, Add):
+        for member in _compat._leaf_mobjects(animation.mobject):
+            _animate._record_wrapper_state(member, states)
+        return
     source = _animate._builder_source(animation)
     if source is not None:
         _animate._record_wrapper_state(source, states)
@@ -157,6 +246,35 @@ def _path_requires_time_map(steps: list[dict[str, Any]]) -> bool:
     return any(step["rate_func"] != "linear" for step in steps)
 
 
+def _schedule_add(scene: _compat.Scene, animation: Add, *, start_time: float) -> None:
+    # Import lazily: the lifecycle layer is installed after this module during
+    # worker bootstrap, while Add is only scheduled after bootstrap completes.
+    import _manim_lifecycle as _lifecycle
+    import _manim_phase_b as _phase_b
+
+    start = float(start_time)
+    for member in _compat._leaf_mobjects(animation.mobject):
+        plan = _lifecycle._resolve_wrapper(
+            scene,
+            member,
+            "add",
+            start,
+            "Add target",
+        )
+        if plan.bind:
+            _phase_b._bind_raw(scene, member)
+        assert member._object is not None
+        if plan.show_now:
+            scene._add_presence_track(
+                member._object,
+                False,
+                True,
+                start,
+                key=f"@add:{member._object.id}:{start:g}",
+            )
+    scene._register_top_level(animation.mobject)
+
+
 def _play_leaf(
     scene: _compat.Scene,
     animation: object,
@@ -166,6 +284,12 @@ def _play_leaf(
     time_map_steps: list[dict[str, Any]],
     pending_time_maps: list[tuple[int, int, list[dict[str, Any]]]],
 ) -> None:
+    if isinstance(animation, Wait):
+        return
+    if isinstance(animation, Add):
+        _schedule_add(scene, animation, start_time=start_time)
+        return
+
     # Author the leaf first at its flattened interval. This preserves the existing
     # deterministic target-state/lifecycle checks and lets successive animations of
     # the same object build their `from` snapshots in virtual order. Once the full
@@ -224,16 +348,17 @@ def _schedule_composition(
     for child, interval in zip(animation.animations, schedule.intervals, strict=True):
         child_start = start_time + float(interval.startTime)
         child_duration = float(interval.duration)
-        child_steps = [
-            *time_map_steps,
-            _normalized_time_map_step(interval, schedule_run_time, outer_rate_id),
-        ]
+        child_steps = list(time_map_steps)
+        if schedule_run_time > 0.0:
+            child_steps.append(
+                _normalized_time_map_step(interval, schedule_run_time, outer_rate_id)
+            )
         if isinstance(child, AnimationGroup):
             _schedule_composition(
                 scene,
                 child,
                 start_time=child_start,
-                run_time_override=child_duration,
+                run_time_override=child_duration if child_duration > 0.0 else None,
                 rate_func_override=None,
                 easing_override=None,
                 lag_ratio_override=None,
@@ -304,6 +429,17 @@ def _play_composition(
     return start_time + root_run_time
 
 
+def _custom_leaf_end(
+    animation: Wait | Add,
+    *,
+    start_time: float,
+    run_time_override: float | None,
+) -> float:
+    run_time = animation.run_time if run_time_override is None else float(run_time_override)
+    run_time = _nonnegative_run_time(run_time, type(animation).__name__)
+    return start_time + run_time
+
+
 def _composition_scene_play(
     self: _compat.Scene,
     *animations: Any,
@@ -315,7 +451,7 @@ def _composition_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
-    if not any(isinstance(animation, AnimationGroup) for animation in animations):
+    if not any(isinstance(animation, (AnimationGroup, Wait, Add)) for animation in animations):
         return _ORIGINAL_SCENE_PLAY(
             self,
             *animations,
@@ -340,6 +476,8 @@ def _composition_scene_play(
     play_run_time = run_time if run_time is not None else duration
     if play_run_time is not None:
         play_run_time = float(play_run_time)
+        if not math.isfinite(play_run_time) or play_run_time < 0.0:
+            raise ValueError("run_time must be finite and non-negative")
     if lag_ratio is not None:
         lag_ratio = float(lag_ratio)
     base_start = self._cursor if start_time is None else float(start_time)
@@ -365,6 +503,21 @@ def _composition_scene_play(
                     rate_func_override=rate_func,
                     easing_override=easing,
                     lag_ratio_override=lag_ratio,
+                )
+            elif isinstance(animation, Add):
+                _options.builder_args(animation)
+                _schedule_add(self, animation, start_time=base_start)
+                end = _custom_leaf_end(
+                    animation,
+                    start_time=base_start,
+                    run_time_override=play_run_time,
+                )
+            elif isinstance(animation, Wait):
+                _options.builder_args(animation)
+                end = _custom_leaf_end(
+                    animation,
+                    start_time=base_start,
+                    run_time_override=play_run_time,
                 )
             else:
                 _ORIGINAL_SCENE_PLAY(
@@ -393,9 +546,12 @@ def _composition_scene_play(
 
 def install() -> None:
     public = {
+        "Add": Add,
         "AnimationGroup": AnimationGroup,
         "LaggedStart": LaggedStart,
+        "LaggedStartMap": LaggedStartMap,
         "Succession": Succession,
+        "Wait": Wait,
     }
     for name, value in public.items():
         setattr(_compat, name, value)
