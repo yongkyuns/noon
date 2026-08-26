@@ -209,6 +209,13 @@ export class Mobject {
     return this.setColor(color);
   }
 
+  setFill(color, opacity = 1) {
+    this._requireDetached();
+    const value = asColor(color);
+    this._core.setFill(value.red, value.green, value.blue, Number(opacity));
+    return this;
+  }
+
   setOpacity(opacity) {
     const value = Number(opacity);
     if (this.isBound) {
@@ -327,6 +334,12 @@ export class AnimateBuilder extends AnimationBase {
   setColor(color) {
     const value = asColor(color);
     this._core.setColor(value.red, value.green, value.blue, value.alpha);
+    return this;
+  }
+
+  setFill(color, opacity = 1) {
+    const value = asColor(color);
+    this._core.setFill(value.red, value.green, value.blue, Number(opacity));
     return this;
   }
 
