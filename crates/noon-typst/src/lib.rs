@@ -603,8 +603,7 @@ mod tests {
 
     #[test]
     fn labeled_groups_become_stable_semantic_parts() {
-        let artifact =
-            compile_typst_resource("#box[x] <lhs> + y", TypstMode::Markup).unwrap();
+        let artifact = compile_typst_resource("#box[x] <lhs> + y", TypstMode::Markup).unwrap();
         assert!(artifact
             .resource
             .parts
