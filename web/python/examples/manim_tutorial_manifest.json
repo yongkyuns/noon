@@ -409,6 +409,24 @@
       "order": 210
     },
     {
+      "id": "parity-moving-around",
+      "title": "MovingAround",
+      "summary": "ManimCE v0.21 Example Gallery MovingAround, byte-for-byte except for the import module, with Rust and JavaScript semantic equivalents.",
+      "status": "ready",
+      "path": "python/examples/manim_gallery_moving_around.py",
+      "category": "animations",
+      "features": ["Square", "animate", "shift", "set_fill", "scale", "rotate", "tri-language-parity"],
+      "upstream": "examples.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/moving_around.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "expected_duration": 4.0,
+      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail_alt": "Exact-source Manim MovingAround",
+      "thumbnail_time": 2.0,
+      "order": 220
+    },
+    {
       "id": "text-and-math",
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
