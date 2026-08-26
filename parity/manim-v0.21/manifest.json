@@ -229,6 +229,11 @@
       "id": "primitive-geometry-matrix",
       "scene": "PrimitiveGeometryMatrix",
       "expected_duration": 1.0
+    },
+    {
+      "id": "add-wait-lagged-start-map",
+      "scene": "AddWaitLaggedStartMap",
+      "expected_duration": 3.2
     }
   ],
   "sample_fractions": [
