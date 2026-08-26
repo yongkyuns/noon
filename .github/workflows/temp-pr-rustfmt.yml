@@ -1,0 +1,31 @@
+name: Temporary PR rustfmt
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.head_ref == 'gallery/manim-moving-around-trilang' ||
+       github.head_ref == 'arch/js-value-tracker')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          rustup default stable
+          rustup component add rustfmt
+          cargo fmt --all
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --all
+          git commit -m "Apply rustfmt to active parity branches"
+          git push origin HEAD:${{ github.head_ref }}
