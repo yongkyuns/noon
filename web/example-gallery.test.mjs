@@ -58,6 +58,7 @@ for (const id of [
   "manim-spin-in-from-nothing",
   "manim-rotating-demo",
   "manim-using-focus-on",
+  "manim-using-indicate",
   "manim-lagged-start-map",
 ]) {
   assert.equal(
@@ -66,11 +67,6 @@ for (const id of [
     `${id}: exact upstream source should be public before separate raster qualification`,
   );
 }
-assert.equal(
-  gallery.examples.some((entry) => entry.id === "manim-using-indicate"),
-  false,
-  "UsingIndicate must stay blocked while retained-family Indicate remains partial",
-);
 for (const syntheticProbeId of [
   "parity-dot-ellipse",
   "parity-add-wait-lagged-start-map",
