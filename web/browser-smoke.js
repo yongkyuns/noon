@@ -27,6 +27,9 @@ window.noonSmoke = {
   renderIncrementalAt() {
     throw new Error("Noon browser smoke harness is not ready");
   },
+  resizeBacking() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
   metrics() {
     return {
       ready: state.ready,
@@ -50,6 +53,10 @@ function metrics() {
     uploadBytes: player?.lastBytesUploaded() ?? 0,
     geometryCacheMisses: player?.lastGeometryCacheMisses() ?? 0,
     rendererBackend: player?.rendererBackend() ?? null,
+    backingWidth: canvas.width,
+    backingHeight: canvas.height,
+    cssWidth: canvas.clientWidth,
+    cssHeight: canvas.clientHeight,
   };
 }
 
@@ -59,6 +66,14 @@ function validateRenderTime(timeSeconds) {
     throw new RangeError("smoke render time must be finite and in [0, 4)");
   }
   return time;
+}
+
+function validateBackingDimension(name, value) {
+  const dimension = Number(value);
+  if (!Number.isSafeInteger(dimension) || dimension <= 0) {
+    throw new RangeError(`${name} must be a positive integer`);
+  }
+  return dimension;
 }
 
 function recordPresent(timestampMs) {
@@ -136,6 +151,17 @@ async function presentIncrementalAt(timeSeconds) {
   return { ...metrics(), presented };
 }
 
+async function resizeBacking(width, height) {
+  const backingWidth = validateBackingDimension("backing width", width);
+  const backingHeight = validateBackingDimension("backing height", height);
+  canvas.width = backingWidth;
+  canvas.height = backingHeight;
+  player.resize(backingWidth, backingHeight);
+  incrementalTime = null;
+  await waitForPaint();
+  return metrics();
+}
+
 async function start() {
   await init();
   player = await NoonCanvasPlayer.create(canvas, demoSceneJson(), 4.0);
@@ -159,6 +185,7 @@ async function start() {
   window.noonSmoke.renderAt = presentAt;
   window.noonSmoke.beginIncremental = beginIncremental;
   window.noonSmoke.renderIncrementalAt = presentIncrementalAt;
+  window.noonSmoke.resizeBacking = resizeBacking;
   window.noonSmoke.metrics = metrics;
   state.ready = true;
 }
