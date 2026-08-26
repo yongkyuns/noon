@@ -1453,10 +1453,10 @@ mod tests {
         assert!(shader.contains("local_units_per_pixel"));
         assert!(shader.contains("rectangle_signed_distance"));
         assert!(shader.contains("capsule_signed_distance"));
-        assert!(shader.contains("mix(premultiplied(fill), premultiplied(stroke)"));
+        assert!(shader.contains("source_over(stroke_layer, fill_layer)"));
         assert!(
             shader
-                .find("let stroke_coverage =")
+                .find("let inner_stroke_coverage =")
                 .expect("stroke coverage")
                 < shader.find("if has_stroke").expect("stroke branch"),
             "fragment derivatives must run before non-uniform stroke control flow"

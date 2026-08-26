@@ -257,6 +257,10 @@ fn covered_color(color: vec4<f32>, opacity: f32, coverage: f32) -> vec4<f32> {
     return premultiplied(color) * (opacity * coverage);
 }
 
+fn source_over(source: vec4<f32>, destination: vec4<f32>) -> vec4<f32> {
+    return source + destination * (1.0 - source.a);
+}
+
 fn styled_shape_color(
     fill: vec4<f32>,
     stroke: vec4<f32>,
@@ -266,25 +270,25 @@ fn styled_shape_color(
     signed_distance: f32,
     stroke_width: f32,
 ) -> vec4<f32> {
-    // Match VectorPath/Lyon semantics: the authored outline is the stroke centerline.
-    // A stroke extends half its width outside and half inside the semantic boundary.
+    // Match Cairo/VMobject semantics: fill the semantic contour first, then
+    // source-over a centered stroke onto the preserved path. Mixing the two
+    // premultiplied colors is not equivalent when either layer is translucent.
     let half_stroke_width = max(stroke_width, 0.0) * 0.5;
     let fill_coverage = inside_coverage(signed_distance);
     let outer_coverage = inside_coverage(signed_distance - half_stroke_width);
-    let stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
+    let inner_stroke_coverage = outside_coverage(signed_distance + half_stroke_width);
+    let stroke_band_coverage = outer_coverage * inner_stroke_coverage;
     let has_stroke = stroke_enabled && stroke_width > 0.0 && stroke.a > 0.0;
+    let fill_layer = select(
+        vec4<f32>(0.0),
+        covered_color(fill, opacity, fill_coverage),
+        fill_enabled,
+    );
     if has_stroke {
-        if fill_enabled {
-            let color = mix(premultiplied(fill), premultiplied(stroke), stroke_coverage);
-            return color * (opacity * outer_coverage);
-        }
-        return covered_color(stroke, opacity, outer_coverage * stroke_coverage);
+        let stroke_layer = covered_color(stroke, opacity, stroke_band_coverage);
+        return source_over(stroke_layer, fill_layer);
     }
-
-    if fill_enabled {
-        return covered_color(fill, opacity, fill_coverage);
-    }
-    return vec4<f32>(0.0);
+    return fill_layer;
 }
 
 fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
