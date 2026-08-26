@@ -577,3 +577,15 @@ class IndicateSquare(Scene):
         )
         self.add(square)
         self.play(Indicate(square))
+
+
+class SpinInFromNothingRectangle(Scene):
+    def construct(self):
+        rectangle = Rectangle(
+            width=2.2,
+            height=1.0,
+            fill_color=BLUE,
+            fill_opacity=0.8,
+            stroke_opacity=0.0,
+        ).rotate(PI / 7).shift(1.5 * RIGHT + 0.5 * UP)
+        self.play(SpinInFromNothing(rectangle))

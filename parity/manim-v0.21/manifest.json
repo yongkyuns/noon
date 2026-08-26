@@ -274,6 +274,11 @@
       "id": "show-submobjects-one-by-one-two-shapes",
       "scene": "ShowSubmobjectsOneByOneTwoShapes",
       "expected_duration": 1.0
+    },
+    {
+      "id": "spin-in-from-nothing-rectangle",
+      "scene": "SpinInFromNothingRectangle",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
