@@ -315,7 +315,7 @@ def _positive_phase_time(value: object) -> float:
 
 
 class Blink(_composition.Succession):
-    """Blink one leaf mobject without running a Python callback during playback."""
+    """Blink one leaf VMobject without running a Python callback during playback."""
 
     def __init__(
         self,
@@ -330,8 +330,14 @@ class Blink(_composition.Succession):
             raise NotImplementedError(
                 "Blink(Group/VGroup) requires retained family opacity semantics and remains partial"
             )
-        if not isinstance(mobject, _base.Mobject):
-            raise TypeError("Blink target must be a Mobject")
+        if not isinstance(mobject, _compat.VMobject):
+            raise NotImplementedError(
+                "Blink currently supports one leaf 2D VMobject; non-vector Mobjects remain partial"
+            )
+        if _updaters(mobject):
+            raise NotImplementedError(
+                "Blink with user mobject updaters has callback-order semantics and remains partial"
+            )
         if isinstance(blinks, bool) or not isinstance(blinks, int):
             raise TypeError("Blink blinks must be an integer")
         if blinks <= 0:
