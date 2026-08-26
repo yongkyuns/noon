@@ -23,6 +23,8 @@ These are intentionally separate from the demo's pedagogical Noon adaptations. A
 
 The harness renders real lossless Manim PNG frames, authors the same scene through Noon's Pyodide compatibility frontend, and seeks Noon to the matching Manim frame times. It captures both WebGPU and WebGL2. Each fixture gets an independent browser canvas player so capture state cannot leak between scenes.
 
+Manim's PNG sequence does not necessarily materialize one image for every logical scene frame: static `wait()` ranges can be represented without duplicate PNG files. The raster oracle therefore takes each materialized PNG's **logical scene time** from the semantic Manim renderer trace; it must not reconstruct time as `frame_index / fps`. Noon rendering, callback advancement, semantic-state capture, and the selected Manim PNG all use that same logical timestamp.
+
 The default 2D presentation contract is also part of parity: the camera is centered at the origin with an **8.0-world-unit frame height** (16:9 width at the default aspect) and a **black background**. All browser canvas player entry points must use that same default contract; the differential harness must not compensate for a runtime-specific camera or clear color.
 
 ## Artifacts and diagnostics

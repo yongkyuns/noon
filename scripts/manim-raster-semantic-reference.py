@@ -18,7 +18,10 @@ from typing import Any
 
 import numpy as np
 from manim import config, tempconfig
+from manim.camera.camera import Camera
+from manim.camera.moving_camera import MovingCamera
 from manim.renderer.cairo_renderer import CairoRenderer
+from manim.scene.moving_camera_scene import MovingCameraScene
 
 PINNED_MANIM_VERSION = "0.21.0"
 CAIRO_STROKE_WIDTH_SCALE = 0.01
@@ -41,10 +44,10 @@ class NullFileWriter:
 
 
 class SemanticRenderer(CairoRenderer):
-    def __init__(self) -> None:
+    def __init__(self, camera_class: type[Camera] = Camera) -> None:
         self.frames: list[dict[str, Any]] = []
         self._active_scene = None
-        super().__init__(file_writer_class=NullFileWriter)
+        super().__init__(file_writer_class=NullFileWriter, camera_class=camera_class)
 
     def play(self, scene, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
         self._active_scene = scene
@@ -180,7 +183,11 @@ def _render_fixture(
     frame_rate: float,
 ) -> dict[str, Any]:
     scene_class = getattr(module, fixture["scene"])
-    renderer = SemanticRenderer()
+    # A supplied renderer bypasses Scene's normal camera-class construction. Preserve
+    # that contract explicitly so MovingCameraScene uses a real MovingCamera while
+    # the semantic oracle still intercepts frame materialization.
+    camera_class = MovingCamera if issubclass(scene_class, MovingCameraScene) else Camera
+    renderer = SemanticRenderer(camera_class=camera_class)
     scene = scene_class(renderer=renderer)
     scene.setup()
     try:

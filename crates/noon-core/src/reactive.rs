@@ -10,6 +10,9 @@ pub use composition::*;
 mod host_callbacks;
 pub use host_callbacks::*;
 
+#[path = "camera.rs"]
+mod camera;
+
 mod host_semantics;
 pub use host_semantics::*;
 

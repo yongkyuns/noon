@@ -144,6 +144,7 @@ pub fn timed_document_from_parts_with_native_inputs(
             version,
             objects,
             tracks,
+            camera_object: None,
             reactive,
         },
         signal_tracks,

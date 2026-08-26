@@ -9,14 +9,13 @@ const canvas = document.querySelector("#scene");
 const offscreen = canvas.transferControlToOffscreen();
 const client = new PythonAuthoringClient();
 const readyPromise = Promise.all([initNoonWeb(), client.ready()]);
-const MANIM_DEFAULT_CAMERA_HEIGHT = 8.0;
 
 let engine = null;
 let host = null;
 let renderer = null;
 let callbackSessionId = null;
 let currentFrameIndex = -1;
-let activeFrameRate = null;
+let activeFrameTimes = null;
 let authoredDuration = null;
 
 function waitForPaint() {
@@ -57,20 +56,21 @@ async function load(source, loopDurationSeconds) {
   if (result.kind !== "scene_document") {
     throw new Error("host raster harness requires a scene document");
   }
-  if (result.callbacks === null) {
-    throw new Error("host raster harness requires registered host callbacks");
-  }
 
   const sceneJson = JSON.stringify(result.document);
   engine = new EngineScenePlayer(sceneJson, loopDuration, 1);
-  host = new HostScenePlayer(sceneJson, JSON.stringify(result.callbacks.slots));
-  callbackSessionId = result.callbacks.session_id;
+  if (result.callbacks !== null) {
+    host = new HostScenePlayer(sceneJson, JSON.stringify(result.callbacks.slots));
+    callbackSessionId = result.callbacks.session_id;
+  }
   authoredDuration = Number(result.duration);
 
+  // The initial execution delta already carries either the scene's semantic camera
+  // state or the shared default camera. Do not overwrite it with a harness-local
+  // fixed camera; moving-camera fixtures must exercise the production camera role.
   const initialDelta = engine.initialDeltaJson();
   renderer = await ExecutionCanvasRenderer.create(offscreen, initialDelta);
   renderer.resize(canvas.width, canvas.height);
-  renderer.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
   let presented = false;
   for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
     presented = renderer.render();
@@ -85,50 +85,72 @@ async function load(source, loopDurationSeconds) {
     duration: authoredDuration,
     objectCount: result.document.objects.length,
     rendererBackend: renderer.rendererBackend(),
-    callbackSlots: result.callbacks.slots.length,
+    callbackSlots: result.callbacks?.slots.length ?? 0,
   };
 }
 
-async function advanceOneFrame(frameIndex, frameRate) {
-  const time = frameIndex / frameRate;
-
+async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
   await presentDelta(deterministicDelta);
 
-  host.advanceTo(time);
-  const frame = JSON.parse(host.callbackFrameJson());
-  const sequence = Number(host.nextSequence());
-  const batch = await client.runCallbackPhase(callbackSessionId, frame, sequence);
-  const batchJson = JSON.stringify(batch);
-  host.commitPatchBatch(batchJson);
+  if (host !== null) {
+    host.advanceTo(time);
+    const frame = JSON.parse(host.callbackFrameJson());
+    const sequence = Number(host.nextSequence());
+    const batch = await client.runCallbackPhase(callbackSessionId, frame, sequence);
+    const batchJson = JSON.stringify(batch);
+    host.commitPatchBatch(batchJson);
 
-  const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-  await presentDelta(hostDelta);
+    const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
+    await presentDelta(hostDelta);
+  }
   currentFrameIndex = frameIndex;
 }
 
-async function renderThrough(frameIndex, frameRate) {
-  if (renderer === null || engine === null || host === null) {
+function normalizeFrameTimes(frameTimes, targetFrame) {
+  if (!Array.isArray(frameTimes) || frameTimes.length <= targetFrame) {
+    throw new RangeError("host raster frame-time map must cover the target frame");
+  }
+  const normalized = frameTimes.map((value, index) => {
+    const time = Number(value);
+    if (!Number.isFinite(time) || time < 0) {
+      throw new RangeError(`host raster frame ${index} has invalid logical time ${value}`);
+    }
+    if (index > 0 && time + 1e-12 < Number(frameTimes[index - 1])) {
+      throw new RangeError("host raster frame-time map must be monotonic");
+    }
+    return time;
+  });
+  return normalized;
+}
+
+async function renderThrough(frameIndex, frameTimes) {
+  if (renderer === null || engine === null) {
     throw new Error("host raster scene has not been loaded");
   }
   const targetFrame = Number(frameIndex);
-  const fps = Number(frameRate);
   if (!Number.isSafeInteger(targetFrame) || targetFrame < 0) {
     throw new RangeError("host raster frame index must be a non-negative integer");
   }
-  if (!Number.isFinite(fps) || fps <= 0) {
-    throw new RangeError("host raster frame rate must be positive and finite");
-  }
-  if (activeFrameRate === null) activeFrameRate = fps;
-  if (activeFrameRate !== fps) {
-    throw new Error("host raster frame rate cannot change after playback begins");
+  const normalizedTimes = normalizeFrameTimes(frameTimes, targetFrame);
+  if (activeFrameTimes === null) {
+    activeFrameTimes = normalizedTimes;
+  } else {
+    if (activeFrameTimes.length !== normalizedTimes.length) {
+      throw new Error("host raster frame-time map cannot change after playback begins");
+    }
+    for (let index = 0; index < activeFrameTimes.length; index += 1) {
+      if (Math.abs(activeFrameTimes[index] - normalizedTimes[index]) > 1e-12) {
+        throw new Error("host raster frame-time map cannot change after playback begins");
+      }
+    }
   }
   if (targetFrame < currentFrameIndex) {
     throw new RangeError("host raster playback cannot move backwards");
   }
 
   for (let frame = currentFrameIndex + 1; frame <= targetFrame; frame += 1) {
-    await advanceOneFrame(frame, fps);
+    await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
 

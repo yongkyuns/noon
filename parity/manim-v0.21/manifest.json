@@ -294,6 +294,11 @@
       "id": "moving-dots",
       "scene": "MovingDots",
       "expected_duration": 3.0
+    },
+    {
+      "id": "moving-camera-center",
+      "scene": "MovingCameraCenter",
+      "expected_duration": 2.6
     }
   ],
   "sample_fractions": [

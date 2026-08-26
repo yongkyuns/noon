@@ -6,16 +6,20 @@
 
 #![forbid(unsafe_code)]
 
+mod camera_authoring;
 mod legacy;
 mod reactive_authoring;
 
+pub use camera_authoring::*;
 pub use legacy::*;
 pub use reactive_authoring::*;
 
 /// Common imports for deterministic and native-reactive Noon authoring.
 pub mod prelude {
     pub use crate::legacy::prelude::*;
-    pub use crate::{ReactiveScene, ReactiveTimelineScene, ValueTracker, VectorSignal};
+    pub use crate::{
+        MovingCameraScene, ReactiveScene, ReactiveTimelineScene, ValueTracker, VectorSignal,
+    };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
         resolve_uniform_composition_schedule, validate_presence_transition, AnimationDefaults,

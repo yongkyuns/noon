@@ -166,6 +166,7 @@ impl SceneDefinition {
             next_object_id,
             tracks,
             next_track_id,
+            camera_object: None,
         })
     }
 
@@ -254,6 +255,7 @@ impl SceneDefinition {
             return Err(PatchError::UnknownObject(id));
         }
         self.tracks.retain(|track| track.object != id);
+        self.clear_camera_object_if(id);
         Ok(())
     }
 
@@ -478,6 +480,7 @@ mod tests {
                 TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             )
             .expect("valid track");
+        assert!(scene.set_camera_object(object));
 
         scene
             .apply_patch(ScenePatch::RemoveObject(object))
@@ -485,6 +488,7 @@ mod tests {
 
         assert!(scene.object(object).is_none());
         assert!(scene.tracks().is_empty());
+        assert_eq!(scene.camera_object(), None);
     }
 
     #[test]
@@ -544,6 +548,7 @@ mod tests {
 
         assert_eq!(scene.objects(), objects);
         assert_eq!(scene.tracks(), tracks);
+        assert_eq!(scene.camera_object(), None);
         assert_eq!(scene.add(GeometryRef::circle(0.5)), ObjectId::new(8));
         assert_eq!(
             scene

@@ -29,6 +29,7 @@ const MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH = "/tmp/_manim_draw_border_then_fi
 const MANIM_INDICATION_MODULE_PATH = "/tmp/_manim_indication.py";
 const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
 const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
+const MANIM_CAMERA_MODULE_PATH = "/tmp/_manim_camera.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -73,6 +74,7 @@ async function initializePyodide() {
     indicationResponse,
     reactiveResponse,
     updatersResponse,
+    cameraResponse,
   ] = await Promise.all([
     fetch(new URL("./python/noon.py", import.meta.url)),
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
@@ -91,6 +93,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_indication.py", import.meta.url)),
     fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
+    fetch(new URL("./python/_manim_camera.py", import.meta.url)),
   ]);
   const responses = [
     [apiResponse, "Noon Python API"],
@@ -110,6 +113,7 @@ async function initializePyodide() {
     [indicationResponse, "Noon Manim indication layer"],
     [reactiveResponse, "Noon reactive compatibility layer"],
     [updatersResponse, "Noon Manim updater layer"],
+    [cameraResponse, "Noon Manim moving-camera adapter"],
   ];
   for (const [response, label] of responses) {
     if (!response.ok) {
@@ -135,6 +139,7 @@ async function initializePyodide() {
     [MANIM_INDICATION_MODULE_PATH, indicationResponse],
     [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
     [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
+    [MANIM_CAMERA_MODULE_PATH, cameraResponse],
   ];
   for (const [path, response] of modules) {
     pyodide.FS.writeFile(path, await response.text(), { encoding: "utf8" });
@@ -166,6 +171,8 @@ _manim_indication.install()
 import _manim_reactive
 import _manim_updaters
 _manim_updaters.install()
+import _manim_camera
+_manim_camera.install()
 `);
   return pyodide;
 }

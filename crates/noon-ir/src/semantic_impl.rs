@@ -1,6 +1,6 @@
 use noon_core::{
-    ObjectDefinition, PatchError, ReactiveBinding, ReactiveError, ReactiveGraphDefinition,
-    SemanticScene, SignalDefinition, TrackDefinition,
+    ObjectDefinition, ObjectId, PatchError, ReactiveBinding, ReactiveError,
+    ReactiveGraphDefinition, SemanticScene, SignalDefinition, TrackDefinition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,8 @@ pub struct SemanticSceneDocument {
     pub version: u32,
     pub objects: Vec<ObjectDefinition>,
     pub tracks: Vec<TrackDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_object: Option<ObjectId>,
     #[serde(default, skip_serializing_if = "ReactiveGraphDocument::is_empty")]
     pub reactive: ReactiveGraphDocument,
 }
@@ -51,6 +53,7 @@ impl SemanticSceneDocument {
             version: FORMAT_VERSION,
             objects: scene.definition().objects().to_vec(),
             tracks: scene.definition().tracks().to_vec(),
+            camera_object: scene.definition().camera_object(),
             reactive: ReactiveGraphDocument::from_graph(scene.reactive()),
         }
     }
@@ -61,9 +64,16 @@ impl SemanticSceneDocument {
                 self.version,
             )));
         }
-        let definition = noon_core::SceneDefinition::from_parts(self.objects, self.tracks)
+        let mut definition = noon_core::SceneDefinition::from_parts(self.objects, self.tracks)
             .map_err(IrError::Patch)
             .map_err(SemanticIrError::Scene)?;
+        if let Some(camera_object) = self.camera_object {
+            if !definition.set_camera_object(camera_object) {
+                return Err(SemanticIrError::Scene(IrError::Patch(
+                    PatchError::UnknownObject(camera_object),
+                )));
+            }
+        }
         let reactive = self
             .reactive
             .into_graph()
@@ -181,6 +191,16 @@ mod tests {
             state.value(position),
             Some(&ReactiveValue::Vec2(Vec2::new(0.25, 1.0)))
         );
+    }
+
+    #[test]
+    fn semantic_camera_role_round_trips_with_reactive_graph() {
+        let mut scene = SemanticScene::new();
+        let frame = scene.add(GeometryRef::rectangle(14.0, 8.0));
+        assert!(scene.definition_mut().set_camera_object(frame));
+        let json = encode_semantic_scene(&scene).expect("semantic camera scene must serialize");
+        let decoded = decode_semantic_scene(&json).expect("semantic camera scene must decode");
+        assert_eq!(decoded.definition().camera_object(), Some(frame));
     }
 
     #[test]

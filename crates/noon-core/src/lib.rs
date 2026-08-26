@@ -157,6 +157,23 @@ pub const DEFAULT_MOBJECT_TO_MOBJECT_BUFFER: f32 = MED_SMALL_BUFF;
 pub const DEFAULT_FRAME_HEIGHT: f32 = 8.0;
 pub const DEFAULT_FRAME_WIDTH: f32 = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0;
 
+/// Runtime-facing 2D camera state. Camera authoring may use an ordinary semantic
+/// frame object, but renderers consume only this normalized center/height contract.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Camera2DState {
+    pub center: Vec2,
+    pub height: f32,
+}
+
+impl Default for Camera2DState {
+    fn default() -> Self {
+        Self {
+            center: ORIGIN,
+            height: DEFAULT_FRAME_HEIGHT,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transform2D {
     pub translation: Vec2,
@@ -828,6 +845,7 @@ pub struct SceneDefinition {
     pub(crate) next_object_id: u64,
     pub(crate) tracks: Vec<TrackDefinition>,
     pub(crate) next_track_id: u64,
+    pub(crate) camera_object: Option<ObjectId>,
 }
 
 impl SceneDefinition {
@@ -865,6 +883,27 @@ impl SceneDefinition {
         object.transform = snapshot.transform;
         object.style = snapshot.style;
         true
+    }
+
+    /// Select an ordinary semantic object whose transform/rectangle bounds define
+    /// the active 2D camera frame. The same transform timeline remains available to
+    /// every frontend; this marker only gives the runtime a viewport role.
+    pub fn set_camera_object(&mut self, id: ObjectId) -> bool {
+        if self.object(id).is_none() {
+            return false;
+        }
+        self.camera_object = Some(id);
+        true
+    }
+
+    pub const fn camera_object(&self) -> Option<ObjectId> {
+        self.camera_object
+    }
+
+    pub(crate) fn clear_camera_object_if(&mut self, id: ObjectId) {
+        if self.camera_object == Some(id) {
+            self.camera_object = None;
+        }
     }
 
     pub fn objects(&self) -> &[ObjectDefinition] {
@@ -921,6 +960,22 @@ mod tests {
         assert_eq!(object.id, circle);
         assert_eq!(object.transform.translation, Vec2::new(4.0, -2.0));
         assert_eq!(object.style.opacity, 0.5);
+    }
+
+    #[test]
+    fn camera_object_is_explicit_shared_scene_identity() {
+        let mut scene = SceneDefinition::new();
+        let frame = scene.add(GeometryRef::rectangle(
+            DEFAULT_FRAME_WIDTH,
+            DEFAULT_FRAME_HEIGHT,
+        ));
+        assert_eq!(scene.camera_object(), None);
+        assert!(scene.set_camera_object(frame));
+        assert_eq!(scene.camera_object(), Some(frame));
+        assert!(!scene.set_camera_object(ObjectId::new(99)));
+        assert_eq!(scene.camera_object(), Some(frame));
+        assert_eq!(Camera2DState::default().center, ORIGIN);
+        assert_eq!(Camera2DState::default().height, DEFAULT_FRAME_HEIGHT);
     }
 
     #[test]

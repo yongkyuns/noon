@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
+use noon_core::{Camera2DState, GeometryRef, ObjectId, Style, Transform2D};
 use noon_runtime::{
     ExecutionSlotError, ExecutionSlotId, FrameChanges, FrameObjectState, FrameState,
 };
@@ -49,6 +49,8 @@ pub struct ExecutionDeltaEnvelope {
     pub sequence: u64,
     pub snapshot: bool,
     pub time: f64,
+    #[serde(default)]
+    pub camera: Camera2DState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<TransportSlotId>,
     pub objects: Vec<TransportObjectState>,
@@ -69,6 +71,8 @@ pub enum ExecutionTransportError {
     InvalidChannel(String),
     UnsupportedVersion(u32),
     InvalidTime(f64),
+    InvalidCameraState,
+    InvalidCameraObject(ObjectId),
     SequenceExhausted,
     SessionRequiresSnapshot { session: u32, sequence: u64 },
     SequenceGap { expected: u64, actual: u64 },
@@ -99,6 +103,14 @@ impl std::fmt::Display for ExecutionTransportError {
                 )
             }
             Self::InvalidTime(time) => write!(formatter, "invalid execution delta time {time}"),
+            Self::InvalidCameraState => {
+                formatter.write_str("invalid execution transport camera state")
+            }
+            Self::InvalidCameraObject(object) => write!(
+                formatter,
+                "camera object {} is missing or not a supported 2D frame",
+                object.get()
+            ),
             Self::SequenceExhausted => {
                 formatter.write_str("execution transport sequence exhausted")
             }
@@ -178,6 +190,18 @@ impl From<serde_json::Error> for ExecutionTransportError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+struct CameraRoleProbe {
+    #[serde(default)]
+    camera_object: Option<ObjectId>,
+}
+
+fn camera_object_from_scene_json(
+    scene_json: &str,
+) -> Result<Option<ObjectId>, ExecutionTransportError> {
+    Ok(serde_json::from_str::<CameraRoleProbe>(scene_json)?.camera_object)
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecutionDeltaEncoder {
     session: u32,
@@ -185,6 +209,7 @@ pub struct ExecutionDeltaEncoder {
     initialized: bool,
     slot_orders: HashMap<TransportSlotId, u32>,
     next_order: u32,
+    camera_object: Option<ObjectId>,
 }
 
 impl ExecutionDeltaEncoder {
@@ -195,6 +220,7 @@ impl ExecutionDeltaEncoder {
             initialized: false,
             slot_orders: HashMap::new(),
             next_order: 0,
+            camera_object: None,
         }
     }
 
@@ -210,6 +236,14 @@ impl ExecutionDeltaEncoder {
         self.initialized
     }
 
+    pub const fn camera_object(&self) -> Option<ObjectId> {
+        self.camera_object
+    }
+
+    pub fn set_camera_object(&mut self, camera_object: Option<ObjectId>) {
+        self.camera_object = camera_object;
+    }
+
     pub fn contains_slot(&self, slot: ExecutionSlotId) -> bool {
         self.slot_orders.contains_key(&TransportSlotId::from(slot))
     }
@@ -220,6 +254,7 @@ impl ExecutionDeltaEncoder {
         live_objects: &[(ExecutionSlotId, usize)],
     ) -> Result<ExecutionDeltaEnvelope, ExecutionTransportError> {
         self.validate_time(frame.time)?;
+        let camera = self.camera_state(frame)?;
         self.slot_orders.clear();
         self.next_order = 0;
         let mut objects = Vec::with_capacity(live_objects.len());
@@ -246,6 +281,7 @@ impl ExecutionDeltaEncoder {
             sequence,
             snapshot: true,
             time: frame.time,
+            camera,
             removed: Vec::new(),
             objects,
         })
@@ -265,6 +301,7 @@ impl ExecutionDeltaEncoder {
         if dirty_objects.is_empty() && added_objects.is_empty() && removed_slots.is_empty() {
             return Ok(None);
         }
+        let camera = self.camera_state(frame)?;
 
         let mut removed = Vec::with_capacity(removed_slots.len());
         let mut seen_removed = HashSet::with_capacity(removed_slots.len());
@@ -314,6 +351,7 @@ impl ExecutionDeltaEncoder {
             sequence,
             snapshot: false,
             time: frame.time,
+            camera,
             removed,
             objects,
         }))
@@ -325,6 +363,19 @@ impl ExecutionDeltaEncoder {
         } else {
             Err(ExecutionTransportError::InvalidTime(time))
         }
+    }
+
+    fn camera_state(&self, frame: &FrameState) -> Result<Camera2DState, ExecutionTransportError> {
+        let Some(camera_object) = self.camera_object else {
+            return Ok(Camera2DState::default());
+        };
+        let object = frame
+            .objects
+            .iter()
+            .find(|object| object.id == camera_object)
+            .ok_or(ExecutionTransportError::InvalidCameraObject(camera_object))?;
+        Camera2DState::from_frame_object(&object.geometry, object.transform)
+            .ok_or(ExecutionTransportError::InvalidCameraObject(camera_object))
     }
 
     fn take_sequence(&mut self) -> Result<u64, ExecutionTransportError> {
@@ -369,12 +420,17 @@ pub struct ExecutionFrameMirror {
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
     object_slots: HashMap<ObjectId, TransportSlotId>,
+    camera: Camera2DState,
     frame: Option<FrameState>,
 }
 
 impl ExecutionFrameMirror {
     pub fn frame(&self) -> Option<&FrameState> {
         self.frame.as_ref()
+    }
+
+    pub const fn camera(&self) -> Camera2DState {
+        self.camera
     }
 
     pub fn session(&self) -> Option<u32> {
@@ -432,6 +488,7 @@ impl ExecutionFrameMirror {
         } else {
             self.apply_partial(&delta)?
         };
+        self.camera = delta.camera;
         self.next_sequence = delta
             .sequence
             .checked_add(1)
@@ -456,6 +513,13 @@ impl ExecutionFrameMirror {
         if !delta.time.is_finite() {
             return Err(ExecutionTransportError::InvalidTime(delta.time));
         }
+        if !delta.camera.center.x.is_finite()
+            || !delta.camera.center.y.is_finite()
+            || !delta.camera.height.is_finite()
+            || delta.camera.height <= 0.0
+        {
+            return Err(ExecutionTransportError::InvalidCameraState);
+        }
         Ok(())
     }
 
@@ -465,6 +529,7 @@ impl ExecutionFrameMirror {
         self.slots.clear();
         self.slot_indices.clear();
         self.object_slots.clear();
+        self.camera = Camera2DState::default();
         self.frame = None;
     }
 
@@ -690,10 +755,13 @@ impl EngineScenePlayer {
         loop_duration_seconds: f64,
         session: u32,
     ) -> Result<Self, ExecutionTransportError> {
+        let camera_object = camera_object_from_scene_json(scene_json)?;
+        let mut encoder = ExecutionDeltaEncoder::new(session);
+        encoder.set_camera_object(camera_object);
         Ok(Self {
             player: ScenePlayer::from_scene_json(scene_json)?,
             clock: PlaybackClock::looping(loop_duration_seconds)?,
-            encoder: ExecutionDeltaEncoder::new(session),
+            encoder,
         })
     }
 
@@ -749,7 +817,9 @@ impl EngineScenePlayer {
         &mut self,
         json: &str,
     ) -> Result<String, ExecutionTransportError> {
+        let camera_object = camera_object_from_scene_json(json)?;
         self.player.replace_scene_json(json)?;
+        self.encoder.set_camera_object(camera_object);
         self.clock.reset();
         self.force_snapshot_json()
     }
@@ -758,8 +828,15 @@ impl EngineScenePlayer {
         &mut self,
         json: &str,
     ) -> Result<(ReconcileOutcome, Option<String>), ExecutionTransportError> {
+        let camera_object = camera_object_from_scene_json(json)?;
+        let camera_changed = camera_object != self.encoder.camera_object();
         let outcome = self.player.reconcile_scene_json(json)?;
-        let delta = self.take_delta_json()?;
+        self.encoder.set_camera_object(camera_object);
+        let delta = if camera_changed {
+            Some(self.force_snapshot_json()?)
+        } else {
+            self.take_delta_json()?
+        };
         Ok((outcome, delta))
     }
 
@@ -907,7 +984,10 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectId, SceneDefinition, ScenePatch, TrackTiming, Vec2};
+    use noon_core::{
+        GeometryRef, ObjectId, SceneDefinition, ScenePatch, TrackTiming, Vec2,
+        DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
+    };
     use noon_ir::{encode_patch_batch, encode_scene, PatchBatch};
 
     use super::*;
@@ -936,6 +1016,26 @@ mod tests {
         encode_scene(&scene).unwrap()
     }
 
+    fn camera_scene_json() -> String {
+        let mut scene = SceneDefinition::new();
+        scene.add(GeometryRef::circle(1.0));
+        let frame = scene.add(GeometryRef::rectangle(
+            DEFAULT_FRAME_WIDTH,
+            DEFAULT_FRAME_HEIGHT,
+        ));
+        scene.object_mut(frame).unwrap().style.opacity = 0.0;
+        assert!(scene.set_camera_object(frame));
+        scene
+            .animate_position(
+                frame,
+                Vec2::ZERO,
+                Vec2::new(3.0, -1.0),
+                TrackTiming::new(0.0, 2.0, noon_core::Easing::Linear),
+            )
+            .unwrap();
+        encode_scene(&scene).unwrap()
+    }
+
     #[test]
     fn snapshot_then_dirty_delta_round_trip() {
         let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
@@ -957,6 +1057,27 @@ mod tests {
         assert_eq!(outcome, TransportApplyOutcome::Applied);
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame().unwrap(), player.frame());
+    }
+
+    #[test]
+    fn camera_state_uses_same_evaluated_transform_as_scene_objects() {
+        let mut player = EngineScenePlayer::new(&camera_scene_json(), 4.0, 19).unwrap();
+        let initial: ExecutionDeltaEnvelope =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        assert_eq!(initial.camera, Camera2DState::default());
+
+        let delta_json = player.tick_delta_json(0.0).unwrap();
+        assert!(delta_json.is_none());
+        let delta_json = player.tick_delta_json(1_000.0).unwrap().unwrap();
+        let delta: ExecutionDeltaEnvelope = serde_json::from_str(&delta_json).unwrap();
+        assert!((delta.camera.center.x - 1.5).abs() < 1.0e-5);
+        assert!((delta.camera.center.y + 0.5).abs() < 1.0e-5);
+        assert_eq!(delta.camera.height, DEFAULT_FRAME_HEIGHT);
+
+        let mut mirror = ExecutionFrameMirror::default();
+        mirror.apply(initial).unwrap();
+        mirror.apply(delta).unwrap();
+        assert!((mirror.camera().center.x - 1.5).abs() < 1.0e-5);
     }
 
     #[test]
@@ -1016,6 +1137,7 @@ mod tests {
             sequence: 3,
             snapshot: false,
             time: 0.0,
+            camera: Camera2DState::default(),
             removed: Vec::new(),
             objects: Vec::new(),
         };
