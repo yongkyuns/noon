@@ -150,7 +150,10 @@ mod tests {
         let artifact = compile_typst("Hello, Noon!", TypstMode::Markup).unwrap();
         assert_eq!(artifact.mode, TypstMode::Markup);
         assert_eq!(artifact.layout.backend.kind, TextLayoutBackendKind::Typst);
-        assert_eq!(artifact.layout.backend.version.as_ref(), TYPST_BACKEND_VERSION);
+        assert_eq!(
+            artifact.layout.backend.version.as_ref(),
+            TYPST_BACKEND_VERSION
+        );
         assert!(artifact.svg.starts_with("<svg"));
         assert!(artifact.size_points.x > 0.0);
         assert!(artifact.size_points.y > 0.0);
