@@ -104,6 +104,21 @@ def resolve(
     )
 
 
+def _play_begin_target(
+    source: _base.Mobject,
+    *,
+    animate_module: Any,
+) -> _base.Mobject:
+    """Copy the retained mobject state visible when ``Scene.play`` begins."""
+
+    scene = source._scene
+    obj = source._object
+    if scene is not None and obj is not None:
+        snapshot = scene._snapshot_for_object_at(obj, scene._cursor)
+        return animate_module._snapshot_mobject(snapshot)
+    return source.copy()
+
+
 def _scale_in_place_builder(
     mobject: object,
     scale_factor: float,
@@ -151,19 +166,7 @@ def _scale_in_place_builder(
 
         @property
         def target(self) -> _base.Mobject:
-            source = self.source
-            scene = source._scene
-            obj = source._object
-            if scene is not None and obj is not None:
-                # _aligned_scene_play binds method-animation sources before expanding
-                # them. The cursor is therefore the Manim-compatible play-begin time and
-                # the retained snapshot includes all earlier authored animations.
-                snapshot = scene._snapshot_for_object_at(obj, scene._cursor)
-                target = _animate._snapshot_mobject(snapshot)
-            else:
-                # This fallback is mainly useful for introspection outside Scene.play;
-                # normal scheduling reaches the bound retained-snapshot branch above.
-                target = source.copy()
+            target = _play_begin_target(self.source, animate_module=_animate)
             target.scale(self.scale_factor)
             return target
 
@@ -182,9 +185,47 @@ def ShrinkToCenter(mobject: object, **kwargs: Any) -> object:
     return _scale_in_place_builder(mobject, 0.0, kwargs)
 
 
+def FadeToColor(mobject: object, color: object, **kwargs: Any) -> object:
+    """Animate one 2D leaf to ``color`` through a play-begin ApplyMethod target.
+
+    ManimCE v0.21 defines ``FadeToColor`` as
+    ``ApplyMethod(mobject.set_color, color, **kwargs)``. Its target copy is created from
+    the mobject in ``Transform.begin()``, so style/transform mutations that happen after
+    animation construction must be visible. Noon reconstructs that play-begin retained
+    snapshot, applies ``set_color`` to the detached copy, then uses the ordinary retained
+    Transform path for interpolation and deterministic seek.
+    """
+
+    if isinstance(mobject, _compat.Group):
+        raise NotImplementedError(
+            "FadeToColor Group/VGroup family recoloring is not yet supported"
+        )
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("FadeToColor target must be a Mobject")
+
+    import _manim_animate as _animate
+
+    class _DeferredFadeToColorBuilder(_animate._AlignedAnimationBuilder):
+        def __init__(self) -> None:
+            self.source = mobject
+            self.mobject = mobject
+            self.anim_args = dict(kwargs)
+            self.cannot_pass_args = True
+            self.is_chaining = False
+
+        @property
+        def target(self) -> _base.Mobject:
+            target = _play_begin_target(self.source, animate_module=_animate)
+            target.set_color(color)
+            return target
+
+    return _DeferredFadeToColorBuilder()
+
+
 public = {
     "ScaleInPlace": ScaleInPlace,
     "ShrinkToCenter": ShrinkToCenter,
+    "FadeToColor": FadeToColor,
 }
 for _name, _value in public.items():
     setattr(_base, _name, _value)
