@@ -9,7 +9,7 @@ description = "Typst text and math layout backend for Noon"
 noon-core = { path = "../noon-core" }
 typst-as-lib = { version = "=0.16.0", default-features = false }
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
-# Direct frame normalization consumes Typst's paged layout model rather than retained SVG.
+# Direct normalization consumes Typst's paged frame layout instead of retained SVG.
 typst-layout = "=0.15.1"
 typst-library = "=0.15.1"
 typst-svg = "=0.15.1"
