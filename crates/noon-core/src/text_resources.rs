@@ -277,10 +277,7 @@ impl TextResource {
     }
 }
 
-fn validate_span(
-    span: TextSourceSpan,
-    source_len: u32,
-) -> Result<(), TextResourceValidationError> {
+fn validate_span(span: TextSourceSpan, source_len: u32) -> Result<(), TextResourceValidationError> {
     if span.start > span.end || span.end > source_len {
         return Err(TextResourceValidationError::InvalidSourceSpan);
     }
@@ -402,7 +399,9 @@ impl TextResourceArena {
         id: TextResourceId,
         resource: TextResource,
     ) -> Result<TextResourceHandle, TextResourceError> {
-        resource.validate().map_err(TextResourceError::InvalidResource)?;
+        resource
+            .validate()
+            .map_err(TextResourceError::InvalidResource)?;
         let index = id.get() as usize;
         let (version, previous) = {
             let entry = self
@@ -498,7 +497,11 @@ impl std::fmt::Display for TextResourceError {
         match self {
             Self::UnknownResource(id) => write!(formatter, "unknown text resource {}", id.get()),
             Self::VersionExhausted(id) => {
-                write!(formatter, "text resource {} version space exhausted", id.get())
+                write!(
+                    formatter,
+                    "text resource {} version space exhausted",
+                    id.get()
+                )
             }
             Self::InvalidResource(error) => write!(formatter, "invalid text resource: {error}"),
         }
