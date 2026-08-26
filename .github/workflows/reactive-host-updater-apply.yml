@@ -20,7 +20,9 @@ jobs:
           ref: arch/reactive-host-geometry-updaters
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Apply implementation
-        run: python3 scripts/apply-reactive-host-updater-slice.py
+        run: |
+          python3 scripts/apply-reactive-host-updater-slice.py
+          python3 scripts/fix-reactive-host-updater-slice.py
       - name: Format
         run: |
           rustup default stable
@@ -38,6 +40,7 @@ jobs:
       - name: Commit validated implementation
         run: |
           rm scripts/apply-reactive-host-updater-slice.py
+          rm scripts/fix-reactive-host-updater-slice.py
           rm .github/workflows/reactive-host-updater-apply.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
