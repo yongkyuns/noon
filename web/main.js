@@ -1,4 +1,4 @@
-import { ExecutionWorkerClient } from "./execution-worker-client.js";
+import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { SceneIdentityMap } from "./scene-identity.js";
 import {
@@ -414,10 +414,15 @@ async function runScene() {
         ? sceneIdentities.stabilize(authored.document, authored.identities)
         : authored.document;
     const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
+      retainedDocumentJson:
+        authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument),
       callbacks: authored.callbacks,
       authoringClient,
       loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
     });
+    rendererBackend = player.rendererBackend;
+    status.dataset.rendererBackend = rendererBackend;
+    status.dataset.executionMode = player.mode;
     const report = await player.metrics();
     const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
     patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
@@ -508,7 +513,7 @@ document.addEventListener("keydown", (event) => {
 
 const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
-  player = new ExecutionWorkerClient(canvas, {
+  player = new AuthoringExecutionClient(canvas, {
     onError(error) {
       showError(error);
     },
@@ -516,14 +521,8 @@ try {
   const ready = await player.start(EMPTY_SCENE_JSON, { loopDurationSeconds: 4.0 });
   rendererBackend = ready.render.backend;
   status.dataset.rendererBackend = rendererBackend;
-  status.dataset.executionTopology = "engine-render-workers";
-
-  function resize() {
-    const scale = window.devicePixelRatio || 1;
-    player.resize(canvas.clientWidth, canvas.clientHeight, scale);
-  }
-  resize();
-  new ResizeObserver(resize).observe(canvas);
+  status.dataset.executionMode = player.mode;
+  status.dataset.executionTopology = "authoring-engine-render-workers";
 
   const requested = requestedExampleId();
   const initialExample = SCENE_EXAMPLES.some((example) => example.id === requested)
@@ -542,6 +541,9 @@ try {
     },
     get exampleCount() {
       return SCENE_EXAMPLES.length;
+    },
+    get executionMode() {
+      return player?.mode ?? null;
     },
     async select(id) {
       await selectExample(id, { run: true, updateUrl: true });
@@ -566,7 +568,13 @@ try {
       const report = await player.metrics();
       const metrics = report.metrics;
       const host = report.engineMetrics.host;
-      setRuntimeStatus(`${metrics.objectCount} objects · ${rendererBackend} worker`, "running");
+      rendererBackend = player.rendererBackend;
+      status.dataset.rendererBackend = rendererBackend;
+      status.dataset.executionMode = report.executionMode;
+      setRuntimeStatus(
+        `${metrics.objectCount} objects · ${rendererBackend} ${report.executionMode} worker`,
+        "running",
+      );
       metricObjects.value = String(metrics.objectCount);
       metricDraws.value = String(metrics.drawCalls);
       metricUpload.value = formatBytes(metrics.bytesUploaded);
