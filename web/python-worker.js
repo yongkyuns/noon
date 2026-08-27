@@ -1,6 +1,8 @@
 import initNoonWeb, {
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
+  manimDotSnapshotJson,
+  manimTriangleSnapshotJson,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -22,6 +24,7 @@ const MANIM_TYPST_MODULE_PATH = "/tmp/_manim_typst.py";
 const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_GEOMETRY_MODULE_PATH = "/tmp/_manim_geometry.py";
+const MANIM_SHARED_GEOMETRY_MODULE_PATH = "/tmp/_manim_shared_geometry.py";
 const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
 const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
 const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
@@ -51,6 +54,10 @@ async function initializePyodide() {
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
+  self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
+    authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
+  self.noonCreateAuthoringTriangleHandle = () =>
+    authoringStore.createMobject(manimTriangleSnapshotJson());
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
   self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
   self.noonCreateAuthoringRectangleHandle = (width, height) =>
@@ -76,6 +83,7 @@ async function initializePyodide() {
     rateFunctionsResponse,
     phaseBResponse,
     geometryResponse,
+    sharedGeometryResponse,
     animationOptionsResponse,
     animateResponse,
     rotateResponse,
@@ -96,6 +104,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
+    fetch(new URL("./python/_manim_shared_geometry.py", import.meta.url)),
     fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
     fetch(new URL("./python/_manim_animate.py", import.meta.url)),
     fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
@@ -117,6 +126,7 @@ async function initializePyodide() {
     [rateFunctionsResponse, "Noon Manim rate functions"],
     [phaseBResponse, "Noon Manim Phase B layer"],
     [geometryResponse, "Noon Manim geometry layer"],
+    [sharedGeometryResponse, "Noon shared Rust geometry adapter"],
     [animationOptionsResponse, "Noon Manim animation options"],
     [animateResponse, "Noon Manim animate layer"],
     [rotateResponse, "Noon Manim Rotate layer"],
@@ -144,6 +154,7 @@ async function initializePyodide() {
     [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
     [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
     [MANIM_GEOMETRY_MODULE_PATH, geometryResponse],
+    [MANIM_SHARED_GEOMETRY_MODULE_PATH, sharedGeometryResponse],
     [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
     [MANIM_ANIMATE_MODULE_PATH, animateResponse],
     [MANIM_ROTATE_MODULE_PATH, rotateResponse],
@@ -171,6 +182,8 @@ import _manim_phase_b
 import _manim_geometry
 import _manim_semantic_handles
 _manim_semantic_handles.install()
+import _manim_shared_geometry
+_manim_shared_geometry.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()

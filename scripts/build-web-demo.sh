@@ -57,6 +57,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/python-worker-source.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
 node --test web/browser-jank.test.mjs
@@ -68,6 +69,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_typst.py \
   web/python/_manim_rate_functions.py \
   web/python/_manim_phase_b.py \
+  web/python/_manim_shared_geometry.py \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
   web/python/_manim_rotate.py \
