@@ -1,10 +1,12 @@
 import initNoonWeb, {
+  RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
   resolveUniformCompositionSchedule,
   validatePresenceTransition,
+  validateRetainedAuthoringDocumentJson,
 } from "./pkg/noon_web.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
@@ -16,6 +18,7 @@ const PYTHON_MODULE_PATH = "/tmp/noon.py";
 const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
 const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
 const MANIM_SEMANTIC_HANDLES_MODULE_PATH = "/tmp/_manim_semantic_handles.py";
+const MANIM_TYPST_MODULE_PATH = "/tmp/_manim_typst.py";
 const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
 const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
 const MANIM_GEOMETRY_MODULE_PATH = "/tmp/_manim_geometry.py";
@@ -55,6 +58,8 @@ async function initializePyodide() {
   self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
     authoringStore.createManimLine(startX, startY, endX, endY);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
+    new RetainedTypstAuthoringHandle(source, math, fontSize);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
@@ -67,6 +72,7 @@ async function initializePyodide() {
     irResponse,
     compatResponse,
     semanticHandlesResponse,
+    typstResponse,
     rateFunctionsResponse,
     phaseBResponse,
     geometryResponse,
@@ -86,6 +92,7 @@ async function initializePyodide() {
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
     fetch(new URL("./python/_manim_compat.py", import.meta.url)),
     fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
+    fetch(new URL("./python/_manim_typst.py", import.meta.url)),
     fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
     fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
     fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
@@ -106,6 +113,7 @@ async function initializePyodide() {
     [irResponse, "Noon Python IR emitter"],
     [compatResponse, "Noon Manim compatibility layer"],
     [semanticHandlesResponse, "Noon shared semantic handle layer"],
+    [typstResponse, "Noon retained Typst compatibility layer"],
     [rateFunctionsResponse, "Noon Manim rate functions"],
     [phaseBResponse, "Noon Manim Phase B layer"],
     [geometryResponse, "Noon Manim geometry layer"],
@@ -132,6 +140,7 @@ async function initializePyodide() {
     [PYTHON_IR_MODULE_PATH, irResponse],
     [MANIM_COMPAT_MODULE_PATH, compatResponse],
     [MANIM_SEMANTIC_HANDLES_MODULE_PATH, semanticHandlesResponse],
+    [MANIM_TYPST_MODULE_PATH, typstResponse],
     [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
     [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
     [MANIM_GEOMETRY_MODULE_PATH, geometryResponse],
@@ -162,6 +171,8 @@ import _manim_phase_b
 import _manim_geometry
 import _manim_semantic_handles
 _manim_semantic_handles.install()
+import _manim_typst
+_manim_typst.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()
@@ -327,7 +338,7 @@ async function runAuthoringSource(pyodide, source, context) {
   globals.set("__noon_context_json", JSON.stringify(context));
 
   try {
-    return await pyodide.runPythonAsync(
+    const resultJson = await pyodide.runPythonAsync(
       `
 import json
 import _manim_updaters
@@ -372,17 +383,20 @@ if isinstance(__noon_result, Scene):
     __noon_duration = float(__noon_result.time)
     __noon_identities = __noon_result.identity_document()
     __noon_callbacks = _manim_updaters.register_scene(__noon_result)
+    __noon_retained = __noon_result.retained_document()
 elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
     __noon_duration = None
     __noon_identities = None
     __noon_callbacks = None
+    __noon_retained = None
 else:
     raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
 json.dumps(
     {
         "kind": __noon_kind,
         "document": __noon_result.to_document(),
+        "retained_document": __noon_retained,
         "duration": __noon_duration,
         "identities": __noon_identities,
         "callbacks": __noon_callbacks,
@@ -393,6 +407,11 @@ json.dumps(
 `,
       { globals },
     );
+    const result = JSON.parse(resultJson);
+    if (result.retained_document !== null) {
+      validateRetainedAuthoringDocumentJson(JSON.stringify(result.retained_document));
+    }
+    return resultJson;
   } finally {
     globals.destroy();
   }
