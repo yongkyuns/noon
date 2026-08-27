@@ -6,12 +6,14 @@
 
 #![forbid(unsafe_code)]
 
+mod analytic_geometry_authoring;
 mod camera_authoring;
 mod geometry_authoring;
 mod legacy;
 mod reactive_authoring;
 mod text_authoring;
 
+pub use analytic_geometry_authoring::*;
 pub use camera_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
@@ -22,9 +24,9 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
-        GeometryAuthoringError, MathTypst, MovingCameraScene, Polygon, ReactiveScene,
+        Dot, Ellipse, GeometryAuthoringError, MathTypst, MovingCameraScene, Polygon, ReactiveScene,
         ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
-        Star, TextAuthoringError, Triangle, Typst, ValueTracker, VectorSignal,
+        Star, TextAuthoringError, Triangle, Typst, ValueTracker, VectorSignal, DEFAULT_DOT_RADIUS,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
