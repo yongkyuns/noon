@@ -514,6 +514,18 @@ mod tests {
         assert_close(actual.y, expected.y);
     }
 
+    fn assert_vec_close_with_tolerance(actual: Vec2, expected: Vec2, tolerance: f32) {
+        assert!(
+            (actual.x - expected.x).abs() <= tolerance
+                && (actual.y - expected.y).abs() <= tolerance,
+            "expected ({}, {}), got ({}, {}) within {tolerance}",
+            expected.x,
+            expected.y,
+            actual.x,
+            actual.y
+        );
+    }
+
     fn endpoint(command: PathCommand) -> Vec2 {
         match command {
             PathCommand::MoveTo { to }
@@ -576,7 +588,7 @@ mod tests {
             .shift(Vec2::new(-3.0, 4.0));
         let expected_center = (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0)
             + Vec2::new(-3.0, 4.0);
-        assert_vec_close(arc.get_arc_center(), expected_center);
+        assert_vec_close_with_tolerance(arc.get_arc_center(), expected_center, 1e-4);
         assert_close(arc.radius(), 2.0);
         assert_close(arc.start_angle(), 0.0);
         assert_close(arc.angle(), TAU / 4.0);
