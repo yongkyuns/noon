@@ -19,14 +19,12 @@ use noon_text_render_wgpu::{
 };
 use swash::{
     scale::ScaleContext,
-    zeno::{self, Cap as ZenoCap, Command as ZenoCommand, Join as ZenoJoin},
+    zeno::{self, Cap as ZenoCap, Command as ZenoCommand, Join as ZenoJoin, PathData},
     CacheKey, FontRef, GlyphId,
 };
 
 use super::{Camera2D, DrawStats, GpuRenderer, UploadStats, PATH_SAMPLE_COUNT};
-use crate::{
-    FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive,
-};
+use crate::{FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive};
 
 /// One item in the renderer's single global painter-order stream.
 ///
@@ -64,7 +62,6 @@ pub struct RetainedPrepareStats {
     pub outline_cache_misses: u64,
 }
 
-#[derive(Debug)]
 pub struct PreparedRetainedTextSnapshot<'a> {
     pub time: f64,
     pub mask_quads: &'a [GlyphQuadInstance],
@@ -88,7 +85,6 @@ impl PreparedRetainedTextSnapshot<'_> {
 
 /// Prepared mixed geometry/text frame. The geometry frame is intentionally kept
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
-#[derive(Debug)]
 pub struct PreparedRetainedGpuFrame<'a> {
     geometry: PreparedFrame<'a>,
     pub text: PreparedRetainedTextSnapshot<'a>,
@@ -132,8 +128,12 @@ impl std::fmt::Display for RetainedPrepareError {
                 handle.id.get(),
                 handle.version
             ),
-            Self::InvalidGlyphId(id) => write!(formatter, "glyph id {id} exceeds the font glyph-id range"),
-            Self::InvalidFontSize => formatter.write_str("glyph outline font size must be finite and positive"),
+            Self::InvalidGlyphId(id) => {
+                write!(formatter, "glyph id {id} exceeds the font glyph-id range")
+            }
+            Self::InvalidFontSize => {
+                formatter.write_str("glyph outline font size must be finite and positive")
+            }
             Self::InvalidVariation => formatter.write_str("glyph outline variation must be finite"),
             Self::Text(error) => write!(formatter, "retained text preparation failed: {error}"),
         }
@@ -204,7 +204,11 @@ impl GlyphOutlineCache {
         if !run.font_size.is_finite() || run.font_size <= 0.0 {
             return Err(RetainedPrepareError::InvalidFontSize);
         }
-        if run.variations.iter().any(|setting| !setting.value.is_finite()) {
+        if run
+            .variations
+            .iter()
+            .any(|setting| !setting.value.is_finite())
+        {
             return Err(RetainedPrepareError::InvalidVariation);
         }
         let glyph_id = GlyphId::try_from(glyph_id)
@@ -230,8 +234,9 @@ impl GlyphOutlineCache {
         let face = if let Some(face) = self.faces.get(&font_handle).copied() {
             face
         } else {
-            let font = FontRef::from_index(resource.data.as_ref(), resource.key.face_index as usize)
-                .ok_or(RetainedPrepareError::InvalidFontData(font_handle))?;
+            let font =
+                FontRef::from_index(resource.data.as_ref(), resource.key.face_index as usize)
+                    .ok_or(RetainedPrepareError::InvalidFontData(font_handle))?;
             let face = SwashFace {
                 offset: font.offset,
                 key: font.key,
@@ -377,7 +382,8 @@ impl RetainedFramePreparer {
                 .text
                 .prepare(device, queue, frame, texts, fonts, metrics)?;
             self.snapshot_mask_quads.clear();
-            self.snapshot_mask_quads.extend_from_slice(prepared.mask_quads);
+            self.snapshot_mask_quads
+                .extend_from_slice(prepared.mask_quads);
             self.snapshot_color_quads.clear();
             self.snapshot_color_quads
                 .extend_from_slice(prepared.color_quads);
@@ -600,12 +606,8 @@ impl RetainedFramePreparer {
         let mut stroke_path = VectorPath::new();
         for glyph in run.glyphs.iter() {
             let (key, outline) = self.outlines.outline(fonts, run, glyph.glyph_id)?;
-            fill_path = append_transformed_path(
-                fill_path,
-                outline.as_ref(),
-                run.transform,
-                glyph.origin,
-            );
+            fill_path =
+                append_transformed_path(fill_path, outline.as_ref(), run.transform, glyph.origin);
             if let Some(stroke) = run.stroke.as_ref() {
                 let expanded = self.outlines.stroked_outline(key, outline.as_ref(), stroke);
                 stroke_path = append_transformed_path(
@@ -803,7 +805,9 @@ fn push_geometry_item(
     index: usize,
 ) {
     let start = u32::try_from(index).expect("retained render instance exceeds u32 limits");
-    let end = start.checked_add(1).expect("retained render instance exceeds u32 limits");
+    let end = start
+        .checked_add(1)
+        .expect("retained render instance exceeds u32 limits");
     if let Some(RetainedRenderItem::Geometry {
         object_id: last_object,
         batch,
@@ -917,10 +921,9 @@ fn zeno_to_noon(commands: impl Iterator<Item = ZenoCommand>) -> VectorPath {
         path = match command {
             ZenoCommand::MoveTo(point) => path.move_to(Vec2::new(point.x, point.y)),
             ZenoCommand::LineTo(point) => path.line_to(Vec2::new(point.x, point.y)),
-            ZenoCommand::QuadTo(control, point) => path.quadratic_to(
-                Vec2::new(control.x, control.y),
-                Vec2::new(point.x, point.y),
-            ),
+            ZenoCommand::QuadTo(control, point) => {
+                path.quadratic_to(Vec2::new(control.x, control.y), Vec2::new(point.x, point.y))
+            }
             ZenoCommand::CurveTo(control1, control2, point) => path.cubic_to(
                 Vec2::new(control1.x, control1.y),
                 Vec2::new(control2.x, control2.y),
@@ -999,7 +1002,9 @@ impl GpuRenderer {
         text_state: &mut RetainedTextGpuState,
     ) -> RetainedUploadStats {
         let geometry = self.upload(device, queue, &prepared.geometry);
-        text_state.glyphs.set_camera(queue, text_camera(self.camera));
+        text_state
+            .glyphs
+            .set_camera(queue, text_camera(self.camera));
         let text_frame = prepared.text.as_prepared_frame();
         let text = text_state
             .glyphs
@@ -1113,7 +1118,9 @@ impl GpuRenderer {
                 pass.set_vertex_buffer(1, self.line_buffer.slice(..));
                 pass.draw(0..6, batch.instance_range.clone());
             }
-            RenderPrimitive::Path { batch: path_batch_index } => {
+            RenderPrimitive::Path {
+                batch: path_batch_index,
+            } => {
                 let path_batch = &prepared.path_batches[path_batch_index];
                 if path_batch.index_range.is_empty() {
                     return stats;
@@ -1128,7 +1135,9 @@ impl GpuRenderer {
                     batch.instance_range.clone(),
                 );
             }
-            RenderPrimitive::MegaPath { batch: mega_batch_index } => {
+            RenderPrimitive::MegaPath {
+                batch: mega_batch_index,
+            } => {
                 let mega_batch = &prepared.mega_path_batches[mega_batch_index];
                 if mega_batch.index_range.is_empty() {
                     return stats;
