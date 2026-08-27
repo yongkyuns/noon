@@ -28,6 +28,7 @@ jobs:
           python3 scripts/tmp_fix_family_member_selection_helper.py
           python3 scripts/tmp_fix_family_member_selection_helper2.py
           python3 scripts/tmp_fix_family_member_selection_helper3.py
+          python3 scripts/tmp_fix_family_member_selection_helper4.py
       - name: Apply migration
         run: python3 scripts/tmp_shared_family_member_selection_migration.py
       - name: Format
