@@ -1,0 +1,48 @@
+name: Presentation final cleanup
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Remove dead performance styling and normalize smoke indentation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          html = Path('web/index.html')
+          text = html.read_text()
+          before = '''      .metrics,\n      .perf-metrics {\n        display: grid;\n        border-top: 1px solid var(--border);\n        background: rgb(10 13 21 / 86%);\n      }\n\n      .metrics {\n        grid-template-columns: repeat(4, minmax(0, 1fr));\n      }\n\n      .perf-metrics {\n        grid-template-columns: repeat(3, minmax(0, 1fr));\n        background: rgb(8 11 18 / 92%);\n      }\n'''
+          after = '''      .metrics {\n        display: grid;\n        grid-template-columns: repeat(4, minmax(0, 1fr));\n        border-top: 1px solid var(--border);\n        background: rgb(10 13 21 / 86%);\n      }\n'''
+          assert text.count(before) == 1, 'performance style block changed unexpectedly'
+          html.write_text(text.replace(before, after, 1))
+
+          smoke = Path('scripts/playground-layout-smoke.mjs')
+          text = smoke.read_text()
+          start = text.index('const presentationContract = await page.evaluate(() => {')
+          end = text.index('  const initialBacking = await page.evaluate(() => {', start)
+          block = text[start:end]
+          assert not block.startswith('  ')
+          indented = ''.join(('  ' + line if line.strip() else line) for line in block.splitlines(keepends=True))
+          smoke.write_text(text[:start] + indented + text[end:])
+          PY
+          node --check scripts/playground-layout-smoke.mjs
+
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/index.html scripts/playground-layout-smoke.mjs
+          git commit -m "Remove dead playground performance styling"
+          git push origin HEAD:${{ github.head_ref }}
