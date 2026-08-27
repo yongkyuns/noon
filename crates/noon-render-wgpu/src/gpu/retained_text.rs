@@ -66,6 +66,17 @@ pub struct RetainedPrepareStats {
     pub outline_cache_misses: u64,
 }
 
+/// Cumulative counters for retained mixed-frame preparation locality.
+///
+/// A scratch reuse means the semantic object/text/vector/outline walk was skipped.
+/// Geometry packing, mixed-order rebuilding, and text snapshot copies remain separate
+/// follow-up costs and are intentionally not hidden by this counter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetainedFrameIncrementalStats {
+    pub scratch_rebuilds: u64,
+    pub scratch_reuses: u64,
+}
+
 pub struct PreparedRetainedTextSnapshot<'a> {
     pub time: f64,
     pub mask_quads: &'a [GlyphQuadInstance],
@@ -525,6 +536,9 @@ pub struct RetainedFramePreparer {
     text: RetainedTextQuadPreparer,
     outlines: GlyphOutlineCache,
     scratch: FrameState,
+    scratch_ready: bool,
+    scratch_object_count: usize,
+    incremental_stats: RetainedFrameIncrementalStats,
     sources: Vec<SourceItem>,
     render_items: Vec<RetainedRenderItem>,
     snapshot_mask_quads: Vec<GlyphQuadInstance>,
@@ -547,6 +561,9 @@ impl Default for RetainedFramePreparer {
                 morphs: Vec::new(),
                 render_geometries: Vec::new(),
             },
+            scratch_ready: false,
+            scratch_object_count: 0,
+            incremental_stats: RetainedFrameIncrementalStats::default(),
             sources: Vec::new(),
             render_items: Vec::new(),
             snapshot_mask_quads: Vec::new(),
@@ -580,6 +597,10 @@ impl RetainedFramePreparer {
         self.outlines.stats()
     }
 
+    pub const fn incremental_stats(&self) -> RetainedFrameIncrementalStats {
+        self.incremental_stats
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prepare<'a>(
         &'a mut self,
@@ -609,7 +630,7 @@ impl RetainedFramePreparer {
         geometries: &GeometryResourceArena,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        self.build_scratch_frame(frame, texts, fonts, geometries)?;
+        self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
 
         // #339/#341 intentionally keep the atlas inside the retained text preparer.
         // Snapshot the lightweight prepared records once so that borrow can end and
@@ -666,6 +687,36 @@ impl RetainedFramePreparer {
             render_items: &self.render_items,
             stats,
         })
+    }
+
+    fn prepare_scratch_with_changes(
+        &mut self,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+    ) -> Result<(), RetainedPrepareError> {
+        if self.scratch_ready
+            && changes.is_empty()
+            && frame.objects.len() == self.scratch_object_count
+        {
+            self.scratch.time = frame.time;
+            self.incremental_stats.scratch_reuses =
+                self.incremental_stats.scratch_reuses.saturating_add(1);
+            return Ok(());
+        }
+
+        // `build_scratch_frame` is fallible and mutates its destination as it walks.
+        // Mark the current generation invalid first so a later empty change set can
+        // never reuse a partially rebuilt scratch scene.
+        self.scratch_ready = false;
+        self.build_scratch_frame(frame, texts, fonts, geometries)?;
+        self.scratch_object_count = frame.objects.len();
+        self.scratch_ready = true;
+        self.incremental_stats.scratch_rebuilds =
+            self.incremental_stats.scratch_rebuilds.saturating_add(1);
+        Ok(())
     }
 
     fn build_scratch_frame(
@@ -1434,6 +1485,7 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 #[cfg(test)]
 mod tests {
     use noon_core::FontResourceId;
+    use noon_runtime::RetainedFrameObjectState;
 
     use super::*;
 
@@ -1524,6 +1576,79 @@ mod tests {
         cache.set_limits(GlyphOutlineCacheLimits::new(1, usize::MAX));
         assert_eq!(cache.total_entries(), 1);
         assert_eq!(cache.stats().evictions, 2);
+    }
+
+    #[test]
+    fn unchanged_frame_reuses_semantic_scratch_generation() {
+        let mut frame = RetainedFrameState {
+            time: 0.0,
+            objects: vec![RetainedFrameObjectState {
+                id: ObjectId::new(1),
+                content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                transform: Transform2D::default(),
+                style: Style::default(),
+                appearance: 1.0,
+            }],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+        };
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.time(), 0.0);
+        }
+        assert_eq!(
+            preparer.incremental_stats(),
+            RetainedFrameIncrementalStats {
+                scratch_rebuilds: 1,
+                scratch_reuses: 0,
+            }
+        );
+        let outline_stats = preparer.outline_cache_stats();
+
+        frame.time = 1.0;
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.time(), 1.0);
+        }
+        assert_eq!(
+            preparer.incremental_stats(),
+            RetainedFrameIncrementalStats {
+                scratch_rebuilds: 1,
+                scratch_reuses: 1,
+            }
+        );
+        assert_eq!(preparer.outline_cache_stats(), outline_stats);
     }
 
     #[test]
