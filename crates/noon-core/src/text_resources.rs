@@ -98,7 +98,21 @@ pub struct FontFaceIdentity {
     pub family: Arc<str>,
     pub face_key: Arc<str>,
     pub face_index: u32,
+    /// Stable cache/identity key for the exact font instance. Renderer-facing
+    /// variation values are retained separately on `GlyphRun`; callers must never
+    /// parse this string to recover axis coordinates.
     pub variation_key: Arc<str>,
+}
+
+/// Exact OpenType variation setting used to shape and later rasterize a glyph run.
+///
+/// Values use the font's design-space coordinates (for example `wght=520.5`). The
+/// renderer may normalize these for its raster backend, but it must not substitute
+/// default-axis values when this list is non-empty.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FontVariationSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
 }
 
 /// Stable identity for one shaped cluster/part across ordinary transforms.
@@ -191,6 +205,8 @@ pub struct PositionedGlyph {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub font: FontFaceIdentity,
+    /// Exact variable-font design coordinates used by the shaping backend.
+    pub variations: Arc<[FontVariationSetting]>,
     pub font_size: f32,
     pub direction: TextDirection,
     pub fill: Option<Color>,
@@ -232,6 +248,16 @@ pub struct TextVectorItem {
     pub semantic_key: Option<Arc<str>>,
 }
 
+/// One entry in the layout backend's original painter-order stream.
+///
+/// Runs and vectors live in separate immutable arrays for efficient batching and
+/// semantic lookup, while this compact stream preserves their observable z-order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextRenderItem {
+    GlyphRun(u32),
+    Vector(u32),
+}
+
 /// Logical source part independently addressable by public text/math APIs.
 /// Ranges refer to flattened glyph-cluster and vector-item order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,6 +277,8 @@ pub struct TextResource {
     pub kind: TextSourceKind,
     pub runs: Arc<[GlyphRun]>,
     pub vector_items: Arc<[TextVectorItem]>,
+    /// Backend painter order across shaped runs and non-glyph vector items.
+    pub render_items: Arc<[TextRenderItem]>,
     pub parts: Arc<[TextPart]>,
     pub bounds: Rect,
     pub baseline: f32,
@@ -277,6 +305,13 @@ impl TextResource {
         let vectors = u32::try_from(self.vector_count()).unwrap_or(u32::MAX);
 
         for run in self.runs.iter() {
+            if run
+                .variations
+                .iter()
+                .any(|setting| !setting.value.is_finite())
+            {
+                return Err(TextResourceValidationError::InvalidFontVariation);
+            }
             for glyph in run.glyphs.iter() {
                 validate_span(glyph.cluster.source_span, source_len)?;
             }
@@ -286,6 +321,22 @@ impl TextResource {
             if let Some(span) = item.source_span {
                 validate_span(span, source_len)?;
             }
+        }
+
+        let mut seen_runs = vec![false; self.runs.len()];
+        let mut seen_vectors = vec![false; self.vector_items.len()];
+        for item in self.render_items.iter().copied() {
+            let seen = match item {
+                TextRenderItem::GlyphRun(index) => seen_runs.get_mut(index as usize),
+                TextRenderItem::Vector(index) => seen_vectors.get_mut(index as usize),
+            }
+            .ok_or(TextResourceValidationError::InvalidRenderItem)?;
+            if std::mem::replace(seen, true) {
+                return Err(TextResourceValidationError::DuplicateRenderItem);
+            }
+        }
+        if seen_runs.iter().any(|seen| !seen) || seen_vectors.iter().any(|seen| !seen) {
+            return Err(TextResourceValidationError::MissingRenderItem);
         }
 
         for part in self.parts.iter() {
@@ -305,6 +356,7 @@ impl TextResource {
         bytes = bytes
             .saturating_add(size_of_val(self.runs.as_ref()))
             .saturating_add(size_of_val(self.vector_items.as_ref()))
+            .saturating_add(size_of_val(self.render_items.as_ref()))
             .saturating_add(size_of_val(self.parts.as_ref()));
 
         for run in self.runs.iter() {
@@ -312,6 +364,7 @@ impl TextResource {
                 .saturating_add(run.font.family.len())
                 .saturating_add(run.font.face_key.len())
                 .saturating_add(run.font.variation_key.len())
+                .saturating_add(size_of_val(run.variations.as_ref()))
                 .saturating_add(size_of_val(run.glyphs.as_ref()));
             for glyph in run.glyphs.iter() {
                 if let Some(key) = &glyph.cluster.semantic_key {
@@ -369,6 +422,10 @@ pub enum TextResourceValidationError {
     InvalidSourceSpan,
     InvalidClusterRange,
     InvalidVectorRange,
+    InvalidFontVariation,
+    InvalidRenderItem,
+    DuplicateRenderItem,
+    MissingRenderItem,
 }
 
 impl std::fmt::Display for TextResourceValidationError {
@@ -377,6 +434,10 @@ impl std::fmt::Display for TextResourceValidationError {
             Self::InvalidSourceSpan => write!(formatter, "invalid text source span"),
             Self::InvalidClusterRange => write!(formatter, "invalid text cluster range"),
             Self::InvalidVectorRange => write!(formatter, "invalid text vector range"),
+            Self::InvalidFontVariation => write!(formatter, "invalid font variation value"),
+            Self::InvalidRenderItem => write!(formatter, "invalid text render item reference"),
+            Self::DuplicateRenderItem => write!(formatter, "duplicate text render item reference"),
+            Self::MissingRenderItem => write!(formatter, "missing text render item reference"),
         }
     }
 }
@@ -622,6 +683,7 @@ mod tests {
                     face_index: 0,
                     variation_key: Arc::from(""),
                 },
+                variations: Arc::from([]),
                 font_size: 48.0,
                 direction: TextDirection::LeftToRight,
                 fill: None,
@@ -629,6 +691,7 @@ mod tests {
                 glyphs,
             }]),
             vector_items: Arc::from([]),
+            render_items: Arc::from([TextRenderItem::GlyphRun(0)]),
             parts: Arc::from([TextPart {
                 source_span: TextSourceSpan::new(0, source.len() as u32),
                 first_cluster: 0,
@@ -724,6 +787,53 @@ mod tests {
             semantic_key: Some(Arc::from("fraction-rule")),
         };
         assert_eq!(item.geometry, geometry);
+    }
+
+    #[test]
+    fn render_items_preserve_interleaved_painter_order() {
+        let mut resource = sample_text("x");
+        resource.vector_items = Arc::from([TextVectorItem {
+            geometry: GeometryResourceHandle {
+                id: GeometryId::new(8),
+                version: 0,
+            },
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: Some(Arc::from("background")),
+        }]);
+        resource.render_items = Arc::from([TextRenderItem::Vector(0), TextRenderItem::GlyphRun(0)]);
+        assert_eq!(resource.validate(), Ok(()));
+        assert_eq!(
+            resource.render_items.as_ref(),
+            &[TextRenderItem::Vector(0), TextRenderItem::GlyphRun(0)]
+        );
+    }
+
+    #[test]
+    fn invalid_render_item_references_are_rejected() {
+        let mut resource = sample_text("x");
+        resource.render_items = Arc::from([TextRenderItem::GlyphRun(1)]);
+        assert_eq!(
+            resource.validate().unwrap_err(),
+            TextResourceValidationError::InvalidRenderItem
+        );
+    }
+
+    #[test]
+    fn non_finite_font_variations_are_rejected() {
+        let mut resource = sample_text("x");
+        resource.runs = Arc::from([GlyphRun {
+            variations: Arc::from([FontVariationSetting {
+                tag: *b"wght",
+                value: f32::NAN,
+            }]),
+            ..resource.runs[0].clone()
+        }]);
+        assert_eq!(
+            resource.validate().unwrap_err(),
+            TextResourceValidationError::InvalidFontVariation
+        );
     }
 
     #[test]
