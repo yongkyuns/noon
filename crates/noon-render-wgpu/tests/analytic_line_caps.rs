@@ -52,6 +52,21 @@ fn analytic_line_packs_all_cap_modes_without_changing_existing_flag_bits() {
 }
 
 #[test]
+fn rectangle_packing_does_not_carry_line_cap_bits() {
+    for cap in [StrokeCap::Round, StrokeCap::Butt, StrokeCap::Square] {
+        let mut frame = line_frame(cap, StrokeWidthMode::ScreenSpace);
+        frame.objects[0].geometry = GeometryRef::rectangle(2.0, 2.0);
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+        let flags = prepared.rectangles[0].style.stroke_enabled;
+        assert_eq!(
+            flags, 3,
+            "non-line packed flags must remain legacy-compatible"
+        );
+    }
+}
+
+#[test]
 fn analytic_shader_has_distinct_round_butt_and_square_cap_sdfs() {
     let shader = include_str!("../src/analytic.wgsl");
     assert!(shader.contains("capsule_signed_distance(input.local, half_length, radius)"));
