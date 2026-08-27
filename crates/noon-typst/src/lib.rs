@@ -190,10 +190,7 @@ pub fn compile_typst_resource(
     for vector in &mut normalizer.vectors {
         vector.transform = vector.transform.then(recenter);
     }
-    let centered_bounds = Rect::new(
-        ink_bounds.min - ink_center,
-        ink_bounds.max - ink_center,
-    );
+    let centered_bounds = Rect::new(ink_bounds.min - ink_center, ink_bounds.max - ink_center);
 
     // The entire mobject is always one addressable part. Labeled Typst groups are
     // appended as narrower semantic parts during traversal.
