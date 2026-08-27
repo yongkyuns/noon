@@ -8,6 +8,13 @@ use noon_core::{
 
 use crate::{FrameState, SceneInstance, TimedSceneInstance, TimedSceneRuntimeError};
 
+const CALLBACK_TIME_EPSILON: f64 = 1e-12;
+
+fn callback_is_active(time: f64, active_after: Option<f64>, active_through: Option<f64>) -> bool {
+    active_after.is_none_or(|start| time + CALLBACK_TIME_EPSILON >= start)
+        && active_through.is_none_or(|end| time + CALLBACK_TIME_EPSILON < end)
+}
+
 /// Dynamic object state captured once for one host callback phase.
 ///
 /// Geometry is intentionally excluded from this frame-critical snapshot. Stable
@@ -110,6 +117,7 @@ pub struct HostDrivenScene {
     watched_dense_indices: Vec<usize>,
     scheduled_invocations: Vec<(HostCallbackInvocation, Option<f64>, Option<f64>)>,
     last_callback_time: f64,
+    last_active_callbacks: Vec<HostCallbackId>,
     last_commit_stats: HostCommitStats,
 }
 
@@ -168,11 +176,19 @@ impl HostDrivenScene {
         }
 
         let last_callback_time = scene.frame().time;
+        let last_active_callbacks = scheduled_invocations
+            .iter()
+            .filter(|(_, active_after, active_through)| {
+                callback_is_active(last_callback_time, *active_after, *active_through)
+            })
+            .map(|(invocation, _, _)| invocation.callback)
+            .collect();
         Ok(Self {
             scene,
             watched_dense_indices,
             scheduled_invocations,
             last_callback_time,
+            last_active_callbacks,
             last_commit_stats: HostCommitStats::default(),
         })
     }
@@ -207,13 +223,33 @@ impl HostDrivenScene {
 
     /// Capture one coherent host callback phase.
     ///
-    /// `delta_time` is signed. Hosts that need Manim-style forward updater `dt`
-    /// can use normal forward playback; signed deltas keep seeks/reverse control
-    /// deterministic rather than silently fabricating elapsed time.
+    /// `delta_time` is signed while the same callback set remains active. A change
+    /// in the active set starts a new callback phase at `dt=0`, matching host
+    /// animation loops that reset their local updater clock at authored boundaries.
+    /// Callbacks already active at the initial playhead retain normal elapsed time.
+    /// The small endpoint epsilon prevents decimal frame-time roundoff from keeping
+    /// a callback alive for one extra nominal frame.
     pub fn callback_frame(&mut self) -> HostCallbackFrame {
         let frame = self.scene.frame();
-        let delta_time = frame.time - self.last_callback_time;
+        let invocations = self
+            .scheduled_invocations
+            .iter()
+            .filter(|(_, active_after, active_through)| {
+                callback_is_active(frame.time, *active_after, *active_through)
+            })
+            .map(|(invocation, _, _)| invocation.clone())
+            .collect::<Vec<_>>();
+        let active_callbacks = invocations
+            .iter()
+            .map(|invocation| invocation.callback)
+            .collect::<Vec<_>>();
+        let delta_time = if active_callbacks == self.last_active_callbacks {
+            frame.time - self.last_callback_time
+        } else {
+            0.0
+        };
         self.last_callback_time = frame.time;
+        self.last_active_callbacks = active_callbacks;
         let objects = self
             .watched_dense_indices
             .iter()
@@ -229,15 +265,6 @@ impl HostDrivenScene {
                     morph: frame.morphs[*index],
                 }
             })
-            .collect();
-        let invocations = self
-            .scheduled_invocations
-            .iter()
-            .filter(|(_, active_after, active_through)| {
-                active_after.is_none_or(|start| frame.time >= start)
-                    && active_through.is_none_or(|end| frame.time < end)
-            })
-            .map(|(invocation, _, _)| invocation.clone())
             .collect();
         HostCallbackFrame {
             time: frame.time,
@@ -367,26 +394,22 @@ mod tests {
         .unwrap();
         let mut driven = HostDrivenScene::new(scene, &registry).unwrap();
 
-        assert_eq!(
-            driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(0)
-        );
+        let frame = driven.callback_frame();
+        assert_eq!(frame.invocations[0].callback, HostCallbackId::new(0));
+        assert_eq!(frame.delta_time, 0.0);
         driven.advance_to(0.5).unwrap();
-        assert_eq!(
-            driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(0)
-        );
+        let frame = driven.callback_frame();
+        assert_eq!(frame.invocations[0].callback, HostCallbackId::new(0));
+        assert_eq!(frame.delta_time, 0.5);
         driven.advance_to(1.0).unwrap();
-        assert_eq!(
-            driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(1)
-        );
+        let frame = driven.callback_frame();
+        assert_eq!(frame.invocations[0].callback, HostCallbackId::new(1));
+        assert_eq!(frame.delta_time, 0.0);
         driven.advance_to(1.5).unwrap();
-        assert_eq!(
-            driven.callback_frame().invocations[0].callback,
-            HostCallbackId::new(1)
-        );
-        driven.advance_to(2.0).unwrap();
+        let frame = driven.callback_frame();
+        assert_eq!(frame.invocations[0].callback, HostCallbackId::new(1));
+        assert_eq!(frame.delta_time, 0.5);
+        driven.advance_to(2.0 - 5e-15).unwrap();
         assert!(driven.callback_frame().invocations.is_empty());
     }
 
