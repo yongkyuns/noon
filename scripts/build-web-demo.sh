@@ -8,6 +8,7 @@ cd "$noon_root"
 node --check web/main.js
 node --check web/example-gallery.js
 node --check web/authoring-client.js
+node --check web/python-editor.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
 node --check web/execution-transport.js
@@ -57,6 +58,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/python-editor.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
 node --test web/browser-jank.test.mjs
