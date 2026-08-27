@@ -7,11 +7,11 @@
 use std::{fmt, sync::Arc};
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontResourceError, GeometryResourceArena, GlyphRun,
-    PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
-    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextResource,
-    TextResourceValidationError, TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle,
-    Vec2, VectorPath,
+    Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting,
+    GeometryResourceArena, GlyphRun, PositionedGlyph, Rect, TextAffineTransform,
+    TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
+    TextLayoutBackendKind, TextPart, TextRenderItem, TextResource, TextResourceValidationError,
+    TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
 };
 use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
@@ -160,6 +160,7 @@ pub fn compile_typst_resource(
         },
         runs: Vec::new(),
         vectors: Vec::new(),
+        render_items: Vec::new(),
         parts: Vec::new(),
         geometry: GeometryResourceArena::new(),
         fonts: FontResourceArena::new(),
@@ -186,6 +187,7 @@ pub fn compile_typst_resource(
         kind: mode.source_kind(),
         runs: normalizer.runs.into(),
         vector_items: normalizer.vectors.into(),
+        render_items: normalizer.render_items.into(),
         parts: normalizer.parts.into(),
         bounds: Rect::new(
             Vec2::new(-0.5 * width, -0.5 * height),
@@ -252,6 +254,7 @@ struct FrameNormalizer {
     page_to_noon: TextAffineTransform,
     runs: Vec<GlyphRun>,
     vectors: Vec<TextVectorItem>,
+    render_items: Vec<TextRenderItem>,
     parts: Vec<TextPart>,
     geometry: GeometryResourceArena,
     fonts: FontResourceArena,
@@ -319,12 +322,22 @@ impl FrameNormalizer {
         let face_key = font
             .post_script_name()
             .unwrap_or_else(|| format!("{}#{}", family, font.index()));
-        let variation_key = format!("{:?}", text.font.variations());
+        let variations: Arc<[FontVariationSetting]> = text
+            .font
+            .variations()
+            .0
+            .iter()
+            .map(|(tag, value)| FontVariationSetting {
+                tag: tag.to_bytes(),
+                value: value.0,
+            })
+            .collect::<Vec<_>>()
+            .into();
         let face = FontFaceIdentity {
             family: Arc::from(family),
             face_key: Arc::from(face_key),
             face_index: font.index(),
-            variation_key: Arc::from(variation_key),
+            variation_key: Arc::from(variation_identity(variations.as_ref())),
         };
         let font_data: &[u8] = font.data().as_ref();
         self.fonts
@@ -394,14 +407,17 @@ impl FrameNormalizer {
         };
         let transform = font_y_up_to_frame.then(state).then(self.page_to_noon);
 
+        let run_index = self.runs.len() as u32;
         self.runs.push(GlyphRun {
             font: face,
+            variations,
             font_size,
             direction: TextDirection::LeftToRight,
             fill,
             transform,
             glyphs: glyphs.into(),
         });
+        self.render_items.push(TextRenderItem::GlyphRun(run_index));
         Ok(())
     }
 
@@ -426,6 +442,7 @@ impl FrameNormalizer {
             ),
             None => (None, 0.0),
         };
+        let vector_index = self.vectors.len() as u32;
         self.vectors.push(TextVectorItem {
             geometry: handle,
             transform: state.then(self.page_to_noon),
@@ -437,6 +454,7 @@ impl FrameNormalizer {
             source_span: None,
             semantic_key,
         });
+        self.render_items.push(TextRenderItem::Vector(vector_index));
         Ok(())
     }
 }
@@ -517,6 +535,21 @@ fn solid_color(paint: &Paint) -> Result<Color, TypstBackendError> {
     Ok(Color::rgba(red, green, blue, alpha))
 }
 
+fn variation_identity(settings: &[FontVariationSetting]) -> String {
+    let mut identity = String::new();
+    for setting in settings {
+        if !identity.is_empty() {
+            identity.push(';');
+        }
+        for byte in setting.tag {
+            identity.push(char::from(byte));
+        }
+        identity.push('=');
+        identity.push_str(&format!("{:08x}", setting.value.to_bits()));
+    }
+    identity
+}
+
 pub fn prepare_source(source: &str, mode: TypstMode) -> String {
     let mut prepared = String::with_capacity(TEMPLATE_PREFIX.len() + source.len() + 8);
     prepared.push_str(TEMPLATE_PREFIX);
@@ -577,6 +610,10 @@ mod tests {
         assert_eq!(artifact.resource.kind, TextSourceKind::Typst);
         assert!(artifact.resource.glyph_count() >= 5);
         assert!(!artifact.resource.runs.is_empty());
+        assert_eq!(
+            artifact.resource.render_items.len(),
+            artifact.resource.runs.len() + artifact.resource.vector_items.len()
+        );
         assert!(artifact.resource.bounds.width() > 0.0);
         assert!(artifact.resource.bounds.height() > 0.0);
         assert_eq!(
@@ -592,17 +629,35 @@ mod tests {
         assert!(!artifact.fonts.is_empty());
         for run in artifact.resource.runs.iter() {
             assert!(artifact.fonts.get_for_face(&run.font).is_some());
+            assert!(run
+                .variations
+                .iter()
+                .all(|setting| setting.value.is_finite()));
         }
     }
 
     #[test]
-    fn direct_math_normalization_retains_vector_decorations() {
+    fn direct_math_normalization_retains_vector_decorations_and_painter_order() {
         let artifact = compile_typst_resource("frac(x, 2)", TypstMode::Math).unwrap();
         assert_eq!(artifact.resource.kind, TextSourceKind::MathTypst);
         assert!(artifact.resource.glyph_count() >= 2);
         assert!(artifact.resource.vector_count() >= 1);
         assert!(!artifact.geometry.is_empty());
         assert!(!artifact.fonts.is_empty());
+        assert!(artifact
+            .resource
+            .render_items
+            .iter()
+            .any(|item| matches!(item, TextRenderItem::GlyphRun(_))));
+        assert!(artifact
+            .resource
+            .render_items
+            .iter()
+            .any(|item| matches!(item, TextRenderItem::Vector(_))));
+        assert_eq!(
+            artifact.resource.render_items.len(),
+            artifact.resource.runs.len() + artifact.resource.vector_items.len()
+        );
         for item in artifact.resource.vector_items.iter() {
             assert!(matches!(
                 artifact.geometry.get(item.geometry),
@@ -636,6 +691,25 @@ mod tests {
     }
 
     #[test]
+    fn variation_identity_is_explicit_and_deterministic() {
+        let settings = [
+            FontVariationSetting {
+                tag: *b"wght",
+                value: 520.5,
+            },
+            FontVariationSetting {
+                tag: *b"opsz",
+                value: 14.0,
+            },
+        ];
+        let first = variation_identity(&settings);
+        let second = variation_identity(&settings);
+        assert_eq!(first, second);
+        assert!(first.starts_with("wght="));
+        assert!(first.contains(";opsz="));
+    }
+
+    #[test]
     fn labeled_groups_become_stable_semantic_parts() {
         let artifact = compile_typst_resource("#box[x] <lhs> + y", TypstMode::Markup).unwrap();
         assert!(artifact
@@ -650,6 +724,7 @@ mod tests {
         let first = compile_typst_resource("$ x^2 $", TypstMode::Markup).unwrap();
         let second = compile_typst_resource("$ x^2 $", TypstMode::Markup).unwrap();
         assert_eq!(first.resource.runs, second.resource.runs);
+        assert_eq!(first.resource.render_items, second.resource.render_items);
         assert_eq!(first.fonts.stats(), second.fonts.stats());
         assert_eq!(
             first
