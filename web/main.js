@@ -26,12 +26,6 @@ const metricObjects = document.querySelector("#metric-objects");
 const metricDraws = document.querySelector("#metric-draws");
 const metricUpload = document.querySelector("#metric-upload");
 const metricTime = document.querySelector("#metric-time");
-const metricCpuFrame = document.querySelector("#metric-cpu-frame");
-const metricRuntime = document.querySelector("#metric-runtime");
-const metricPrepare = document.querySelector("#metric-prepare");
-const metricUploadMs = document.querySelector("#metric-upload-ms");
-const metricEncode = document.querySelector("#metric-encode");
-const metricGpu = document.querySelector("#metric-gpu");
 const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
 
@@ -159,8 +153,10 @@ galleryStyle.textContent = `
     align-items: flex-start;
     gap: 0.8rem;
     min-height: 3.8rem;
+    margin-bottom: 1rem;
     padding: 0.75rem 0.85rem;
-    border-bottom: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-radius: 0.9rem;
     background: rgba(11, 15, 24, 0.92);
   }
   .selected-copy { min-width: 0; flex: 1; }
@@ -251,6 +247,7 @@ workspace.before(gallerySection);
 
 const selectedExampleStrip = document.createElement("div");
 selectedExampleStrip.className = "selected-example";
+selectedExampleStrip.setAttribute("aria-label", "Selected example");
 const selectedCopy = document.createElement("div");
 selectedCopy.className = "selected-copy";
 const selectedTitle = document.createElement("span");
@@ -261,7 +258,7 @@ selectedCopy.append(selectedTitle, selectedSummary);
 const selectedTags = document.createElement("div");
 selectedTags.className = "selected-tags";
 selectedExampleStrip.append(selectedCopy, selectedTags);
-document.querySelector(".editor-stack").before(selectedExampleStrip);
+workspace.before(selectedExampleStrip);
 
 const resetButton = document.createElement("button");
 resetButton.type = "button";
@@ -626,7 +623,7 @@ async function selectExample(
     return recordStale(selectionToken ?? requestToken, "before-selection-run");
   }
   if (scroll) {
-    workspace.scrollIntoView({ behavior: "smooth", block: "start" });
+    selectedExampleStrip.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   if (run) return runScene();
   return { stale: false };
@@ -754,12 +751,6 @@ try {
       metricDraws.value = String(metrics.drawCalls);
       metricUpload.value = formatBytes(metrics.bytesUploaded);
       metricTime.value = `${metrics.time.toFixed(2)} s`;
-      metricCpuFrame.value = "engine worker";
-      metricRuntime.value = host.enabled ? `${host.missedDeadlines} host misses` : "engine worker";
-      metricPrepare.value = "render worker";
-      metricUploadMs.value = "render worker";
-      metricEncode.value = "render worker";
-      metricGpu.value = rendererBackend;
       status.dataset.instances = String(metrics.instancesDrawn);
       status.dataset.uploadBytes = String(metrics.bytesUploaded);
       status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);

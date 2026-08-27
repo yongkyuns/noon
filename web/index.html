@@ -139,7 +139,7 @@
 
       .workspace {
         display: grid;
-        grid-template-columns: minmax(21rem, 0.86fr) minmax(0, 1.34fr);
+        grid-template-columns: minmax(24rem, 1fr) minmax(0, 1.15fr);
         min-height: 38rem;
         overflow: hidden;
         border: 1px solid var(--border);
@@ -417,90 +417,6 @@
         white-space: nowrap;
       }
 
-      .below {
-        display: grid;
-        grid-template-columns: 1.25fr 0.75fr;
-        gap: 1rem;
-        margin-top: 1rem;
-      }
-
-      .info-panel {
-        border: 1px solid var(--border);
-        border-radius: 0.9rem;
-        background: var(--panel);
-        padding: 1rem;
-      }
-
-      .info-panel h2 {
-        margin-bottom: 0.75rem;
-        color: #dce3f1;
-        font-size: 0.8rem;
-      }
-
-      .pipeline {
-        display: flex;
-        align-items: stretch;
-        gap: 0.38rem;
-      }
-
-      .pipeline-step {
-        min-width: 0;
-        flex: 1;
-        padding: 0.72rem 0.7rem;
-        border: 1px solid #263149;
-        border-radius: 0.65rem;
-        background: #0c111b;
-      }
-
-      .pipeline-step strong {
-        display: block;
-        color: #d6dceb;
-        font-size: 0.72rem;
-      }
-
-      .pipeline-step span {
-        display: block;
-        margin-top: 0.2rem;
-        color: var(--muted-2);
-        font-size: 0.66rem;
-      }
-
-      .arrow {
-        align-self: center;
-        color: #58647a;
-        font-size: 0.78rem;
-      }
-
-      .api-list {
-        display: grid;
-        gap: 0.48rem;
-      }
-
-      code {
-        color: #cfc8ff;
-        font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-
-      .api-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        padding-bottom: 0.45rem;
-        border-bottom: 1px solid #20293b;
-      }
-
-      .api-row:last-child {
-        padding-bottom: 0;
-        border-bottom: 0;
-      }
-
-      .api-row span {
-        color: var(--muted-2);
-        font-size: 0.68rem;
-        text-align: right;
-      }
-
       @media (max-width: 68rem) {
         .workspace {
           grid-template-columns: 1fr;
@@ -514,10 +430,6 @@
 
         .preview-pane {
           min-height: 30rem;
-        }
-
-        .below {
-          grid-template-columns: 1fr;
         }
       }
 
@@ -590,15 +502,6 @@
 
         .metric:nth-child(-n + 2) {
           border-bottom: 1px solid var(--border);
-        }
-
-        .pipeline {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-        }
-
-        .arrow {
-          display: none;
         }
       }
     </style>
@@ -713,72 +616,9 @@
               <output id="metric-time" class="metric-value">—</output>
             </div>
           </div>
-          <div class="perf-metrics" aria-label="Frame performance p50 and p95">
-            <div class="metric">
-              <span class="metric-label">CPU frame · p50 / p95</span>
-              <output id="metric-cpu-frame" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Runtime eval · p50 / p95</span>
-              <output id="metric-runtime" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Frame prepare · p50 / p95</span>
-              <output id="metric-prepare" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">GPU upload CPU · p50 / p95</span>
-              <output id="metric-upload-ms" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Encode + submit · p50 / p95</span>
-              <output id="metric-encode" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">GPU render · p50 / p95</span>
-              <output id="metric-gpu" class="metric-value">—</output>
-            </div>
-          </div>
         </section>
       </section>
 
-      <section class="below" aria-label="Architecture and API notes">
-        <article class="info-panel">
-          <h2>What happens when you press Run</h2>
-          <div class="pipeline" aria-label="Noon browser execution pipeline">
-            <div class="pipeline-step">
-              <strong>Python</strong>
-              <span>authoring API</span>
-            </div>
-            <span class="arrow" aria-hidden="true">→</span>
-            <div class="pipeline-step">
-              <strong>Scene IR</strong>
-              <span>document / patches</span>
-            </div>
-            <span class="arrow" aria-hidden="true">→</span>
-            <div class="pipeline-step">
-              <strong>Rust runtime</strong>
-              <span>deterministic timeline</span>
-            </div>
-            <span class="arrow" aria-hidden="true">→</span>
-            <div class="pipeline-step">
-              <strong>WebGPU</strong>
-              <span>persistent renderer</span>
-            </div>
-          </div>
-        </article>
-
-        <aside class="info-panel">
-          <h2>Python API in this demo</h2>
-          <div class="api-list">
-            <div class="api-row"><code>scene.circle(...)</code><span>analytic primitive</span></div>
-            <div class="api-row"><code>scene.rectangle(...)</code><span>analytic primitive</span></div>
-            <div class="api-row"><code>scene.path(...)</code><span>cached vector path</span></div>
-            <div class="api-row"><code>scene.play(Transform(...))</code><span>compiled transform</span></div>
-            <div class="api-row"><code>scene.animate_*(...)</code><span>low-level tracks</span></div>
-          </div>
-        </aside>
-      </section>
     </main>
 
     <script type="module" src="./main.js"></script>
