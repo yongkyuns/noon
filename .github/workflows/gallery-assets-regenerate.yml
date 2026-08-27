@@ -39,6 +39,27 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Select stable indication poster times
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("web/python/examples/manim_tutorial_manifest.json")
+          manifest = json.loads(path.read_text())
+          desired = {
+              "manim-using-focus-on": 2.5,
+              "manim-using-indicate": 1.5,
+          }
+          seen = set()
+          for entry in manifest["entries"]:
+              if entry.get("id") in desired:
+                  entry["thumbnail_time"] = desired[entry["id"]]
+                  seen.add(entry["id"])
+          assert seen == set(desired), seen
+          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
       - name: Regenerate posters on current renderer
         run: node scripts/generate-gallery-thumbnails.mjs
 
@@ -58,5 +79,5 @@ jobs:
             echo "Poster assets already match current renderer"
             exit 0
           fi
-          git commit -m "Regenerate gallery posters on current renderer"
+          git commit -m "Resample stable indication gallery posters"
           git push origin HEAD:${{ github.head_ref }}
