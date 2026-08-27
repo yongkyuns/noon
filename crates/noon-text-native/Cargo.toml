@@ -1,0 +1,13 @@
+[package]
+name = "noon-text-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Native OpenType text shaping backend for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+swash = "=0.2.10"
+
+[dev-dependencies]
+typst-assets = { version = "=0.15.1", features = ["fonts"] }
