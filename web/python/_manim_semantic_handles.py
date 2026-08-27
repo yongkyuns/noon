@@ -211,6 +211,8 @@ _ORIGINAL_LINE_INIT = _compat.Line.__init__
 _ORIGINAL_GROUP_INIT = _compat.Group.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
+_ORIGINAL_GROUP_SHIFT = _compat.Group.shift
+_ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
 _GROUP_COPY_DELEGATE = None
 _GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
@@ -1074,6 +1076,87 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
     return float(handle.strokeOpacity)
 
 
+
+def _shared_family_layout_session(value: object, *, mutation: bool = False):
+    if not isinstance(value, _compat.Group):
+        return None
+    family_handle = getattr(value, "_semantic_family_handle", None)
+    if family_handle is None or not hasattr(family_handle, "layoutSession"):
+        return None
+    leaves = _compat._leaf_mobjects(value)
+    resolver = _mutation_handle_for if mutation else _handle_for
+    leaf_handles = [resolver(member) for member in leaves]
+    if not all(handle is not None for handle in leaf_handles):
+        return None
+    session = family_handle.layoutSession()
+    for handle in leaf_handles:
+        session.includeMobject(handle)
+    return session, leaves, leaf_handles
+
+
+def _apply_family_translation(
+    self: _compat.Group,
+    translation: object,
+    leaves: list[_base.Mobject],
+    leaf_handles: list[object],
+) -> _compat.Group:
+    for member, handle in zip(leaves, leaf_handles):
+        translation.applyMobject(handle)
+        _sync_bound_transform(member, handle)
+    translation.finish()
+    return self
+
+
+def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
+    shared = _shared_family_layout_session(self, mutation=True)
+    if shared is None:
+        return _ORIGINAL_GROUP_SHIFT(self, direction)
+    session, leaves, leaf_handles = shared
+    if not hasattr(session, "shiftBy"):
+        return _ORIGINAL_GROUP_SHIFT(self, direction)
+    offset = _base._as_vec2(direction)
+    translation = session.shiftBy(offset.x, offset.y)
+    return _apply_family_translation(self, translation, leaves, leaf_handles)
+
+
+def _group_move_to(
+    self: _compat.Group,
+    point_or_mobject: object,
+    aligned_edge: object = _base.ORIGIN,
+    coor_mask: object = (1.0, 1.0, 1.0),
+) -> _compat.Group:
+    shared = _shared_family_layout_session(self, mutation=True)
+    if shared is None:
+        return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
+    session, leaves, leaf_handles = shared
+    edge = _base._as_vec2(aligned_edge)
+    mask = _alignment_mask2(coor_mask)
+
+    translation = None
+    if isinstance(point_or_mobject, _compat.Group):
+        target_shared = _shared_family_layout_session(point_or_mobject)
+        if target_shared is not None and hasattr(session, "moveToFamily"):
+            target_session = target_shared[0]
+            translation = session.moveToFamily(
+                target_session, edge.x, edge.y, mask.x, mask.y
+            )
+    elif _alignment_is_mobject(point_or_mobject):
+        target_handle = _handle_for(point_or_mobject)
+        if target_handle is not None and hasattr(session, "moveToMobject"):
+            translation = session.moveToMobject(
+                target_handle, edge.x, edge.y, mask.x, mask.y
+            )
+    elif hasattr(session, "moveToPoint"):
+        point = _base._as_vec2(point_or_mobject)
+        translation = session.moveToPoint(
+            point.x, point.y, edge.x, edge.y, mask.x, mask.y
+        )
+
+    if translation is None:
+        return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
+    return _apply_family_translation(self, translation, leaves, leaf_handles)
+
+
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
 
@@ -1315,5 +1398,7 @@ def install() -> None:
         _compat.Group.__init__ = _group_init
         _compat.Group.add = _group_add
         _compat.Group.remove = _group_remove
+        _compat.Group.shift = _group_shift
+        _compat.Group.move_to = _group_move_to
         _compat.Group.copy = _group_copy
         _compat.Group._copy_for_animate_target = _group_target_mobject
