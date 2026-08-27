@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Noon retained Typst demo</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background: #07090f; color: #f7f8fb; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+      main { width: min(92vw, 72rem); display: grid; gap: 1rem; }
+      header { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+      h1 { margin: 0; font-size: 1.35rem; }
+      p { margin: .35rem 0 0; color: #96a2ba; }
+      #status { color: #75d7b0; font-variant-numeric: tabular-nums; }
+      .frame { aspect-ratio: 16 / 9; border: 1px solid #263149; border-radius: 1rem; overflow: hidden; background: #000; }
+      canvas { display: block; width: 100%; height: 100%; }
+      code { color: #c8c1ff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Retained Typst + MathTypst</h1>
+          <p><code>Typst</code> glyph atlas + <code>MathTypst</code> vector decorations in one GPU painter stream.</p>
+        </div>
+        <output id="status">starting…</output>
+      </header>
+      <div class="frame"><canvas id="scene"></canvas></div>
+    </main>
+    <script type="module" src="./retained-typst-demo.js"></script>
+  </body>
+</html>
