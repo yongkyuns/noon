@@ -135,20 +135,6 @@ async function enhancePythonEditors() {
     }
     .python-code-editor .cm-editor { height: 100%; }
     .python-code-editor .cm-focused { outline: 2px solid #aa9cff; outline-offset: -2px; }
-    @media (min-width: 68.01rem) {
-      .canvas-wrap {
-        padding: 0 !important;
-        place-items: stretch !important;
-      }
-      .canvas-wrap > canvas {
-        width: 100%;
-        height: 100%;
-        max-width: none;
-        aspect-ratio: auto;
-        border: 0;
-        border-radius: 0;
-      }
-    }
     @media (max-width: 44rem) {
       .python-code-editor { min-height: 25rem; }
       .python-code-editor .cm-editor { font-size: 0.76rem; }
