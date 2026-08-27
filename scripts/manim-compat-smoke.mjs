@@ -47,6 +47,15 @@ class Demo(Scene):
         assert abs(rush_from(0.5) - (2.0 * smooth(0.75) - 1.0)) < 1e-12
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
 
+        import _manim_compat as _compat_impl
+        original_circle_ir = _compat_impl._ir.Circle
+        _compat_impl._ir.Circle = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("shared Circle constructor must bypass Python IR"))
+        try:
+            shared_constructed = Circle(radius=0.33)
+        finally:
+            _compat_impl._ir.Circle = original_circle_ir
+        assert abs(shared_constructed.radius - 0.33) < 1e-12
+
         circle = Circle(radius=0.6, color=BLUE)
         square = Square(side_length=1.0, color=PINK).next_to(circle, RIGHT)
         assert isinstance(circle, Circle)

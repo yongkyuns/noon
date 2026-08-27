@@ -48,6 +48,12 @@ async function initializePyodide() {
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
+  self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
+  self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
+  self.noonCreateAuthoringRectangleHandle = (width, height) =>
+    authoringStore.createManimRectangle(width, height);
+  self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
+    authoringStore.createManimLine(startX, startY, endX, endY);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
