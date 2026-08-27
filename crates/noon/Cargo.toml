@@ -6,7 +6,9 @@ license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
 [dependencies]
+noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
+noon-typst = { path = "../noon-typst" }
 
 [dev-dependencies]
 noon-ir = { path = "../noon-ir" }
