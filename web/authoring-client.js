@@ -28,6 +28,10 @@ export class PythonAuthoringClient {
     });
   }
 
+  get terminated() {
+    return this.#terminated;
+  }
+
   ready() {
     return this.#readyPromise;
   }

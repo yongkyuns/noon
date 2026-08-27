@@ -1,5 +1,6 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { PlaygroundGeneration } from "./playground-generation.js";
 import { SceneIdentityMap } from "./scene-identity.js";
 import {
   exampleUrl,
@@ -275,8 +276,12 @@ let authoringClient = null;
 const sceneIdentities = new SceneIdentityMap();
 const drafts = new Map();
 const sourceCache = new Map();
+const generations = new PlaygroundGeneration();
 let player = null;
 let rendererBackend = "";
+let sceneRunPromise = null;
+let playerNeedsRestart = false;
+let busyDepth = 0;
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -298,6 +303,18 @@ function setBusy(busy) {
   }
 }
 
+function beginBusy() {
+  busyDepth += 1;
+  setBusy(true);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    busyDepth = Math.max(0, busyDepth - 1);
+    if (busyDepth === 0) setBusy(false);
+  };
+}
+
 function showError(error) {
   console.error(error);
   setRuntimeStatus(`Error: ${error}`, "error");
@@ -311,11 +328,49 @@ function showSceneError(error) {
   patchStatus.dataset.state = "error";
 }
 
+function recordStale(token, stage) {
+  const diagnostics = generations.recordStale(token, stage);
+  status.dataset.staleResults = String(diagnostics.staleDrops);
+  status.dataset.lastStaleStage = diagnostics.lastStale?.stage ?? "";
+  console.debug(
+    `[Noon playground] dropped stale ${token?.kind ?? "unknown"} result`,
+    diagnostics.lastStale,
+  );
+  return { stale: true, stage };
+}
+
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function ensureAuthoringClient() {
+  if (authoringClient?.terminated) {
+    authoringClient = null;
+  }
+  authoringClient ??= new PythonAuthoringClient();
+  return authoringClient;
+}
+
+async function ensureExecutionReady() {
+  if (!playerNeedsRestart) return;
+  patchStatus.value = "Restarting runtime workers…";
+  patchStatus.dataset.state = "running";
+  setRuntimeStatus("Restarting runtime workers…", "running");
+  const ready = await player.restart();
+  playerNeedsRestart = false;
+  rendererBackend = ready.render.backend;
+  status.dataset.rendererBackend = rendererBackend;
+  status.dataset.executionMode = player.mode;
+}
+
+async function runPlaygroundTestHook(name, payload) {
+  const hook = globalThis.__NOON_PLAYGROUND_TEST_HOOKS__?.[name];
+  if (typeof hook === "function") {
+    await hook(payload);
+  }
 }
 
 async function loadDemoAuthoringSource(path) {
@@ -396,44 +451,106 @@ function renderGallery() {
   }
 }
 
-async function runScene() {
-  const example = currentExample();
-  if (!example || !player) return;
-  setBusy(true);
-  try {
-    patchStatus.value = `Building ${example.title} in the Python worker…`;
-    patchStatus.dataset.state = "running";
-    authoringClient ??= new PythonAuthoringClient();
-    const authored = await authoringClient.run(sceneSourceEditor.value, {});
-    if (authored.kind !== "scene_document") {
-      throw new Error("Python scene source returned a PatchBatch");
-    }
+function isCurrentRun(runToken) {
+  return generations.isRunCurrent(runToken, selectedExampleId);
+}
 
-    const runtimeDocument =
-      authored.callbacks === null
-        ? sceneIdentities.stabilize(authored.document, authored.identities)
-        : authored.document;
-    const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
-      retainedDocumentJson:
-        authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument),
-      callbacks: authored.callbacks,
-      authoringClient,
-      loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-    });
-    rendererBackend = player.rendererBackend;
-    status.dataset.rendererBackend = rendererBackend;
-    status.dataset.executionMode = player.mode;
-    const report = await player.metrics();
-    const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
-    patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
-    patchStatus.dataset.state = "applied";
-    patchStatus.dataset.exampleId = example.id;
-    patchStatus.dataset.parityStatus = example.parityStatus;
-    patchStatus.dataset.sequence = String(result.nextPatchSequence);
-  } catch (error) {
-    showSceneError(error);
+async function runScene() {
+  if (sceneRunPromise !== null) return sceneRunPromise;
+  const example = currentExample();
+  if (!example || !player) return null;
+
+  const runToken = generations.beginRun(example.id);
+  const source = sceneSourceEditor.value;
+  const releaseBusy = beginBusy();
+  const task = (async () => {
+    try {
+      await ensureExecutionReady();
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
+
+      patchStatus.value = `Building ${example.title} in the Python worker…`;
+      patchStatus.dataset.state = "running";
+      const client = ensureAuthoringClient();
+      let authored;
+      try {
+        authored = await client.run(source, {
+          playground: {
+            example_id: example.id,
+            selection_generation: runToken.selectionGeneration,
+            run_generation: runToken.runGeneration,
+          },
+        });
+      } catch (error) {
+        if (client.terminated && authoringClient === client) {
+          authoringClient = null;
+        }
+        throw error;
+      }
+
+      await runPlaygroundTestHook("afterAuthoring", {
+        exampleId: example.id,
+        selectionGeneration: runToken.selectionGeneration,
+        runGeneration: runToken.runGeneration,
+      });
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-authoring");
+      if (authored.kind !== "scene_document") {
+        throw new Error("Python scene source returned a PatchBatch");
+      }
+
+      const runtimeDocument =
+        authored.callbacks === null
+          ? sceneIdentities.stabilize(authored.document, authored.identities)
+          : authored.document;
+      await runPlaygroundTestHook("beforeReconcile", {
+        exampleId: example.id,
+        selectionGeneration: runToken.selectionGeneration,
+        runGeneration: runToken.runGeneration,
+      });
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "before-reconcile");
+
+      const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
+        retainedDocumentJson:
+          authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument),
+        callbacks: authored.callbacks,
+        authoringClient: client,
+        loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+      });
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
+
+      rendererBackend = player.rendererBackend;
+      status.dataset.rendererBackend = rendererBackend;
+      status.dataset.executionMode = player.mode;
+      const report = await player.metrics();
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-metrics");
+
+      const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
+      patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
+      patchStatus.dataset.state = "applied";
+      patchStatus.dataset.exampleId = example.id;
+      patchStatus.dataset.parityStatus = example.parityStatus;
+      patchStatus.dataset.sequence = String(result.nextPatchSequence);
+      return { stale: false, result };
+    } catch (error) {
+      if (!isCurrentRun(runToken)) {
+        return recordStale(runToken, "error");
+      }
+      if (playerNeedsRestart) {
+        showError(error);
+      } else {
+        showSceneError(error);
+      }
+      return { stale: false, error };
+    }
+  })();
+
+  sceneRunPromise = task;
+  try {
+    return await task;
   } finally {
-    setBusy(false);
+    if (sceneRunPromise === task) {
+      sceneRunPromise = null;
+    }
+    releaseBusy();
   }
 }
 
@@ -445,13 +562,38 @@ async function selectExample(
   if (!example) {
     throw new Error(`Unknown Manim example ${id}`);
   }
-  if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
-    drafts.set(selectedExampleId, sceneSourceEditor.value);
-  }
 
-  setBusy(true);
+  const requestToken = generations.beginSelectionRequest(id);
+  const releaseBusy = beginBusy();
+  let selectionToken = null;
   try {
     const source = await loadDemoAuthoringSource(example.path);
+    if (!generations.isSelectionRequestCurrent(requestToken)) {
+      return recordStale(requestToken, "after-source-load");
+    }
+
+    selectionToken = generations.commitSelection(requestToken);
+    if (selectionToken === null) {
+      return recordStale(requestToken, "before-selection-commit");
+    }
+
+    // If the prior scene has already entered reconciliation, let it settle while
+    // the prior selection is still the visible/active one. The generation bump
+    // above prevents authoring that has not reconciled yet from committing at all.
+    const priorRun = sceneRunPromise;
+    if (priorRun !== null) {
+      await priorRun;
+    }
+    if (
+      !generations.isSelectionRequestCurrent(requestToken) ||
+      !generations.isSelectionCurrent(selectionToken)
+    ) {
+      return recordStale(selectionToken, "after-prior-run");
+    }
+
+    if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
+      drafts.set(selectedExampleId, sceneSourceEditor.value);
+    }
     selectedExampleId = id;
     canonicalSource = source;
     sceneSourceEditor.value = drafts.get(id) ?? source;
@@ -465,14 +607,29 @@ async function selectExample(
     if (updateUrl) {
       history.pushState({ example: id }, "", exampleUrl(id));
     }
+  } catch (error) {
+    if (generations.isSelectionRequestCurrent(requestToken)) {
+      showSceneError(error);
+    } else {
+      recordStale(requestToken, "selection-error");
+    }
+    return { stale: false, error };
   } finally {
-    setBusy(false);
+    releaseBusy();
   }
 
+  if (
+    selectionToken === null ||
+    !generations.isSelectionRequestCurrent(requestToken) ||
+    !generations.isSelectionCurrent(selectionToken)
+  ) {
+    return recordStale(selectionToken ?? requestToken, "before-selection-run");
+  }
   if (scroll) {
     workspace.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  if (run) await runScene();
+  if (run) return runScene();
+  return { stale: false };
 }
 
 function refreshGalleryFilters() {
@@ -515,6 +672,7 @@ const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
   player = new AuthoringExecutionClient(canvas, {
     onError(error) {
+      playerNeedsRestart = true;
       showError(error);
     },
   });
@@ -545,8 +703,17 @@ try {
     get executionMode() {
       return player?.mode ?? null;
     },
+    get runInFlight() {
+      return sceneRunPromise !== null;
+    },
+    get generationDiagnostics() {
+      return generations.diagnostics;
+    },
     async select(id) {
-      await selectExample(id, { run: true, updateUrl: true });
+      return selectExample(id, { run: true, updateUrl: true });
+    },
+    async run() {
+      return runScene();
     },
   };
 
@@ -562,7 +729,15 @@ try {
   let lastStatusUpdate = -Infinity;
   let metricsPending = false;
   async function updateWorkerMetrics(timestamp) {
-    if (metricsPending || timestamp - lastStatusUpdate <= 200) return;
+    if (
+      metricsPending ||
+      busyDepth > 0 ||
+      sceneRunPromise !== null ||
+      playerNeedsRestart ||
+      timestamp - lastStatusUpdate <= 200
+    ) {
+      return;
+    }
     metricsPending = true;
     try {
       const report = await player.metrics();
@@ -593,7 +768,9 @@ try {
       status.dataset.presentedFrames = String(metrics.presentedFrames);
       lastStatusUpdate = timestamp;
     } catch (error) {
-      showError(error);
+      if (!playerNeedsRestart) {
+        showError(error);
+      }
     } finally {
       metricsPending = false;
     }

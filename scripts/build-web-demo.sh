@@ -6,8 +6,10 @@ noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
 node --check web/main.js
+node --check web/playground-generation.js
 node --check web/example-gallery.js
 node --check web/authoring-client.js
+node --check web/python-editor.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
 node --check web/execution-transport.js
@@ -57,6 +59,9 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/playground-generation.test.mjs
+node --test web/python-editor.test.mjs
+node --test web/python-worker-source.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
 node --test web/browser-jank.test.mjs
@@ -68,6 +73,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_typst.py \
   web/python/_manim_rate_functions.py \
   web/python/_manim_phase_b.py \
+  web/python/_manim_shared_geometry.py \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
   web/python/_manim_rotate.py \
