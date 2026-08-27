@@ -28,6 +28,19 @@ _ORIGINAL_TRIANGLE_INIT = _geometry.Triangle.__init__
 _INSTALLED = False
 
 
+def _set_shared_color(self: _base.Mobject, color: object) -> None:
+    """Apply Manim ``color`` through the shared semantic handle.
+
+    The generic Phase-B setter rebuilds a Python snapshot before handing it back to
+    Rust.  Shared constructors must not re-enter that compatibility path: parse the
+    host color once, then use the semantic-handle mutation that preserves each
+    channel's existing opacity.
+    """
+
+    parsed = _shared._phase_b._as_color("color", color)
+    _shared._set_color(self, parsed)
+
+
 def _dot_init(
     self: _geometry.Dot,
     point: object = _base.ORIGIN,
@@ -62,7 +75,7 @@ def _dot_init(
     options["fill_opacity"] = fill_opacity
     _shared._apply_shared_constructor_kwargs(self, options)
     if color is not None:
-        self.set_color(color)
+        _set_shared_color(self, color)
 
 
 def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
@@ -75,7 +88,7 @@ def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     _shared._attach_shared_handle(self, _create_triangle_handle())
     _shared._apply_shared_constructor_kwargs(self, options)
     if color is not None:
-        self.set_color(color)
+        _set_shared_color(self, color)
 
 
 def install() -> None:
