@@ -1,0 +1,9 @@
+[package]
+name = "noon-text-compile"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Backend-neutral text compiler registry and compiled artifact cache for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
