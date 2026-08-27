@@ -1,0 +1,13 @@
+[package]
+name = "noon-text-raster"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Backend-neutral retained glyph raster cache for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+swash = "=0.2.10"
+
+[dev-dependencies]
+noon-typst = { path = "../noon-typst" }
