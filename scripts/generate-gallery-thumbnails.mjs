@@ -22,9 +22,14 @@ const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const placeholder = "thumbnails/manim/exact-source.svg";
 const generatedThumbnailRoot = "thumbnails/manim/generated";
 const entries = manifest.entries.filter(
-  (entry) => entry.status === "ready" && entry.thumbnail === placeholder,
+  (entry) =>
+    entry.status === "ready" &&
+    (entry.thumbnail === placeholder || entry.thumbnail.startsWith(`${generatedThumbnailRoot}/`)),
 );
-assert.ok(entries.length > 0, "expected ready gallery entries using the placeholder thumbnail");
+assert.ok(
+  entries.length > 0,
+  "expected ready gallery entries using placeholder or generated thumbnails",
+);
 
 const outputRoot = path.resolve(
   repoRoot,
