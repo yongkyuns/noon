@@ -502,14 +502,59 @@ def _install_rotating_breadth() -> None:
                 "non-z Rotating currently supports the 180-degree projection used by Manim RotatingDemo"
             )
 
+        if axis == "z":
+            # Generic Transform's pointwise-rotation interpolation is intentionally
+            # target-state semantics: for a 180-degree source/target pair its matrix
+            # blend passes through zero scale at alpha=0.5. That is correct for
+            # ``mobject.animate.rotate`` but wrong for procedural Rotating families:
+            # circles collapse and independently retained Arrow shaft/tip members can
+            # visibly separate. Approximate the missing curved family-pivot channel
+            # with short deterministic Transform arcs, all sampled from the same
+            # global rate function. At <=5 degrees per interval the pointwise blend's
+            # worst midpoint scale factor is cos(2.5 degrees) > 0.999, while every
+            # family member remains synchronized at identical segment boundaries.
+            max_step = math.pi / 36.0
+            segment_count = max(1, math.ceil(abs(animation.angle) / max_step))
+            end_time = start_time + duration
+            for segment in range(segment_count):
+                alpha = (segment + 1) / segment_count
+                eased_alpha = rates.evaluate_rate_function(easing, alpha)
+                cumulative_angle = sign * animation.angle * eased_alpha
+                segment_start = start_time + duration * segment / segment_count
+                segment_end = (
+                    end_time
+                    if segment + 1 == segment_count
+                    else start_time + duration * (segment + 1) / segment_count
+                )
+                segment_duration = segment_end - segment_start
+                for index, (source, current) in enumerate(
+                    zip(sources, detached, strict=True)
+                ):
+                    assert source._object is not None
+                    obj = source._object
+                    target = animate._snapshot_mobject(current.to_ir())
+                    target.rotate(cumulative_angle, compat.OUT, about_point=pivot_point)
+                    object_key = scene._object_keys[obj.id]
+                    compat._BaseScene.play(
+                        scene,
+                        _base.Transform(
+                            source,
+                            target,
+                            key=(
+                                f"@rotating-family:{object_key}:{start_time:g}:{index}"
+                                f":segment:{segment}"
+                            ),
+                        ),
+                        run_time=segment_duration,
+                        start_time=segment_start,
+                        easing="linear",
+                    )
+            return
+
         for index, (source, current) in enumerate(zip(sources, detached, strict=True)):
             assert source._object is not None
             obj = source._object
-            if axis == "z":
-                target = animate._snapshot_mobject(current.to_ir())
-                target.rotate(sign * animation.angle, compat.OUT, about_point=pivot_point)
-            else:
-                target = reflected_target(current, axis=axis, pivot_point=pivot_point)
+            target = reflected_target(current, axis=axis, pivot_point=pivot_point)
 
             object_key = scene._object_keys[obj.id]
             compat._BaseScene.play(
