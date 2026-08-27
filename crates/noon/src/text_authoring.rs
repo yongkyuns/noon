@@ -289,14 +289,15 @@ impl RetainedScene {
             .iter()
             .map(RetainedObjectDefinition::from)
             .collect::<Vec<_>>();
-        let next_object_id = objects
-            .iter()
-            .map(|object| object.id.get())
-            .max()
-            .map_or(Ok(0), |id| {
-                id.checked_add(1)
-                    .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)
-            })?;
+        let next_object_id =
+            objects
+                .iter()
+                .map(|object| object.id.get())
+                .max()
+                .map_or(Ok(0), |id| {
+                    id.checked_add(1)
+                        .ok_or(TextAuthoringError::ObjectIdSpaceExhausted)
+                })?;
         Ok(Self {
             objects,
             tracks: scene.tracks().to_vec(),
@@ -529,7 +530,10 @@ mod tests {
         assert_eq!(retained.objects()[0].id, circle);
         assert_eq!(retained.objects()[1].id, square);
         assert_eq!(retained.tracks(), legacy.tracks());
-        assert!(retained.objects().iter().all(|object| object.content.geometry().is_some()));
+        assert!(retained
+            .objects()
+            .iter()
+            .all(|object| object.content.geometry().is_some()));
 
         let compiled = retained.compile().unwrap();
         assert_eq!(compiled.object_index(circle), Some(0));
@@ -584,7 +588,10 @@ mod tests {
             .unwrap();
 
         let handle = retained.objects()[1].content.text().unwrap();
-        assert_eq!(retained.texts().get(handle).unwrap().kind, TextSourceKind::MathTypst);
+        assert_eq!(
+            retained.texts().get(handle).unwrap().kind,
+            TextSourceKind::MathTypst
+        );
     }
 
     #[test]
@@ -609,7 +616,10 @@ mod tests {
         let duplicate_error = retained
             .insert_typst_at(1, existing, Typst::new("duplicate"))
             .unwrap_err();
-        assert_eq!(duplicate_error, TextAuthoringError::DuplicateObject(existing));
+        assert_eq!(
+            duplicate_error,
+            TextAuthoringError::DuplicateObject(existing)
+        );
         assert!(retained.texts().is_empty());
         assert!(retained.fonts().is_empty());
     }
