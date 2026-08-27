@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
+    mem::{size_of, size_of_val},
     sync::Arc,
 };
 
@@ -25,6 +26,9 @@ use swash::{
 
 use super::{Camera2D, DrawStats, GpuRenderer, UploadStats, PATH_SAMPLE_COUNT};
 use crate::{FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive};
+
+pub const DEFAULT_GLYPH_OUTLINE_CACHE_MAX_ENTRIES: usize = 4_096;
+pub const DEFAULT_GLYPH_OUTLINE_CACHE_MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 
 /// One item in the renderer's single global painter-order stream.
 ///
@@ -168,31 +172,221 @@ struct SwashFace {
     key: CacheKey,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphOutlineCacheLimits {
+    pub max_entries: usize,
+    pub max_retained_bytes: usize,
+}
+
+impl GlyphOutlineCacheLimits {
+    pub const fn new(max_entries: usize, max_retained_bytes: usize) -> Self {
+        Self {
+            max_entries,
+            max_retained_bytes,
+        }
+    }
+}
+
+impl Default for GlyphOutlineCacheLimits {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_GLYPH_OUTLINE_CACHE_MAX_ENTRIES,
+            DEFAULT_GLYPH_OUTLINE_CACHE_MAX_RETAINED_BYTES,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlyphOutlineCacheStats {
+    pub outline_entries: usize,
+    pub stroked_entries: usize,
+    pub retained_bytes: usize,
+    pub font_faces: usize,
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    pub rejected_admissions: u64,
+}
+
+#[derive(Clone)]
+struct CachedOutline {
+    path: Arc<VectorPath>,
+    retained_bytes: usize,
+    last_used: u64,
+}
+
+#[derive(Clone, Copy)]
+enum OutlineResidencyKey {
+    Outline(OutlineKey),
+    Stroked(StrokedOutlineKey),
+}
+
 struct GlyphOutlineCache {
     scale_context: ScaleContext,
     faces: HashMap<FontResourceHandle, SwashFace>,
-    outlines: HashMap<OutlineKey, Arc<VectorPath>>,
-    stroked: HashMap<StrokedOutlineKey, Arc<VectorPath>>,
+    outlines: HashMap<OutlineKey, CachedOutline>,
+    stroked: HashMap<StrokedOutlineKey, CachedOutline>,
+    limits: GlyphOutlineCacheLimits,
+    retained_bytes: usize,
+    access_clock: u64,
     hits: u64,
     misses: u64,
+    evictions: u64,
+    rejected_admissions: u64,
 }
 
 impl Default for GlyphOutlineCache {
     fn default() -> Self {
+        Self::with_limits(GlyphOutlineCacheLimits::default())
+    }
+}
+
+impl GlyphOutlineCache {
+    fn with_limits(limits: GlyphOutlineCacheLimits) -> Self {
         Self {
             scale_context: ScaleContext::new(),
             faces: HashMap::new(),
             outlines: HashMap::new(),
             stroked: HashMap::new(),
+            limits,
+            retained_bytes: 0,
+            access_clock: 0,
             hits: 0,
             misses: 0,
+            evictions: 0,
+            rejected_admissions: 0,
         }
     }
-}
 
-impl GlyphOutlineCache {
-    fn stats(&self) -> (u64, u64) {
-        (self.hits, self.misses)
+    fn limits(&self) -> GlyphOutlineCacheLimits {
+        self.limits
+    }
+
+    fn set_limits(&mut self, limits: GlyphOutlineCacheLimits) {
+        self.limits = limits;
+        self.enforce_limits();
+    }
+
+    fn stats(&self) -> GlyphOutlineCacheStats {
+        GlyphOutlineCacheStats {
+            outline_entries: self.outlines.len(),
+            stroked_entries: self.stroked.len(),
+            retained_bytes: self.retained_bytes,
+            font_faces: self.faces.len(),
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
+            rejected_admissions: self.rejected_admissions,
+        }
+    }
+
+    fn total_entries(&self) -> usize {
+        self.outlines.len().saturating_add(self.stroked.len())
+    }
+
+    fn next_access(&mut self) -> u64 {
+        self.access_clock = self.access_clock.saturating_add(1);
+        self.access_clock
+    }
+
+    fn cached_outline(&mut self, key: OutlineKey) -> Option<Arc<VectorPath>> {
+        if !self.outlines.contains_key(&key) {
+            return None;
+        }
+        let access = self.next_access();
+        let entry = self
+            .outlines
+            .get_mut(&key)
+            .expect("glyph outline cache entry must still exist");
+        entry.last_used = access;
+        self.hits = self.hits.saturating_add(1);
+        Some(entry.path.clone())
+    }
+
+    fn cached_stroked(&mut self, key: StrokedOutlineKey) -> Option<Arc<VectorPath>> {
+        if !self.stroked.contains_key(&key) {
+            return None;
+        }
+        let access = self.next_access();
+        let entry = self
+            .stroked
+            .get_mut(&key)
+            .expect("stroked glyph outline cache entry must still exist");
+        entry.last_used = access;
+        self.hits = self.hits.saturating_add(1);
+        Some(entry.path.clone())
+    }
+
+    fn admit_outline(&mut self, key: OutlineKey, path: Arc<VectorPath>) {
+        self.admit(OutlineResidencyKey::Outline(key), path);
+    }
+
+    fn admit_stroked(&mut self, key: StrokedOutlineKey, path: Arc<VectorPath>) {
+        self.admit(OutlineResidencyKey::Stroked(key), path);
+    }
+
+    fn admit(&mut self, key: OutlineResidencyKey, path: Arc<VectorPath>) {
+        let retained_bytes = vector_path_retained_bytes(path.as_ref());
+        if self.limits.max_entries == 0 || retained_bytes > self.limits.max_retained_bytes {
+            self.rejected_admissions = self.rejected_admissions.saturating_add(1);
+            return;
+        }
+        let access = self.next_access();
+        let entry = CachedOutline {
+            path,
+            retained_bytes,
+            last_used: access,
+        };
+        let previous = match key {
+            OutlineResidencyKey::Outline(key) => self.outlines.insert(key, entry),
+            OutlineResidencyKey::Stroked(key) => self.stroked.insert(key, entry),
+        };
+        if let Some(previous) = previous {
+            self.retained_bytes = self.retained_bytes.saturating_sub(previous.retained_bytes);
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(retained_bytes);
+        self.enforce_limits();
+    }
+
+    fn enforce_limits(&mut self) {
+        while self.total_entries() > self.limits.max_entries
+            || self.retained_bytes > self.limits.max_retained_bytes
+        {
+            let Some(oldest) = self.oldest_entry() else {
+                break;
+            };
+            let removed = match oldest {
+                OutlineResidencyKey::Outline(key) => self.outlines.remove(&key),
+                OutlineResidencyKey::Stroked(key) => self.stroked.remove(&key),
+            }
+            .expect("selected glyph outline cache entry must still exist");
+            self.retained_bytes = self.retained_bytes.saturating_sub(removed.retained_bytes);
+            self.evictions = self.evictions.saturating_add(1);
+        }
+    }
+
+    fn oldest_entry(&self) -> Option<OutlineResidencyKey> {
+        let outline = self
+            .outlines
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, entry)| (OutlineResidencyKey::Outline(*key), entry.last_used));
+        let stroked = self
+            .stroked
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, entry)| (OutlineResidencyKey::Stroked(*key), entry.last_used));
+        match (outline, stroked) {
+            (Some((key, _)), None) | (None, Some((key, _))) => Some(key),
+            (Some((outline_key, outline_access)), Some((stroked_key, stroked_access))) => {
+                if outline_access <= stroked_access {
+                    Some(outline_key)
+                } else {
+                    Some(stroked_key)
+                }
+            }
+            (None, None) => None,
+        }
     }
 
     fn outline(
@@ -222,9 +416,8 @@ impl GlyphOutlineCache {
             size_bits: run.font_size.to_bits(),
             variation_fingerprint: variation_fingerprint(run),
         };
-        if let Some(path) = self.outlines.get(&key) {
-            self.hits = self.hits.saturating_add(1);
-            return Ok((key, path.clone()));
+        if let Some(path) = self.cached_outline(key) {
+            return Ok((key, path));
         }
 
         self.misses = self.misses.saturating_add(1);
@@ -266,7 +459,7 @@ impl GlyphOutlineCache {
             .map(|outline| zeno_to_noon(outline.path().commands()))
             .unwrap_or_default();
         let path = Arc::new(path);
-        self.outlines.insert(key, path.clone());
+        self.admit_outline(key, path.clone());
         Ok((key, path))
     }
 
@@ -280,15 +473,23 @@ impl GlyphOutlineCache {
             outline: outline_key,
             stroke_fingerprint: stroke_fingerprint(stroke),
         };
-        if let Some(path) = self.stroked.get(&key) {
-            self.hits = self.hits.saturating_add(1);
-            return path.clone();
+        if let Some(path) = self.cached_stroked(key) {
+            return path;
         }
         self.misses = self.misses.saturating_add(1);
         let path = Arc::new(expand_stroke(outline, stroke));
-        self.stroked.insert(key, path.clone());
+        self.admit_stroked(key, path.clone());
         path
     }
+}
+
+fn vector_path_retained_bytes(path: &VectorPath) -> usize {
+    let own = size_of::<VectorPath>() + size_of_val(path.commands());
+    own.saturating_add(
+        path.morph_target()
+            .map(vector_path_retained_bytes)
+            .unwrap_or(0),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -361,6 +562,24 @@ impl RetainedFramePreparer {
         Self::default()
     }
 
+    pub fn with_outline_cache_limits(limits: GlyphOutlineCacheLimits) -> Self {
+        let mut preparer = Self::default();
+        preparer.outlines.set_limits(limits);
+        preparer
+    }
+
+    pub fn outline_cache_limits(&self) -> GlyphOutlineCacheLimits {
+        self.outlines.limits()
+    }
+
+    pub fn set_outline_cache_limits(&mut self, limits: GlyphOutlineCacheLimits) {
+        self.outlines.set_limits(limits);
+    }
+
+    pub fn outline_cache_stats(&self) -> GlyphOutlineCacheStats {
+        self.outlines.stats()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prepare<'a>(
         &'a mut self,
@@ -405,15 +624,15 @@ impl RetainedFramePreparer {
             .iter()
             .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
             .count();
-        let (outline_cache_hits, outline_cache_misses) = self.outlines.stats();
+        let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             semantic_objects: frame.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
             vector_items: self.snapshot_text_stats.vector_items,
             outline_runs: self.snapshot_text_stats.outline_runs,
-            outline_cache_hits,
-            outline_cache_misses,
+            outline_cache_hits: outline_cache.hits,
+            outline_cache_misses: outline_cache.misses,
         };
         let text = PreparedRetainedTextSnapshot {
             time: frame.time,
@@ -1196,7 +1415,98 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use noon_core::FontResourceId;
+
     use super::*;
+
+    fn outline_key(glyph_id: GlyphId) -> OutlineKey {
+        OutlineKey {
+            font: FontResourceHandle {
+                id: FontResourceId::new(1),
+                version: 0,
+            },
+            glyph_id,
+            size_bits: 24.0_f32.to_bits(),
+            variation_fingerprint: 0,
+        }
+    }
+
+    fn stroked_key(outline: OutlineKey, stroke_fingerprint: u64) -> StrokedOutlineKey {
+        StrokedOutlineKey {
+            outline,
+            stroke_fingerprint,
+        }
+    }
+
+    fn test_path(seed: f32, segments: usize) -> Arc<VectorPath> {
+        let mut path = VectorPath::new().move_to(Vec2::new(seed, seed));
+        for index in 0..segments {
+            path = path.line_to(Vec2::new(seed + index as f32, seed - index as f32));
+        }
+        Arc::new(path)
+    }
+
+    #[test]
+    fn outline_entry_budget_is_shared_with_stroked_paths() {
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(2, usize::MAX));
+        let first = outline_key(1);
+        let second = outline_key(2);
+        cache.admit_outline(first, test_path(1.0, 2));
+        cache.admit_stroked(stroked_key(first, 11), test_path(2.0, 3));
+        cache.admit_outline(second, test_path(3.0, 2));
+
+        let stats = cache.stats();
+        assert_eq!(stats.outline_entries + stats.stroked_entries, 2);
+        assert_eq!(stats.evictions, 1);
+        assert!(!cache.outlines.contains_key(&first));
+        assert!(cache.stroked.contains_key(&stroked_key(first, 11)));
+        assert!(cache.outlines.contains_key(&second));
+    }
+
+    #[test]
+    fn outline_lru_hit_preserves_recent_entry() {
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(2, usize::MAX));
+        let first = outline_key(1);
+        let second = outline_key(2);
+        let third = outline_key(3);
+        cache.admit_outline(first, test_path(1.0, 2));
+        cache.admit_outline(second, test_path(2.0, 2));
+        assert!(cache.cached_outline(first).is_some());
+        cache.admit_outline(third, test_path(3.0, 2));
+
+        assert!(cache.outlines.contains_key(&first));
+        assert!(!cache.outlines.contains_key(&second));
+        assert!(cache.outlines.contains_key(&third));
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(cache.stats().evictions, 1);
+    }
+
+    #[test]
+    fn oversized_outline_is_returnable_but_not_resident() {
+        let path = test_path(1.0, 8);
+        let bytes = vector_path_retained_bytes(path.as_ref());
+        assert!(bytes > 0);
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(8, bytes - 1));
+        cache.admit_outline(outline_key(1), path);
+
+        let stats = cache.stats();
+        assert_eq!(stats.outline_entries, 0);
+        assert_eq!(stats.retained_bytes, 0);
+        assert_eq!(stats.rejected_admissions, 1);
+    }
+
+    #[test]
+    fn tightening_outline_limits_evicts_immediately() {
+        let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(4, usize::MAX));
+        cache.admit_outline(outline_key(1), test_path(1.0, 2));
+        cache.admit_outline(outline_key(2), test_path(2.0, 2));
+        cache.admit_stroked(stroked_key(outline_key(2), 5), test_path(3.0, 3));
+        assert_eq!(cache.total_entries(), 3);
+
+        cache.set_limits(GlyphOutlineCacheLimits::new(1, usize::MAX));
+        assert_eq!(cache.total_entries(), 1);
+        assert_eq!(cache.stats().evictions, 2);
+    }
 
     #[test]
     fn retained_order_never_merges_geometry_across_glyphs() {
