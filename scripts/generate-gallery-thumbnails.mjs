@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ const manifestPath = path.join(
 );
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const placeholder = "thumbnails/manim/exact-source.svg";
+const generatedThumbnailRoot = "thumbnails/manim/generated";
 const entries = manifest.entries.filter(
   (entry) => entry.status === "ready" && entry.thumbnail === placeholder,
 );
@@ -87,6 +88,21 @@ function assertUsefulPoster(buffer, entry) {
     if (delta >= 24) changed += 1;
   }
   assert.ok(changed >= 16, `${entry.id}: poster appears blank (${changed} changed pixels)`);
+}
+
+function remapManifest(generated) {
+  const byId = new Map(generated.map((item) => [item.id, item]));
+  return {
+    ...manifest,
+    entries: manifest.entries.map((entry) => {
+      const poster = byId.get(entry.id);
+      if (!poster) return entry;
+      return {
+        ...entry,
+        thumbnail: `${generatedThumbnailRoot}/${poster.filename}`,
+      };
+    }),
+  };
 }
 
 let browser = null;
@@ -161,12 +177,15 @@ try {
     }
   }
 
-  await import("node:fs/promises").then(({ writeFile }) =>
-    writeFile(
-      path.join(outputRoot, "manifest.json"),
-      `${JSON.stringify({ generated }, null, 2)}\n`,
-      "utf8",
-    ),
+  await writeFile(
+    path.join(outputRoot, "manifest.json"),
+    `${JSON.stringify({ generated }, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(outputRoot, "manim_tutorial_manifest.json"),
+    `${JSON.stringify(remapManifest(generated), null, 2)}\n`,
+    "utf8",
   );
   console.log(`${generated.length}/${entries.length} gallery poster frames generated`);
 } finally {
