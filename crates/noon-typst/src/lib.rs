@@ -27,8 +27,9 @@ use typst_library::{
 use typst_svg::{svg, SvgOptions};
 
 pub const TYPST_BACKEND_VERSION: &str = "0.15.1";
-const TEMPLATE_VERSION: &str = "noon-typst-page-v1";
-const TEMPLATE_PREFIX: &str = "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n";
+const TEMPLATE_VERSION: &str = "noon-typst-page-v2";
+const TEMPLATE_PREFIX: &str =
+    "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(size: 10pt)\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypstMode {
@@ -807,6 +808,8 @@ mod tests {
     fn template_and_source_fingerprints_are_stable() {
         assert_eq!(fingerprint_hex(b"noon"), fingerprint_hex(b"noon"));
         assert_ne!(fingerprint_hex(b"noon"), fingerprint_hex(b"Noon"));
-        assert!(prepare_source("x", TypstMode::Math).starts_with(TEMPLATE_PREFIX));
+        let prepared = prepare_source("x", TypstMode::Math);
+        assert!(prepared.starts_with(TEMPLATE_PREFIX));
+        assert!(prepared.contains("#set text(size: 10pt)"));
     }
 }

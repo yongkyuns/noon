@@ -28,8 +28,8 @@ mod wasm {
     /// End-to-end browser proof for the retained Typst path.
     ///
     /// Source is compiled once while constructing the renderer. Every render then
-    /// consumes only the retained scene/runtime/resources and #342's mixed GPU
-    /// painter stream; Python/SVG/full-frame rerendering is not involved.
+    /// consumes only the retained scene/runtime/resources and the mixed GPU painter
+    /// stream; Python/SVG/full-frame rerendering is not involved.
     #[wasm_bindgen(js_name = RetainedTypstCanvasRenderer)]
     pub struct WasmRetainedTypstCanvasRenderer {
         _instance: wgpu::Instance,
@@ -76,75 +76,30 @@ mod wasm {
                     )
                     .map_err(js_error)?;
             }
-            if scene.objects().is_empty() {
-                return Err(js_message(
-                    "retained Typst demo requires Typst or MathTypst source",
-                ));
-            }
-            let compiled = scene.compile().map_err(js_error)?;
-            let runtime = RetainedSceneInstance::new(compiled);
+            Self::from_scene(canvas, scene).await
+        }
 
-            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
-            instance_descriptor.display = Some(Box::new(WebDisplaySource));
-            let instance =
-                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
-            let surface = instance
-                .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
-                .map_err(js_error)?;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                })
-                .await
-                .map_err(js_error)?;
-            let backend = adapter.get_info().backend;
-            let required_limits = if backend == wgpu::Backend::Gl {
-                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        /// Construct exactly one centered retained Typst object. This is used by
+        /// raster-differential fixtures so the public font-size transform and
+        /// source-language identity are tested without demo-specific positioning.
+        #[wasm_bindgen(js_name = createSingle)]
+        pub async fn create_single(
+            canvas: OffscreenCanvas,
+            source: &str,
+            math: bool,
+            font_size: f32,
+        ) -> Result<WasmRetainedTypstCanvasRenderer, JsValue> {
+            let mut scene = RetainedScene::new();
+            if math {
+                scene
+                    .add_math_typst(MathTypst::new(source).with_font_size(font_size))
+                    .map_err(js_error)?;
             } else {
-                wgpu::Limits::default()
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("Noon retained Typst demo GPU device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    ..Default::default()
-                })
-                .await
-                .map_err(js_error)?;
-
-            let width = canvas.width().max(1);
-            let height = canvas.height().max(1);
-            let config = surface
-                .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_message("GPU adapter cannot present retained Typst demo"))?;
-            surface.configure(&device, &config);
-
-            let mut renderer = GpuRenderer::new(&device, config.format);
-            let camera_height = DEFAULT_CAMERA_HEIGHT;
-            set_camera(&mut renderer, &device, &queue, width, height, camera_height)?;
-            let text_gpu = renderer.create_retained_text_state(&device, &queue);
-
-            Ok(Self {
-                _instance: instance,
-                surface,
-                device,
-                queue,
-                canvas,
-                config,
-                scene,
-                runtime,
-                preparer: RetainedFramePreparer::new(),
-                renderer,
-                text_gpu,
-                camera_height,
-                last_draw_calls: 0,
-                last_instances_drawn: 0,
-                last_bytes_uploaded: 0,
-            })
+                scene
+                    .add_typst(Typst::new(source).with_font_size(font_size))
+                    .map_err(js_error)?;
+            }
+            Self::from_scene(canvas, scene).await
         }
 
         pub fn render(&mut self) -> Result<(), JsValue> {
@@ -257,6 +212,83 @@ mod wasm {
         #[wasm_bindgen(js_name = lastBytesUploaded)]
         pub fn last_bytes_uploaded(&self) -> usize {
             self.last_bytes_uploaded
+        }
+    }
+
+    impl WasmRetainedTypstCanvasRenderer {
+        async fn from_scene(
+            canvas: OffscreenCanvas,
+            scene: RetainedScene,
+        ) -> Result<WasmRetainedTypstCanvasRenderer, JsValue> {
+            if scene.objects().is_empty() {
+                return Err(js_message(
+                    "retained Typst renderer requires at least one text object",
+                ));
+            }
+            let compiled = scene.compile().map_err(js_error)?;
+            let runtime = RetainedSceneInstance::new(compiled);
+
+            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+            instance_descriptor.display = Some(Box::new(WebDisplaySource));
+            let instance =
+                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
+            let surface = instance
+                .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
+                .map_err(js_error)?;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: Some(&surface),
+                })
+                .await
+                .map_err(js_error)?;
+            let backend = adapter.get_info().backend;
+            let required_limits = if backend == wgpu::Backend::Gl {
+                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+            } else {
+                wgpu::Limits::default()
+            };
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("Noon retained Typst demo GPU device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits,
+                    ..Default::default()
+                })
+                .await
+                .map_err(js_error)?;
+
+            let width = canvas.width().max(1);
+            let height = canvas.height().max(1);
+            let config = surface
+                .get_default_config(&adapter, width, height)
+                .ok_or_else(|| js_message("GPU adapter cannot present retained Typst demo"))?;
+            surface.configure(&device, &config);
+
+            let mut renderer = GpuRenderer::new(&device, config.format);
+            let camera_height = DEFAULT_CAMERA_HEIGHT;
+            set_camera(&mut renderer, &device, &queue, width, height, camera_height)?;
+            let text_gpu = renderer.create_retained_text_state(&device, &queue);
+
+            Ok(Self {
+                _instance: instance,
+                surface,
+                device,
+                queue,
+                canvas,
+                config,
+                scene,
+                runtime,
+                preparer: RetainedFramePreparer::new(),
+                renderer,
+                text_gpu,
+                camera_height,
+                last_draw_calls: 0,
+                last_instances_drawn: 0,
+                last_bytes_uploaded: 0,
+            })
         }
     }
 

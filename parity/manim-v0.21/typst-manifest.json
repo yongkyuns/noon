@@ -1,0 +1,34 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "typst_version": "0.15.0",
+    "renderer": "cairo",
+    "pixel_width": 960,
+    "pixel_height": 540,
+    "source": "parity/manim-v0.21/typst_scenes.py",
+    "upstream": "docs/source/guides/using_text.rst"
+  },
+  "fixtures": [
+    {
+      "id": "hello-typst",
+      "scene": "HelloTypst",
+      "kind": "typst",
+      "source": "*Hello* from _Typst!_",
+      "font_size": 96
+    },
+    {
+      "id": "hello-math-typst",
+      "scene": "HelloMathTypst",
+      "kind": "math-typst",
+      "source": "sum_(k=1)^n k = (n(n + 1)) / 2",
+      "font_size": 72
+    }
+  ],
+  "policy": {
+    "source_equivalence": "exact-manim-v0.21-doc-example",
+    "reference_capture": "cairo-save-last-frame",
+    "noon_path": "retained-text-resource",
+    "initial_mode": "measure-before-ratchet"
+  }
+}
