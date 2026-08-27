@@ -15,6 +15,7 @@ mod reactive_authoring_facade;
 mod reactive_player;
 mod retained_authoring;
 mod retained_execution_transport;
+mod retained_resource_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
 
@@ -33,6 +34,7 @@ pub use reactive_authoring_facade::*;
 pub use reactive_player::*;
 pub use retained_authoring::*;
 pub use retained_execution_transport::*;
+pub use retained_resource_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
 pub use semantic_snapshot::*;
