@@ -86,7 +86,10 @@ impl RetainedTypstAuthoringSpec {
         if !factor.is_finite() || factor <= 0.0 {
             return Err("retained Typst scale factor must be finite and positive".to_owned());
         }
-        self.transform.scale = self.transform.scale.component_mul(Vec2::new(factor, factor));
+        self.transform.scale = self
+            .transform
+            .scale
+            .component_mul(Vec2::new(factor, factor));
         Ok(())
     }
 
@@ -147,7 +150,10 @@ impl RetainedAuthoringDocument {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.channel != RETAINED_AUTHORING_CHANNEL {
-            return Err(format!("invalid retained authoring channel {:?}", self.channel));
+            return Err(format!(
+                "invalid retained authoring channel {:?}",
+                self.channel
+            ));
         }
         if self.protocol_version != RETAINED_AUTHORING_VERSION {
             return Err(format!(
@@ -217,7 +223,8 @@ mod wasm {
         #[wasm_bindgen(constructor)]
         pub fn new(source: &str, math: bool, font_size: f32) -> Result<Self, JsValue> {
             Ok(Self {
-                inner: RetainedTypstAuthoringSpec::new(source, math, font_size).map_err(js_error)?,
+                inner: RetainedTypstAuthoringSpec::new(source, math, font_size)
+                    .map_err(js_error)?,
             })
         }
 
@@ -300,8 +307,8 @@ mod tests {
 
     #[test]
     fn typst_handle_wire_spec_stays_source_level() {
-        let mut spec = RetainedTypstAuthoringSpec::new("*Hello* from _Typst!_", false, 96.0)
-            .unwrap();
+        let mut spec =
+            RetainedTypstAuthoringSpec::new("*Hello* from _Typst!_", false, 96.0).unwrap();
         spec.shift(Vec2::new(1.0, -2.0)).unwrap();
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("*Hello* from _Typst!_"));
@@ -315,12 +322,8 @@ mod tests {
 
     #[test]
     fn math_typst_identity_is_explicit_on_wire() {
-        let spec = RetainedTypstAuthoringSpec::new(
-            "sum_(k=1)^n k = (n(n + 1)) / 2",
-            true,
-            72.0,
-        )
-        .unwrap();
+        let spec =
+            RetainedTypstAuthoringSpec::new("sum_(k=1)^n k = (n(n + 1)) / 2", true, 72.0).unwrap();
         assert!(spec.math);
         assert_eq!(spec.font_size, 72.0);
     }
@@ -340,7 +343,8 @@ mod tests {
             },
         ])
         .unwrap();
-        let round_trip = RetainedAuthoringDocument::from_json(&document.to_json().unwrap()).unwrap();
+        let round_trip =
+            RetainedAuthoringDocument::from_json(&document.to_json().unwrap()).unwrap();
         assert_eq!(round_trip.objects[0].object, ObjectId::new(9));
         assert_eq!(round_trip.objects[0].order, 1);
         assert_eq!(round_trip.objects[1].object, ObjectId::new(4));
