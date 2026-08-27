@@ -134,7 +134,7 @@ try {
     });
     const mixedTransitionMetrics = execution.metrics();
     const mixedTransitionState = execution.state();
-    const [legacyRaceMetrics, mixedResult, mixedRaceMetrics, mixedRaceState] = await Promise.all([
+    const [preMixedRaceMetrics, mixedResult, mixedRaceMetrics, mixedRaceState] = await Promise.all([
       inFlightLegacyMetrics,
       mixedTransition,
       mixedTransitionMetrics,
@@ -188,7 +188,7 @@ try {
       retainedMode: AUTHORING_EXECUTION_RETAINED,
       initialReady,
       initialCanvasChanged: initialCanvas !== originalCanvas,
-      legacyRaceModeBeforeMixed: legacyRaceMetrics.executionMode,
+      legacyRaceModeBeforeMixed: preMixedRaceMetrics.executionMode,
       mixedMode: mixedResult.mode,
       mixedRebuilt: mixedResult.rebuilt,
       mixedCanvasChanged: mixedCanvas !== initialCanvas,
