@@ -81,13 +81,11 @@
     },
     {
       "id": "mobject.move-to",
-      "surface": "Mobject.move_to",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_move_to/_move_to"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::move_to"},
-      "reason": "The Python compatibility formula still chooses critical points and masks before delegating only the final shift.",
-      "replacement": "Move the complete compatibility placement operation behind the shared handle.",
-      "migration_issue": "#61"
+      "surface": "Leaf Mobject.move_to for point or leaf-Mobject targets",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_move_to_handle/manim_move_to_point"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_move_to"}],
+      "reason": "Python coerces Manim vector arguments; Rust chooses aligned critical points, applies coordinate masks, and performs the translation."
     },
     {
       "id": "mobject.scale",
@@ -139,22 +137,38 @@
     },
     {
       "id": "mobject.next-to",
-      "surface": "Mobject.next_to",
+      "surface": "Leaf Mobject.next_to without explicit submobject aligner selection",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_next_to_handle/manim_next_to_point"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_next_to"}],
+      "reason": "Rust owns Manim's unnormalized direction/buffer formula, aligned critical points, coordinate mask, and translation; Python only coerces host values."
+    },
+    {
+      "id": "mobject.next-to-submobject-aligner",
+      "surface": "Mobject.next_to with submobject_to_align/index_of_submobject_to_align and Group-family targets",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_next_to"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::next_to_handle/next_to_point"},
-      "reason": "Python still owns direction, aligner, critical-point, mask, and buffer composition for the compatibility operation.",
-      "replacement": "Pass normalized arguments to the shared next-to operation without recomputing placement in Python.",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_next_to fallback"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore family membership"},
+      "reason": "Selecting a wrapper submobject/family aligner still happens in Python before placement can be delegated.",
+      "replacement": "Expose family-member layout handles so Rust can resolve the selected aligner and target family bounds.",
       "migration_issue": "#61"
     },
     {
       "id": "mobject.align",
-      "surface": "Mobject.align_to/align_on_border",
+      "surface": "Leaf Mobject.align_to/align_on_border",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::align_to_handle/align_to_point/align_on_frame"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_align_to/_align_on_frame"}],
+      "reason": "Python coerces vectors/points while Rust chooses critical points and applies axis/frame-edge translations."
+    },
+    {
+      "id": "group-placement",
+      "surface": "Group/VGroup move_to/next_to/align_to/arrange family-bound placement",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_align_to/_align_to/_align_on_frame"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::align_to_handle/align_to_point/align_on_frame"},
-      "reason": "Python still computes alignment and frame-edge deltas for compatibility wrappers.",
-      "replacement": "Delegate normalized alignment requests to the shared handle operations.",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_move_to/_manim_next_to/_manim_align_to/_manim_arrange"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore family membership"},
+      "reason": "Stable family identity is shared, but aggregate family layout bounds and placement operations are not yet exposed through the family handle.",
+      "replacement": "Move aggregate family bounds and family placement behind WasmAuthoringFamilyHandle.",
       "migration_issue": "#61"
     },
     {
