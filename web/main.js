@@ -158,8 +158,10 @@ galleryStyle.textContent = `
     align-items: flex-start;
     gap: 0.8rem;
     min-height: 3.8rem;
+    margin-bottom: 1rem;
     padding: 0.75rem 0.85rem;
-    border-bottom: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-radius: 0.9rem;
     background: rgba(11, 15, 24, 0.92);
   }
   .selected-copy { min-width: 0; flex: 1; }
@@ -250,6 +252,7 @@ workspace.before(gallerySection);
 
 const selectedExampleStrip = document.createElement("div");
 selectedExampleStrip.className = "selected-example";
+selectedExampleStrip.setAttribute("aria-label", "Selected example");
 const selectedCopy = document.createElement("div");
 selectedCopy.className = "selected-copy";
 const selectedTitle = document.createElement("span");
@@ -260,7 +263,7 @@ selectedCopy.append(selectedTitle, selectedSummary);
 const selectedTags = document.createElement("div");
 selectedTags.className = "selected-tags";
 selectedExampleStrip.append(selectedCopy, selectedTags);
-document.querySelector(".editor-stack").before(selectedExampleStrip);
+workspace.before(selectedExampleStrip);
 
 const resetButton = document.createElement("button");
 resetButton.type = "button";
@@ -470,7 +473,7 @@ async function selectExample(
   }
 
   if (scroll) {
-    workspace.scrollIntoView({ behavior: "smooth", block: "start" });
+    selectedExampleStrip.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   if (run) await runScene();
 }
