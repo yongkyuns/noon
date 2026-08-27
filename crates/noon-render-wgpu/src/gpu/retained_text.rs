@@ -11,7 +11,7 @@ use noon_core::{
     StrokeJoin, StrokeWidthMode, Style, TextAffineTransform, TextGlyphStroke, TextRenderItem,
     TextResourceArena, TextVectorItem, Transform2D, Vec2, VectorPath,
 };
-use noon_runtime::{FrameObjectState, FrameState, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RetainedFrameState};
 use noon_text_atlas::GpuGlyphAtlas;
 use noon_text_render_wgpu::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
@@ -591,6 +591,24 @@ impl RetainedFramePreparer {
         geometries: &GeometryResourceArena,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        let changes = FrameChanges::all();
+        self.prepare_with_changes(
+            device, queue, frame, &changes, texts, fonts, geometries, metrics,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_changes<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.build_scratch_frame(frame, texts, fonts, geometries)?;
 
         // #339/#341 intentionally keep the atlas inside the retained text preparer.
@@ -599,7 +617,7 @@ impl RetainedFramePreparer {
         {
             let prepared = self
                 .text
-                .prepare(device, queue, frame, texts, fonts, metrics)?;
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
             self.snapshot_mask_quads.clear();
             self.snapshot_mask_quads
                 .extend_from_slice(prepared.mask_quads);
