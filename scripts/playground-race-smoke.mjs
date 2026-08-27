@@ -168,8 +168,14 @@ try {
   await page.evaluate(() => {
     window.__newestSelection = window.__noonExampleGallery.select("parity-create-circle");
   });
+  // A selection request intentionally does not invalidate the current scene while
+  // its source is still loading. Wait for the newer selection to commit: that is
+  // the contract boundary that advances selection/run generations and makes the
+  // held older authoring result stale.
   await page.waitForFunction(
-    () => window.__noonExampleGallery.generationDiagnostics.selectionRequestGeneration >= 3,
+    () => window.__noonExampleGallery.generationDiagnostics.selectionGeneration >= 3,
+    null,
+    { timeout: 30_000 },
   );
   await page.evaluate(() => {
     const release = window.__noonRace.release;
