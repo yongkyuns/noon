@@ -361,6 +361,10 @@ async function captureHostFixture(
       Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
       `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,
     );
+    // Match the deterministic capture path: rendering/present submits GPU work,
+    // while the browser compositor owns when that surface becomes screenshot-visible.
+    // Waiting one paint prevents callback-heavy scenes from being captured mid-present.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     const outputPath = path.join(fixtureDir, `${sample.label}.png`);
     await page.locator("#scene").screenshot({ path: outputPath });
     captures.push({ ...sample, noonPath: outputPath, metrics });
