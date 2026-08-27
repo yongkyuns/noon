@@ -150,7 +150,7 @@ test("older scene results without a retained sidecar remain compatible", () => {
       callbacks: null,
     }),
   );
-  assert.equal(parsed.retainedDocument, null);
+  assert.equal("retainedDocument" in parsed, false);
 });
 
 test("validates retained Typst authoring documents and JS-safe identities", () => {
