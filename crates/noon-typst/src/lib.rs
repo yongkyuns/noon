@@ -8,17 +8,21 @@ use std::{fmt, sync::Arc};
 
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting,
-    GeometryResourceArena, GlyphRun, PositionedGlyph, Rect, TextAffineTransform,
-    TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
-    TextLayoutBackendKind, TextPart, TextRenderItem, TextResource, TextResourceValidationError,
-    TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+    GeometryResourceArena, GlyphRun, PositionedGlyph, Rect, StrokeCap, StrokeJoin,
+    TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke, TextLayoutArtifact,
+    TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem, TextResource,
+    TextResourceValidationError, TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle,
+    Vec2, VectorPath,
 };
 use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
 use typst_library::{
     layout::{Frame, FrameItem, Point, Transform},
     text::TextItem,
-    visualize::{CurveItem, Geometry, Paint, Shape},
+    visualize::{
+        CurveItem, FixedStroke, Geometry, LineCap as TypstLineCap, LineJoin as TypstLineJoin,
+        Paint, Shape,
+    },
 };
 use typst_svg::{svg, SvgOptions};
 
@@ -345,11 +349,7 @@ impl FrameNormalizer {
             .map_err(TypstBackendError::FontResource)?;
 
         let fill = inherited_color(&text.fill)?;
-        if let Some(stroke) = &text.stroke {
-            // Ensure the retained path does not silently discard a paint mode even
-            // though glyph stroke rendering is a later renderer task.
-            let _ = solid_color(&stroke.paint)?;
-        }
+        let stroke = text.stroke.as_ref().map(text_glyph_stroke).transpose()?;
 
         let mut cursor = Vec2::ZERO;
         let font_size = text.size.to_pt() as f32;
@@ -414,6 +414,7 @@ impl FrameNormalizer {
             font_size,
             direction: TextDirection::LeftToRight,
             fill,
+            stroke,
             transform,
             glyphs: glyphs.into(),
         });
@@ -510,6 +511,38 @@ fn geometry_path(geometry: &Geometry) -> VectorPath {
 
 fn point_vec(point: Point) -> Vec2 {
     Vec2::new(point.x.to_pt() as f32, point.y.to_pt() as f32)
+}
+
+fn text_glyph_stroke(stroke: &FixedStroke) -> Result<TextGlyphStroke, TypstBackendError> {
+    let (dash_array, dash_phase) = match &stroke.dash {
+        Some(dash) => (
+            dash.array
+                .iter()
+                .map(|length| length.to_pt() as f32)
+                .collect::<Vec<_>>()
+                .into(),
+            dash.phase.to_pt() as f32,
+        ),
+        None => (Arc::from([]), 0.0),
+    };
+
+    Ok(TextGlyphStroke {
+        paint: inherited_color(&stroke.paint)?,
+        width: stroke.thickness.to_pt() as f32,
+        cap: match stroke.cap {
+            TypstLineCap::Butt => StrokeCap::Butt,
+            TypstLineCap::Round => StrokeCap::Round,
+            TypstLineCap::Square => StrokeCap::Square,
+        },
+        join: match stroke.join {
+            TypstLineJoin::Miter => StrokeJoin::Miter,
+            TypstLineJoin::Round => StrokeJoin::Round,
+            TypstLineJoin::Bevel => StrokeJoin::Bevel,
+        },
+        dash_array,
+        dash_phase,
+        miter_limit: stroke.miter_limit.get() as f32,
+    })
 }
 
 fn inherited_color(paint: &Paint) -> Result<Option<Color>, TypstBackendError> {
@@ -673,6 +706,34 @@ mod tests {
 
         let styled = compile_typst_resource("#text(fill: red)[Hello]", TypstMode::Markup).unwrap();
         assert!(styled.resource.runs.iter().any(|run| run.fill.is_some()));
+    }
+
+    #[test]
+    fn glyph_stroke_metadata_survives_normalization() {
+        let artifact = compile_typst_resource(
+            "#text(stroke: (paint: red, thickness: 1.5pt, cap: \"round\", join: \"bevel\", dash: (array: (3pt, 2pt), phase: 0.5pt), miter-limit: 5.0))[A]",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        let stroke = artifact
+            .resource
+            .runs
+            .iter()
+            .find_map(|run| run.stroke.as_ref())
+            .expect("stroked Typst text should retain outline semantics");
+        let paint = stroke
+            .paint
+            .expect("authored Typst red should be intrinsic");
+        assert!((paint.red - 1.0).abs() < 1e-6);
+        assert!((paint.green - 65.0 / 255.0).abs() < 1e-6);
+        assert!((paint.blue - 54.0 / 255.0).abs() < 1e-6);
+        assert!((paint.alpha - 1.0).abs() < 1e-6);
+        assert_eq!(stroke.width, 1.5);
+        assert_eq!(stroke.cap, StrokeCap::Round);
+        assert_eq!(stroke.join, StrokeJoin::Bevel);
+        assert_eq!(stroke.dash_array.as_ref(), &[3.0, 2.0]);
+        assert_eq!(stroke.dash_phase, 0.5);
+        assert_eq!(stroke.miter_limit, 5.0);
     }
 
     #[test]

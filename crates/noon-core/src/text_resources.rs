@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{Color, GeometryResourceHandle, Rect, Vec2};
+use crate::{Color, GeometryResourceHandle, Rect, StrokeCap, StrokeJoin, Vec2};
 
 /// Stable identity for one retained text/math resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -200,6 +200,22 @@ pub struct PositionedGlyph {
     pub bounds: Rect,
 }
 
+/// Exact outline-stroke semantics for one shaped glyph run.
+///
+/// `paint == None` means inherit the owning mobject color, mirroring `GlyphRun::fill`.
+/// Stroked runs require path-outline rendering: bitmap/atlas rasterization cannot
+/// reproduce dash, cap, join, or miter behavior without changing observable output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextGlyphStroke {
+    pub paint: Option<Color>,
+    pub width: f32,
+    pub cap: StrokeCap,
+    pub join: StrokeJoin,
+    pub dash_array: Arc<[f32]>,
+    pub dash_phase: f32,
+    pub miter_limit: f32,
+}
+
 /// One shaped run. `fill == None` means inherit the owning mobject's color;
 /// `Some` preserves an intrinsic backend color (for example styled Typst content).
 #[derive(Clone, Debug, PartialEq)]
@@ -210,6 +226,9 @@ pub struct GlyphRun {
     pub font_size: f32,
     pub direction: TextDirection,
     pub fill: Option<Color>,
+    /// Exact outline stroke requested by the layout backend. Any `Some` value
+    /// routes the run through lazy glyph outlines instead of the steady atlas path.
+    pub stroke: Option<TextGlyphStroke>,
     /// Maps the run's backend-local glyph coordinates into the resource coordinate
     /// system. Ordinary native text uses identity; math/layout engines can retain
     /// arbitrary group transforms without outlining every glyph.
@@ -312,6 +331,20 @@ impl TextResource {
             {
                 return Err(TextResourceValidationError::InvalidFontVariation);
             }
+            if let Some(stroke) = &run.stroke {
+                let invalid = !stroke.width.is_finite()
+                    || stroke.width < 0.0
+                    || !stroke.dash_phase.is_finite()
+                    || !stroke.miter_limit.is_finite()
+                    || stroke.miter_limit < 0.0
+                    || stroke
+                        .dash_array
+                        .iter()
+                        .any(|length| !length.is_finite() || *length < 0.0);
+                if invalid {
+                    return Err(TextResourceValidationError::InvalidGlyphStroke);
+                }
+            }
             for glyph in run.glyphs.iter() {
                 validate_span(glyph.cluster.source_span, source_len)?;
             }
@@ -366,6 +399,9 @@ impl TextResource {
                 .saturating_add(run.font.variation_key.len())
                 .saturating_add(size_of_val(run.variations.as_ref()))
                 .saturating_add(size_of_val(run.glyphs.as_ref()));
+            if let Some(stroke) = &run.stroke {
+                bytes = bytes.saturating_add(size_of_val(stroke.dash_array.as_ref()));
+            }
             for glyph in run.glyphs.iter() {
                 if let Some(key) = &glyph.cluster.semantic_key {
                     bytes = bytes.saturating_add(key.len());
@@ -423,6 +459,7 @@ pub enum TextResourceValidationError {
     InvalidClusterRange,
     InvalidVectorRange,
     InvalidFontVariation,
+    InvalidGlyphStroke,
     InvalidRenderItem,
     DuplicateRenderItem,
     MissingRenderItem,
@@ -435,6 +472,7 @@ impl std::fmt::Display for TextResourceValidationError {
             Self::InvalidClusterRange => write!(formatter, "invalid text cluster range"),
             Self::InvalidVectorRange => write!(formatter, "invalid text vector range"),
             Self::InvalidFontVariation => write!(formatter, "invalid font variation value"),
+            Self::InvalidGlyphStroke => write!(formatter, "invalid glyph stroke value"),
             Self::InvalidRenderItem => write!(formatter, "invalid text render item reference"),
             Self::DuplicateRenderItem => write!(formatter, "duplicate text render item reference"),
             Self::MissingRenderItem => write!(formatter, "missing text render item reference"),
@@ -687,6 +725,7 @@ mod tests {
                 font_size: 48.0,
                 direction: TextDirection::LeftToRight,
                 fill: None,
+                stroke: None,
                 transform: TextAffineTransform::IDENTITY,
                 glyphs,
             }]),
@@ -833,6 +872,48 @@ mod tests {
         assert_eq!(
             resource.validate().unwrap_err(),
             TextResourceValidationError::InvalidFontVariation
+        );
+    }
+
+    #[test]
+    fn glyph_stroke_semantics_are_retained_and_validated() {
+        let mut resource = sample_text("x");
+        resource.runs = Arc::from([GlyphRun {
+            stroke: Some(TextGlyphStroke {
+                paint: Some(Color::RED),
+                width: 1.5,
+                cap: StrokeCap::Butt,
+                join: StrokeJoin::Miter,
+                dash_array: Arc::from([3.0, 2.0]),
+                dash_phase: 0.5,
+                miter_limit: 4.0,
+            }),
+            ..resource.runs[0].clone()
+        }]);
+        assert_eq!(resource.validate(), Ok(()));
+        let stroke = resource.runs[0].stroke.as_ref().unwrap();
+        assert_eq!(stroke.paint, Some(Color::RED));
+        assert_eq!(stroke.dash_array.as_ref(), &[3.0, 2.0]);
+    }
+
+    #[test]
+    fn non_finite_glyph_strokes_are_rejected() {
+        let mut resource = sample_text("x");
+        resource.runs = Arc::from([GlyphRun {
+            stroke: Some(TextGlyphStroke {
+                paint: None,
+                width: 1.0,
+                cap: StrokeCap::Round,
+                join: StrokeJoin::Round,
+                dash_array: Arc::from([f32::NAN]),
+                dash_phase: 0.0,
+                miter_limit: 4.0,
+            }),
+            ..resource.runs[0].clone()
+        }]);
+        assert_eq!(
+            resource.validate().unwrap_err(),
+            TextResourceValidationError::InvalidGlyphStroke
         );
     }
 
