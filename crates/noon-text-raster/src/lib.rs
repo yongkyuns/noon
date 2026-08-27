@@ -72,6 +72,37 @@ pub struct PreparedGlyphRaster {
     pub raster: Arc<GlyphRaster>,
 }
 
+/// Residency limits for position-independent CPU glyph images.
+///
+/// The entry cap bounds map/metadata growth, including zero-byte whitespace glyphs.
+/// The image-byte cap bounds retained pixel payloads. An image larger than the byte
+/// budget is still returned to the caller but is not admitted to the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphRasterCacheLimits {
+    pub max_entries: usize,
+    pub max_image_bytes: usize,
+}
+
+impl GlyphRasterCacheLimits {
+    pub const UNBOUNDED: Self = Self {
+        max_entries: usize::MAX,
+        max_image_bytes: usize::MAX,
+    };
+
+    pub const fn new(max_entries: usize, max_image_bytes: usize) -> Self {
+        Self {
+            max_entries,
+            max_image_bytes,
+        }
+    }
+}
+
+impl Default for GlyphRasterCacheLimits {
+    fn default() -> Self {
+        Self::UNBOUNDED
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlyphRasterStats {
     pub entries: usize,
@@ -79,6 +110,8 @@ pub struct GlyphRasterStats {
     pub font_faces: usize,
     pub hits: u64,
     pub misses: u64,
+    pub evictions: u64,
+    pub rejected_admissions: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +167,13 @@ struct SwashFace {
     key: CacheKey,
 }
 
+#[derive(Clone)]
+struct CachedGlyphRaster {
+    raster: Arc<GlyphRaster>,
+    image_bytes: usize,
+    last_used: u64,
+}
+
 /// Position-independent CPU glyph raster cache used before GPU atlas allocation.
 ///
 /// The cache deliberately does not shape text: `GlyphRun` already contains the
@@ -143,10 +183,14 @@ struct SwashFace {
 pub struct GlyphRasterCache {
     scale_context: ScaleContext,
     faces: HashMap<FontResourceHandle, SwashFace>,
-    entries: HashMap<GlyphRasterKey, Arc<GlyphRaster>>,
+    entries: HashMap<GlyphRasterKey, CachedGlyphRaster>,
+    limits: GlyphRasterCacheLimits,
     image_bytes: usize,
+    access_clock: u64,
     hits: u64,
     misses: u64,
+    evictions: u64,
+    rejected_admissions: u64,
 }
 
 impl Default for GlyphRasterCache {
@@ -156,15 +200,38 @@ impl Default for GlyphRasterCache {
 }
 
 impl GlyphRasterCache {
+    /// Construct an unbounded cache for backward compatibility.
+    ///
+    /// Long-lived renderer owners should prefer [`Self::with_limits`] so glyph-size
+    /// churn and large text workloads cannot grow retained CPU image memory forever.
     pub fn new() -> Self {
+        Self::with_limits(GlyphRasterCacheLimits::UNBOUNDED)
+    }
+
+    pub fn with_limits(limits: GlyphRasterCacheLimits) -> Self {
         Self {
             scale_context: ScaleContext::new(),
             faces: HashMap::new(),
             entries: HashMap::new(),
+            limits,
             image_bytes: 0,
+            access_clock: 0,
             hits: 0,
             misses: 0,
+            evictions: 0,
+            rejected_admissions: 0,
         }
+    }
+
+    pub fn limits(&self) -> GlyphRasterCacheLimits {
+        self.limits
+    }
+
+    /// Replace residency limits and immediately evict least-recently-used entries
+    /// until the cache satisfies the new budget.
+    pub fn set_limits(&mut self, limits: GlyphRasterCacheLimits) {
+        self.limits = limits;
+        self.enforce_limits();
     }
 
     pub fn stats(&self) -> GlyphRasterStats {
@@ -174,6 +241,8 @@ impl GlyphRasterCache {
             font_faces: self.faces.len(),
             hits: self.hits,
             misses: self.misses,
+            evictions: self.evictions,
+            rejected_admissions: self.rejected_admissions,
         }
     }
 
@@ -188,8 +257,11 @@ impl GlyphRasterCache {
     pub fn clear_images(&mut self) {
         self.entries.clear();
         self.image_bytes = 0;
+        self.access_clock = 0;
         self.hits = 0;
         self.misses = 0;
+        self.evictions = 0;
+        self.rejected_admissions = 0;
     }
 
     /// Rasterize all glyphs in one retained run at an explicit device-pixel size.
@@ -247,9 +319,11 @@ impl GlyphRasterCache {
             pixel_size_bits: pixel_size.to_bits(),
             variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
         };
-        if let Some(raster) = self.entries.get(&key) {
+        let access = self.next_access();
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_used = access;
             self.hits = self.hits.saturating_add(1);
-            return Ok(raster.clone());
+            return Ok(entry.raster.clone());
         }
 
         self.misses = self.misses.saturating_add(1);
@@ -258,11 +332,50 @@ impl GlyphRasterCache {
             .ok_or(GlyphRasterError::MissingFontResource)?;
         let face = self.swash_face(font_handle, resource)?;
         let raster = Arc::new(self.rasterize(resource, face, run, glyph_id, pixel_size)?);
-        if let GlyphRaster::Image(image) = raster.as_ref() {
-            self.image_bytes = self.image_bytes.saturating_add(image.data.len());
+        let image_bytes = raster_image_bytes(raster.as_ref());
+
+        if self.limits.max_entries == 0 || image_bytes > self.limits.max_image_bytes {
+            self.rejected_admissions = self.rejected_admissions.saturating_add(1);
+            return Ok(raster);
         }
-        self.entries.insert(key, raster.clone());
+
+        self.image_bytes = self.image_bytes.saturating_add(image_bytes);
+        self.entries.insert(
+            key,
+            CachedGlyphRaster {
+                raster: raster.clone(),
+                image_bytes,
+                last_used: access,
+            },
+        );
+        self.enforce_limits();
         Ok(raster)
+    }
+
+    fn next_access(&mut self) -> u64 {
+        self.access_clock = self.access_clock.saturating_add(1);
+        self.access_clock
+    }
+
+    fn enforce_limits(&mut self) {
+        while self.entries.len() > self.limits.max_entries
+            || self.image_bytes > self.limits.max_image_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
+            let removed = self
+                .entries
+                .remove(&oldest_key)
+                .expect("selected glyph raster cache entry must still exist");
+            self.image_bytes = self.image_bytes.saturating_sub(removed.image_bytes);
+            self.evictions = self.evictions.saturating_add(1);
+        }
     }
 
     fn swash_face(
@@ -337,6 +450,13 @@ impl GlyphRasterCache {
     }
 }
 
+fn raster_image_bytes(raster: &GlyphRaster) -> usize {
+    match raster {
+        GlyphRaster::Empty => 0,
+        GlyphRaster::Image(image) => image.data.len(),
+    }
+}
+
 fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for setting in settings {
@@ -393,6 +513,74 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(cache.stats().misses, 1);
         assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn entry_budget_evicts_the_least_recently_used_raster() {
+        let artifact = compile_typst_resource("ABC", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        assert!(run.glyphs.len() >= 3);
+        let a = run.glyphs[0].glyph_id;
+        let b = run.glyphs[1].glyph_id;
+        let c = run.glyphs[2].glyph_id;
+        let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(2, usize::MAX));
+
+        cache.get_or_rasterize(&artifact.fonts, run, a, 48.0).unwrap();
+        cache.get_or_rasterize(&artifact.fonts, run, b, 48.0).unwrap();
+        cache.get_or_rasterize(&artifact.fonts, run, a, 48.0).unwrap();
+        cache.get_or_rasterize(&artifact.fonts, run, c, 48.0).unwrap();
+
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 2);
+        assert_eq!(stats.evictions, 1);
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 3);
+
+        cache.get_or_rasterize(&artifact.fonts, run, b, 48.0).unwrap();
+        assert_eq!(cache.stats().misses, 4);
+        assert_eq!(cache.stats().evictions, 2);
+    }
+
+    #[test]
+    fn images_larger_than_the_byte_budget_are_not_admitted() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(16, 1));
+
+        let raster = cache
+            .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 64.0)
+            .unwrap();
+        let GlyphRaster::Image(image) = raster.as_ref() else {
+            panic!("visible glyph should produce pixels");
+        };
+        assert!(image.data.len() > 1);
+        assert_eq!(cache.stats().entries, 0);
+        assert_eq!(cache.stats().image_bytes, 0);
+        assert_eq!(cache.stats().rejected_admissions, 1);
+
+        cache
+            .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 64.0)
+            .unwrap();
+        assert_eq!(cache.stats().misses, 2);
+        assert_eq!(cache.stats().rejected_admissions, 2);
+    }
+
+    #[test]
+    fn tightening_limits_evicts_immediately() {
+        let artifact = compile_typst_resource("AB", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let mut cache = GlyphRasterCache::new();
+        for glyph in run.glyphs.iter().take(2) {
+            cache
+                .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 48.0)
+                .unwrap();
+        }
+        assert!(cache.stats().entries >= 2);
+
+        cache.set_limits(GlyphRasterCacheLimits::new(1, usize::MAX));
+        assert_eq!(cache.stats().entries, 1);
+        assert!(cache.stats().evictions >= 1);
     }
 
     #[test]
