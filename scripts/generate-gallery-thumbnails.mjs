@@ -125,7 +125,10 @@ try {
         ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
         { source, loopDuration: Math.max(1, expectedDuration + 1) },
       );
-      assert.equal(loaded.duration, expectedDuration, `${entry.id}: authored duration`);
+      assert.ok(
+        Math.abs(loaded.duration - expectedDuration) <= 1e-9,
+        `${entry.id}: authored duration ${loaded.duration} != ${expectedDuration}`,
+      );
       assert.ok(loaded.objectCount > 0, `${entry.id}: authored scene must contain objects`);
       assert.equal(loaded.rendererBackend, "WebGL2", `${entry.id}: deterministic poster backend`);
 
