@@ -32,6 +32,10 @@ pub use semantic_model::*;
 mod resource_arena;
 pub use resource_arena::*;
 
+#[path = "font_resources.rs"]
+mod font_resources;
+pub use font_resources::*;
+
 #[path = "text_resources.rs"]
 mod text_resources;
 pub use text_resources::*;
