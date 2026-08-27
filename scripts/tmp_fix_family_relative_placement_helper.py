@@ -18,4 +18,11 @@ new = '''rust = replace_once(
 '''
 if text.count(old) != 1:
     raise RuntimeError(f"expected one helper import block, found {text.count(old)}")
-path.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+for name in ("manim_family_next_to_delta", "manim_family_align_to_delta"):
+    old_fn = f"fn {name}("
+    new_fn = f'#[cfg(any(target_arch = "wasm32", test))]\nfn {name}('
+    if text.count(old_fn) != 1:
+        raise RuntimeError(f"expected one {name} declaration, found {text.count(old_fn)}")
+    text = text.replace(old_fn, new_fn, 1)
+path.write_text(text)
