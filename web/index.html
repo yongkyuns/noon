@@ -372,20 +372,11 @@
         box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
       }
 
-      .metrics,
-      .perf-metrics {
+      .metrics {
         display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         border-top: 1px solid var(--border);
         background: rgb(10 13 21 / 86%);
-      }
-
-      .metrics {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-      }
-
-      .perf-metrics {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        background: rgb(8 11 18 / 92%);
       }
 
       .metric {
@@ -490,8 +481,7 @@
           padding-top: 75%;
         }
 
-        .metrics,
-        .perf-metrics {
+        .metrics {
           grid-template-columns: repeat(2, 1fr);
         }
 
@@ -613,32 +603,6 @@
             <div class="metric">
               <span class="metric-label">Playhead</span>
               <output id="metric-time" class="metric-value">—</output>
-            </div>
-          </div>
-          <div class="perf-metrics" aria-label="Frame performance p50 and p95">
-            <div class="metric">
-              <span class="metric-label">CPU frame · p50 / p95</span>
-              <output id="metric-cpu-frame" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Runtime eval · p50 / p95</span>
-              <output id="metric-runtime" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Frame prepare · p50 / p95</span>
-              <output id="metric-prepare" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">GPU upload CPU · p50 / p95</span>
-              <output id="metric-upload-ms" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Encode + submit · p50 / p95</span>
-              <output id="metric-encode" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">GPU render · p50 / p95</span>
-              <output id="metric-gpu" class="metric-value">—</output>
             </div>
           </div>
         </section>

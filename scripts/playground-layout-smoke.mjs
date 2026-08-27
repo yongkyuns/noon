@@ -139,6 +139,16 @@ try {
     { timeout: 30_000 },
   );
   await waitForAuthoredScene(page, "parity-square-and-circle", browserErrors);
+  await page.waitForFunction(
+    () =>
+      ["metric-objects", "metric-draws", "metric-upload", "metric-time"].every((id) => {
+        const metric = document.querySelector(`#${id}`);
+        const value = metric?.value ?? metric?.textContent ?? "";
+        return value !== "" && value !== "—";
+      }),
+    null,
+    { timeout: 10_000 },
+  );
 
   const galleryContract = await page.evaluate(() => ({
     cards: document.querySelectorAll(".example-card").length,
@@ -173,10 +183,26 @@ try {
     const workspaceRect = workspace.getBoundingClientRect();
     const editorRect = editor.getBoundingClientRect();
     const previewRect = preview.getBoundingClientRect();
+    const metricLabels = [...document.querySelectorAll(".metric-label")].map(
+      (label) => label.textContent ?? "",
+    );
+    const metricValues = [...document.querySelectorAll(".metric-value")].map(
+      (metric) => metric.value ?? metric.textContent ?? "",
+    );
+    const realMetricIds = ["metric-objects", "metric-draws", "metric-upload", "metric-time"];
     return {
       selectedOutsideWorkspace: selected !== null && !workspace.contains(selected),
       selectedImmediatelyBeforeWorkspace: selected?.nextElementSibling === workspace,
       obsoletePanels: document.querySelectorAll(".below, .info-panel, .pipeline, .api-list").length,
+      placeholderPerformancePanels: document.querySelectorAll(".perf-metrics").length,
+      percentileLabels: metricLabels.filter((label) => /\bp(?:50|95)\b/i.test(label)).length,
+      fakeTimingValues: metricValues.filter((value) => /^(?:engine|render) worker$/i.test(value)).length,
+      realMetricsPresent: realMetricIds.every((id) => document.querySelector(`#${id}`) !== null),
+      realMetricsPopulated: realMetricIds.every((id) => {
+        const metric = document.querySelector(`#${id}`);
+        const value = metric?.value ?? metric?.textContent ?? "";
+        return value !== "" && value !== "—";
+      }),
       editorTop: editorRect.top,
       previewTop: previewRect.top,
       editorShare: editorRect.width / workspaceRect.width,
@@ -197,6 +223,23 @@ try {
     0,
     "obsolete architecture/API presentation panes must not be rendered",
   );
+  assert.equal(
+    presentationContract.placeholderPerformancePanels,
+    0,
+    "playground must not expose a placeholder frame-performance panel",
+  );
+  assert.equal(
+    presentationContract.percentileLabels,
+    0,
+    "playground must not claim p50/p95 telemetry without measured percentiles",
+  );
+  assert.equal(
+    presentationContract.fakeTimingValues,
+    0,
+    "worker ownership strings must not be presented as timing values",
+  );
+  assert.equal(presentationContract.realMetricsPresent, true, "real scene metrics must remain visible");
+  assert.equal(presentationContract.realMetricsPopulated, true, "real scene metrics must keep updating");
   assert.ok(
     Math.abs(presentationContract.editorTop - presentationContract.previewTop) <= 1,
     `desktop source/preview panes must align at the top (${presentationContract.editorTop} vs ${presentationContract.previewTop})`,

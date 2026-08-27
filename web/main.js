@@ -25,12 +25,6 @@ const metricObjects = document.querySelector("#metric-objects");
 const metricDraws = document.querySelector("#metric-draws");
 const metricUpload = document.querySelector("#metric-upload");
 const metricTime = document.querySelector("#metric-time");
-const metricCpuFrame = document.querySelector("#metric-cpu-frame");
-const metricRuntime = document.querySelector("#metric-runtime");
-const metricPrepare = document.querySelector("#metric-prepare");
-const metricUploadMs = document.querySelector("#metric-upload-ms");
-const metricEncode = document.querySelector("#metric-encode");
-const metricGpu = document.querySelector("#metric-gpu");
 const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
 
@@ -582,12 +576,6 @@ try {
       metricDraws.value = String(metrics.drawCalls);
       metricUpload.value = formatBytes(metrics.bytesUploaded);
       metricTime.value = `${metrics.time.toFixed(2)} s`;
-      metricCpuFrame.value = "engine worker";
-      metricRuntime.value = host.enabled ? `${host.missedDeadlines} host misses` : "engine worker";
-      metricPrepare.value = "render worker";
-      metricUploadMs.value = "render worker";
-      metricEncode.value = "render worker";
-      metricGpu.value = rendererBackend;
       status.dataset.instances = String(metrics.instancesDrawn);
       status.dataset.uploadBytes = String(metrics.bytesUploaded);
       status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
