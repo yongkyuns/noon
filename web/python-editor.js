@@ -4,6 +4,18 @@ const LINT_URL = "https://esm.sh/@codemirror/lint@6.9.7";
 const THEME_URL = "https://esm.sh/@codemirror/theme-one-dark@6.1.3";
 const RUFF_URL = "https://esm.sh/@astral-sh/ruff-wasm-web@0.16.4";
 
+export const PYTHON_RUFF_SETTINGS = {
+  "line-length": 88,
+  "indent-width": 4,
+  lint: {
+    select: ["E4", "E7", "E9", "F"],
+    // Public gallery sources intentionally preserve Manim's conventional
+    // `from noon import *` shape. F403/F405 cannot resolve that dynamic export
+    // surface, so keeping them enabled turns every canonical API use into noise.
+    ignore: ["F403", "F405"],
+  },
+};
+
 let ruffWorkspacePromise = null;
 
 if (typeof document !== "undefined") {
@@ -154,14 +166,7 @@ async function runRuff(view) {
 async function getRuffWorkspace() {
   ruffWorkspacePromise ??= import(RUFF_URL).then(async (ruff) => {
     await ruff.default();
-    return new ruff.Workspace(
-      {
-        "line-length": 88,
-        "indent-width": 4,
-        lint: { select: ["E4", "E7", "E9", "F"] },
-      },
-      ruff.PositionEncoding.Utf16,
-    );
+    return new ruff.Workspace(PYTHON_RUFF_SETTINGS, ruff.PositionEncoding.Utf16);
   });
   return ruffWorkspacePromise;
 }
