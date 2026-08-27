@@ -9,6 +9,7 @@ description = "Browser-facing persistent runtime and live patch control for Noon
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ciborium = "0.2"
 noon = { path = "../noon" }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
