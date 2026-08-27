@@ -27,6 +27,8 @@ jobs:
           sed -i 's/if text.count(old) != 1:/if text.count(old) < 1:/' scripts/tmp_shared_family_layout_migration.py
           python3 scripts/tmp_shared_family_layout_migration.py
           sed -i '/^fn semantic_family_leaf_ids(/i #[cfg(any(target_arch = "wasm32", test))]' crates/noon-web/src/authoring_mobject.rs
+          sed -i 's/self.bounds.as_ref().map_or(0.0, Bounds2D64::width)/self.bounds.as_ref().map_or(0.0, |bounds| bounds.max_x - bounds.min_x)/' crates/noon-web/src/authoring_mobject.rs
+          sed -i 's/self.bounds.as_ref().map_or(0.0, Bounds2D64::height)/self.bounds.as_ref().map_or(0.0, |bounds| bounds.max_y - bounds.min_y)/' crates/noon-web/src/authoring_mobject.rs
       - name: Format
         run: cargo fmt --all
       - name: Check diff formatting
