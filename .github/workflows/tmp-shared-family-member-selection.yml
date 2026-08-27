@@ -32,6 +32,8 @@ jobs:
           python3 scripts/tmp_fix_family_member_selection_helper5.py
       - name: Apply migration
         run: python3 scripts/tmp_shared_family_member_selection_migration.py
+      - name: Apply product fixes
+        run: python3 scripts/tmp_fix_family_member_selection_product.py
       - name: Format
         run: cargo fmt --all
       - name: Check diff formatting
