@@ -41,10 +41,14 @@ impl GlyphAtlasPlane {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphAtlasImage {
     pub plane: GlyphAtlasPlane,
+    /// Texture page containing this image. The current live GPU atlas emits page
+    /// zero only; keeping page identity in the retained entry lets multi-page GPU
+    /// residency land without changing glyph/quad identity again.
+    pub page: u32,
     /// Top-left texel containing visible glyph pixels, excluding the transparent gutter.
     pub origin: [u32; 2],
     pub size: [u32; 2],
-    /// Normalized UV rectangle for the visible glyph pixels.
+    /// Normalized UV rectangle for the visible glyph pixels within `page`.
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
 }
@@ -70,6 +74,7 @@ pub struct GlyphAtlasStats {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlyphAtlasError {
     InvalidExtent,
+    InvalidPageCount,
     DimensionOverflow,
     ImageTooLarge {
         width: u32,
@@ -90,6 +95,7 @@ impl std::fmt::Display for GlyphAtlasError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidExtent => write!(formatter, "glyph atlas extent is too small"),
+            Self::InvalidPageCount => write!(formatter, "glyph atlas page count must be positive"),
             Self::DimensionOverflow => write!(formatter, "glyph atlas dimensions overflow"),
             Self::ImageTooLarge {
                 width,
@@ -120,6 +126,16 @@ struct AtlasAllocation {
     outer_origin: [u32; 2],
     outer_size: [u32; 2],
     inner_origin: [u32; 2],
+}
+
+/// Deterministic page-aware shelf allocation returned before GPU texture ownership
+/// is involved. This is intentionally separate from residency/eviction policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphAtlasPageAllocation {
+    pub page: u32,
+    pub outer_origin: [u32; 2],
+    pub outer_size: [u32; 2],
+    pub inner_origin: [u32; 2],
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +227,89 @@ impl ShelfPacker {
     }
 }
 
+/// Pure deterministic multi-page allocator used by the paged residency manager.
+///
+/// Existing pages are tried in stable order. Each trial uses a clone and commits
+/// the shelf cursor only on success, so probing a page that cannot fit an image
+/// cannot consume otherwise reusable space. A new page is appended only after all
+/// existing pages reject the allocation as full.
+#[derive(Clone, Debug)]
+pub struct GlyphAtlasPageAllocator {
+    extent: u32,
+    max_pages: usize,
+    pages: Vec<ShelfPacker>,
+}
+
+impl GlyphAtlasPageAllocator {
+    pub fn new(extent: u32, max_pages: usize) -> Result<Self, GlyphAtlasError> {
+        if max_pages == 0 {
+            return Err(GlyphAtlasError::InvalidPageCount);
+        }
+        Ok(Self {
+            extent,
+            max_pages,
+            pages: vec![ShelfPacker::new(extent)?],
+        })
+    }
+
+    pub const fn extent(&self) -> u32 {
+        self.extent
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub const fn max_pages(&self) -> usize {
+        self.max_pages
+    }
+
+    pub fn allocate(
+        &mut self,
+        plane: GlyphAtlasPlane,
+        width: u32,
+        height: u32,
+    ) -> Result<GlyphAtlasPageAllocation, GlyphAtlasError> {
+        for (page_index, page) in self.pages.iter_mut().enumerate() {
+            let mut candidate = page.clone();
+            match candidate.allocate(plane, width, height) {
+                Ok(allocation) => {
+                    *page = candidate;
+                    return page_allocation(page_index, allocation);
+                }
+                Err(GlyphAtlasError::Full { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        if self.pages.len() >= self.max_pages {
+            return Err(GlyphAtlasError::Full {
+                plane,
+                extent: self.extent,
+            });
+        }
+
+        let mut page = ShelfPacker::new(self.extent)?;
+        let allocation = page.allocate(plane, width, height)?;
+        let page_index = self.pages.len();
+        self.pages.push(page);
+        page_allocation(page_index, allocation)
+    }
+}
+
+fn page_allocation(
+    page_index: usize,
+    allocation: AtlasAllocation,
+) -> Result<GlyphAtlasPageAllocation, GlyphAtlasError> {
+    let page = u32::try_from(page_index).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+    Ok(GlyphAtlasPageAllocation {
+        page,
+        outer_origin: allocation.outer_origin,
+        outer_size: allocation.outer_size,
+        inner_origin: allocation.inner_origin,
+    })
+}
+
 struct AtlasPlaneState {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -254,6 +353,11 @@ impl AtlasPlaneState {
 /// Alpha-mask and color glyphs use independent textures because they have different
 /// formats and shader semantics. Neither texture is allocated until the first image
 /// for that plane is uploaded. Empty glyphs are cached without consuming GPU space.
+///
+/// The live GPU implementation intentionally remains one page per plane in this
+/// foundation slice. Entries already carry page identity and the pure page allocator
+/// above defines deterministic rollover; subsequent work can move texture ownership
+/// to page vectors without another retained-entry format change.
 pub struct GpuGlyphAtlas {
     extent: u32,
     mask: Option<AtlasPlaneState>,
@@ -420,6 +524,7 @@ impl GpuGlyphAtlas {
         let size = [image.placement.width, image.placement.height];
         let atlas_image = GlyphAtlasImage {
             plane,
+            page: 0,
             origin,
             size,
             uv_min: [
@@ -545,6 +650,63 @@ mod tests {
         assert_eq!(second.outer_size, [6, 5]);
         assert_eq!(third.outer_origin, [0, 5]);
         assert_eq!(third.inner_origin, [1, 6]);
+    }
+
+    #[test]
+    fn paged_allocator_rolls_over_in_stable_page_order() {
+        let mut allocator = GlyphAtlasPageAllocator::new(8, 2).unwrap();
+        let first = allocator.allocate(GlyphAtlasPlane::Mask, 4, 2).unwrap();
+        let second = allocator.allocate(GlyphAtlasPlane::Mask, 4, 2).unwrap();
+        let third = allocator.allocate(GlyphAtlasPlane::Mask, 1, 1).unwrap();
+
+        assert_eq!(first.page, 0);
+        assert_eq!(second.page, 0);
+        assert_eq!(third.page, 1);
+        assert_eq!(third.outer_origin, [0, 0]);
+        assert_eq!(third.inner_origin, [1, 1]);
+        assert_eq!(allocator.page_count(), 2);
+    }
+
+    #[test]
+    fn paged_allocator_respects_page_budget() {
+        let mut allocator = GlyphAtlasPageAllocator::new(8, 1).unwrap();
+        allocator.allocate(GlyphAtlasPlane::Color, 4, 2).unwrap();
+        allocator.allocate(GlyphAtlasPlane::Color, 4, 2).unwrap();
+        assert_eq!(
+            allocator
+                .allocate(GlyphAtlasPlane::Color, 1, 1)
+                .unwrap_err(),
+            GlyphAtlasError::Full {
+                plane: GlyphAtlasPlane::Color,
+                extent: 8,
+            }
+        );
+        assert_eq!(allocator.page_count(), 1);
+    }
+
+    #[test]
+    fn oversized_paged_allocation_does_not_append_a_page() {
+        let mut allocator = GlyphAtlasPageAllocator::new(8, 3).unwrap();
+        assert_eq!(
+            allocator.allocate(GlyphAtlasPlane::Mask, 7, 1).unwrap_err(),
+            GlyphAtlasError::ImageTooLarge {
+                width: 7,
+                height: 1,
+                extent: 8,
+            }
+        );
+        assert_eq!(allocator.page_count(), 1);
+        let next = allocator.allocate(GlyphAtlasPlane::Mask, 2, 2).unwrap();
+        assert_eq!(next.page, 0);
+        assert_eq!(next.outer_origin, [0, 0]);
+    }
+
+    #[test]
+    fn zero_page_budget_is_rejected() {
+        assert_eq!(
+            GlyphAtlasPageAllocator::new(8, 0).unwrap_err(),
+            GlyphAtlasError::InvalidPageCount
+        );
     }
 
     #[test]
