@@ -1,7 +1,7 @@
 use noon_core::{
     Bounds2D64, Color, GeometryRef, ObjectSnapshot, PathCommand, SemanticNodeId, SemanticNodeKind,
-    SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, Style, Vec2,
-    VectorPath,
+    SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Style, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -12,6 +12,28 @@ pub struct ManimNextToArgs {
     mask: (f64, f64),
 }
 
+fn manim_vmobject_style(color: Color) -> Style {
+    let mut fill = color;
+    fill.alpha = 0.0;
+    Style {
+        fill: Some(fill),
+        stroke: Some(color),
+        stroke_width: 0.04,
+        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        stroke_join: StrokeJoin::Miter,
+        stroke_cap: StrokeCap::Butt,
+        opacity: 1.0,
+    }
+}
+
+fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
+    let value = finite_f32(name, value)?;
+    if value <= 0.0 {
+        return Err(format!("{name} must be positive"));
+    }
+    Ok(value)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrontendMobjectHandle {
     snapshot: ObjectSnapshot,
@@ -20,6 +42,52 @@ pub struct FrontendMobjectHandle {
 }
 
 impl FrontendMobjectHandle {
+    fn from_manim_geometry(geometry: GeometryRef, color: Color) -> Self {
+        Self::from_snapshot(ObjectSnapshot {
+            geometry,
+            transform: Transform2D::IDENTITY,
+            style: manim_vmobject_style(color),
+        })
+    }
+
+    pub fn manim_circle(radius: f64) -> Result<Self, String> {
+        Ok(Self::from_manim_geometry(
+            GeometryRef::circle(positive_f32("radius", radius)?),
+            Color::RED,
+        ))
+    }
+
+    pub fn manim_square(side_length: f64) -> Result<Self, String> {
+        let side = positive_f32("side_length", side_length)?;
+        Ok(Self::from_manim_geometry(
+            GeometryRef::rectangle(side, side),
+            Color::WHITE,
+        ))
+    }
+
+    pub fn manim_rectangle(width: f64, height: f64) -> Result<Self, String> {
+        Ok(Self::from_manim_geometry(
+            GeometryRef::rectangle(
+                positive_f32("width", width)?,
+                positive_f32("height", height)?,
+            ),
+            Color::WHITE,
+        ))
+    }
+
+    pub fn manim_line(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Result<Self, String> {
+        Ok(Self::from_manim_geometry(
+            GeometryRef::line(
+                Vec2::new(
+                    finite_f32("start.x", start_x)?,
+                    finite_f32("start.y", start_y)?,
+                ),
+                Vec2::new(finite_f32("end.x", end_x)?, finite_f32("end.y", end_y)?),
+            ),
+            Color::WHITE,
+        ))
+    }
+
     pub fn from_snapshot(snapshot: ObjectSnapshot) -> Self {
         let transform = snapshot.transform;
         let semantic_transform = SemanticTransform2_5D {
@@ -181,6 +249,67 @@ impl FrontendMobjectHandle {
         semantic_xy(x, y)?;
         let center = self.center();
         self.shift(x - center.0, y - center.1)
+    }
+
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = semantic_xy_f64(x, y)?;
+        self.semantic_transform.translation.x = value.x;
+        self.semantic_transform.translation.y = value.y;
+        self.sync_legacy_transform()
+    }
+
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+        let value = semantic_xy_f64(x, y)?;
+        self.semantic_transform.scale.x = value.x;
+        self.semantic_transform.scale.y = value.y;
+        self.sync_legacy_transform()
+    }
+
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
+        self.semantic_transform.rotation_z = render_f64("rotation", angle)?;
+        self.sync_legacy_transform()
+    }
+
+    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
+        let mode = match mode {
+            "scale_with_object" => StrokeWidthMode::ScaleWithObject,
+            "screen_space" => StrokeWidthMode::ScreenSpace,
+            _ => {
+                return Err(
+                    "stroke_width_mode must be scale_with_object or screen_space".to_owned(),
+                )
+            }
+        };
+        self.semantic_style.stroke_width_mode = mode;
+        self.snapshot.style.stroke_width_mode = mode;
+        Ok(())
+    }
+
+    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
+        self.snapshot.style.stroke_join = match join {
+            "round" => StrokeJoin::Round,
+            "miter" => StrokeJoin::Miter,
+            "bevel" => StrokeJoin::Bevel,
+            _ => return Err("stroke_join must be round, miter, or bevel".to_owned()),
+        };
+        Ok(())
+    }
+
+    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
+        self.snapshot.style.stroke_cap = match cap {
+            "round" => StrokeCap::Round,
+            "butt" => StrokeCap::Butt,
+            "square" => StrokeCap::Square,
+            _ => return Err("stroke_cap must be round, butt, or square".to_owned()),
+        };
+        Ok(())
+    }
+
+    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
+        let opacity = render_f64("opacity", opacity)?;
+        self.semantic_style.object_opacity = opacity;
+        self.snapshot.style.opacity = finite_f32("opacity", opacity)?;
+        Ok(())
     }
 
     /// ManimCE-compatible move_to for a leaf mobject target.
@@ -1021,6 +1150,13 @@ mod wasm {
         semantics: SharedSemanticStore,
     }
 
+    impl WasmAuthoringStore {
+        fn attach_handle(&self, handle: FrontendMobjectHandle) -> WasmAuthoringMobjectHandle {
+            let id = self.semantics.borrow_mut().insert_authoring_object();
+            WasmAuthoringMobjectHandle(handle, Some(Rc::clone(&self.semantics)), Some(id))
+        }
+    }
+
     #[wasm_bindgen]
     impl WasmAuthoringStore {
         #[wasm_bindgen(constructor)]
@@ -1036,12 +1172,51 @@ mod wasm {
             snapshot_json: &str,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             let handle = FrontendMobjectHandle::from_json(snapshot_json).map_err(js_error)?;
-            let id = self.semantics.borrow_mut().insert_authoring_object();
-            Ok(WasmAuthoringMobjectHandle(
-                handle,
-                Some(Rc::clone(&self.semantics)),
-                Some(id),
-            ))
+            Ok(self.attach_handle(handle))
+        }
+
+        #[wasm_bindgen(js_name = createManimCircle)]
+        pub fn create_manim_circle(
+            &self,
+            radius: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            FrontendMobjectHandle::manim_circle(radius)
+                .map(|handle| self.attach_handle(handle))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimSquare)]
+        pub fn create_manim_square(
+            &self,
+            side_length: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            FrontendMobjectHandle::manim_square(side_length)
+                .map(|handle| self.attach_handle(handle))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimRectangle)]
+        pub fn create_manim_rectangle(
+            &self,
+            width: f64,
+            height: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            FrontendMobjectHandle::manim_rectangle(width, height)
+                .map(|handle| self.attach_handle(handle))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimLine)]
+        pub fn create_manim_line(
+            &self,
+            start_x: f64,
+            start_y: f64,
+            end_x: f64,
+            end_y: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            FrontendMobjectHandle::manim_line(start_x, start_y, end_x, end_y)
+                .map(|handle| self.attach_handle(handle))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createFamily)]
@@ -1452,6 +1627,41 @@ mod wasm {
             self.0.move_to(x, y).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setTranslation)]
+        pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.0.set_translation(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setScale)]
+        pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.0.set_scale(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setRotation)]
+        pub fn set_rotation(&mut self, angle: f64) -> Result<(), JsValue> {
+            self.0.set_rotation(angle).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeWidthMode)]
+        pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), JsValue> {
+            self.0.set_stroke_width_mode(mode).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeJoin)]
+        pub fn set_stroke_join(&mut self, join: &str) -> Result<(), JsValue> {
+            self.0.set_stroke_join(join).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStrokeCap)]
+        pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), JsValue> {
+            self.0.set_stroke_cap(cap).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
+            self.0.set_object_opacity(opacity).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimMoveToHandle)]
         pub fn manim_move_to_handle(
             &mut self,
@@ -1839,6 +2049,51 @@ mod tests {
         let expected = 9.0 * 2.0_f64.sqrt() / 8.0;
         assert!((curve.width() - expected).abs() < 1e-12);
         assert!((curve.height() - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn manim_primitive_constructors_own_geometry_and_cairo_defaults() {
+        let circle = FrontendMobjectHandle::manim_circle(1.5).unwrap();
+        assert_eq!(circle.snapshot().geometry, GeometryRef::circle(1.5));
+        let fill = circle.snapshot().style.fill.unwrap();
+        let stroke = circle.snapshot().style.stroke.unwrap();
+        assert_eq!(fill.red, Color::RED.red);
+        assert_eq!(fill.alpha, 0.0);
+        assert_eq!(stroke.red, Color::RED.red);
+        assert_eq!(stroke.alpha, 1.0);
+        assert_eq!(circle.snapshot().style.stroke_width, 0.04);
+        assert_eq!(
+            circle.snapshot().style.stroke_width_mode,
+            StrokeWidthMode::ScreenSpace
+        );
+        assert_eq!(circle.snapshot().style.stroke_join, StrokeJoin::Miter);
+        assert_eq!(circle.snapshot().style.stroke_cap, StrokeCap::Butt);
+
+        let line = FrontendMobjectHandle::manim_line(-2.0, 1.0, 3.0, -1.0).unwrap();
+        assert_eq!(
+            line.snapshot().geometry,
+            GeometryRef::line(Vec2::new(-2.0, 1.0), Vec2::new(3.0, -1.0))
+        );
+        assert_eq!(line.snapshot().style.stroke.unwrap().red, Color::WHITE.red);
+
+        let mut square = FrontendMobjectHandle::manim_square(2.0).unwrap();
+        square.set_translation(2.0, 3.0).unwrap();
+        square.set_scale(2.0, 0.5).unwrap();
+        square.set_rotation(0.4).unwrap();
+        square.set_stroke_width_mode("scale_with_object").unwrap();
+        square.set_stroke_join("bevel").unwrap();
+        square.set_stroke_cap("square").unwrap();
+        square.set_object_opacity(0.8).unwrap();
+        assert_eq!(square.wire_translation(), (2.0, 3.0));
+        assert_eq!(square.wire_scale(), (2.0, 0.5));
+        assert!((square.wire_rotation() - 0.4_f32 as f64).abs() < 1e-7);
+        assert_eq!(
+            square.snapshot().style.stroke_width_mode,
+            StrokeWidthMode::ScaleWithObject
+        );
+        assert_eq!(square.snapshot().style.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(square.snapshot().style.stroke_cap, StrokeCap::Square);
+        assert_eq!(square.snapshot().style.opacity, 0.8);
     }
 
     #[test]
