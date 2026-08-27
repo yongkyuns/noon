@@ -9,5 +9,6 @@ members = [
     "crates/noon-render-wgpu",
     "crates/noon-web",
     "crates/noon-typst",
+    "crates/noon-text-raster",
 ]
 resolver = "2"
