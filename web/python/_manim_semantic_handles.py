@@ -215,6 +215,7 @@ _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
 _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
 _ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
 _ORIGINAL_GROUP_ALIGN_TO = _compat.Group.align_to
+_ORIGINAL_GROUP_ARRANGE = _compat.Group.arrange
 _GROUP_COPY_DELEGATE = None
 _GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
@@ -1285,6 +1286,68 @@ def _group_align_to(
     return _apply_family_translation(self, translation, leaves, leaf_handles)
 
 
+
+def _group_arrange(
+    self: _compat.Group,
+    direction: object = _base.RIGHT,
+    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    center: bool = True,
+    **kwargs: Any,
+) -> _compat.Group:
+    # Forwarded placement kwargs can select additional alignment semantics; retain
+    # the pinned compatibility path until shared member-selection support lands.
+    if kwargs:
+        return _ORIGINAL_GROUP_ARRANGE(
+            self,
+            direction=direction,
+            buff=buff,
+            center=center,
+            **kwargs,
+        )
+    if not self.submobjects:
+        return self
+
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    if family_handle is None or not hasattr(family_handle, "arrangeSession"):
+        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
+
+    axis = _base._as_vec2(_base.RIGHT if direction is None else direction)
+    arrangement = family_handle.arrangeSession(axis.x, axis.y, float(buff), bool(center))
+    prepared: list[tuple[object, list[_base.Mobject], list[object]]] = []
+
+    for member in self.submobjects:
+        if isinstance(member, _compat.Group):
+            shared = _shared_family_layout_session(member, mutation=True)
+            if shared is None or not hasattr(arrangement, "includeFamily"):
+                return _ORIGINAL_GROUP_ARRANGE(
+                    self, direction=direction, buff=buff, center=center
+                )
+            arrangement.includeFamily(shared[0])
+            prepared.append((member, shared[1], shared[2]))
+        elif isinstance(member, _base.Mobject):
+            handle = _mutation_handle_for(member)
+            if handle is None or not hasattr(arrangement, "includeMobject"):
+                return _ORIGINAL_GROUP_ARRANGE(
+                    self, direction=direction, buff=buff, center=center
+                )
+            arrangement.includeMobject(handle)
+            prepared.append((member, [member], [handle]))
+        else:
+            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
+
+    for member, leaves, leaf_handles in prepared:
+        translation = arrangement.nextTranslation()
+        if isinstance(member, _compat.Group):
+            _apply_family_translation(member, translation, leaves, leaf_handles)
+        else:
+            handle = leaf_handles[0]
+            translation.applyMobject(handle)
+            _sync_bound_transform(member, handle)
+            translation.finish()
+    arrangement.finish()
+    return self
+
+
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
 
@@ -1530,5 +1593,6 @@ def install() -> None:
         _compat.Group.move_to = _group_move_to
         _compat.Group.next_to = _group_next_to
         _compat.Group.align_to = _group_align_to
+        _compat.Group.arrange = _group_arrange
         _compat.Group.copy = _group_copy
         _compat.Group._copy_for_animate_target = _group_target_mobject

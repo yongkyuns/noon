@@ -179,12 +179,12 @@
     },
     {
       "id": "group-placement",
-      "surface": "Group/VGroup arrange and next_to submobject_to_align/index_of_submobject_to_align selection",
+      "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/FrontendFamilyTranslation"},
-      "reason": "Default family relative placement is shared-Rust-owned, but direct member selection and arrange sequencing still traverse Python wrapper submobjects.",
-      "replacement": "Expose shared family-member selection and ordered arrange sequencing behind WasmAuthoringFamilyHandle.",
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/FrontendFamilyArrangePlan/FrontendFamilyTranslation"},
+      "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
+      "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
       "migration_issue": "#61"
     },
     {
@@ -320,11 +320,11 @@
     },
     {
       "id": "layout.arrange",
-      "surface": "Group.arrange",
-      "classification": "python-adapter-only",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange"},
-      "reason": "The operation is Manim collection syntax: it iterates Python children and delegates each placement to shared next_to semantics.",
-      "replacement": "Keep only until shared family handles can express collection iteration directly."
+      "surface": "Deterministic Group/VGroup arrange(direction, buff, center) without forwarded placement kwargs",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyArrangePlan/WasmAuthoringFamilyHandle::arrange_session/WasmAuthoringFamilyArrange"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange"}],
+      "reason": "Rust snapshots authoritative direct-member order, validates each member's shared bounds, computes sequential Manim next_to spacing and optional recentering, and returns ordered per-member shared translations. Python only mirrors wrapper identity and applies those translations."
     },
     {
       "id": "rate-function.lookup",
