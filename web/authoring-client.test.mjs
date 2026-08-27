@@ -8,6 +8,7 @@ import {
   parseAuthoringResult,
   validateCallbackSession,
   validatePatchBatch,
+  validateRetainedAuthoringDocument,
   validateSceneDocument,
   validateSceneDuration,
   validateSceneIdentities,
@@ -48,6 +49,31 @@ function workerMessage(type, payload = {}) {
   };
 }
 
+function retainedDocument() {
+  return {
+    channel: "noon.authoring.retained",
+    protocol_version: 1,
+    objects: [
+      {
+        object: 2 ** 52,
+        order: 1,
+        text: {
+          source: "*Hello* from _Typst!_",
+          math: false,
+          font_size: 96,
+          transform: {
+            translation: { x: 0, y: 0 },
+            scale: { x: 1, y: 1 },
+            rotation: 0,
+          },
+          color: { red: 1, green: 1, blue: 1, alpha: 1 },
+          opacity: 1,
+        },
+      },
+    ],
+  };
+}
+
 test("correlates a Python request with a validated PatchBatch response", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
@@ -76,7 +102,7 @@ test("correlates a Python request with a validated PatchBatch response", async (
   assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
 });
 
-test("correlates a Python request with Scene callback and duration metadata", async () => {
+test("correlates a Python request with Scene callback, retained, and duration metadata", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
@@ -87,6 +113,7 @@ test("correlates a Python request with Scene callback and duration metadata", as
   const scene = { version: 1, objects: [{ id: 0 }], tracks: [] };
   const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
   const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
+  const retained = retainedDocument();
   worker.emit(
     "message",
     workerMessage("result", {
@@ -94,6 +121,7 @@ test("correlates a Python request with Scene callback and duration metadata", as
       resultJson: JSON.stringify({
         kind: "scene_document",
         document: scene,
+        retained_document: retained,
         duration: 2.75,
         identities,
         callbacks,
@@ -104,10 +132,47 @@ test("correlates a Python request with Scene callback and duration metadata", as
   assert.deepEqual(await resultPromise, {
     kind: "scene_document",
     document: scene,
+    retainedDocument: retained,
     duration: 2.75,
     identities,
     callbacks,
   });
+});
+
+test("older scene results without a retained sidecar remain compatible", () => {
+  const scene = { version: 1, objects: [], tracks: [] };
+  const parsed = parseAuthoringResult(
+    JSON.stringify({
+      kind: "scene_document",
+      document: scene,
+      duration: 0,
+      identities: { objects: [], tracks: [] },
+      callbacks: null,
+    }),
+  );
+  assert.equal(parsed.retainedDocument, null);
+});
+
+test("validates retained Typst authoring documents and JS-safe identities", () => {
+  const retained = retainedDocument();
+  assert.equal(validateRetainedAuthoringDocument(retained), retained);
+
+  const unsafe = structuredClone(retained);
+  unsafe.objects[0].object = Number.MAX_SAFE_INTEGER + 1;
+  assert.throws(
+    () => validateRetainedAuthoringDocument(unsafe),
+    /invalid object ID/,
+  );
+
+  const duplicateOrder = structuredClone(retained);
+  duplicateOrder.objects.push({
+    ...structuredClone(duplicateOrder.objects[0]),
+    object: 2 ** 52 + 1,
+  });
+  assert.throws(
+    () => validateRetainedAuthoringDocument(duplicateOrder),
+    /duplicate painter orders/,
+  );
 });
 
 test("Scene duration accepts zero and rejects missing, negative, or non-finite values", () => {
