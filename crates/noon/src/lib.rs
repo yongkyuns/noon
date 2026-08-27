@@ -13,6 +13,7 @@ mod geometry_authoring;
 mod legacy;
 mod line_matcher_authoring;
 mod reactive_authoring;
+mod rounded_rectangle_authoring;
 mod text_authoring;
 
 pub use analytic_geometry_authoring::*;
@@ -22,6 +23,7 @@ pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
 pub use reactive_authoring::*;
+pub use rounded_rectangle_authoring::*;
 pub use text_authoring::*;
 
 /// Common imports for deterministic and native-reactive Noon authoring.
@@ -31,8 +33,9 @@ pub mod prelude {
         Arc, ArcAuthoringError, ArcBetweenPoints, Cross, Dot, Ellipse, GeometryAuthoringError,
         LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon, ReactiveScene,
         ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
-        Star, TextAuthoringError, Triangle, Typst, Underline, ValueTracker, VectorSignal,
-        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS,
+        RoundedRectangle, RoundedRectangleAuthoringError, Star, TextAuthoringError, Triangle,
+        Typst, Underline, ValueTracker, VectorSignal, DEFAULT_CROSS_SCALE_FACTOR,
+        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
         DEFAULT_UNDERLINE_BUFF,
     };
     pub use noon_core::{
