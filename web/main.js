@@ -277,6 +277,8 @@ const drafts = new Map();
 const sourceCache = new Map();
 let player = null;
 let rendererBackend = "";
+let sceneRunInFlight = false;
+let playerNeedsRestart = false;
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -316,6 +318,26 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function ensureAuthoringClient() {
+  if (authoringClient?.terminated) {
+    authoringClient = null;
+  }
+  authoringClient ??= new PythonAuthoringClient();
+  return authoringClient;
+}
+
+async function ensureExecutionReady() {
+  if (!playerNeedsRestart) return;
+  patchStatus.value = "Restarting runtime workers…";
+  patchStatus.dataset.state = "running";
+  setRuntimeStatus("Restarting runtime workers…", "running");
+  const ready = await player.restart();
+  playerNeedsRestart = false;
+  rendererBackend = ready.render.backend;
+  status.dataset.rendererBackend = rendererBackend;
+  status.dataset.executionMode = player.mode;
 }
 
 async function loadDemoAuthoringSource(path) {
@@ -398,13 +420,23 @@ function renderGallery() {
 
 async function runScene() {
   const example = currentExample();
-  if (!example || !player) return;
+  if (!example || !player || sceneRunInFlight) return;
+  sceneRunInFlight = true;
   setBusy(true);
   try {
+    await ensureExecutionReady();
     patchStatus.value = `Building ${example.title} in the Python worker…`;
     patchStatus.dataset.state = "running";
-    authoringClient ??= new PythonAuthoringClient();
-    const authored = await authoringClient.run(sceneSourceEditor.value, {});
+    const client = ensureAuthoringClient();
+    let authored;
+    try {
+      authored = await client.run(sceneSourceEditor.value, {});
+    } catch (error) {
+      if (client.terminated && authoringClient === client) {
+        authoringClient = null;
+      }
+      throw error;
+    }
     if (authored.kind !== "scene_document") {
       throw new Error("Python scene source returned a PatchBatch");
     }
@@ -417,7 +449,7 @@ async function runScene() {
       retainedDocumentJson:
         authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument),
       callbacks: authored.callbacks,
-      authoringClient,
+      authoringClient: client,
       loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
     });
     rendererBackend = player.rendererBackend;
@@ -433,6 +465,7 @@ async function runScene() {
   } catch (error) {
     showSceneError(error);
   } finally {
+    sceneRunInFlight = false;
     setBusy(false);
   }
 }
@@ -515,6 +548,7 @@ const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
   player = new AuthoringExecutionClient(canvas, {
     onError(error) {
+      playerNeedsRestart = true;
       showError(error);
     },
   });
@@ -562,7 +596,14 @@ try {
   let lastStatusUpdate = -Infinity;
   let metricsPending = false;
   async function updateWorkerMetrics(timestamp) {
-    if (metricsPending || timestamp - lastStatusUpdate <= 200) return;
+    if (
+      metricsPending ||
+      sceneRunInFlight ||
+      playerNeedsRestart ||
+      timestamp - lastStatusUpdate <= 200
+    ) {
+      return;
+    }
     metricsPending = true;
     try {
       const report = await player.metrics();
@@ -593,7 +634,9 @@ try {
       status.dataset.presentedFrames = String(metrics.presentedFrames);
       lastStatusUpdate = timestamp;
     } catch (error) {
-      showError(error);
+      if (!playerNeedsRestart) {
+        showError(error);
+      }
     } finally {
       metricsPending = false;
     }
