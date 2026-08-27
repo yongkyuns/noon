@@ -166,6 +166,23 @@ try:
 except ImportError:  # Older/mock bridges may expose only leaf Mobject handles.
     _create_family_handle = None
 
+try:
+    from js import noonCreateAuthoringCircleHandle as _create_circle_handle
+except ImportError:
+    _create_circle_handle = None
+try:
+    from js import noonCreateAuthoringSquareHandle as _create_square_handle
+except ImportError:
+    _create_square_handle = None
+try:
+    from js import noonCreateAuthoringRectangleHandle as _create_rectangle_handle
+except ImportError:
+    _create_rectangle_handle = None
+try:
+    from js import noonCreateAuthoringLineHandle as _create_line_handle
+except ImportError:
+    _create_line_handle = None
+
 _INSTALLED = False
 _ORIGINAL_INIT = _base.Mobject.__init__
 _ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
@@ -187,6 +204,10 @@ _ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
 _ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
 _ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
 _ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
+_ORIGINAL_CIRCLE_INIT = _compat.Circle.__init__
+_ORIGINAL_SQUARE_INIT = _compat.Square.__init__
+_ORIGINAL_RECTANGLE_INIT = _compat.Rectangle.__init__
+_ORIGINAL_LINE_INIT = _compat.Line.__init__
 _ORIGINAL_GROUP_INIT = _compat.Group.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
@@ -287,6 +308,167 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
         translation = raw.transform["translation"]
         return _base.Vec2(float(translation["x"]), float(translation["y"]))
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
+
+
+_CONSTRUCTOR_MISSING = object()
+
+
+def _attach_shared_handle(self: _base.Mobject, handle: object) -> None:
+    self._raw = None
+    self._scene = None
+    self._object = None
+    self._semantic_handle = handle
+    self._semantic_handle_fresh = True
+
+
+def _constructor_color(name: str, value: object) -> _base.Color:
+    if not isinstance(value, _base.Color):
+        raise TypeError(f"{name} must be a Color or None")
+    return value
+
+
+def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
+    options = dict(kwargs)
+    allowed = {
+        "position", "rotation", "scale", "fill", "stroke",
+        "stroke_width", "stroke_width_mode", "stroke_join", "stroke_cap",
+        "opacity", "fill_color", "stroke_color", "fill_opacity",
+        "stroke_opacity",
+    }
+    unknown = sorted(set(options) - allowed)
+    if unknown:
+        raise TypeError(f"unsupported Mobject constructor option(s): {', '.join(unknown)}")
+
+    handle = self._semantic_handle
+    if "position" in options:
+        value = _ir._vec2("position", options["position"])
+        handle.setTranslation(value["x"], value["y"])
+    if "rotation" in options:
+        handle.setRotation(_ir._finite_number("rotation", options["rotation"]))
+    if "scale" in options:
+        value = _ir._vec2("scale", options["scale"])
+        handle.setScale(value["x"], value["y"])
+    if "stroke_width" in options:
+        handle.setStrokeWidth(_phase_b._manim_stroke_width(options["stroke_width"]))
+    if "stroke_width_mode" in options:
+        handle.setStrokeWidthMode(_ir._stroke_width_mode(options["stroke_width_mode"]))
+    if "stroke_join" in options:
+        handle.setStrokeJoin(_ir._stroke_join(options["stroke_join"]))
+    if "stroke_cap" in options:
+        handle.setStrokeCap(_ir._stroke_cap(options["stroke_cap"]))
+    if "opacity" in options:
+        handle.setObjectOpacity(_ir._finite_number("opacity", options["opacity"]))
+
+    fill = options.get("fill", _CONSTRUCTOR_MISSING)
+    fill_color = options.get("fill_color", _CONSTRUCTOR_MISSING)
+    if fill_color is not _CONSTRUCTOR_MISSING and fill_color is not None:
+        fill = _phase_b._as_color("fill_color", fill_color)
+    if fill is not _CONSTRUCTOR_MISSING:
+        if fill is None:
+            handle.disableFill()
+        else:
+            parsed = _constructor_color("fill", fill)
+            handle.setFill(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+    stroke = options.get("stroke", _CONSTRUCTOR_MISSING)
+    stroke_color = options.get("stroke_color", _CONSTRUCTOR_MISSING)
+    if stroke_color is not _CONSTRUCTOR_MISSING and stroke_color is not None:
+        stroke = _phase_b._as_color("stroke_color", stroke_color)
+    if stroke is not _CONSTRUCTOR_MISSING:
+        if stroke is None:
+            handle.disableStroke()
+        else:
+            parsed = _constructor_color("stroke", stroke)
+            handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+            handle.setStrokeOpacity(parsed.alpha)
+
+    if options.get("fill_opacity") is not None:
+        handle.setFillOpacity(_phase_b._opacity("fill_opacity", options["fill_opacity"]))
+    if options.get("stroke_opacity") is not None:
+        handle.setStrokeOpacity(_phase_b._opacity("stroke_opacity", options["stroke_opacity"]))
+
+
+def _circle_init(
+    self: _compat.Circle,
+    radius: float = 1.0,
+    *,
+    color: _base.Color | None = None,
+    **kwargs: Any,
+) -> None:
+    if _create_circle_handle is None:
+        _ORIGINAL_CIRCLE_INIT(self, radius, color=color, **kwargs)
+        return
+    value = _ir._positive_number("radius", radius)
+    _attach_shared_handle(self, _create_circle_handle(value))
+    self.radius = value
+    _apply_shared_constructor_kwargs(self, kwargs)
+    if color is not None:
+        self.set_color(color)
+
+
+def _rectangle_init(
+    self: _compat.Rectangle,
+    width: float = 4.0,
+    height: float = 2.0,
+    *,
+    color: _base.Color | None = None,
+    **kwargs: Any,
+) -> None:
+    if _create_rectangle_handle is None:
+        _ORIGINAL_RECTANGLE_INIT(self, width, height, color=color, **kwargs)
+        return
+    width_value = _ir._positive_number("width", width)
+    height_value = _ir._positive_number("height", height)
+    _attach_shared_handle(self, _create_rectangle_handle(width_value, height_value))
+    self.width_value = width_value
+    self.height_value = height_value
+    _apply_shared_constructor_kwargs(self, kwargs)
+    if color is not None:
+        self.set_color(color)
+
+
+def _square_init(
+    self: _compat.Square,
+    side_length: float = 2.0,
+    *,
+    color: _base.Color | None = None,
+    **kwargs: Any,
+) -> None:
+    if _create_square_handle is None:
+        _ORIGINAL_SQUARE_INIT(self, side_length, color=color, **kwargs)
+        return
+    value = _ir._positive_number("side_length", side_length)
+    _attach_shared_handle(self, _create_square_handle(value))
+    self.side_length = value
+    self.width_value = value
+    self.height_value = value
+    _apply_shared_constructor_kwargs(self, kwargs)
+    if color is not None:
+        self.set_color(color)
+
+
+def _line_init(
+    self: _compat.Line,
+    start: object = None,
+    end: object = None,
+    *,
+    color: _base.Color | None = None,
+    **kwargs: Any,
+) -> None:
+    if _create_line_handle is None:
+        _ORIGINAL_LINE_INIT(self, start, end, color=color, **kwargs)
+        return
+    start_value = _base.LEFT if start is None else _compat._as_vec2(start)
+    end_value = _base.RIGHT if end is None else _compat._as_vec2(end)
+    _attach_shared_handle(
+        self,
+        _create_line_handle(start_value.x, start_value.y, end_value.x, end_value.y),
+    )
+    self.start = start_value
+    self.end = end_value
+    _apply_shared_constructor_kwargs(self, kwargs)
+    if color is not None:
+        self.set_color(color)
 
 
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
@@ -1090,6 +1272,15 @@ def install() -> None:
     _compat.VMobject.get_fill_opacity = _get_fill_opacity
     _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for
+
+    if _create_circle_handle is not None:
+        _compat.Circle.__init__ = _circle_init
+    if _create_square_handle is not None:
+        _compat.Square.__init__ = _square_init
+    if _create_rectangle_handle is not None:
+        _compat.Rectangle.__init__ = _rectangle_init
+    if _create_line_handle is not None:
+        _compat.Line.__init__ = _line_init
 
     if _create_family_handle is not None:
         _GROUP_COPY_DELEGATE = _compat.Group.copy

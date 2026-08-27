@@ -35,42 +35,34 @@
     {
       "id": "mobject.circle",
       "surface": "Circle",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Circle.__init__"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::circle"},
-      "reason": "Python still constructs the authoritative circle transport snapshot before creating a shared handle.",
-      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_circle/WasmAuthoringStore::create_manim_circle"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_circle_init"}],
+      "reason": "Rust constructs the geometry and Manim Cairo VMobject defaults directly in the shared semantic store; Python only coerces explicit host constructor arguments."
     },
     {
       "id": "mobject.square",
       "surface": "Square",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Square.__init__"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::square"},
-      "reason": "Python still constructs the authoritative square transport snapshot before creating a shared handle.",
-      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_square/WasmAuthoringStore::create_manim_square"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_square_init"}],
+      "reason": "Rust constructs square geometry and exact Manim VMobject defaults; Python retains only call-shape and explicit-argument coercion."
     },
     {
       "id": "mobject.rectangle",
       "surface": "Rectangle",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Rectangle.__init__"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::rectangle"},
-      "reason": "Python still constructs the authoritative rectangle transport snapshot before creating a shared handle.",
-      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_rectangle/WasmAuthoringStore::create_manim_rectangle"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rectangle_init"}],
+      "reason": "Rust constructs rectangle geometry and exact Manim VMobject defaults; Python retains only call-shape and explicit-argument coercion."
     },
     {
       "id": "mobject.line",
       "surface": "Line",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Line.__init__"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_facade.rs", "symbol": "FrontendDetachedMobject::line"},
-      "reason": "Python still constructs the authoritative line transport snapshot before creating a shared handle.",
-      "replacement": "Expose the shared Rust constructor directly to the Python adapter.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendMobjectHandle::manim_line/WasmAuthoringStore::create_manim_line"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_line_init"}],
+      "reason": "Rust constructs line geometry and exact Manim VMobject defaults; Python only coerces endpoint vectors and explicit constructor options."
     },
     {
       "id": "mobject.shift",
