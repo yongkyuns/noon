@@ -31,6 +31,7 @@ node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/manim-raster-differential.mjs
 node --check scripts/manim-seek-playback-raster.mjs
+node --check scripts/manim-typst-authoring-smoke.mjs
 node --check scripts/perf-profile.mjs
 node --check scripts/authoring-perf.mjs
 node --check scripts/perf-device-run.mjs
@@ -58,6 +59,7 @@ node --test web/performance-corpus-manifest.test.mjs
 node --test web/wire-contracts.test.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_compat.py \
+  web/python/_manim_typst.py \
   web/python/_manim_rate_functions.py \
   web/python/_manim_phase_b.py \
   web/python/_manim_animation_options.py \

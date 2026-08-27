@@ -3,6 +3,8 @@ import "./python-editor.js";
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 5;
 export const NOON_IR_VERSION = 1;
+export const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
+export const RETAINED_AUTHORING_VERSION = 1;
 
 export class PythonAuthoringClient {
   #worker;
@@ -201,13 +203,18 @@ export function parseAuthoringResult(resultJson) {
   }
   if (result.kind === "scene_document") {
     const document = validateSceneDocument(result.document);
-    return {
+    const retainedDocument = validateRetainedAuthoringDocument(result.retained_document);
+    const parsed = {
       kind: result.kind,
       document,
       duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
       callbacks: validateCallbackSession(result.callbacks, document),
     };
+    if (retainedDocument !== null) {
+      parsed.retainedDocument = retainedDocument;
+    }
+    return parsed;
   }
   throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
 }
@@ -255,6 +262,84 @@ export function validateSceneDocument(scene) {
     throw new Error("Python Scene tracks must be an array");
   }
   return scene;
+}
+
+export function validateRetainedAuthoringDocument(document) {
+  if (document === null || document === undefined) {
+    return null;
+  }
+  if (!isRecord(document)) {
+    throw new Error("Python retained authoring result must be an object");
+  }
+  if (document.channel !== RETAINED_AUTHORING_CHANNEL) {
+    throw new Error(`Invalid retained authoring channel ${document.channel}`);
+  }
+  if (document.protocol_version !== RETAINED_AUTHORING_VERSION) {
+    throw new Error(
+      `Unsupported retained authoring protocol version ${document.protocol_version}`,
+    );
+  }
+  if (!Array.isArray(document.objects)) {
+    throw new Error("Python retained authoring objects must be an array");
+  }
+
+  const objectIds = new Set();
+  const orders = new Set();
+  for (const object of document.objects) {
+    if (!isRecord(object) || !Number.isSafeInteger(object.object) || object.object < 0) {
+      throw new Error("Python retained authoring object has an invalid object ID");
+    }
+    if (!Number.isSafeInteger(object.order) || object.order < 0) {
+      throw new Error("Python retained authoring object has an invalid painter order");
+    }
+    if (objectIds.has(object.object)) {
+      throw new Error("Python retained authoring document has duplicate object IDs");
+    }
+    if (orders.has(object.order)) {
+      throw new Error("Python retained authoring document has duplicate painter orders");
+    }
+    objectIds.add(object.object);
+    orders.add(object.order);
+    validateRetainedTypstSpec(object.text);
+  }
+  return document;
+}
+
+function validateRetainedTypstSpec(text) {
+  if (!isRecord(text) || typeof text.source !== "string" || text.source.length === 0) {
+    throw new Error("Python retained Typst source must be a non-empty string");
+  }
+  if (typeof text.math !== "boolean") {
+    throw new Error("Python retained Typst math flag must be boolean");
+  }
+  if (!Number.isFinite(text.font_size) || text.font_size <= 0) {
+    throw new Error("Python retained Typst font size must be finite and positive");
+  }
+  if (!Number.isFinite(text.opacity) || text.opacity < 0 || text.opacity > 1) {
+    throw new Error("Python retained Typst opacity must be between zero and one");
+  }
+  if (!isRecord(text.transform) || !isRecord(text.transform.translation) || !isRecord(text.transform.scale)) {
+    throw new Error("Python retained Typst transform is malformed");
+  }
+  for (const value of [
+    text.transform.translation.x,
+    text.transform.translation.y,
+    text.transform.scale.x,
+    text.transform.scale.y,
+    text.transform.rotation,
+  ]) {
+    if (!Number.isFinite(value)) {
+      throw new Error("Python retained Typst transform must be finite");
+    }
+  }
+  if (!isRecord(text.color)) {
+    throw new Error("Python retained Typst color is malformed");
+  }
+  for (const value of [text.color.red, text.color.green, text.color.blue, text.color.alpha]) {
+    if (!Number.isFinite(value)) {
+      throw new Error("Python retained Typst color must be finite");
+    }
+  }
 }
 
 export function validateSceneDuration(duration) {
