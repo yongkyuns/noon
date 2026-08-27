@@ -1161,6 +1161,46 @@ def _group_move_to(
 
 
 
+
+def _layout_bounds_handle(value: object) -> object | None:
+    if isinstance(value, _compat.Group):
+        shared = _shared_family_layout_session(value)
+        if shared is None or not hasattr(shared[0], "boundsHandle"):
+            return None
+        return shared[0].boundsHandle()
+    if isinstance(value, _base.Mobject):
+        handle = _handle_for(value)
+        if handle is None or not hasattr(handle, "layoutBoundsHandle"):
+            return None
+        return handle.layoutBoundsHandle()
+    return None
+
+
+def _family_member_bounds_handle(value: object, index: int) -> object | None:
+    if not isinstance(value, _compat.Group):
+        return None
+    family_handle = getattr(value, "_semantic_family_handle", None)
+    if family_handle is None or not hasattr(family_handle, "memberLayoutSession"):
+        return None
+    selection = family_handle.memberLayoutSession(int(index))
+    # The Python list is only an identity mirror: Rust normalized the index first and
+    # validates the selected direct semantic member before accepting its live bounds.
+    member = value.submobjects[index]
+    if isinstance(member, _compat.Group):
+        shared = _shared_family_layout_session(member)
+        if shared is None or not hasattr(selection, "includeFamily"):
+            return None
+        selection.includeFamily(shared[0])
+    elif isinstance(member, _base.Mobject):
+        handle = _handle_for(member)
+        if handle is None or not hasattr(selection, "includeMobject"):
+            return None
+        selection.includeMobject(handle)
+    else:
+        return None
+    return selection.boundsHandle()
+
+
 def _group_next_to(
     self: _compat.Group,
     mobject_or_point: object,
@@ -1171,20 +1211,6 @@ def _group_next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    # Selecting a specific wrapper/member remains explicit #61 debt until shared
-    # family-member handles expose that selection. Do not silently rederive it here.
-    if submobject_to_align is not None or index_of_submobject_to_align is not None:
-        return _ORIGINAL_GROUP_NEXT_TO(
-            self,
-            mobject_or_point,
-            direction,
-            buff,
-            aligned_edge,
-            submobject_to_align,
-            index_of_submobject_to_align,
-            coor_mask,
-        )
-
     shared = _shared_family_layout_session(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_NEXT_TO(
@@ -1203,7 +1229,81 @@ def _group_next_to(
     mask = _alignment_mask2(coor_mask)
 
     translation = None
-    if isinstance(mobject_or_point, _compat.Group):
+    source_aligner_bounds = None
+    if submobject_to_align is not None:
+        source_aligner_bounds = _layout_bounds_handle(submobject_to_align)
+    elif index_of_submobject_to_align is not None:
+        source_aligner_bounds = _family_member_bounds_handle(
+            self, int(index_of_submobject_to_align)
+        )
+
+    if source_aligner_bounds is not None:
+        if _alignment_is_mobject(mobject_or_point):
+            if index_of_submobject_to_align is not None:
+                target_bounds = _family_member_bounds_handle(
+                    mobject_or_point, int(index_of_submobject_to_align)
+                )
+            else:
+                target_bounds = _layout_bounds_handle(mobject_or_point)
+            if target_bounds is None or not hasattr(session, "nextToBoundsWithAligner"):
+                return _ORIGINAL_GROUP_NEXT_TO(
+                    self,
+                    mobject_or_point,
+                    direction,
+                    buff,
+                    aligned_edge=aligned_edge,
+                    submobject_to_align=submobject_to_align,
+                    index_of_submobject_to_align=index_of_submobject_to_align,
+                    coor_mask=coor_mask,
+                )
+            translation = session.nextToBoundsWithAligner(
+                source_aligner_bounds,
+                target_bounds,
+                vector.x,
+                vector.y,
+                float(buff),
+                edge.x,
+                edge.y,
+                mask.x,
+                mask.y,
+            )
+        else:
+            if not hasattr(session, "nextToPointWithAligner"):
+                return _ORIGINAL_GROUP_NEXT_TO(
+                    self,
+                    mobject_or_point,
+                    direction,
+                    buff,
+                    aligned_edge=aligned_edge,
+                    submobject_to_align=submobject_to_align,
+                    index_of_submobject_to_align=index_of_submobject_to_align,
+                    coor_mask=coor_mask,
+                )
+            point = _base._as_vec2(mobject_or_point)
+            translation = session.nextToPointWithAligner(
+                source_aligner_bounds,
+                point.x,
+                point.y,
+                vector.x,
+                vector.y,
+                float(buff),
+                edge.x,
+                edge.y,
+                mask.x,
+                mask.y,
+            )
+    elif submobject_to_align is not None or index_of_submobject_to_align is not None:
+        return _ORIGINAL_GROUP_NEXT_TO(
+            self,
+            mobject_or_point,
+            direction,
+            buff,
+            aligned_edge=aligned_edge,
+            submobject_to_align=submobject_to_align,
+            index_of_submobject_to_align=index_of_submobject_to_align,
+            coor_mask=coor_mask,
+        )
+    elif isinstance(mobject_or_point, _compat.Group):
         target_shared = _shared_family_layout_session(mobject_or_point)
         if target_shared is not None and hasattr(session, "nextToFamily"):
             translation = session.nextToFamily(
@@ -1242,7 +1342,6 @@ def _group_next_to(
             mask.x,
             mask.y,
         )
-
     if translation is None:
         return _ORIGINAL_GROUP_NEXT_TO(
             self,

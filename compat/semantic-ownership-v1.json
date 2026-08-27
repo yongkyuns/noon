@@ -178,13 +178,21 @@
       "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
     },
     {
-      "id": "group-placement",
-      "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection and arrange forwarded placement kwargs",
+      "id": "group-member-placement-selection",
+      "surface": "Group/VGroup next_to submobject_to_align/index_of_submobject_to_align selection",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyMemberSelection/WasmAuthoringFamilyMemberLayout/WasmAuthoringLayoutBounds"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_family_member_bounds_handle/_group_next_to"}],
+      "reason": "Rust normalizes signed direct-member indices, validates the selected wrapper semantic identity, owns selected live bounds and critical-point placement math, and produces the full-family translation. Explicit source aligners are user-provided call arguments and are converted to shared Rust bounds without a Python geometry calculation."
+    },
+    {
+      "id": "group-arrange-forwarded-placement",
+      "surface": "Group/VGroup arrange forwarded next_to placement kwargs",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/FrontendFamilyArrangePlan/FrontendFamilyTranslation"},
-      "reason": "Default family relative placement and ordinary arrange sequencing are shared-Rust-owned, but explicit wrapper/member aligner selection and forwarded arrange placement kwargs still resolve in Python.",
-      "replacement": "Expose shared family-member selection handles and route forwarded arrange alignment policy through the shared family placement API.",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_arrange fallback"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyArrangePlan/WasmAuthoringFamilyMemberLayout/WasmAuthoringFamilyLayout"},
+      "reason": "Ordinary arrange and indexed family next_to are shared-Rust-owned, but arrange still forwards arbitrary next_to kwargs through the pinned Python compatibility loop.",
+      "replacement": "Add shared arrange policy inputs for aligned_edge/coor_mask and member-aligner selection, reusing shared family member selection.",
       "migration_issue": "#61"
     },
     {
