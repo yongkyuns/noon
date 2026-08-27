@@ -254,6 +254,10 @@ pub struct DrawStats {
     pub instances_drawn: usize,
 }
 
+fn backend_requires_zero_origin_line_upload(backend: wgpu::Backend) -> bool {
+    backend == wgpu::Backend::Gl
+}
+
 #[derive(Debug)]
 pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
@@ -558,6 +562,12 @@ impl GpuRenderer {
             std::mem::size_of_val(prepared.mega_path_vertex_instances);
         let mut buffer_reallocations = 0;
 
+        #[cfg(target_arch = "wasm32")]
+        let webgl_line_zero_origin = backend_requires_zero_origin_line_upload(device.adapter_info().backend)
+            && !prepared.line_dirty_ranges.is_empty();
+        #[cfg(not(target_arch = "wasm32"))]
+        let webgl_line_zero_origin = false;
+
         let circle_reallocated = ensure_capacity(
             device,
             &mut self.circle_buffer,
@@ -650,12 +660,13 @@ impl GpuRenderer {
             prepared.rectangles,
             prepared.rectangle_dirty_ranges,
             rectangle_reallocated,
-        ) + upload_dirty(
+        ) + upload_dirty_zero_origin(
             queue,
             &self.line_buffer,
             prepared.lines,
             prepared.line_dirty_ranges,
             line_reallocated,
+            webgl_line_zero_origin,
         ) + upload_dirty(
             queue,
             &self.path_vertex_buffer,
@@ -751,7 +762,6 @@ impl GpuRenderer {
         self.encode_inner(encoder, view, prepared, clear_color, None)
     }
 
-    /// Encodes a render pass with beginning/end GPU timestamp writes.
     pub fn encode_profiled(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -774,9 +784,6 @@ impl GpuRenderer {
         let scene_view = self.presentation.scene_view(view);
         let sample_count = ordered_render_sample_count(prepared.path_batches);
         let stats = if sample_count == 1 {
-            // Analytic SDF primitives already use derivative-based edge coverage. When
-            // no visible vector path participates in painter order, avoid 4x sample
-            // shading and the multisample resolve without changing alpha ordering.
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: scene_view,
                 depth_slice: None,
@@ -801,9 +808,6 @@ impl GpuRenderer {
             });
             self.draw_ordered(&mut pass, prepared, true)
         } else {
-            // Mixed vector/analytic content still shares one 4x multisampled target so
-            // pipeline switches follow semantic painter order. Splitting these primitives
-            // into separate passes would not be alpha-order safe.
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &self.path_msaa_view,
                 depth_slice: None,
@@ -876,9 +880,7 @@ impl GpuRenderer {
                     pass.set_vertex_buffer(1, self.line_buffer.slice(..));
                     pass.draw(0..6, batch.instance_range.clone());
                 }
-                RenderPrimitive::MegaPath {
-                    batch: mega_batch_index,
-                } => {
+                RenderPrimitive::MegaPath { batch: mega_batch_index } => {
                     let mega_batch = &prepared.mega_path_batches[mega_batch_index];
                     if mega_batch.index_range.is_empty() {
                         continue;
@@ -895,9 +897,7 @@ impl GpuRenderer {
                     stats.instances_drawn += mega_batch.path_count;
                     continue;
                 }
-                RenderPrimitive::Path {
-                    batch: path_batch_index,
-                } => {
+                RenderPrimitive::Path { batch: path_batch_index } => {
                     let path_batch = &prepared.path_batches[path_batch_index];
                     if path_batch.index_range.is_empty() {
                         continue;
@@ -1061,13 +1061,13 @@ fn create_pipeline(
         label: Some(descriptor.label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: shader,
+            module: &shader,
             entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
             buffers: &[quad_vertex_layout(), descriptor.instance_layout],
         },
         fragment: Some(wgpu::FragmentState {
-            module: shader,
+            module: &shader,
             entry_point: Some(descriptor.fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -1088,10 +1088,7 @@ fn create_pipeline(
 }
 
 fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
-    if path_batches
-        .iter()
-        .any(|batch| !batch.index_range.is_empty())
-    {
+    if path_batches.iter().any(|batch| !batch.index_range.is_empty()) {
         PATH_SAMPLE_COUNT
     } else {
         1
@@ -1277,6 +1274,34 @@ fn upload_dirty<T: Pod>(
     bytes_uploaded
 }
 
+fn upload_dirty_zero_origin<T: Pod>(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    instances: &[T],
+    dirty_ranges: &[std::ops::Range<usize>],
+    force_full_upload: bool,
+    force_zero_origin: bool,
+) -> usize {
+    if force_full_upload || !force_zero_origin {
+        return upload_dirty(
+            queue,
+            buffer,
+            instances,
+            dirty_ranges,
+            force_full_upload,
+        );
+    }
+    let Some(prefix_end) = dirty_ranges.iter().map(|range| range.end).max() else {
+        return 0;
+    };
+    if prefix_end == 0 || instances.is_empty() {
+        return 0;
+    }
+    let bytes = bytemuck::cast_slice(&instances[..prefix_end]);
+    queue.write_buffer(buffer, 0, bytes);
+    bytes.len()
+}
+
 #[cfg(test)]
 mod tests {
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D, VectorPath};
@@ -1378,6 +1403,15 @@ mod tests {
     }
 
     #[test]
+    fn webgl_line_uploads_must_start_from_zero() {
+        assert!(backend_requires_zero_origin_line_upload(wgpu::Backend::Gl));
+        assert!(!backend_requires_zero_origin_line_upload(
+            wgpu::Backend::BrowserWebGpu
+        ));
+        assert!(!backend_requires_zero_origin_line_upload(wgpu::Backend::Vulkan));
+    }
+
+    #[test]
     fn camera_rejects_invalid_world_size() {
         assert_eq!(
             Camera2D::new(Vec2::ZERO, Vec2::new(0.0, 2.0)),
@@ -1435,10 +1469,7 @@ mod tests {
 
         let path_instance_layout = path_instance_layout();
         assert_eq!(path_instance_layout.array_stride, 80);
-        assert_eq!(
-            path_instance_layout.step_mode,
-            wgpu::VertexStepMode::Instance
-        );
+        assert_eq!(path_instance_layout.step_mode, wgpu::VertexStepMode::Instance);
         assert_eq!(path_instance_layout.attributes.len(), 8);
         assert_eq!(path_instance_layout.attributes[0].shader_location, 3);
         assert_eq!(path_instance_layout.attributes[6].shader_location, 9);
@@ -1518,8 +1549,7 @@ mod tests {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
         queue.submit(Some(encoder.finish()));
 
@@ -1559,8 +1589,7 @@ mod tests {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
         queue.submit(Some(encoder.finish()));
 
@@ -1609,8 +1638,7 @@ mod tests {
             usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let draw = renderer.encode_profiled(
             &mut encoder,
             &view,
@@ -1654,8 +1682,7 @@ mod tests {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let draw = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
         queue.submit(Some(encoder.finish()));
 
