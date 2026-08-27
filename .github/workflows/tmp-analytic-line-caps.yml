@@ -1,0 +1,35 @@
+name: Temporary analytic line cap validation
+
+on:
+  push:
+    branches:
+      - fix/analytic-line-stroke-caps
+
+permissions:
+  contents: write
+
+jobs:
+  stage-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply cap parity patch
+        run: python3 scripts/tmp_fix_analytic_line_caps.py
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Validate renderer cap semantics
+        run: |
+          cargo test -p noon-render-wgpu analytic_line
+          cargo test -p noon-render-wgpu stroke_style
+          cargo test -p noon-render-wgpu --lib
+      - name: Commit implementation without temporary helpers
+        run: |
+          rm scripts/tmp_fix_analytic_line_caps.py
+          rm .github/workflows/tmp-analytic-line-caps.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Respect stroke caps for analytic lines"
+          git push origin HEAD:fix/analytic-line-stroke-caps
