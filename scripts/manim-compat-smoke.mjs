@@ -89,6 +89,11 @@ class GroupAndSceneMembership(Scene):
         pair.add(left)
         assert len(pair) == 2
         assert int(pair._semantic_family_handle.memberCount) == 2
+        layout = pair._semantic_family_handle.layoutSession()
+        layout.includeMobject(left._semantic_handle)
+        layout.includeMobject(right._semantic_handle)
+        assert abs(float(layout.width) - pair.width) < 1e-12
+        assert abs(float(layout.height) - pair.height) < 1e-12
         alias = VGroup(left)
         assert int(alias._semantic_family_handle.memberCount) == 1
 
