@@ -731,7 +731,9 @@ mod tests {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            renderer.draw_ordered_glyphs(&mut pass, &prepared, 1).unwrap()
+            renderer
+                .draw_ordered_glyphs(&mut pass, &prepared, 1)
+                .unwrap()
         };
         queue.submit(Some(encoder.finish()));
         assert_eq!(stats.draw_calls, 1);
