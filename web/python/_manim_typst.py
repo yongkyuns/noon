@@ -21,7 +21,9 @@ except ImportError:  # Native CPython tests use the source-level fallback below.
     _create_retained_handle = None
 
 
-_RETAINED_OBJECT_ID_BASE = 1 << 63
+# Reserve the upper half of JavaScript's exact-integer range for retained text IDs.
+# Legacy geometry IDs start at zero and no practical scene can approach 2^52 objects.
+_RETAINED_OBJECT_ID_BASE = 1 << 52
 _INSTALLED = False
 _ORIGINAL_SCENE_ADD = _compat.Scene.add
 _ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
