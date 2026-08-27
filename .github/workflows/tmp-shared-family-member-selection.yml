@@ -1,0 +1,62 @@
+name: Temporary shared family member selection migration
+
+on:
+  push:
+    branches:
+      - agent/arch-shared-family-member-selection
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-validate:
+    if: github.event.head_commit.message != 'Move family member selection into shared Rust semantics'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply migration
+        run: python3 scripts/tmp_shared_family_member_selection_migration.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Check diff formatting
+        run: git diff --check
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Rust semantic tests
+        run: cargo test -p noon-web authoring_mobject
+      - name: WASM compile
+        run: cargo check -p noon-web --target wasm32-unknown-unknown
+      - name: Python family selection regressions
+        env:
+          PYTHONPATH: web/python
+        run: >-
+          python3 -m unittest
+          web.python.test_manim_shared_family_member_selection
+          web.python.test_manim_shared_family_arrange
+          web.python.test_manim_shared_family_relative_placement
+          web.python.test_manim_shared_family_translation
+          web.python.test_manim_shared_family_identity
+      - name: Ownership audit
+        run: python3 scripts/semantic_ownership_check.py
+      - name: Commit migration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            crates/noon-web/src/authoring_mobject.rs \
+            compat/semantic-ownership-v1.json \
+            scripts/check-web-package.mjs \
+            web/python/_manim_semantic_handles.py \
+            web/python/test_manim_shared_family_member_selection.py
+          git diff --cached --exit-code && { echo 'migration produced no product diff'; exit 1; } || true
+          git commit -m 'Move family member selection into shared Rust semantics'
+          git push origin HEAD:${GITHUB_REF_NAME}
