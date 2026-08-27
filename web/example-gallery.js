@@ -1,5 +1,10 @@
 const MANIM_REUSE = "source-equivalent-manim-v0.21";
 const READY_PARITY = new Set(["candidate", "parity-qualified"]);
+const THUMBNAIL_FALLBACK_MARKER = "noonThumbnailFallbackInstalled";
+
+if (typeof document !== "undefined") {
+  installGalleryThumbnailFallback(document);
+}
 
 export function normalizeGalleryManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.entries)) {
@@ -124,4 +129,71 @@ export function exampleUrl(id, locationLike = globalThis.location) {
 
 export function parityLabel(status) {
   return status === "parity-qualified" ? "Parity qualified" : "Parity candidate";
+}
+
+export function applyGalleryThumbnailFailure(image, documentLike = globalThis.document) {
+  if (
+    !image ||
+    image.tagName !== "IMG" ||
+    !image.classList?.contains("example-thumb") ||
+    image.dataset?.thumbnailFailed === "true" ||
+    typeof documentLike?.createElement !== "function"
+  ) {
+    return false;
+  }
+
+  const alt = typeof image.alt === "string" && image.alt.trim() !== "" ? image.alt.trim() : "Example";
+  const fallback = documentLike.createElement("span");
+  fallback.className = "example-thumb-fallback";
+  fallback.setAttribute("role", "img");
+  fallback.setAttribute("aria-label", `${alt} — preview unavailable`);
+  fallback.textContent = "Preview unavailable";
+
+  image.dataset.thumbnailFailed = "true";
+  image.hidden = true;
+  image.alt = "";
+  image.after(fallback);
+  return true;
+}
+
+export function installGalleryThumbnailFallback(documentLike = globalThis.document) {
+  if (
+    !documentLike?.documentElement?.dataset ||
+    typeof documentLike.addEventListener !== "function" ||
+    typeof documentLike.createElement !== "function"
+  ) {
+    return false;
+  }
+  if (documentLike.documentElement.dataset[THUMBNAIL_FALLBACK_MARKER] === "true") {
+    return false;
+  }
+  documentLike.documentElement.dataset[THUMBNAIL_FALLBACK_MARKER] = "true";
+
+  documentLike.addEventListener(
+    "error",
+    (event) => {
+      applyGalleryThumbnailFailure(event.target, documentLike);
+    },
+    true,
+  );
+
+  const style = documentLike.createElement("style");
+  style.dataset.galleryThumbnailFallback = "true";
+  style.textContent = `
+    .example-thumb-fallback {
+      display: grid;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      place-items: center;
+      border-bottom: 1px solid #222d41;
+      background:
+        radial-gradient(circle at 50% 45%, rgb(142 124 255 / 12%), transparent 45%),
+        #111722;
+      color: #77849d;
+      font: 0.66rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.02em;
+    }
+  `;
+  documentLike.head?.append(style);
+  return true;
 }

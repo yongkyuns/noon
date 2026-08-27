@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import {
+  applyGalleryThumbnailFailure,
   exampleUrl,
   filterGalleryExamples,
   normalizeGalleryManifest,
@@ -122,6 +123,48 @@ assert.equal(
   20,
 );
 
+const insertedFallbacks = [];
+const fakeImage = {
+  tagName: "IMG",
+  classList: { contains: (name) => name === "example-thumb" },
+  dataset: {},
+  alt: "DifferentRotations poster frame",
+  hidden: false,
+  after(node) {
+    insertedFallbacks.push(node);
+  },
+};
+const fakeDocument = {
+  createElement(tagName) {
+    return {
+      tagName: tagName.toUpperCase(),
+      className: "",
+      attributes: new Map(),
+      textContent: "",
+      setAttribute(name, value) {
+        this.attributes.set(name, value);
+      },
+    };
+  },
+};
+assert.equal(applyGalleryThumbnailFailure(fakeImage, fakeDocument), true);
+assert.equal(fakeImage.hidden, true, "failed image must be removed from visual layout");
+assert.equal(fakeImage.alt, "", "hidden failed image must not duplicate fallback accessibility text");
+assert.equal(fakeImage.dataset.thumbnailFailed, "true");
+assert.equal(insertedFallbacks.length, 1);
+assert.equal(insertedFallbacks[0].className, "example-thumb-fallback");
+assert.equal(insertedFallbacks[0].textContent, "Preview unavailable");
+assert.equal(
+  insertedFallbacks[0].attributes.get("aria-label"),
+  "DifferentRotations poster frame — preview unavailable",
+);
+assert.equal(
+  applyGalleryThumbnailFailure(fakeImage, fakeDocument),
+  false,
+  "repeat image errors must not append duplicate fallback UI",
+);
+assert.equal(insertedFallbacks.length, 1);
+
 assert.equal(
   requestedExampleId({ search: "?example=parity-square-to-circle" }),
   "parity-square-to-circle",
@@ -154,4 +197,4 @@ assert.throws(
   /source-equivalent ManimCE/,
 );
 
-console.log("✓ Manim gallery manifest contract");
+console.log("✓ Manim gallery manifest contract + thumbnail fallback");
