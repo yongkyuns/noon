@@ -14,7 +14,7 @@ use noon_core::{
     Color, FontResourceArena, FontVariationSetting, GlyphRun, TextRenderItem, TextResourceArena,
     TextResourceHandle, Transform2D, Vec2,
 };
-use noon_runtime::RetainedFrameState;
+use noon_runtime::{FrameChanges, RetainedFrameState};
 use noon_text_atlas::{
     GlyphAtlasEntry, GlyphAtlasError, GlyphAtlasPlane, GlyphAtlasStats, GpuGlyphAtlas,
     DEFAULT_GLYPH_ATLAS_EXTENT,
@@ -125,6 +125,17 @@ pub struct RetainedTextPrepareStats {
     pub outline_runs: usize,
 }
 
+/// Cumulative counters for the retained text preparation fast path.
+///
+/// A `reused_frames` increment means preparation returned the existing quad/item
+/// buffers without scanning retained objects, touching the raster cache, or probing
+/// the atlas. Object-local incremental rebuilds are layered on top of this contract.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetainedTextIncrementalStats {
+    pub rebuild_attempts: u64,
+    pub reused_frames: u64,
+}
+
 #[derive(Debug)]
 pub struct PreparedRetainedTextFrame<'a> {
     pub time: f64,
@@ -191,6 +202,9 @@ pub struct RetainedTextQuadPreparer {
     color_quads: Vec<GlyphQuadInstance>,
     items: Vec<PreparedTextItem>,
     stats: RetainedTextPrepareStats,
+    incremental_stats: RetainedTextIncrementalStats,
+    last_metrics: Option<TextDeviceMetrics>,
+    prepared_once: bool,
 }
 
 impl RetainedTextQuadPreparer {
@@ -202,6 +216,9 @@ impl RetainedTextQuadPreparer {
             color_quads: Vec::new(),
             items: Vec::new(),
             stats: RetainedTextPrepareStats::default(),
+            incremental_stats: RetainedTextIncrementalStats::default(),
+            last_metrics: None,
+            prepared_once: false,
         })
     }
 
@@ -217,10 +234,17 @@ impl RetainedTextQuadPreparer {
         self.atlas.stats()
     }
 
+    pub const fn incremental_stats(&self) -> RetainedTextIncrementalStats {
+        self.incremental_stats
+    }
+
     pub fn atlas(&self) -> &GpuGlyphAtlas {
         &self.atlas
     }
 
+    /// Compatibility entry point for callers that do not yet preserve runtime
+    /// dirtiness. Treats the frame as fully dirty, matching the pre-incremental
+    /// behavior exactly.
     pub fn prepare<'a>(
         &'a mut self,
         device: &wgpu::Device,
@@ -230,7 +254,42 @@ impl RetainedTextQuadPreparer {
         fonts: &FontResourceArena,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
+        let changes = FrameChanges::all();
+        self.prepare_with_changes(device, queue, frame, &changes, texts, fonts, metrics)
+    }
+
+    /// Prepare retained text while preserving runtime dirty-state locality.
+    ///
+    /// The first slice intentionally optimizes the strongest safe case: when the
+    /// runtime reports no changed objects and device metrics are unchanged, the
+    /// already-prepared buffers are returned directly. Non-empty change sets still
+    /// take the existing full-rebuild path until per-object retained ranges land.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_changes<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         metrics.validate()?;
+        if self.prepared_once && changes.is_empty() && self.last_metrics == Some(metrics) {
+            self.incremental_stats.reused_frames =
+                self.incremental_stats.reused_frames.saturating_add(1);
+            return Ok(PreparedRetainedTextFrame {
+                time: frame.time,
+                mask_quads: &self.mask_quads,
+                color_quads: &self.color_quads,
+                items: &self.items,
+                stats: self.stats,
+            });
+        }
+
+        self.incremental_stats.rebuild_attempts =
+            self.incremental_stats.rebuild_attempts.saturating_add(1);
         self.mask_quads.clear();
         self.color_quads.clear();
         self.items.clear();
@@ -296,6 +355,8 @@ impl RetainedTextQuadPreparer {
             }
         }
 
+        self.last_metrics = Some(metrics);
+        self.prepared_once = true;
         Ok(PreparedRetainedTextFrame {
             time: frame.time,
             mask_quads: &self.mask_quads,
@@ -526,7 +587,7 @@ fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
 #[cfg(test)]
 mod tests {
     use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D};
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
     use noon_typst::{compile_typst_resource, TypstMode};
 
     use super::*;
@@ -746,6 +807,94 @@ mod tests {
         assert_eq!(preparer.raster_stats().entries, raster_entries);
         assert!(preparer.raster_stats().hits > first_raster_hits);
         assert!(preparer.atlas_stats().hits > first_atlas_hits);
+    }
+
+    #[test]
+    fn unchanged_runtime_frame_reuses_prepared_text_without_cache_lookups() {
+        let artifact = compile_typst_resource("Static", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            assert!(!prepared.mask_quads.is_empty());
+        }
+        let raster = preparer.raster_stats();
+        let atlas = preparer.atlas_stats();
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            assert!(!prepared.mask_quads.is_empty());
+        }
+
+        assert_eq!(preparer.raster_stats(), raster);
+        assert_eq!(preparer.atlas_stats(), atlas);
+        assert_eq!(
+            preparer.incremental_stats(),
+            RetainedTextIncrementalStats {
+                rebuild_attempts: 1,
+                reused_frames: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn device_metric_change_invalidates_unchanged_frame_reuse() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &artifact.fonts,
+                TextDeviceMetrics::uniform(90.0).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 2);
+        assert_eq!(preparer.incremental_stats().reused_frames, 0);
     }
 
     #[test]
