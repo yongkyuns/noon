@@ -10,5 +10,6 @@ members = [
     "crates/noon-web",
     "crates/noon-typst",
     "crates/noon-text-raster",
+    "crates/noon-text-atlas",
 ]
 resolver = "2"
