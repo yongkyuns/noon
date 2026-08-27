@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
+  RETAINED_EXECUTION_TRANSPORT_CHANNEL,
   SharedExecutionDeltaReader,
   SharedExecutionDeltaWriter,
   TransferableExecutionDeltaReceiver,
@@ -15,9 +16,9 @@ import {
   selectExecutionTransportMode,
 } from "./execution-transport.js";
 
-function delta(sequence, { session = 1, snapshot = sequence === 0 } = {}) {
+function delta(sequence, { session = 1, snapshot = sequence === 0, channel = "noon.execution" } = {}) {
   return JSON.stringify({
-    channel: "noon.execution",
+    channel,
     protocol_version: 1,
     session,
     sequence,
@@ -76,6 +77,23 @@ test("shared two-slot mailbox retains ownership until consumer accepts", () => {
   assert.equal(writer.send(delta(2, { snapshot: false })), true);
   reader.drain(apply);
   assert.deepEqual(received, [0, 1, 2]);
+});
+
+test("shared transport also carries retained execution framing", () => {
+  const mailbox = createSharedExecutionMailbox(4096);
+  const writer = new SharedExecutionDeltaWriter(mailbox);
+  const reader = new SharedExecutionDeltaReader(mailbox);
+  const retained = delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL });
+  assert.equal(writer.send(retained), true);
+  const received = [];
+  assert.equal(
+    reader.drain((json) => {
+      received.push(JSON.parse(json).channel);
+      return true;
+    }),
+    1,
+  );
+  assert.deepEqual(received, [RETAINED_EXECUTION_TRANSPORT_CHANNEL]);
 });
 
 test("transferable mailbox defers ack until consumer accepts", async () => {
@@ -137,6 +155,23 @@ test("transferable envelope metadata must match encoded payload", () => {
     { session: 1, sequence: 0, snapshot: true },
   );
 
+  const retainedPayload = new TextEncoder().encode(
+    delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL }),
+  );
+  const retainedBuffer = retainedPayload.buffer.slice(
+    retainedPayload.byteOffset,
+    retainedPayload.byteOffset + retainedPayload.byteLength,
+  );
+  assert.deepEqual(
+    decodeTransferableExecutionDelta({
+      type: "execution_delta",
+      session: 1,
+      sequence: 0,
+      buffer: retainedBuffer,
+    }).metadata,
+    { session: 1, sequence: 0, snapshot: true },
+  );
+
   const mismatchPayload = new TextEncoder().encode(delta(0));
   const mismatchBuffer = mismatchPayload.buffer.slice(
     mismatchPayload.byteOffset,
@@ -154,7 +189,19 @@ test("transferable envelope metadata must match encoded payload", () => {
   );
 });
 
-test("metadata rejects future protocols and unsafe sequence values", () => {
+test("metadata accepts only known execution channels and rejects future protocols", () => {
+  assert.equal(
+    executionDeltaMetadata(delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL })).sequence,
+    0,
+  );
+
+  const unrelated = JSON.parse(delta(0));
+  unrelated.channel = "noon.execution.unrelated";
+  assert.throws(
+    () => executionDeltaMetadata(JSON.stringify(unrelated)),
+    /invalid channel/,
+  );
+
   const future = JSON.parse(delta(0));
   future.protocol_version = 2;
   assert.throws(

@@ -1,8 +1,13 @@
 export const EXECUTION_TRANSPORT_CHANNEL = "noon.execution";
+export const RETAINED_EXECUTION_TRANSPORT_CHANNEL = "noon.execution.retained";
 export const EXECUTION_TRANSPORT_VERSION = 1;
 export const EXECUTION_TRANSPORT_SHARED = "shared";
 export const EXECUTION_TRANSPORT_TRANSFERABLE = "transferable";
 
+const EXECUTION_TRANSPORT_CHANNELS = new Set([
+  EXECUTION_TRANSPORT_CHANNEL,
+  RETAINED_EXECUTION_TRANSPORT_CHANNEL,
+]);
 const SLOT_FREE = 0;
 const SLOT_WRITING = 1;
 const SLOT_READY = 2;
@@ -33,7 +38,7 @@ export function executionDeltaMetadata(json) {
   } catch (error) {
     throw new Error(`execution delta is invalid JSON: ${error.message}`);
   }
-  if (!isRecord(delta) || delta.channel !== EXECUTION_TRANSPORT_CHANNEL) {
+  if (!isRecord(delta) || !EXECUTION_TRANSPORT_CHANNELS.has(delta.channel)) {
     throw new Error("execution delta has an invalid channel");
   }
   if (delta.protocol_version !== EXECUTION_TRANSPORT_VERSION) {

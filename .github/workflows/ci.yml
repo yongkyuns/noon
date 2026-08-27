@@ -189,6 +189,9 @@ jobs:
       - name: Test engine/render worker transports
         run: node scripts/execution-worker-smoke.mjs
 
+      - name: Test mixed retained worker transports
+        run: node scripts/retained-execution-worker-smoke.mjs
+
       - name: Test slow Python callbacks do not block rendering
         run: node scripts/execution-worker-host-smoke.mjs
 
