@@ -15,20 +15,37 @@
       "scene": "HelloTypst",
       "kind": "typst",
       "source": "*Hello* from _Typst!_",
-      "font_size": 96
+      "font_size": 96,
+      "ratchet": {
+        "max_differing_ratio": 0.009,
+        "max_mean_absolute_channel_error": 0.35,
+        "max_abs_centroid_x_delta": 0,
+        "max_abs_centroid_y_delta": 0,
+        "max_abs_width_delta": 0,
+        "max_abs_height_delta": 0
+      }
     },
     {
       "id": "hello-math-typst",
       "scene": "HelloMathTypst",
       "kind": "math-typst",
       "source": "sum_(k=1)^n k = (n(n + 1)) / 2",
-      "font_size": 72
+      "font_size": 72,
+      "ratchet": {
+        "max_differing_ratio": 0.008,
+        "max_mean_absolute_channel_error": 0.3,
+        "max_abs_centroid_x_delta": 0,
+        "max_abs_centroid_y_delta": 0,
+        "max_abs_width_delta": 2,
+        "max_abs_height_delta": 0
+      }
     }
   ],
   "policy": {
     "source_equivalence": "exact-manim-v0.21-doc-example",
     "reference_capture": "cairo-save-last-frame",
     "noon_path": "retained-text-resource",
-    "initial_mode": "measure-before-ratchet"
+    "mode": "enforced-per-fixture-ratchet",
+    "ratchet_rule": "thresholds may only stay equal or tighten after source-level parity improvements"
   }
 }
