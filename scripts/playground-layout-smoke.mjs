@@ -165,6 +165,47 @@ try {
   assert.ok(galleryContract.thumbnails.every((src) => src?.includes("thumbnails/manim/")));
   assert.match(galleryContract.href, /example=parity-square-and-circle/);
 
+  const presentationContract = await page.evaluate(() => {
+    const workspace = document.querySelector(".workspace");
+    const editor = document.querySelector(".editor-pane");
+    const preview = document.querySelector(".preview-pane");
+    const selected = document.querySelector(".selected-example");
+    const workspaceRect = workspace.getBoundingClientRect();
+    const editorRect = editor.getBoundingClientRect();
+    const previewRect = preview.getBoundingClientRect();
+    return {
+      selectedOutsideWorkspace: selected !== null && !workspace.contains(selected),
+      selectedImmediatelyBeforeWorkspace: selected?.nextElementSibling === workspace,
+      obsoletePanels: document.querySelectorAll(".below, .info-panel, .pipeline, .api-list").length,
+      editorTop: editorRect.top,
+      previewTop: previewRect.top,
+      editorShare: editorRect.width / workspaceRect.width,
+    };
+  });
+  assert.equal(
+    presentationContract.selectedOutsideWorkspace,
+    true,
+    "selected-example context must not offset only the editor pane",
+  );
+  assert.equal(
+    presentationContract.selectedImmediatelyBeforeWorkspace,
+    true,
+    "selected-example context must sit directly above the shared source/preview workspace",
+  );
+  assert.equal(
+    presentationContract.obsoletePanels,
+    0,
+    "obsolete architecture/API presentation panes must not be rendered",
+  );
+  assert.ok(
+    Math.abs(presentationContract.editorTop - presentationContract.previewTop) <= 1,
+    `desktop source/preview panes must align at the top (${presentationContract.editorTop} vs ${presentationContract.previewTop})`,
+  );
+  assert.ok(
+    presentationContract.editorShare >= 0.42 && presentationContract.editorShare <= 0.5,
+    `desktop editor should receive a balanced workspace share, got ${presentationContract.editorShare}`,
+  );
+
   const initialBacking = await page.evaluate(() => {
     const canvas = document.querySelector("#scene");
     return {
@@ -233,7 +274,7 @@ try {
 
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ Manim gallery + WebGL2 viewport @ DPR ${deviceScaleFactor}: ` +
+    `✓ Manim gallery + aligned WebGL2 viewport @ DPR ${deviceScaleFactor}: ` +
       `${galleryContract.cards} cards, desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `mobile ${mobile.canvas.width.toFixed(0)}×${mobile.canvas.height.toFixed(0)}`,
   );
