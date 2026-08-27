@@ -1,0 +1,217 @@
+name: Demo presentation integration
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply presentation cleanup on recovery tree
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, before, after, label):
+              count = text.count(before)
+              assert count == 1, f"{label}: expected one match, got {count}"
+              return text.replace(before, after, 1)
+
+          def remove_balanced_div(text, marker, label):
+              start = text.find(marker)
+              assert start >= 0, f"missing {label}"
+              pos = start
+              depth = 0
+              while True:
+                  open_pos = text.find("<div", pos)
+                  close_pos = text.find("</div>", pos)
+                  assert open_pos >= 0 or close_pos >= 0, f"unterminated {label}"
+                  if open_pos >= 0 and (close_pos < 0 or open_pos < close_pos):
+                      depth += 1
+                      pos = open_pos + 4
+                  else:
+                      depth -= 1
+                      pos = close_pos + len("</div>")
+                      if depth == 0:
+                          if pos < len(text) and text[pos] == "\n":
+                              pos += 1
+                          return text[:start] + text[pos:]
+
+          html_path = Path("web/index.html")
+          main_path = Path("web/main.js")
+          editor_path = Path("web/python-editor.js")
+          smoke_path = Path("scripts/playground-layout-smoke.mjs")
+          html = html_path.read_text()
+          main = main_path.read_text()
+          editor = editor_path.read_text()
+          smoke = smoke_path.read_text()
+
+          already = (
+              "workspace.before(selectedExampleStrip);" in main
+              and "metricCpuFrame" not in main
+              and 'class="below"' not in html
+              and 'class="perf-metrics"' not in html
+              and "fakePercentileLabels" in smoke
+          )
+          if already:
+              print("presentation integration already applied")
+              raise SystemExit(0)
+
+          html = replace_once(
+              html,
+              "grid-template-columns: minmax(21rem, 0.86fr) minmax(0, 1.34fr);",
+              "grid-template-columns: minmax(24rem, 1fr) minmax(0, 1.15fr);",
+              "workspace split",
+          )
+          style_start = html.find("      .below {\n")
+          responsive_start = html.find("      @media (max-width: 68rem) {", style_start)
+          assert style_start >= 0 and responsive_start > style_start
+          html = html[:style_start] + html[responsive_start:]
+          html = html.replace("\n        .below {\n          grid-template-columns: 1fr;\n        }\n", "")
+          html = html.replace(
+              "\n        .pipeline {\n          display: grid;\n          grid-template-columns: 1fr 1fr;\n        }\n\n        .arrow {\n          display: none;\n        }\n",
+              "",
+          )
+          html = remove_balanced_div(
+              html,
+              '          <div class="perf-metrics" aria-label="Frame performance p50 and p95">',
+              "fake percentile panel",
+          )
+          markup_start = html.find('      <section class="below" aria-label="Architecture and API notes">')
+          main_close = html.find("    </main>", markup_start)
+          assert markup_start >= 0 and main_close > markup_start
+          html = html[:markup_start] + html[main_close:]
+
+          main = replace_once(
+              main,
+              'const metricCpuFrame = document.querySelector("#metric-cpu-frame");\nconst metricRuntime = document.querySelector("#metric-runtime");\nconst metricPrepare = document.querySelector("#metric-prepare");\nconst metricUploadMs = document.querySelector("#metric-upload-ms");\nconst metricEncode = document.querySelector("#metric-encode");\nconst metricGpu = document.querySelector("#metric-gpu");\n',
+              "",
+              "fake metric lookups",
+          )
+          main = replace_once(
+              main,
+              '    min-height: 3.8rem;\n    padding: 0.75rem 0.85rem;\n    border-bottom: 1px solid var(--border);\n    background: rgba(11, 15, 24, 0.92);',
+              '    min-height: 3.8rem;\n    margin-bottom: 1rem;\n    padding: 0.75rem 0.85rem;\n    border: 1px solid var(--border);\n    border-radius: 0.9rem;\n    background: rgba(11, 15, 24, 0.92);',
+              "selected strip styling",
+          )
+          main = replace_once(
+              main,
+              'selectedExampleStrip.className = "selected-example";\n',
+              'selectedExampleStrip.className = "selected-example";\nselectedExampleStrip.setAttribute("aria-label", "Selected example");\n',
+              "selected strip label",
+          )
+          main = replace_once(
+              main,
+              'document.querySelector(".editor-stack").before(selectedExampleStrip);',
+              'workspace.before(selectedExampleStrip);',
+              "selected strip placement",
+          )
+          main = replace_once(
+              main,
+              '    workspace.scrollIntoView({ behavior: "smooth", block: "start" });',
+              '    selectedExampleStrip.scrollIntoView({ behavior: "smooth", block: "start" });',
+              "scroll target",
+          )
+          main = replace_once(
+              main,
+              '      metricCpuFrame.value = "engine worker";\n      metricRuntime.value = host.enabled ? `${host.missedDeadlines} host misses` : "engine worker";\n      metricPrepare.value = "render worker";\n      metricUploadMs.value = "render worker";\n      metricEncode.value = "render worker";\n      metricGpu.value = rendererBackend;\n',
+              "",
+              "fake metric assignments",
+          )
+
+          editor = replace_once(
+              editor,
+              '    @media (min-width: 68.01rem) {\n      .canvas-wrap {\n        padding: 0 !important;\n        place-items: stretch !important;\n      }\n      .canvas-wrap > canvas {\n        width: 100%;\n        height: 100%;\n        max-width: none;\n        aspect-ratio: auto;\n        border: 0;\n        border-radius: 0;\n      }\n    }\n',
+              "",
+              "editor canvas override",
+          )
+
+          anchor = '  assert.match(galleryContract.href, /example=parity-square-and-circle/);\n'
+          coverage = r'''
+          const presentationContract = await page.evaluate(() => {
+            const workspace = document.querySelector(".workspace");
+            const editor = document.querySelector(".editor-pane");
+            const preview = document.querySelector(".preview-pane");
+            const selected = document.querySelector(".selected-example");
+            const workspaceRect = workspace.getBoundingClientRect();
+            const editorRect = editor.getBoundingClientRect();
+            const previewRect = preview.getBoundingClientRect();
+            return {
+              selectedOutsideWorkspace: selected !== null && !workspace.contains(selected),
+              selectedImmediatelyBeforeWorkspace: selected?.nextElementSibling === workspace,
+              obsoletePanels: document.querySelectorAll(
+                ".below, .info-panel, .pipeline, .api-list, .perf-metrics",
+              ).length,
+              fakePercentileLabels: [...document.querySelectorAll(".metric-label")].filter((label) =>
+                /p50\s*\/\s*p95/i.test(label.textContent ?? ""),
+              ).length,
+              editorTop: editorRect.top,
+              previewTop: previewRect.top,
+              editorShare: editorRect.width / workspaceRect.width,
+            };
+          });
+          assert.equal(
+            presentationContract.selectedOutsideWorkspace,
+            true,
+            "selected-example context must not offset only the editor pane",
+          );
+          assert.equal(
+            presentationContract.selectedImmediatelyBeforeWorkspace,
+            true,
+            "selected-example context must sit directly above the shared source/preview workspace",
+          );
+          assert.equal(
+            presentationContract.obsoletePanels,
+            0,
+            "obsolete architecture/API/performance presentation panes must not be rendered",
+          );
+          assert.equal(
+            presentationContract.fakePercentileLabels,
+            0,
+            "public demo must not claim p50/p95 telemetry it does not measure",
+          );
+          assert.ok(
+            Math.abs(presentationContract.editorTop - presentationContract.previewTop) <= 1,
+            `desktop source/preview panes must align at the top (${presentationContract.editorTop} vs ${presentationContract.previewTop})`,
+          );
+          assert.ok(
+            presentationContract.editorShare >= 0.42 && presentationContract.editorShare <= 0.5,
+            `desktop editor should receive a balanced workspace share, got ${presentationContract.editorShare}`,
+          );
+          '''
+          smoke = replace_once(smoke, anchor, anchor + coverage, "presentation smoke anchor")
+          smoke = smoke.replace(
+              "✓ Manim gallery + WebGL2 viewport @ DPR",
+              "✓ Manim gallery + aligned WebGL2 viewport @ DPR",
+          )
+
+          html_path.write_text(html)
+          main_path.write_text(main)
+          editor_path.write_text(editor)
+          smoke_path.write_text(smoke)
+          print("applied presentation cleanup")
+          PY
+          node --check web/main.js
+          node --check web/python-editor.js
+          node --check scripts/playground-layout-smoke.mjs
+
+      - name: Commit integrated presentation changes
+        run: |
+          if git diff --quiet; then
+            echo "No presentation changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/index.html web/main.js web/python-editor.js scripts/playground-layout-smoke.mjs
+          git commit -m "Integrate demo presentation cleanup"
+          git push origin HEAD:${{ github.head_ref }}
