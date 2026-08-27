@@ -162,13 +162,21 @@
       "reason": "Rust derives recursive leaf order from SemanticStore, validates the Python wrapper mirror against that order, and computes the aggregate bounds; Python only supplies the corresponding live shared leaf handles."
     },
     {
+      "id": "group-translation",
+      "surface": "Deterministic Group/VGroup shift/move_to/center/set_x/set_y translation",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "FrontendFamilyTranslation/WasmAuthoringFamilyLayout::shift_by/move_to_*/WasmAuthoringFamilyTranslation::apply_mobject"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_apply_family_translation"}],
+      "reason": "Rust computes the family translation delta from authoritative shared bounds, validates recursive leaf order, and mutates each shared leaf handle; Python only coerces host arguments and synchronizes the legacy scene transport mirror."
+    },
+    {
       "id": "group-placement",
-      "surface": "Group/VGroup move_to/next_to/align_to/arrange family-bound placement",
+      "surface": "Group/VGroup next_to/align_to/arrange relative family placement",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_move_to/_manim_next_to/_manim_align_to/_manim_arrange"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyHandle::layout_session/WasmAuthoringFamilyLayout"},
-      "reason": "Aggregate deterministic family bounds are shared-Rust-owned, but Python still computes group placement deltas and dispatches the resulting mutation across member wrappers.",
-      "replacement": "Move family placement deltas and member mutation application behind WasmAuthoringFamilyHandle.",
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_manim_align_to/_manim_arrange"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/FrontendFamilyTranslation"},
+      "reason": "Family translation and aggregate bounds are shared-Rust-owned, but Python still computes relative next_to/align_to deltas and direct-submobject arrange sequencing.",
+      "replacement": "Move relative family placement intent and arrange sequencing behind the shared family handle.",
       "migration_issue": "#61"
     },
     {
