@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 
 mod legacy;
+mod mixed;
 mod semantic;
 
 pub use legacy::*;
+pub use mixed::*;
 pub use semantic::*;
