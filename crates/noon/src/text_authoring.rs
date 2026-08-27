@@ -18,7 +18,7 @@ use noon_typst::{compile_typst_resource, TypstBackendError, TypstMode, TypstReso
 /// Manim's public text APIs scale imported layout geometry by font points rather
 /// than changing the layout backend's source. Keeping this as an object transform
 /// also keeps glyph/cluster identity stable when font size changes geometrically.
-pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 0.001;
+pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 
 /// Stable handle to one semantic object in a [`RetainedScene`].
@@ -362,8 +362,8 @@ mod tests {
                 Some(GeometryResource::VectorPath(_))
             ));
         }
-        assert!((scene.objects()[0].transform.scale.x - 0.072).abs() < 1e-6);
-        assert!((scene.objects()[0].transform.scale.y - 0.072).abs() < 1e-6);
+        assert!((scene.objects()[0].transform.scale.x - 0.075).abs() < 1e-6);
+        assert!((scene.objects()[0].transform.scale.y - 0.075).abs() < 1e-6);
     }
 
     #[test]
