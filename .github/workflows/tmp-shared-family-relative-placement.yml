@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Fix migration anchor
+        run: python3 scripts/tmp_fix_family_relative_placement_helper.py
       - name: Apply migration
         run: python3 scripts/tmp_shared_family_relative_placement_migration.py
       - name: Format
@@ -61,6 +63,7 @@ jobs:
             scripts/check-web-package.mjs
           git rm -f \
             .github/workflows/tmp-shared-family-relative-placement.yml \
-            scripts/tmp_shared_family_relative_placement_migration.py
+            scripts/tmp_shared_family_relative_placement_migration.py \
+            scripts/tmp_fix_family_relative_placement_helper.py
           git commit -m 'Move family relative placement into shared Rust semantics'
           git push origin HEAD:agent/arch-shared-family-relative-placement
