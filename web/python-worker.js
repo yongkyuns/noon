@@ -171,14 +171,16 @@ import _manim_phase_b
 import _manim_geometry
 import _manim_semantic_handles
 _manim_semantic_handles.install()
-import _manim_typst
-_manim_typst.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
+# Retained text must wrap the final lifecycle-aware Scene.add implementation so
+# it is intercepted before any legacy geometry binding occurs.
+import _manim_typst
+_manim_typst.install()
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill
