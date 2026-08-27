@@ -57,13 +57,15 @@ async function waitForRuntime(page, errors, label) {
   );
 }
 
-async function waitForAppliedScene(page, errors, label) {
+async function waitForAppliedScene(page, errors, label, expectedText = null) {
   await page.waitForFunction(
-    () => {
+    (needle) => {
       const patch = document.querySelector("#patch-status");
-      return patch?.dataset.state === "applied" || patch?.dataset.state === "error";
+      const text = patch?.value ?? patch?.textContent ?? "";
+      if (patch?.dataset.state === "error") return true;
+      return patch?.dataset.state === "applied" && (needle === null || text.includes(needle));
     },
-    null,
+    expectedText,
     { timeout: 60_000 },
   );
   const patch = await page.evaluate(() => ({
@@ -78,6 +80,9 @@ async function waitForAppliedScene(page, errors, label) {
     "applied",
     `${label}: authored scene did not apply: ${JSON.stringify(patch)}\n${errors.join("\n")}`,
   );
+  if (expectedText !== null) {
+    assert.match(patch.text, new RegExp(expectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
 }
 
 let browser = null;
@@ -203,8 +208,14 @@ try {
   const fallbackWarnings = [];
   fallbackPage.on("pageerror", (error) => fallbackErrors.push(`pageerror: ${error}`));
   fallbackPage.on("console", (message) => {
-    if (message.type() === "error") fallbackErrors.push(`console: ${message.text()}`);
     if (message.type() === "warning") fallbackWarnings.push(message.text());
+    if (
+      message.type() === "error" &&
+      !message.text().includes("ERR_FAILED") &&
+      !message.text().includes("esm.sh")
+    ) {
+      fallbackErrors.push(`console: ${message.text()}`);
+    }
   });
 
   await fallbackPage.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, {
@@ -233,10 +244,15 @@ try {
   assert.equal(fallback.backend, "WebGL2");
 
   await fallbackPage.locator("#python-scene-source").fill(
-    "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n",
+    "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
   );
   await fallbackPage.locator("#replace-scene").click();
-  await waitForAppliedScene(fallbackPage, fallbackErrors, "edited textarea fallback");
+  await waitForAppliedScene(
+    fallbackPage,
+    fallbackErrors,
+    "edited textarea fallback",
+    "2 objects",
+  );
   assert.ok(
     fallbackWarnings.some((warning) => warning.includes("Enhanced Python editor unavailable")),
     `expected a non-fatal enhancement warning; got ${fallbackWarnings.join("\n")}`,
@@ -249,7 +265,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback.`,
+    `Python editor smoke passed: enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();
