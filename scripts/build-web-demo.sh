@@ -13,6 +13,7 @@ node --check web/native-inputs.js
 node --check web/execution-transport.js
 node --check web/execution-engine-worker.js
 node --check web/execution-render-worker.js
+node --check web/legacy-execution-worker-client.js
 node --check web/execution-worker-client.js
 node --check web/noon-authoring.js
 node --check web/js/examples/manim-quickstart-equivalents.js
@@ -51,6 +52,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/execution-worker-routing.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
 node --test web/browser-jank.test.mjs

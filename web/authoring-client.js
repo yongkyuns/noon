@@ -15,6 +15,7 @@ export class PythonAuthoringClient {
   #rejectReady;
   #ready = false;
   #terminated = false;
+  #lastRetainedDocument = null;
 
   constructor(worker = createAuthoringWorker()) {
     this.#worker = worker;
@@ -87,6 +88,17 @@ export class PythonAuthoringClient {
     return result;
   }
 
+  /// Consume the retained sidecar produced by the most recent scene-authoring run.
+  ///
+  /// The normal demo already passes this client into `ExecutionWorkerClient` when
+  /// reconciling Python output, so the execution boundary can pick the retained
+  /// worker path without adding retained source/resource payloads to Scene JSON.
+  consumeRetainedDocument() {
+    const retained = this.#lastRetainedDocument;
+    this.#lastRetainedDocument = null;
+    return retained;
+  }
+
   terminate() {
     if (this.#terminated) {
       return;
@@ -134,6 +146,9 @@ export class PythonAuthoringClient {
 
       if (message.type === "result") {
         const result = parseAuthoringResult(message.resultJson);
+        if (result.kind === "scene_document") {
+          this.#lastRetainedDocument = result.retainedDocument ?? null;
+        }
         this.#settle(message.requestId, ({ resolve }) => resolve(result));
         return;
       }
@@ -318,7 +333,11 @@ function validateRetainedTypstSpec(text) {
   if (!Number.isFinite(text.opacity) || text.opacity < 0 || text.opacity > 1) {
     throw new Error("Python retained Typst opacity must be between zero and one");
   }
-  if (!isRecord(text.transform) || !isRecord(text.transform.translation) || !isRecord(text.transform.scale)) {
+  if (
+    !isRecord(text.transform) ||
+    !isRecord(text.transform.translation) ||
+    !isRecord(text.transform.scale)
+  ) {
     throw new Error("Python retained Typst transform is malformed");
   }
   for (const value of [

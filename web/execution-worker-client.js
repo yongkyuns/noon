@@ -1,39 +1,39 @@
-import {
-  EXECUTION_TRANSPORT_SHARED,
-  EXECUTION_TRANSPORT_TRANSFERABLE,
-  selectExecutionTransportMode,
-} from "./execution-transport.js";
-import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
-
-const ENGINE_CHANNEL = "noon.engine";
-const ENGINE_PROTOCOL_VERSION = 1;
-const RENDER_CHANNEL = "noon.render";
-const RENDER_PROTOCOL_VERSION = 1;
+import { ExecutionWorkerClient as LegacyExecutionWorkerClient } from "./legacy-execution-worker-client.js";
+import { RetainedExecutionWorkerClient } from "./retained-execution-worker-client.js";
 
 export class ExecutionWorkerClient {
   #canvas;
-  #engineWorker = null;
-  #renderWorker = null;
-  #nextRequestId = 0;
-  #pending = new Map();
-  #session = 0;
+  #activeClient = null;
+  #executionMode = null;
   #sceneJson = null;
+  #retainedDocumentJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
-  #ready = null;
   #onError;
-  #hostAuthoringClient = null;
-  #hostCallbacks = null;
+  #legacyClientFactory;
+  #retainedClientFactory;
+  #replacementResizeObserver = null;
 
-  constructor(canvas, { onError = null } = {}) {
-    if (!(canvas instanceof HTMLCanvasElement)) {
-      throw new TypeError("ExecutionWorkerClient requires an HTMLCanvasElement");
-    }
+  constructor(
+    canvas,
+    {
+      onError = null,
+      legacyClientFactory = (target, options) =>
+        new LegacyExecutionWorkerClient(target, options),
+      retainedClientFactory = (target, options) =>
+        new RetainedExecutionWorkerClient(target, options),
+    } = {},
+  ) {
     if (onError !== null && typeof onError !== "function") {
       throw new TypeError("ExecutionWorkerClient onError must be a function");
     }
+    if (typeof legacyClientFactory !== "function" || typeof retainedClientFactory !== "function") {
+      throw new TypeError("execution worker client factories must be functions");
+    }
     this.#canvas = canvas;
     this.#onError = onError;
+    this.#legacyClientFactory = legacyClientFactory;
+    this.#retainedClientFactory = retainedClientFactory;
   }
 
   get canvas() {
@@ -41,225 +41,254 @@ export class ExecutionWorkerClient {
   }
 
   get transportMode() {
-    return this.#transportMode;
+    return this.#activeClient?.transportMode ?? this.#transportMode;
   }
 
-  async start(
-    sceneJson,
-    {
-      loopDurationSeconds = 4,
-      transportMode = selectExecutionTransportMode(),
-      sharedSlotCapacity = 1024 * 1024,
-    } = {},
-  ) {
-    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+  get executionMode() {
+    return this.#executionMode;
+  }
+
+  async start(sceneJson, options = {}) {
+    if (this.#activeClient !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
-    validateSceneJson(sceneJson);
-    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    validateLoopDurationSeconds(loopDurationSeconds);
-    if (
-      transportMode !== EXECUTION_TRANSPORT_SHARED &&
-      transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
-    ) {
-      throw new TypeError(`unsupported execution transport mode ${transportMode}`);
-    }
-    if (
-      transportMode === EXECUTION_TRANSPORT_SHARED &&
-      selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED
-    ) {
-      throw new Error("shared execution transport requires cross-origin isolation");
-    }
-    if (typeof this.#canvas.transferControlToOffscreen !== "function") {
-      throw new Error("OffscreenCanvas transfer is unavailable in this browser");
-    }
-
-    this.#sceneJson = sceneJson;
-    this.#loopDurationSeconds = loopDurationSeconds;
-    this.#transportMode = transportMode;
-    this.#session = checkedNextSession(this.#session);
-
-    // The OffscreenCanvas inherits the HTML canvas backing-store dimensions at
-    // transfer time. Size that backing store from the already-laid-out CSS box
-    // before handing control to the render worker; otherwise Chrome/WebGL can
-    // create its first surface at the HTML default 300×150 and only correct it
-    // after renderer startup.
-    const devicePixelRatio = window.devicePixelRatio || 1;
-    const initialWidth = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
-    const initialHeight = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
-    this.#canvas.width = initialWidth;
-    this.#canvas.height = initialHeight;
-
-    const channel = new MessageChannel();
-    const offscreen = this.#canvas.transferControlToOffscreen();
-    this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
-      type: "module",
-      name: "noon-engine",
+    const client = this.#legacyClientFactory(this.#canvas, {
+      onError: (error, owner) => this.#notifyError(error, owner),
     });
-    this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-      type: "module",
-      name: "noon-render",
-    });
-
-    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-    const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
-    this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
-      engine,
-      render,
-      transportMode,
-      session: this.#session,
-    }));
-
-    this.#renderWorker.postMessage(
-      renderEnvelope("init", {
-        canvas: offscreen,
-        port: channel.port2,
-        transportMode,
-        width: initialWidth,
-        height: initialHeight,
-      }),
-      [offscreen, channel.port2],
-    );
-    this.#engineWorker.postMessage(
-      engineEnvelope("init", {
-        port: channel.port1,
-        sceneJson,
-        loopDurationSeconds,
-        transportMode,
-        sharedSlotCapacity,
-        session: this.#session,
-      }),
-      [channel.port1],
-    );
-    return this.#ready;
+    this.#activeClient = client;
+    this.#executionMode = "legacy";
+    try {
+      const ready = await client.start(sceneJson, options);
+      this.#sceneJson = sceneJson;
+      this.#retainedDocumentJson = null;
+      this.#loopDurationSeconds = options.loopDurationSeconds ?? 4;
+      this.#transportMode = ready.transportMode ?? options.transportMode ?? client.transportMode;
+      return ready;
+    } catch (error) {
+      client.terminate();
+      this.#activeClient = null;
+      this.#executionMode = null;
+      throw error;
+    }
   }
 
   ready() {
-    if (this.#ready === null) {
-      throw new Error("ExecutionWorkerClient has not been started");
-    }
-    return this.#ready;
+    this.#requireStarted();
+    return this.#activeClient.ready();
   }
 
-  async replaceScene(
-    sceneJson,
-    { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
-  ) {
-    validateSceneJson(sceneJson);
-    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
-    const result = await this.#requestEngine("replace_scene", {
-      sceneJson,
-      loopDurationSeconds: duration,
-    });
-    this.#sceneJson = result.sceneJson ?? sceneJson;
-    if (duration !== null) {
-      this.#loopDurationSeconds = duration;
-    }
-    await this.configureHostCallbacks(callbacks, authoringClient);
-    return result;
+  replaceScene(sceneJson, options = {}) {
+    return this.#routeScene("replaceScene", sceneJson, options);
   }
 
-  async reconcileScene(
-    sceneJson,
-    { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
-  ) {
-    validateSceneJson(sceneJson);
-    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
-    const result = await this.#requestEngine("reconcile_scene", {
-      sceneJson,
-      loopDurationSeconds: duration,
-    });
-    this.#sceneJson = result.sceneJson ?? sceneJson;
-    if (duration !== null) {
-      this.#loopDurationSeconds = duration;
-    }
-    await this.configureHostCallbacks(callbacks, authoringClient);
-    return result;
+  reconcileScene(sceneJson, options = {}) {
+    return this.#routeScene("reconcileScene", sceneJson, options);
   }
 
   async setLoopDurationSeconds(loopDurationSeconds) {
-    const duration = validateLoopDurationSeconds(loopDurationSeconds);
-    const result = await this.#requestEngine("set_loop_duration", {
-      loopDurationSeconds: duration,
-    });
-    this.#loopDurationSeconds = duration;
+    this.#requireStarted();
+    const result = await this.#activeClient.setLoopDurationSeconds(loopDurationSeconds);
+    this.#loopDurationSeconds = loopDurationSeconds;
     return result;
   }
 
-  async applyPatchBatch(patchBatchJson) {
-    if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
-      throw new TypeError("patch batch must be non-empty JSON text");
+  applyPatchBatch(patchBatchJson) {
+    this.#requireStarted();
+    if (this.#executionMode === "retained") {
+      throw new Error("patch batches are not supported by mixed retained execution yet");
     }
-    const result = await this.#requestEngine("apply_patch", { patchBatchJson });
-    if (typeof result.sceneJson === "string") {
-      this.#sceneJson = result.sceneJson;
-    }
-    return result;
+    return this.#activeClient.applyPatchBatch(patchBatchJson);
   }
 
-  async configureHostCallbacks(callbacks, authoringClient = null) {
-    await this.ready();
-    if (callbacks === null || callbacks === undefined) {
-      this.#hostCallbacks = null;
-      await this.#requestEngine("configure_callbacks", { callbacks: null });
-      return;
+  configureHostCallbacks(callbacks, authoringClient = null) {
+    this.#requireStarted();
+    if (this.#executionMode === "retained") {
+      if (callbacks !== null && callbacks !== undefined) {
+        throw new Error("live Python callbacks are not supported by mixed retained execution yet");
+      }
+      return Promise.resolve();
     }
-    validateCallbacks(callbacks);
-    if (!authoringClient || typeof authoringClient.attachEnginePort !== "function") {
-      throw new TypeError("host callbacks require a PythonAuthoringClient");
-    }
-    if (this.#hostAuthoringClient !== authoringClient) {
-      const channel = new MessageChannel();
-      await authoringClient.attachEnginePort(channel.port2);
-      await this.#requestEngine(
-        "attach_host_port",
-        { port: channel.port1 },
-        [channel.port1],
-      );
-      this.#hostAuthoringClient = authoringClient;
-    }
-    this.#hostCallbacks = cloneCallbacks(callbacks);
-    await this.#requestEngine("configure_callbacks", { callbacks: this.#hostCallbacks });
+    return this.#activeClient.configureHostCallbacks(callbacks, authoringClient);
   }
 
-  async state() {
-    return this.#requestEngine("state", {});
+  state() {
+    this.#requireStarted();
+    return this.#activeClient.state();
   }
 
   async metrics() {
-    const [render, engine] = await Promise.all([
-      this.#requestRender("metrics", {}),
-      this.#requestEngine("metrics", {}),
-    ]);
-    return { ...render, engineMetrics: engine.metrics };
+    this.#requireStarted();
+    const report = await this.#activeClient.metrics();
+    if (this.#executionMode !== "retained") {
+      return report;
+    }
+    return {
+      ...report,
+      engineMetrics: {
+        ...report.engineMetrics,
+        host: report.engineMetrics?.host ?? disabledHostMetrics(),
+      },
+    };
   }
 
   resize(width, height, devicePixelRatio = 1) {
     this.#requireStarted();
-    if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(devicePixelRatio)) {
-      throw new TypeError("execution canvas dimensions must be finite");
-    }
-    const physicalWidth = Math.max(1, Math.round(width * devicePixelRatio));
-    const physicalHeight = Math.max(1, Math.round(height * devicePixelRatio));
-    // Once control has moved to OffscreenCanvas, HTMLCanvasElement bitmap sizing
-    // belongs to the render worker. Writing width/height here throws InvalidStateError.
-    this.#renderWorker.postMessage(
-      renderEnvelope("resize", { width: physicalWidth, height: physicalHeight }),
-    );
+    this.#activeClient.resize(width, height, devicePixelRatio);
   }
 
   async restart() {
     this.#requireStarted();
-    const sceneJson = this.#sceneJson;
-    const loopDurationSeconds = this.#loopDurationSeconds;
-    const transportMode = this.#transportMode;
-    const callbacks = this.#hostCallbacks;
-    const authoringClient = this.#hostAuthoringClient;
-    this.terminate({ preserveHostConfiguration: true });
+    const ready = await this.#activeClient.restart();
+    const nextCanvas = this.#activeClient.canvas;
+    if (nextCanvas !== undefined && nextCanvas !== this.#canvas) {
+      this.#canvas = nextCanvas;
+      this.#installReplacementResizeObserver();
+    }
+    this.#transportMode = ready.transportMode ?? this.#activeClient.transportMode ?? this.#transportMode;
+    return ready;
+  }
 
+  terminate(options = {}) {
+    this.#activeClient?.terminate(options);
+    this.#activeClient = null;
+    this.#executionMode = null;
+    this.#replacementResizeObserver?.disconnect();
+    this.#replacementResizeObserver = null;
+  }
+
+  async #routeScene(operation, sceneJson, options) {
+    this.#requireStarted();
+    const {
+      callbacks = null,
+      authoringClient = null,
+      loopDurationSeconds = null,
+      retainedDocument: explicitRetainedDocument,
+    } = options ?? {};
+    const retainedDocument =
+      explicitRetainedDocument === undefined
+        ? consumeRetainedDocument(authoringClient)
+        : validateRetainedDocument(explicitRetainedDocument);
+
+    if (hasRetainedObjects(retainedDocument)) {
+      if (callbacks !== null && callbacks !== undefined) {
+        throw new Error(
+          "retained Typst scenes with live Python callbacks are not supported by the retained runtime yet",
+        );
+      }
+      return this.#switchToRetained(sceneJson, retainedDocument, loopDurationSeconds);
+    }
+
+    if (this.#executionMode === "retained") {
+      return this.#switchToLegacy(
+        sceneJson,
+        callbacks,
+        authoringClient,
+        loopDurationSeconds,
+      );
+    }
+
+    const result = await this.#activeClient[operation](sceneJson, {
+      callbacks,
+      authoringClient,
+      loopDurationSeconds,
+    });
+    this.#sceneJson = result.sceneJson ?? sceneJson;
+    if (loopDurationSeconds !== null && loopDurationSeconds !== undefined) {
+      this.#loopDurationSeconds = loopDurationSeconds;
+    }
+    return result;
+  }
+
+  async #switchToRetained(sceneJson, retainedDocument, loopDurationSeconds) {
+    const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
+    const transportMode = this.#transportMode ?? this.#activeClient.transportMode;
+    this.#terminateActive();
+    this.#replaceCanvas();
+
+    const client = this.#retainedClientFactory(this.#canvas, {
+      onError: (error, owner) => this.#notifyError(error, owner),
+    });
+    this.#activeClient = client;
+    this.#executionMode = "retained";
+    const retainedDocumentJson = JSON.stringify(retainedDocument);
+    try {
+      const ready = await client.start(sceneJson, retainedDocumentJson, {
+        loopDurationSeconds: duration,
+        ...(transportMode === null || transportMode === undefined ? {} : { transportMode }),
+      });
+      this.#sceneJson = sceneJson;
+      this.#retainedDocumentJson = retainedDocumentJson;
+      this.#loopDurationSeconds = duration;
+      this.#transportMode = ready.transportMode ?? client.transportMode ?? transportMode;
+      this.#installReplacementResizeObserver();
+      const state = await client.state();
+      return {
+        ...state,
+        type: "result",
+        operation: "replace_scene",
+        incremental: false,
+        executionMode: "retained",
+        session: ready.session ?? null,
+        nextPatchSequence: state.nextPatchSequence ?? "0",
+      };
+    } catch (error) {
+      client.terminate();
+      this.#activeClient = null;
+      this.#executionMode = null;
+      throw error;
+    }
+  }
+
+  async #switchToLegacy(sceneJson, callbacks, authoringClient, loopDurationSeconds) {
+    const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
+    const transportMode = this.#transportMode ?? this.#activeClient.transportMode;
+    this.#terminateActive();
+    this.#replaceCanvas();
+
+    const client = this.#legacyClientFactory(this.#canvas, {
+      onError: (error, owner) => this.#notifyError(error, owner),
+    });
+    this.#activeClient = client;
+    this.#executionMode = "legacy";
+    try {
+      const ready = await client.start(sceneJson, {
+        loopDurationSeconds: duration,
+        ...(transportMode === null || transportMode === undefined ? {} : { transportMode }),
+      });
+      await client.configureHostCallbacks(callbacks, authoringClient);
+      this.#sceneJson = sceneJson;
+      this.#retainedDocumentJson = null;
+      this.#loopDurationSeconds = duration;
+      this.#transportMode = ready.transportMode ?? client.transportMode ?? transportMode;
+      this.#installReplacementResizeObserver();
+      const state = await client.state();
+      return {
+        ...state,
+        type: "result",
+        operation: "replace_scene",
+        incremental: false,
+        executionMode: "legacy",
+        session: ready.session ?? null,
+        nextPatchSequence: state.nextPatchSequence ?? "0",
+      };
+    } catch (error) {
+      client.terminate();
+      this.#activeClient = null;
+      this.#executionMode = null;
+      throw error;
+    }
+  }
+
+  #terminateActive() {
+    this.#activeClient?.terminate();
+    this.#activeClient = null;
+  }
+
+  #replaceCanvas() {
     const previous = this.#canvas;
+    if (!previous || typeof previous.cloneNode !== "function" || typeof previous.replaceWith !== "function") {
+      throw new Error("execution canvas cannot be replaced after OffscreenCanvas transfer");
+    }
     const replacement = previous.cloneNode(false);
     replacement.width = previous.width;
     replacement.height = previous.height;
@@ -267,137 +296,32 @@ export class ExecutionWorkerClient {
     replacement.id = previous.id;
     previous.replaceWith(replacement);
     this.#canvas = replacement;
-    const ready = await this.start(sceneJson, { loopDurationSeconds, transportMode });
-    if (callbacks !== null && authoringClient !== null) {
-      this.#hostAuthoringClient = null;
-      await this.configureHostCallbacks(callbacks, authoringClient);
+    this.#replacementResizeObserver?.disconnect();
+    this.#replacementResizeObserver = null;
+  }
+
+  #installReplacementResizeObserver() {
+    this.#replacementResizeObserver?.disconnect();
+    this.#replacementResizeObserver = null;
+    if (typeof ResizeObserver !== "function") {
+      return;
     }
-    return ready;
-  }
-
-  terminate({ preserveHostConfiguration = false } = {}) {
-    this.#engineWorker?.terminate();
-    this.#renderWorker?.terminate();
-    this.#engineWorker = null;
-    this.#renderWorker = null;
-    this.#ready = null;
-    const error = new Error("execution worker client terminated");
-    for (const pending of this.#pending.values()) {
-      pending.reject(error);
-    }
-    this.#pending.clear();
-    if (!preserveHostConfiguration) {
-      this.#hostAuthoringClient = null;
-      this.#hostCallbacks = null;
-    }
-  }
-
-  async #requestEngine(type, payload, transfer = []) {
-    await this.ready();
-    return this.#request(
-      this.#engineWorker,
-      "engine",
-      engineEnvelope,
-      type,
-      payload,
-      transfer,
-    );
-  }
-
-  async #requestRender(type, payload, transfer = []) {
-    await this.ready();
-    return this.#request(
-      this.#renderWorker,
-      "render",
-      renderEnvelope,
-      type,
-      payload,
-      transfer,
-    );
-  }
-
-  #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
-    const requestId = this.#nextRequestId;
-    this.#nextRequestId = checkedNextRequestId(this.#nextRequestId);
-    const result = new Promise((resolve, reject) => {
-      this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
-    });
-    worker.postMessage(envelopeFactory(type, { requestId, ...payload }), transfer);
-    return result;
-  }
-
-  #workerReady(worker, channel, owner) {
-    return new Promise((resolve, reject) => {
-      const onMessage = (event) => {
-        const message = event.data;
-        try {
-          validateWorkerEnvelope(message, channel);
-          if (message.type === "ready") {
-            resolve(message);
-            return;
-          }
-          if (message.type === "host_callback_error") {
-            this.#notifyError(new Error(message.message || "host callback failed"), "host");
-            return;
-          }
-          if (message.type === "error") {
-            const error = new Error(message.message || `${owner} worker failed`);
-            if (message.requestId === null || message.requestId === undefined) {
-              reject(error);
-              this.#notifyError(error, owner);
-              return;
-            }
-            this.#settle(owner, message.requestId, ({ reject: rejectPending }) => {
-              rejectPending(error);
-            });
-            return;
-          }
-          if (message.requestId !== undefined) {
-            this.#settle(owner, message.requestId, ({ resolve: resolvePending }) => {
-              resolvePending(message);
-            });
-          }
-        } catch (error) {
-          reject(error);
-          this.#notifyError(error, owner);
-        }
-      };
-      worker.addEventListener("message", onMessage);
-      worker.addEventListener("error", (event) => {
-        const error = new Error(event.message || `${owner} worker crashed`);
-        reject(error);
-        this.#rejectOwner(owner, error);
-        this.#notifyError(error, owner);
-      });
-      worker.addEventListener("messageerror", () => {
-        const error = new Error(`${owner} worker message could not be decoded`);
-        reject(error);
-        this.#rejectOwner(owner, error);
-        this.#notifyError(error, owner);
-      });
-    });
-  }
-
-  #settle(owner, requestId, settle) {
-    if (!Number.isSafeInteger(requestId) || requestId < 0) {
-      throw new Error(`${owner} worker returned an invalid request ID`);
-    }
-    const key = `${owner}:${requestId}`;
-    const pending = this.#pending.get(key);
-    if (!pending) {
-      throw new Error(`${owner} worker returned unknown request ID ${requestId}`);
-    }
-    this.#pending.delete(key);
-    settle(pending);
-  }
-
-  #rejectOwner(owner, error) {
-    for (const [key, pending] of this.#pending.entries()) {
-      if (key.startsWith(`${owner}:`)) {
-        pending.reject(error);
-        this.#pending.delete(key);
+    const canvas = this.#canvas;
+    this.#replacementResizeObserver = new ResizeObserver(() => {
+      if (this.#activeClient === null) {
+        return;
       }
-    }
+      try {
+        this.#activeClient.resize(
+          canvas.clientWidth,
+          canvas.clientHeight,
+          globalThis.devicePixelRatio || 1,
+        );
+      } catch (error) {
+        this.#notifyError(error, "resize");
+      }
+    });
+    this.#replacementResizeObserver.observe(canvas);
   }
 
   #notifyError(error, owner) {
@@ -405,91 +329,52 @@ export class ExecutionWorkerClient {
   }
 
   #requireStarted() {
-    if (this.#engineWorker === null || this.#renderWorker === null) {
+    if (this.#activeClient === null) {
       throw new Error("ExecutionWorkerClient has not been started");
     }
   }
 }
 
-function engineEnvelope(type, payload = {}) {
-  return {
-    channel: ENGINE_CHANNEL,
-    protocolVersion: ENGINE_PROTOCOL_VERSION,
-    type,
-    ...payload,
-  };
-}
-
-function renderEnvelope(type, payload = {}) {
-  return {
-    channel: RENDER_CHANNEL,
-    protocolVersion: RENDER_PROTOCOL_VERSION,
-    type,
-    ...payload,
-  };
-}
-
-function validateWorkerEnvelope(message, channel) {
-  const version = channel === ENGINE_CHANNEL ? ENGINE_PROTOCOL_VERSION : RENDER_PROTOCOL_VERSION;
-  if (
-    !message ||
-    typeof message !== "object" ||
-    message.channel !== channel ||
-    message.protocolVersion !== version
-  ) {
-    throw new Error(`received an invalid ${channel} worker envelope`);
-  }
-}
-
-function validateSceneJson(sceneJson) {
-  if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
-    throw new TypeError("scene must be non-empty JSON text");
-  }
-}
-
-function validateLoopDurationSeconds(loopDurationSeconds) {
-  if (!Number.isFinite(loopDurationSeconds) || loopDurationSeconds <= 0) {
-    throw new TypeError("loop duration must be positive and finite");
-  }
-  return loopDurationSeconds;
-}
-
-function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
-  if (loopDurationSeconds === null || loopDurationSeconds === undefined) {
+function consumeRetainedDocument(authoringClient) {
+  if (!authoringClient || typeof authoringClient.consumeRetainedDocument !== "function") {
     return null;
   }
-  return validateLoopDurationSeconds(loopDurationSeconds);
+  return validateRetainedDocument(authoringClient.consumeRetainedDocument());
 }
 
-function validateCallbacks(callbacks) {
-  if (!callbacks || typeof callbacks !== "object") {
-    throw new TypeError("callback configuration must be an object");
+function validateRetainedDocument(document) {
+  if (document === null || document === undefined) {
+    return null;
   }
-  if (!Number.isSafeInteger(callbacks.session_id) || callbacks.session_id < 0) {
-    throw new TypeError("callback configuration has an invalid session ID");
+  if (
+    typeof document !== "object" ||
+    Array.isArray(document) ||
+    !Array.isArray(document.objects)
+  ) {
+    throw new TypeError("retained authoring handoff must contain an objects array");
   }
-  if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
-    throw new TypeError("callback configuration must contain slots");
-  }
+  return document;
 }
 
-function cloneCallbacks(callbacks) {
+function hasRetainedObjects(document) {
+  return document !== null && document.objects.length > 0;
+}
+
+function disabledHostMetrics() {
   return {
-    session_id: callbacks.session_id,
-    slots: callbacks.slots.map((slot) => ({ id: slot.id, objects: [...slot.objects] })),
+    enabled: false,
+    inFlight: false,
+    pendingCommit: false,
+    generation: 0,
+    nextSequence: 0,
+    requests: 0,
+    completed: 0,
+    committed: 0,
+    missedDeadlines: 0,
+    droppedLateResults: 0,
+    errors: 0,
+    lastDurationMs: null,
+    maxDurationMs: 0,
+    lastFrameTime: null,
   };
-}
-
-function checkedNextRequestId(current) {
-  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
-    throw new Error("execution worker request ID space exhausted");
-  }
-  return current + 1;
-}
-
-function checkedNextSession(current) {
-  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
-    throw new Error("execution worker session space exhausted");
-  }
-  return current + 1;
 }
