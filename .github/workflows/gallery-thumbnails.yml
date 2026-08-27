@@ -1,0 +1,55 @@
+name: Gallery thumbnail generation
+
+on:
+  pull_request:
+    paths:
+      - "scripts/generate-gallery-thumbnails.mjs"
+      - "web/python/examples/manim_tutorial_manifest.json"
+      - "web/python/examples/**"
+      - "web/python/**"
+      - "crates/noon-web/**"
+      - ".github/workflows/gallery-thumbnails.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Install capture dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Generate deterministic Noon poster frames
+        run: node scripts/generate-gallery-thumbnails.mjs
+
+      - name: Upload generated poster frames
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-thumbnail-artifacts
+          path: gallery-thumbnail-artifacts
+          if-no-files-found: error
+          retention-days: 1
