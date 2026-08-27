@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use noon_core::{
-    GeometryRef, ObjectDefinition, ObjectId, Style, TrackDefinition, Transform2D,
-};
+use noon_core::{GeometryRef, ObjectDefinition, ObjectId, Style, TrackDefinition, Transform2D};
 use serde::{Deserialize, Serialize};
 
 use crate::{IrError, SceneDocument};
@@ -156,7 +154,10 @@ pub struct SceneSpec {
 }
 
 impl SceneSpec {
-    pub fn new(objects: Vec<ObjectSpec>, tracks: Vec<TrackDefinition>) -> Result<Self, SceneSpecError> {
+    pub fn new(
+        objects: Vec<ObjectSpec>,
+        tracks: Vec<TrackDefinition>,
+    ) -> Result<Self, SceneSpecError> {
         let spec = Self {
             version: SCENE_SPEC_VERSION,
             objects,
@@ -169,7 +170,10 @@ impl SceneSpec {
 
     pub fn from_legacy(legacy: &SceneDocument) -> Result<Self, SceneSpecError> {
         // Reuse the mature legacy validator before adapting its geometry objects.
-        legacy.clone().into_scene().map_err(SceneSpecError::Legacy)?;
+        legacy
+            .clone()
+            .into_scene()
+            .map_err(SceneSpecError::Legacy)?;
         let spec = Self {
             version: SCENE_SPEC_VERSION,
             objects: legacy.objects.iter().map(ObjectSpec::from_legacy).collect(),
@@ -191,7 +195,10 @@ impl SceneSpec {
         legacy: &SceneDocument,
         text_objects: Vec<OrderedTextObjectSpec>,
     ) -> Result<Self, SceneSpecError> {
-        legacy.clone().into_scene().map_err(SceneSpecError::Legacy)?;
+        legacy
+            .clone()
+            .into_scene()
+            .map_err(SceneSpecError::Legacy)?;
         let object_count = legacy
             .objects
             .len()
@@ -388,7 +395,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mixed.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+            mixed
+                .objects
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
             vec![legacy.objects[0].id, text_id, legacy.objects[1].id]
         );
         assert_eq!(mixed.objects[1].transform, text.transform);
@@ -416,8 +427,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mixed.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
-            vec![ObjectId::new(100), legacy.objects[0].id, ObjectId::new(101), legacy.objects[1].id]
+            mixed
+                .objects
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            vec![
+                ObjectId::new(100),
+                legacy.objects[0].id,
+                ObjectId::new(101),
+                legacy.objects[1].id
+            ]
         );
     }
 
@@ -449,10 +469,7 @@ mod tests {
     #[test]
     fn text_and_geometry_share_one_identity_domain() {
         let legacy = legacy_document();
-        let collision = ObjectSpec::text(
-            legacy.objects[0].id,
-            TextSpec::typst("collision", 24.0),
-        );
+        let collision = ObjectSpec::text(legacy.objects[0].id, TextSpec::typst("collision", 24.0));
         assert!(matches!(
             SceneSpec::from_legacy_with_ordered_text(
                 &legacy,
