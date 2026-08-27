@@ -1,0 +1,38 @@
+name: Temporary host raster paint barrier
+
+on:
+  push:
+    branches:
+      - fix/host-raster-paint-barrier
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact host capture barrier
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/manim-raster-differential.mjs")
+          text = path.read_text()
+          old = '''    assert.ok(\n      Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,\n      `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,\n    );\n    const outputPath = path.join(fixtureDir, `${sample.label}.png`);\n'''
+          new = '''    assert.ok(\n      Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,\n      `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,\n    );\n    // Match the deterministic capture path: rendering/present submits GPU work,\n    // while the browser compositor owns when that surface becomes screenshot-visible.\n    // Waiting one paint prevents callback-heavy scenes from being captured mid-present.\n    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));\n    const outputPath = path.join(fixtureDir, `${sample.label}.png`);\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one host capture anchor, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate driver syntax
+        run: node --check scripts/manim-raster-differential.mjs
+      - name: Commit implementation only
+        run: |
+          rm .github/workflows/tmp-host-raster-paint-barrier.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Synchronize host raster screenshots with browser paint"
+          git push origin HEAD:fix/host-raster-paint-barrier
