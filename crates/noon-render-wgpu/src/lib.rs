@@ -73,13 +73,18 @@ impl From<Style> for PackedStyle {
             StrokeWidthMode::ScaleWithObject => 0,
             StrokeWidthMode::ScreenSpace => 2,
         };
+        let stroke_cap = match value.stroke_cap {
+            StrokeCap::Round => 0,
+            StrokeCap::Butt => 1 << 2,
+            StrokeCap::Square => 2 << 2,
+        };
         Self {
             fill,
             stroke,
             stroke_width: value.stroke_width,
             opacity: value.opacity,
             fill_enabled,
-            stroke_enabled: stroke_enabled | stroke_width_mode,
+            stroke_enabled: stroke_enabled | stroke_width_mode | stroke_cap,
         }
     }
 }
@@ -1799,13 +1804,17 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
     let GeometryRef::Line { start, end } = &object.geometry else {
         unreachable!("line slot must retain line geometry")
     };
-    let mut transform: PackedTransform = object.transform.into();
-    transform.padding = reveal.clamp(0.0, 1.0);
+    let reveal = reveal.clamp(0.0, 1.0);
+    let revealed_end = *start + (*end - *start) * reveal;
+    let mut style = pack_style(object);
+    if reveal <= 0.0 {
+        style.opacity = 0.0;
+    }
     LineInstance {
-        transform,
-        style: pack_style(object),
+        transform: object.transform.into(),
+        style,
         start: [start.x, start.y],
-        end: [end.x, end.y],
+        end: [revealed_end.x, revealed_end.y],
     }
 }
 
@@ -2253,7 +2262,9 @@ mod tests {
             .iter()
             .all(|path| path.path_params == [1.0, 0.0]));
         assert_eq!(prepared.lines.len(), 1);
-        assert_eq!(prepared.lines[0].transform.padding, 0.5);
+        assert_eq!(prepared.lines[0].start, [-1.0, 0.0]);
+        assert_eq!(prepared.lines[0].end, [0.0, 0.0]);
+        assert_eq!(prepared.lines[0].transform.padding, 0.0);
         assert_eq!(prepared.stats.instance_count, 3);
         assert_eq!(prepared.stats.unsupported_count, 0);
         assert_eq!(prepared.stats.geometry_cache_misses, 2);
@@ -2261,7 +2272,9 @@ mod tests {
         frame.reveals[2] = 0.8;
         let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));
         assert_eq!(advanced.lines.len(), 1);
-        assert_eq!(advanced.lines[0].transform.padding, 0.8);
+        assert_eq!(advanced.lines[0].start, [-1.0, 0.0]);
+        assert_eq!(advanced.lines[0].end, [0.6, 0.0]);
+        assert_eq!(advanced.lines[0].transform.padding, 0.0);
         assert_eq!(advanced.stats.geometry_cache_misses, 0);
         assert_eq!(advanced.stats.instances_repacked, 1);
         assert_eq!(advanced.line_dirty_ranges.len(), 1);
@@ -2552,11 +2565,27 @@ mod tests {
         assert_eq!(prepared.line_ids, &[ObjectId::new(8)]);
         assert_eq!(instance.start, [-2.0, 1.5]);
         assert_eq!(instance.end, [3.0, -0.5]);
-        assert_eq!(instance.transform.padding, 1.0);
+        assert_eq!(instance.transform.padding, 0.0);
         assert_eq!(instance.style.stroke, [0.2, 0.8, 0.4, 1.0]);
         assert_eq!(instance.style.stroke_enabled, 1);
         assert_eq!(instance.style.stroke_width, 0.125);
         assert_eq!(instance.style.opacity, 0.75);
+    }
+
+    #[test]
+    fn line_packing_encodes_semantic_cap_bits() {
+        let mut butt = object(9, GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 0.0)));
+        butt.style.fill = None;
+        butt.style.stroke = Some(Color::WHITE);
+        butt.style.stroke_cap = noon_core::StrokeCap::Butt;
+        let mut square = butt.clone();
+        square.id = ObjectId::new(10);
+        square.style.stroke_cap = noon_core::StrokeCap::Square;
+        let cap_frame = frame(vec![butt, square]);
+        let mut cap_preparer = FramePreparer::new();
+        let packed = cap_preparer.prepare(&cap_frame);
+        assert_eq!(packed.lines[0].style.stroke_enabled & 0b1100, 0b0100);
+        assert_eq!(packed.lines[1].style.stroke_enabled & 0b1100, 0b1000);
     }
 
     #[test]

@@ -31,7 +31,6 @@ struct LineVertexInput {
     @location(7) metrics: vec2<f32>,
     @location(8) flags: vec2<u32>,
     @location(9) end: vec2<f32>,
-    @location(10) reveal: f32,
 };
 
 struct VertexOutput {
@@ -92,6 +91,10 @@ fn stroke_is_enabled(flags: vec2<u32>) -> bool {
 
 fn stroke_is_screen_space(flags: vec2<u32>) -> bool {
     return (flags.y & 2u) != 0u;
+}
+
+fn stroke_cap(flags: vec2<u32>) -> u32 {
+    return (flags.y >> 2u) & 3u;
 }
 
 fn safe_abs_scale(scale: vec2<f32>) -> vec2<f32> {
@@ -176,10 +179,9 @@ fn vs_rectangle(input: VertexInput) -> VertexOutput {
 
 @vertex
 fn vs_line(input: LineVertexInput) -> VertexOutput {
-    let reveal = clamp(input.reveal, 0.0, 1.0);
-    let revealed_end = mix(input.start, input.end, reveal);
+    let revealed_end = input.end;
     let screen_space = stroke_is_screen_space(input.flags);
-    let authored_width = select(0.0, max(input.metrics.x, 0.0), reveal > 0.0);
+    let authored_width = max(input.metrics.x, 0.0);
 
     var output: VertexOutput;
     if screen_space {
@@ -368,6 +370,21 @@ fn capsule_signed_distance(position: vec2<f32>, half_length: f32, radius: f32) -
     return length(offset) - radius;
 }
 
+fn line_signed_distance(
+    position: vec2<f32>,
+    half_length: f32,
+    radius: f32,
+    cap: u32,
+) -> f32 {
+    if cap == 1u {
+        return rectangle_signed_distance(position, vec2<f32>(half_length, radius));
+    }
+    if cap == 2u {
+        return rectangle_signed_distance(position, vec2<f32>(half_length + radius, radius));
+    }
+    return capsule_signed_distance(position, half_length, radius);
+}
+
 @fragment
 fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let radius = max(abs(input.geometry.x), 0.000001);
@@ -487,7 +504,12 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_length = input.geometry.x * 0.5;
     let radius = input.geometry.y * 0.5;
-    let signed_distance = capsule_signed_distance(input.local, half_length, radius);
+    let signed_distance = line_signed_distance(
+        input.local,
+        half_length,
+        radius,
+        (u32(input.flags.y) >> 2u) & 3u,
+    );
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
     return styled_line_color(input, signed_distance) * visible;
 }
