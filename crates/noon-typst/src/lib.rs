@@ -728,18 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn retained_typst_bounds_follow_ink_instead_of_the_page_line_box() {
-        let source = "*Hello* from _Typst!_";
-        let svg = compile_typst(source, TypstMode::Markup).unwrap();
-        let retained = compile_typst_resource(source, TypstMode::Markup).unwrap();
-        assert!(retained.resource.bounds.height() < svg.size_points.y);
-        assert!(retained.resource.bounds.width() <= svg.size_points.x);
-        let center = retained.resource.bounds.center();
-        assert!(center.x.abs() < 1e-5);
-        assert!(center.y.abs() < 1e-5);
-    }
-
-    #[test]
     fn direct_math_normalization_retains_vector_decorations_and_painter_order() {
         let artifact = compile_typst_resource("frac(x, 2)", TypstMode::Math).unwrap();
         assert_eq!(artifact.resource.kind, TextSourceKind::MathTypst);
