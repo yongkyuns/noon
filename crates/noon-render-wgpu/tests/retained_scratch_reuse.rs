@@ -2,7 +2,9 @@ use noon_core::{
     FontResourceArena, GeometryId, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId,
     Style, TextResourceArena, Transform2D,
 };
-use noon_render_wgpu::{RetainedFrameIncrementalStats, RetainedFramePreparer, RetainedPrepareError};
+use noon_render_wgpu::{
+    RetainedFrameIncrementalStats, RetainedFramePreparer, RetainedPrepareError,
+};
 use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
 use noon_text_render_wgpu::TextDeviceMetrics;
 
