@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 scripts/tmp_fix_family_translation_helper.py
           python3 scripts/tmp_fix2_family_translation_helper.py
+          python3 scripts/tmp_fix3_family_translation_helper.py
       - name: Apply migration
         run: python3 scripts/tmp_shared_family_translation_migration.py
       - name: Format
@@ -66,6 +67,7 @@ jobs:
             .github/workflows/tmp-shared-family-translation.yml \
             scripts/tmp_shared_family_translation_migration.py \
             scripts/tmp_fix_family_translation_helper.py \
-            scripts/tmp_fix2_family_translation_helper.py
+            scripts/tmp_fix2_family_translation_helper.py \
+            scripts/tmp_fix3_family_translation_helper.py
           git commit -m 'Move family translation into shared Rust semantics'
           git push origin HEAD:agent/arch-shared-family-translation
