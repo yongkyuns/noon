@@ -15,6 +15,7 @@ let host = null;
 let renderer = null;
 let callbackSessionId = null;
 let currentFrameIndex = -1;
+let currentLogicalTime = 0;
 let activeFrameTimes = null;
 let authoredDuration = null;
 
@@ -96,6 +97,11 @@ async function advanceOneFrame(frameIndex, time) {
   if (host !== null) {
     host.advanceTo(time);
     const frame = JSON.parse(host.callbackFrameJson());
+    if (Math.abs(Number(frame.time) - Number(time)) > 1e-9) {
+      throw new Error(
+        `host callback playhead mismatch at frame ${frameIndex}: expected ${time}, got ${frame.time}`,
+      );
+    }
     const sequence = Number(host.nextSequence());
     const batch = await client.runCallbackPhase(callbackSessionId, frame, sequence);
     const batchJson = JSON.stringify(batch);
@@ -105,6 +111,7 @@ async function advanceOneFrame(frameIndex, time) {
     await presentDelta(hostDelta);
   }
   currentFrameIndex = frameIndex;
+  currentLogicalTime = time;
 }
 
 function normalizeFrameTimes(frameTimes, targetFrame) {
@@ -157,7 +164,12 @@ async function renderThrough(frameIndex, frameTimes) {
   return {
     error: null,
     presented: true,
-    time: renderer.time(),
+    // Logical scene time advances every reference frame even when the execution
+    // transport correctly emits no visual delta (for example a zero-dt updater
+    // activation boundary). Keep the renderer's last-delta time separately for
+    // diagnostics instead of treating it as the authoritative playhead.
+    time: currentLogicalTime,
+    rendererTime: renderer.time(),
     objectCount: renderer.objectCount(),
     rendererBackend: renderer.rendererBackend(),
     drawCalls: renderer.lastDrawCalls(),
