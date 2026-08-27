@@ -154,13 +154,21 @@
       "reason": "Python coerces vectors/points while Rust chooses critical points and applies axis/frame-edge translations."
     },
     {
+      "id": "group-layout-bounds",
+      "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "semantic_family_leaf_ids/WasmAuthoringFamilyHandle::layout_session/WasmAuthoringFamilyLayout"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
+      "reason": "Rust derives recursive leaf order from SemanticStore, validates the Python wrapper mirror against that order, and computes the aggregate bounds; Python only supplies the corresponding live shared leaf handles."
+    },
+    {
       "id": "group-placement",
       "surface": "Group/VGroup move_to/next_to/align_to/arrange family-bound placement",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_move_to/_manim_next_to/_manim_align_to/_manim_arrange"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore family membership"},
-      "reason": "Stable family identity is shared, but aggregate family layout bounds and placement operations are not yet exposed through the family handle.",
-      "replacement": "Move aggregate family bounds and family placement behind WasmAuthoringFamilyHandle.",
+      "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyHandle::layout_session/WasmAuthoringFamilyLayout"},
+      "reason": "Aggregate deterministic family bounds are shared-Rust-owned, but Python still computes group placement deltas and dispatches the resulting mutation across member wrappers.",
+      "replacement": "Move family placement deltas and member mutation application behind WasmAuthoringFamilyHandle.",
       "migration_issue": "#61"
     },
     {

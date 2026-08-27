@@ -839,6 +839,48 @@ impl FrontendFamilyTargetEditor {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn semantic_family_leaf_ids(
+    store: &SemanticStore,
+    family: SemanticNodeId,
+) -> Result<Vec<SemanticNodeId>, String> {
+    fn collect(
+        store: &SemanticStore,
+        node_id: SemanticNodeId,
+        leaves: &mut Vec<SemanticNodeId>,
+    ) -> Result<(), String> {
+        let node = store
+            .node(node_id)
+            .ok_or_else(|| format!("unknown semantic family member {node_id:?}"))?;
+        match node.kind() {
+            SemanticNodeKind::AuthoringObject => {
+                leaves.push(node_id);
+                Ok(())
+            }
+            SemanticNodeKind::Family => {
+                for member in node.members() {
+                    collect(store, *member, leaves)?;
+                }
+                Ok(())
+            }
+            SemanticNodeKind::Object(_) => Err(format!(
+                "family layout member {node_id:?} is not an authoring object"
+            )),
+        }
+    }
+
+    let root = store
+        .node(family)
+        .ok_or_else(|| format!("unknown family semantic node {family:?}"))?;
+    if !matches!(root.kind(), SemanticNodeKind::Family) {
+        return Err(format!("semantic node {family:?} is not a family"));
+    }
+
+    let mut leaves = Vec::new();
+    collect(store, family, &mut leaves)?;
+    Ok(leaves)
+}
+
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
     render_f64(name, value).map(|value| value as f32)
 }
@@ -1135,8 +1177,8 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use super::{
-        FrontendFamilyTargetEditor, FrontendMobjectHandle, ManimNextToArgs, SemanticNodeId,
-        SemanticStore,
+        semantic_family_leaf_ids, Bounds2D64, FrontendFamilyTargetEditor, FrontendMobjectHandle,
+        ManimNextToArgs, SemanticNodeId, SemanticStore,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -1233,6 +1275,143 @@ mod wasm {
     pub struct WasmAuthoringFamilyHandle {
         semantics: SharedSemanticStore,
         id: SemanticNodeId,
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmAuthoringFamilyLayout {
+        semantics: SharedSemanticStore,
+        expected_leaves: Vec<SemanticNodeId>,
+        next_leaf: usize,
+        bounds: Option<Bounds2D64>,
+    }
+
+    impl WasmAuthoringFamilyLayout {
+        fn ensure_complete(&self) -> Result<(), JsValue> {
+            if self.next_leaf != self.expected_leaves.len() {
+                return Err(JsValue::from_str(&format!(
+                    "family layout is incomplete: accepted {} of {} leaves",
+                    self.next_leaf,
+                    self.expected_leaves.len()
+                )));
+            }
+            Ok(())
+        }
+
+        fn center(&self) -> Result<(f64, f64), JsValue> {
+            self.ensure_complete()?;
+            Ok(self.bounds.as_ref().map_or((0.0, 0.0), |bounds| {
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                )
+            }))
+        }
+
+        fn include_bounds(&mut self, bounds: Bounds2D64) {
+            if let Some(total) = &mut self.bounds {
+                total.include(bounds.min_x, bounds.min_y);
+                total.include(bounds.max_x, bounds.max_y);
+            } else {
+                self.bounds = Some(bounds);
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringFamilyLayout {
+        #[wasm_bindgen(js_name = includeMobject)]
+        pub fn include_mobject(
+            &mut self,
+            member: &WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let store = member.1.as_ref().ok_or_else(|| {
+                JsValue::from_str(
+                    "family layout member is not attached to a shared authoring store",
+                )
+            })?;
+            if !Rc::ptr_eq(&self.semantics, store) {
+                return Err(JsValue::from_str(
+                    "family layout and mobject belong to different authoring stores",
+                ));
+            }
+            let id = member.2.ok_or_else(|| {
+                JsValue::from_str("family layout member has no semantic identity")
+            })?;
+            let expected = self
+                .expected_leaves
+                .get(self.next_leaf)
+                .copied()
+                .ok_or_else(|| JsValue::from_str("family layout received too many leaves"))?;
+            if id != expected {
+                return Err(JsValue::from_str(&format!(
+                    "family layout leaf mismatch at index {}: expected {expected:?}, got {id:?}",
+                    self.next_leaf
+                )));
+            }
+            if let Some(bounds) = member.0.layout_bounds() {
+                self.include_bounds(bounds);
+            }
+            self.next_leaf += 1;
+            Ok(())
+        }
+
+        #[wasm_bindgen(getter, js_name = centerX)]
+        pub fn center_x(&self) -> Result<f64, JsValue> {
+            self.center().map(|center| center.0)
+        }
+
+        #[wasm_bindgen(getter, js_name = centerY)]
+        pub fn center_y(&self) -> Result<f64, JsValue> {
+            self.center().map(|center| center.1)
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn width(&self) -> Result<f64, JsValue> {
+            self.ensure_complete()?;
+            Ok(self
+                .bounds
+                .as_ref()
+                .map_or(0.0, |bounds| bounds.max_x - bounds.min_x))
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn height(&self) -> Result<f64, JsValue> {
+            self.ensure_complete()?;
+            Ok(self
+                .bounds
+                .as_ref()
+                .map_or(0.0, |bounds| bounds.max_y - bounds.min_y))
+        }
+
+        #[wasm_bindgen(js_name = criticalX)]
+        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> Result<f64, JsValue> {
+            self.ensure_complete()?;
+            let center = self.center()?.0;
+            Ok(self.bounds.as_ref().map_or(center, |bounds| {
+                if direction_x < 0.0 {
+                    bounds.min_x
+                } else if direction_x > 0.0 {
+                    bounds.max_x
+                } else {
+                    center
+                }
+            }))
+        }
+
+        #[wasm_bindgen(js_name = criticalY)]
+        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> Result<f64, JsValue> {
+            self.ensure_complete()?;
+            let center = self.center()?.1;
+            Ok(self.bounds.as_ref().map_or(center, |bounds| {
+                if direction_y < 0.0 {
+                    bounds.min_y
+                } else if direction_y > 0.0 {
+                    bounds.max_y
+                } else {
+                    center
+                }
+            }))
+        }
     }
 
     #[wasm_bindgen]
@@ -1358,6 +1537,18 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = layoutSession)]
+        pub fn layout_session(&self) -> Result<WasmAuthoringFamilyLayout, JsValue> {
+            let expected_leaves =
+                semantic_family_leaf_ids(&self.semantics.borrow(), self.id).map_err(js_error)?;
+            Ok(WasmAuthoringFamilyLayout {
+                semantics: Rc::clone(&self.semantics),
+                expected_leaves,
+                next_leaf: 0,
+                bounds: None,
+            })
+        }
+
         #[wasm_bindgen(js_name = targetEditor)]
         pub fn target_editor(&self) -> Result<WasmAuthoringFamilyTargetEditor, JsValue> {
             let editor =
@@ -2214,6 +2405,33 @@ mod tests {
         let before = target.clone();
         assert!(target.set_fill(1.0, 0.0, 0.0, 2.0).is_err());
         assert_eq!(target, before);
+    }
+
+    #[test]
+    fn family_layout_leaf_order_comes_from_shared_semantic_graph() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        let nested = store.insert_family();
+        store.add_member(nested, first).unwrap();
+        let outer = store.insert_family();
+        store.add_member(outer, nested).unwrap();
+        store.add_member(outer, second).unwrap();
+
+        assert_eq!(
+            semantic_family_leaf_ids(&store, outer).unwrap(),
+            vec![first, second]
+        );
+
+        let alias = store.insert_family();
+        store.add_member(alias, first).unwrap();
+        let aliased_outer = store.insert_family();
+        store.add_member(aliased_outer, nested).unwrap();
+        store.add_member(aliased_outer, alias).unwrap();
+        assert_eq!(
+            semantic_family_leaf_ids(&store, aliased_outer).unwrap(),
+            vec![first, first]
+        );
     }
 
     #[test]
