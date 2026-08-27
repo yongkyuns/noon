@@ -13,6 +13,7 @@ mod legacy;
 mod lifecycle;
 mod reactive_authoring_facade;
 mod reactive_player;
+mod retained_execution_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
 
@@ -29,6 +30,7 @@ pub use legacy::*;
 pub use lifecycle::*;
 pub use reactive_authoring_facade::*;
 pub use reactive_player::*;
+pub use retained_execution_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
 pub use semantic_snapshot::*;
