@@ -377,8 +377,11 @@ def _install_rotating_breadth() -> None:
 
     The qualified centered-leaf implementation stays in ``_manim_rotate``. This final
     bootstrap wrapper handles retained groups, external pivots, and the 180-degree x/y
-    projections used by the upstream documentation scene. It intentionally remains a
-    parity candidate until curved z-pivot and 3D intermediate-frame tracks are native.
+    projections used by the upstream documentation scene. Z-axis family rotation is
+    subdivided into short deterministic transforms so independently retained children
+    follow the same rigid circular path to sub-pixel tolerance instead of taking one
+    long chord. The broader paths remain parity candidates until curved z-pivot and 3D
+    intermediate-frame tracks are native.
     """
 
     compat = sys.modules.get("_manim_compat")
@@ -392,6 +395,8 @@ def _install_rotating_breadth() -> None:
         return
 
     original_scene_play = compat.Scene.play
+    max_z_segment_angle = math.radians(5.0)
+    max_z_segments = 512
 
     class Rotating:
         def __init__(
@@ -484,6 +489,90 @@ def _install_rotating_breadth() -> None:
             raise ValueError(f"unsupported reflection axis {axis!r}")
         return animate._snapshot_mobject(target_snapshot)
 
+    def z_segment_count(angle: float, easing: str) -> int:
+        if easing in {"step_start", "step_end"}:
+            return 1
+        count = max(1, math.ceil(abs(angle) / max_z_segment_angle))
+        while count <= max_z_segments:
+            samples = [
+                rates.evaluate_rate_function(easing, index / count)
+                for index in range(count + 1)
+            ]
+            largest_step = max(
+                (abs(angle * (right - left)) for left, right in zip(samples, samples[1:])),
+                default=0.0,
+            )
+            if largest_step <= max_z_segment_angle + 1e-12:
+                return count
+            count *= 2
+        raise NotImplementedError(
+            "Rotating family z-axis motion would require too many deterministic segments; "
+            "native curved transform tracks are required for this angle/rate function"
+        )
+
+    def schedule_z_family(
+        scene: object,
+        animation: Rotating,
+        sources: list[_base.Mobject],
+        detached: list[_base.Mobject],
+        *,
+        pivot_point: _base.Vec2,
+        sign: float,
+        start_time: float,
+        duration: float,
+        easing: str,
+    ) -> None:
+        segment_count = z_segment_count(animation.angle, easing)
+        if segment_count == 1 and easing in {"step_start", "step_end"}:
+            for index, (source, current) in enumerate(zip(sources, detached, strict=True)):
+                assert source._object is not None
+                target = animate._snapshot_mobject(current.to_ir())
+                target.rotate(sign * animation.angle, compat.OUT, about_point=pivot_point)
+                object_key = scene._object_keys[source._object.id]
+                compat._BaseScene.play(
+                    scene,
+                    _base.Transform(
+                        source,
+                        target,
+                        key=f"@rotating-family:{object_key}:{start_time:g}:{index}",
+                    ),
+                    run_time=duration,
+                    start_time=start_time,
+                    easing=easing,
+                )
+            return
+
+        segment_duration = duration / segment_count
+        current_members = list(detached)
+        previous_progress = rates.evaluate_rate_function(easing, 0.0)
+        for segment_index in range(segment_count):
+            progress = rates.evaluate_rate_function(
+                easing, (segment_index + 1) / segment_count
+            )
+            delta_angle = sign * animation.angle * (progress - previous_progress)
+            segment_start = start_time + segment_index * segment_duration
+            for index, source in enumerate(sources):
+                assert source._object is not None
+                target = animate._snapshot_mobject(current_members[index].to_ir())
+                target.rotate(delta_angle, compat.OUT, about_point=pivot_point)
+                object_key = scene._object_keys[source._object.id]
+                compat._BaseScene.play(
+                    scene,
+                    _base.Transform(
+                        source,
+                        target,
+                        key=(
+                            f"@rotating-family:{object_key}:{start_time:g}:"
+                            f"{segment_index}:{index}"
+                        ),
+                    ),
+                    run_time=segment_duration,
+                    start_time=segment_start,
+                    easing="linear",
+                )
+                current_members[index] = target
+            previous_progress = progress
+
     def schedule_family(
         scene: object,
         animation: Rotating,
@@ -502,15 +591,24 @@ def _install_rotating_breadth() -> None:
                 "non-z Rotating currently supports the 180-degree projection used by Manim RotatingDemo"
             )
 
+        if axis == "z":
+            schedule_z_family(
+                scene,
+                animation,
+                sources,
+                detached,
+                pivot_point=pivot_point,
+                sign=sign,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+            return
+
         for index, (source, current) in enumerate(zip(sources, detached, strict=True)):
             assert source._object is not None
             obj = source._object
-            if axis == "z":
-                target = animate._snapshot_mobject(current.to_ir())
-                target.rotate(sign * animation.angle, compat.OUT, about_point=pivot_point)
-            else:
-                target = reflected_target(current, axis=axis, pivot_point=pivot_point)
-
+            target = reflected_target(current, axis=axis, pivot_point=pivot_point)
             object_key = scene._object_keys[obj.id]
             compat._BaseScene.play(
                 scene,
