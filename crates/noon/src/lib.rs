@@ -12,8 +12,11 @@ mod camera_authoring;
 mod geometry_authoring;
 mod legacy;
 mod line_matcher_authoring;
+mod polygram_authoring;
 mod reactive_authoring;
 mod rounded_rectangle_authoring;
+mod sector_authoring;
+mod shape_matcher_authoring;
 mod text_authoring;
 
 pub use analytic_geometry_authoring::*;
@@ -22,21 +25,26 @@ pub use camera_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
+pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use rounded_rectangle_authoring::*;
+pub use sector_authoring::*;
+pub use shape_matcher_authoring::*;
 pub use text_authoring::*;
 
 /// Common imports for deterministic and native-reactive Noon authoring.
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
-        Arc, ArcAuthoringError, ArcBetweenPoints, Cross, Dot, Ellipse, GeometryAuthoringError,
-        LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon, ReactiveScene,
+        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
+        Cross, Dot, Ellipse, GeometryAuthoringError, LineMatcherAuthoringError, MathTypst,
+        MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
         ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
-        RoundedRectangle, RoundedRectangleAuthoringError, Star, TextAuthoringError, Triangle,
-        Typst, Underline, ValueTracker, VectorSignal, DEFAULT_CROSS_SCALE_FACTOR,
+        RoundedRectangle, RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
+        SurroundingRectangle, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
+        VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
         DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
-        DEFAULT_UNDERLINE_BUFF,
+        DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
