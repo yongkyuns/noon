@@ -94,6 +94,10 @@ fn stroke_is_screen_space(flags: vec2<u32>) -> bool {
     return (flags.y & 2u) != 0u;
 }
 
+fn stroke_cap_mode(flags: vec2<f32>) -> u32 {
+    return (u32(flags.y) >> 2u) & 3u;
+}
+
 fn safe_abs_scale(scale: vec2<f32>) -> vec2<f32> {
     return max(abs(scale), vec2<f32>(0.000001));
 }
@@ -487,7 +491,22 @@ fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     let half_length = input.geometry.x * 0.5;
     let radius = input.geometry.y * 0.5;
-    let signed_distance = capsule_signed_distance(input.local, half_length, radius);
+    let cap_mode = stroke_cap_mode(input.flags);
+    var signed_distance = capsule_signed_distance(input.local, half_length, radius);
+    if cap_mode == 1u {
+        // Cairo/Manim BUTT caps terminate at the semantic endpoints. The proxy
+        // quad is intentionally larger for antialiasing; the SDF clips coverage.
+        signed_distance = rectangle_signed_distance(
+            input.local,
+            vec2<f32>(half_length, radius),
+        );
+    } else if cap_mode == 2u {
+        // SQUARE extends by exactly one half stroke width along the tangent.
+        signed_distance = rectangle_signed_distance(
+            input.local,
+            vec2<f32>(half_length + radius, radius),
+        );
+    }
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
     return styled_line_color(input, signed_distance) * visible;
 }
