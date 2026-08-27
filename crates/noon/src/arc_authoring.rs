@@ -195,14 +195,12 @@ macro_rules! define_arc_shape {
 
             /// Return the transformed first path anchor, matching VMobject `get_start()`.
             pub fn get_start(&self) -> Vec2 {
-                arc_start_from_snapshot(&self.snapshot)
-                    .expect("Arc retains a non-empty VectorPath")
+                arc_start_from_snapshot(&self.snapshot).expect("Arc retains a non-empty VectorPath")
             }
 
             /// Return the transformed final path anchor, matching VMobject `get_end()`.
             pub fn get_end(&self) -> Vec2 {
-                arc_end_from_snapshot(&self.snapshot)
-                    .expect("Arc retains a non-empty VectorPath")
+                arc_end_from_snapshot(&self.snapshot).expect("Arc retains a non-empty VectorPath")
             }
 
             /// Match Manim `Arc.get_arc_center()` by intersecting normals derived from
@@ -647,8 +645,7 @@ mod tests {
             .scale(1.5)
             .rotate(TAU / 8.0)
             .shift(Vec2::new(-3.0, 4.0));
-        let expected_center =
-            (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0) + Vec2::new(-3.0, 4.0);
+        let expected_center = (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0) + Vec2::new(-3.0, 4.0);
         assert_vec_close_with_tolerance(arc.get_arc_center(), expected_center, 1e-4);
         assert_close(arc.radius(), 2.0);
         assert_close(arc.start_angle(), 0.0);
