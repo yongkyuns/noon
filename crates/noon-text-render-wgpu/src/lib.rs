@@ -20,8 +20,18 @@ use noon_text_atlas::{
     DEFAULT_GLYPH_ATLAS_EXTENT,
 };
 use noon_text_raster::{
-    GlyphRaster, GlyphRasterCache, GlyphRasterError, GlyphRasterKey, GlyphRasterStats,
+    GlyphRaster, GlyphRasterCache, GlyphRasterCacheLimits, GlyphRasterError, GlyphRasterKey,
+    GlyphRasterStats,
 };
+
+pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES: usize = 8_192;
+pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+pub const GLYPH_RASTER_SIZE_BUCKET_RATIO: f32 = 1.125;
+
+pub const DEFAULT_GLYPH_RASTER_CACHE_LIMITS: GlyphRasterCacheLimits = GlyphRasterCacheLimits::new(
+    DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES,
+    DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES,
+);
 
 /// Device density needed to select a position-independent glyph raster size.
 ///
@@ -193,8 +203,8 @@ impl From<GlyphAtlasError> for TextPrepareError {
 ///
 /// Raster and atlas caches survive frame preparation so translation/opacity changes
 /// only rebuild inexpensive quad records. The glyph raster identity intentionally
-/// excludes position; changes to effective device scale select a new integer pixel
-/// bucket instead.
+/// excludes position; changes to effective device scale select a conservative
+/// geometric device-pixel bucket instead.
 pub struct RetainedTextQuadPreparer {
     raster_cache: GlyphRasterCache,
     atlas: GpuGlyphAtlas,
@@ -209,8 +219,15 @@ pub struct RetainedTextQuadPreparer {
 
 impl RetainedTextQuadPreparer {
     pub fn new(atlas_extent: u32) -> Result<Self, GlyphAtlasError> {
+        Self::with_raster_cache_limits(atlas_extent, DEFAULT_GLYPH_RASTER_CACHE_LIMITS)
+    }
+
+    pub fn with_raster_cache_limits(
+        atlas_extent: u32,
+        raster_limits: GlyphRasterCacheLimits,
+    ) -> Result<Self, GlyphAtlasError> {
         Ok(Self {
-            raster_cache: GlyphRasterCache::new(),
+            raster_cache: GlyphRasterCache::with_limits(raster_limits),
             atlas: GpuGlyphAtlas::new(atlas_extent)?,
             mask_quads: Vec::new(),
             color_quads: Vec::new(),
@@ -228,6 +245,14 @@ impl RetainedTextQuadPreparer {
 
     pub fn raster_stats(&self) -> GlyphRasterStats {
         self.raster_cache.stats()
+    }
+
+    pub fn raster_cache_limits(&self) -> GlyphRasterCacheLimits {
+        self.raster_cache.limits()
+    }
+
+    pub fn set_raster_cache_limits(&mut self, limits: GlyphRasterCacheLimits) {
+        self.raster_cache.set_limits(limits);
     }
 
     pub const fn atlas_stats(&self) -> GlyphAtlasStats {
@@ -516,7 +541,25 @@ fn raster_pixel_size(
     if !requested.is_finite() {
         return Err(TextPrepareError::InvalidTextTransform);
     }
-    Ok(requested.ceil().max(1.0))
+    Ok(raster_size_bucket(requested))
+}
+
+/// Round an effective glyph size upward to a geometric residency bucket.
+///
+/// Rounding upward ensures the selected raster never undersamples the current
+/// transform. Geometric growth bounds the number of distinct raster identities over
+/// large zoom ranges while retaining much finer resolution than octave-sized bins.
+fn raster_size_bucket(requested: f32) -> f32 {
+    let requested = requested.max(1.0);
+    let mut bucket = 1.0_f32;
+    while bucket < requested {
+        let next = bucket * GLYPH_RASTER_SIZE_BUCKET_RATIO;
+        if !next.is_finite() || next <= bucket {
+            return requested;
+        }
+        bucket = next;
+    }
+    bucket
 }
 
 /// Largest singular value of the local-to-device 2x2 transform.
@@ -586,6 +629,8 @@ fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D};
     use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
     use noon_typst::{compile_typst_resource, TypstMode};
@@ -622,6 +667,42 @@ mod tests {
 
     fn metrics() -> TextDeviceMetrics {
         TextDeviceMetrics::uniform(67.5).unwrap()
+    }
+
+    #[test]
+    fn renderer_uses_finite_default_raster_cache_limits() {
+        let preparer = RetainedTextQuadPreparer::new(128).unwrap();
+        assert_eq!(
+            preparer.raster_cache_limits(),
+            DEFAULT_GLYPH_RASTER_CACHE_LIMITS
+        );
+        assert!(preparer.raster_cache_limits().max_entries < usize::MAX);
+        assert!(preparer.raster_cache_limits().max_image_bytes < usize::MAX);
+    }
+
+    #[test]
+    fn raster_size_buckets_never_undersample_requested_size() {
+        for requested in [0.0, 1.0, 1.01, 10.0, 100.0, 1_000.0, 100_000.0] {
+            let bucket = raster_size_bucket(requested);
+            assert!(bucket >= requested.max(1.0));
+            assert!(bucket.is_finite());
+        }
+    }
+
+    #[test]
+    fn nearby_zoom_requests_share_raster_residency() {
+        assert_eq!(raster_size_bucket(100.0), raster_size_bucket(101.0));
+        assert_eq!(raster_size_bucket(101.0), raster_size_bucket(105.0));
+        assert_ne!(raster_size_bucket(105.0), raster_size_bucket(120.0));
+    }
+
+    #[test]
+    fn large_zoom_range_uses_bounded_geometric_bucket_count() {
+        let buckets = (1..=1_000)
+            .map(|requested| raster_size_bucket(requested as f32).to_bits())
+            .collect::<BTreeSet<_>>();
+        assert!(buckets.len() < 70);
+        assert!(buckets.len() > 20);
     }
 
     #[test]
