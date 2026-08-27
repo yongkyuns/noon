@@ -16,6 +16,7 @@ mod reactive_player;
 mod retained_authoring;
 mod retained_authoring_player;
 mod retained_authoring_scene;
+mod retained_execution_canvas;
 mod retained_execution_resources;
 mod retained_execution_transport;
 mod retained_resource_transport;
@@ -38,6 +39,8 @@ pub use reactive_player::*;
 pub use retained_authoring::*;
 pub use retained_authoring_player::*;
 pub use retained_authoring_scene::*;
+#[cfg(target_arch = "wasm32")]
+pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;
 pub use retained_execution_transport::*;
 pub use retained_resource_transport::*;
