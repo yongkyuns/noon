@@ -1076,6 +1076,35 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
 
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
+
+    # Group/VGroup wrapper traversal remains host-language metadata, but the shared
+    # family graph independently derives the expected recursive leaf sequence and
+    # rejects any wrapper divergence. Rust owns the actual aggregate bounds math.
+    if isinstance(value, _compat.Group):
+        family_handle = getattr(value, "_semantic_family_handle", None)
+        leaf_handles = [_handle_for(member) for member in leaves]
+        if (
+            family_handle is not None
+            and hasattr(family_handle, "layoutSession")
+            and all(handle is not None for handle in leaf_handles)
+        ):
+            session = family_handle.layoutSession()
+            for handle in leaf_handles:
+                session.includeMobject(handle)
+            return (
+                _base.Vec2(
+                    float(session.criticalX(-1.0, 0.0)),
+                    float(session.criticalY(0.0, -1.0)),
+                ),
+                _base.Vec2(
+                    float(session.criticalX(1.0, 0.0)),
+                    float(session.criticalY(0.0, 1.0)),
+                ),
+            )
+
+    # Host-dynamic/stale bound leaves intentionally retain the evaluated-snapshot
+    # fallback until runtime family queries exist. Deterministic shared handles do
+    # not execute this aggregation path.
     present: list[tuple[_base.Vec2, _base.Vec2]] = []
     for member in leaves:
         bounds = (
@@ -1097,7 +1126,6 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
             max(bound[1].y for bound in present),
         ),
     )
-
 
 def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     if isinstance(value, _compat.Group):
