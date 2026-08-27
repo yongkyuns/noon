@@ -530,3 +530,7 @@ function postError(requestId, error) {
     message: error instanceof Error ? error.message : String(error),
   });
 }
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
