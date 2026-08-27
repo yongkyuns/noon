@@ -11,6 +11,10 @@ import {
   requestedExampleId,
 } from "./example-gallery.js";
 
+void import("./python-editor.js").catch((error) => {
+  console.warn("Optional Python editor unavailable; using textarea fallback", error);
+});
+
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
