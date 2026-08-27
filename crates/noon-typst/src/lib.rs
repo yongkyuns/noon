@@ -152,6 +152,10 @@ pub fn compile_typst_resource(
     let width = size.x.to_pt() as f32;
     let height = size.y.to_pt() as f32;
     let full_span = TextSourceSpan::new(0, source_len);
+    let page_bounds = Rect::new(
+        Vec2::new(-0.5 * width, -0.5 * height),
+        Vec2::new(0.5 * width, 0.5 * height),
+    );
 
     let mut normalizer = FrameNormalizer {
         full_span,
@@ -170,8 +174,23 @@ pub fn compile_typst_resource(
         geometry: GeometryResourceArena::new(),
         fonts: FontResourceArena::new(),
         clusters: 0,
+        ink_bounds: None,
     };
     normalizer.walk_frame(&page.frame, TextAffineTransform::IDENTITY, None)?;
+
+    // Manim's SVGMobject centers the imported path family, not the SVG viewport.
+    // Center the exact Typst text/shape ink box after normalization so retained
+    // rendering observes the same default placement while keeping glyph outlines lazy.
+    let ink_bounds = normalizer.ink_bounds.unwrap_or(page_bounds);
+    let ink_center = ink_bounds.center();
+    let recenter = TextAffineTransform::translation(-ink_center.x, -ink_center.y);
+    for run in &mut normalizer.runs {
+        run.transform = run.transform.then(recenter);
+    }
+    for vector in &mut normalizer.vectors {
+        vector.transform = vector.transform.then(recenter);
+    }
+    let centered_bounds = Rect::new(ink_bounds.min - ink_center, ink_bounds.max - ink_center);
 
     // The entire mobject is always one addressable part. Labeled Typst groups are
     // appended as narrower semantic parts during traversal.
@@ -194,11 +213,8 @@ pub fn compile_typst_resource(
         vector_items: normalizer.vectors.into(),
         render_items: normalizer.render_items.into(),
         parts: normalizer.parts.into(),
-        bounds: Rect::new(
-            Vec2::new(-0.5 * width, -0.5 * height),
-            Vec2::new(0.5 * width, 0.5 * height),
-        ),
-        baseline: 0.5 * height - page.frame.baseline().to_pt() as f32,
+        bounds: centered_bounds,
+        baseline: 0.5 * height - page.frame.baseline().to_pt() as f32 - ink_center.y,
         layout_artifact: Some(layout_artifact(&prepared_source)),
     };
     resource
@@ -264,9 +280,17 @@ struct FrameNormalizer {
     geometry: GeometryResourceArena,
     fonts: FontResourceArena,
     clusters: u32,
+    ink_bounds: Option<Rect>,
 }
 
 impl FrameNormalizer {
+    fn include_ink_bounds(&mut self, bounds: Rect) {
+        self.ink_bounds = Some(match self.ink_bounds {
+            Some(current) => current.union(bounds),
+            None => bounds,
+        });
+    }
+
     fn walk_frame(
         &mut self,
         frame: &Frame,
@@ -399,6 +423,13 @@ impl FrameNormalizer {
             cursor += advance;
         }
 
+        // Typst's TextItem bbox uses exact font glyph boxes without retaining paths.
+        // It is already expressed in the surrounding frame's Y-down coordinates.
+        let frame_transform = state.then(self.page_to_noon);
+        if let Some(bounds) = transformed_typst_rect(text.bbox(), frame_transform) {
+            self.include_ink_bounds(bounds);
+        }
+
         // Typst renders glyph outlines in a Y-up font coordinate system while its
         // frames are Y-down. Conjugating that flip with the accumulated frame state
         // and final page-to-Noon flip preserves arbitrary group affine transforms.
@@ -444,10 +475,15 @@ impl FrameNormalizer {
             ),
             None => (None, 0.0),
         };
+        let transform = state.then(self.page_to_noon);
+        // Manim's mobject bounds come from vector points and do not expand for stroke.
+        if let Some(bounds) = transformed_typst_rect(shape.bbox(false), transform) {
+            self.include_ink_bounds(bounds);
+        }
         let vector_index = self.vectors.len() as u32;
         self.vectors.push(TextVectorItem {
             geometry: handle,
-            transform: state.then(self.page_to_noon),
+            transform,
             style: TextVectorStyle {
                 fill,
                 stroke,
@@ -474,6 +510,24 @@ fn typst_transform(transform: Transform) -> TextAffineTransform {
         tx: transform.tx.to_pt() as f32,
         ty: transform.ty.to_pt() as f32,
     }
+}
+
+fn transformed_typst_rect(
+    rect: typst_library::layout::Rect,
+    transform: TextAffineTransform,
+) -> Option<Rect> {
+    let min = point_vec(rect.min);
+    let max = point_vec(rect.max);
+    if !min.x.is_finite() || !min.y.is_finite() || !max.x.is_finite() || !max.y.is_finite() {
+        return None;
+    }
+
+    Rect::from_points([
+        transform.transform_point(Vec2::new(min.x, min.y)),
+        transform.transform_point(Vec2::new(max.x, min.y)),
+        transform.transform_point(Vec2::new(min.x, max.y)),
+        transform.transform_point(Vec2::new(max.x, max.y)),
+    ])
 }
 
 fn geometry_path(geometry: &Geometry) -> VectorPath {
@@ -650,6 +704,9 @@ mod tests {
         );
         assert!(artifact.resource.bounds.width() > 0.0);
         assert!(artifact.resource.bounds.height() > 0.0);
+        let center = artifact.resource.bounds.center();
+        assert!(center.x.abs() < 1e-5);
+        assert!(center.y.abs() < 1e-5);
         assert_eq!(
             artifact
                 .resource
