@@ -1,0 +1,29 @@
+[package]
+name = "noon-text-render-wgpu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Retained atlas-backed text quad preparation for Noon"
+
+[features]
+default = ["native", "ci-noop"]
+native = [
+    "wgpu/dx12",
+    "wgpu/metal",
+    "wgpu/gles",
+    "wgpu/vulkan",
+    "noon-text-atlas/native",
+]
+web = ["wgpu/webgpu", "wgpu/webgl", "noon-text-atlas/web"]
+ci-noop = ["wgpu/noop", "noon-text-atlas/ci-noop"]
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+noon-core = { path = "../noon-core" }
+noon-runtime = { path = "../noon-runtime" }
+noon-text-atlas = { path = "../noon-text-atlas", default-features = false }
+noon-text-raster = { path = "../noon-text-raster" }
+wgpu = { version = "29.0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+noon-typst = { path = "../noon-typst" }
