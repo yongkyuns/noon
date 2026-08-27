@@ -11,6 +11,7 @@ mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
+mod manim_geometry_bridge;
 mod reactive_authoring_facade;
 mod reactive_player;
 mod retained_authoring;
