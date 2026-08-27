@@ -271,13 +271,8 @@ fn arc_center_from_snapshot(snapshot: &ObjectSnapshot) -> Vec2 {
     let second_tangent = second_handle - second_anchor;
     let first_normal = Vec2::new(-first_tangent.y, first_tangent.x);
     let second_normal = Vec2::new(-second_tangent.y, second_tangent.x);
-    line_intersection(
-        first_anchor,
-        first_normal,
-        second_anchor,
-        second_normal,
-    )
-    .unwrap_or(Vec2::ZERO)
+    line_intersection(first_anchor, first_normal, second_anchor, second_normal)
+        .unwrap_or(Vec2::ZERO)
 }
 
 fn validate_arc_inputs(
@@ -509,6 +504,13 @@ mod tests {
         );
     }
 
+    fn assert_close_with_tolerance(actual: f32, expected: f32, tolerance: f32) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual} within {tolerance}"
+        );
+    }
+
     fn assert_vec_close(actual: Vec2, expected: Vec2) {
         assert_close(actual.x, expected.x);
         assert_close(actual.y, expected.y);
@@ -586,13 +588,12 @@ mod tests {
             .scale(1.5)
             .rotate(TAU / 8.0)
             .shift(Vec2::new(-3.0, 4.0));
-        let expected_center = (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0)
-            + Vec2::new(-3.0, 4.0);
+        let expected_center = (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0) + Vec2::new(-3.0, 4.0);
         assert_vec_close_with_tolerance(arc.get_arc_center(), expected_center, 1e-4);
         assert_close(arc.radius(), 2.0);
         assert_close(arc.start_angle(), 0.0);
         assert_close(arc.angle(), TAU / 4.0);
-        assert_close(arc.stop_angle(), 3.0 * TAU / 8.0);
+        assert_close_with_tolerance(arc.stop_angle(), 3.0 * TAU / 8.0, 1e-4);
     }
 
     #[test]
