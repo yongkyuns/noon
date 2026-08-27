@@ -58,6 +58,37 @@ impl std::fmt::Display for ArcAuthoringError {
 
 impl std::error::Error for ArcAuthoringError {}
 
+/// Immutable constructor-time Manim arc metadata.
+///
+/// Affine transforms change retained path points but do not rewrite these authored
+/// values, matching Manim's observable `radius`, `start_angle`, `angle`, and
+/// `num_components` attributes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArcMetadata {
+    radius: f32,
+    start_angle: f32,
+    angle: f32,
+    num_components: usize,
+}
+
+impl ArcMetadata {
+    pub const fn radius(self) -> f32 {
+        self.radius
+    }
+
+    pub const fn start_angle(self) -> f32 {
+        self.start_angle
+    }
+
+    pub const fn angle(self) -> f32 {
+        self.angle
+    }
+
+    pub const fn num_components(self) -> usize {
+        self.num_components
+    }
+}
+
 macro_rules! define_arc_shape {
     ($name:ident) => {
         #[derive(Clone, Debug, PartialEq)]
@@ -135,32 +166,41 @@ macro_rules! define_arc_shape {
                 &self.snapshot
             }
 
+            pub fn metadata(&self) -> ArcMetadata {
+                ArcMetadata {
+                    radius: self.radius,
+                    start_angle: self.start_angle,
+                    angle: self.angle,
+                    num_components: self.num_components,
+                }
+            }
+
             /// Constructor-time Manim `radius` metadata. Ordinary affine transforms
             /// alter points, not this authored attribute, matching Manim.
             pub fn radius(&self) -> f32 {
-                self.radius
+                self.metadata().radius()
             }
 
             pub fn start_angle(&self) -> f32 {
-                self.start_angle
+                self.metadata().start_angle()
             }
 
             pub fn angle(&self) -> f32 {
-                self.angle
+                self.metadata().angle()
             }
 
             pub fn num_components(&self) -> usize {
-                self.num_components
+                self.metadata().num_components()
             }
 
             /// Return the transformed first path anchor, matching VMobject `get_start()`.
             pub fn get_start(&self) -> Vec2 {
-                path_start(&self.snapshot).expect("Arc retains a non-empty VectorPath")
+                arc_start_from_snapshot(&self.snapshot).expect("Arc retains a non-empty VectorPath")
             }
 
             /// Return the transformed final path anchor, matching VMobject `get_end()`.
             pub fn get_end(&self) -> Vec2 {
-                path_end(&self.snapshot).expect("Arc retains a non-empty VectorPath")
+                arc_end_from_snapshot(&self.snapshot).expect("Arc retains a non-empty VectorPath")
             }
 
             /// Match Manim `Arc.get_arc_center()` by intersecting normals derived from
@@ -178,8 +218,8 @@ macro_rules! define_arc_shape {
 
             /// Match Manim `Arc.stop_angle()` in the 2D plane.
             pub fn stop_angle(&self) -> f32 {
-                let delta = self.get_end() - self.get_arc_center();
-                delta.y.atan2(delta.x).rem_euclid(TAU)
+                arc_stop_angle_from_snapshot(&self.snapshot)
+                    .expect("Arc retains a non-empty VectorPath")
             }
         }
 
@@ -198,7 +238,11 @@ fn point_is_finite(point: Vec2) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
-fn path_start(snapshot: &ObjectSnapshot) -> Option<Vec2> {
+/// Return the transformed first path anchor for an Arc-compatible retained snapshot.
+///
+/// Frontends can call this against their current authoritative snapshot after any
+/// affine edits, avoiding host-language copies of Manim's point-query semantics.
+pub fn arc_start_from_snapshot(snapshot: &ObjectSnapshot) -> Option<Vec2> {
     let GeometryRef::VectorPath(path) = &snapshot.geometry else {
         return None;
     };
@@ -208,7 +252,8 @@ fn path_start(snapshot: &ObjectSnapshot) -> Option<Vec2> {
     }
 }
 
-fn path_end(snapshot: &ObjectSnapshot) -> Option<Vec2> {
+/// Return the transformed final path anchor for an Arc-compatible retained snapshot.
+pub fn arc_end_from_snapshot(snapshot: &ObjectSnapshot) -> Option<Vec2> {
     let GeometryRef::VectorPath(path) = &snapshot.geometry else {
         return None;
     };
@@ -242,7 +287,12 @@ fn line_intersection(
     Some(first_point + first_direction * parameter)
 }
 
-fn arc_center_from_snapshot(snapshot: &ObjectSnapshot) -> Vec2 {
+/// Derive Manim's current Arc center from a retained snapshot.
+///
+/// The result is computed from transformed points and first-segment normals. A
+/// non-cubic/parallel-normal fallback returns world ORIGIN, matching the existing
+/// Arc and zero-angle ArcBetweenPoints behavior.
+pub fn arc_center_from_snapshot(snapshot: &ObjectSnapshot) -> Vec2 {
     let GeometryRef::VectorPath(path) = &snapshot.geometry else {
         return Vec2::ZERO;
     };
@@ -273,6 +323,13 @@ fn arc_center_from_snapshot(snapshot: &ObjectSnapshot) -> Vec2 {
     let second_normal = Vec2::new(-second_tangent.y, second_tangent.x);
     line_intersection(first_anchor, first_normal, second_anchor, second_normal)
         .unwrap_or(Vec2::ZERO)
+}
+
+/// Derive Manim's current stop angle from an Arc-compatible retained snapshot.
+pub fn arc_stop_angle_from_snapshot(snapshot: &ObjectSnapshot) -> Option<f32> {
+    let end = arc_end_from_snapshot(snapshot)?;
+    let delta = end - arc_center_from_snapshot(snapshot);
+    Some(delta.y.atan2(delta.x).rem_euclid(TAU))
 }
 
 fn validate_arc_inputs(
@@ -597,6 +654,48 @@ mod tests {
     }
 
     #[test]
+    fn public_snapshot_queries_match_typed_arc_after_transform() {
+        let arc = Arc::with_options(2.0, TAU / 8.0, TAU / 3.0, 7, Vec2::new(1.0, -2.0))
+            .expect("valid arc")
+            .scale_xy(Vec2::new(1.25, 0.75))
+            .rotate(-TAU / 10.0)
+            .shift(Vec2::new(3.0, 5.0));
+
+        assert_vec_close(
+            arc_start_from_snapshot(arc.snapshot()).expect("arc start"),
+            arc.get_start(),
+        );
+        assert_vec_close(
+            arc_end_from_snapshot(arc.snapshot()).expect("arc end"),
+            arc.get_end(),
+        );
+        assert_vec_close_with_tolerance(
+            arc_center_from_snapshot(arc.snapshot()),
+            arc.get_arc_center(),
+            1e-4,
+        );
+        assert_close_with_tolerance(
+            arc_stop_angle_from_snapshot(arc.snapshot()).expect("arc stop angle"),
+            arc.stop_angle(),
+            1e-4,
+        );
+    }
+
+    #[test]
+    fn metadata_value_preserves_constructor_attributes_across_transforms() {
+        let arc = Arc::with_options(2.5, TAU / 7.0, -TAU / 5.0, 6, Vec2::new(2.0, 3.0))
+            .expect("valid arc")
+            .scale(4.0)
+            .rotate(TAU / 9.0)
+            .shift(Vec2::new(-8.0, 1.0));
+        let metadata = arc.metadata();
+        assert_close(metadata.radius(), 2.5);
+        assert_close(metadata.start_angle(), TAU / 7.0);
+        assert_close(metadata.angle(), -TAU / 5.0);
+        assert_eq!(metadata.num_components(), 6);
+    }
+
+    #[test]
     fn move_arc_center_to_uses_derived_current_center() {
         let arc = Arc::default()
             .shift(Vec2::new(2.0, -3.0))
@@ -652,6 +751,13 @@ mod tests {
         assert_vec_close(arc.get_arc_center(), Vec2::ZERO);
         assert_close(arc.radius(), 1.0);
         assert_close(arc.angle(), 0.0);
+        assert_eq!(arc_start_from_snapshot(arc.snapshot()), Some(start));
+        assert_eq!(arc_end_from_snapshot(arc.snapshot()), Some(end));
+        assert_eq!(arc_center_from_snapshot(arc.snapshot()), Vec2::ZERO);
+        assert_eq!(
+            arc_stop_angle_from_snapshot(arc.snapshot()),
+            Some((end.y.atan2(end.x)).rem_euclid(TAU))
+        );
     }
 
     #[test]
