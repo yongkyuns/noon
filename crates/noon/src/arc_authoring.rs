@@ -135,19 +135,16 @@ macro_rules! define_arc_shape {
                 &self.snapshot
             }
 
-            /// Constructor-time Manim `radius` metadata.
-            ///
-            /// As in Manim, ordinary affine transforms do not rewrite this attribute.
+            /// Constructor-time Manim `radius` metadata. Ordinary affine transforms
+            /// alter points, not this authored attribute, matching Manim.
             pub fn radius(&self) -> f32 {
                 self.radius
             }
 
-            /// Constructor-time Manim `start_angle` metadata.
             pub fn start_angle(&self) -> f32 {
                 self.start_angle
             }
 
-            /// Constructor/resolution-time Manim `angle` metadata.
             pub fn angle(&self) -> f32 {
                 self.angle
             }
@@ -259,8 +256,6 @@ fn arc_center_from_snapshot(snapshot: &ObjectSnapshot) -> Vec2 {
         to: second_anchor,
     }) = commands.get(1).copied()
     else {
-        // Manim's zero-angle ArcBetweenPoints line fallback cannot resolve a
-        // circular center and ultimately falls back to world ORIGIN.
         return Vec2::ZERO;
     };
 
@@ -350,16 +345,11 @@ fn arc_snapshot(path: VectorPath) -> ObjectSnapshot {
 }
 
 impl Arc {
-    /// Build ManimCE's default quarter-circle arc.
     pub fn new() -> Self {
         Self::with_options(1.0, 0.0, TAU / 4.0, 9, Vec2::ZERO)
             .expect("the built-in Arc default is valid")
     }
 
-    /// Build a circular arc using ManimCE's anchor/handle construction.
-    ///
-    /// `num_components` matches Manim's Cairo `Arc`: it is the number of anchors,
-    /// so the retained path contains `num_components - 1` cubic Bézier segments.
     pub fn with_options(
         radius: f32,
         start_angle: f32,
@@ -385,17 +375,10 @@ impl Default for Arc {
 }
 
 impl ArcBetweenPoints {
-    /// Build the default quarter-turn arc spanning `start` to `end`.
     pub fn new(start: Vec2, end: Vec2) -> Result<Self, ArcAuthoringError> {
         Self::with_options(start, end, TAU / 4.0, None, 9)
     }
 
-    /// Build an arc spanning two endpoints with ManimCE-compatible angle/radius rules.
-    ///
-    /// When `radius` is supplied, Manim derives the subtended angle from the chord;
-    /// a negative radius selects the opposite bend direction. Without an explicit
-    /// radius, the authored `angle` is preserved and the unit arc is similarity-
-    /// transformed so its endpoints land exactly on `start` and `end`.
     pub fn with_options(
         start: Vec2,
         end: Vec2,
@@ -591,9 +574,7 @@ mod tests {
             .scale(1.5)
             .rotate(TAU / 8.0)
             .shift(Vec2::new(-3.0, 4.0));
-        let expected_center = Vec2::new(1.0, 2.0)
-            .scale(1.5)
-            .rotate(TAU / 8.0)
+        let expected_center = (Vec2::new(1.0, 2.0) * 1.5).rotate(TAU / 8.0)
             + Vec2::new(-3.0, 4.0);
         assert_vec_close(arc.get_arc_center(), expected_center);
         assert_close(arc.radius(), 2.0);
