@@ -1,0 +1,19 @@
+[package]
+name = "noon-text-atlas"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "GPU glyph atlas allocation and upload for Noon"
+
+[features]
+default = ["native", "ci-noop"]
+native = ["wgpu/dx12", "wgpu/metal", "wgpu/gles", "wgpu/vulkan"]
+web = ["wgpu/webgpu", "wgpu/webgl"]
+ci-noop = ["wgpu/noop"]
+
+[dependencies]
+noon-text-raster = { path = "../noon-text-raster" }
+wgpu = { version = "29.0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+noon-core = { path = "../noon-core" }

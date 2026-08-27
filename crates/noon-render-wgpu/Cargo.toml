@@ -6,15 +6,22 @@ license = "MIT"
 
 [features]
 default = ["native", "ci-noop"]
-native = ["wgpu/dx12", "wgpu/metal", "wgpu/gles", "wgpu/vulkan"]
-web = ["wgpu/webgpu", "wgpu/webgl"]
-ci-noop = ["wgpu/noop"]
+native = [
+    "wgpu/dx12",
+    "wgpu/metal",
+    "wgpu/gles",
+    "wgpu/vulkan",
+    "noon-text-atlas/native",
+]
+web = ["wgpu/webgpu", "wgpu/webgl", "noon-text-atlas/web"]
+ci-noop = ["wgpu/noop", "noon-text-atlas/ci-noop"]
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 noon-runtime = { path = "../noon-runtime" }
+noon-text-atlas = { path = "../noon-text-atlas", default-features = false }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
