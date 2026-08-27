@@ -7,10 +7,11 @@
 use std::{fmt, sync::Arc};
 
 use noon_core::{
-    Color, FontFaceIdentity, GeometryResourceArena, GlyphRun, PositionedGlyph, Rect,
-    TextAffineTransform, TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
-    TextLayoutBackendKind, TextPart, TextResource, TextResourceValidationError, TextSourceKind,
-    TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+    Color, FontFaceIdentity, FontResourceArena, FontResourceError, GeometryResourceArena, GlyphRun,
+    PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
+    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextResource,
+    TextResourceValidationError, TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle,
+    Vec2, VectorPath,
 };
 use typst_as_lib::TypstEngine;
 use typst_layout::PagedDocument;
@@ -54,8 +55,9 @@ pub struct TypstSvgArtifact {
 /// Direct retained result used by Noon rendering/animation integration.
 ///
 /// `resource` contains shaped glyph runs and references into `geometry` for Typst
-/// vector decorations such as fraction rules and authored shapes. No SVG string or
-/// Typst frame is retained after this value is constructed.
+/// vector decorations such as fraction rules and authored shapes. `fonts` owns the
+/// exact immutable font buffers that produced the retained glyph IDs. No SVG string,
+/// Typst frame, or Typst compiler object is retained after this value is constructed.
 #[derive(Clone, Debug)]
 pub struct TypstResourceArtifact {
     pub mode: TypstMode,
@@ -63,6 +65,7 @@ pub struct TypstResourceArtifact {
     pub prepared_source: Arc<str>,
     pub resource: TextResource,
     pub geometry: GeometryResourceArena,
+    pub fonts: FontResourceArena,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +78,7 @@ pub enum TypstBackendError {
     UnsupportedImage,
     UnsupportedClip,
     InvalidResource(TextResourceValidationError),
+    FontResource(FontResourceError),
 }
 
 impl fmt::Display for TypstBackendError {
@@ -104,6 +108,7 @@ impl fmt::Display for TypstBackendError {
             Self::InvalidResource(error) => {
                 write!(formatter, "invalid normalized text resource: {error}")
             }
+            Self::FontResource(error) => write!(formatter, "invalid Typst font resource: {error}"),
         }
     }
 }
@@ -157,6 +162,7 @@ pub fn compile_typst_resource(
         vectors: Vec::new(),
         parts: Vec::new(),
         geometry: GeometryResourceArena::new(),
+        fonts: FontResourceArena::new(),
         clusters: 0,
     };
     normalizer.walk_frame(&page.frame, TextAffineTransform::IDENTITY, None)?;
@@ -198,6 +204,7 @@ pub fn compile_typst_resource(
         prepared_source: Arc::from(prepared_source),
         resource,
         geometry: normalizer.geometry,
+        fonts: normalizer.fonts,
     })
 }
 
@@ -247,6 +254,7 @@ struct FrameNormalizer {
     vectors: Vec<TextVectorItem>,
     parts: Vec<TextPart>,
     geometry: GeometryResourceArena,
+    fonts: FontResourceArena,
     clusters: u32,
 }
 
@@ -312,6 +320,17 @@ impl FrameNormalizer {
             .post_script_name()
             .unwrap_or_else(|| format!("{}#{}", family, font.index()));
         let variation_key = format!("{:?}", text.font.variations());
+        let face = FontFaceIdentity {
+            family: Arc::from(family),
+            face_key: Arc::from(face_key),
+            face_index: font.index(),
+            variation_key: Arc::from(variation_key),
+        };
+        let font_data: &[u8] = font.data().as_ref();
+        self.fonts
+            .intern_face(&face, Arc::<[u8]>::from(font_data))
+            .map_err(TypstBackendError::FontResource)?;
+
         let fill = inherited_color(&text.fill)?;
         if let Some(stroke) = &text.stroke {
             // Ensure the retained path does not silently discard a paint mode even
@@ -376,12 +395,7 @@ impl FrameNormalizer {
         let transform = font_y_up_to_frame.then(state).then(self.page_to_noon);
 
         self.runs.push(GlyphRun {
-            font: FontFaceIdentity {
-                family: Arc::from(family),
-                face_key: Arc::from(face_key),
-                face_index: font.index(),
-                variation_key: Arc::from(variation_key),
-            },
+            font: face,
             font_size,
             direction: TextDirection::LeftToRight,
             fill,
@@ -575,6 +589,10 @@ mod tests {
                 .kind,
             TextLayoutBackendKind::Typst
         );
+        assert!(!artifact.fonts.is_empty());
+        for run in artifact.resource.runs.iter() {
+            assert!(artifact.fonts.get_for_face(&run.font).is_some());
+        }
     }
 
     #[test]
@@ -584,6 +602,7 @@ mod tests {
         assert!(artifact.resource.glyph_count() >= 2);
         assert!(artifact.resource.vector_count() >= 1);
         assert!(!artifact.geometry.is_empty());
+        assert!(!artifact.fonts.is_empty());
         for item in artifact.resource.vector_items.iter() {
             assert!(matches!(
                 artifact.geometry.get(item.geometry),
@@ -602,6 +621,21 @@ mod tests {
     }
 
     #[test]
+    fn repeated_runs_share_immutable_font_buffers() {
+        let artifact = compile_typst_resource(
+            "#text(fill: red)[A] #text(fill: blue)[B]",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        assert!(artifact.resource.runs.len() >= 2);
+        assert_eq!(artifact.fonts.len(), 1);
+        assert!(artifact.fonts.stats().font_bytes > 0);
+        for run in artifact.resource.runs.iter() {
+            assert!(artifact.fonts.get_for_face(&run.font).is_some());
+        }
+    }
+
+    #[test]
     fn labeled_groups_become_stable_semantic_parts() {
         let artifact = compile_typst_resource("#box[x] <lhs> + y", TypstMode::Markup).unwrap();
         assert!(artifact
@@ -616,6 +650,7 @@ mod tests {
         let first = compile_typst_resource("$ x^2 $", TypstMode::Markup).unwrap();
         let second = compile_typst_resource("$ x^2 $", TypstMode::Markup).unwrap();
         assert_eq!(first.resource.runs, second.resource.runs);
+        assert_eq!(first.fonts.stats(), second.fonts.stats());
         assert_eq!(
             first
                 .resource
