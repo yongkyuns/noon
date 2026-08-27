@@ -17,8 +17,8 @@
       "source": "*Hello* from _Typst!_",
       "font_size": 96,
       "ratchet": {
-        "max_differing_ratio": 0.009,
-        "max_mean_absolute_channel_error": 0.35,
+        "max_differing_ratio": 0.008,
+        "max_mean_absolute_channel_error": 0.28,
         "max_abs_centroid_x_delta": 0,
         "max_abs_centroid_y_delta": 0,
         "max_abs_width_delta": 0,
@@ -32,8 +32,8 @@
       "source": "sum_(k=1)^n k = (n(n + 1)) / 2",
       "font_size": 72,
       "ratchet": {
-        "max_differing_ratio": 0.008,
-        "max_mean_absolute_channel_error": 0.3,
+        "max_differing_ratio": 0.007,
+        "max_mean_absolute_channel_error": 0.24,
         "max_abs_centroid_x_delta": 0,
         "max_abs_centroid_y_delta": 0,
         "max_abs_width_delta": 2,
@@ -46,6 +46,7 @@
     "reference_capture": "cairo-save-last-frame",
     "noon_path": "retained-text-resource",
     "mode": "enforced-per-fixture-ratchet",
+    "max_background_channel_delta_sum": 0,
     "ratchet_rule": "thresholds may only stay equal or tighten after source-level parity improvements"
   }
 }
