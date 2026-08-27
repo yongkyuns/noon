@@ -11,8 +11,8 @@ use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
-    Color, FontResourceArena, FontVariationSetting, GlyphRun, TextRenderItem, TextResourceArena,
-    TextResourceHandle, Transform2D, Vec2,
+    Color, FontResourceArena, FontVariationSetting, GlyphRun, ObjectId, TextRenderItem,
+    TextResourceArena, TextResourceHandle, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, RetainedFrameState};
 use noon_text_atlas::{
@@ -136,15 +136,29 @@ pub struct RetainedTextPrepareStats {
     pub outline_runs: usize,
 }
 
-/// Cumulative counters for the retained text preparation fast path.
+/// Cumulative counters for retained text preparation locality.
 ///
-/// A `reused_frames` increment means preparation returned the existing quad/item
-/// buffers without scanning retained objects, touching the raster cache, or probing
-/// the atlas. Object-local incremental rebuilds are layered on top of this contract.
+/// `reused_frames` return the existing prepared arrays untouched. Successful
+/// `object_update_frames` mutate only already-resident quad records for changed text
+/// objects and perform no raster or atlas lookups. Incompatible incremental changes
+/// are counted as `fallback_rebuilds` before taking the conservative full path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedTextIncrementalStats {
     pub rebuild_attempts: u64,
     pub reused_frames: u64,
+    pub object_update_frames: u64,
+    pub objects_updated: u64,
+    pub fallback_rebuilds: u64,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedTextObjectState {
+    id: ObjectId,
+    text: TextResourceHandle,
+    transform: Transform2D,
+    reveal: f32,
+    morph: f32,
+    item_range: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -202,8 +216,9 @@ impl From<GlyphAtlasError> for TextPrepareError {
 
 /// Persistent retained text preparation state.
 ///
-/// Raster and atlas caches survive frame preparation so translation/opacity changes
-/// only rebuild inexpensive quad records. Glyph raster identity intentionally excludes
+/// Raster and atlas caches survive frame preparation. Stable object-local ranges let
+/// translation and paint/opacity changes update already-resident quads without
+/// rescanning unrelated text or probing those caches. Glyph raster identity excludes
 /// position; ordinary display sizes preserve the legacy integer-pixel identity, while
 /// very large device scales use conservative geometric residency buckets.
 pub struct RetainedTextQuadPreparer {
@@ -212,6 +227,7 @@ pub struct RetainedTextQuadPreparer {
     mask_quads: Vec<GlyphQuadInstance>,
     color_quads: Vec<GlyphQuadInstance>,
     items: Vec<PreparedTextItem>,
+    object_states: Vec<Option<PreparedTextObjectState>>,
     stats: RetainedTextPrepareStats,
     incremental_stats: RetainedTextIncrementalStats,
     last_metrics: Option<TextDeviceMetrics>,
@@ -233,6 +249,7 @@ impl RetainedTextQuadPreparer {
             mask_quads: Vec::new(),
             color_quads: Vec::new(),
             items: Vec::new(),
+            object_states: Vec::new(),
             stats: RetainedTextPrepareStats::default(),
             incremental_stats: RetainedTextIncrementalStats::default(),
             last_metrics: None,
@@ -286,10 +303,9 @@ impl RetainedTextQuadPreparer {
 
     /// Prepare retained text while preserving runtime dirty-state locality.
     ///
-    /// The first slice intentionally optimizes the strongest safe case: when the
-    /// runtime reports no changed objects and device metrics are unchanged, the
-    /// already-prepared buffers are returned directly. Non-empty change sets still
-    /// take the existing full-rebuild path until per-object retained ranges land.
+    /// Empty change sets reuse the prepared arrays. Non-empty compatible change sets
+    /// update only the changed text objects' stable quad ranges. Anything that can
+    /// change raster identity or prepared structure falls back before mutation.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_with_changes<'a>(
         &'a mut self,
@@ -305,24 +321,173 @@ impl RetainedTextQuadPreparer {
         if self.prepared_once && changes.is_empty() && self.last_metrics == Some(metrics) {
             self.incremental_stats.reused_frames =
                 self.incremental_stats.reused_frames.saturating_add(1);
-            return Ok(PreparedRetainedTextFrame {
-                time: frame.time,
-                mask_quads: &self.mask_quads,
-                color_quads: &self.color_quads,
-                items: &self.items,
-                stats: self.stats,
-            });
+            return Ok(self.prepared_frame(frame.time));
         }
 
+        if self.can_update_objects(frame, changes, texts, metrics)? {
+            let updated = self.update_objects(frame, changes, texts);
+            self.incremental_stats.object_update_frames = self
+                .incremental_stats
+                .object_update_frames
+                .saturating_add(1);
+            self.incremental_stats.objects_updated = self
+                .incremental_stats
+                .objects_updated
+                .saturating_add(updated as u64);
+            return Ok(self.prepared_frame(frame.time));
+        }
+
+        if self.prepared_once && !changes.is_all() && !changes.is_empty() {
+            self.incremental_stats.fallback_rebuilds =
+                self.incremental_stats.fallback_rebuilds.saturating_add(1);
+        }
+        self.full_rebuild(device, queue, frame, texts, fonts, metrics)?;
+        Ok(self.prepared_frame(frame.time))
+    }
+
+    fn prepared_frame(&self, time: f64) -> PreparedRetainedTextFrame<'_> {
+        PreparedRetainedTextFrame {
+            time,
+            mask_quads: &self.mask_quads,
+            color_quads: &self.color_quads,
+            items: &self.items,
+            stats: self.stats,
+        }
+    }
+
+    fn can_update_objects(
+        &self,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<bool, TextPrepareError> {
+        if !self.prepared_once
+            || changes.is_all()
+            || changes.is_structural()
+            || changes.is_empty()
+            || self.last_metrics != Some(metrics)
+            || frame.objects.len() != self.object_states.len()
+        {
+            return Ok(false);
+        }
+
+        for &index in changes.object_indices() {
+            let Some(object) = frame.objects.get(index) else {
+                return Ok(false);
+            };
+            match self.object_states.get(index).and_then(Option::as_ref) {
+                None => {
+                    if frame.is_present(index) && object.text().is_some() {
+                        return Ok(false);
+                    }
+                }
+                Some(state) => {
+                    if object.id != state.id
+                        || !frame.is_present(index)
+                        || object.text() != Some(state.text)
+                        || object.transform.scale != state.transform.scale
+                        || object.transform.rotation != state.transform.rotation
+                        || frame.reveal(index) != state.reveal
+                        || frame.morph(index) != state.morph
+                    {
+                        return Ok(false);
+                    }
+                    texts
+                        .get(state.text)
+                        .ok_or(TextPrepareError::MissingTextResource(state.text))?;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn update_objects(
+        &mut self,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+    ) -> usize {
+        let mut updated = 0_usize;
+        for &index in changes.object_indices() {
+            let Some(state) = self.object_states[index].clone() else {
+                continue;
+            };
+            let object = &frame.objects[index];
+            let resource = texts
+                .get(state.text)
+                .expect("validated text resource must remain present during object-local update");
+            let delta = object.transform.translation - state.transform.translation;
+            let object_opacity = object.style.opacity * object.appearance;
+
+            for item in &self.items[state.item_range.clone()] {
+                let PreparedTextItem::GlyphBatch {
+                    run_index,
+                    plane,
+                    instance_range,
+                    ..
+                } = item
+                else {
+                    continue;
+                };
+                let run = &resource.runs[*run_index as usize];
+                let color = match plane {
+                    GlyphAtlasPlane::Mask => color_with_opacity(
+                        run.fill.or(object.style.fill).unwrap_or(Color::WHITE),
+                        object_opacity,
+                    ),
+                    GlyphAtlasPlane::Color => [1.0, 1.0, 1.0, object_opacity],
+                };
+                let start = instance_range.start as usize;
+                let end = instance_range.end as usize;
+                let quads = match plane {
+                    GlyphAtlasPlane::Mask => &mut self.mask_quads,
+                    GlyphAtlasPlane::Color => &mut self.color_quads,
+                };
+                for quad in &mut quads[start..end] {
+                    quad.origin[0] += delta.x;
+                    quad.origin[1] += delta.y;
+                    quad.color = color;
+                }
+            }
+
+            let stored = self.object_states[index]
+                .as_mut()
+                .expect("validated text object state must remain present");
+            stored.transform = object.transform;
+            stored.reveal = frame.reveal(index);
+            stored.morph = frame.morph(index);
+            updated = updated.saturating_add(1);
+        }
+        updated
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn full_rebuild(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedFrameState,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<(), TextPrepareError> {
         self.incremental_stats.rebuild_attempts =
             self.incremental_stats.rebuild_attempts.saturating_add(1);
+        // A fallible rebuild must never leave an old successful generation reusable.
+        // Clear validity before mutating any prepared arrays and restore it only after
+        // the complete frame has been rebuilt successfully.
+        self.prepared_once = false;
+        self.last_metrics = None;
         self.mask_quads.clear();
         self.color_quads.clear();
         self.items.clear();
+        self.object_states.clear();
+        self.object_states.resize_with(frame.objects.len(), || None);
         self.stats = RetainedTextPrepareStats::default();
 
-        for (object_index, object) in frame.objects.iter().enumerate() {
-            if !frame.is_present(object_index) {
+        for (object_slot, object) in frame.objects.iter().enumerate() {
+            if !frame.is_present(object_slot) {
                 continue;
             }
             let Some(text_handle) = object.text() else {
@@ -331,11 +496,12 @@ impl RetainedTextQuadPreparer {
             let resource = texts
                 .get(text_handle)
                 .ok_or(TextPrepareError::MissingTextResource(text_handle))?;
-            let object_index = u32::try_from(object_index)
+            let object_index = u32::try_from(object_slot)
                 .expect("retained frame object count exceeds u32 painter-order limits");
             self.stats.text_objects += 1;
-            let reveal = frame.reveal(object_index as usize);
-            let morph = frame.morph(object_index as usize);
+            let reveal = frame.reveal(object_slot);
+            let morph = frame.morph(object_slot);
+            let item_start = self.items.len();
 
             for render_item in resource.render_items.iter().copied() {
                 match render_item {
@@ -379,17 +545,20 @@ impl RetainedTextQuadPreparer {
                     }
                 }
             }
+
+            self.object_states[object_slot] = Some(PreparedTextObjectState {
+                id: object.id,
+                text: text_handle,
+                transform: object.transform,
+                reveal,
+                morph,
+                item_range: item_start..self.items.len(),
+            });
         }
 
         self.last_metrics = Some(metrics);
         self.prepared_once = true;
-        Ok(PreparedRetainedTextFrame {
-            time: frame.time,
-            mask_quads: &self.mask_quads,
-            color_quads: &self.color_quads,
-            items: &self.items,
-            stats: self.stats,
-        })
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -663,6 +832,33 @@ mod tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+        }
+    }
+
+    fn two_text_frame(text: TextResourceHandle) -> RetainedFrameState {
+        let transform = scene_transform();
+        RetainedFrameState {
+            time: 0.0,
+            objects: vec![
+                RetainedFrameObjectState {
+                    id: ObjectId::new(1),
+                    content: ObjectContentRef::Text(text),
+                    transform,
+                    style: Style::default(),
+                    appearance: 1.0,
+                },
+                RetainedFrameObjectState {
+                    id: ObjectId::new(2),
+                    content: ObjectContentRef::Text(text),
+                    transform,
+                    style: Style::default(),
+                    appearance: 1.0,
+                },
+            ],
+            presences: vec![true, true],
+            reveals: vec![1.0, 1.0],
+            morphs: vec![0.0, 0.0],
+            render_geometries: vec![None, None],
         }
     }
 
@@ -953,8 +1149,218 @@ mod tests {
             RetainedTextIncrementalStats {
                 rebuild_attempts: 1,
                 reused_frames: 1,
+                ..RetainedTextIncrementalStats::default()
             }
         );
+    }
+
+    #[test]
+    fn changed_text_translation_and_opacity_update_only_its_quads() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = two_text_frame(handle);
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        let (before, batches) = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            let batches = prepared
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    PreparedTextItem::GlyphBatch {
+                        object_index,
+                        plane: GlyphAtlasPlane::Mask,
+                        instance_range,
+                        ..
+                    } => Some((*object_index, instance_range.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (prepared.mask_quads.to_vec(), batches)
+        };
+        let raster = preparer.raster_stats();
+        let atlas = preparer.atlas_stats();
+
+        frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
+        frame.objects[1].style.opacity = 0.5;
+        frame.objects[1].appearance = 0.5;
+        let after = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![1]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            prepared.mask_quads.to_vec()
+        };
+
+        assert_eq!(preparer.raster_stats(), raster);
+        assert_eq!(preparer.atlas_stats(), atlas);
+        for (object_index, range) in batches {
+            let start = range.start as usize;
+            let end = range.end as usize;
+            if object_index == 0 {
+                assert_eq!(&after[start..end], &before[start..end]);
+            } else {
+                for (after_quad, before_quad) in after[start..end].iter().zip(&before[start..end]) {
+                    assert!((after_quad.origin[0] - before_quad.origin[0] - 2.0).abs() < 1e-5);
+                    assert!((after_quad.origin[1] - before_quad.origin[1] + 3.0).abs() < 1e-5);
+                    assert_eq!(after_quad.axis_x, before_quad.axis_x);
+                    assert_eq!(after_quad.axis_y, before_quad.axis_y);
+                    assert_eq!(after_quad.uv_min, before_quad.uv_min);
+                    assert_eq!(after_quad.uv_max, before_quad.uv_max);
+                    assert!((after_quad.color[3] - before_quad.color[3] * 0.25).abs() < 1e-6);
+                }
+            }
+        }
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 1);
+        assert_eq!(preparer.incremental_stats().object_update_frames, 1);
+        assert_eq!(preparer.incremental_stats().objects_updated, 1);
+        assert_eq!(preparer.incremental_stats().fallback_rebuilds, 0);
+    }
+
+    #[test]
+    fn text_scale_change_falls_back_to_full_rebuild() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        frame.objects[0].transform.scale = Vec2::new(0.1, 0.1);
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 2);
+        assert_eq!(preparer.incremental_stats().object_update_frames, 0);
+        assert_eq!(preparer.incremental_stats().objects_updated, 0);
+        assert_eq!(preparer.incremental_stats().fallback_rebuilds, 1);
+    }
+
+    #[test]
+    fn text_object_identity_change_falls_back_to_full_rebuild() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        frame.objects[0].id = ObjectId::new(99);
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 2);
+        assert_eq!(preparer.incremental_stats().object_update_frames, 0);
+        assert_eq!(preparer.incremental_stats().fallback_rebuilds, 1);
+    }
+
+    #[test]
+    fn failed_full_rebuild_cannot_be_reused_as_a_valid_generation() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        let missing = TextResourceArena::new();
+        assert!(matches!(
+            preparer.prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &missing,
+                &artifact.fonts,
+                metrics(),
+            ),
+            Err(TextPrepareError::MissingTextResource(found)) if found == handle
+        ));
+
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        assert!(!prepared.mask_quads.is_empty());
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 3);
+        assert_eq!(preparer.incremental_stats().reused_frames, 0);
     }
 
     #[test]
