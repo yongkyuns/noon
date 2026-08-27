@@ -3,6 +3,45 @@ import { spawn } from "node:child_process";
 
 import playwright from "playwright";
 
+import { PlaygroundGeneration } from "../web/playground-generation.js";
+
+function stressGenerationGate() {
+  const generations = new PlaygroundGeneration();
+  let seed = 0x6e6f6f6e;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  };
+
+  let activeExample = "scene-0";
+  generations.commitSelection(generations.beginSelectionRequest(activeExample));
+  let latestRun = generations.beginRun(activeExample);
+  const staleRuns = [];
+
+  for (let index = 0; index < 500; index += 1) {
+    if (random() % 3 === 0) {
+      const request = generations.beginSelectionRequest(`scene-${index + 1}`);
+      const committed = generations.commitSelection(request);
+      assert.ok(committed);
+      staleRuns.push(latestRun);
+      activeExample = committed.exampleId;
+      latestRun = generations.beginRun(activeExample);
+    } else {
+      staleRuns.push(latestRun);
+      latestRun = generations.beginRun(activeExample);
+    }
+    assert.equal(generations.isRunCurrent(latestRun, activeExample), true);
+    const sample = staleRuns[random() % staleRuns.length];
+    if (sample) {
+      assert.equal(generations.isRunCurrent(sample, activeExample), false);
+    }
+  }
+}
+
+stressGenerationGate();
+
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_RACE_PORT ?? "4184");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -197,7 +236,7 @@ try {
 
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ playground generations: ${staleRace.diagnostics.staleDrops} stale result(s) rejected; duplicate Run coalesced`,
+    `✓ playground generations: 500 seeded operations + ${staleRace.diagnostics.staleDrops} stale result(s) rejected; duplicate Run coalesced`,
   );
 } finally {
   if (browser !== null) await browser.close();
