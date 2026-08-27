@@ -88,6 +88,7 @@ pub enum GlyphRasterError {
     GlyphIdOutOfRange(u32),
     InvalidPixelSize,
     InvalidVariation,
+    OutlineRequired,
     UnexpectedSubpixelMask,
 }
 
@@ -113,6 +114,10 @@ impl fmt::Display for GlyphRasterError {
                 write!(formatter, "glyph pixel size must be finite and positive")
             }
             Self::InvalidVariation => write!(formatter, "glyph variation values must be finite"),
+            Self::OutlineRequired => write!(
+                formatter,
+                "stroked glyph runs require retained outline rendering"
+            ),
             Self::UnexpectedSubpixelMask => write!(
                 formatter,
                 "Swash returned a subpixel mask for an alpha-only atlas request"
@@ -226,6 +231,9 @@ impl GlyphRasterCache {
             .any(|setting| !setting.value.is_finite())
         {
             return Err(GlyphRasterError::InvalidVariation);
+        }
+        if run.stroke.is_some() {
+            return Err(GlyphRasterError::OutlineRequired);
         }
 
         let glyph_id = GlyphId::try_from(glyph_id)
@@ -385,6 +393,32 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(cache.stats().misses, 1);
         assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn stroked_typst_runs_require_outline_rendering() {
+        let artifact = compile_typst_resource(
+            "#text(stroke: (paint: red, thickness: 1pt, dash: \"dashed\"))[A]",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        let run = artifact
+            .resource
+            .runs
+            .iter()
+            .find(|run| run.stroke.is_some())
+            .expect("Typst should retain the text stroke");
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::new();
+
+        assert_eq!(
+            cache
+                .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 48.0)
+                .unwrap_err(),
+            GlyphRasterError::OutlineRequired
+        );
+        assert!(cache.is_empty());
+        assert_eq!(cache.stats().misses, 0);
     }
 
     #[test]
