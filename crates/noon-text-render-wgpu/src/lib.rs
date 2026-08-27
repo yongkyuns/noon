@@ -27,6 +27,7 @@ use noon_text_raster::{
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES: usize = 8_192;
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 pub const GLYPH_RASTER_SIZE_BUCKET_RATIO: f32 = 1.125;
+pub const GLYPH_RASTER_SIZE_BUCKET_START: f32 = 256.0;
 
 pub const DEFAULT_GLYPH_RASTER_CACHE_LIMITS: GlyphRasterCacheLimits = GlyphRasterCacheLimits::new(
     DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES,
@@ -202,9 +203,9 @@ impl From<GlyphAtlasError> for TextPrepareError {
 /// Persistent retained text preparation state.
 ///
 /// Raster and atlas caches survive frame preparation so translation/opacity changes
-/// only rebuild inexpensive quad records. The glyph raster identity intentionally
-/// excludes position; changes to effective device scale select a conservative
-/// geometric device-pixel bucket instead.
+/// only rebuild inexpensive quad records. Glyph raster identity intentionally excludes
+/// position; ordinary display sizes preserve the legacy integer-pixel identity, while
+/// very large device scales use conservative geometric residency buckets.
 pub struct RetainedTextQuadPreparer {
     raster_cache: GlyphRasterCache,
     atlas: GpuGlyphAtlas,
@@ -544,18 +545,25 @@ fn raster_pixel_size(
     Ok(raster_size_bucket(requested))
 }
 
-/// Round an effective glyph size upward to a geometric residency bucket.
+/// Preserve the legacy integer-ceil raster identity at ordinary display sizes and
+/// switch to conservative geometric residency buckets only for very large glyphs.
 ///
-/// Rounding upward ensures the selected raster never undersamples the current
-/// transform. Geometric growth bounds the number of distinct raster identities over
-/// large zoom ranges while retaining much finer resolution than octave-sized bins.
+/// Keeping the ordinary path exact protects raster parity. Above the threshold,
+/// rounding upward still guarantees that the selected raster never undersamples the
+/// active transform while bounding the number of identities accumulated during
+/// extreme smooth zoom.
 fn raster_size_bucket(requested: f32) -> f32 {
     let requested = requested.max(1.0);
-    let mut bucket = 1.0_f32;
+    let legacy = requested.ceil();
+    if legacy <= GLYPH_RASTER_SIZE_BUCKET_START {
+        return legacy;
+    }
+
+    let mut bucket = GLYPH_RASTER_SIZE_BUCKET_START;
     while bucket < requested {
         let next = bucket * GLYPH_RASTER_SIZE_BUCKET_RATIO;
         if !next.is_finite() || next <= bucket {
-            return requested;
+            return legacy;
         }
         bucket = next;
     }
@@ -681,8 +689,24 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_raster_sizes_preserve_legacy_integer_ceil_identity() {
+        for requested in [0.0, 1.0, 1.01, 10.0, 67.5, 100.0, 255.0, 255.1, 256.0] {
+            assert_eq!(raster_size_bucket(requested), requested.max(1.0).ceil());
+        }
+    }
+
+    #[test]
     fn raster_size_buckets_never_undersample_requested_size() {
-        for requested in [0.0, 1.0, 1.01, 10.0, 100.0, 1_000.0, 100_000.0] {
+        for requested in [
+            0.0,
+            1.0,
+            1.01,
+            10.0,
+            100.0,
+            256.1,
+            1_000.0,
+            100_000.0,
+        ] {
             let bucket = raster_size_bucket(requested);
             assert!(bucket >= requested.max(1.0));
             assert!(bucket.is_finite());
@@ -690,19 +714,19 @@ mod tests {
     }
 
     #[test]
-    fn nearby_zoom_requests_share_raster_residency() {
-        assert_eq!(raster_size_bucket(100.0), raster_size_bucket(101.0));
-        assert_eq!(raster_size_bucket(101.0), raster_size_bucket(105.0));
-        assert_ne!(raster_size_bucket(105.0), raster_size_bucket(120.0));
+    fn nearby_high_zoom_requests_share_raster_residency() {
+        assert_eq!(raster_size_bucket(300.0), raster_size_bucket(301.0));
+        assert_eq!(raster_size_bucket(301.0), raster_size_bucket(320.0));
+        assert_ne!(raster_size_bucket(320.0), raster_size_bucket(330.0));
     }
 
     #[test]
-    fn large_zoom_range_uses_bounded_geometric_bucket_count() {
-        let buckets = (1..=1_000)
+    fn high_zoom_range_uses_bounded_geometric_bucket_count() {
+        let buckets = (257..=1_000)
             .map(|requested| raster_size_bucket(requested as f32).to_bits())
             .collect::<BTreeSet<_>>();
-        assert!(buckets.len() < 70);
-        assert!(buckets.len() > 20);
+        assert!(buckets.len() < 20);
+        assert!(buckets.len() > 5);
     }
 
     #[test]
