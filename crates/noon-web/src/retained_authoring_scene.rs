@@ -300,11 +300,8 @@ mod tests {
         let mut legacy = SceneDefinition::new();
         let camera = legacy.add(GeometryRef::rectangle(14.0, 8.0));
         assert!(legacy.set_camera_object(camera));
-        let mixed = MixedRetainedAuthoringScene::from_parts(
-            &legacy,
-            retained_document(Vec::new()),
-        )
-        .unwrap();
+        let mixed = MixedRetainedAuthoringScene::from_parts(&legacy, retained_document(Vec::new()))
+            .unwrap();
         assert_eq!(mixed.camera_object(), Some(camera));
     }
 
