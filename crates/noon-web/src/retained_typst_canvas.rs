@@ -124,12 +124,14 @@ mod wasm {
                 self.config.height as f32 / camera.world_size.y,
             ))
             .map_err(js_error)?;
+            let changes = self.runtime.take_frame_changes();
             let prepared = self
                 .preparer
-                .prepare(
+                .prepare_with_changes(
                     &self.device,
                     &self.queue,
                     self.runtime.frame(),
+                    &changes,
                     self.scene.texts(),
                     self.scene.fonts(),
                     self.scene.geometries(),
