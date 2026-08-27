@@ -14,10 +14,16 @@ node --check web/execution-transport.js
 node --check web/execution-engine-worker.js
 node --check web/execution-render-worker.js
 node --check web/execution-worker-client.js
+node --check web/retained-execution-engine-worker.js
+node --check web/retained-execution-render-worker.js
+node --check web/retained-execution-worker-client.js
+node --check web/authoring-execution-client.js
 node --check web/noon-authoring.js
 node --check web/js/examples/manim-quickstart-equivalents.js
 node --check scripts/execution-worker-smoke.mjs
 node --check scripts/execution-worker-host-smoke.mjs
+node --check scripts/retained-execution-worker-smoke.mjs
+node --check scripts/authoring-execution-router-smoke.mjs
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
 node --check web/morph-profile.js
