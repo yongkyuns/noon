@@ -10,6 +10,7 @@ members = [
     "crates/noon-web",
     "crates/noon-typst",
     "crates/noon-text-native",
+    "crates/noon-text-compile",
     "crates/noon-text-raster",
     "crates/noon-text-atlas",
     "crates/noon-text-render-wgpu",
