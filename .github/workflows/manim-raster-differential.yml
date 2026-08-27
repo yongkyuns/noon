@@ -94,6 +94,12 @@ jobs:
           NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
         run: node scripts/manim-typst-raster-differential.mjs
 
+      - name: Enforce retained Typst raster ratchets
+        env:
+          NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
+        run: node scripts/manim-typst-raster-enforce.mjs
+
       - name: Upload retained Typst measurement artifacts
         if: always()
         uses: actions/upload-artifact@v4
