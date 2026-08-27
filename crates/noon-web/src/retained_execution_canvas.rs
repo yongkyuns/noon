@@ -61,8 +61,9 @@ mod wasm {
             canvas: OffscreenCanvas,
             resource_bundle_bytes: Vec<u8>,
         ) -> Result<WasmRetainedExecutionCanvasRenderer, JsValue> {
-            let mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
-                .map_err(js_error)?;
+            let mirror =
+                InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
+                    .map_err(js_error)?;
             let camera = mirror.camera();
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
