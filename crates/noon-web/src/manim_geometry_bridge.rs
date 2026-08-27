@@ -152,7 +152,7 @@ mod wasm {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectSnapshot, PathCommand};
+    use noon_core::{GeometryRef, ObjectSnapshot, PathCommand, Vec2};
 
     use super::{manim_arc_between_points_snapshot_json, manim_arc_snapshot_json};
 
