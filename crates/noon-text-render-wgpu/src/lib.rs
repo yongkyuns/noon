@@ -697,16 +697,7 @@ mod tests {
 
     #[test]
     fn raster_size_buckets_never_undersample_requested_size() {
-        for requested in [
-            0.0,
-            1.0,
-            1.01,
-            10.0,
-            100.0,
-            256.1,
-            1_000.0,
-            100_000.0,
-        ] {
+        for requested in [0.0, 1.0, 1.01, 10.0, 100.0, 256.1, 1_000.0, 100_000.0] {
             let bucket = raster_size_bucket(requested);
             assert!(bucket >= requested.max(1.0));
             assert!(bucket.is_finite());
