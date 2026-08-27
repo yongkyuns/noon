@@ -143,6 +143,10 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 350));
     const mixedMetrics = await execution.metrics();
     const mixedCanvas = execution.canvas;
+    const mixedRestartReady = await execution.restart();
+    const mixedRestartCanvas = execution.canvas;
+    const mixedRestartMetrics = await execution.metrics();
+    const mixedRestartState = await execution.state();
 
     let callbackError = null;
     try {
@@ -181,6 +185,9 @@ try {
       callbacks: legacy.callbacks,
       authoringClient: authoring,
     });
+    const legacyRestartReady = await execution.restart();
+    const legacyRestartCanvas = execution.canvas;
+    const legacyRestartMetrics = await execution.metrics();
 
     const state = await execution.state();
     const summary = {
@@ -195,18 +202,24 @@ try {
       mixedRaceMode: mixedRaceMetrics.executionMode,
       mixedRaceRetainedChannel: JSON.parse(mixedRaceState.retainedDocumentJson).channel,
       mixedMetrics,
+      mixedRestartMode: mixedRestartReady.mode,
+      mixedRestartCanvasChanged: mixedRestartCanvas !== mixedCanvas,
+      mixedRestartObjectCount: mixedRestartMetrics.metrics.objectCount,
+      mixedRestartRetainedChannel: JSON.parse(mixedRestartState.retainedDocumentJson).channel,
       callbackError,
       legacyRetainedObjectCount,
       retainedRaceModeBeforeLegacy: retainedRaceMetrics.executionMode,
       legacyMode: legacyResult.mode,
       legacyRebuilt: legacyResult.rebuilt,
-      legacyCanvasChanged: legacyCanvas !== mixedCanvas,
+      legacyCanvasChanged: legacyCanvas !== mixedRestartCanvas,
       legacyRaceMode: legacyRaceMetrics.executionMode,
       legacyRaceObjectCount: JSON.parse(legacyRaceState.sceneJson).objects.length,
       legacyMetrics,
       secondLegacyMode: secondLegacy.mode,
       secondLegacyRebuilt: secondLegacy.rebuilt,
-      sameLegacyCanvas: execution.canvas === legacyCanvas,
+      legacyRestartMode: legacyRestartReady.mode,
+      legacyRestartCanvasChanged: legacyRestartCanvas !== legacyCanvas,
+      legacyRestartObjectCount: legacyRestartMetrics.metrics.objectCount,
       state,
       transportMode: execution.transportMode,
       rendererBackend: execution.rendererBackend,
@@ -233,6 +246,10 @@ try {
   assert.equal(result.mixedMetrics.engineMetrics.resourceBundleTransfers, 1);
   assert.ok(result.mixedMetrics.engineMetrics.resourceBundleBytes > 0);
   assert.equal(result.mixedMetrics.engineMetrics.host.enabled, false);
+  assert.equal(result.mixedRestartMode, result.retainedMode);
+  assert.equal(result.mixedRestartCanvasChanged, true);
+  assert.equal(result.mixedRestartObjectCount, 3);
+  assert.equal(result.mixedRestartRetainedChannel, "noon.authoring.retained");
   assert.match(result.callbackError, /retained authoring with Python host callbacks is not supported yet/);
 
   assert.equal(result.legacyRetainedObjectCount, 0, "geometry-only authoring should emit an empty sidecar");
@@ -247,15 +264,19 @@ try {
   assert.equal(typeof result.legacyMetrics.engineMetrics.host.enabled, "boolean");
   assert.equal(result.secondLegacyMode, result.initialMode);
   assert.equal(result.secondLegacyRebuilt, false);
-  assert.equal(result.sameLegacyCanvas, true);
+  assert.equal(result.legacyRestartMode, result.initialMode);
+  assert.equal(result.legacyRestartCanvasChanged, true);
+  assert.equal(result.legacyRestartObjectCount, 2);
   assert.equal(JSON.parse(result.state.sceneJson).objects.length, 2);
   assert.match(result.rendererBackend, /WebGPU|WebGL2/);
   assert.deepEqual(result.clientErrors, []);
   assert.deepEqual(browserErrors, []);
   console.log(
-    `✓ authoring execution router: legacy → retained → legacy on ${result.rendererBackend}`,
+    `✓ authoring execution router: legacy → retained → restart → legacy → restart on ${result.rendererBackend}`,
   );
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
 }
+
+await import("./playground-race-smoke.mjs");

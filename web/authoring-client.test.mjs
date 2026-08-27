@@ -247,6 +247,24 @@ test("rejects only the request associated with a Python execution error", async 
   );
 
   await assert.rejects(resultPromise, /broken/);
+  assert.equal(client.terminated, false, "ordinary Python errors keep the worker reusable");
+});
+
+test("exposes fatal Python worker termination to recovery owners", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+  assert.equal(client.terminated, false);
+
+  const resultPromise = client.run("result = scene");
+  await Promise.resolve();
+  worker.emit("error", { message: "worker crashed" });
+
+  await assert.rejects(resultPromise, /worker crashed/);
+  assert.equal(client.terminated, true);
+  assert.equal(worker.terminated, true);
+  await assert.rejects(client.run("result = retry"), /terminated/);
 });
 
 test("rejects malformed PatchBatch documents before they reach Rust", () => {
@@ -317,5 +335,6 @@ test("terminating the client rejects pending work", async () => {
   client.terminate();
 
   assert.equal(worker.terminated, true);
+  assert.equal(client.terminated, true);
   await assert.rejects(resultPromise, /terminated/);
 });

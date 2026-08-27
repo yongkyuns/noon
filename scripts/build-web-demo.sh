@@ -6,6 +6,7 @@ noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
 node --check web/main.js
+node --check web/playground-generation.js
 node --check web/example-gallery.js
 node --check web/authoring-client.js
 node --check web/python-editor.js
@@ -58,6 +59,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/playground-generation.test.mjs
 node --test web/python-editor.test.mjs
 node --test web/python-worker-source.test.mjs
 node --test web/scene-identity.test.mjs

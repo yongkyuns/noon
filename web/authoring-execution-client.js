@@ -157,6 +157,19 @@ export class AuthoringExecutionClient {
     return result;
   }
 
+  async restart() {
+    return this.#withStablePlayer(async (player, mode) => {
+      const ready = await player.restart();
+      this.#canvas = player.canvas;
+      this.#mode = mode;
+      this.#rendererBackend = ready.render.backend;
+      this.#transportMode = ready.transportMode;
+      this.#observeCanvas();
+      this.#resizeCurrentCanvas();
+      return { ...ready, mode };
+    });
+  }
+
   async applyPatchBatch(patchBatchJson) {
     return this.#withStablePlayer((player, mode) => {
       if (mode !== AUTHORING_EXECUTION_LEGACY) {
