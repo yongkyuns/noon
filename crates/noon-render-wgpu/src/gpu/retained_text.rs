@@ -593,14 +593,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_with_changes(
-            device,
-            queue,
-            frame,
-            &changes,
-            texts,
-            fonts,
-            geometries,
-            metrics,
+            device, queue, frame, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -622,9 +615,9 @@ impl RetainedFramePreparer {
         // Snapshot the lightweight prepared records once so that borrow can end and
         // the atlas can be borrowed alongside them for the parent GPU renderer.
         {
-            let prepared = self.text.prepare_with_changes(
-                device, queue, frame, changes, texts, fonts, metrics,
-            )?;
+            let prepared = self
+                .text
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
             self.snapshot_mask_quads.clear();
             self.snapshot_mask_quads
                 .extend_from_slice(prepared.mask_quads);
