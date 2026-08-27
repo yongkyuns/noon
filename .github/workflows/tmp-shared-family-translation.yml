@@ -63,7 +63,7 @@ jobs:
             web/python/test_manim_shared_family_translation.py \
             compat/semantic-ownership-v1.json \
             scripts/check-web-package.mjs
-          git rm \
+          git rm -f \
             .github/workflows/tmp-shared-family-translation.yml \
             scripts/tmp_shared_family_translation_migration.py \
             scripts/tmp_fix_family_translation_helper.py \
