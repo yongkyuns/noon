@@ -203,14 +203,18 @@ export function parseAuthoringResult(resultJson) {
   }
   if (result.kind === "scene_document") {
     const document = validateSceneDocument(result.document);
-    return {
+    const retainedDocument = validateRetainedAuthoringDocument(result.retained_document);
+    const parsed = {
       kind: result.kind,
       document,
-      retainedDocument: validateRetainedAuthoringDocument(result.retained_document),
       duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
       callbacks: validateCallbackSession(result.callbacks, document),
     };
+    if (retainedDocument !== null) {
+      parsed.retainedDocument = retainedDocument;
+    }
+    return parsed;
   }
   throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
 }
