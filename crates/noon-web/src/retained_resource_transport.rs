@@ -127,12 +127,14 @@ impl RetainedResourceBundle {
     }
 
     pub fn encode_binary(&self) -> Result<Vec<u8>, RetainedResourceTransportError> {
-        postcard::to_allocvec(self)
-            .map_err(|error| RetainedResourceTransportError::Encode(error.to_string()))
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(self, &mut bytes)
+            .map_err(|error| RetainedResourceTransportError::Encode(error.to_string()))?;
+        Ok(bytes)
     }
 
     pub fn decode_binary(bytes: &[u8]) -> Result<Self, RetainedResourceTransportError> {
-        let bundle: Self = postcard::from_bytes(bytes)
+        let bundle: Self = ciborium::de::from_reader(bytes)
             .map_err(|error| RetainedResourceTransportError::Decode(error.to_string()))?;
         bundle.validate_protocol()?;
         Ok(bundle)
