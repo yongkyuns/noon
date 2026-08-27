@@ -373,20 +373,11 @@
         box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
       }
 
-      .metrics,
-      .perf-metrics {
+      .metrics {
         display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         border-top: 1px solid var(--border);
         background: rgb(10 13 21 / 86%);
-      }
-
-      .metrics {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-      }
-
-      .perf-metrics {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        background: rgb(8 11 18 / 92%);
       }
 
       .metric {
