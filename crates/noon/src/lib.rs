@@ -23,8 +23,8 @@ pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
         GeometryAuthoringError, MathTypst, MovingCameraScene, Polygon, ReactiveScene,
-        ReactiveTimelineScene, RegularPolygon, RetainedMobject, RetainedScene, TextAuthoringError,
-        Triangle, Typst, ValueTracker, VectorSignal,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
+        Star, TextAuthoringError, Triangle, Typst, ValueTracker, VectorSignal,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
