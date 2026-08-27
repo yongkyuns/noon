@@ -35,6 +35,56 @@ async function waitForServer() {
   throw new Error(`Python editor smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
+async function waitForRuntime(page, errors, label) {
+  let runtimeStatus = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    runtimeStatus = await page.evaluate(() => {
+      const status = document.querySelector("#status");
+      return {
+        state: status?.dataset.state ?? null,
+        text: document.querySelector("#status-text")?.textContent ?? status?.textContent ?? "",
+      };
+    });
+    if (runtimeStatus.state === "running" || runtimeStatus.state === "error") {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+  assert.equal(
+    runtimeStatus?.state,
+    "running",
+    `${label}: playground runtime did not become ready: ${JSON.stringify(runtimeStatus)}\n${errors.join("\n")}`,
+  );
+}
+
+async function waitForAppliedScene(page, errors, label, expectedText = null) {
+  await page.waitForFunction(
+    (needle) => {
+      const patch = document.querySelector("#patch-status");
+      const text = patch?.value ?? patch?.textContent ?? "";
+      if (patch?.dataset.state === "error") return true;
+      return patch?.dataset.state === "applied" && (needle === null || text.includes(needle));
+    },
+    expectedText,
+    { timeout: 60_000 },
+  );
+  const patch = await page.evaluate(() => ({
+    state: document.querySelector("#patch-status")?.dataset.state ?? null,
+    text:
+      document.querySelector("#patch-status")?.value ??
+      document.querySelector("#patch-status")?.textContent ??
+      "",
+  }));
+  assert.equal(
+    patch.state,
+    "applied",
+    `${label}: authored scene did not apply: ${JSON.stringify(patch)}\n${errors.join("\n")}`,
+  );
+  if (expectedText !== null) {
+    assert.match(patch.text, new RegExp(expectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -93,25 +143,7 @@ try {
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
 
-  let runtimeStatus = null;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    runtimeStatus = await page.evaluate(() => {
-      const status = document.querySelector("#status");
-      return {
-        state: status?.dataset.state ?? null,
-        text: document.querySelector("#status-text")?.textContent ?? status?.textContent ?? "",
-      };
-    });
-    if (runtimeStatus.state === "running" || runtimeStatus.state === "error") {
-      break;
-    }
-    await page.waitForTimeout(500);
-  }
-  assert.equal(
-    runtimeStatus?.state,
-    "running",
-    `playground runtime did not become ready: ${JSON.stringify(runtimeStatus)}\n${errors.join("\n")}`,
-  );
+  await waitForRuntime(page, errors, "enhanced editor");
 
   const layout = await page.evaluate(() => {
     const scroller = document
@@ -167,8 +199,73 @@ try {
   assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics");
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
+  await page.close();
+
+  const fallbackContext = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  await fallbackContext.route("https://esm.sh/**", (route) => route.abort("failed"));
+  const fallbackPage = await fallbackContext.newPage();
+  const fallbackErrors = [];
+  const fallbackWarnings = [];
+  fallbackPage.on("pageerror", (error) => fallbackErrors.push(`pageerror: ${error}`));
+  fallbackPage.on("console", (message) => {
+    if (message.type() === "warning") fallbackWarnings.push(message.text());
+    if (
+      message.type() === "error" &&
+      !message.text().includes("ERR_FAILED") &&
+      !message.text().includes("esm.sh")
+    ) {
+      fallbackErrors.push(`console: ${message.text()}`);
+    }
+  });
+
+  await fallbackPage.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, {
+    waitUntil: "load",
+  });
+  await fallbackPage.waitForFunction(
+    () => document.querySelector("#python-scene-source")?.value.includes("from noon import"),
+    null,
+    { timeout: 30_000 },
+  );
+  await waitForRuntime(fallbackPage, fallbackErrors, "textarea fallback");
+  await waitForAppliedScene(fallbackPage, fallbackErrors, "textarea fallback");
+
+  const fallback = await fallbackPage.evaluate(() => {
+    const textarea = document.querySelector("#python-scene-source");
+    return {
+      textareaHidden: textarea?.hidden ?? true,
+      editorCount: document.querySelectorAll(".python-code-editor").length,
+      source: textarea?.value ?? "",
+      backend: document.querySelector("#status")?.dataset.rendererBackend ?? null,
+    };
+  });
+  assert.equal(fallback.textareaHidden, false, "CDN failure must keep the native textarea visible");
+  assert.equal(fallback.editorCount, 0, "failed enhancement must not leave partial editor hosts");
+  assert.match(fallback.source, /from noon import \*/);
+  assert.equal(fallback.backend, "WebGL2");
+
+  await fallbackPage.locator("#python-scene-source").fill(
+    "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
+  );
+  await fallbackPage.locator("#replace-scene").click();
+  await waitForAppliedScene(
+    fallbackPage,
+    fallbackErrors,
+    "edited textarea fallback",
+    "2 objects",
+  );
+  assert.ok(
+    fallbackWarnings.some((warning) => warning.includes("Enhanced Python editor unavailable")),
+    `expected a non-fatal enhancement warning; got ${fallbackWarnings.join("\n")}`,
+  );
+  assert.deepEqual(
+    fallbackErrors,
+    [],
+    `editor CDN failure must not emit unhandled browser errors:\n${fallbackErrors.join("\n")}`,
+  );
+  await fallbackContext.close();
+
   console.log(
-    `Python editor smoke passed: bounded centered preview, 2 CodeMirror editors, syntax highlighting, ${lintRanges} Ruff diagnostics.`,
+    `Python editor smoke passed: enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();
