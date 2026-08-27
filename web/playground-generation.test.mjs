@@ -15,6 +15,27 @@ test("newest selection request wins when source loads complete out of order", ()
   assert.equal(generations.isSelectionCurrent(committed), true);
 });
 
+test("loading a newer selection preserves the current run until that selection commits", () => {
+  const generations = new PlaygroundGeneration();
+  generations.commitSelection(generations.beginSelectionRequest("first"));
+  const currentRun = generations.beginRun("first");
+
+  const loadingSecond = generations.beginSelectionRequest("second");
+  assert.equal(
+    generations.isRunCurrent(currentRun, "first"),
+    true,
+    "a slow or failed source load must not cancel the current valid scene",
+  );
+
+  const committedSecond = generations.commitSelection(loadingSecond);
+  assert.ok(committedSecond);
+  assert.equal(
+    generations.isRunCurrent(currentRun, "first"),
+    false,
+    "the loaded selection invalidates prior authoring at commit time",
+  );
+});
+
 test("committing a new selection invalidates authoring from the previous selection", () => {
   const generations = new PlaygroundGeneration();
   const firstSelection = generations.commitSelection(
