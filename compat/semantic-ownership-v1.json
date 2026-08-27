@@ -170,13 +170,21 @@
       "reason": "Rust computes the family translation delta from authoritative shared bounds, validates recursive leaf order, and mutates each shared leaf handle; Python only coerces host arguments and synchronizes the legacy scene transport mirror."
     },
     {
+      "id": "group-relative-placement",
+      "surface": "Deterministic Group/VGroup next_to/align_to without explicit submobject selection",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout::next_to_*/align_to_*/FrontendFamilyTranslation"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_next_to/_group_align_to"}],
+      "reason": "Rust resolves family/leaf/point critical points, Manim's unnormalized next_to direction and buffer, align_to axis masking, and the authoritative recursive leaf mutation order. Python only coerces host arguments and selects the target handle kind."
+    },
+    {
       "id": "group-placement",
-      "surface": "Group/VGroup next_to/align_to/arrange relative family placement",
+      "surface": "Group/VGroup arrange and next_to submobject_to_align/index_of_submobject_to_align selection",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_next_to/_manim_align_to/_manim_arrange"},
+      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_manim_arrange/_group_next_to fallback"},
       "shared_owner": {"language": "rust", "path": "crates/noon-web/src/authoring_mobject.rs", "symbol": "WasmAuthoringFamilyLayout/FrontendFamilyTranslation"},
-      "reason": "Family translation and aggregate bounds are shared-Rust-owned, but Python still computes relative next_to/align_to deltas and direct-submobject arrange sequencing.",
-      "replacement": "Move relative family placement intent and arrange sequencing behind the shared family handle.",
+      "reason": "Default family relative placement is shared-Rust-owned, but direct member selection and arrange sequencing still traverse Python wrapper submobjects.",
+      "replacement": "Expose shared family-member selection and ordered arrange sequencing behind WasmAuthoringFamilyHandle.",
       "migration_issue": "#61"
     },
     {

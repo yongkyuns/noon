@@ -213,6 +213,8 @@ _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
 _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
+_ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
+_ORIGINAL_GROUP_ALIGN_TO = _compat.Group.align_to
 _GROUP_COPY_DELEGATE = None
 _GROUP_TARGET_COPY = ContextVar("noon_group_target_copy", default=False)
 
@@ -1157,6 +1159,132 @@ def _group_move_to(
     return _apply_family_translation(self, translation, leaves, leaf_handles)
 
 
+
+def _group_next_to(
+    self: _compat.Group,
+    mobject_or_point: object,
+    direction: object = _base.RIGHT,
+    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    aligned_edge: object = _base.ORIGIN,
+    submobject_to_align: object | None = None,
+    index_of_submobject_to_align: int | None = None,
+    coor_mask: object = (1.0, 1.0, 1.0),
+) -> _compat.Group:
+    # Selecting a specific wrapper/member remains explicit #61 debt until shared
+    # family-member handles expose that selection. Do not silently rederive it here.
+    if submobject_to_align is not None or index_of_submobject_to_align is not None:
+        return _ORIGINAL_GROUP_NEXT_TO(
+            self,
+            mobject_or_point,
+            direction,
+            buff,
+            aligned_edge,
+            submobject_to_align,
+            index_of_submobject_to_align,
+            coor_mask,
+        )
+
+    shared = _shared_family_layout_session(self, mutation=True)
+    if shared is None:
+        return _ORIGINAL_GROUP_NEXT_TO(
+            self,
+            mobject_or_point,
+            direction,
+            buff,
+            aligned_edge,
+            submobject_to_align,
+            index_of_submobject_to_align,
+            coor_mask,
+        )
+    session, leaves, leaf_handles = shared
+    vector = _base._as_vec2(direction)
+    edge = _base._as_vec2(aligned_edge)
+    mask = _alignment_mask2(coor_mask)
+
+    translation = None
+    if isinstance(mobject_or_point, _compat.Group):
+        target_shared = _shared_family_layout_session(mobject_or_point)
+        if target_shared is not None and hasattr(session, "nextToFamily"):
+            translation = session.nextToFamily(
+                target_shared[0],
+                vector.x,
+                vector.y,
+                float(buff),
+                edge.x,
+                edge.y,
+                mask.x,
+                mask.y,
+            )
+    elif _alignment_is_mobject(mobject_or_point):
+        target_handle = _handle_for(mobject_or_point)
+        if target_handle is not None and hasattr(session, "nextToMobject"):
+            translation = session.nextToMobject(
+                target_handle,
+                vector.x,
+                vector.y,
+                float(buff),
+                edge.x,
+                edge.y,
+                mask.x,
+                mask.y,
+            )
+    elif hasattr(session, "nextToPoint"):
+        point = _base._as_vec2(mobject_or_point)
+        translation = session.nextToPoint(
+            point.x,
+            point.y,
+            vector.x,
+            vector.y,
+            float(buff),
+            edge.x,
+            edge.y,
+            mask.x,
+            mask.y,
+        )
+
+    if translation is None:
+        return _ORIGINAL_GROUP_NEXT_TO(
+            self,
+            mobject_or_point,
+            direction,
+            buff,
+            aligned_edge,
+            submobject_to_align,
+            index_of_submobject_to_align,
+            coor_mask,
+        )
+    return _apply_family_translation(self, translation, leaves, leaf_handles)
+
+
+def _group_align_to(
+    self: _compat.Group,
+    mobject_or_point: object,
+    direction: object = _base.ORIGIN,
+) -> _compat.Group:
+    shared = _shared_family_layout_session(self, mutation=True)
+    if shared is None:
+        return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
+    session, leaves, leaf_handles = shared
+    axis = _base._as_vec2(direction)
+
+    translation = None
+    if isinstance(mobject_or_point, _compat.Group):
+        target_shared = _shared_family_layout_session(mobject_or_point)
+        if target_shared is not None and hasattr(session, "alignToFamily"):
+            translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
+    elif _alignment_is_mobject(mobject_or_point):
+        target_handle = _handle_for(mobject_or_point)
+        if target_handle is not None and hasattr(session, "alignToMobject"):
+            translation = session.alignToMobject(target_handle, axis.x, axis.y)
+    elif hasattr(session, "alignToPoint"):
+        point = _base._as_vec2(mobject_or_point)
+        translation = session.alignToPoint(point.x, point.y, axis.x, axis.y)
+
+    if translation is None:
+        return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
+    return _apply_family_translation(self, translation, leaves, leaf_handles)
+
+
 def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     leaves = _compat._leaf_mobjects(value)
 
@@ -1400,5 +1528,7 @@ def install() -> None:
         _compat.Group.remove = _group_remove
         _compat.Group.shift = _group_shift
         _compat.Group.move_to = _group_move_to
+        _compat.Group.next_to = _group_next_to
+        _compat.Group.align_to = _group_align_to
         _compat.Group.copy = _group_copy
         _compat.Group._copy_for_animate_target = _group_target_mobject
