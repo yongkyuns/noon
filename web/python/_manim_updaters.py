@@ -499,7 +499,10 @@ def _install_rotating_breadth() -> None:
                 for index in range(count + 1)
             ]
             largest_step = max(
-                (abs(angle * (right - left)) for left, right in zip(samples, samples[1:])),
+                (
+                    abs(angle * (right - left))
+                    for left, right in zip(samples, samples[1:])
+                ),
                 default=0.0,
             )
             if largest_step <= max_z_segment_angle + 1e-12:
@@ -543,6 +546,7 @@ def _install_rotating_breadth() -> None:
             return
 
         segment_duration = duration / segment_count
+        segment_start = start_time
         current_members = list(detached)
         previous_progress = rates.evaluate_rate_function(easing, 0.0)
         for segment_index in range(segment_count):
@@ -550,7 +554,6 @@ def _install_rotating_breadth() -> None:
                 easing, (segment_index + 1) / segment_count
             )
             delta_angle = sign * animation.angle * (progress - previous_progress)
-            segment_start = start_time + segment_index * segment_duration
             for index, source in enumerate(sources):
                 assert source._object is not None
                 target = animate._snapshot_mobject(current_members[index].to_ir())
@@ -571,6 +574,7 @@ def _install_rotating_breadth() -> None:
                     easing="linear",
                 )
                 current_members[index] = target
+            segment_start += segment_duration
             previous_progress = progress
 
     def schedule_family(
