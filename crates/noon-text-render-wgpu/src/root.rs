@@ -4,6 +4,5 @@
 mod preparation;
 pub use preparation::*;
 
-#[rustfmt::skip]
 mod gpu;
 pub use gpu::*;
