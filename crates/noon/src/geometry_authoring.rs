@@ -5,7 +5,7 @@
 //! rebuilding polygon vertex/order rules.
 
 use crate::legacy::{IntoSnapshot, Path};
-use noon_core::{Color, GeometryRef, ObjectSnapshot, Vec2, VectorPath, BLUE, TAU};
+use noon_core::{Color, ObjectSnapshot, Vec2, VectorPath, BLUE, TAU};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GeometryAuthoringError {
@@ -21,9 +21,10 @@ impl std::fmt::Display for GeometryAuthoringError {
                 formatter,
                 "regular polygon requires at least 3 vertices, got {value}"
             ),
-            Self::InvalidRadius(value) => {
-                write!(formatter, "regular polygon radius must be finite and positive, got {value}")
-            }
+            Self::InvalidRadius(value) => write!(
+                formatter,
+                "regular polygon radius must be finite and positive, got {value}"
+            ),
             Self::InvalidStartAngle(value) => write!(
                 formatter,
                 "regular polygon start angle must be finite, got {value}"
@@ -210,7 +211,7 @@ impl Default for Triangle {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode};
+    use noon_core::{GeometryRef, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode};
 
     use super::*;
 
