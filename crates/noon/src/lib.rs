@@ -12,6 +12,7 @@ mod camera_authoring;
 mod geometry_authoring;
 mod legacy;
 mod line_matcher_authoring;
+mod polygram_authoring;
 mod reactive_authoring;
 mod rounded_rectangle_authoring;
 mod sector_authoring;
@@ -24,6 +25,7 @@ pub use camera_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
+pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use rounded_rectangle_authoring::*;
 pub use sector_authoring::*;
@@ -36,9 +38,9 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, Dot, Ellipse, GeometryAuthoringError, LineMatcherAuthoringError, MathTypst,
-        MovingCameraScene, Polygon, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
+        MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
+        RoundedRectangle, RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
         SurroundingRectangle, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
         VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
         DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
