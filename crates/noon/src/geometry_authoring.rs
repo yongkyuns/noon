@@ -143,7 +143,7 @@ fn regular_polygon_vertices(
     }
 
     let start_angle = start_angle.unwrap_or_else(|| {
-        if num_vertices % 2 == 0 {
+        if num_vertices.is_multiple_of(2) {
             0.0
         } else {
             TAU / 4.0
