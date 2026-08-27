@@ -525,10 +525,18 @@ mod tests {
         let c = run.glyphs[2].glyph_id;
         let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(2, usize::MAX));
 
-        cache.get_or_rasterize(&artifact.fonts, run, a, 48.0).unwrap();
-        cache.get_or_rasterize(&artifact.fonts, run, b, 48.0).unwrap();
-        cache.get_or_rasterize(&artifact.fonts, run, a, 48.0).unwrap();
-        cache.get_or_rasterize(&artifact.fonts, run, c, 48.0).unwrap();
+        cache
+            .get_or_rasterize(&artifact.fonts, run, a, 48.0)
+            .unwrap();
+        cache
+            .get_or_rasterize(&artifact.fonts, run, b, 48.0)
+            .unwrap();
+        cache
+            .get_or_rasterize(&artifact.fonts, run, a, 48.0)
+            .unwrap();
+        cache
+            .get_or_rasterize(&artifact.fonts, run, c, 48.0)
+            .unwrap();
 
         let stats = cache.stats();
         assert_eq!(stats.entries, 2);
@@ -536,7 +544,9 @@ mod tests {
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 3);
 
-        cache.get_or_rasterize(&artifact.fonts, run, b, 48.0).unwrap();
+        cache
+            .get_or_rasterize(&artifact.fonts, run, b, 48.0)
+            .unwrap();
         assert_eq!(cache.stats().misses, 4);
         assert_eq!(cache.stats().evictions, 2);
     }
