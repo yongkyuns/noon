@@ -61,7 +61,7 @@ fn rectangle_packing_does_not_carry_line_cap_bits() {
         let flags = prepared.rectangles[0].style.stroke_enabled;
         assert_eq!(
             flags, 3,
-            "non-line packed flags must remain legacy-compatible"
+            "rectangle packed flags must remain legacy-compatible"
         );
     }
 }
