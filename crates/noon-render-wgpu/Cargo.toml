@@ -12,9 +12,19 @@ native = [
     "wgpu/gles",
     "wgpu/vulkan",
     "noon-text-atlas/native",
+    "noon-text-render-wgpu/native",
 ]
-web = ["wgpu/webgpu", "wgpu/webgl", "noon-text-atlas/web"]
-ci-noop = ["wgpu/noop", "noon-text-atlas/ci-noop"]
+web = [
+    "wgpu/webgpu",
+    "wgpu/webgl",
+    "noon-text-atlas/web",
+    "noon-text-render-wgpu/web",
+]
+ci-noop = [
+    "wgpu/noop",
+    "noon-text-atlas/ci-noop",
+    "noon-text-render-wgpu/ci-noop",
+]
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
@@ -22,6 +32,8 @@ noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 noon-runtime = { path = "../noon-runtime" }
 noon-text-atlas = { path = "../noon-text-atlas", default-features = false }
+noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false }
+swash = "=0.2.10"
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
