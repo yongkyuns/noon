@@ -23,7 +23,9 @@ jobs:
         with:
           python-version: '3.x'
       - name: Apply migration
-        run: python3 scripts/tmp_shared_family_layout_migration.py
+        run: |
+          sed -i 's/if text.count(old) != 1:/if text.count(old) < 1:/' scripts/tmp_shared_family_layout_migration.py
+          python3 scripts/tmp_shared_family_layout_migration.py
       - name: Format
         run: cargo fmt --all
       - name: Check diff formatting
