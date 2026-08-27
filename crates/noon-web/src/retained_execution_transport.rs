@@ -54,7 +54,9 @@ impl From<&ObjectContentRef> for TransportObjectContent {
             ObjectContentRef::Geometry(geometry) => Self::Geometry {
                 geometry: geometry.clone(),
             },
-            ObjectContentRef::Text(text) => Self::Text { text: (*text).into() },
+            ObjectContentRef::Text(text) => Self::Text {
+                text: (*text).into(),
+            },
         }
     }
 }
@@ -303,7 +305,8 @@ impl RetainedExecutionFrameMirror {
     pub fn apply(
         &mut self,
         delta: RetainedExecutionDeltaEnvelope,
-    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), RetainedExecutionTransportError> {
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), RetainedExecutionTransportError>
+    {
         validate_envelope_header(&delta)?;
 
         match self.session {
@@ -324,7 +327,10 @@ impl RetainedExecutionFrameMirror {
                 }
             }
             Some(_) if delta.sequence < self.next_sequence => {
-                return Ok((RetainedTransportApplyOutcome::DroppedStale, FrameChanges::default()));
+                return Ok((
+                    RetainedTransportApplyOutcome::DroppedStale,
+                    FrameChanges::default(),
+                ));
             }
             Some(_) if delta.sequence != self.next_sequence => {
                 return Err(RetainedExecutionTransportError::SequenceGap {
@@ -371,7 +377,9 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
             }
             if !seen_objects.insert(object.object) {
-                return Err(RetainedExecutionTransportError::DuplicateObject(object.object));
+                return Err(RetainedExecutionTransportError::DuplicateObject(
+                    object.object,
+                ));
             }
             validate_object_state(object)?;
         }
@@ -418,11 +426,15 @@ impl RetainedExecutionFrameMirror {
             }
             let current = &frame.objects[index];
             if current.id != object.object {
-                return Err(RetainedExecutionTransportError::SlotIdentityChanged(object.slot));
+                return Err(RetainedExecutionTransportError::SlotIdentityChanged(
+                    object.slot,
+                ));
             }
             let content: ObjectContentRef = object.content.clone().into();
             if current.content != content {
-                return Err(RetainedExecutionTransportError::ContentIdentityChanged(object.slot));
+                return Err(RetainedExecutionTransportError::ContentIdentityChanged(
+                    object.slot,
+                ));
             }
             frame.objects[index] = frame_object(object);
             frame.presences[index] = object.presence;
@@ -505,10 +517,12 @@ fn transport_object(
 fn validate_object_state(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
-    if matches!(object.content, TransportObjectContent::Text { .. })
+    if matches!(&object.content, TransportObjectContent::Text { .. })
         && object.render_geometry.is_some()
     {
-        return Err(RetainedExecutionTransportError::TextRenderGeometry(object.slot));
+        return Err(RetainedExecutionTransportError::TextRenderGeometry(
+            object.slot,
+        ));
     }
     Ok(())
 }
