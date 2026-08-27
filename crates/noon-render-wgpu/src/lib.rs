@@ -1801,9 +1801,18 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
     };
     let mut transform: PackedTransform = object.transform.into();
     transform.padding = reveal.clamp(0.0, 1.0);
+    let mut style = pack_style(object);
+    // Cap mode is line geometry, not a global style-packing concern. Keeping
+    // these bits off circles/rectangles/paths preserves their exact packed bytes
+    // and prevents line-cap semantics from perturbing unrelated raster paths.
+    style.stroke_enabled |= match object.style.stroke_cap {
+        StrokeCap::Round => 0,
+        StrokeCap::Butt => 1 << 2,
+        StrokeCap::Square => 2 << 2,
+    };
     LineInstance {
         transform,
-        style: pack_style(object),
+        style,
         start: [start.x, start.y],
         end: [end.x, end.y],
     }
