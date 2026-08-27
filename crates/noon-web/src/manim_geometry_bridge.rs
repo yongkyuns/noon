@@ -22,7 +22,10 @@ fn snapshot_json(snapshot: ObjectSnapshot) -> Result<String, String> {
 }
 
 pub fn manim_dot_snapshot_json(point_x: f64, point_y: f64, radius: f64) -> Result<String, String> {
-    let point = Vec2::new(finite_f32("point.x", point_x)?, finite_f32("point.y", point_y)?);
+    let point = Vec2::new(
+        finite_f32("point.x", point_x)?,
+        finite_f32("point.y", point_y)?,
+    );
     snapshot_json(Dot::new(point, positive_f32("radius", radius)?).into_snapshot())
 }
 
