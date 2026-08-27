@@ -82,7 +82,7 @@ fn analytic_shader_has_distinct_round_butt_and_square_cap_sdfs() {
 fn rectangle_packing_does_not_carry_line_cap_bits() {
     for cap in [StrokeCap::Round, StrokeCap::Butt, StrokeCap::Square] {
         let mut frame = line_frame(cap, StrokeWidthMode::ScreenSpace);
-        frame.objects[0].geometry = GeometryRef::rectangle(Vec2::new(2.0, 2.0));
+        frame.objects[0].geometry = GeometryRef::rectangle(2.0, 2.0);
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
         let flags = prepared.rectangles[0].style.stroke_enabled;
