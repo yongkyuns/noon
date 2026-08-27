@@ -19,7 +19,12 @@ export const PYTHON_RUFF_SETTINGS = {
 let ruffWorkspacePromise = null;
 
 if (typeof document !== "undefined") {
-  await enhancePythonEditors();
+  // CodeMirror/Ruff are progressive enhancement. A transient CDN, CSP, or WASM
+  // failure must leave the native textarea usable instead of rejecting the
+  // playground's module graph and taking Python authoring down with it.
+  void enhancePythonEditors().catch((error) => {
+    console.warn("Enhanced Python editor unavailable; using textarea fallback", error);
+  });
 }
 
 async function enhancePythonEditors() {
