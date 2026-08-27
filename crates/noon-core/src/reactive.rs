@@ -40,6 +40,10 @@ pub use font_resources::*;
 mod text_resources;
 pub use text_resources::*;
 
+#[path = "resource_mutation.rs"]
+mod resource_mutation;
+pub use resource_mutation::*;
+
 #[path = "object_content.rs"]
 mod object_content;
 pub use object_content::*;
