@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
       NOON_WASM_SKIP_OPT: "1"
       NOON_SKIP_PLAYGROUND_TEST: "1"
     steps:
@@ -44,12 +46,27 @@ jobs:
             pkg-config
 
       - name: Install pinned ManimCE reference
-        run: python -m pip install --disable-pip-version-check "manim==0.21.0"
+        run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
 
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
 
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -70,6 +87,21 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+
+      - name: Render and compare retained Typst fixtures
+        env:
+          NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
+        run: node scripts/manim-typst-raster-differential.mjs
+
+      - name: Upload retained Typst measurement artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retained-typst-raster-measurement
+          path: manim-raster-artifacts/retained-typst
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Render and compare canonical Manim scenes
         env:
