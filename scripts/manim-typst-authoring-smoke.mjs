@@ -35,8 +35,9 @@ async function waitForServer() {
   throw new Error(`retained Typst authoring smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-// These are the pinned ManimCE v0.21 examples in parity/manim-v0.21/typst_scenes.py.
-const helloTypstSource = `from manim import *
+// Pinned ManimCE v0.21 examples from parity/manim-v0.21/typst_scenes.py.
+// As with Noon's existing parity corpus, only the import is substituted.
+const helloTypstSource = `from noon import *
 
 
 class HelloTypst(Scene):
@@ -45,7 +46,7 @@ class HelloTypst(Scene):
         self.add(text)
 `;
 
-const helloMathTypstSource = `from manim import *
+const helloMathTypstSource = `from noon import *
 
 
 class HelloMathTypst(Scene):
@@ -54,7 +55,7 @@ class HelloMathTypst(Scene):
         self.add(equation)
 `;
 
-const mixedPainterSource = `from manim import *
+const mixedPainterSource = `from noon import *
 
 
 class MixedPainterOrder(Scene):
@@ -222,7 +223,7 @@ try {
   await page.evaluate(() => window.noonRetainedTypstSmoke.stop());
   assert.deepEqual(errors, [], `browser errors while testing retained Typst authoring:\n${errors.join("\n")}`);
   console.log(
-    "Retained Typst authoring smoke passed: exact Manim v0.21 Typst/MathTypst sources emit source-only retained sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Retained Typst authoring smoke passed: pinned Manim v0.21 Typst/MathTypst sources (import-only substitution) emit source-only retained sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();
