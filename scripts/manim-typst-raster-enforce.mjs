@@ -36,6 +36,11 @@ assert.equal(
   "enforced-per-fixture-ratchet",
   "Typst raster manifest must explicitly enable ratchet enforcement",
 );
+finiteNonnegative(
+  manifest.policy?.max_background_channel_delta_sum,
+  "policy.max_background_channel_delta_sum",
+);
+assert.deepEqual(report.reference, manifest.reference, "Typst raster report/reference drifted from manifest");
 assert.ok(Array.isArray(report.fixtures), "Typst raster report must contain fixture results");
 
 const fixturesById = new Map(manifest.fixtures.map((fixture) => [fixture.id, fixture]));
@@ -67,7 +72,20 @@ for (const fixture of manifest.fixtures) {
     assert.equal(matches.length, 1, `${backend}/${fixture.id}: expected exactly one raster result`);
     const result = matches[0];
     assert.ok(result.bboxDelta, `${backend}/${fixture.id}: missing bbox delta`);
+    assert.equal(
+      result.reference.background.length,
+      result.actual.background.length,
+      `${backend}/${fixture.id}: background channel count mismatch`,
+    );
+    const backgroundDelta = result.reference.background
+      .map((value, index) => Math.abs(value - result.actual.background[index]))
+      .reduce((sum, value) => sum + value, 0);
 
+    enforceMaximum(
+      backgroundDelta,
+      manifest.policy.max_background_channel_delta_sum,
+      `${backend}/${fixture.id} background channel delta sum`,
+    );
     enforceMaximum(
       result.differingRatio,
       ratchet.max_differing_ratio,
