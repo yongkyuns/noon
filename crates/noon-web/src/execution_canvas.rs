@@ -19,7 +19,10 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
-    use crate::{ExecutionFrameMirror, TransportApplyOutcome};
+    use crate::{
+        gpu_uncaptured_error::{install_uncaptured_error_handler, GpuUncapturedErrorSlot},
+        ExecutionFrameMirror, TransportApplyOutcome,
+    };
 
     use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
 
@@ -62,6 +65,8 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        gpu_generation: u32,
+        gpu_errors: GpuUncapturedErrorSlot,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -90,6 +95,9 @@ mod wasm {
                 backend,
                 config,
             } = initialize_gpu(&canvas, width, height).await?;
+            let gpu_generation = 1;
+            let gpu_errors = GpuUncapturedErrorSlot::default();
+            install_uncaptured_error_handler(&device, gpu_generation, backend, gpu_errors.clone());
             let renderer = GpuRenderer::new(&device, config.format);
 
             let mut result = Self {
@@ -112,6 +120,8 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                gpu_generation,
+                gpu_errors,
             };
             result.update_camera()?;
             Ok(result)
@@ -160,11 +170,10 @@ mod wasm {
                         self.surface.configure(&self.device, &self.config);
                         return Ok(false);
                     }
-                    wgpu::CurrentSurfaceTexture::Validation => {
-                        return Err(js_message(
-                            "GPU backend rejected the OffscreenCanvas surface texture",
-                        ));
-                    }
+                    // wgpu reports this through the device's uncaptured-error handler.
+                    // Keep the pending frame intact so a recoverable validation error
+                    // can be surfaced once and the same frame retried.
+                    wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
             let changes = mem::take(&mut self.pending_changes);
@@ -237,6 +246,19 @@ mod wasm {
                 wgpu::Backend::Gl => "WebGL2".to_owned(),
                 other => format!("{other:?}"),
             }
+        }
+
+        #[wasm_bindgen(js_name = gpuGeneration)]
+        pub fn gpu_generation(&self) -> u32 {
+            self.gpu_generation
+        }
+
+        #[wasm_bindgen(js_name = takeGpuUncapturedErrorJson)]
+        pub fn take_gpu_uncaptured_error_json(&self) -> Result<Option<String>, JsValue> {
+            self.gpu_errors
+                .take(self.gpu_generation)
+                .map(|error| serde_json::to_string(&error).map_err(js_error))
+                .transpose()
         }
 
         pub fn time(&self) -> f64 {

@@ -1,4 +1,5 @@
 import init, { ExecutionCanvasRenderer } from "./pkg/noon_web.js";
+import { drainRendererGpuErrors } from "./render-gpu-errors.js";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
@@ -43,8 +44,10 @@ async function handleMainMessage(message) {
         width = normalizedDimension(message.width);
         height = normalizedDimension(message.height);
         renderer?.resize(width, height);
+        drainGpuErrors();
         return;
       case "metrics":
+        if (!drainGpuErrors()) return;
         respond(message.requestId, {
           type: "metrics",
           metrics: currentMetrics(),
@@ -101,6 +104,7 @@ function attachEngine(message) {
       `execution render reconnect transport ${message.transportMode} does not match ${transportMode}`,
     );
   }
+  if (!drainGpuErrors()) return;
 
   renderPort.close?.();
   sharedReader = null;
@@ -111,6 +115,7 @@ function attachEngine(message) {
     type: "engine_port_attached",
     transportMode,
     backend: renderer.rendererBackend(),
+    gpuGeneration: renderer.gpuGeneration(),
   });
 }
 
@@ -196,13 +201,16 @@ async function bootstrapRenderer(initial) {
   try {
     renderer = await ExecutionCanvasRenderer.create(canvas, initial);
     renderer.resize(width, height);
+    if (!drainGpuErrors()) return;
     needsPresent = true;
     tryPresent();
+    if (!drainGpuErrors()) return;
     running = true;
     postMain({
       type: "ready",
       transportMode,
       backend: renderer.rendererBackend(),
+      gpuGeneration: renderer.gpuGeneration(),
     });
     flushBootstrapQueue();
     drainTransport();
@@ -213,15 +221,16 @@ async function bootstrapRenderer(initial) {
 }
 
 function tryPresent() {
-  if (renderer === null || !needsPresent) {
+  if (renderer === null || !needsPresent || !drainGpuErrors()) {
     return false;
   }
   if (!renderer.render()) {
+    drainGpuErrors();
     return false;
   }
   needsPresent = false;
   presentedFrames += 1;
-  return true;
+  return drainGpuErrors();
 }
 
 function flushBootstrapQueue() {
@@ -253,7 +262,7 @@ function scheduleFrame() {
 }
 
 function frame(timestamp) {
-  if (!running) {
+  if (!running || !drainGpuErrors()) {
     return;
   }
   lastFrameTimestamp = timestamp;
@@ -265,8 +274,33 @@ function frame(timestamp) {
     flushBootstrapQueue();
     drainTransport();
   }
+  if (!running || !drainGpuErrors()) {
+    return;
+  }
   renderPort.postMessage({ type: "tick", timestamp });
   scheduleFrame();
+}
+
+function drainGpuErrors() {
+  if (renderer === null) return true;
+  try {
+    return drainRendererGpuErrors(renderer, {
+      onRecoverable(error) {
+        postMain({
+          type: "recoverable_error",
+          owner: "render",
+          message: error.message,
+          diagnostic: error,
+        });
+      },
+      onFatal(error) {
+        fail(new Error(error.message), null);
+      },
+    });
+  } catch (error) {
+    fail(error, null);
+    return false;
+  }
 }
 
 function currentMetrics() {
@@ -283,6 +317,7 @@ function currentMetrics() {
     ready: true,
     transportMode,
     backend: renderer.rendererBackend(),
+    gpuGeneration: renderer.gpuGeneration(),
     time: renderer.time(),
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),

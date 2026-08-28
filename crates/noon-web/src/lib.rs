@@ -7,6 +7,8 @@ mod composition;
 mod determinism;
 mod execution_canvas;
 mod execution_transport;
+#[cfg(any(target_arch = "wasm32", test))]
+mod gpu_uncaptured_error;
 mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
