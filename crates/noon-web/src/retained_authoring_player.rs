@@ -679,7 +679,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restart.time, 0.0);
-        assert!(engine.is_paused(), "restart preserves transport play/pause state");
+        assert!(
+            engine.is_paused(),
+            "restart preserves transport play/pause state"
+        );
         assert_eq!(engine.resource_bundle_bytes(), resources);
     }
 }
