@@ -154,4 +154,17 @@ test("playground freshness admits only the newest result under seeded out-of-ord
   assert.equal(generations.diagnostics.staleDrops, requestCount - 1);
   assert.equal(client.diagnostics.pendingRequests, 0);
   assert.equal(client.terminated, false);
+
+  const postStress = client.run("result = post_stress");
+  await Promise.resolve();
+  assert.equal(worker.messages.at(-1).requestId, requestCount);
+  emitSceneResult(worker, requestCount, requestCount);
+  const postStressResult = await postStress;
+  assert.equal(postStressResult.document.objects[0].id, requestCount);
+  assert.deepEqual(client.diagnostics, {
+    nextRequestId: requestCount + 1,
+    pendingRequests: 0,
+    staleResponses: 0,
+    terminated: false,
+  });
 });
