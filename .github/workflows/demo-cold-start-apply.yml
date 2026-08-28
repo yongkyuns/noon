@@ -1,0 +1,132 @@
+name: Demo cold-start apply
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply cold-start overlap
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          main_path = Path("web/main.js")
+          main = main_path.read_text()
+          ensure = '''function ensureAuthoringClient() {
+            if (authoringClient?.terminated) {
+              authoringClient = null;
+            }
+            authoringClient ??= new PythonAuthoringClient();
+            return authoringClient;
+          }
+          '''
+          warm = '''
+          function warmAuthoringClient() {
+            const client = ensureAuthoringClient();
+            status.dataset.authoringWarmup = "started";
+            void client.ready().then(
+              () => {
+                if (authoringClient === client) {
+                  status.dataset.authoringWarmup = "ready";
+                }
+              },
+              () => {
+                if (authoringClient === client && client.terminated) {
+                  authoringClient = null;
+                }
+                status.dataset.authoringWarmup = "failed";
+              },
+            );
+          }
+          '''
+          if main.count(ensure) != 1:
+              raise SystemExit("expected exactly one ensureAuthoringClient definition")
+          main = main.replace(ensure, ensure + warm)
+          startup = '''try {
+            player = new AuthoringExecutionClient(canvas, {
+          '''
+          if main.count(startup) != 1:
+              raise SystemExit("expected exactly one playground player startup")
+          main = main.replace(startup, '''try {
+            warmAuthoringClient();
+            player = new AuthoringExecutionClient(canvas, {
+          ''')
+          main_path.write_text(main)
+
+          worker_path = Path("web/python-worker.js")
+          worker = worker_path.read_text()
+          promise_pattern = re.compile(
+              r'  const \[\n(?P<bindings>.*?)  \] = await Promise\.all\(\[\n(?P<fetches>.*?)  \]\);\n',
+              re.S,
+          )
+          match = promise_pattern.search(worker)
+          if match is None:
+              raise SystemExit("compatibility source Promise.all block not found")
+          if worker.count("async function initializePyodide() {\n  await initNoonWeb();\n") != 1:
+              raise SystemExit("unexpected initializePyodide prefix")
+          if worker.count("  const pyodide = await loadPyodide();\n") != 1:
+              raise SystemExit("unexpected loadPyodide call shape")
+
+          compatibility_kickoff = (
+              "  const compatibilitySourcesReady = Promise.all([\n"
+              + match.group("fetches")
+              + "  ]);\n"
+          )
+          worker = worker.replace(
+              "async function initializePyodide() {\n  await initNoonWeb();\n",
+              "async function initializePyodide() {\n"
+              "  const noonWebReady = initNoonWeb();\n"
+              "  const pyodideReady = loadPyodide();\n"
+              + compatibility_kickoff
+              + "  await noonWebReady;\n",
+          )
+          worker = worker.replace(
+              "  const pyodide = await loadPyodide();\n",
+              "  const pyodide = await pyodideReady;\n",
+          )
+          worker = worker.replace(
+              match.group(0),
+              "  const [\n"
+              + match.group("bindings")
+              + "  ] = await compatibilitySourcesReady;\n",
+          )
+          worker_path.write_text(worker)
+
+          build_path = Path("scripts/build-web-demo.sh")
+          build = build_path.read_text()
+          anchor = "node --test web/playground-generation.test.mjs\n"
+          if build.count(anchor) != 1:
+              raise SystemExit("playground generation build-test anchor missing")
+          build = build.replace(
+              anchor,
+              anchor + "node --test web/playground-startup.test.mjs\n",
+          )
+          build_path.write_text(build)
+          PY
+
+      - name: Validate startup overlap
+        run: |
+          node --check web/main.js
+          node --check web/python-worker.js
+          node --test web/playground-startup.test.mjs
+          node --test web/authoring-client.test.mjs
+
+      - name: Commit cold-start overlap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/main.js web/python-worker.js web/playground-startup.test.mjs scripts/build-web-demo.sh
+          git commit -m "Overlap playground Python cold start"
+          git push origin HEAD:${{ github.head_ref }}
