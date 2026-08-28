@@ -1,10 +1,12 @@
 {
   "manifest_version": 1,
   "noon_ir_version": 1,
+  "scene_spec_version": 1,
   "authoring_protocol": {"channel": "noon.authoring", "version": 5},
   "contracts": [
     {"name":"scene_document","version_domain":"noon_ir","required":["version","objects","tracks"],"optional":[],"unknown_fields":"ignored","ordering":"objects and tracks preserve producer order"},
     {"name":"semantic_scene_document","version_domain":"noon_ir","required":["version","objects","tracks"],"optional":["reactive"],"defaults":{"reactive":{"signals":[],"bindings":[]}},"unknown_fields":"ignored","ordering":"objects, tracks, signals, and bindings preserve producer order"},
+    {"name":"canonical_scene_spec","version_domain":"scene_spec","required":["version","objects","tracks"],"optional":["camera_object"],"unknown_fields":"ignored","ordering":"objects are the canonical mixed geometry/text painter-order stream; tracks preserve producer order"},
     {"name":"patch_batch","version_domain":"noon_ir","required":["version","sequence","patches"],"optional":[],"unknown_fields":"ignored","ordering":"patches are applied in array order"},
     {"name":"authoring_envelope","version_domain":"authoring_protocol","required":["channel","protocolVersion","type"],"optional":["requestId","source","context","sessionId","frame","sequence","resultJson","patchBatchJson","message"],"unknown_fields":"ignored by the current client after envelope validation"},
     {"name":"authoring_result","version_domain":"authoring_protocol","required":["kind","document"],"optional":["identities","callbacks"],"notes":"scene_document results carry identities and optional callback session metadata; patch_batch results carry a Noon IR v1 PatchBatch"},

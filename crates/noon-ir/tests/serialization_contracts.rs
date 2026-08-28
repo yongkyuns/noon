@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use noon_ir::{
     decode_patch_batch, decode_scene, decode_semantic_scene, encode_patch_batch, encode_scene,
-    IrError, SemanticIrError,
+    IrError, ObjectSpecContent, SceneSpec, SemanticIrError,
 };
 use serde_json::Value;
 
@@ -10,6 +10,7 @@ const MANIFEST: &str = include_str!("../../../compat/wire-contracts-v1.json");
 const EMPTY_SCENE: &str = include_str!("../../../compat/wire/v1/scene-empty.json");
 const UNKNOWN_FIELD_SCENE: &str = include_str!("../../../compat/wire/v1/scene-unknown-field.json");
 const REACTIVE_SCENE: &str = include_str!("../../../compat/wire/v1/semantic-reactive.json");
+const MIXED_SCENE_SPEC: &str = include_str!("../../../compat/wire/v1/scene-spec-mixed.json");
 const EMPTY_PATCH: &str = include_str!("../../../compat/wire/v1/patch-empty.json");
 const FUTURE_SCENE: &str = include_str!("../../../compat/wire/invalid/future-scene.json");
 const FUTURE_PATCH: &str = include_str!("../../../compat/wire/invalid/future-patch.json");
@@ -21,6 +22,7 @@ fn contract_manifest_inventories_current_cross_language_boundaries() {
     let manifest: Value = serde_json::from_str(MANIFEST).expect("contract manifest is JSON");
     assert_eq!(manifest["manifest_version"], 1);
     assert_eq!(manifest["noon_ir_version"], 1);
+    assert_eq!(manifest["scene_spec_version"], 1);
     assert_eq!(manifest["authoring_protocol"]["channel"], "noon.authoring");
     assert_eq!(manifest["authoring_protocol"]["version"], 5);
     let names = manifest["contracts"]
@@ -32,6 +34,7 @@ fn contract_manifest_inventories_current_cross_language_boundaries() {
     for required in [
         "scene_document",
         "semantic_scene_document",
+        "canonical_scene_spec",
         "patch_batch",
         "authoring_envelope",
         "authoring_result",
@@ -55,10 +58,42 @@ fn canonical_v1_fixtures_round_trip_and_preserve_stable_text_where_promised() {
 }
 
 #[test]
+fn canonical_mixed_scene_spec_fixture_preserves_one_painter_order_domain() {
+    let spec = SceneSpec::from_json(MIXED_SCENE_SPEC).expect("v1 mixed SceneSpec decodes");
+    assert_eq!(spec.version, 1);
+    assert_eq!(spec.objects.len(), 3);
+    assert_eq!(spec.objects[0].id.get(), 0);
+    assert_eq!(spec.objects[1].id.get(), 1);
+    assert_eq!(spec.objects[2].id.get(), 2);
+    assert!(matches!(
+        &spec.objects[0].content,
+        ObjectSpecContent::Geometry(_)
+    ));
+    let ObjectSpecContent::Text(text) = &spec.objects[1].content else {
+        panic!("middle canonical object must remain source-level text");
+    };
+    assert_eq!(text.source, "x^2");
+    assert_eq!(text.font_size, 36.0);
+    assert!(matches!(
+        &spec.objects[2].content,
+        ObjectSpecContent::Geometry(_)
+    ));
+
+    let encoded = spec.to_json().expect("mixed SceneSpec re-serializes");
+    let decoded = SceneSpec::from_json(&encoded).expect("re-serialized SceneSpec decodes");
+    assert_eq!(decoded, spec);
+    assert!(!encoded.contains("metadata"));
+}
+
+#[test]
 fn additive_unknown_top_level_fields_are_ignored_by_v1_readers() {
     let decoded = decode_scene(UNKNOWN_FIELD_SCENE).expect("additive metadata remains compatible");
     assert!(decoded.objects().is_empty());
     assert!(decoded.tracks().is_empty());
+
+    let mixed = SceneSpec::from_json(MIXED_SCENE_SPEC)
+        .expect("canonical mixed additive metadata remains compatible");
+    assert_eq!(mixed.objects.len(), 3);
 }
 
 #[test]
