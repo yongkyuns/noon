@@ -102,6 +102,7 @@ impl PreparedRetainedTextSnapshot<'_> {
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
 pub struct PreparedRetainedGpuFrame<'a> {
     geometry: PreparedFrame<'a>,
+    text_generation: u64,
     pub text: PreparedRetainedTextSnapshot<'a>,
     pub render_items: &'a [RetainedRenderItem],
     pub stats: RetainedPrepareStats,
@@ -549,6 +550,7 @@ pub struct RetainedFramePreparer {
     snapshot_metrics: Option<TextDeviceMetrics>,
     prepared_generation_ready: bool,
     prepared_generation_reuses: u64,
+    text_generation: u64,
 }
 
 impl Default for RetainedFramePreparer {
@@ -578,6 +580,7 @@ impl Default for RetainedFramePreparer {
             snapshot_metrics: None,
             prepared_generation_ready: false,
             prepared_generation_reuses: 0,
+            text_generation: 0,
         }
     }
 }
@@ -677,6 +680,7 @@ impl RetainedFramePreparer {
             };
             return Ok(PreparedRetainedGpuFrame {
                 geometry,
+                text_generation: self.text_generation,
                 text,
                 render_items: &self.render_items,
                 stats: self.snapshot_prepare_stats,
@@ -705,6 +709,10 @@ impl RetainedFramePreparer {
             self.snapshot_text_items.extend_from_slice(prepared.items);
             self.snapshot_text_stats = prepared.stats;
         }
+        self.text_generation = self
+            .text_generation
+            .checked_add(1)
+            .expect("retained text generation counter exhausted");
 
         let geometry = if scratch_reused {
             let no_changes = FrameChanges::default();
@@ -748,6 +756,7 @@ impl RetainedFramePreparer {
         };
         Ok(PreparedRetainedGpuFrame {
             geometry,
+            text_generation: self.text_generation,
             text,
             render_items: &self.render_items,
             stats,
@@ -1323,6 +1332,7 @@ pub struct RetainedDrawStats {
 
 pub struct RetainedTextGpuState {
     glyphs: TextGlyphGpuRenderer,
+    last_uploaded_generation: Option<u64>,
 }
 
 impl RetainedTextGpuState {
@@ -1334,8 +1344,13 @@ impl RetainedTextGpuState {
     ) -> Self {
         Self {
             glyphs: TextGlyphGpuRenderer::new(device, queue, target_format, text_camera(camera)),
+            last_uploaded_generation: None,
         }
     }
+}
+
+fn text_upload_needed(last_uploaded_generation: Option<u64>, generation: u64) -> bool {
+    last_uploaded_generation != Some(generation)
 }
 
 impl GpuRenderer {
@@ -1358,10 +1373,20 @@ impl GpuRenderer {
         text_state
             .glyphs
             .set_camera(queue, text_camera(self.camera));
-        let text_frame = prepared.text.as_prepared_frame();
-        let text = text_state
-            .glyphs
-            .upload(device, queue, &text_frame, prepared.text.atlas);
+        let text = if text_upload_needed(
+            text_state.last_uploaded_generation,
+            prepared.text_generation,
+        ) {
+            let text_frame = prepared.text.as_prepared_frame();
+            let uploaded =
+                text_state
+                    .glyphs
+                    .upload(device, queue, &text_frame, prepared.text.atlas);
+            text_state.last_uploaded_generation = Some(prepared.text_generation);
+            uploaded
+        } else {
+            TextGpuUploadStats::default()
+        };
         RetainedUploadStats { geometry, text }
     }
 
@@ -1644,6 +1669,13 @@ mod tests {
     }
 
     #[test]
+    fn new_or_changed_text_generation_requires_gpu_upload() {
+        assert!(text_upload_needed(None, 1));
+        assert!(!text_upload_needed(Some(1), 1));
+        assert!(text_upload_needed(Some(1), 2));
+    }
+
+    #[test]
     fn unchanged_frame_reuses_semantic_scratch_generation() {
         let mut frame = RetainedFrameState {
             time: 0.0,
@@ -1665,6 +1697,7 @@ mod tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
+        let first_text_generation;
 
         {
             let prepared = preparer
@@ -1681,6 +1714,8 @@ mod tests {
                 .unwrap();
             assert_eq!(prepared.time(), 0.0);
             assert_eq!(prepared.geometry_stats().full_rebuilds, 1);
+            first_text_generation = prepared.text_generation;
+            assert_eq!(first_text_generation, 1);
         }
         assert_eq!(preparer.prepared_generation_reuses, 0);
         assert_eq!(
@@ -1707,6 +1742,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(prepared.time(), 1.0);
+            assert_eq!(prepared.text_generation, first_text_generation);
             let geometry_stats = prepared.geometry_stats();
             assert_eq!(geometry_stats.full_rebuilds, 0);
             assert_eq!(geometry_stats.instances_repacked, 0);
@@ -1747,7 +1783,7 @@ mod tests {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
 
-        preparer
+        let first_generation = preparer
             .prepare_with_changes(
                 &device,
                 &queue,
@@ -1758,7 +1794,8 @@ mod tests {
                 &geometries,
                 first_metrics,
             )
-            .unwrap();
+            .unwrap()
+            .text_generation;
         frame.time = 1.0;
         let prepared = preparer
             .prepare_with_changes(
@@ -1775,6 +1812,7 @@ mod tests {
 
         assert_eq!(prepared.time(), 1.0);
         assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+        assert_ne!(prepared.text_generation, first_generation);
         assert_eq!(preparer.prepared_generation_reuses, 0);
     }
 
