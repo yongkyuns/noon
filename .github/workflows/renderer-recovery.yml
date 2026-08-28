@@ -7,6 +7,7 @@ on:
       - "crates/noon-web/**"
       - "crates/noon-render-wgpu/**"
       - "scripts/renderer-init-failure-smoke.mjs"
+      - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   push:
@@ -17,6 +18,7 @@ on:
       - "crates/noon-web/**"
       - "crates/noon-render-wgpu/**"
       - "scripts/renderer-init-failure-smoke.mjs"
+      - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   workflow_dispatch:
@@ -30,7 +32,7 @@ concurrency:
 
 jobs:
   initialization-fallback:
-    name: Initialization and fallback
+    name: Initialization, fallback, and WebGL recovery
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -80,7 +82,7 @@ jobs:
 
       - name: Install browser smoke dependencies
         run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
       - name: Test renderer initialization and fallback
@@ -88,11 +90,26 @@ jobs:
           NOON_RENDERER_FAILURE_ARTIFACTS: browser-smoke-artifacts/renderer-init-failure
         run: node scripts/renderer-init-failure-smoke.mjs
 
-      - name: Upload renderer failure diagnostics
+      - name: Test WebGL context loss and recovery
+        id: webgl_context_loss
+        env:
+          NOON_RENDERER_CONTEXT_LOSS_ARTIFACTS: browser-smoke-artifacts/renderer-context-loss
+        run: node scripts/renderer-webgl-context-loss-smoke.mjs
+
+      - name: Upload renderer initialization diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: renderer-init-failure
           path: browser-smoke-artifacts/renderer-init-failure
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload WebGL recovery diagnostics
+        if: always() && steps.webgl_context_loss.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-webgl-context-loss
+          path: browser-smoke-artifacts/renderer-context-loss
           if-no-files-found: error
           retention-days: 7
