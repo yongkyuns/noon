@@ -60,6 +60,11 @@ impl HostCallbackSlot {
         }
         Ok(())
     }
+
+    fn deduplicate_objects(&mut self) {
+        let mut seen = BTreeSet::new();
+        self.objects.retain(|object| seen.insert(*object));
+    }
 }
 
 /// Declarative host-dynamic participation for a semantic scene.
@@ -81,14 +86,15 @@ impl HostCallbackRegistry {
         }
     }
 
-    pub fn from_slots(slots: Vec<HostCallbackSlot>) -> Result<Self, HostCallbackRegistryError> {
+    pub fn from_slots(mut slots: Vec<HostCallbackSlot>) -> Result<Self, HostCallbackRegistryError> {
         let mut ids = BTreeSet::new();
         let mut next_callback_id = 0;
-        for slot in &slots {
+        for slot in &mut slots {
             slot.validate_schedule()?;
             if !ids.insert(slot.id) {
                 return Err(HostCallbackRegistryError::DuplicateCallback(slot.id));
             }
+            slot.deduplicate_objects();
             next_callback_id = next_callback_id.max(
                 slot.id
                     .get()
@@ -108,18 +114,14 @@ impl HostCallbackRegistry {
             .next_callback_id
             .checked_add(1)
             .expect("Noon host callback ID space exhausted");
-        let mut unique = Vec::new();
-        for object in objects {
-            if !unique.contains(&object) {
-                unique.push(object);
-            }
-        }
-        self.slots.push(HostCallbackSlot {
+        let mut slot = HostCallbackSlot {
             id,
-            objects: unique,
+            objects: objects.into_iter().collect(),
             active_after: None,
             active_through: None,
-        });
+        };
+        slot.deduplicate_objects();
+        self.slots.push(slot);
         id
     }
 
@@ -174,6 +176,27 @@ mod tests {
         );
         assert_eq!(registry.register([]), HostCallbackId::new(1));
         assert_eq!(registry.slots()[0].objects, vec![first, second]);
+    }
+
+    #[test]
+    fn local_and_transported_subscriptions_share_canonical_order() {
+        let first = ObjectId::new(4);
+        let second = ObjectId::new(7);
+        let third = ObjectId::new(9);
+        let objects = vec![second, first, second, third, first, third];
+
+        let mut local = HostCallbackRegistry::new();
+        local.register(objects.clone());
+        let transported = HostCallbackRegistry::from_slots(vec![HostCallbackSlot {
+            id: HostCallbackId::new(0),
+            objects,
+            active_after: None,
+            active_through: None,
+        }])
+        .unwrap();
+
+        assert_eq!(local.slots()[0].objects, vec![second, first, third]);
+        assert_eq!(transported.slots()[0].objects, local.slots()[0].objects);
     }
 
     #[test]
