@@ -25,6 +25,24 @@ The main `CI` workflow runs:
 
 The separate Manim workflows pin ManimCE v0.21.0 for API-surface and semantic differential coverage.
 
+The separate `Playground cross-browser matrix` workflow is a required user-workflow gate for browser-facing changes. It covers Chromium, Firefox, and WebKit without adding those heavier browser installs to every main-CI run.
+
+## Browser UI matrix
+
+The playground E2E matrix deliberately uses three pairwise profiles instead of multiplying every browser, DPR, and viewport combination:
+
+| Browser | Required profile | Runtime expectation |
+| --- | --- | --- |
+| Chromium | desktop, DPR 1 | Exercise the public authoring workflow through the supported GPU fallback path. |
+| Firefox | desktop, DPR 2 | Exercise the full workflow when Worker + OffscreenCanvas + WebGL2 prerequisites are available; otherwise emit an explicit unsupported-capability record. |
+| WebKit | mobile-like, DPR 2 | Exercise the full workflow when Worker + OffscreenCanvas + WebGL2 prerequisites are available; otherwise emit an explicit unsupported-capability record. |
+
+`scripts/playground-browser-matrix-smoke.mjs` always validates that the public shell lays out without horizontal overflow. When the browser advertises the runtime prerequisites, the test must also load a real gallery example, select another example through the visible gallery, edit the source, rerun it through the public **Run** control, and survive rapid viewport resizing without page or console errors. A browser that advertises those prerequisites but cannot complete the workflow is a failure, not a skip.
+
+Unsupported combinations are never silently skipped. Their diagnostics artifact records the exact missing capabilities, browser version, viewport, DPR, runtime/status state, and browser errors. Supported runs retain the same metadata plus a screenshot; failures retain a failure screenshot and diagnostics JSON.
+
+This matrix is user-workflow coverage, not a replacement for the Chromium WebGPU/WebGL renderer matrix. Renderer pixel/backend qualification remains in the dedicated rendering jobs.
+
 ## Test inventory
 
 `scripts/test-inventory.py` scans production modules and test entry points across Rust, JavaScript, Python, browser smoke, and compatibility tooling. It emits JSON and Markdown reports and fails `--check` when a production module has no explicit layer/module test strategy.
