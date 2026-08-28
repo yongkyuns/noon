@@ -3,6 +3,7 @@ import {
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
+import { replaceExecutionCanvas } from "./execution-canvas.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
@@ -86,49 +87,56 @@ export class RetainedExecutionWorkerClient {
     this.#canvas.width = initialWidth;
     this.#canvas.height = initialHeight;
 
-    const channel = new MessageChannel();
-    const offscreen = this.#canvas.transferControlToOffscreen();
-    this.#engineWorker = new Worker(
-      new URL("./retained-execution-engine-worker.js", import.meta.url),
-      { type: "module", name: "noon-mixed-retained-engine" },
-    );
-    this.#renderWorker = new Worker(
-      new URL("./retained-execution-render-worker.js", import.meta.url),
-      { type: "module", name: "noon-mixed-retained-render" },
-    );
+    let canvasTransferred = false;
+    try {
+      const channel = new MessageChannel();
+      const offscreen = this.#canvas.transferControlToOffscreen();
+      canvasTransferred = true;
+      this.#engineWorker = new Worker(
+        new URL("./retained-execution-engine-worker.js", import.meta.url),
+        { type: "module", name: "noon-mixed-retained-engine" },
+      );
+      this.#renderWorker = new Worker(
+        new URL("./retained-execution-render-worker.js", import.meta.url),
+        { type: "module", name: "noon-mixed-retained-render" },
+      );
 
-    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-    const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
-    this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
-      engine,
-      render,
-      transportMode,
-      session: this.#session,
-    }));
-
-    this.#renderWorker.postMessage(
-      renderEnvelope("init", {
-        canvas: offscreen,
-        port: channel.port2,
+      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+      const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
+      this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
+        engine,
+        render,
         transportMode,
-        width: initialWidth,
-        height: initialHeight,
-      }),
-      [offscreen, channel.port2],
-    );
-    this.#engineWorker.postMessage(
-      engineEnvelope("init", {
-        port: channel.port1,
-        sceneJson,
-        retainedDocumentJson,
-        loopDurationSeconds,
-        transportMode,
-        sharedSlotCapacity,
         session: this.#session,
-      }),
-      [channel.port1],
-    );
-    return this.#ready;
+      }));
+
+      this.#renderWorker.postMessage(
+        renderEnvelope("init", {
+          canvas: offscreen,
+          port: channel.port2,
+          transportMode,
+          width: initialWidth,
+          height: initialHeight,
+        }),
+        [offscreen, channel.port2],
+      );
+      this.#engineWorker.postMessage(
+        engineEnvelope("init", {
+          port: channel.port1,
+          sceneJson,
+          retainedDocumentJson,
+          loopDurationSeconds,
+          transportMode,
+          sharedSlotCapacity,
+          session: this.#session,
+        }),
+        [channel.port1],
+      );
+      return await this.#ready;
+    } catch (error) {
+      this.#rollbackFailedStart(error, canvasTransferred);
+      throw error;
+    }
   }
 
   ready() {
@@ -185,21 +193,21 @@ export class RetainedExecutionWorkerClient {
   }
 
   async restart() {
-    this.#requireStarted();
+    if (
+      this.#sceneJson === null ||
+      this.#retainedDocumentJson === null ||
+      this.#transportMode === null
+    ) {
+      throw new Error("RetainedExecutionWorkerClient has not been started");
+    }
     const sceneJson = this.#sceneJson;
     const retainedDocumentJson = this.#retainedDocumentJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
-    this.terminate();
-
-    const previous = this.#canvas;
-    const replacement = previous.cloneNode(false);
-    replacement.width = previous.width;
-    replacement.height = previous.height;
-    replacement.className = previous.className;
-    replacement.id = previous.id;
-    previous.replaceWith(replacement);
-    this.#canvas = replacement;
+    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+      this.terminate();
+      this.#canvas = replaceExecutionCanvas(this.#canvas);
+    }
     return this.start(sceneJson, retainedDocumentJson, {
       loopDurationSeconds,
       transportMode,
@@ -305,6 +313,21 @@ export class RetainedExecutionWorkerClient {
         pending.reject(error);
         this.#pending.delete(key);
       }
+    }
+  }
+
+  #rollbackFailedStart(error, replaceCanvas) {
+    this.#engineWorker?.terminate();
+    this.#renderWorker?.terminate();
+    this.#engineWorker = null;
+    this.#renderWorker = null;
+    this.#ready = null;
+    for (const pending of this.#pending.values()) {
+      pending.reject(error);
+    }
+    this.#pending.clear();
+    if (replaceCanvas) {
+      this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
   }
 
