@@ -125,15 +125,18 @@ try {
 }
 
 // Keep a compact sustained timestamp-query regression in the existing WebGPU
-// browser gate. The canonical performance suite separately validates 300-frame
-// runs; 64 measured frames here rotate the four readback slots many times while
-// keeping normal PR CI bounded.
+// browser gate. This is a correctness/lifetime oracle, not a performance result,
+// so pin its headless Linux backend to the same deterministic SwiftShader/Vulkan
+// stack used by the dedicated WebGPU recovery tests. Normal perf-profile runs
+// remain hardware-selected unless the caller explicitly requests software WebGPU.
 const sustained = spawnSync(process.execPath, ["scripts/perf-profile.mjs"], {
   cwd: repoRoot,
   encoding: "utf8",
   env: {
     ...process.env,
     NOON_PERF_BACKEND: "webgpu",
+    NOON_PERF_FORCE_SOFTWARE_WEBGPU: "1",
+    NOON_PERF_REQUIRE_GPU_TIMESTAMPS: "1",
     NOON_PERF_COUNTS: "10000",
     NOON_PERF_LAYOUTS: "fixed",
     NOON_PERF_WARMUP: "8",
