@@ -13,6 +13,9 @@ import {
 const manifest = JSON.parse(
   await readFile(new URL("./python/examples/manim_tutorial_manifest.json", import.meta.url), "utf8"),
 );
+const parityManifest = JSON.parse(
+  await readFile(new URL("../parity/manim-v0.21/manifest.json", import.meta.url), "utf8"),
+);
 const gallery = normalizeGalleryManifest(manifest);
 const readyEntries = manifest.entries.filter((entry) => entry.status === "ready");
 assert.equal(
@@ -55,6 +58,19 @@ assert.equal(
     ?.parityStatus,
   "parity-qualified",
   "exact-source DrawBorderThenFill keeps its qualified raster/timeline evidence",
+);
+const movingCamera = readyEntries.find((entry) => entry.id === "manim-moving-camera-center");
+assert.equal(
+  movingCamera?.parity_status,
+  "parity-qualified",
+  "MovingCameraCenter must keep its qualified camera/raster/timeline evidence",
+);
+assert.equal(movingCamera?.parity_fixture, "moving-camera-center");
+assert.ok(movingCamera?.features.includes("pixel-parity"));
+assert.ok(movingCamera?.features.includes("time-parity"));
+assert.ok(
+  parityManifest.fixtures.some((fixture) => fixture.id === movingCamera?.parity_fixture),
+  "a parity-qualified gallery entry must point at its canonical Manim fixture",
 );
 for (const id of [
   "manim-dot-example",
