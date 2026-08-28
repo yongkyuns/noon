@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "objects": [
+    {"id": 0, "content": {"kind": "geometry", "value": {"circle": {"radius": 1.0}}}},
+    {"id": 1, "content": {"kind": "text", "value": {"kind": "typst", "source": "x^2", "font_size": 36.0}}},
+    {"id": 2, "content": {"kind": "geometry", "value": {"rectangle": {"size": {"x": 2.0, "y": 1.0}}}}}
+  ],
+  "tracks": [],
+  "metadata": {"fixture": "canonical-mixed-v1"}
+}

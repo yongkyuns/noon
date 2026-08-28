@@ -13,6 +13,7 @@ node --check web/python-editor.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
 node --check web/execution-transport.js
+node --check web/execution-canvas.js
 node --check web/execution-engine-worker.js
 node --check web/execution-render-worker.js
 node --check web/execution-worker-client.js
@@ -58,6 +59,8 @@ node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
+node --test web/execution-worker-client.test.mjs
+node --test web/execution-worker-startup.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/playground-generation.test.mjs
 node --test web/playground-startup.test.mjs

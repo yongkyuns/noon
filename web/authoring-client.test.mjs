@@ -325,6 +325,107 @@ test("drops duplicate responses for already-issued requests without killing the 
   assert.equal(client.diagnostics.staleResponses, 1);
 });
 
+test("drops malformed stale result payloads before parsing them", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const batch = { version: 1, sequence: 0, patches: [] };
+  const resultPromise = client.run("result = batch");
+  await Promise.resolve();
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    }),
+  );
+  await resultPromise;
+
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: "{",
+    }),
+  );
+  assert.equal(client.terminated, false);
+  assert.equal(worker.terminated, false);
+  assert.equal(client.diagnostics.staleResponses, 1);
+
+  const retry = client.run("result = retry");
+  await Promise.resolve();
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 1,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    }),
+  );
+  await retry;
+  assert.equal(client.terminated, false);
+});
+
+test("malformed pending payloads remain fatal and reject the pending request", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const resultPromise = client.run("result = batch");
+  await Promise.resolve();
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: "{",
+    }),
+  );
+
+  await assert.rejects(resultPromise, /returned invalid JSON/);
+  assert.equal(client.terminated, true);
+  assert.equal(worker.terminated, true);
+  assert.equal(client.diagnostics.pendingRequests, 0);
+  assert.equal(client.diagnostics.staleResponses, 0);
+});
+
+test("drops malformed stale callback payloads before parsing them", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const frame = {
+    time: 0.25,
+    delta_time: 0.25,
+    objects: [],
+    invocations: [{ callback: 0, object_indices: [] }],
+  };
+  const batch = { version: 1, sequence: 7, patches: [] };
+  const callbackPromise = client.runCallbackPhase(2, frame, 7);
+  await Promise.resolve();
+  worker.emit(
+    "message",
+    workerMessage("callback_result", {
+      requestId: 0,
+      patchBatchJson: JSON.stringify(batch),
+    }),
+  );
+  await callbackPromise;
+
+  worker.emit(
+    "message",
+    workerMessage("callback_result", {
+      requestId: 0,
+      patchBatchJson: "{",
+    }),
+  );
+  assert.equal(client.terminated, false);
+  assert.equal(worker.terminated, false);
+  assert.equal(client.diagnostics.staleResponses, 1);
+});
+
 test("treats never-issued future response IDs as fatal protocol corruption", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);

@@ -3,18 +3,20 @@ import {
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
+import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { projectLegacyReactiveSceneJson } from "./legacy-reactive-projection.js";
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
+const WORKER_OWNERS = Object.freeze(["engine", "render"]);
 
 export class ExecutionWorkerClient {
   #canvas;
   #engineWorker = null;
   #renderWorker = null;
-  #nextRequestId = 0;
+  #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #session = 0;
   #sceneJson = null;
@@ -25,6 +27,8 @@ export class ExecutionWorkerClient {
   #onRecoverableError;
   #hostAuthoringClient = null;
   #hostCallbacks = null;
+  #staleWorkerEvents = { engine: 0, render: 0 };
+  #staleResponses = { engine: 0, render: 0 };
 
   constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -47,6 +51,14 @@ export class ExecutionWorkerClient {
 
   get transportMode() {
     return this.#transportMode;
+  }
+
+  get diagnostics() {
+    return Object.freeze({
+      session: this.#session,
+      engine: this.#ownerDiagnostics("engine"),
+      render: this.#ownerDiagnostics("render"),
+    });
   }
 
   async start(
@@ -95,48 +107,55 @@ export class ExecutionWorkerClient {
     this.#canvas.width = initialWidth;
     this.#canvas.height = initialHeight;
 
-    const channel = new MessageChannel();
-    const offscreen = this.#canvas.transferControlToOffscreen();
-    this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
-      type: "module",
-      name: "noon-engine",
-    });
-    this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
-      type: "module",
-      name: "noon-render",
-    });
+    let canvasTransferred = false;
+    try {
+      const channel = new MessageChannel();
+      const offscreen = this.#canvas.transferControlToOffscreen();
+      canvasTransferred = true;
+      this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-engine",
+      });
+      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-render",
+      });
 
-    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-    const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
-    this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
-      engine,
-      render,
-      transportMode,
-      session: this.#session,
-    }));
-
-    this.#renderWorker.postMessage(
-      renderEnvelope("init", {
-        canvas: offscreen,
-        port: channel.port2,
+      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+      const renderReady = this.#workerReady(this.#renderWorker, RENDER_CHANNEL, "render");
+      this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
+        engine,
+        render,
         transportMode,
-        width: initialWidth,
-        height: initialHeight,
-      }),
-      [offscreen, channel.port2],
-    );
-    this.#engineWorker.postMessage(
-      engineEnvelope("init", {
-        port: channel.port1,
-        sceneJson,
-        loopDurationSeconds,
-        transportMode,
-        sharedSlotCapacity,
         session: this.#session,
-      }),
-      [channel.port1],
-    );
-    return this.#ready;
+      }));
+
+      this.#renderWorker.postMessage(
+        renderEnvelope("init", {
+          canvas: offscreen,
+          port: channel.port2,
+          transportMode,
+          width: initialWidth,
+          height: initialHeight,
+        }),
+        [offscreen, channel.port2],
+      );
+      this.#engineWorker.postMessage(
+        engineEnvelope("init", {
+          port: channel.port1,
+          sceneJson,
+          loopDurationSeconds,
+          transportMode,
+          sharedSlotCapacity,
+          session: this.#session,
+        }),
+        [channel.port1],
+      );
+      return await this.#ready;
+    } catch (error) {
+      this.#rollbackFailedStart(error, canvasTransferred);
+      throw error;
+    }
   }
 
   ready() {
@@ -191,6 +210,19 @@ export class ExecutionWorkerClient {
     });
     this.#loopDurationSeconds = duration;
     return result;
+  }
+
+  async pause() {
+    return this.#requestEngine("pause", {});
+  }
+
+  async resume() {
+    return this.#requestEngine("resume", {});
+  }
+
+  async seek(timeSeconds) {
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    return this.#requestEngine("seek", { time });
   }
 
   async applyPatchBatch(patchBatchJson) {
@@ -256,22 +288,18 @@ export class ExecutionWorkerClient {
   }
 
   async restart() {
-    this.#requireStarted();
+    if (this.#sceneJson === null || this.#transportMode === null) {
+      throw new Error("ExecutionWorkerClient has not been started");
+    }
     const sceneJson = this.#sceneJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
     const callbacks = this.#hostCallbacks;
     const authoringClient = this.#hostAuthoringClient;
-    this.terminate({ preserveHostConfiguration: true });
-
-    const previous = this.#canvas;
-    const replacement = previous.cloneNode(false);
-    replacement.width = previous.width;
-    replacement.height = previous.height;
-    replacement.className = previous.className;
-    replacement.id = previous.id;
-    previous.replaceWith(replacement);
-    this.#canvas = replacement;
+    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+      this.terminate({ preserveHostConfiguration: true });
+      this.#canvas = replaceExecutionCanvas(this.#canvas);
+    }
     const ready = await this.start(sceneJson, { loopDurationSeconds, transportMode });
     if (callbacks !== null && authoringClient !== null) {
       this.#hostAuthoringClient = null;
@@ -322,8 +350,9 @@ export class ExecutionWorkerClient {
   }
 
   #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
-    const requestId = this.#nextRequestId;
-    this.#nextRequestId = checkedNextRequestId(this.#nextRequestId);
+    validateWorkerOwner(owner);
+    const requestId = this.#nextRequestIds[owner];
+    this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
     const result = new Promise((resolve, reject) => {
       this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
     });
@@ -332,8 +361,13 @@ export class ExecutionWorkerClient {
   }
 
   #workerReady(worker, channel, owner) {
+    validateWorkerOwner(owner);
     return new Promise((resolve, reject) => {
       const onMessage = (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const message = event.data;
         try {
           validateWorkerEnvelope(message, channel);
@@ -352,6 +386,7 @@ export class ExecutionWorkerClient {
             const error = new Error(message.message || `${owner} worker failed`);
             if (message.requestId === null || message.requestId === undefined) {
               reject(error);
+              this.#rejectOwner(owner, error);
               this.#notifyError(error, owner);
               return;
             }
@@ -367,17 +402,26 @@ export class ExecutionWorkerClient {
           }
         } catch (error) {
           reject(error);
+          this.#rejectOwner(owner, error);
           this.#notifyError(error, owner);
         }
       };
       worker.addEventListener("message", onMessage);
       worker.addEventListener("error", (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(event.message || `${owner} worker crashed`);
         reject(error);
         this.#rejectOwner(owner, error);
         this.#notifyError(error, owner);
       });
       worker.addEventListener("messageerror", () => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(`${owner} worker message could not be decoded`);
         reject(error);
         this.#rejectOwner(owner, error);
@@ -387,16 +431,22 @@ export class ExecutionWorkerClient {
   }
 
   #settle(owner, requestId, settle) {
+    validateWorkerOwner(owner);
     if (!Number.isSafeInteger(requestId) || requestId < 0) {
       throw new Error(`${owner} worker returned an invalid request ID`);
     }
     const key = `${owner}:${requestId}`;
     const pending = this.#pending.get(key);
     if (!pending) {
-      throw new Error(`${owner} worker returned unknown request ID ${requestId}`);
+      if (requestId < this.#nextRequestIds[owner]) {
+        this.#staleResponses[owner] += 1;
+        return false;
+      }
+      throw new Error(`${owner} worker returned unissued request ID ${requestId}`);
     }
     this.#pending.delete(key);
     settle(pending);
+    return true;
   }
 
   #rejectOwner(owner, error) {
@@ -406,6 +456,44 @@ export class ExecutionWorkerClient {
         this.#pending.delete(key);
       }
     }
+  }
+
+  #rollbackFailedStart(error, replaceCanvas) {
+    this.#engineWorker?.terminate();
+    this.#renderWorker?.terminate();
+    this.#engineWorker = null;
+    this.#renderWorker = null;
+    this.#ready = null;
+    for (const pending of this.#pending.values()) {
+      pending.reject(error);
+    }
+    this.#pending.clear();
+    if (replaceCanvas) {
+      this.#canvas = replaceExecutionCanvas(this.#canvas);
+    }
+  }
+
+  #isCurrentWorker(owner, worker) {
+    return owner === "engine" ? this.#engineWorker === worker : this.#renderWorker === worker;
+  }
+
+  #recordStaleWorkerEvent(owner) {
+    this.#staleWorkerEvents[owner] += 1;
+  }
+
+  #ownerDiagnostics(owner) {
+    let pendingRequests = 0;
+    for (const key of this.#pending.keys()) {
+      if (key.startsWith(`${owner}:`)) {
+        pendingRequests += 1;
+      }
+    }
+    return Object.freeze({
+      nextRequestId: this.#nextRequestIds[owner],
+      pendingRequests,
+      staleResponses: this.#staleResponses[owner],
+      staleWorkerEvents: this.#staleWorkerEvents[owner],
+    });
   }
 
   #notifyError(error, owner) {
@@ -457,6 +545,12 @@ function validateWorkerEnvelope(message, channel) {
   }
 }
 
+function validateWorkerOwner(owner) {
+  if (!WORKER_OWNERS.includes(owner)) {
+    throw new Error(`unknown execution worker owner ${owner}`);
+  }
+}
+
 function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
@@ -475,6 +569,18 @@ function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
     return null;
   }
   return validateLoopDurationSeconds(loopDurationSeconds);
+}
+
+function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
+  if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+    throw new TypeError("playback seek time must be finite and non-negative");
+  }
+  if (timeSeconds > loopDurationSeconds) {
+    throw new RangeError(
+      `playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
+    );
+  }
+  return timeSeconds;
 }
 
 function validateCallbacks(callbacks) {
