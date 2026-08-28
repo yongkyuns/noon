@@ -11,6 +11,7 @@ const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const WORKER_OWNERS = Object.freeze(["engine", "render"]);
+const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 
 export class ExecutionWorkerClient {
   #canvas;
@@ -22,11 +23,14 @@ export class ExecutionWorkerClient {
   #sceneJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
+  #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #ready = null;
+  #playing = true;
   #onError;
   #onRecoverableError;
   #hostAuthoringClient = null;
   #hostCallbacks = null;
+  #fatalOwner = null;
   #staleWorkerEvents = { engine: 0, render: 0 };
   #staleResponses = { engine: 0, render: 0 };
 
@@ -66,7 +70,7 @@ export class ExecutionWorkerClient {
     {
       loopDurationSeconds = 4,
       transportMode = selectExecutionTransportMode(),
-      sharedSlotCapacity = 1024 * 1024,
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
@@ -94,6 +98,7 @@ export class ExecutionWorkerClient {
     this.#sceneJson = sceneJson;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
+    this.#sharedSlotCapacity = sharedSlotCapacity;
     this.#session = checkedNextSession(this.#session);
 
     // The OffscreenCanvas inherits the HTML canvas backing-store dimensions at
@@ -151,7 +156,10 @@ export class ExecutionWorkerClient {
         }),
         [channel.port1],
       );
-      return await this.#ready;
+      const ready = await this.#ready;
+      this.#playing = true;
+      this.#fatalOwner = null;
+      return ready;
     } catch (error) {
       this.#rollbackFailedStart(error, canvasTransferred);
       throw error;
@@ -176,6 +184,7 @@ export class ExecutionWorkerClient {
       sceneJson,
       loopDurationSeconds: duration,
     });
+    this.#rememberPlaying(result);
     this.#sceneJson = result.sceneJson ?? sceneJson;
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
@@ -195,6 +204,7 @@ export class ExecutionWorkerClient {
       sceneJson,
       loopDurationSeconds: duration,
     });
+    this.#rememberPlaying(result);
     this.#sceneJson = result.sceneJson ?? sceneJson;
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
@@ -208,25 +218,34 @@ export class ExecutionWorkerClient {
     const result = await this.#requestEngine("set_loop_duration", {
       loopDurationSeconds: duration,
     });
+    this.#rememberPlaying(result);
     this.#loopDurationSeconds = duration;
     return result;
   }
 
   async pause() {
-    return this.#requestEngine("pause", {});
+    const result = await this.#requestEngine("pause", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async resume() {
-    return this.#requestEngine("resume", {});
+    const result = await this.#requestEngine("resume", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async seek(timeSeconds) {
     const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
-    return this.#requestEngine("seek", { time });
+    const result = await this.#requestEngine("seek", { time });
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async restartPlayback() {
-    return this.#requestEngine("restart_playback", {});
+    const result = await this.#requestEngine("restart_playback", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async applyPatchBatch(patchBatchJson) {
@@ -234,6 +253,7 @@ export class ExecutionWorkerClient {
       throw new TypeError("patch batch must be non-empty JSON text");
     }
     const result = await this.#requestEngine("apply_patch", { patchBatchJson });
+    this.#rememberPlaying(result);
     if (typeof result.sceneJson === "string") {
       this.#sceneJson = result.sceneJson;
     }
@@ -291,24 +311,104 @@ export class ExecutionWorkerClient {
     );
   }
 
-  async restart() {
+  async restart({ failedOwner = this.#fatalOwner } = {}) {
     if (this.#sceneJson === null || this.#transportMode === null) {
       throw new Error("ExecutionWorkerClient has not been started");
     }
+    if (failedOwner !== null && failedOwner !== "engine" && failedOwner !== "render") {
+      throw new TypeError(`unsupported failed execution owner ${failedOwner}`);
+    }
+    if (failedOwner === "engine" && this.#renderWorker !== null) {
+      return this.#restartEngine();
+    }
+    return this.#restartAll();
+  }
+
+  async #restartEngine() {
+    const wasPlaying = this.#playing;
+    const callbacks = this.#hostCallbacks;
+    const authoringClient = this.#hostAuthoringClient;
+    const reconnectError = new Error("execution engine worker restarting");
+    this.#engineWorker?.terminate();
+    this.#engineWorker = null;
+    this.#rejectOwner("engine", reconnectError);
+
+    const channel = new MessageChannel();
+    const renderAttached = this.#request(
+      this.#renderWorker,
+      "render",
+      renderEnvelope,
+      "attach_engine",
+      { port: channel.port2, transportMode: this.#transportMode },
+      [channel.port2],
+    ).catch((error) => {
+      this.#markFatalOwner("render");
+      throw error;
+    });
+    this.#session = checkedNextSession(this.#session);
+    this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
+      type: "module",
+      name: "noon-engine",
+    });
+    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+    const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
+      engine,
+      render,
+      transportMode: this.#transportMode,
+      session: this.#session,
+    }));
+    this.#ready = nextReady;
+    this.#engineWorker.postMessage(
+      engineEnvelope("init", {
+        port: channel.port1,
+        sceneJson: this.#sceneJson,
+        loopDurationSeconds: this.#loopDurationSeconds,
+        transportMode: this.#transportMode,
+        sharedSlotCapacity: this.#sharedSlotCapacity,
+        session: this.#session,
+      }),
+      [channel.port1],
+    );
+
+    const ready = await nextReady;
+    this.#playing = true;
+    if (!wasPlaying) {
+      await this.pause();
+    }
+    if (callbacks !== null && authoringClient !== null) {
+      this.#hostAuthoringClient = null;
+      await this.configureHostCallbacks(callbacks, authoringClient);
+      await this.#requestEngine("request_callback_phase", {});
+    }
+    this.#fatalOwner = null;
+    return ready;
+  }
+
+  async #restartAll() {
     const sceneJson = this.#sceneJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
+    const sharedSlotCapacity = this.#sharedSlotCapacity;
+    const wasPlaying = this.#playing;
     const callbacks = this.#hostCallbacks;
     const authoringClient = this.#hostAuthoringClient;
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
-    const ready = await this.start(sceneJson, { loopDurationSeconds, transportMode });
+    const ready = await this.start(sceneJson, {
+      loopDurationSeconds,
+      transportMode,
+      sharedSlotCapacity,
+    });
+    if (!wasPlaying) {
+      await this.pause();
+    }
     if (callbacks !== null && authoringClient !== null) {
       this.#hostAuthoringClient = null;
       await this.configureHostCallbacks(callbacks, authoringClient);
     }
+    this.#fatalOwner = null;
     return ready;
   }
 
@@ -327,6 +427,7 @@ export class ExecutionWorkerClient {
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
     }
+    this.#fatalOwner = null;
   }
 
   async #requestEngine(type, payload, transfer = []) {
@@ -472,6 +573,7 @@ export class ExecutionWorkerClient {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.#fatalOwner = null;
     if (replaceCanvas) {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
@@ -500,7 +602,14 @@ export class ExecutionWorkerClient {
     });
   }
 
+  #markFatalOwner(owner) {
+    if (owner === "render" || this.#fatalOwner === null) {
+      this.#fatalOwner = owner;
+    }
+  }
+
   #notifyError(error, owner) {
+    this.#markFatalOwner(owner);
     this.#onError?.(error, owner);
   }
 
@@ -510,6 +619,12 @@ export class ExecutionWorkerClient {
       return;
     }
     console.warn(`[Noon execution] recoverable ${owner} error`, error);
+  }
+
+  #rememberPlaying(result) {
+    if (typeof result?.playing === "boolean") {
+      this.#playing = result.playing;
+    }
   }
 
   #requireStarted() {
@@ -602,8 +717,18 @@ function validateCallbacks(callbacks) {
 function cloneCallbacks(callbacks) {
   return {
     session_id: callbacks.session_id,
-    slots: callbacks.slots.map((slot) => ({ id: slot.id, objects: [...slot.objects] })),
+    slots: callbacks.slots.map(cloneCallbackSlot),
   };
+}
+
+function cloneCallbackSlot(slot) {
+  const cloned = { id: slot.id, objects: [...slot.objects] };
+  for (const field of ["active_after", "active_through"]) {
+    if (Object.prototype.hasOwnProperty.call(slot, field)) {
+      cloned[field] = slot[field];
+    }
+  }
+  return cloned;
 }
 
 function checkedNextRequestId(current) {

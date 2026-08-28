@@ -16,6 +16,7 @@ let sharedReader = null;
 let transferableReceiver = null;
 let renderer = null;
 let resourceBytes = null;
+let reconnectResourceBundlePending = false;
 let canvas = null;
 let width = 1;
 let height = 1;
@@ -36,6 +37,9 @@ async function handleMainMessage(message) {
     switch (message.type) {
       case "init":
         await initialize(message);
+        return;
+      case "attach_engine":
+        attachEngine(message);
         return;
       case "resize":
         width = normalizedDimension(message.width);
@@ -84,17 +88,53 @@ async function initialize(message) {
   width = normalizedDimension(message.width ?? canvas.width);
   height = normalizedDimension(message.height ?? canvas.height);
   transportMode = message.transportMode;
-  renderPort = message.port;
   await init();
+  attachRenderPort(message.port);
+}
 
-  renderPort.addEventListener("message", (event) => handleEngineMessage(event.data));
-  if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
-    transferableReceiver = new TransferableExecutionDeltaReceiver(
-      renderPort,
-      (json) => consumeDelta(json),
+function attachEngine(message) {
+  if (renderer === null || renderPort === null) {
+    throw new Error("mixed retained render worker cannot reconnect before renderer bootstrap");
+  }
+  if (!(message.port instanceof MessagePort)) {
+    throw new Error("mixed retained render reconnect requires an engine MessagePort");
+  }
+  if (message.transportMode !== transportMode) {
+    throw new Error(
+      `mixed retained render reconnect transport ${message.transportMode} does not match ${transportMode}`,
     );
   }
-  renderPort.start();
+
+  renderPort.close?.();
+  sharedReader = null;
+  transferableReceiver = null;
+  bootstrapQueue = [];
+  reconnectResourceBundlePending = true;
+  attachRenderPort(message.port);
+  respond(message.requestId, {
+    type: "engine_port_attached",
+    transportMode,
+    retained: true,
+    mixed: true,
+    backend: renderer.rendererBackend(),
+  });
+}
+
+function attachRenderPort(port) {
+  renderPort = port;
+  port.addEventListener("message", (event) => {
+    if (renderPort !== port) {
+      return;
+    }
+    handleEngineMessage(event.data);
+  });
+  if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
+    transferableReceiver = new TransferableExecutionDeltaReceiver(
+      port,
+      (json) => (renderPort === port ? consumeDelta(json) : true),
+    );
+  }
+  port.start();
 }
 
 function handleEngineMessage(message) {
@@ -103,11 +143,21 @@ function handleEngineMessage(message) {
   }
   if (message.type === "retained_resources") {
     try {
-      if (resourceBytes !== null || renderer !== null || bootstrapPromise !== null) {
-        throw new Error("retained resource bundle may be installed only once before the snapshot");
-      }
       if (!(message.bytes instanceof Uint8Array) || message.bytes.byteLength === 0) {
         throw new Error("retained resource bundle must be a non-empty Uint8Array");
+      }
+      if (renderer !== null) {
+        if (!reconnectResourceBundlePending) {
+          throw new Error("retained resource bundle may be installed only once before the snapshot");
+        }
+        // A replacement engine deterministically recreates the same immutable
+        // resource bundle. The live renderer already owns those GPU resources,
+        // so acknowledge the reconnect generation without rebuilding them.
+        reconnectResourceBundlePending = false;
+        return;
+      }
+      if (resourceBytes !== null || bootstrapPromise !== null) {
+        throw new Error("retained resource bundle may be installed only once before the snapshot");
       }
       resourceBytes = message.bytes;
     } catch (error) {
@@ -163,6 +213,9 @@ function consumeDelta(json) {
     return true;
   }
 
+  if (reconnectResourceBundlePending) {
+    throw new Error("mixed retained reconnect snapshot arrived before its resource bundle");
+  }
   if (needsPresent) {
     return false;
   }
@@ -289,7 +342,7 @@ function currentMetrics() {
     lastFrameTimestamp,
     bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
     needsPresent,
-    resourceBundlePending: false,
+    resourceBundlePending: reconnectResourceBundlePending,
   };
 }
 

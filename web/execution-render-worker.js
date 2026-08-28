@@ -36,6 +36,9 @@ async function handleMainMessage(message) {
       case "init":
         await initialize(message);
         return;
+      case "attach_engine":
+        attachEngine(message);
+        return;
       case "resize":
         width = normalizedDimension(message.width);
         height = normalizedDimension(message.height);
@@ -82,17 +85,50 @@ async function initialize(message) {
   width = normalizedDimension(message.width ?? canvas.width);
   height = normalizedDimension(message.height ?? canvas.height);
   transportMode = message.transportMode;
-  renderPort = message.port;
   await init();
+  attachRenderPort(message.port);
+}
 
-  renderPort.addEventListener("message", (event) => handleEngineMessage(event.data));
-  if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
-    transferableReceiver = new TransferableExecutionDeltaReceiver(
-      renderPort,
-      (json) => consumeDelta(json),
+function attachEngine(message) {
+  if (renderer === null || renderPort === null) {
+    throw new Error("execution render worker cannot reconnect before renderer bootstrap");
+  }
+  if (!(message.port instanceof MessagePort)) {
+    throw new Error("execution render reconnect requires an engine MessagePort");
+  }
+  if (message.transportMode !== transportMode) {
+    throw new Error(
+      `execution render reconnect transport ${message.transportMode} does not match ${transportMode}`,
     );
   }
-  renderPort.start();
+
+  renderPort.close?.();
+  sharedReader = null;
+  transferableReceiver = null;
+  bootstrapQueue = [];
+  attachRenderPort(message.port);
+  respond(message.requestId, {
+    type: "engine_port_attached",
+    transportMode,
+    backend: renderer.rendererBackend(),
+  });
+}
+
+function attachRenderPort(port) {
+  renderPort = port;
+  port.addEventListener("message", (event) => {
+    if (renderPort !== port) {
+      return;
+    }
+    handleEngineMessage(event.data);
+  });
+  if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
+    transferableReceiver = new TransferableExecutionDeltaReceiver(
+      port,
+      (json) => (renderPort === port ? consumeDelta(json) : true),
+    );
+  }
+  port.start();
 }
 
 function handleEngineMessage(message) {

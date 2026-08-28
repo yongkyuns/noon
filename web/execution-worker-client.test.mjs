@@ -134,6 +134,17 @@ function requestMessage(worker, type) {
   return entry.message;
 }
 
+async function waitForRequest(worker, type, occurrence = 1) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const entries = worker.messages.filter(({ message }) => message.type === type);
+    if (entries.length >= occurrence) {
+      return entries[occurrence - 1].message;
+    }
+    await Promise.resolve();
+  }
+  assert.fail(`missing ${worker.name} ${type} request`);
+}
+
 test("engine and render requests use independent issuance spaces", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);
@@ -267,3 +278,182 @@ test("ignores queued events from workers that were replaced by restart", async (
   assert.deepEqual(errors, []);
   client.terminate();
 });
+
+test("engine failure reconnects without replacing the render worker or canvas", async () => {
+  const errors = [];
+  const { client, engine: oldEngine, render } = await startClient(errors);
+  const canvas = client.canvas;
+
+  oldEngine.emitError("engine lost");
+  assert.deepEqual(errors, ["engine: engine lost"]);
+
+  const offset = FakeWorker.instances.length;
+  const restartPromise = client.restart();
+  await Promise.resolve();
+  const newEngine = FakeWorker.instances[offset];
+  assert.ok(newEngine, "replacement engine worker must be created");
+  assert.equal(newEngine.name, "noon-engine");
+  assert.equal(FakeWorker.instances.length, offset + 1, "engine reconnect must not create a render worker");
+
+  const attachRequest = requestMessage(render, "attach_engine");
+  render.emitMessage(
+    renderMessage("engine_port_attached", {
+      requestId: attachRequest.requestId,
+      transportMode: "transferable",
+      backend: "WebGL2",
+    }),
+  );
+  newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+
+  const restarted = await restartPromise;
+  assert.equal(restarted.session, 2);
+  assert.equal(client.canvas, canvas, "engine reconnect must preserve the transferred canvas");
+  assert.equal(oldEngine.terminated, true);
+  assert.equal(render.terminated, false);
+
+  oldEngine.emitMessage({ malformed: true });
+  oldEngine.emitMessageError();
+  assert.equal(client.diagnostics.engine.staleWorkerEvents, 2);
+  assert.deepEqual(errors, ["engine: engine lost"]);
+
+  const statePromise = client.state();
+  await Promise.resolve();
+  const stateRequest = requestMessage(newEngine, "state");
+  newEngine.emitMessage(
+    engineMessage("state", {
+      requestId: stateRequest.requestId,
+      time: 0,
+      nextPatchSequence: "0",
+      sceneJson: SCENE_JSON,
+    }),
+  );
+  await statePromise;
+  client.terminate();
+});
+
+test("engine reconnect restores pause mode and callback phase configuration", async () => {
+  const errors = [];
+  const { client, engine: oldEngine, render } = await startClient(errors);
+  const callbacks = {
+    session_id: 7,
+    slots: [
+      {
+        id: 3,
+        objects: [0],
+        active_after: 0.25,
+        active_through: 1.75,
+      },
+    ],
+  };
+  const authoringClient = {
+    ports: [],
+    async attachEnginePort(port) {
+      this.ports.push(port);
+    },
+  };
+
+  const configurePromise = client.configureHostCallbacks(callbacks, authoringClient);
+  const initialHostAttach = await waitForRequest(oldEngine, "attach_host_port");
+  oldEngine.emitMessage(
+    engineMessage("host_port_attached", { requestId: initialHostAttach.requestId }),
+  );
+  const initialConfigure = await waitForRequest(oldEngine, "configure_callbacks");
+  assert.deepEqual(initialConfigure.callbacks, callbacks);
+  oldEngine.emitMessage(
+    engineMessage("callbacks_configured", {
+      requestId: initialConfigure.requestId,
+      enabled: true,
+      generation: 1,
+    }),
+  );
+  await configurePromise;
+
+  const pausePromise = client.pause();
+  const initialPause = await waitForRequest(oldEngine, "pause");
+  oldEngine.emitMessage(
+    engineMessage("result", {
+      requestId: initialPause.requestId,
+      operation: "pause",
+      time: 0.5,
+      playing: false,
+      nextPatchSequence: "0",
+      sceneJson: SCENE_JSON,
+    }),
+  );
+  await pausePromise;
+
+  oldEngine.emitError("engine lost");
+  const canvas = client.canvas;
+  const offset = FakeWorker.instances.length;
+  const restartPromise = client.restart();
+  const newEngine = await waitForNewEngine(offset);
+
+  const renderAttach = await waitForRequest(render, "attach_engine");
+  render.emitMessage(
+    renderMessage("engine_port_attached", {
+      requestId: renderAttach.requestId,
+      transportMode: "transferable",
+      backend: "WebGL2",
+    }),
+  );
+  newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+
+  const restoredPause = await waitForRequest(newEngine, "pause");
+  newEngine.emitMessage(
+    engineMessage("result", {
+      requestId: restoredPause.requestId,
+      operation: "pause",
+      time: 0,
+      playing: false,
+      nextPatchSequence: "0",
+      sceneJson: SCENE_JSON,
+    }),
+  );
+
+  const restoredHostAttach = await waitForRequest(newEngine, "attach_host_port");
+  newEngine.emitMessage(
+    engineMessage("host_port_attached", { requestId: restoredHostAttach.requestId }),
+  );
+  const restoredConfigure = await waitForRequest(newEngine, "configure_callbacks");
+  assert.deepEqual(
+    restoredConfigure.callbacks,
+    callbacks,
+    "reconnect must preserve callback activation windows",
+  );
+  newEngine.emitMessage(
+    engineMessage("callbacks_configured", {
+      requestId: restoredConfigure.requestId,
+      enabled: true,
+      generation: 1,
+    }),
+  );
+
+  const phaseRequest = await waitForRequest(newEngine, "request_callback_phase");
+  newEngine.emitMessage(
+    engineMessage("callback_phase_requested", {
+      requestId: phaseRequest.requestId,
+      generation: 1,
+      hostRequestId: 0,
+    }),
+  );
+
+  const restarted = await restartPromise;
+  assert.equal(restarted.session, 2);
+  assert.equal(client.canvas, canvas);
+  assert.equal(render.terminated, false);
+  assert.equal(authoringClient.ports.length, 2, "Python host port must be replaced on reconnect");
+  assert.deepEqual(errors, ["engine: engine lost"]);
+  client.terminate();
+});
+
+async function waitForNewEngine(offset) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const worker = FakeWorker.instances[offset];
+    if (worker !== undefined) {
+      assert.equal(worker.name, "noon-engine");
+      return worker;
+    }
+    await Promise.resolve();
+  }
+  assert.fail("replacement engine worker must be created");
+}
