@@ -50,52 +50,9 @@ self.addEventListener("message", (event) => {
 });
 
 async function initializePyodide() {
-  await initNoonWeb();
-  const authoringStore = new WasmAuthoringStore();
-  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
-    authoringStore.createMobject(snapshotJson);
-  self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
-    authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
-  self.noonCreateAuthoringTriangleHandle = () =>
-    authoringStore.createMobject(manimTriangleSnapshotJson());
-  self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
-  self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
-  self.noonCreateAuthoringRectangleHandle = (width, height) =>
-    authoringStore.createManimRectangle(width, height);
-  self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
-    authoringStore.createManimLine(startX, startY, endX, endY);
-  self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
-  self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
-    new RetainedTypstAuthoringHandle(source, math, fontSize);
-  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
-  self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
-  self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
-  self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
-  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
-
-  const pyodide = await loadPyodide();
-  const [
-    apiResponse,
-    irResponse,
-    compatResponse,
-    semanticHandlesResponse,
-    typstResponse,
-    rateFunctionsResponse,
-    phaseBResponse,
-    geometryResponse,
-    sharedGeometryResponse,
-    animationOptionsResponse,
-    animateResponse,
-    rotateResponse,
-    compositionResponse,
-    lifecycleResponse,
-    growingResponse,
-    drawBorderThenFillResponse,
-    indicationResponse,
-    reactiveResponse,
-    updatersResponse,
-    cameraResponse,
-  ] = await Promise.all([
+  const noonWebReady = initNoonWeb();
+  const pyodideReady = loadPyodide();
+  const compatibilitySourcesReady = Promise.all([
     fetch(new URL("./python/noon.py", import.meta.url)),
     fetch(new URL("./python/_noon_ir.py", import.meta.url)),
     fetch(new URL("./python/_manim_compat.py", import.meta.url)),
@@ -117,6 +74,56 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
     fetch(new URL("./python/_manim_camera.py", import.meta.url)),
   ]);
+  const startupResourcesReady = Promise.all([
+  noonWebReady,
+  pyodideReady,
+  compatibilitySourcesReady,
+]);
+const [, pyodide, compatibilitySources] = await startupResourcesReady;
+const authoringStore = new WasmAuthoringStore();
+  self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
+    authoringStore.createMobject(snapshotJson);
+  self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
+    authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
+  self.noonCreateAuthoringTriangleHandle = () =>
+    authoringStore.createMobject(manimTriangleSnapshotJson());
+  self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
+  self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
+  self.noonCreateAuthoringRectangleHandle = (width, height) =>
+    authoringStore.createManimRectangle(width, height);
+  self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
+    authoringStore.createManimLine(startX, startY, endX, endY);
+  self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
+    new RetainedTypstAuthoringHandle(source, math, fontSize);
+  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+  self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
+  self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
+  self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
+  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
+
+  const [
+    apiResponse,
+    irResponse,
+    compatResponse,
+    semanticHandlesResponse,
+    typstResponse,
+    rateFunctionsResponse,
+    phaseBResponse,
+    geometryResponse,
+    sharedGeometryResponse,
+    animationOptionsResponse,
+    animateResponse,
+    rotateResponse,
+    compositionResponse,
+    lifecycleResponse,
+    growingResponse,
+    drawBorderThenFillResponse,
+    indicationResponse,
+    reactiveResponse,
+    updatersResponse,
+    cameraResponse,
+  ] = compatibilitySources;
   const responses = [
     [apiResponse, "Noon Python API"],
     [irResponse, "Noon Python IR emitter"],
