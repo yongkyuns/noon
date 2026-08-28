@@ -13,6 +13,8 @@ on:
       - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
+      - "web/execution-renderer-smoke.html"
+      - "web/execution-renderer-smoke.js"
   push:
     branches:
       - master
@@ -27,6 +29,8 @@ on:
       - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
+      - "web/execution-renderer-smoke.html"
+      - "web/execution-renderer-smoke.js"
   workflow_dispatch:
 
 permissions:

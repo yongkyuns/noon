@@ -17,6 +17,29 @@ const artifactDir = path.resolve(
     "browser-smoke-artifacts/renderer-init-failure",
 );
 
+const webglBrowserArgs = [
+  "--disable-features=WebGPU",
+  "--enable-unsafe-swiftshader",
+  "--ignore-gpu-blocklist",
+  "--use-gl=angle",
+  "--use-angle=swiftshader",
+  "--disable-gpu-sandbox",
+  "--disable-dev-shm-usage",
+];
+const webgpuBrowserArgs = [
+  "--enable-unsafe-webgpu",
+  "--enable-unsafe-swiftshader",
+  "--use-webgpu-adapter=swiftshader",
+  "--use-gpu-in-tests",
+  "--ignore-gpu-blocklist",
+  "--enable-features=Vulkan",
+  "--use-gl=angle",
+  "--use-angle=swiftshader",
+  "--use-vulkan=swiftshader",
+  "--disable-gpu-sandbox",
+  "--disable-dev-shm-usage",
+];
+
 await mkdir(artifactDir, { recursive: true });
 
 let serverOutput = "";
@@ -58,6 +81,17 @@ async function waitForHarness(page) {
   return page.evaluate(() => window.noonSmoke.metrics());
 }
 
+async function waitForExecutionRendererHarness(page) {
+  await page.goto(`${baseUrl}/web/execution-renderer-smoke.html`, { waitUntil: "load" });
+  await page.waitForFunction(() => window.noonExecutionRendererSmoke?.ready === true, null, {
+    timeout: 30_000,
+  });
+  return page.evaluate(() => ({
+    error: window.noonExecutionRendererSmoke.error,
+    metrics: window.noonExecutionRendererSmoke.metrics,
+  }));
+}
+
 function collectErrors(page) {
   const pageErrors = [];
   const consoleErrors = [];
@@ -82,19 +116,11 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: [
-      "--disable-features=WebGPU",
-      "--enable-unsafe-swiftshader",
-      "--ignore-gpu-blocklist",
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--disable-gpu-sandbox",
-      "--disable-dev-shm-usage",
-    ],
+    args: webglBrowserArgs,
   });
 
-  // Scenario 1: WebGPU is unavailable, but the same production auto-selection
-  // path must fall back to WebGL2 and still present a real frame.
+  // Scenario 1: WebGPU is unavailable, but the main browser player must fall
+  // back to WebGL2 and still present a real frame.
   const fallbackPage = await browser.newPage({ viewport: { width: 1000, height: 600 } });
   const fallbackErrors = collectErrors(fallbackPage);
   const fallbackInitial = await waitForHarness(fallbackPage);
@@ -186,6 +212,94 @@ try {
   });
   await unavailablePage.close();
   console.log("✓ renderer init: both backends unavailable fails clearly without an unhandled exception");
+
+  await browser.close();
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: webgpuBrowserArgs,
+  });
+
+  // Scenario 3 targets the OffscreenCanvas execution renderer directly. WebGPU
+  // remains discoverable and returns a real adapter, but device creation fails;
+  // the same renderer instance must then initialize WebGL2 and present its
+  // initial execution snapshot.
+  const deviceFailurePage = await browser.newPage({ viewport: { width: 1000, height: 600 } });
+  const deviceFailureErrors = collectErrors(deviceFailurePage);
+  await deviceFailurePage.addInitScript(() => {
+    const state = { patched: false, patchError: null, requestDeviceCalls: 0 };
+    window.__noonWebGpuInitFailure = state;
+    try {
+      const gpu = navigator.gpu;
+      if (!gpu || typeof gpu.requestAdapter !== "function") {
+        state.patchError = "navigator.gpu.requestAdapter is unavailable";
+        return;
+      }
+      const originalRequestAdapter = gpu.requestAdapter.bind(gpu);
+      Object.defineProperty(gpu, "requestAdapter", {
+        configurable: true,
+        value: async (...adapterArgs) => {
+          const adapter = await originalRequestAdapter(...adapterArgs);
+          if (!adapter) return adapter;
+          Object.defineProperty(adapter, "requestDevice", {
+            configurable: true,
+            value: async () => {
+              state.requestDeviceCalls += 1;
+              throw new DOMException(
+                "Noon injected WebGPU requestDevice failure",
+                "OperationError",
+              );
+            },
+          });
+          return adapter;
+        },
+      });
+      state.patched = true;
+    } catch (error) {
+      state.patchError = String(error);
+    }
+  });
+
+  const deviceFailure = await waitForExecutionRendererHarness(deviceFailurePage);
+  const injection = await deviceFailurePage.evaluate(() => window.__noonWebGpuInitFailure);
+  assert.equal(injection.patched, true, `WebGPU device-failure patch failed: ${injection.patchError}`);
+  assert.ok(injection.requestDeviceCalls >= 1, "WebGPU requestDevice failure was not exercised");
+  assert.equal(
+    deviceFailure.error,
+    null,
+    `WebGPU device failure did not fall back cleanly: ${deviceFailure.error}`,
+  );
+  assert.equal(
+    deviceFailure.metrics?.rendererBackend,
+    "WebGL2",
+    `WebGPU device failure selected ${deviceFailure.metrics?.rendererBackend}`,
+  );
+  assert.equal(
+    deviceFailure.metrics?.presented,
+    true,
+    "device-init fallback did not present a frame",
+  );
+  assert.ok(
+    deviceFailure.metrics?.drawCalls > 0,
+    "device-init fallback emitted no draw calls",
+  );
+  assert.ok(
+    deviceFailure.metrics?.objectCount > 0,
+    "device-init fallback lost the initial execution snapshot",
+  );
+  assert.deepEqual(
+    deviceFailureErrors.pageErrors,
+    [],
+    `device-init fallback emitted page errors: ${deviceFailureErrors.pageErrors.join("\n")}`,
+  );
+  await writeDiagnostics("webgpu-device-failure-fallback", {
+    browserVersion: browser.version(),
+    injection,
+    ...deviceFailure,
+    ...deviceFailureErrors,
+  });
+  await deviceFailurePage.close();
+  console.log("✓ execution renderer init: WebGPU device failure falls back to WebGL2 and presents");
 } catch (error) {
   await writeDiagnostics("failure", {
     browserVersion: browser?.version() ?? null,

@@ -32,6 +32,15 @@ mod wasm {
         }
     }
 
+    struct InitializedGpu {
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        backend: wgpu::Backend,
+        config: wgpu::SurfaceConfiguration,
+    }
+
     #[wasm_bindgen(js_name = ExecutionCanvasRenderer)]
     pub struct WasmExecutionCanvasRenderer {
         instance: wgpu::Instance,
@@ -71,43 +80,16 @@ mod wasm {
                 ));
             }
             let camera = mirror.camera();
-
-            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
-            instance_descriptor.display = Some(Box::new(WebDisplaySource));
-            let instance =
-                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
-            let surface = create_surface(&instance, &canvas)?;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                })
-                .await
-                .map_err(js_error)?;
-            let backend = adapter.get_info().backend;
-            let required_limits = if backend == wgpu::Backend::Gl {
-                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
-            } else {
-                wgpu::Limits::default()
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("Noon execution render worker GPU device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    ..Default::default()
-                })
-                .await
-                .map_err(js_error)?;
-
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
-            let config = surface
-                .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_message("GPU adapter cannot present to this OffscreenCanvas"))?;
-            surface.configure(&device, &config);
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+            } = initialize_gpu(&canvas, width, height).await?;
             let renderer = GpuRenderer::new(&device, config.format);
 
             let mut result = Self {
@@ -309,6 +291,133 @@ mod wasm {
         }
     }
 
+    async fn initialize_gpu(
+        canvas: &OffscreenCanvas,
+        width: u32,
+        height: u32,
+    ) -> Result<InitializedGpu, JsValue> {
+        let webgpu_error = if wgpu::util::is_browser_webgpu_supported().await {
+            match initialize_webgpu(canvas, width, height).await {
+                Ok(initialized) => return Ok(initialized),
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        };
+
+        initialize_webgl(canvas, width, height)
+            .await
+            .map_err(|webgl_error| {
+                if let Some(webgpu_error) = webgpu_error {
+                    js_message(&format!(
+                        "WebGPU initialization failed: {webgpu_error}; WebGL2 fallback failed: {webgl_error}"
+                    ))
+                } else {
+                    js_message(&format!("WebGL2 initialization failed: {webgl_error}"))
+                }
+            })
+    }
+
+    async fn initialize_webgpu(
+        canvas: &OffscreenCanvas,
+        width: u32,
+        height: u32,
+    ) -> Result<InitializedGpu, String> {
+        let instance = create_instance(wgpu::Backends::BROWSER_WEBGPU);
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let backend = adapter.get_info().backend;
+        let (device, queue) = request_device(&adapter, backend).await?;
+
+        // Do not claim a canvas context until WebGPU has a usable device. Once a
+        // canvas is bound to WebGPU, browsers cannot reliably create WebGL2 from
+        // that same canvas for fallback.
+        let surface = create_surface(&instance, canvas).map_err(js_value_message)?;
+        let config = default_surface_config(&surface, &adapter, width, height)?;
+        surface.configure(&device, &config);
+        Ok(InitializedGpu {
+            instance,
+            surface,
+            device,
+            queue,
+            backend,
+            config,
+        })
+    }
+
+    async fn initialize_webgl(
+        canvas: &OffscreenCanvas,
+        width: u32,
+        height: u32,
+    ) -> Result<InitializedGpu, String> {
+        let instance = create_instance(wgpu::Backends::GL);
+        let surface = create_surface(&instance, canvas).map_err(js_value_message)?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let backend = adapter.get_info().backend;
+        let (device, queue) = request_device(&adapter, backend).await?;
+        let config = default_surface_config(&surface, &adapter, width, height)?;
+        surface.configure(&device, &config);
+        Ok(InitializedGpu {
+            instance,
+            surface,
+            device,
+            queue,
+            backend,
+            config,
+        })
+    }
+
+    fn create_instance(backends: wgpu::Backends) -> wgpu::Instance {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = backends;
+        descriptor.display = Some(Box::new(WebDisplaySource));
+        wgpu::Instance::new(descriptor)
+    }
+
+    async fn request_device(
+        adapter: &wgpu::Adapter,
+        backend: wgpu::Backend,
+    ) -> Result<(wgpu::Device, wgpu::Queue), String> {
+        let required_limits = if backend == wgpu::Backend::Gl {
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        } else {
+            wgpu::Limits::default()
+        };
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Noon execution render worker GPU device"),
+                required_features: wgpu::Features::empty(),
+                required_limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    fn default_surface_config(
+        surface: &wgpu::Surface<'_>,
+        adapter: &wgpu::Adapter,
+        width: u32,
+        height: u32,
+    ) -> Result<wgpu::SurfaceConfiguration, String> {
+        surface
+            .get_default_config(adapter, width, height)
+            .ok_or_else(|| "GPU adapter cannot present to this OffscreenCanvas".to_owned())
+    }
+
     fn create_surface(
         instance: &wgpu::Instance,
         canvas: &OffscreenCanvas,
@@ -316,6 +425,10 @@ mod wasm {
         instance
             .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
             .map_err(js_error)
+    }
+
+    fn js_value_message(value: JsValue) -> String {
+        value.as_string().unwrap_or_else(|| format!("{value:?}"))
     }
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {
