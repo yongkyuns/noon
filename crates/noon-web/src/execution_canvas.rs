@@ -19,7 +19,10 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
-    use crate::{ExecutionFrameMirror, TransportApplyOutcome};
+    use crate::{
+        gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
+        ExecutionFrameMirror, TransportApplyOutcome,
+    };
 
     use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
 
@@ -62,6 +65,8 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        gpu_generation: u32,
+        gpu_diagnostics: GpuDiagnosticMailbox,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -90,6 +95,9 @@ mod wasm {
                 backend,
                 config,
             } = initialize_gpu(&canvas, width, height).await?;
+            let gpu_generation = 1;
+            let gpu_diagnostics = GpuDiagnosticMailbox::default();
+            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
             let renderer = GpuRenderer::new(&device, config.format);
 
             let mut result = Self {
@@ -112,6 +120,8 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                gpu_generation,
+                gpu_diagnostics,
             };
             result.update_camera()?;
             Ok(result)
@@ -160,11 +170,10 @@ mod wasm {
                         self.surface.configure(&self.device, &self.config);
                         return Ok(false);
                     }
-                    wgpu::CurrentSurfaceTexture::Validation => {
-                        return Err(js_message(
-                            "GPU backend rejected the OffscreenCanvas surface texture",
-                        ));
-                    }
+                    // The device error callback owns validation diagnostics. Keep
+                    // the pending frame intact so a recoverable validation can be
+                    // reported once and presentation retried unchanged.
+                    wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
             let changes = mem::take(&mut self.pending_changes);
@@ -237,6 +246,19 @@ mod wasm {
                 wgpu::Backend::Gl => "WebGL2".to_owned(),
                 other => format!("{other:?}"),
             }
+        }
+
+        #[wasm_bindgen(js_name = gpuGeneration)]
+        pub fn gpu_generation(&self) -> u32 {
+            self.gpu_generation
+        }
+
+        #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
+        pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {
+            self.gpu_diagnostics
+                .take_for_generation(self.gpu_generation)
+                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
+                .transpose()
         }
 
         pub fn time(&self) -> f64 {
