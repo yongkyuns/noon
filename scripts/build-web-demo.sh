@@ -66,6 +66,7 @@ node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
 node --test web/execution-worker-startup.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/authoring-out-of-order-races.test.mjs
 node --test web/playground-generation.test.mjs
 node --test web/playground-startup.test.mjs
 node --test web/python-editor.test.mjs
