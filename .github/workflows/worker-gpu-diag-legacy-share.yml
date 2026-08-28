@@ -20,6 +20,7 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /crates/noon-web/src/legacy.rs
+            /crates/noon-web/src/clock.rs
             /crates/noon-web/src/gpu_diagnostics.rs
 
       - name: Consolidate uncaptured error policy
