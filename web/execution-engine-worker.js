@@ -47,6 +47,10 @@ async function handleMainMessage(message) {
       case "replace_scene":
       case "reconcile_scene":
       case "set_loop_duration":
+      case "pause_playback":
+      case "resume_playback":
+      case "seek_playback":
+      case "restart_playback":
       case "apply_patch":
       case "configure_callbacks":
         enqueueControl(message);
@@ -60,6 +64,7 @@ async function handleMainMessage(message) {
         respond(message.requestId, {
           type: "state",
           time: player.time(),
+          paused: player.isPaused(),
           nextPatchSequence: String(player.nextPatchSequence()),
           sceneJson: player.sceneJson(),
         });
@@ -325,6 +330,39 @@ function executeControl(message) {
       respond(message.requestId, runtimeResult("set_loop_duration"));
       return;
     }
+    case "pause_playback": {
+      beginPlaybackControl(false);
+      player.pausePlayback();
+      respond(message.requestId, runtimeResult("pause_playback"));
+      return;
+    }
+    case "resume_playback": {
+      beginPlaybackControl(false);
+      player.resumePlayback();
+      respond(message.requestId, runtimeResult("resume_playback"));
+      return;
+    }
+    case "seek_playback": {
+      validateSceneTime(message.sceneTime);
+      beginPlaybackControl(true);
+      const delta = player.seekPlaybackDeltaJson(message.sceneTime);
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      requestLatestHostPhase();
+      respond(message.requestId, runtimeResult("seek_playback"));
+      return;
+    }
+    case "restart_playback": {
+      beginPlaybackControl(true);
+      const delta = player.restartPlaybackDeltaJson();
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      requestLatestHostPhase();
+      respond(message.requestId, runtimeResult("restart_playback"));
+      return;
+    }
     case "apply_patch": {
       const delta = player.applyPatchBatchDeltaJson(message.patchBatchJson);
       if (delta !== undefined && delta !== null) {
@@ -347,6 +385,29 @@ function executeControl(message) {
   }
 }
 
+function beginPlaybackControl(invalidateHostPhase) {
+  latestTick = null;
+  if (invalidateHostPhase) {
+    invalidateHostCallbackPhase();
+  }
+}
+
+function invalidateHostCallbackPhase() {
+  if (hostCallbacks === null) {
+    return;
+  }
+  hostGeneration = checkedIncrement(hostGeneration, "host callback generation");
+  if (hostInFlight !== null) {
+    hostMetrics.droppedLateResults += 1;
+  }
+  if (pendingHostResult !== null) {
+    hostMetrics.droppedLateResults += 1;
+  }
+  hostInFlight = null;
+  pendingHostResult = null;
+  lastHostPhaseTime = Number.NaN;
+}
+
 function validateRequiredLoopDuration(duration) {
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error("execution engine loop duration must be positive and finite");
@@ -360,6 +421,12 @@ function validateOptionalLoopDuration(duration) {
   validateRequiredLoopDuration(duration);
 }
 
+function validateSceneTime(sceneTime) {
+  if (!Number.isFinite(sceneTime) || sceneTime < 0) {
+    throw new Error("execution playback scene time must be finite and non-negative");
+  }
+}
+
 function applyOptionalLoopDuration(duration) {
   if (duration !== null && duration !== undefined) {
     player.setLoopDurationSeconds(duration);
@@ -371,6 +438,7 @@ function runtimeResult(operation) {
     type: "result",
     operation,
     time: player.time(),
+    paused: player.isPaused(),
     nextPatchSequence: String(player.nextPatchSequence()),
     sceneJson: player.sceneJson(),
   };
@@ -564,6 +632,8 @@ function sendDeltaOrThrow(json) {
 
 function currentEngineMetrics() {
   return {
+    time: player.time(),
+    paused: player.isPaused(),
     host: {
       enabled: hostCallbacks !== null,
       inFlight: hostInFlight !== null,
