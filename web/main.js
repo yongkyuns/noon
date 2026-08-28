@@ -282,6 +282,7 @@ let player = null;
 let rendererBackend = "";
 let sceneRunPromise = null;
 let playerNeedsRestart = false;
+let startupAutoplayPending = false;
 let busyDepth = 0;
 
 function currentExample() {
@@ -365,12 +366,46 @@ function warmAuthoringClient() {
       }
     },
     () => {
-    if (authoringClient !== client) return;
-    if (client.terminated) {
-      authoringClient = null;
-    }
-    status.dataset.authoringWarmup = "failed";
-  },
+      if (authoringClient !== client) return;
+      if (client.terminated) {
+        authoringClient = null;
+      }
+      status.dataset.authoringWarmup = "failed";
+    },
+  );
+  return client;
+}
+
+function cancelStartupAutoplay(reason = "cancelled") {
+  if (!startupAutoplayPending) return;
+  startupAutoplayPending = false;
+  status.dataset.startupAutoplay = reason;
+}
+
+function scheduleStartupAutoplay(exampleId, client) {
+  startupAutoplayPending = true;
+  status.dataset.startupAutoplay = "waiting";
+  void client.ready().then(
+    () => {
+      if (!startupAutoplayPending) return;
+      if (
+        authoringClient !== client ||
+        selectedExampleId !== exampleId ||
+        sceneRunPromise !== null ||
+        sceneSourceEditor.value !== canonicalSource
+      ) {
+        cancelStartupAutoplay("skipped");
+        return;
+      }
+      startupAutoplayPending = false;
+      status.dataset.startupAutoplay = "running";
+      void runScene().then((result) => {
+        status.dataset.startupAutoplay = result?.error ? "failed" : "settled";
+      });
+    },
+    () => {
+      cancelStartupAutoplay("failed");
+    },
   );
 }
 
@@ -476,6 +511,7 @@ function isCurrentRun(runToken) {
 }
 
 async function runScene() {
+  cancelStartupAutoplay();
   if (sceneRunPromise !== null) return sceneRunPromise;
   const example = currentExample();
   if (!example || !player) return null;
@@ -671,6 +707,7 @@ resetButton.addEventListener("click", async () => {
   patchStatus.dataset.state = "ready";
 });
 sceneSourceEditor.addEventListener("input", () => {
+  cancelStartupAutoplay();
   const example = currentExample();
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
@@ -690,7 +727,7 @@ document.addEventListener("keydown", (event) => {
 
 const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
-  warmAuthoringClient();
+  const startupAuthoringClient = warmAuthoringClient();
   player = new AuthoringExecutionClient(canvas, {
     onError(error) {
       playerNeedsRestart = true;
@@ -709,7 +746,7 @@ try {
     : SCENE_EXAMPLES[0].id;
   history.replaceState({ example: initialExample }, "", exampleUrl(initialExample));
   renderGallery();
-  await selectExample(initialExample, { run: true });
+  await selectExample(initialExample, { run: false });
 
   const initialState = await player.state();
   patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
@@ -737,6 +774,8 @@ try {
       return runScene();
     },
   };
+
+  scheduleStartupAutoplay(initialExample, startupAuthoringClient);
 
   window.addEventListener(
     "pagehide",

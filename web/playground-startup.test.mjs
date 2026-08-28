@@ -19,6 +19,49 @@ assert.match(
   "failed eager warmup must discard a dead Python client for the next Run",
 );
 
+const initialSelection = main.indexOf(
+  "await selectExample(initialExample, { run: false });",
+  startupRegion,
+);
+const galleryInstall = main.indexOf("window.__noonExampleGallery =", startupRegion);
+const autoplaySchedule = main.indexOf(
+  "scheduleStartupAutoplay(initialExample, startupAuthoringClient);",
+  startupRegion,
+);
+assert.ok(initialSelection > playerStart, "initial source selection must follow renderer startup");
+assert.ok(galleryInstall > initialSelection, "playground API must install after initial source selection");
+assert.ok(
+  autoplaySchedule > galleryInstall,
+  "initial Python autoplay must be scheduled only after the playground is interactive",
+);
+assert.doesNotMatch(
+  main.slice(startupRegion),
+  /await selectExample\(initialExample, \{ run: true \}\)/,
+  "playground startup must not await Python scene authoring",
+);
+
+const autoplayStart = main.indexOf("function scheduleStartupAutoplay(");
+const executionReadyStart = main.indexOf("async function ensureExecutionReady()", autoplayStart);
+assert.ok(autoplayStart >= 0 && executionReadyStart > autoplayStart, "startup autoplay helper must exist");
+const autoplayBody = main.slice(autoplayStart, executionReadyStart);
+assert.match(autoplayBody, /client\.ready\(\)\.then\(/, "autoplay must wait for warm Python readiness");
+assert.match(autoplayBody, /selectedExampleId !== exampleId/, "autoplay must yield to a newer selection");
+assert.match(autoplayBody, /sceneRunPromise !== null/, "autoplay must yield to a user-started run");
+assert.match(
+  autoplayBody,
+  /sceneSourceEditor\.value !== canonicalSource/,
+  "autoplay must yield to source edits",
+);
+
+const runSceneStart = main.indexOf("async function runScene()");
+const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
+assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
+assert.match(
+  main.slice(runSceneStart, selectExampleStart),
+  /cancelStartupAutoplay\(\);/,
+  "an explicit run must cancel pending startup autoplay",
+);
+
 const initializeStart = worker.indexOf("async function initializePyodide()");
 assert.notEqual(initializeStart, -1, "Python worker initializer must exist");
 const firstBarrier = worker.indexOf("await startupResourcesReady;", initializeStart);
@@ -45,4 +88,6 @@ assert.ok(
   "compatibility source preload should cover the full Python compatibility surface",
 );
 
-console.log("✓ playground overlaps renderer, Pyodide, Noon WASM, and compatibility-source cold start");
+console.log(
+  "✓ playground becomes interactive before Python autoplay and overlaps all cold-start resources",
+);
