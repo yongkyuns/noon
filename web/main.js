@@ -1,6 +1,7 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
+import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { SceneIdentityMap } from "./scene-identity.js";
 import {
   exampleUrl,
@@ -279,6 +280,8 @@ const drafts = new Map();
 const sourceCache = new Map();
 const generations = new PlaygroundGeneration();
 let player = null;
+let playbackControls = null;
+let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
 let playerNeedsRestart = false;
@@ -300,6 +303,7 @@ function setBusy(busy) {
   gallerySearch.disabled = busy;
   categorySelect.disabled = busy;
   paritySelect.disabled = busy;
+  playbackControls?.setBusy(busy);
   for (const card of galleryGrid.querySelectorAll(".example-card")) {
     card.disabled = busy;
   }
@@ -333,6 +337,12 @@ function showSceneError(error) {
 function showRecoverableSceneError(error) {
   console.warn("Recoverable Python callback error", error);
   patchStatus.value = `Python callback failed: ${error}`;
+  patchStatus.dataset.state = "error";
+}
+
+function showPlaybackError(error) {
+  console.error(error);
+  patchStatus.value = `Playback failed: ${error}`;
   patchStatus.dataset.state = "error";
 }
 
@@ -425,6 +435,12 @@ async function ensureExecutionReady() {
   rendererBackend = ready.render.backend;
   status.dataset.rendererBackend = rendererBackend;
   status.dataset.executionMode = player.mode;
+  const playbackState = await player.state();
+  playbackControls?.sync({
+    time: playbackState.time,
+    playing: playbackState.playing,
+    durationSeconds: playbackDurationSeconds,
+  });
 }
 
 async function runPlaygroundTestHook(name, payload) {
@@ -578,6 +594,15 @@ async function runScene() {
         loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
       });
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
+
+      if (authored.duration > 0) {
+        playbackDurationSeconds = authored.duration;
+      }
+      playbackControls?.sync({
+        time: result.time,
+        playing: result.playing,
+        durationSeconds: playbackDurationSeconds,
+      });
 
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;
@@ -748,6 +773,10 @@ try {
   status.dataset.rendererBackend = rendererBackend;
   status.dataset.executionMode = player.mode;
   status.dataset.executionTopology = "authoring-engine-render-workers";
+  playbackControls = new PlaygroundPlaybackControls(player, document.querySelector(".preview-pane"), {
+    durationSeconds: playbackDurationSeconds,
+    onError: showPlaybackError,
+  });
 
   const requested = requestedExampleId();
   const initialExample = SCENE_EXAMPLES.some((example) => example.id === requested)
@@ -759,6 +788,11 @@ try {
 
   const initialState = await player.state();
   patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
+  playbackControls.sync({
+    time: initialState.time,
+    playing: initialState.playing,
+    durationSeconds: playbackDurationSeconds,
+  });
 
   window.__noonExampleGallery = {
     get selectedExampleId() {
@@ -789,6 +823,7 @@ try {
   window.addEventListener(
     "pagehide",
     () => {
+      playbackControls?.destroy();
       authoringClient?.terminate();
       player?.terminate();
     },
@@ -823,6 +858,7 @@ try {
       metricDraws.value = String(metrics.drawCalls);
       metricUpload.value = formatBytes(metrics.bytesUploaded);
       metricTime.value = `${metrics.time.toFixed(2)} s`;
+      playbackControls?.updateTime(metrics.time);
       status.dataset.instances = String(metrics.instancesDrawn);
       status.dataset.uploadBytes = String(metrics.bytesUploaded);
       status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
