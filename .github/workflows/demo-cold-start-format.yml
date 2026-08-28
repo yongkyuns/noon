@@ -23,14 +23,6 @@ jobs:
 
           main_path = Path("web/main.js")
           main = main_path.read_text()
-          old_main = '''    () => {
-            if (authoringClient !== client) return;
-            if (client.terminated) {
-              authoringClient = null;
-            }
-            status.dataset.authoringWarmup = "failed";
-          },
-          );'''
           # Handle the exact currently committed block independent of indentation drift.
           start = main.index('    () => {\n    if (authoringClient !== client) return;')
           end = main.index('  );', start) + len('  );')
@@ -47,13 +39,6 @@ jobs:
 
           worker_path = Path("web/python-worker.js")
           worker = worker_path.read_text()
-          old_worker = '''  const startupResourcesReady = Promise.all([
-            noonWebReady,
-            pyodideReady,
-            compatibilitySourcesReady,
-          ]);
-          const [, pyodide, compatibilitySources] = await startupResourcesReady;
-          const authoringStore = new WasmAuthoringStore();'''
           start = worker.index('  const startupResourcesReady = Promise.all([')
           end = worker.index('  self.noonCreateAuthoringMobjectHandle', start)
           new_worker = '''  const startupResourcesReady = Promise.all([
