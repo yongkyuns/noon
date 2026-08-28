@@ -23,5 +23,5 @@ noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, fea
 noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["web"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }
+web-sys = { version = "0.3", features = ["Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"] }
