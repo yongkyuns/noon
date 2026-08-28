@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use noon_core::{GeometryRef, ObjectDefinition, ObjectId, Style, TrackDefinition, Transform2D};
+use noon_core::{
+    validate_track_definition, GeometryRef, ObjectDefinition, ObjectId, Style, TimelineError,
+    TrackDefinition, TrackId, Transform2D,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{IrError, SceneDocument};
@@ -11,6 +14,20 @@ use crate::{IrError, SceneDocument};
 /// version. Compatibility adapters may consume the legacy document while migration
 /// is in progress, but new frontend semantics should converge on `SceneSpec`.
 pub const SCENE_SPEC_VERSION: u32 = 1;
+
+#[derive(Deserialize)]
+struct SceneSpecVersionProbe {
+    version: u32,
+}
+
+fn preflight_scene_spec_version(json: &str) -> Result<(), SceneSpecError> {
+    let probe: SceneSpecVersionProbe = serde_json::from_str(json).map_err(SceneSpecError::Json)?;
+    if probe.version == SCENE_SPEC_VERSION {
+        Ok(())
+    } else {
+        Err(SceneSpecError::UnsupportedVersion(probe.version))
+    }
+}
 
 /// Source-language identity at the canonical authoring boundary.
 ///
@@ -272,6 +289,19 @@ impl SceneSpec {
             }
         }
 
+        for track in &self.tracks {
+            if !ids.contains(&track.object) {
+                return Err(SceneSpecError::UnknownTrackObject {
+                    track: track.id,
+                    object: track.object,
+                });
+            }
+            validate_track_definition(track).map_err(|error| SceneSpecError::InvalidTrack {
+                track: track.id,
+                error,
+            })?;
+        }
+
         if let Some(camera) = self.camera_object {
             if !ids.contains(&camera) {
                 return Err(SceneSpecError::UnknownCameraObject(camera));
@@ -281,6 +311,7 @@ impl SceneSpec {
     }
 
     pub fn from_json(json: &str) -> Result<Self, SceneSpecError> {
+        preflight_scene_spec_version(json)?;
         let spec: Self = serde_json::from_str(json).map_err(SceneSpecError::Json)?;
         spec.validate()?;
         Ok(spec)
@@ -299,8 +330,19 @@ pub enum SceneSpecError {
     InvalidTextFontSize(f32),
     DuplicateObject(ObjectId),
     DuplicatePainterOrder(u32),
-    PainterOrderOutOfRange { order: u32, object_count: usize },
+    PainterOrderOutOfRange {
+        order: u32,
+        object_count: usize,
+    },
     OrderedObjectIsNotText(ObjectId),
+    UnknownTrackObject {
+        track: TrackId,
+        object: ObjectId,
+    },
+    InvalidTrack {
+        track: TrackId,
+        error: TimelineError,
+    },
     UnknownCameraObject(ObjectId),
     ObjectCountOverflow,
     Legacy(IrError),
@@ -335,6 +377,15 @@ impl std::fmt::Display for SceneSpecError {
                 "ordered text adapter object {} does not contain text",
                 object.get()
             ),
+            Self::UnknownTrackObject { track, object } => write!(
+                formatter,
+                "mixed SceneSpec track {} targets unknown object {}",
+                track.get(),
+                object.get()
+            ),
+            Self::InvalidTrack { track, error } => {
+                write!(formatter, "invalid mixed SceneSpec track {}: {error}", track.get())
+            }
             Self::UnknownCameraObject(object) => {
                 write!(formatter, "unknown SceneSpec camera object {}", object.get())
             }
@@ -349,7 +400,7 @@ impl std::error::Error for SceneSpecError {}
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Color, GeometryRef, SceneDefinition, Vec2};
+    use noon_core::{Color, GeometryRef, RateFunction, SceneDefinition, TrackTiming, Vec2};
 
     use super::*;
     use crate::SceneDocument;
@@ -361,6 +412,20 @@ mod tests {
         scene.object_mut(first).unwrap().transform.translation = Vec2::new(-2.0, 0.0);
         scene.object_mut(second).unwrap().style.opacity = 0.6;
         SceneDocument::from_scene(&scene)
+    }
+
+    fn scene_with_position_track() -> SceneDefinition {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_position(
+                object,
+                Vec2::ZERO,
+                Vec2::ONE,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            )
+            .unwrap();
+        scene
     }
 
     #[test]
@@ -476,6 +541,98 @@ mod tests {
                 vec![OrderedTextObjectSpec::new(1, collision).unwrap()],
             ),
             Err(SceneSpecError::DuplicateObject(_))
+        ));
+    }
+
+    #[test]
+    fn canonical_tracks_must_target_existing_mixed_objects() {
+        let scene = scene_with_position_track();
+        let track = scene.tracks()[0].clone();
+        let spec = SceneSpec {
+            version: SCENE_SPEC_VERSION,
+            objects: vec![ObjectSpec::text(
+                ObjectId::new(99),
+                TextSpec::typst("x", 24.0),
+            )],
+            tracks: vec![track.clone()],
+            camera_object: None,
+        };
+
+        assert!(matches!(
+            spec.validate(),
+            Err(SceneSpecError::UnknownTrackObject { track: id, object })
+                if id == track.id && object == track.object
+        ));
+    }
+
+    #[test]
+    fn canonical_tracks_reuse_shared_timeline_validation() {
+        let scene = scene_with_position_track();
+        let object = scene.objects()[0].id;
+        let mut track = scene.tracks()[0].clone();
+        track.timing.duration = 0.0;
+        let spec = SceneSpec {
+            version: SCENE_SPEC_VERSION,
+            objects: vec![ObjectSpec::geometry(object, GeometryRef::circle(1.0))],
+            tracks: vec![track.clone()],
+            camera_object: None,
+        };
+
+        assert!(matches!(
+            spec.validate(),
+            Err(SceneSpecError::InvalidTrack {
+                track: id,
+                error: TimelineError::InvalidDuration(0.0),
+            }) if id == track.id
+        ));
+
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(matches!(
+            SceneSpec::from_json(&json),
+            Err(SceneSpecError::InvalidTrack {
+                track: id,
+                error: TimelineError::InvalidDuration(0.0),
+            }) if id == track.id
+        ));
+    }
+
+    #[test]
+    fn future_scene_spec_version_is_rejected_before_content_decode() {
+        let json = r#"{
+            "version": 2,
+            "objects": [{
+                "id": 7,
+                "content": {
+                    "kind": "future_content_kind",
+                    "value": {"future_only": true}
+                }
+            }],
+            "tracks": []
+        }"#;
+
+        assert!(matches!(
+            SceneSpec::from_json(json),
+            Err(SceneSpecError::UnsupportedVersion(2))
+        ));
+    }
+
+    #[test]
+    fn current_scene_spec_version_still_reports_unknown_content_as_json_error() {
+        let json = r#"{
+            "version": 1,
+            "objects": [{
+                "id": 7,
+                "content": {
+                    "kind": "future_content_kind",
+                    "value": {"future_only": true}
+                }
+            }],
+            "tracks": []
+        }"#;
+
+        assert!(matches!(
+            SceneSpec::from_json(json),
+            Err(SceneSpecError::Json(_))
         ));
     }
 

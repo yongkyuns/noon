@@ -143,6 +143,18 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 350));
     const mixedMetrics = await execution.metrics();
     const mixedCanvas = execution.canvas;
+
+    const mixedPause = await execution.pause();
+    const mixedPausedCanvas = execution.canvas;
+    const mixedPausedState = await execution.state();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    const mixedStillPausedState = await execution.state();
+    const mixedSeek = await execution.seek(2.5);
+    const mixedSeekState = await execution.state();
+    const mixedResume = await execution.resume();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    const mixedResumedState = await execution.state();
+
     const mixedRestartReady = await execution.restart();
     const mixedRestartCanvas = execution.canvas;
     const mixedRestartMetrics = await execution.metrics();
@@ -180,6 +192,17 @@ try {
     const legacyMetrics = await execution.metrics();
     const legacyCanvas = execution.canvas;
 
+    const legacyPause = await execution.pause();
+    const legacyPausedCanvas = execution.canvas;
+    const legacyPausedState = await execution.state();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    const legacyStillPausedState = await execution.state();
+    const legacySeek = await execution.seek(1.5);
+    const legacySeekState = await execution.state();
+    const legacyResume = await execution.resume();
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    const legacyResumedState = await execution.state();
+
     const secondLegacy = await execution.reconcileScene(JSON.stringify(legacy.document), {
       retainedDocumentJson: JSON.stringify(legacy.retainedDocument),
       callbacks: legacy.callbacks,
@@ -202,6 +225,14 @@ try {
       mixedRaceMode: mixedRaceMetrics.executionMode,
       mixedRaceRetainedChannel: JSON.parse(mixedRaceState.retainedDocumentJson).channel,
       mixedMetrics,
+      mixedPause,
+      mixedPausePreservedCanvas: mixedPausedCanvas === mixedCanvas,
+      mixedPausedState,
+      mixedStillPausedState,
+      mixedSeek,
+      mixedSeekState,
+      mixedResume,
+      mixedResumedState,
       mixedRestartMode: mixedRestartReady.mode,
       mixedRestartCanvasChanged: mixedRestartCanvas !== mixedCanvas,
       mixedRestartObjectCount: mixedRestartMetrics.metrics.objectCount,
@@ -215,6 +246,14 @@ try {
       legacyRaceMode: legacyRaceMetrics.executionMode,
       legacyRaceObjectCount: JSON.parse(legacyRaceState.sceneJson).objects.length,
       legacyMetrics,
+      legacyPause,
+      legacyPausePreservedCanvas: legacyPausedCanvas === legacyCanvas,
+      legacyPausedState,
+      legacyStillPausedState,
+      legacySeek,
+      legacySeekState,
+      legacyResume,
+      legacyResumedState,
       secondLegacyMode: secondLegacy.mode,
       secondLegacyRebuilt: secondLegacy.rebuilt,
       legacyRestartMode: legacyRestartReady.mode,
@@ -246,6 +285,21 @@ try {
   assert.equal(result.mixedMetrics.engineMetrics.resourceBundleTransfers, 1);
   assert.ok(result.mixedMetrics.engineMetrics.resourceBundleBytes > 0);
   assert.equal(result.mixedMetrics.engineMetrics.host.enabled, false);
+  assert.equal(result.mixedPause.operation, "pause");
+  assert.equal(result.mixedPause.playing, false);
+  assert.equal(result.mixedPausePreservedCanvas, true);
+  assert.equal(result.mixedPausedState.playing, false);
+  assert.equal(result.mixedStillPausedState.playing, false);
+  assert.equal(result.mixedStillPausedState.time, result.mixedPausedState.time);
+  assert.equal(result.mixedSeek.operation, "seek");
+  assert.equal(result.mixedSeek.playing, false);
+  assert.equal(result.mixedSeek.time, 2.5);
+  assert.equal(result.mixedSeekState.time, 2.5);
+  assert.equal(result.mixedSeekState.playing, false);
+  assert.equal(result.mixedResume.operation, "resume");
+  assert.equal(result.mixedResume.playing, true);
+  assert.ok(result.mixedResumedState.time > 2.5);
+  assert.equal(result.mixedResumedState.playing, true);
   assert.equal(result.mixedRestartMode, result.retainedMode);
   assert.equal(result.mixedRestartCanvasChanged, true);
   assert.equal(result.mixedRestartObjectCount, 3);
@@ -262,6 +316,21 @@ try {
   assert.equal(result.legacyMetrics.executionMode, result.initialMode);
   assert.equal(result.legacyMetrics.metrics.objectCount, 2);
   assert.equal(typeof result.legacyMetrics.engineMetrics.host.enabled, "boolean");
+  assert.equal(result.legacyPause.operation, "pause");
+  assert.equal(result.legacyPause.playing, false);
+  assert.equal(result.legacyPausePreservedCanvas, true);
+  assert.equal(result.legacyPausedState.playing, false);
+  assert.equal(result.legacyStillPausedState.playing, false);
+  assert.equal(result.legacyStillPausedState.time, result.legacyPausedState.time);
+  assert.equal(result.legacySeek.operation, "seek");
+  assert.equal(result.legacySeek.playing, false);
+  assert.equal(result.legacySeek.time, 1.5);
+  assert.equal(result.legacySeekState.time, 1.5);
+  assert.equal(result.legacySeekState.playing, false);
+  assert.equal(result.legacyResume.operation, "resume");
+  assert.equal(result.legacyResume.playing, true);
+  assert.ok(result.legacyResumedState.time > 1.5);
+  assert.equal(result.legacyResumedState.playing, true);
   assert.equal(result.secondLegacyMode, result.initialMode);
   assert.equal(result.secondLegacyRebuilt, false);
   assert.equal(result.legacyRestartMode, result.initialMode);
@@ -272,7 +341,7 @@ try {
   assert.deepEqual(result.clientErrors, []);
   assert.deepEqual(browserErrors, []);
   console.log(
-    `✓ authoring execution router: legacy → retained → restart → legacy → restart on ${result.rendererBackend}`,
+    `✓ authoring execution router: deterministic controls across retained/legacy on ${result.rendererBackend}`,
   );
 } finally {
   await browser?.close();

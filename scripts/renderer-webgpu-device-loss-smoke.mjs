@@ -134,6 +134,101 @@ async function renderAndCapture(page, name) {
   return { metrics, screenshot };
 }
 
+async function destroyAndRecover(
+  page,
+  { deviceIndex, minimumDeviceCount, screenshotName, baselineMetrics },
+) {
+  await page.evaluate((index) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    const device = capture?.devices[index];
+    if (!device) throw new Error(`captured Noon GPUDevice ${index} is unavailable`);
+    device.destroy();
+  }, deviceIndex);
+  await page.waitForFunction(
+    (index) => window.__noonWebGpuDeviceCapture?.lost[index] !== null,
+    deviceIndex,
+    { timeout: 10_000 },
+  );
+
+  const duringLoss = await page.evaluate(() => ({
+    metrics: window.noonSmoke.metrics(),
+    capture: {
+      deviceCount: window.__noonWebGpuDeviceCapture.devices.length,
+      lost: window.__noonWebGpuDeviceCapture.lost,
+    },
+  }));
+  assert.equal(
+    duringLoss.metrics.rendererBackend,
+    "WebGPU",
+    "device loss changed semantic backend identity",
+  );
+  assert.equal(
+    duringLoss.metrics.revision,
+    baselineMetrics.revision,
+    "device loss reset scene revision",
+  );
+  assert.equal(
+    duringLoss.metrics.objectCount,
+    baselineMetrics.objectCount,
+    "device loss reset scene objects",
+  );
+
+  let recovered = null;
+  let lastRecoveryError = null;
+  for (let attempt = 0; attempt < 40 && recovered === null; attempt += 1) {
+    try {
+      const candidate = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);
+      if (candidate.presented && candidate.rendererBackend === "WebGPU") {
+        recovered = candidate;
+      }
+    } catch (error) {
+      lastRecoveryError = String(error);
+    }
+    if (recovered === null) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  assert.ok(recovered, `WebGPU device did not recover: ${lastRecoveryError ?? "no frame presented"}`);
+  assert.equal(recovered.error, null, "recovered renderer reported an error");
+  assert.equal(recovered.revision, baselineMetrics.revision, "device recovery reset scene revision");
+  assert.equal(
+    recovered.objectCount,
+    baselineMetrics.objectCount,
+    "device recovery reset object count",
+  );
+  assert.ok(
+    Math.abs(recovered.time - sampleTime) < 1e-6,
+    "device recovery changed semantic playhead time",
+  );
+
+  const recoveryCapture = await page.evaluate((lostIndex) => {
+    const capture = window.__noonWebGpuDeviceCapture;
+    const replacementIndex = capture.devices.length - 1;
+    return {
+      deviceCount: capture.devices.length,
+      lost: capture.lost,
+      replacementIndex,
+      replacedDevice:
+        replacementIndex > lostIndex && capture.devices[lostIndex] !== capture.devices[replacementIndex],
+    };
+  }, deviceIndex);
+  assert.ok(
+    recoveryCapture.deviceCount >= minimumDeviceCount,
+    `device recovery requested ${recoveryCapture.deviceCount} devices; expected at least ${minimumDeviceCount}`,
+  );
+  assert.equal(recoveryCapture.replacedDevice, true, "device recovery reused the lost GPUDevice");
+  assert.equal(
+    recoveryCapture.lost[recoveryCapture.replacementIndex],
+    null,
+    "replacement GPUDevice is already lost",
+  );
+
+  const screenshot = await page.locator("#scene").screenshot({
+    path: path.join(artifactDir, `${screenshotName}.png`),
+  });
+  return { duringLoss, recovered, recoveryCapture, screenshot };
+}
+
 function changedPixelCount(leftBuffer, rightBuffer) {
   const left = PNG.sync.read(leftBuffer);
   const right = PNG.sync.read(rightBuffer);
@@ -196,79 +291,55 @@ try {
   assert.ok(captureBefore.deviceCount >= 1, "Noon's WebGPU device creation was not captured");
 
   const baseline = await renderAndCapture(page, "baseline");
-  await page.evaluate(() => {
-    const capture = window.__noonWebGpuDeviceCapture;
-    const device = capture?.devices[0];
-    if (!device) throw new Error("captured Noon GPUDevice is unavailable");
-    device.destroy();
+  const firstRecovery = await destroyAndRecover(page, {
+    deviceIndex: 0,
+    minimumDeviceCount: 2,
+    screenshotName: "recovered",
+    baselineMetrics: baseline.metrics,
   });
-  await page.waitForFunction(
-    () => window.__noonWebGpuDeviceCapture?.lost[0] !== null,
-    null,
-    { timeout: 10_000 },
+  const secondRecovery = await destroyAndRecover(page, {
+    deviceIndex: firstRecovery.recoveryCapture.replacementIndex,
+    minimumDeviceCount: firstRecovery.recoveryCapture.deviceCount + 1,
+    screenshotName: "recovered-second",
+    baselineMetrics: baseline.metrics,
+  });
+
+  assert.ok(
+    secondRecovery.recoveryCapture.replacementIndex > firstRecovery.recoveryCapture.replacementIndex,
+    "second recovery did not advance the GPU device generation",
   );
-
-  const duringLoss = await page.evaluate(() => ({
-    metrics: window.noonSmoke.metrics(),
-    capture: {
-      deviceCount: window.__noonWebGpuDeviceCapture.devices.length,
-      lost: window.__noonWebGpuDeviceCapture.lost,
-    },
-  }));
-  assert.equal(duringLoss.metrics.rendererBackend, "WebGPU", "device loss changed semantic backend identity");
-  assert.equal(duringLoss.metrics.revision, baseline.metrics.revision, "device loss reset scene revision");
-  assert.equal(duringLoss.metrics.objectCount, baseline.metrics.objectCount, "device loss reset scene objects");
-
-  let recovered = null;
-  let lastRecoveryError = null;
-  for (let attempt = 0; attempt < 40 && recovered === null; attempt += 1) {
-    try {
-      const candidate = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);
-      if (candidate.presented && candidate.rendererBackend === "WebGPU") {
-        recovered = candidate;
-      }
-    } catch (error) {
-      lastRecoveryError = String(error);
-    }
-    if (recovered === null) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  assert.ok(recovered, `WebGPU device did not recover: ${lastRecoveryError ?? "no frame presented"}`);
-  assert.equal(recovered.error, null, "recovered renderer reported an error");
-  assert.equal(recovered.revision, baseline.metrics.revision, "device recovery reset scene revision");
-  assert.equal(recovered.objectCount, baseline.metrics.objectCount, "device recovery reset object count");
-  assert.ok(Math.abs(recovered.time - sampleTime) < 1e-6, "device recovery changed semantic playhead time");
-
-  const recoveryCapture = await page.evaluate(() => {
-    const capture = window.__noonWebGpuDeviceCapture;
-    return {
-      deviceCount: capture.devices.length,
-      lost: capture.lost,
-      replacedDevice: capture.devices.length >= 2 && capture.devices[0] !== capture.devices.at(-1),
-    };
-  });
-  assert.ok(recoveryCapture.deviceCount >= 2, "device recovery did not request a replacement GPUDevice");
-  assert.equal(recoveryCapture.replacedDevice, true, "device recovery reused the lost GPUDevice");
-  assert.equal(recoveryCapture.lost.at(-1), null, "replacement GPUDevice is already lost");
-
-  const recoveredScreenshot = await page.locator("#scene").screenshot({
-    path: path.join(artifactDir, "recovered.png"),
-  });
+  assert.equal(
+    secondRecovery.recoveryCapture.lost[firstRecovery.recoveryCapture.replacementIndex]?.reason != null,
+    true,
+    "first replacement device did not report its loss before the second recovery",
+  );
 
   const freshPage = await browser.newPage({ viewport: { width: 1000, height: 600 } });
   const freshErrors = collectBrowserErrors(freshPage);
   await waitForHarness(freshPage);
   const fresh = await renderAndCapture(freshPage, "fresh");
 
-  const changedPixels = changedPixelCount(recoveredScreenshot, fresh.screenshot);
+  const changedPixels = changedPixelCount(firstRecovery.screenshot, fresh.screenshot);
   assert.equal(
     changedPixels,
     0,
-    `recovered WebGPU frame differs from fresh renderer at ${changedPixels} pixels`,
+    `first recovered WebGPU frame differs from fresh renderer at ${changedPixels} pixels`,
   );
-  assert.equal(fresh.metrics.objectCount, recovered.objectCount, "fresh/recovered object count mismatch");
-  assert.ok(Math.abs(fresh.metrics.time - recovered.time) < 1e-6, "fresh/recovered time mismatch");
+  const secondChangedPixels = changedPixelCount(secondRecovery.screenshot, fresh.screenshot);
+  assert.equal(
+    secondChangedPixels,
+    0,
+    `second recovered WebGPU frame differs from fresh renderer at ${secondChangedPixels} pixels`,
+  );
+  assert.equal(
+    fresh.metrics.objectCount,
+    secondRecovery.recovered.objectCount,
+    "fresh/recovered object count mismatch",
+  );
+  assert.ok(
+    Math.abs(fresh.metrics.time - secondRecovery.recovered.time) < 1e-6,
+    "fresh/recovered time mismatch",
+  );
 
   assert.deepEqual(browserErrors.pageErrors, [], "device-loss recovery emitted page errors");
   assert.deepEqual(freshErrors.pageErrors, [], "fresh comparison renderer emitted page errors");
@@ -286,18 +357,26 @@ try {
     browserVersion: browser.version(),
     initial,
     baseline: baseline.metrics,
-    duringLoss,
-    recovered,
+    duringLoss: firstRecovery.duringLoss,
+    recovered: firstRecovery.recovered,
+    recoveryCapture: firstRecovery.recoveryCapture,
+    secondRecovery: {
+      duringLoss: secondRecovery.duringLoss,
+      recovered: secondRecovery.recovered,
+      recoveryCapture: secondRecovery.recoveryCapture,
+    },
     fresh: fresh.metrics,
     captureBefore,
-    recoveryCapture,
     changedPixels,
+    secondChangedPixels,
     browserErrors,
     freshErrors,
   });
   await freshPage.close();
   await page.close();
-  console.log("✓ WebGPU device loss replaces the device and preserves scene, time, and exact output");
+  console.log(
+    "✓ repeated WebGPU device loss advances GPU generations and preserves scene, time, and exact output",
+  );
 } catch (error) {
   await writeDiagnostics("failure", {
     browserVersion: browser?.version() ?? null,

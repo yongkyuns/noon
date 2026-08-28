@@ -579,15 +579,20 @@ impl TextResourceArena {
                 .entries
                 .get_mut(index)
                 .ok_or(TextResourceError::UnknownResource(id))?;
-            let previous = entry
+            entry
                 .value
-                .take()
+                .as_ref()
                 .ok_or(TextResourceError::UnknownResource(id))?;
-            entry.version = entry
+            let version = entry
                 .version
                 .checked_add(1)
                 .ok_or(TextResourceError::VersionExhausted(id))?;
-            (entry.version, previous)
+            let previous = entry
+                .value
+                .take()
+                .expect("text resource presence was preflighted");
+            entry.version = version;
+            (version, previous)
         };
 
         self.subtract_stats(previous.as_ref());
@@ -603,14 +608,19 @@ impl TextResourceArena {
                 .entries
                 .get_mut(index)
                 .ok_or(TextResourceError::UnknownResource(id))?;
-            let resource = entry
+            entry
                 .value
-                .take()
+                .as_ref()
                 .ok_or(TextResourceError::UnknownResource(id))?;
-            entry.version = entry
+            let version = entry
                 .version
                 .checked_add(1)
                 .ok_or(TextResourceError::VersionExhausted(id))?;
+            let resource = entry
+                .value
+                .take()
+                .expect("text resource presence was preflighted");
+            entry.version = version;
             resource
         };
 
@@ -766,6 +776,40 @@ mod tests {
         assert!(arena.get(first).is_none());
         assert_eq!(arena.get(second).unwrap().source.as_ref(), "x^2");
         assert_eq!(arena.stats().glyphs, 3);
+    }
+
+    #[test]
+    fn replacement_version_exhaustion_leaves_resource_and_stats_unchanged() {
+        let mut arena = TextResourceArena::new();
+        let inserted = arena.insert(sample_text("x")).unwrap();
+        arena.entries[inserted.id.get() as usize].version = u64::MAX;
+        let current = arena.current_handle(inserted.id).unwrap();
+        let stats = arena.stats();
+
+        assert_eq!(
+            arena.replace(inserted.id, sample_text("replacement")),
+            Err(TextResourceError::VersionExhausted(inserted.id))
+        );
+        assert_eq!(arena.current_handle(inserted.id), Some(current));
+        assert_eq!(arena.stats(), stats);
+        assert_eq!(arena.get(current).unwrap().source.as_ref(), "x");
+    }
+
+    #[test]
+    fn removal_version_exhaustion_leaves_resource_and_stats_unchanged() {
+        let mut arena = TextResourceArena::new();
+        let inserted = arena.insert(sample_text("xyz")).unwrap();
+        arena.entries[inserted.id.get() as usize].version = u64::MAX;
+        let current = arena.current_handle(inserted.id).unwrap();
+        let stats = arena.stats();
+
+        assert!(matches!(
+            arena.remove(inserted.id),
+            Err(TextResourceError::VersionExhausted(id)) if id == inserted.id
+        ));
+        assert_eq!(arena.current_handle(inserted.id), Some(current));
+        assert_eq!(arena.stats(), stats);
+        assert_eq!(arena.get(current).unwrap().source.as_ref(), "xyz");
     }
 
     #[test]

@@ -1,0 +1,134 @@
+name: Playground cross-browser matrix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/playground-cross-browser.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/playground-browser-matrix-smoke.mjs"
+      - "web/**"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/playground-cross-browser.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/playground-browser-matrix-smoke.mjs"
+      - "web/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playground-cross-browser-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build browser package
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+
+      - name: Upload browser package
+        uses: actions/upload-artifact@v4
+        with:
+          name: playground-cross-browser-web-pkg
+          path: web/pkg
+          if-no-files-found: error
+          retention-days: 1
+
+  browser:
+    name: ${{ matrix.browser }} / ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            profile: desktop-dpr1
+          - browser: firefox
+            profile: desktop-dpr2
+          - browser: webkit
+            profile: mobile-dpr2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: playground-cross-browser-web-pkg
+          path: web/pkg
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
+
+      - name: Install browser E2E dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Test public playground workflow
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
+        run: node scripts/playground-browser-matrix-smoke.mjs
+
+      - name: Upload playground diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playground-matrix-${{ matrix.browser }}-${{ matrix.profile }}
+          path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
+          if-no-files-found: error
+          retention-days: 7

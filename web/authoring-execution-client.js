@@ -1,3 +1,4 @@
+import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
 import { RetainedExecutionWorkerClient } from "./retained-execution-worker-client.js";
 
@@ -30,18 +31,23 @@ export class AuthoringExecutionClient {
   #transportMode = null;
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #onError;
+  #onRecoverableError;
   #resizeObserver = null;
   #transition = null;
 
-  constructor(canvas, { onError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("AuthoringExecutionClient requires an HTMLCanvasElement");
     }
     if (onError !== null && typeof onError !== "function") {
       throw new TypeError("AuthoringExecutionClient onError must be a function");
     }
+    if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
+      throw new TypeError("AuthoringExecutionClient onRecoverableError must be a function");
+    }
     this.#canvas = canvas;
     this.#onError = onError;
+    this.#onRecoverableError = onRecoverableError;
     this.#observeCanvas();
   }
 
@@ -157,16 +163,33 @@ export class AuthoringExecutionClient {
     return result;
   }
 
+  async pause() {
+    return this.#withStablePlayer((player) => player.pause());
+  }
+
+  async resume() {
+    return this.#withStablePlayer((player) => player.resume());
+  }
+
+  async seek(timeSeconds) {
+    return this.#withStablePlayer((player) => player.seek(timeSeconds));
+  }
+
   async restart() {
     return this.#withStablePlayer(async (player, mode) => {
-      const ready = await player.restart();
-      this.#canvas = player.canvas;
-      this.#mode = mode;
-      this.#rendererBackend = ready.render.backend;
-      this.#transportMode = ready.transportMode;
-      this.#observeCanvas();
-      this.#resizeCurrentCanvas();
-      return { ...ready, mode };
+      try {
+        const ready = await player.restart();
+        this.#canvas = player.canvas;
+        this.#mode = mode;
+        this.#rendererBackend = ready.render.backend;
+        this.#transportMode = ready.transportMode;
+        this.#observeCanvas();
+        this.#resizeCurrentCanvas();
+        return { ...ready, mode };
+      } catch (error) {
+        this.#adoptPlayerCanvas(player);
+        throw error;
+      }
     });
   }
 
@@ -199,7 +222,10 @@ export class AuthoringExecutionClient {
   }
 
   async #startLegacy(sceneJson, options) {
-    const player = new ExecutionWorkerClient(this.#canvas, { onError: this.#onError });
+    const player = new ExecutionWorkerClient(this.#canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
     try {
       const ready = await player.start(sceneJson, options);
       this.#player = player;
@@ -209,6 +235,7 @@ export class AuthoringExecutionClient {
       return ready;
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -238,13 +265,17 @@ export class AuthoringExecutionClient {
       };
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
 
   async #rebuildLegacy(sceneJson, { callbacks, authoringClient }) {
     const canvas = this.#replaceTransferredCanvas();
-    const player = new ExecutionWorkerClient(canvas, { onError: this.#onError });
+    const player = new ExecutionWorkerClient(canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
     try {
       const ready = await player.start(sceneJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
@@ -270,6 +301,7 @@ export class AuthoringExecutionClient {
       };
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -320,24 +352,20 @@ export class AuthoringExecutionClient {
 
   #replaceTransferredCanvas() {
     this.#player?.terminate();
-    const previous = this.#canvas;
-    const replacement = previous.cloneNode(false);
-    replacement.width = previous.width;
-    replacement.height = previous.height;
-    replacement.className = previous.className;
-    replacement.id = previous.id;
-    for (const attribute of previous.getAttributeNames()) {
-      if (attribute !== "width" && attribute !== "height" && attribute !== "class" && attribute !== "id") {
-        replacement.setAttribute(attribute, previous.getAttribute(attribute));
-      }
-    }
-    previous.replaceWith(replacement);
-    this.#canvas = replacement;
+    this.#canvas = replaceExecutionCanvas(this.#canvas);
     this.#player = null;
     this.#mode = null;
     this.#rendererBackend = "";
     this.#observeCanvas();
-    return replacement;
+    return this.#canvas;
+  }
+
+  #adoptPlayerCanvas(player) {
+    if (this.#canvas === player.canvas) {
+      return;
+    }
+    this.#canvas = player.canvas;
+    this.#observeCanvas();
   }
 
   #observeCanvas() {
