@@ -37,7 +37,11 @@ fn callback_snapshot_stays_local_in_a_large_native_scene() {
     let objects = frame["objects"]
         .as_array()
         .expect("callback frame objects must be an array");
-    assert_eq!(objects.len(), 1, "only callback-owned objects belong in the host snapshot");
+    assert_eq!(
+        objects.len(),
+        1,
+        "only callback-owned objects belong in the host snapshot"
+    );
     assert_eq!(objects[0]["object"], host_object.get());
 
     let invocations = frame["invocations"]
