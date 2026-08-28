@@ -1,7 +1,7 @@
 use noon_compile::CompiledScene;
 use noon_core::{
-    Easing, GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, Vec2,
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::{RuntimePatchStats, SceneInstance};
 
@@ -45,7 +45,7 @@ fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
                     to: 0.5,
                 },
                 timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
-                time_map: Default::default(),
+                time_map: CompositionTimeMap::identity(),
             })
         };
 
