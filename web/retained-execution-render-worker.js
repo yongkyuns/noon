@@ -1,5 +1,9 @@
 import init, { RetainedExecutionCanvasRenderer } from "./pkg/noon_web.js";
 import {
+  drainRendererGpuDiagnostics,
+  formatGpuDiagnostic,
+} from "./render-gpu-diagnostics.js";
+import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaReader,
@@ -46,11 +50,13 @@ async function handleMainMessage(message) {
         height = normalizedDimension(message.height);
         if (renderer !== null) {
           renderer.resize(width, height);
+          if (!drainGpuDiagnostics()) return;
           needsPresent = true;
           tryPresent();
         }
         return;
       case "metrics":
+        if (!drainGpuDiagnostics()) return;
         respond(message.requestId, { type: "metrics", metrics: currentMetrics() });
         return;
       case "stop":
@@ -117,6 +123,7 @@ function attachEngine(message) {
     retained: true,
     mixed: true,
     backend: renderer.rendererBackend(),
+    gpuGeneration: renderer.gpuGeneration(),
   });
 }
 
@@ -237,8 +244,10 @@ async function bootstrapRenderer(initial) {
       throw new Error("mixed retained execution renderer must begin from an applied snapshot");
     }
     renderer.resize(width, height);
+    if (!drainGpuDiagnostics()) return;
     needsPresent = true;
     tryPresent();
+    if (!drainGpuDiagnostics()) return;
     running = true;
     postMain({
       type: "ready",
@@ -246,6 +255,7 @@ async function bootstrapRenderer(initial) {
       retained: true,
       mixed: true,
       backend: renderer.rendererBackend(),
+      gpuGeneration: renderer.gpuGeneration(),
     });
     flushBootstrapQueue();
     drainTransport();
@@ -256,15 +266,16 @@ async function bootstrapRenderer(initial) {
 }
 
 function tryPresent() {
-  if (renderer === null || !needsPresent) {
+  if (renderer === null || !needsPresent || !drainGpuDiagnostics()) {
     return false;
   }
   if (!renderer.render()) {
+    drainGpuDiagnostics();
     return false;
   }
   needsPresent = false;
   presentedFrames += 1;
-  return true;
+  return drainGpuDiagnostics();
 }
 
 function flushBootstrapQueue() {
@@ -296,7 +307,7 @@ function scheduleFrame() {
 }
 
 function frame(timestamp) {
-  if (!running) {
+  if (!running || !drainGpuDiagnostics()) {
     return;
   }
   lastFrameTimestamp = timestamp;
@@ -308,8 +319,33 @@ function frame(timestamp) {
     flushBootstrapQueue();
     drainTransport();
   }
+  if (!running || !drainGpuDiagnostics()) {
+    return;
+  }
   renderPort.postMessage({ type: "tick", timestamp });
   scheduleFrame();
+}
+
+function drainGpuDiagnostics() {
+  if (renderer === null) return true;
+  try {
+    return drainRendererGpuDiagnostics(renderer, {
+      onRecoverable(diagnostic) {
+        postMain({
+          type: "recoverable_error",
+          owner: "render",
+          message: formatGpuDiagnostic(diagnostic),
+          diagnostic,
+        });
+      },
+      onFatal(diagnostic) {
+        fail(new Error(formatGpuDiagnostic(diagnostic)), null);
+      },
+    });
+  } catch (error) {
+    fail(error, null);
+    return false;
+  }
 }
 
 function currentMetrics() {
@@ -331,6 +367,7 @@ function currentMetrics() {
     mixed: true,
     transportMode,
     backend: renderer.rendererBackend(),
+    gpuGeneration: renderer.gpuGeneration(),
     time: renderer.time(),
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),
