@@ -786,6 +786,33 @@ impl EngineScenePlayer {
         Ok(())
     }
 
+    pub fn pause_playback(&mut self) {
+        self.clock.pause();
+    }
+
+    pub fn resume_playback(&mut self) {
+        self.clock.resume();
+    }
+
+    pub fn seek_playback_delta_json(
+        &mut self,
+        scene_time: f64,
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        let scene_time = self.clock.seek(scene_time)?;
+        self.player.seek(scene_time)?;
+        self.take_delta_json()
+    }
+
+    pub fn restart_playback_delta_json(
+        &mut self,
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        self.seek_playback_delta_json(0.0)
+    }
+
+    pub const fn is_paused(&self) -> bool {
+        self.clock.is_paused()
+    }
+
     pub fn apply_patch_batch_delta_json(
         &mut self,
         json: &str,
@@ -906,6 +933,36 @@ mod wasm {
         #[wasm_bindgen(js_name = setLoopDurationSeconds)]
         pub fn set_loop_duration_seconds(&mut self, duration: f64) -> Result<(), JsValue> {
             self.inner.set_loop_duration(duration).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pausePlayback)]
+        pub fn pause_playback(&mut self) {
+            self.inner.pause_playback();
+        }
+
+        #[wasm_bindgen(js_name = resumePlayback)]
+        pub fn resume_playback(&mut self) {
+            self.inner.resume_playback();
+        }
+
+        #[wasm_bindgen(js_name = seekPlaybackDeltaJson)]
+        pub fn seek_playback_delta_json(
+            &mut self,
+            scene_time: f64,
+        ) -> Result<Option<String>, JsValue> {
+            self.inner
+                .seek_playback_delta_json(scene_time)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = restartPlaybackDeltaJson)]
+        pub fn restart_playback_delta_json(&mut self) -> Result<Option<String>, JsValue> {
+            self.inner.restart_playback_delta_json().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = isPaused)]
+        pub fn is_paused(&self) -> bool {
+            self.inner.is_paused()
         }
 
         #[wasm_bindgen(js_name = applyPatchBatchDeltaJson)]
@@ -1170,6 +1227,65 @@ mod tests {
 
         player.tick_delta_json(3_100.0).unwrap();
         assert_eq!(player.time(), 0.0);
+        assert_eq!(player.next_patch_sequence(), 1);
+    }
+
+    #[test]
+    fn playback_controls_preserve_patch_sequence_and_seek_exactly() {
+        let mut player = EngineScenePlayer::new(&scene_json(), 4.0, 14).unwrap();
+        player.initial_delta_json().unwrap();
+        assert!(player.tick_delta_json(100.0).unwrap().is_none());
+        assert!(player.tick_delta_json(600.0).unwrap().is_some());
+        assert!((player.time() - 0.5).abs() < 1.0e-9);
+
+        let patch = PatchBatch::new(0, Vec::new());
+        player
+            .apply_patch_batch_delta_json(&encode_patch_batch(&patch).unwrap())
+            .unwrap();
+        assert_eq!(player.next_patch_sequence(), 1);
+
+        player.pause_playback();
+        assert!(player.is_paused());
+        assert!(player.tick_delta_json(5_600.0).unwrap().is_none());
+        assert!((player.time() - 0.5).abs() < 1.0e-9);
+
+        player.resume_playback();
+        assert!(!player.is_paused());
+        assert!(player.tick_delta_json(6_000.0).unwrap().is_none());
+        assert!((player.time() - 0.5).abs() < 1.0e-9);
+        assert!(player.tick_delta_json(6_250.0).unwrap().is_some());
+        assert!((player.time() - 0.75).abs() < 1.0e-9);
+
+        let seek: ExecutionDeltaEnvelope = serde_json::from_str(
+            &player
+                .seek_playback_delta_json(1.25)
+                .unwrap()
+                .expect("seek must update animated geometry"),
+        )
+        .unwrap();
+        assert!((seek.time - 1.25).abs() < 1.0e-9);
+        assert_eq!(player.next_patch_sequence(), 1);
+
+        let rewind: ExecutionDeltaEnvelope = serde_json::from_str(
+            &player
+                .seek_playback_delta_json(0.25)
+                .unwrap()
+                .expect("rewind must update animated geometry"),
+        )
+        .unwrap();
+        assert!((rewind.time - 0.25).abs() < 1.0e-9);
+        assert_eq!(player.next_patch_sequence(), 1);
+
+        player.pause_playback();
+        let restart: ExecutionDeltaEnvelope = serde_json::from_str(
+            &player
+                .restart_playback_delta_json()
+                .unwrap()
+                .expect("restart from nonzero time must produce a delta"),
+        )
+        .unwrap();
+        assert_eq!(restart.time, 0.0);
+        assert!(player.is_paused());
         assert_eq!(player.next_patch_sequence(), 1);
     }
 
