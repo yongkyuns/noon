@@ -1,0 +1,68 @@
+name: Fix render-worker GPU validation oracle
+
+on:
+  push:
+    branches:
+      - tmp/worker-gpu-validation-oracle-v2
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature script
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics-v2
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Make worker oracle deterministic and isolated
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/renderer-worker-webgpu-validation-error-smoke.mjs")
+          text = path.read_text()
+
+          def replace_once(old, new):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one replacement target, found {count}: {old[:100]!r}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '      const response = await fetch(`${baseUrl}/web/`);\n',
+              '      const response = await fetch(`${baseUrl}/web/execution-worker-smoke.html`);\n',
+          )
+          replace_once(
+              '  await page.goto(`${baseUrl}/web/`, { waitUntil: "load" });\n',
+              '  await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });\n',
+          )
+          replace_once(
+              '    document.body.innerHTML = "<canvas id=\'scene\' width=\'640\' height=\'360\'></canvas>";\n',
+              '',
+          )
+
+          old_wait = '''  await page.waitForFunction(\n    () =>\n      window.__noonValidationHarness.renderMessages.filter(\n        (message) => message?.channel === "noon.render" && message?.type === "recoverable_error",\n      ).length >= 1,\n    null,\n    { timeout: 10_000 },\n  );\n  await new Promise((resolve) => setTimeout(resolve, 250));\n\n'''
+          new_wait = '''  let diagnosticMetrics = null;\n  let recoverableCount = 0;\n  for (let attempt = 0; attempt < 40; attempt += 1) {\n    diagnosticMetrics = await renderMetrics(page, 150 + attempt);\n    recoverableCount = await page.evaluate(\n      () =>\n        window.__noonValidationHarness.renderMessages.filter(\n          (message) => message?.channel === "noon.render" && message?.type === "recoverable_error",\n        ).length,\n    );\n    if (recoverableCount >= 1) break;\n    await new Promise((resolve) => setTimeout(resolve, 10));\n  }\n  diagnostics.diagnosticMetrics = diagnosticMetrics;\n  assert.ok(\n    recoverableCount >= 1,\n    `worker control boundaries never surfaced the WebGPU validation diagnostic; last metrics=${JSON.stringify(diagnosticMetrics)}`,\n  );\n\n  // Cross several additional public worker boundaries to prove the mailbox is\n  // one-shot rather than merely delayed. No test-only production hook is needed.\n  for (let requestId = 190; requestId < 193; requestId += 1) {\n    await renderMetrics(page, requestId);\n  }\n\n'''
+          replace_once(old_wait, new_wait)
+
+          path.write_text(text)
+          PY
+
+          node --check scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          git diff --check
+          grep -q 'execution-worker-smoke.html' scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          grep -q 'worker control boundaries never surfaced' scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          ! grep -q 'document.body.innerHTML' scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          git commit -m "Make worker GPU validation oracle deterministic"
+          git push origin HEAD:fix/worker-gpu-validation-diagnostics-v2
