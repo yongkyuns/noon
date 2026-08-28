@@ -53,6 +53,7 @@ async function handleMainMessage(message) {
       case "restart_playback":
       case "apply_patch":
       case "configure_callbacks":
+      case "request_callback_phase":
         enqueueControl(message);
         return;
       case "attach_host_port":
@@ -380,6 +381,18 @@ function executeControl(message) {
         type: "callbacks_configured",
         enabled: hostCallbacks !== null,
         generation: hostGeneration,
+      });
+      return;
+    }
+    case "request_callback_phase": {
+      if (hostCallbacks === null || hostPort === null) {
+        throw new Error("callback phase synchronization requires configured host callbacks");
+      }
+      requestLatestHostPhase();
+      respond(message.requestId, {
+        type: "callback_phase_requested",
+        generation: hostGeneration,
+        hostRequestId: hostInFlight?.requestId ?? null,
       });
       return;
     }

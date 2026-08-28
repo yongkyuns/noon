@@ -169,7 +169,7 @@ async function runMode(browser, transportMode) {
   assert.equal(afterRetime.nextPatchSequence, "1");
 
   const beforeStall = await page.evaluate(() => window.executionSmoke.client.metrics());
-  const stallStarted = await page.evaluate(() => {
+  await page.evaluate(() => {
     const worker = new Worker(
       URL.createObjectURL(
         new Blob(
@@ -182,7 +182,6 @@ async function runMode(browser, transportMode) {
     );
     window.executionSmoke.hostStallWorker = worker;
     worker.postMessage(500);
-    return performance.now();
   });
   await page.waitForTimeout(220);
   const duringStall = await page.evaluate(() => window.executionSmoke.client.metrics());
@@ -191,18 +190,41 @@ async function runMode(browser, transportMode) {
     `${transportMode}: render worker stopped while an isolated host worker was stalled`,
   );
 
-  const restarted = await page.evaluate(() => window.executionSmoke.client.restart());
-  assert.equal(restarted.session, 2);
-  assert.equal(restarted.transportMode, transportMode);
-  await page.waitForTimeout(300);
-  const afterRestart = await page.evaluate(() => window.executionSmoke.client.metrics());
-  assert.equal(afterRestart.metrics.ready, true);
-  assert.equal(afterRestart.metrics.objectCount, 4);
-  assert.ok(afterRestart.metrics.presentedFrames >= 1);
+  const reconnected = await page.evaluate(async () => {
+    const client = window.executionSmoke.client;
+    const canvas = client.canvas;
+    const paused = await client.pause();
+    const beforeReconnect = await client.metrics();
+    const ready = await client.restart({ failedOwner: "engine" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const afterReconnect = await client.metrics();
+    const state = await client.state();
+    return {
+      ready,
+      paused,
+      state,
+      sameCanvas: client.canvas === canvas,
+      presentedBefore: beforeReconnect.metrics.presentedFrames,
+      presentedAfter: afterReconnect.metrics.presentedFrames,
+      metrics: afterReconnect.metrics,
+    };
+  });
+  assert.equal(reconnected.ready.session, 2);
+  assert.equal(reconnected.ready.transportMode, transportMode);
+  assert.equal(reconnected.paused.playing, false);
+  assert.equal(reconnected.state.playing, false, `${transportMode}: engine reconnect lost paused mode`);
+  assert.equal(reconnected.sameCanvas, true, `${transportMode}: engine reconnect replaced canvas`);
   assert.ok(
-    afterRestart.metrics.time >= 0 && afterRestart.metrics.time < 0.9,
-    `${transportMode}: restart forgot the authored loop duration`,
+    reconnected.presentedAfter >= reconnected.presentedBefore,
+    `${transportMode}: engine reconnect reset renderer presentation history`,
   );
+  assert.equal(reconnected.metrics.ready, true);
+  assert.equal(reconnected.metrics.objectCount, 4);
+  assert.ok(
+    reconnected.metrics.time >= 0 && reconnected.metrics.time < 0.9,
+    `${transportMode}: engine reconnect forgot the authored loop duration`,
+  );
+  await page.evaluate(() => window.executionSmoke.client.resume());
 
   const clientErrors = await page.evaluate(() => window.executionSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
@@ -214,7 +236,7 @@ async function runMode(browser, transportMode) {
   await page.close();
   console.log(
     `✓ execution workers ${transportMode}: ${before.metrics.backend}, ` +
-      `${before.metrics.presentedFrames} frames before restart`,
+      `${reconnected.presentedAfter} frames with canvas-preserving engine reconnect`,
   );
 }
 
