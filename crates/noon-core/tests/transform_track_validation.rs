@@ -24,10 +24,12 @@ fn bulk_construction_rejects_non_finite_transform_track_snapshot() {
 
     assert!(matches!(
         SceneDefinition::from_parts(vec![object], vec![track]),
-        Err(PatchError::InvalidTrack(TimelineError::InvalidObjectValue {
-            property: Property::Transform,
-            endpoint: TrackValueEndpoint::To,
-            field: ObjectStateField::Style,
-        }))
+        Err(PatchError::InvalidTrack(
+            TimelineError::InvalidObjectValue {
+                property: Property::Transform,
+                endpoint: TrackValueEndpoint::To,
+                field: ObjectStateField::Style,
+            }
+        ))
     ));
 }
