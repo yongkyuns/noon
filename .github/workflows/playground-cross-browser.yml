@@ -74,11 +74,13 @@ jobs:
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
 
-      - name: Upload browser package
+      - name: Upload browser runtime assets
         uses: actions/upload-artifact@v4
         with:
-          name: playground-cross-browser-web-pkg
-          path: web/pkg
+          name: playground-cross-browser-web-runtime
+          path: |
+            web/pkg
+            web/python/compat-bundle.json
           if-no-files-found: error
           retention-days: 1
 
@@ -100,11 +102,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download browser package
+      - name: Download browser runtime assets
         uses: actions/download-artifact@v4
         with:
-          name: playground-cross-browser-web-pkg
-          path: web/pkg
+          name: playground-cross-browser-web-runtime
+          path: web
 
       - name: Cache Playwright browser
         uses: actions/cache@v4
