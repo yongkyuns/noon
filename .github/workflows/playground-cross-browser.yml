@@ -8,6 +8,7 @@ on:
       - "Cargo.lock"
       - "crates/**"
       - "scripts/build-web-demo.sh"
+      - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "web/**"
   push:
@@ -19,6 +20,7 @@ on:
       - "Cargo.lock"
       - "crates/**"
       - "scripts/build-web-demo.sh"
+      - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "web/**"
   workflow_dispatch:
@@ -80,7 +82,8 @@ jobs:
           name: playground-cross-browser-web-runtime
           path: |
             web/pkg
-            web/python/compat-bundle.json
+            web/python-worker.js
+            web/python/compat-bundle.*.json
           if-no-files-found: error
           retention-days: 1
 

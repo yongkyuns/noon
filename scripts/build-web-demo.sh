@@ -5,13 +5,14 @@ set -euo pipefail
 noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
-node scripts/build-python-compat-bundle.mjs
+node scripts/build-python-worker.mjs
 node --check web/main.js
 node --check web/playground-generation.js
 node --check web/example-gallery.js
 node --check web/authoring-client.js
 node --check web/python-editor.js
 node --check web/python-compat-modules.js
+node --check web/python-worker.source.js
 node --check web/python-worker.js
 node --check web/native-inputs.js
 node --check web/execution-transport.js
@@ -25,7 +26,7 @@ node --check web/retained-execution-worker-client.js
 node --check web/authoring-execution-client.js
 node --check web/noon-authoring.js
 node --check web/js/examples/manim-quickstart-equivalents.js
-node --check scripts/build-python-compat-bundle.mjs
+node --check scripts/build-python-worker.mjs
 node --check scripts/execution-worker-smoke.mjs
 node --check scripts/execution-worker-host-smoke.mjs
 node --check scripts/retained-execution-worker-smoke.mjs

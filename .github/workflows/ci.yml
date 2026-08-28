@@ -104,7 +104,8 @@ jobs:
           name: web-pkg
           path: |
             web/pkg
-            web/python/compat-bundle.json
+            web/python-worker.js
+            web/python/compat-bundle.*.json
           if-no-files-found: error
           retention-days: 1
 
