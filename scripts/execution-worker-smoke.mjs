@@ -80,7 +80,7 @@ async function startClient(page, transportMode) {
         errors.push(`${owner}: ${error}`);
       },
     });
-    window.executionSmoke = { client, errors };
+    window.executionSmoke = { client, errors, originalCanvas: canvas };
     const ready = await client.start(wasm.demoSceneJson(), {
       loopDurationSeconds: 4,
       transportMode: mode,
@@ -168,6 +168,61 @@ async function runMode(browser, transportMode) {
   );
   assert.equal(afterRetime.nextPatchSequence, "1");
 
+  const paused = await page.evaluate(() => window.executionSmoke.client.pausePlayback());
+  assert.equal(paused.paused, true);
+  assert.equal(paused.nextPatchSequence, "1");
+  const pausedTime = paused.time;
+  await page.waitForTimeout(220);
+  const frozen = await page.evaluate(() => window.executionSmoke.client.state());
+  assert.equal(frozen.paused, true);
+  assert.equal(frozen.time, pausedTime, `${transportMode}: paused playhead advanced`);
+  assert.equal(frozen.nextPatchSequence, "1");
+
+  const sought = await page.evaluate(() => window.executionSmoke.client.seekPlayback(0.25));
+  assert.equal(sought.paused, true);
+  assert.equal(sought.time, 0.25);
+  assert.equal(sought.nextPatchSequence, "1");
+  await page.waitForTimeout(120);
+  const soughtFrozen = await page.evaluate(() => window.executionSmoke.client.state());
+  assert.equal(soughtFrozen.time, 0.25, `${transportMode}: paused seek did not remain exact`);
+
+  const resumed = await page.evaluate(() => window.executionSmoke.client.resumePlayback());
+  assert.equal(resumed.paused, false);
+  assert.equal(resumed.time, 0.25, `${transportMode}: resume charged paused wall time`);
+  await page.waitForTimeout(40);
+  const repaused = await page.evaluate(() => window.executionSmoke.client.pausePlayback());
+  assert.equal(repaused.paused, true);
+  assert.ok(
+    repaused.time >= 0.25 && repaused.time < 0.45,
+    `${transportMode}: resumed playhead caught up instead of re-anchoring (${repaused.time})`,
+  );
+  assert.equal(repaused.nextPatchSequence, "1");
+
+  const seekBeforeRestart = await page.evaluate(() =>
+    window.executionSmoke.client.seekPlayback(0.65),
+  );
+  assert.equal(seekBeforeRestart.time, 0.65);
+  assert.equal(seekBeforeRestart.paused, true);
+  const playbackRestart = await page.evaluate(() => window.executionSmoke.client.restartPlayback());
+  assert.equal(playbackRestart.time, 0);
+  assert.equal(playbackRestart.paused, true);
+  assert.equal(playbackRestart.nextPatchSequence, "1");
+  const sameCanvas = await page.evaluate(
+    () => window.executionSmoke.client.canvas === window.executionSmoke.originalCanvas,
+  );
+  assert.equal(sameCanvas, true, `${transportMode}: playback restart replaced the canvas`);
+
+  const invalidSeek = await page.evaluate(async () => {
+    try {
+      await window.executionSmoke.client.seekPlayback(-0.1);
+      return null;
+    } catch (error) {
+      return String(error);
+    }
+  });
+  assert.match(invalidSeek, /playback scene time must be finite and non-negative/);
+
+  await page.evaluate(() => window.executionSmoke.client.resumePlayback());
   const beforeStall = await page.evaluate(() => window.executionSmoke.client.metrics());
   const stallStarted = await page.evaluate(() => {
     const worker = new Worker(
@@ -184,6 +239,7 @@ async function runMode(browser, transportMode) {
     worker.postMessage(500);
     return performance.now();
   });
+  assert.ok(Number.isFinite(stallStarted));
   await page.waitForTimeout(220);
   const duringStall = await page.evaluate(() => window.executionSmoke.client.metrics());
   assert.ok(
