@@ -199,10 +199,7 @@ impl RetainedAuthoringEnginePlayer {
         timestamp_ms: f64,
     ) -> Result<Option<String>, RetainedAuthoringPlayerError> {
         let scene_time = self.clock.scene_time(timestamp_ms)?;
-        self.player
-            .evaluate_delta(scene_time)?
-            .map(|delta| serde_json::to_string(&delta).map_err(RetainedAuthoringPlayerError::from))
-            .transpose()
+        self.evaluate_scene_time_delta_json(scene_time)
     }
 
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), RetainedAuthoringPlayerError> {
@@ -210,8 +207,48 @@ impl RetainedAuthoringEnginePlayer {
         Ok(())
     }
 
+    /// Freeze logical playback without changing the retained scene/resource generation.
+    pub fn pause_playback(&mut self) {
+        self.clock.pause();
+    }
+
+    /// Resume from the frozen logical phase. The next browser tick re-anchors wall time.
+    pub fn resume_playback(&mut self) {
+        self.clock.resume();
+    }
+
+    /// Evaluate an exact logical scene time immediately, without replaying intermediate frames.
+    pub fn seek_playback_delta_json(
+        &mut self,
+        scene_time: f64,
+    ) -> Result<Option<String>, RetainedAuthoringPlayerError> {
+        let scene_time = self.clock.seek(scene_time)?;
+        self.evaluate_scene_time_delta_json(scene_time)
+    }
+
+    /// Return to scene time zero while preserving the current paused/running state.
+    pub fn restart_playback_delta_json(
+        &mut self,
+    ) -> Result<Option<String>, RetainedAuthoringPlayerError> {
+        self.seek_playback_delta_json(0.0)
+    }
+
+    pub const fn is_paused(&self) -> bool {
+        self.clock.is_paused()
+    }
+
     pub fn time(&self) -> f64 {
         self.player.frame().time
+    }
+
+    fn evaluate_scene_time_delta_json(
+        &mut self,
+        scene_time: f64,
+    ) -> Result<Option<String>, RetainedAuthoringPlayerError> {
+        self.player
+            .evaluate_delta(scene_time)?
+            .map(|delta| serde_json::to_string(&delta).map_err(RetainedAuthoringPlayerError::from))
+            .transpose()
     }
 }
 
@@ -333,6 +370,36 @@ mod wasm {
         #[wasm_bindgen(js_name = setLoopDurationSeconds)]
         pub fn set_loop_duration_seconds(&mut self, duration: f64) -> Result<(), JsValue> {
             self.inner.set_loop_duration(duration).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = pausePlayback)]
+        pub fn pause_playback(&mut self) {
+            self.inner.pause_playback();
+        }
+
+        #[wasm_bindgen(js_name = resumePlayback)]
+        pub fn resume_playback(&mut self) {
+            self.inner.resume_playback();
+        }
+
+        #[wasm_bindgen(js_name = seekPlaybackDeltaJson)]
+        pub fn seek_playback_delta_json(
+            &mut self,
+            scene_time: f64,
+        ) -> Result<Option<String>, JsValue> {
+            self.inner
+                .seek_playback_delta_json(scene_time)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = restartPlaybackDeltaJson)]
+        pub fn restart_playback_delta_json(&mut self) -> Result<Option<String>, JsValue> {
+            self.inner.restart_playback_delta_json().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = isPaused)]
+        pub fn is_paused(&self) -> bool {
+            self.inner.is_paused()
         }
 
         #[wasm_bindgen(js_name = legacySceneJson)]
@@ -542,5 +609,77 @@ mod tests {
         assert!(!engine.resource_bundle_bytes().is_empty());
         assert_eq!(engine.legacy_scene_json(), legacy_json);
         assert_eq!(engine.retained_document_json(), retained_json);
+    }
+
+    #[test]
+    fn retained_engine_playback_controls_preserve_resource_generation_and_exact_phase() {
+        let mut legacy = SceneDefinition::new();
+        let circle = legacy.add(GeometryRef::circle(0.25));
+        legacy
+            .animate_position(
+                circle,
+                Vec2::ZERO,
+                Vec2::new(2.0, 0.0),
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            )
+            .unwrap();
+        let text_id = ObjectId::new(1_u64 << 52);
+        let retained = text_document("controls", false, 1, text_id);
+        let legacy_json = noon_ir::encode_scene(&legacy).unwrap();
+        let retained_json = retained.to_json().unwrap();
+        let mut engine =
+            RetainedAuthoringEnginePlayer::new(&legacy_json, &retained_json, 4.0, 32).unwrap();
+        let resources = engine.resource_bundle_bytes().to_vec();
+
+        engine.initial_delta_json().unwrap();
+        assert!(engine.tick_delta_json(100.0).unwrap().is_none());
+        assert!(engine.tick_delta_json(600.0).unwrap().is_some());
+        assert!((engine.time() - 0.5).abs() < 1.0e-9);
+
+        engine.pause_playback();
+        assert!(engine.is_paused());
+        assert!(engine.tick_delta_json(5_600.0).unwrap().is_none());
+        assert!((engine.time() - 0.5).abs() < 1.0e-9);
+
+        engine.resume_playback();
+        assert!(!engine.is_paused());
+        assert!(engine.tick_delta_json(6_000.0).unwrap().is_none());
+        assert!((engine.time() - 0.5).abs() < 1.0e-9);
+        assert!(engine.tick_delta_json(6_250.0).unwrap().is_some());
+        assert!((engine.time() - 0.75).abs() < 1.0e-9);
+
+        let seek: RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &engine
+                .seek_playback_delta_json(1.25)
+                .unwrap()
+                .expect("forward seek must change animated geometry"),
+        )
+        .unwrap();
+        assert!((seek.time - 1.25).abs() < 1.0e-9);
+        assert!(!seek.snapshot);
+        assert!((engine.time() - 1.25).abs() < 1.0e-9);
+
+        let rewind: RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &engine
+                .seek_playback_delta_json(0.25)
+                .unwrap()
+                .expect("backward seek must resynchronize retained runtime"),
+        )
+        .unwrap();
+        assert!((rewind.time - 0.25).abs() < 1.0e-9);
+        assert!(rewind.snapshot);
+        assert_eq!(engine.resource_bundle_bytes(), resources);
+
+        engine.pause_playback();
+        let restart: RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &engine
+                .restart_playback_delta_json()
+                .unwrap()
+                .expect("restart from nonzero time must produce a delta"),
+        )
+        .unwrap();
+        assert_eq!(restart.time, 0.0);
+        assert!(engine.is_paused(), "restart preserves transport play/pause state");
+        assert_eq!(engine.resource_bundle_bytes(), resources);
     }
 }

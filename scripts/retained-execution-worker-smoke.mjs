@@ -170,6 +170,7 @@ async function runMode(browser, transportMode) {
   assert.ok(before.metrics.bytesUploaded > 0, `${transportMode}: mixed retained scene uploaded no GPU data`);
   assert.equal(before.engineMetrics.retained, true);
   assert.equal(before.engineMetrics.mixed, true);
+  assert.equal(before.engineMetrics.paused, false);
   assert.equal(before.engineMetrics.resourceBundleTransfers, 1);
   assert.ok(before.engineMetrics.resourceBundleBytes > 0);
   assert.ok(before.engineMetrics.time > 0, `${transportMode}: mixed retained engine playhead did not advance`);
@@ -182,6 +183,56 @@ async function runMode(browser, transportMode) {
   assert.deepEqual(retainedDocument.objects.map((object) => object.object), [textA, textB]);
   assert.deepEqual(retainedDocument.objects.map((object) => object.order), [1, 4]);
   assert.equal(state.nextPatchSequence, "0");
+  assert.equal(state.paused, false);
+
+  const paused = await page.evaluate(() => window.retainedExecutionSmoke.client.pausePlayback());
+  assert.equal(paused.operation, "pause_playback");
+  assert.equal(paused.paused, true);
+  const pausedTime = paused.time;
+  await page.waitForTimeout(350);
+  const stillPaused = await page.evaluate(() => window.retainedExecutionSmoke.client.state());
+  assert.equal(stillPaused.paused, true);
+  assert.equal(stillPaused.time, pausedTime, `${transportMode}: paused playhead advanced`);
+
+  const sought = await page.evaluate(() => window.retainedExecutionSmoke.client.seekPlayback(1.25));
+  assert.equal(sought.operation, "seek_playback");
+  assert.equal(sought.paused, true);
+  assert.ok(Math.abs(sought.time - 1.25) < 1e-9, `${transportMode}: seek was not exact`);
+  await page.waitForTimeout(100);
+  const afterSeek = await page.evaluate(() => window.retainedExecutionSmoke.client.metrics());
+  assert.equal(afterSeek.engineMetrics.paused, true);
+  assert.ok(Math.abs(afterSeek.engineMetrics.time - 1.25) < 1e-9);
+  assert.equal(afterSeek.engineMetrics.resourceBundleTransfers, 1);
+  assert.equal(afterSeek.metrics.objectCount, 6);
+
+  const restartedPlayback = await page.evaluate(() =>
+    window.retainedExecutionSmoke.client.restartPlayback(),
+  );
+  assert.equal(restartedPlayback.operation, "restart_playback");
+  assert.equal(restartedPlayback.paused, true);
+  assert.equal(restartedPlayback.time, 0);
+
+  const resumed = await page.evaluate(() => window.retainedExecutionSmoke.client.resumePlayback());
+  assert.equal(resumed.operation, "resume_playback");
+  assert.equal(resumed.paused, false);
+  assert.equal(resumed.time, 0);
+  await page.waitForTimeout(250);
+  const afterResume = await page.evaluate(() => window.retainedExecutionSmoke.client.state());
+  assert.equal(afterResume.paused, false);
+  assert.ok(
+    afterResume.time > 0 && afterResume.time < 0.75,
+    `${transportMode}: resume caught up across paused wall time: ${afterResume.time}`,
+  );
+
+  const invalidSeek = await page.evaluate(async () => {
+    try {
+      await window.retainedExecutionSmoke.client.seekPlayback(-0.1);
+      return null;
+    } catch (error) {
+      return String(error);
+    }
+  });
+  assert.match(invalidSeek, /finite and non-negative/);
 
   const retimed = await page.evaluate(() =>
     window.retainedExecutionSmoke.client.setLoopDurationSeconds(0.9),
@@ -193,6 +244,8 @@ async function runMode(browser, transportMode) {
   assert.equal(afterRetime.engineMetrics.resourceBundleTransfers, 1);
   assert.equal(afterRetime.metrics.objectCount, 6);
 
+  // `restart()` remains the separate worker/canvas recovery operation. Playback restart
+  // above must not increment the session; recovery deliberately creates session 2.
   const restarted = await page.evaluate(() => window.retainedExecutionSmoke.client.restart());
   assert.equal(restarted.session, 2);
   assert.equal(restarted.transportMode, transportMode);
@@ -202,6 +255,7 @@ async function runMode(browser, transportMode) {
   const afterRestart = await page.evaluate(() => window.retainedExecutionSmoke.client.metrics());
   assert.equal(afterRestart.metrics.ready, true);
   assert.equal(afterRestart.metrics.objectCount, 6);
+  assert.equal(afterRestart.engineMetrics.paused, false);
   assert.equal(afterRestart.engineMetrics.resourceBundleTransfers, 1);
   assert.ok(afterRestart.engineMetrics.resourceBundleBytes > 0);
 
@@ -212,7 +266,7 @@ async function runMode(browser, transportMode) {
   await page.close();
   console.log(
     `✓ mixed retained execution workers ${transportMode}: ${before.metrics.backend}, ` +
-      `${before.engineMetrics.resourceBundleBytes} resource bytes`,
+      `${before.engineMetrics.resourceBundleBytes} resource bytes + deterministic playback controls`,
   );
 }
 

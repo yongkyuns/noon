@@ -15,6 +15,7 @@ let transportMode = null;
 let transport = null;
 let player = null;
 let latestTick = null;
+let controlQueue = [];
 let initialized = false;
 let stopped = false;
 let resourceBundleBytes = 0;
@@ -31,16 +32,18 @@ async function handleMainMessage(message) {
         await initialize(message);
         return;
       case "set_loop_duration":
-        requireInitialized();
-        validateLoopDuration(message.loopDurationSeconds);
-        player.setLoopDurationSeconds(message.loopDurationSeconds);
-        respond(message.requestId, runtimeResult("set_loop_duration"));
+      case "pause_playback":
+      case "resume_playback":
+      case "seek_playback":
+      case "restart_playback":
+        enqueueControl(message);
         return;
       case "state":
         requireInitialized();
         respond(message.requestId, {
           type: "state",
           time: player.time(),
+          paused: player.isPaused(),
           nextPatchSequence: "0",
           sceneJson: player.legacySceneJson(),
           retainedDocumentJson: player.retainedDocumentJson(),
@@ -54,6 +57,7 @@ async function handleMainMessage(message) {
             retained: true,
             mixed: true,
             time: player.time(),
+            paused: player.isPaused(),
             resourceBundleBytes,
             resourceBundleTransfers: 1,
           },
@@ -69,6 +73,7 @@ async function handleMainMessage(message) {
         );
       case "stop":
         stopped = true;
+        controlQueue = [];
         latestTick = null;
         renderPort?.close?.();
         self.close();
@@ -172,13 +177,34 @@ function handleRenderMessage(message) {
   }
 }
 
+function enqueueControl(message) {
+  requireInitialized();
+  if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) {
+    throw new Error("mixed retained engine request ID must be a non-negative safe integer");
+  }
+  controlQueue.push(message);
+  drainWork();
+}
+
 function drainWork() {
   if (!initialized || stopped || player === null || transport === null) {
     return;
   }
-  if (latestTick === null || !transportCanSend()) {
+
+  while (controlQueue.length > 0 && transportCanSend()) {
+    const message = controlQueue.shift();
+    try {
+      executeControl(message);
+    } catch (error) {
+      fail(error, message.requestId);
+      return;
+    }
+  }
+
+  if (controlQueue.length > 0 || latestTick === null || !transportCanSend()) {
     return;
   }
+
   const timestamp = latestTick;
   latestTick = null;
   try {
@@ -188,6 +214,51 @@ function drainWork() {
     }
   } catch (error) {
     fail(error, null);
+  }
+}
+
+function executeControl(message) {
+  switch (message.type) {
+    case "set_loop_duration":
+      validateLoopDuration(message.loopDurationSeconds);
+      player.setLoopDurationSeconds(message.loopDurationSeconds);
+      respond(message.requestId, runtimeResult("set_loop_duration"));
+      return;
+    case "pause_playback":
+      // A queued RAF timestamp may have arrived before this user command but not yet
+      // reached the engine because of transport backpressure. Drop it at the control
+      // barrier so playback freezes at the last actually presented logical frame.
+      latestTick = null;
+      player.pausePlayback();
+      respond(message.requestId, runtimeResult("pause_playback"));
+      return;
+    case "resume_playback":
+      // The shared clock intentionally re-anchors on the next post-command RAF.
+      latestTick = null;
+      player.resumePlayback();
+      respond(message.requestId, runtimeResult("resume_playback"));
+      return;
+    case "seek_playback": {
+      validateSceneTime(message.sceneTime);
+      latestTick = null;
+      const delta = player.seekPlaybackDeltaJson(message.sceneTime);
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, runtimeResult("seek_playback"));
+      return;
+    }
+    case "restart_playback": {
+      latestTick = null;
+      const delta = player.restartPlaybackDeltaJson();
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, runtimeResult("restart_playback"));
+      return;
+    }
+    default:
+      throw new Error(`unknown queued mixed retained engine command ${message.type}`);
   }
 }
 
@@ -221,6 +292,7 @@ function runtimeResult(operation) {
     type: "result",
     operation,
     time: player.time(),
+    paused: player.isPaused(),
     nextPatchSequence: "0",
     sceneJson: player.legacySceneJson(),
     retainedDocumentJson: player.retainedDocumentJson(),
@@ -263,6 +335,12 @@ function validateMainMessage(message) {
 function validateLoopDuration(duration) {
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error("mixed retained execution loop duration must be positive and finite");
+  }
+}
+
+function validateSceneTime(sceneTime) {
+  if (!Number.isFinite(sceneTime) || sceneTime < 0) {
+    throw new Error("mixed retained playback scene time must be finite and non-negative");
   }
 }
 
