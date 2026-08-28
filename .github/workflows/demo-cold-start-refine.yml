@@ -1,0 +1,112 @@
+name: Demo cold-start refine
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Refine concurrent bootstrap failure handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main_path = Path("web/main.js")
+          main = main_path.read_text()
+          old = '''    () => {
+              if (authoringClient === client && client.terminated) {
+                authoringClient = null;
+              }
+              status.dataset.authoringWarmup = "failed";
+            },
+          );
+          '''
+          new = '''    () => {
+              if (authoringClient !== client) return;
+              if (client.terminated) {
+                authoringClient = null;
+              }
+              status.dataset.authoringWarmup = "failed";
+            },
+          );
+          '''
+          if main.count(old) != 1:
+              raise SystemExit("warmup failure handler shape changed")
+          main_path.write_text(main.replace(old, new))
+
+          worker_path = Path("web/python-worker.js")
+          worker = worker_path.read_text()
+          source_end = '''  ]);
+            await noonWebReady;
+            const authoringStore = new WasmAuthoringStore();
+          '''
+          source_replacement = '''  ]);
+            const startupResourcesReady = Promise.all([
+              noonWebReady,
+              pyodideReady,
+              compatibilitySourcesReady,
+            ]);
+            const [, pyodide, compatibilitySources] = await startupResourcesReady;
+            const authoringStore = new WasmAuthoringStore();
+          '''
+          if worker.count(source_end) != 1:
+              raise SystemExit("worker startup barrier shape changed")
+          worker = worker.replace(source_end, source_replacement)
+          if worker.count("  const pyodide = await pyodideReady;\n") != 1:
+              raise SystemExit("expected one delayed Pyodide await")
+          worker = worker.replace("  const pyodide = await pyodideReady;\n", "")
+          if worker.count("  ] = await compatibilitySourcesReady;\n") != 1:
+              raise SystemExit("expected one delayed compatibility-source await")
+          worker = worker.replace(
+              "  ] = await compatibilitySourcesReady;\n",
+              "  ] = compatibilitySources;\n",
+          )
+          worker_path.write_text(worker)
+
+          test_path = Path("web/playground-startup.test.mjs")
+          test = test_path.read_text()
+          test = test.replace(
+              'const firstBarrier = worker.indexOf("await noonWebReady;", initializeStart);\n'
+              'assert.ok(firstBarrier > initializeStart, "Noon WASM readiness must remain an explicit barrier");\n',
+              'const firstBarrier = worker.indexOf("await startupResourcesReady;", initializeStart);\n'
+              'assert.ok(firstBarrier > initializeStart, "startup resources must share one handled readiness barrier");\n',
+          )
+          test = test.replace(
+              '  "const compatibilitySourcesReady = Promise.all([",\n',
+              '  "const compatibilitySourcesReady = Promise.all([",\n'
+              '  "const startupResourcesReady = Promise.all([",\n',
+          )
+          test = test.replace(
+              'assert.doesNotMatch(worker, /await initNoonWeb\\(\\)/, "Noon WASM must not serialize Pyodide startup");\n'
+              'assert.doesNotMatch(worker, /await loadPyodide\\(\\)/, "Pyodide must be started before Noon WASM is awaited");\n',
+              'assert.doesNotMatch(worker, /await initNoonWeb\\(\\)/, "Noon WASM must not serialize Pyodide startup");\n'
+              'assert.doesNotMatch(worker, /await loadPyodide\\(\\)/, "Pyodide must not serialize Noon WASM startup");\n'
+              'assert.doesNotMatch(worker, /await (?:noonWebReady|pyodideReady|compatibilitySourcesReady)/, "independent startup promises must be handled by the shared barrier");\n',
+          )
+          test_path.write_text(test)
+          PY
+
+      - name: Validate refined startup overlap
+        run: |
+          node --check web/main.js
+          node --check web/python-worker.js
+          node --test web/playground-startup.test.mjs
+          node --test web/authoring-client.test.mjs
+
+      - name: Commit refinement
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/main.js web/python-worker.js web/playground-startup.test.mjs
+          git commit -m "Handle concurrent startup failures atomically"
+          git push origin HEAD:${{ github.head_ref }}
