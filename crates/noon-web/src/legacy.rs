@@ -422,7 +422,7 @@ mod wasm {
         rc::Rc,
         sync::{
             atomic::{AtomicU32, Ordering},
-            Arc,
+            Arc, Mutex,
         },
     };
 
@@ -441,6 +441,118 @@ mod wasm {
     const GPU_QUERY_BYTES: u64 = 16;
     const GPU_PROFILE_SLOT_COUNT: usize = 4;
     const GPU_PROFILE_SAMPLE_CAPACITY: usize = 512;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GpuUncapturedErrorKind {
+        Validation,
+        OutOfMemory,
+        Internal,
+    }
+
+    impl GpuUncapturedErrorKind {
+        const fn label(self) -> &'static str {
+            match self {
+                Self::Validation => "validation",
+                Self::OutOfMemory => "out-of-memory",
+                Self::Internal => "internal",
+            }
+        }
+
+        const fn is_fatal(self) -> bool {
+            !matches!(self, Self::Validation)
+        }
+    }
+
+    #[derive(Debug)]
+    struct GpuUncapturedError {
+        generation: u32,
+        kind: GpuUncapturedErrorKind,
+        message: String,
+    }
+
+    impl GpuUncapturedError {
+        fn from_wgpu(generation: u32, backend: wgpu::Backend, error: wgpu::Error) -> Self {
+            let kind = match &error {
+                wgpu::Error::Validation { .. } => GpuUncapturedErrorKind::Validation,
+                wgpu::Error::OutOfMemory { .. } => GpuUncapturedErrorKind::OutOfMemory,
+                wgpu::Error::Internal { .. } => GpuUncapturedErrorKind::Internal,
+            };
+            let backend = match backend {
+                wgpu::Backend::BrowserWebGpu => "WebGPU",
+                wgpu::Backend::Gl => "WebGL2",
+                _ => "GPU",
+            };
+            Self {
+                generation,
+                kind,
+                message: format!(
+                    "{backend} generation {generation} {} error: {error}",
+                    kind.label()
+                ),
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct GpuDeviceSignals {
+        lost_generation: Arc<AtomicU32>,
+        uncaptured_error: Arc<Mutex<Option<GpuUncapturedError>>>,
+    }
+
+    impl GpuDeviceSignals {
+        fn lost_generation(&self) -> u32 {
+            self.lost_generation.load(Ordering::Acquire)
+        }
+
+        fn mark_lost(&self, generation: u32) {
+            self.lost_generation.fetch_max(generation, Ordering::AcqRel);
+        }
+
+        fn report_uncaptured_error(
+            &self,
+            generation: u32,
+            backend: wgpu::Backend,
+            error: wgpu::Error,
+        ) {
+            let captured = GpuUncapturedError::from_wgpu(generation, backend, error);
+            self.with_error_slot(|pending| {
+                let replace = match pending.as_ref() {
+                    None => true,
+                    Some(current) if current.generation < generation => true,
+                    Some(current) if current.generation > generation => false,
+                    Some(current) => !current.kind.is_fatal() && captured.kind.is_fatal(),
+                };
+                if replace {
+                    *pending = Some(captured);
+                }
+            });
+        }
+
+        fn take_uncaptured_error(&self, generation: u32) -> Option<GpuUncapturedError> {
+            self.with_error_slot(|pending| {
+                let pending_generation = pending.as_ref().map(|error| error.generation);
+                match pending_generation {
+                    Some(current) if current < generation => {
+                        pending.take();
+                        None
+                    }
+                    Some(current) if current == generation => pending.take(),
+                    _ => None,
+                }
+            })
+        }
+
+        fn with_error_slot<R>(
+            &self,
+            operation: impl FnOnce(&mut Option<GpuUncapturedError>) -> R,
+        ) -> R {
+            let mut pending = match self.uncaptured_error.lock() {
+                Ok(pending) => pending,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            operation(&mut pending)
+        }
+    }
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -722,7 +834,7 @@ mod wasm {
             adapter: wgpu::Adapter,
             format: wgpu::TextureFormat,
             generation: u32,
-            lost_generation: Arc<AtomicU32>,
+            gpu_signals: GpuDeviceSignals,
             profiling_enabled: bool,
         ) -> Result<Self, JsValue> {
             let backend = adapter.get_info().backend;
@@ -748,14 +860,20 @@ mod wasm {
                 .await
                 .map_err(js_error)?;
             device.set_device_lost_callback({
-                let lost_generation = Arc::clone(&lost_generation);
+                let gpu_signals = gpu_signals.clone();
                 move |_reason, _message| {
                     // Device-lost callbacks can arrive after a replacement
                     // generation is already active. Never let an older
                     // callback overwrite a newer loss marker.
-                    lost_generation.fetch_max(generation, Ordering::AcqRel);
+                    gpu_signals.mark_lost(generation);
                 }
             });
+            device.on_uncaptured_error(Arc::new({
+                let gpu_signals = gpu_signals.clone();
+                move |error| {
+                    gpu_signals.report_uncaptured_error(generation, backend, error);
+                }
+            }));
 
             let renderer = GpuRenderer::new(&device, format);
             let mut gpu_profiler =
@@ -784,7 +902,7 @@ mod wasm {
         async fn create(
             format: wgpu::TextureFormat,
             generation: u32,
-            lost_generation: Arc<AtomicU32>,
+            gpu_signals: GpuDeviceSignals,
             profiling_enabled: bool,
         ) -> Result<Self, JsValue> {
             // WebGPU adapters are one-shot after successful device creation.
@@ -808,7 +926,7 @@ mod wasm {
                 adapter,
                 format,
                 generation,
-                lost_generation,
+                gpu_signals,
                 profiling_enabled,
             )
             .await?;
@@ -833,7 +951,7 @@ mod wasm {
             canvas: &HtmlCanvasElement,
             backends: wgpu::Backends,
             generation: u32,
-            lost_generation: Arc<AtomicU32>,
+            gpu_signals: GpuDeviceSignals,
             profiling_enabled: bool,
         ) -> Result<Self, JsValue> {
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -860,7 +978,7 @@ mod wasm {
                 adapter,
                 config.format,
                 generation,
-                lost_generation,
+                gpu_signals,
                 profiling_enabled,
             )
             .await?;
@@ -1024,7 +1142,8 @@ mod wasm {
         gpu_profiling_requested: bool,
         gpu_generation: u32,
         gpu_generation_counter: u32,
-        gpu_device_lost_generation: Arc<AtomicU32>,
+        gpu_signals: GpuDeviceSignals,
+        gpu_fatal_error: Option<String>,
         gpu_recovery_phase: GpuRecoveryPhase,
         gpu_recovery_completion: Rc<RefCell<Option<GpuRecoveryCompletion>>>,
         webgl_context_recovery: Option<WebGlContextRecovery>,
@@ -1042,12 +1161,12 @@ mod wasm {
             let player = ScenePlayer::from_scene_json(scene_json).map_err(js_error)?;
             let clock = PlaybackClock::looping(loop_duration_seconds).map_err(js_error)?;
             let gpu_generation = 1;
-            let gpu_device_lost_generation = Arc::new(AtomicU32::new(0));
+            let gpu_signals = GpuDeviceSignals::default();
             let runtime = BrowserGpuRuntime::create(
                 &canvas,
                 wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
                 gpu_generation,
-                Arc::clone(&gpu_device_lost_generation),
+                gpu_signals.clone(),
                 false,
             )
             .await?;
@@ -1105,7 +1224,8 @@ mod wasm {
                 gpu_profiling_requested: false,
                 gpu_generation,
                 gpu_generation_counter: gpu_generation,
-                gpu_device_lost_generation,
+                gpu_signals,
+                gpu_fatal_error: None,
                 gpu_recovery_phase: GpuRecoveryPhase::Ready,
                 gpu_recovery_completion: Rc::new(RefCell::new(None)),
                 webgl_context_recovery,
@@ -1149,12 +1269,14 @@ mod wasm {
 
         #[wasm_bindgen(js_name = renderFrame)]
         pub fn render_frame(&mut self, timestamp_ms: f64) -> Result<bool, JsValue> {
+            self.check_gpu_error()?;
             let frame_started_ms = performance_now_ms();
             let scene_time = self.clock.scene_time(timestamp_ms).map_err(js_error)?;
             let runtime_started_ms = performance_now_ms();
             self.player.advance_to(scene_time).map_err(js_error)?;
             self.last_runtime_evaluation_ms = elapsed_ms(runtime_started_ms);
             let presented = self.render_current_frame()?;
+            self.check_gpu_error()?;
             self.last_cpu_frame_ms = elapsed_ms(frame_started_ms);
             Ok(presented)
         }
@@ -1341,11 +1463,24 @@ mod wasm {
                 .map(|recovery| (recovery.is_lost(), recovery.generation()))
         }
 
+        fn check_gpu_error(&mut self) -> Result<(), JsValue> {
+            if let Some(message) = &self.gpu_fatal_error {
+                return Err(js_message(message));
+            }
+            let Some(error) = self.gpu_signals.take_uncaptured_error(self.gpu_generation) else {
+                return Ok(());
+            };
+            if error.kind.is_fatal() {
+                self.gpu_fatal_error = Some(error.message.clone());
+            }
+            Err(js_message(&error.message))
+        }
+
         fn gpu_commands_ready(&self) -> bool {
             if !matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready) {
                 return false;
             }
-            if self.gpu_device_lost_generation.load(Ordering::Acquire) == self.gpu_generation {
+            if self.gpu_signals.lost_generation() == self.gpu_generation {
                 return false;
             }
             if let Some((lost, generation)) = self.current_webgl_context() {
@@ -1419,7 +1554,7 @@ mod wasm {
                 .ok_or_else(|| js_message("GPU recovery generation counter exhausted"))?;
             self.gpu_generation_counter = generation;
             let completion = Rc::clone(&self.gpu_recovery_completion);
-            let lost_generation = Arc::clone(&self.gpu_device_lost_generation);
+            let gpu_signals = self.gpu_signals.clone();
             let profiling_enabled = self.gpu_profiling_requested;
             let backend = self.backend;
             self.gpu_recovery_phase = GpuRecoveryPhase::Recovering {
@@ -1434,7 +1569,7 @@ mod wasm {
                         let runtime = BrowserWebGpuRecoveryRuntime::create(
                             format,
                             generation,
-                            lost_generation,
+                            gpu_signals,
                             profiling_enabled,
                         )
                         .await
@@ -1459,7 +1594,7 @@ mod wasm {
                             &canvas,
                             wgpu::Backends::GL,
                             generation,
-                            lost_generation,
+                            gpu_signals,
                             profiling_enabled,
                         )
                         .await
@@ -1609,9 +1744,7 @@ mod wasm {
 
             match completion.runtime {
                 Ok(runtime) => {
-                    if self.gpu_device_lost_generation.load(Ordering::Acquire)
-                        == completion.generation
-                    {
+                    if self.gpu_signals.lost_generation() == completion.generation {
                         self.gpu_recovery_phase = GpuRecoveryPhase::Ready;
                         self.start_gpu_recovery(completion.context_generation)?;
                         return Ok(false);
@@ -1649,7 +1782,7 @@ mod wasm {
                     return Ok(false);
                 }
             }
-            if self.gpu_device_lost_generation.load(Ordering::Acquire) == self.gpu_generation
+            if self.gpu_signals.lost_generation() == self.gpu_generation
                 && matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready)
             {
                 self.start_gpu_recovery(
@@ -1676,8 +1809,7 @@ mod wasm {
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Lost => {
-                        let device_lost = self.gpu_device_lost_generation.load(Ordering::Acquire)
-                            == self.gpu_generation;
+                        let device_lost = self.gpu_signals.lost_generation() == self.gpu_generation;
                         if self.backend == wgpu::Backend::Gl || device_lost {
                             let context_generation = self
                                 .current_webgl_context()
@@ -1694,9 +1826,7 @@ mod wasm {
                         return Ok(false);
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
-                        if self.gpu_device_lost_generation.load(Ordering::Acquire)
-                            == self.gpu_generation
-                        {
+                        if self.gpu_signals.lost_generation() == self.gpu_generation {
                             self.start_gpu_recovery(
                                 self.current_webgl_context()
                                     .map(|(_, generation)| generation),

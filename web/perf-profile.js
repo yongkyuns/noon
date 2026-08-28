@@ -1,6 +1,7 @@
 import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
+import { readCompletePlayerFrameMetrics } from "./player-frame-metrics.js";
 import { ANALYTIC_LAYOUTS, buildAnalyticScene } from "./perf-workloads.js";
 
 const parameters = new URLSearchParams(location.search);
@@ -57,6 +58,7 @@ try {
   browserJank.start();
   const measurementStartMs = performance.now();
   let previousTimestamp = null;
+  let incompleteMetricFrames = 0;
   let measured = 0;
   while (measured < measuredFrames) {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
@@ -65,19 +67,30 @@ try {
     const presented = player.renderFrame(timestamp);
     const browserCallMs = performance.now() - started;
     if (!presented) {
+      previousTimestamp = null;
       continue;
     }
 
-    const cpuFrameMs = player.lastCpuFrameMs();
+    const metrics = readCompletePlayerFrameMetrics(player);
+    if (metrics === null) {
+      // GPU/context recovery can replace renderer-owned instrumentation between
+      // runtime evaluation and presentation. Exclude that whole frame rather than
+      // mixing partial measurements into percentile windows. The skipped count is
+      // reported so repeated recovery remains visible instead of being hidden.
+      incompleteMetricFrames += 1;
+      previousTimestamp = null;
+      continue;
+    }
+
     cadence.record(timestamp, browserCallMs);
-    recordPlayerMetric(windows.cpuFrameMs, cpuFrameMs, "cpu frame");
-    recordPlayerMetric(windows.runtimeMs, player.lastRuntimeEvaluationMs(), "runtime");
-    recordPlayerMetric(windows.prepareMs, player.lastFramePrepareMs(), "prepare");
-    recordPlayerMetric(windows.uploadMs, player.lastUploadMs(), "upload");
-    recordPlayerMetric(windows.encodeSubmitMs, player.lastEncodeSubmitMs(), "encode/submit");
+    windows.cpuFrameMs.record(metrics.cpuFrameMs);
+    windows.runtimeMs.record(metrics.runtimeMs);
+    windows.prepareMs.record(metrics.prepareMs);
+    windows.uploadMs.record(metrics.uploadMs);
+    windows.encodeSubmitMs.record(metrics.encodeSubmitMs);
     if (previousTimestamp !== null) {
       windows.unattributedFrameMs.record(
-        estimateUnattributedFrameMs(timestamp - previousTimestamp, cpuFrameMs),
+        estimateUnattributedFrameMs(timestamp - previousTimestamp, metrics.cpuFrameMs),
       );
     }
     previousTimestamp = timestamp;
@@ -115,6 +128,7 @@ try {
       playerCreateMs,
       warmupFrames,
       measuredFrames: frame.frames,
+      incompleteMetricFrames,
     },
     cadence: {
       frameIntervalMs: frame.interval,
@@ -172,13 +186,6 @@ try {
 } finally {
   browserJank.stop();
   player?.free?.();
-}
-
-function recordPlayerMetric(window, value, label) {
-  if (!Number.isFinite(value)) {
-    throw new Error(`${label} metric is not finite: ${value}`);
-  }
-  window.record(value);
 }
 
 async function waitForGpuSamples(player, supported, expectedFrames) {
