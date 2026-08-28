@@ -106,12 +106,7 @@ pub(crate) struct GpuDiagnosticMailbox {
 
 impl GpuDiagnosticMailbox {
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn record_wgpu(
-        &self,
-        generation: u32,
-        backend: wgpu::Backend,
-        error: wgpu::Error,
-    ) {
+    pub(crate) fn record_wgpu(&self, generation: u32, backend: wgpu::Backend, error: wgpu::Error) {
         self.record(GpuDiagnostic::from_wgpu(generation, backend, error));
     }
 
@@ -192,7 +187,11 @@ mod tests {
         let mailbox = GpuDiagnosticMailbox::default();
         mailbox.record(diagnostic(7, GpuDiagnosticKind::Validation, "recoverable"));
         mailbox.record(diagnostic(7, GpuDiagnosticKind::Internal, "fatal"));
-        mailbox.record(diagnostic(7, GpuDiagnosticKind::Validation, "late validation"));
+        mailbox.record(diagnostic(
+            7,
+            GpuDiagnosticKind::Validation,
+            "late validation",
+        ));
 
         let captured = mailbox.take_for_generation(7).expect("fatal diagnostic");
         assert_eq!(captured.message, "fatal");
