@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, SceneDefinition,
-    TrackId, Vec2,
+    patch::{validate_geometry, validate_style, validate_transform},
+    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
+    PatchError, SceneDefinition, TrackId, Vec2,
 };
 
 /// Language-neutral animation rate functions shared by every authoring frontend.
@@ -118,6 +119,21 @@ impl Property {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackValueEndpoint {
+    From,
+    To,
+}
+
+impl std::fmt::Display for TrackValueEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::From => "from",
+            Self::To => "to",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
@@ -149,7 +165,11 @@ impl TrackValues {
         }
     }
 
-    fn validate_numeric_values(&self, property: Property) -> Result<(), TimelineError> {
+    fn validate_numeric_values(
+        &self,
+        object: ObjectId,
+        property: Property,
+    ) -> Result<(), TimelineError> {
         match self {
             Self::Scalar { from, to } if !from.is_finite() || !to.is_finite() => {
                 Err(TimelineError::InvalidScalarValues {
@@ -170,8 +190,41 @@ impl TrackValues {
                     to: *to,
                 })
             }
+            Self::Object { from, to } => {
+                validate_object_track_value(object, property, TrackValueEndpoint::From, from)?;
+                validate_object_track_value(object, property, TrackValueEndpoint::To, to)
+            }
             _ => Ok(()),
         }
+    }
+}
+
+fn validate_object_track_value(
+    object: ObjectId,
+    property: Property,
+    endpoint: TrackValueEndpoint,
+    snapshot: &ObjectSnapshot,
+) -> Result<(), TimelineError> {
+    validate_geometry(object, &snapshot.geometry)
+        .map_err(|error| invalid_object_track_value(property, endpoint, error))?;
+    validate_transform(object, snapshot.transform)
+        .map_err(|error| invalid_object_track_value(property, endpoint, error))?;
+    validate_style(object, snapshot.style)
+        .map_err(|error| invalid_object_track_value(property, endpoint, error))
+}
+
+fn invalid_object_track_value(
+    property: Property,
+    endpoint: TrackValueEndpoint,
+    error: PatchError,
+) -> TimelineError {
+    let PatchError::InvalidObjectState { field, .. } = error else {
+        unreachable!("object-state validator returned a non-object validation error")
+    };
+    TimelineError::InvalidObjectValue {
+        property,
+        endpoint,
+        field,
     }
 }
 
@@ -231,6 +284,11 @@ pub enum TimelineError {
         from: Vec2,
         to: Vec2,
     },
+    InvalidObjectValue {
+        property: Property,
+        endpoint: TrackValueEndpoint,
+        field: ObjectStateField,
+    },
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
     TrackIdExhausted,
@@ -262,6 +320,14 @@ impl std::fmt::Display for TimelineError {
                 formatter,
                 "non-finite vector values for {property:?}: from=({}, {}), to=({}, {})",
                 from.x, from.y, to.x, to.y
+            ),
+            Self::InvalidObjectValue {
+                property,
+                endpoint,
+                field,
+            } => write!(
+                formatter,
+                "non-finite {field} state in {endpoint} object value for {property:?}"
             ),
             Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
             Self::InstantTrackCannotUseTimeMap(property) => write!(
@@ -309,7 +375,9 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
             actual,
         });
     }
-    track.values.validate_numeric_values(track.property)?;
+    track
+        .values
+        .validate_numeric_values(track.object, track.property)?;
     if track.property.is_instant() && !track.time_map.is_identity() {
         return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
     }
@@ -459,7 +527,7 @@ impl SceneDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CompositionTimeMapStep, GeometryRef};
+    use crate::{CompositionTimeMapStep, GeometryRef, Style};
 
     fn timing() -> TrackTiming {
         TrackTiming::new(1.0, 2.0, RateFunction::Linear)
@@ -751,6 +819,53 @@ mod tests {
             scene
                 .animate_position(object, Vec2::ZERO, Vec2::ONE, timing())
                 .unwrap(),
+            TrackId::new(0)
+        );
+    }
+
+    #[test]
+    fn non_finite_transform_snapshots_are_rejected_without_consuming_track_ids() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let valid = ObjectSnapshot::new(GeometryRef::circle(1.0));
+
+        let mut invalid_geometry = valid.clone();
+        invalid_geometry.geometry = GeometryRef::circle(f32::NAN);
+        let mut invalid_transform = valid.clone();
+        invalid_transform.transform.rotation = f32::INFINITY;
+        let mut invalid_style = valid.clone();
+        invalid_style.style = Style {
+            opacity: f32::NAN,
+            ..Style::default()
+        };
+
+        for (field, invalid) in [
+            (ObjectStateField::Geometry, invalid_geometry),
+            (ObjectStateField::Transform, invalid_transform),
+            (ObjectStateField::Style, invalid_style),
+        ] {
+            for (endpoint, from, to) in [
+                (TrackValueEndpoint::From, invalid.clone(), valid.clone()),
+                (TrackValueEndpoint::To, valid.clone(), invalid.clone()),
+            ] {
+                assert_eq!(
+                    scene
+                        .animate_transform(object, from, to, timing())
+                        .expect_err("non-finite transform endpoint must fail"),
+                    TimelineError::InvalidObjectValue {
+                        property: Property::Transform,
+                        endpoint,
+                        field,
+                    }
+                );
+            }
+        }
+
+        assert!(scene.tracks().is_empty());
+        assert_eq!(
+            scene
+                .animate_transform(object, valid.clone(), valid, timing())
+                .expect("finite transform track must remain valid"),
             TrackId::new(0)
         );
     }
