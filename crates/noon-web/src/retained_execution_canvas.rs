@@ -2,6 +2,7 @@
 mod wasm {
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+    use noon_runtime::FrameChanges;
     use noon_text_render_wgpu::TextDeviceMetrics;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
@@ -42,6 +43,7 @@ mod wasm {
         drawable: bool,
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
+        pending_changes: FrameChanges,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         text_gpu: RetainedTextGpuState,
@@ -118,6 +120,7 @@ mod wasm {
                 drawable: true,
                 mirror,
                 pending_frame: false,
+                pending_changes: FrameChanges::default(),
                 preparer: RetainedFramePreparer::new(),
                 renderer,
                 text_gpu,
@@ -140,7 +143,7 @@ mod wasm {
                     "render worker must present the retained execution delta before accepting another",
                 ));
             }
-            let (outcome, _) = self.mirror.apply_json(json).map_err(js_error)?;
+            let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
                     let camera = self.mirror.camera();
@@ -149,6 +152,7 @@ mod wasm {
                         self.camera_height = camera.height;
                         self.update_camera()?;
                     }
+                    self.pending_changes = changes;
                     self.pending_frame = true;
                     Ok(true)
                 }
@@ -196,10 +200,11 @@ mod wasm {
             .map_err(js_error)?;
             let prepared = self
                 .preparer
-                .prepare(
+                .prepare_with_changes(
                     &self.device,
                     &self.queue,
                     frame,
+                    &self.pending_changes,
                     resources.texts(),
                     resources.fonts(),
                     resources.geometries(),
@@ -242,6 +247,7 @@ mod wasm {
                 .instances_drawn
                 .saturating_add(draw.text.instances_drawn);
             self.pending_frame = false;
+            self.pending_changes = FrameChanges::default();
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
