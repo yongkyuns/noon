@@ -420,6 +420,10 @@ mod wasm {
         cell::{Cell, RefCell},
         collections::VecDeque,
         rc::Rc,
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        },
     };
 
     use noon_core::{
@@ -428,8 +432,9 @@ mod wasm {
     };
     use noon_ir::encode_scene;
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
-    use wasm_bindgen::prelude::*;
-    use web_sys::HtmlCanvasElement;
+    use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
+    use wasm_bindgen_futures::spawn_local;
+    use web_sys::{Event, HtmlCanvasElement};
 
     use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};
 
@@ -443,6 +448,83 @@ mod wasm {
     impl wgpu::rwh::HasDisplayHandle for WebDisplaySource {
         fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
             Ok(wgpu::rwh::DisplayHandle::web())
+        }
+    }
+
+    #[derive(Default)]
+    struct WebGlContextState {
+        lost: Cell<bool>,
+        generation: Cell<u64>,
+    }
+
+    struct WebGlContextRecovery {
+        canvas: HtmlCanvasElement,
+        state: Rc<WebGlContextState>,
+        lost_listener: Closure<dyn FnMut(Event)>,
+        restored_listener: Closure<dyn FnMut(Event)>,
+    }
+
+    impl WebGlContextRecovery {
+        fn attach(canvas: &HtmlCanvasElement) -> Result<Self, JsValue> {
+            let state = Rc::new(WebGlContextState::default());
+            let lost_state = Rc::clone(&state);
+            let lost_listener = Closure::wrap(Box::new(move |event: Event| {
+                // WebGL only permits an explicit restore when the application
+                // cancels the loss event. Keep semantic state alive while the
+                // browser owns recovery of the underlying context.
+                event.prevent_default();
+                lost_state.lost.set(true);
+            }) as Box<dyn FnMut(Event)>);
+            canvas.add_event_listener_with_callback(
+                "webglcontextlost",
+                lost_listener.as_ref().unchecked_ref(),
+            )?;
+
+            let restored_state = Rc::clone(&state);
+            let restored_listener = Closure::wrap(Box::new(move |_event: Event| {
+                restored_state.lost.set(false);
+                restored_state
+                    .generation
+                    .set(restored_state.generation.get().wrapping_add(1));
+            }) as Box<dyn FnMut(Event)>);
+            if let Err(error) = canvas.add_event_listener_with_callback(
+                "webglcontextrestored",
+                restored_listener.as_ref().unchecked_ref(),
+            ) {
+                let _ = canvas.remove_event_listener_with_callback(
+                    "webglcontextlost",
+                    lost_listener.as_ref().unchecked_ref(),
+                );
+                return Err(error);
+            }
+
+            Ok(Self {
+                canvas: canvas.clone(),
+                state,
+                lost_listener,
+                restored_listener,
+            })
+        }
+
+        fn is_lost(&self) -> bool {
+            self.state.lost.get()
+        }
+
+        fn generation(&self) -> u64 {
+            self.state.generation.get()
+        }
+    }
+
+    impl Drop for WebGlContextRecovery {
+        fn drop(&mut self) {
+            let _ = self.canvas.remove_event_listener_with_callback(
+                "webglcontextlost",
+                self.lost_listener.as_ref().unchecked_ref(),
+            );
+            let _ = self.canvas.remove_event_listener_with_callback(
+                "webglcontextrestored",
+                self.restored_listener.as_ref().unchecked_ref(),
+            );
         }
     }
 
@@ -626,6 +708,213 @@ mod wasm {
         }
     }
 
+    struct BrowserGpuDeviceRuntime {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        backend: wgpu::Backend,
+        preparer: FramePreparer,
+        renderer: GpuRenderer,
+        gpu_profiler: Option<GpuFrameProfiler>,
+    }
+
+    impl BrowserGpuDeviceRuntime {
+        async fn from_adapter(
+            adapter: wgpu::Adapter,
+            format: wgpu::TextureFormat,
+            generation: u32,
+            lost_generation: Arc<AtomicU32>,
+            profiling_enabled: bool,
+        ) -> Result<Self, JsValue> {
+            let backend = adapter.get_info().backend;
+            let timestamp_queries_supported =
+                adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+            let required_features = if timestamp_queries_supported {
+                wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            };
+            let required_limits = if backend == wgpu::Backend::Gl {
+                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+            } else {
+                wgpu::Limits::default()
+            };
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("Noon browser GPU device"),
+                    required_features,
+                    required_limits,
+                    ..Default::default()
+                })
+                .await
+                .map_err(js_error)?;
+            device.set_device_lost_callback({
+                let lost_generation = Arc::clone(&lost_generation);
+                move |_reason, _message| {
+                    // Device-lost callbacks can arrive after a replacement
+                    // generation is already active. Never let an older
+                    // callback overwrite a newer loss marker.
+                    lost_generation.fetch_max(generation, Ordering::AcqRel);
+                }
+            });
+
+            let renderer = GpuRenderer::new(&device, format);
+            let mut gpu_profiler =
+                timestamp_queries_supported.then(|| GpuFrameProfiler::new(&device, &queue));
+            if let Some(profiler) = &mut gpu_profiler {
+                profiler.set_enabled(profiling_enabled);
+            }
+
+            Ok(Self {
+                device,
+                queue,
+                backend,
+                preparer: FramePreparer::new(),
+                renderer,
+                gpu_profiler,
+            })
+        }
+    }
+
+    struct BrowserWebGpuRecoveryRuntime {
+        instance: wgpu::Instance,
+        device: BrowserGpuDeviceRuntime,
+    }
+
+    impl BrowserWebGpuRecoveryRuntime {
+        async fn create(
+            format: wgpu::TextureFormat,
+            generation: u32,
+            lost_generation: Arc<AtomicU32>,
+            profiling_enabled: bool,
+        ) -> Result<Self, JsValue> {
+            // WebGPU adapters are one-shot after successful device creation.
+            // Recovery therefore starts from a fresh GPU/adapter generation,
+            // while the existing canvas surface remains authoritative.
+            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+            let instance = wgpu::Instance::new(instance_descriptor);
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(js_error)?;
+            if adapter.get_info().backend != wgpu::Backend::BrowserWebGpu {
+                return Err(js_message("WebGPU recovery selected a non-WebGPU adapter"));
+            }
+            let device = BrowserGpuDeviceRuntime::from_adapter(
+                adapter,
+                format,
+                generation,
+                lost_generation,
+                profiling_enabled,
+            )
+            .await?;
+            Ok(Self { instance, device })
+        }
+    }
+
+    struct BrowserGpuRuntime {
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        backend: wgpu::Backend,
+        config: wgpu::SurfaceConfiguration,
+        preparer: FramePreparer,
+        renderer: GpuRenderer,
+        gpu_profiler: Option<GpuFrameProfiler>,
+    }
+
+    impl BrowserGpuRuntime {
+        async fn create(
+            canvas: &HtmlCanvasElement,
+            backends: wgpu::Backends,
+            generation: u32,
+            lost_generation: Arc<AtomicU32>,
+            profiling_enabled: bool,
+        ) -> Result<Self, JsValue> {
+            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            instance_descriptor.backends = backends;
+            instance_descriptor.display = Some(Box::new(WebDisplaySource));
+            let instance =
+                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
+            let surface = create_surface(&instance, canvas)?;
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: Some(&surface),
+                })
+                .await
+                .map_err(js_error)?;
+
+            let width = canvas.width().max(1);
+            let height = canvas.height().max(1);
+            let config = surface
+                .get_default_config(&adapter, width, height)
+                .ok_or_else(|| js_message("GPU adapter cannot present to this canvas"))?;
+            let device_runtime = BrowserGpuDeviceRuntime::from_adapter(
+                adapter,
+                config.format,
+                generation,
+                lost_generation,
+                profiling_enabled,
+            )
+            .await?;
+            surface.configure(&device_runtime.device, &config);
+            let BrowserGpuDeviceRuntime {
+                device,
+                queue,
+                backend,
+                preparer,
+                renderer,
+                gpu_profiler,
+            } = device_runtime;
+
+            Ok(Self {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+                preparer,
+                renderer,
+                gpu_profiler,
+            })
+        }
+    }
+
+    enum GpuRecoveryRuntime {
+        Full(BrowserGpuRuntime),
+        WebGpu(BrowserWebGpuRecoveryRuntime),
+    }
+
+    struct GpuRecoveryCompletion {
+        generation: u32,
+        context_generation: Option<u64>,
+        runtime: Result<GpuRecoveryRuntime, String>,
+    }
+
+    enum GpuRecoveryPhase {
+        Ready,
+        Recovering {
+            generation: u32,
+            context_generation: Option<u64>,
+        },
+        Failed {
+            context_generation: Option<u64>,
+            message: String,
+        },
+    }
+
+    fn js_value_text(value: JsValue) -> String {
+        value.as_string().unwrap_or_else(|| format!("{value:?}"))
+    }
+
     #[wasm_bindgen(js_name = ScenePlayer)]
     pub struct WasmScenePlayer {
         inner: ScenePlayer,
@@ -732,6 +1021,14 @@ mod wasm {
         last_upload_ms: f64,
         last_encode_submit_ms: f64,
         gpu_profiler: Option<GpuFrameProfiler>,
+        gpu_profiling_requested: bool,
+        gpu_generation: u32,
+        gpu_generation_counter: u32,
+        gpu_device_lost_generation: Arc<AtomicU32>,
+        gpu_recovery_phase: GpuRecoveryPhase,
+        gpu_recovery_completion: Rc<RefCell<Option<GpuRecoveryCompletion>>>,
+        webgl_context_recovery: Option<WebGlContextRecovery>,
+        webgl_context_generation: u64,
     }
 
     #[wasm_bindgen(js_class = NoonCanvasPlayer)]
@@ -744,53 +1041,35 @@ mod wasm {
         ) -> Result<WasmCanvasPlayer, JsValue> {
             let player = ScenePlayer::from_scene_json(scene_json).map_err(js_error)?;
             let clock = PlaybackClock::looping(loop_duration_seconds).map_err(js_error)?;
-
-            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
-            instance_descriptor.display = Some(Box::new(WebDisplaySource));
-            let instance =
-                wgpu::util::new_instance_with_webgpu_detection(instance_descriptor).await;
-            let surface = create_surface(&instance, &canvas)?;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                })
-                .await
-                .map_err(js_error)?;
-            let backend = adapter.get_info().backend;
-            let timestamp_queries_supported =
-                adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
-            let required_features = if timestamp_queries_supported {
-                wgpu::Features::TIMESTAMP_QUERY
+            let gpu_generation = 1;
+            let gpu_device_lost_generation = Arc::new(AtomicU32::new(0));
+            let runtime = BrowserGpuRuntime::create(
+                &canvas,
+                wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+                gpu_generation,
+                Arc::clone(&gpu_device_lost_generation),
+                false,
+            )
+            .await?;
+            let webgl_context_recovery = if runtime.backend == wgpu::Backend::Gl {
+                Some(WebGlContextRecovery::attach(&canvas)?)
             } else {
-                wgpu::Features::empty()
+                None
             };
-            let required_limits = if backend == wgpu::Backend::Gl {
-                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
-            } else {
-                wgpu::Limits::default()
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("Noon browser GPU device"),
-                    required_features,
-                    required_limits,
-                    ..Default::default()
-                })
-                .await
-                .map_err(js_error)?;
-
-            let width = canvas.width().max(1);
-            let height = canvas.height().max(1);
-            let config = surface
-                .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_message("GPU adapter cannot present to this canvas"))?;
-            surface.configure(&device, &config);
-            let renderer = GpuRenderer::new(&device, config.format);
-            let gpu_profiler =
-                timestamp_queries_supported.then(|| GpuFrameProfiler::new(&device, &queue));
+            let webgl_context_generation = webgl_context_recovery
+                .as_ref()
+                .map_or(0, WebGlContextRecovery::generation);
+            let BrowserGpuRuntime {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+                preparer,
+                renderer,
+                gpu_profiler,
+            } = runtime;
 
             let mut result = Self {
                 instance,
@@ -803,7 +1082,7 @@ mod wasm {
                 drawable: true,
                 player,
                 clock,
-                preparer: FramePreparer::new(),
+                preparer,
                 renderer,
                 camera_center: Vec2::ZERO,
                 camera_height: noon_core::DEFAULT_FRAME_HEIGHT,
@@ -823,6 +1102,14 @@ mod wasm {
                 last_upload_ms: f64::NAN,
                 last_encode_submit_ms: f64::NAN,
                 gpu_profiler,
+                gpu_profiling_requested: false,
+                gpu_generation,
+                gpu_generation_counter: gpu_generation,
+                gpu_device_lost_generation,
+                gpu_recovery_phase: GpuRecoveryPhase::Ready,
+                gpu_recovery_completion: Rc::new(RefCell::new(None)),
+                webgl_context_recovery,
+                webgl_context_generation,
             };
             result.update_camera()?;
             Ok(result)
@@ -833,7 +1120,7 @@ mod wasm {
             self.canvas.set_width(width);
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
-            if !self.drawable {
+            if !self.drawable || !self.gpu_commands_ready() {
                 return Ok(());
             }
 
@@ -981,18 +1268,22 @@ mod wasm {
 
         #[wasm_bindgen(js_name = setGpuProfilingEnabled)]
         pub fn set_gpu_profiling_enabled(&mut self, enabled: bool) -> bool {
-            if let Some(profiler) = &mut self.gpu_profiler {
-                profiler.set_enabled(enabled);
-                true
-            } else {
-                false
+            self.gpu_profiling_requested = enabled;
+            if self.gpu_commands_ready() {
+                if let Some(profiler) = &mut self.gpu_profiler {
+                    profiler.set_enabled(enabled);
+                    return true;
+                }
             }
+            self.gpu_profiler.is_some()
         }
 
         #[wasm_bindgen(js_name = resetGpuProfiling)]
         pub fn reset_gpu_profiling(&mut self) {
-            if let Some(profiler) = &mut self.gpu_profiler {
-                profiler.reset();
+            if self.gpu_commands_ready() {
+                if let Some(profiler) = &mut self.gpu_profiler {
+                    profiler.reset();
+                }
             }
         }
 
@@ -1044,8 +1335,51 @@ mod wasm {
                 .unwrap_or(f64::NAN)
         }
 
+        fn current_webgl_context(&self) -> Option<(bool, u64)> {
+            self.webgl_context_recovery
+                .as_ref()
+                .map(|recovery| (recovery.is_lost(), recovery.generation()))
+        }
+
+        fn gpu_commands_ready(&self) -> bool {
+            if !matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready) {
+                return false;
+            }
+            if self.gpu_device_lost_generation.load(Ordering::Acquire) == self.gpu_generation {
+                return false;
+            }
+            if let Some((lost, generation)) = self.current_webgl_context() {
+                if lost || generation != self.webgl_context_generation {
+                    return false;
+                }
+            }
+            true
+        }
+
+        fn reset_renderer_metrics(&mut self) {
+            self.last_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.last_cpu_frame_ms = f64::NAN;
+            self.last_runtime_evaluation_ms = f64::NAN;
+            self.last_frame_prepare_ms = f64::NAN;
+            self.last_upload_ms = f64::NAN;
+            self.last_encode_submit_ms = f64::NAN;
+        }
+
+        fn sync_surface_size(&mut self) {
+            let width = self.canvas.width().max(1);
+            let height = self.canvas.height().max(1);
+            if self.config.width != width || self.config.height != height {
+                self.config.width = width;
+                self.config.height = height;
+                self.surface.configure(&self.device, &self.config);
+            }
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
-            if !self.drawable {
+            if !self.drawable || !self.gpu_commands_ready() {
                 return Ok(());
             }
             let aspect = self.config.width as f32 / self.config.height as f32;
@@ -1064,10 +1398,315 @@ mod wasm {
             Ok(())
         }
 
+        fn start_gpu_recovery(&mut self, context_generation: Option<u64>) -> Result<(), JsValue> {
+            if matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Recovering { .. }) {
+                return Ok(());
+            }
+            if let GpuRecoveryPhase::Failed {
+                context_generation: failed_context,
+                message,
+            } = &self.gpu_recovery_phase
+            {
+                if *failed_context == context_generation {
+                    return Err(js_message(message));
+                }
+            }
+
+            let generation = self
+                .gpu_generation_counter
+                .checked_add(1)
+                .ok_or_else(|| js_message("GPU recovery generation counter exhausted"))?;
+            self.gpu_generation_counter = generation;
+            let completion = Rc::clone(&self.gpu_recovery_completion);
+            let lost_generation = Arc::clone(&self.gpu_device_lost_generation);
+            let profiling_enabled = self.gpu_profiling_requested;
+            let backend = self.backend;
+            self.gpu_recovery_phase = GpuRecoveryPhase::Recovering {
+                generation,
+                context_generation,
+            };
+
+            match backend {
+                wgpu::Backend::BrowserWebGpu => {
+                    let format = self.config.format;
+                    spawn_local(async move {
+                        let runtime = BrowserWebGpuRecoveryRuntime::create(
+                            format,
+                            generation,
+                            lost_generation,
+                            profiling_enabled,
+                        )
+                        .await
+                        .map(GpuRecoveryRuntime::WebGpu)
+                        .map_err(|error| {
+                            format!(
+                                "BrowserWebGpu device recovery initialization failed: {}",
+                                js_value_text(error),
+                            )
+                        });
+                        *completion.borrow_mut() = Some(GpuRecoveryCompletion {
+                            generation,
+                            context_generation,
+                            runtime,
+                        });
+                    });
+                }
+                wgpu::Backend::Gl => {
+                    let canvas = self.canvas.clone();
+                    spawn_local(async move {
+                        let runtime = BrowserGpuRuntime::create(
+                            &canvas,
+                            wgpu::Backends::GL,
+                            generation,
+                            lost_generation,
+                            profiling_enabled,
+                        )
+                        .await
+                        .map(GpuRecoveryRuntime::Full)
+                        .map_err(|error| {
+                            format!(
+                                "WebGL GPU recovery initialization failed: {}",
+                                js_value_text(error),
+                            )
+                        });
+                        *completion.borrow_mut() = Some(GpuRecoveryCompletion {
+                            generation,
+                            context_generation,
+                            runtime,
+                        });
+                    });
+                }
+                other => {
+                    self.gpu_recovery_phase = GpuRecoveryPhase::Failed {
+                        context_generation,
+                        message: format!("GPU recovery does not support backend {other:?}"),
+                    };
+                    return Err(js_message(&format!(
+                        "GPU recovery does not support backend {other:?}",
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        fn install_gpu_runtime(
+            &mut self,
+            runtime: GpuRecoveryRuntime,
+            generation: u32,
+            context_generation: Option<u64>,
+        ) -> Result<(), JsValue> {
+            match runtime {
+                GpuRecoveryRuntime::Full(runtime) => {
+                    if runtime.backend != self.backend {
+                        return Err(js_message(&format!(
+                            "GPU recovery changed backend from {:?} to {:?}",
+                            self.backend, runtime.backend,
+                        )));
+                    }
+                    let BrowserGpuRuntime {
+                        instance,
+                        surface,
+                        device,
+                        queue,
+                        backend,
+                        config,
+                        preparer,
+                        renderer,
+                        gpu_profiler,
+                    } = runtime;
+                    self.instance = instance;
+                    self.surface = surface;
+                    self.device = device;
+                    self.queue = queue;
+                    self.backend = backend;
+                    self.config = config;
+                    self.preparer = preparer;
+                    self.renderer = renderer;
+                    self.gpu_profiler = gpu_profiler;
+                }
+                GpuRecoveryRuntime::WebGpu(runtime) => {
+                    let BrowserWebGpuRecoveryRuntime {
+                        instance,
+                        device: runtime,
+                    } = runtime;
+                    if runtime.backend != self.backend
+                        || self.backend != wgpu::Backend::BrowserWebGpu
+                    {
+                        return Err(js_message(&format!(
+                            "WebGPU device recovery changed backend from {:?} to {:?}",
+                            self.backend, runtime.backend,
+                        )));
+                    }
+                    let BrowserGpuDeviceRuntime {
+                        device,
+                        queue,
+                        backend: _,
+                        preparer,
+                        renderer,
+                        gpu_profiler,
+                    } = runtime;
+                    // Surface/canvas ownership survives device loss. Replace the
+                    // GPU/adapter instance generation and all device-bound state,
+                    // then configure the existing surface with the new device.
+                    self.instance = instance;
+                    self.device = device;
+                    self.queue = queue;
+                    self.preparer = preparer;
+                    self.renderer = renderer;
+                    self.gpu_profiler = gpu_profiler;
+                    self.config.width = self.canvas.width().max(1);
+                    self.config.height = self.canvas.height().max(1);
+                    self.surface.configure(&self.device, &self.config);
+                }
+            }
+
+            self.gpu_generation = generation;
+            if let Some(context_generation) = context_generation {
+                self.webgl_context_generation = context_generation;
+            }
+            self.gpu_recovery_phase = GpuRecoveryPhase::Ready;
+            self.reset_renderer_metrics();
+            self.sync_surface_size();
+            self.update_camera()
+        }
+
+        fn poll_gpu_recovery(&mut self) -> Result<bool, JsValue> {
+            if let GpuRecoveryPhase::Failed { message, .. } = &self.gpu_recovery_phase {
+                return Err(js_message(message));
+            }
+            let Some(completion) = self.gpu_recovery_completion.borrow_mut().take() else {
+                return Ok(matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready));
+            };
+            let (expected_generation, expected_context) = match self.gpu_recovery_phase {
+                GpuRecoveryPhase::Recovering {
+                    generation,
+                    context_generation,
+                } => (generation, context_generation),
+                GpuRecoveryPhase::Ready => return Ok(true),
+                GpuRecoveryPhase::Failed { .. } => unreachable!(),
+            };
+            if completion.generation != expected_generation
+                || completion.context_generation != expected_context
+            {
+                return Ok(false);
+            }
+
+            if self.backend == wgpu::Backend::Gl {
+                let Some((lost, current_context_generation)) = self.current_webgl_context() else {
+                    return Err(js_message("WebGL recovery lost its context listener"));
+                };
+                if lost {
+                    *self.gpu_recovery_completion.borrow_mut() = Some(completion);
+                    return Ok(false);
+                }
+                if Some(current_context_generation) != completion.context_generation {
+                    self.gpu_recovery_phase = GpuRecoveryPhase::Ready;
+                    self.start_gpu_recovery(Some(current_context_generation))?;
+                    return Ok(false);
+                }
+            }
+
+            match completion.runtime {
+                Ok(runtime) => {
+                    if self.gpu_device_lost_generation.load(Ordering::Acquire)
+                        == completion.generation
+                    {
+                        self.gpu_recovery_phase = GpuRecoveryPhase::Ready;
+                        self.start_gpu_recovery(completion.context_generation)?;
+                        return Ok(false);
+                    }
+                    self.install_gpu_runtime(
+                        runtime,
+                        completion.generation,
+                        completion.context_generation,
+                    )?;
+                    Ok(true)
+                }
+                Err(message) => {
+                    self.gpu_recovery_phase = GpuRecoveryPhase::Failed {
+                        context_generation: completion.context_generation,
+                        message: message.clone(),
+                    };
+                    Err(js_message(&message))
+                }
+            }
+        }
+
         fn render_current_frame(&mut self) -> Result<bool, JsValue> {
             if !self.drawable {
                 return Ok(false);
             }
+
+            if let Some((lost, context_generation)) = self.current_webgl_context() {
+                if lost {
+                    return Ok(false);
+                }
+                if context_generation != self.webgl_context_generation
+                    && matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready)
+                {
+                    self.start_gpu_recovery(Some(context_generation))?;
+                    return Ok(false);
+                }
+            }
+            if self.gpu_device_lost_generation.load(Ordering::Acquire) == self.gpu_generation
+                && matches!(self.gpu_recovery_phase, GpuRecoveryPhase::Ready)
+            {
+                self.start_gpu_recovery(
+                    self.current_webgl_context()
+                        .map(|(_, generation)| generation),
+                )?;
+                return Ok(false);
+            }
+            if !self.poll_gpu_recovery()? {
+                return Ok(false);
+            }
+
+            // Acquire a presentable texture before consuming semantic frame
+            // changes. Surface/device failure therefore cannot drop the pending
+            // delta while recovery is being scheduled.
+            let (surface_texture, reconfigure_after_present) =
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
+                    wgpu::CurrentSurfaceTexture::Outdated => {
+                        self.surface.configure(&self.device, &self.config);
+                        return Ok(false);
+                    }
+                    wgpu::CurrentSurfaceTexture::Lost => {
+                        let device_lost = self.gpu_device_lost_generation.load(Ordering::Acquire)
+                            == self.gpu_generation;
+                        if self.backend == wgpu::Backend::Gl || device_lost {
+                            let context_generation = self
+                                .current_webgl_context()
+                                .and_then(|(lost, generation)| (!lost).then_some(generation));
+                            if self.backend != wgpu::Backend::Gl || context_generation.is_some() {
+                                self.start_gpu_recovery(context_generation)?;
+                            }
+                        } else {
+                            // A surface-only loss does not invalidate the device;
+                            // wgpu explicitly permits recreating just the surface.
+                            self.surface = create_surface(&self.instance, &self.canvas)?;
+                            self.surface.configure(&self.device, &self.config);
+                        }
+                        return Ok(false);
+                    }
+                    wgpu::CurrentSurfaceTexture::Validation => {
+                        if self.gpu_device_lost_generation.load(Ordering::Acquire)
+                            == self.gpu_generation
+                        {
+                            self.start_gpu_recovery(
+                                self.current_webgl_context()
+                                    .map(|(_, generation)| generation),
+                            )?;
+                            return Ok(false);
+                        }
+                        return Err(js_message(
+                            "GPU backend rejected the canvas surface texture",
+                        ));
+                    }
+                };
 
             let prepare_started_ms = performance_now_ms();
             let changes = self.player.take_frame_changes();
@@ -1081,27 +1720,6 @@ mod wasm {
             self.last_upload_ms = elapsed_ms(upload_started_ms);
             self.last_bytes_uploaded = upload.bytes_uploaded;
 
-            let (surface_texture, reconfigure_after_present) =
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
-                    wgpu::CurrentSurfaceTexture::Timeout
-                    | wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
-                    wgpu::CurrentSurfaceTexture::Outdated => {
-                        self.surface.configure(&self.device, &self.config);
-                        return Ok(false);
-                    }
-                    wgpu::CurrentSurfaceTexture::Lost => {
-                        self.surface = create_surface(&self.instance, &self.canvas)?;
-                        self.surface.configure(&self.device, &self.config);
-                        return Ok(false);
-                    }
-                    wgpu::CurrentSurfaceTexture::Validation => {
-                        return Err(js_message(
-                            "GPU backend rejected the canvas surface texture",
-                        ));
-                    }
-                };
             let view = surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
