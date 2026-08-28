@@ -1,6 +1,9 @@
 import initNoonWeb, {
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
+  WasmManimArcSnapshotQuery,
+  createManimArcBetweenPointsSpec,
+  createManimArcSpec,
   manimDotSnapshotJson,
   manimTriangleSnapshotJson,
   resolveAnimationOptions,
@@ -58,6 +61,11 @@ async function initializePyodide() {
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
     authoringStore.createMobject(manimTriangleSnapshotJson());
+  self.noonCreateAuthoringArcSpec = (...args) =>
+    arcSpecPlain(createManimArcSpec(...args));
+  self.noonCreateAuthoringArcBetweenPointsSpec = (...args) =>
+    arcSpecPlain(createManimArcBetweenPointsSpec(...args));
+  self.noonQueryAuthoringArc = arcSnapshotQueryPlain;
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
   self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
   self.noonCreateAuthoringRectangleHandle = (width, height) =>
@@ -207,6 +215,37 @@ import _manim_camera
 _manim_camera.install()
 `);
   return pyodide;
+}
+
+function arcSpecPlain(spec) {
+  try {
+    return {
+      snapshotJson: spec.snapshotJson(),
+      radius: spec.radius,
+      startAngle: spec.startAngle,
+      angle: spec.angle,
+      numComponents: spec.numComponents,
+    };
+  } finally {
+    spec.free();
+  }
+}
+
+function arcSnapshotQueryPlain(snapshotJson) {
+  const query = new WasmManimArcSnapshotQuery(snapshotJson);
+  try {
+    return {
+      startX: query.startX,
+      startY: query.startY,
+      endX: query.endX,
+      endY: query.endY,
+      centerX: query.centerX,
+      centerY: query.centerY,
+      stopAngle: query.stopAngle,
+    };
+  } finally {
+    query.free();
+  }
 }
 
 function resolveAnimationOptionsPlain(...args) {
