@@ -11,6 +11,7 @@ mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
+mod manim_arc_bridge;
 mod manim_geometry_bridge;
 mod reactive_authoring_facade;
 mod reactive_player;
@@ -35,6 +36,7 @@ pub use execution_transport::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
+pub use manim_arc_bridge::*;
 pub use manim_geometry_bridge::*;
 pub use reactive_authoring_facade::*;
 pub use reactive_player::*;
