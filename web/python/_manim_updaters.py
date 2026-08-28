@@ -376,9 +376,9 @@ def _install_rotating_breadth() -> None:
     """Install source-execution breadth for Manim's literal ``RotatingDemo``.
 
     The qualified centered-leaf implementation stays in ``_manim_rotate``. This final
-    bootstrap wrapper handles retained groups, external pivots, and the 180-degree x/y
-    projections used by the upstream documentation scene. It intentionally remains a
-    parity candidate until curved z-pivot and 3D intermediate-frame tracks are native.
+    bootstrap wrapper handles retained groups, external pivots, curved z-axis family
+    motion, and the planar principal-axis projection used by the documentation scene.
+    Arbitrary 3D retained state remains a separate representation problem.
     """
 
     compat = sys.modules.get("_manim_compat")
@@ -464,24 +464,59 @@ def _install_rotating_breadth() -> None:
             return compat._critical_for(group, compat._as_vec2(animation.about_edge))
         return group.get_center()
 
-    def reflected_target(
-        current: _base.Mobject, *, axis: str, pivot_point: _base.Vec2
+    def projection_scale_key(current: _base.Mobject, *, axis: str) -> str:
+        """Return the local scale channel matching the projected world dimension.
+
+        The scene wire stores legacy rotation as f32, so exact quarter turns authored
+        through repeated retained Transforms can return with O(1e-7) rad quantization
+        residue. Classify against the nearest quarter turn using a bound derived from
+        f32 machine epsilon; larger residuals are genuine non-principal bases whose
+        projected affine map would require shear in Noon's rotation+scale transform.
+        """
+
+        rotation = float(current.to_ir()["transform"]["rotation"])
+        quarter_turn = math.pi / 2.0
+        quarter_index = round(rotation / quarter_turn)
+        nearest = quarter_index * quarter_turn
+        f32_epsilon = 2.0**-23
+        tolerance = 8.0 * f32_epsilon * max(1.0, abs(rotation), abs(nearest))
+        if abs(rotation - nearest) > tolerance:
+            raise NotImplementedError(
+                "non-z Rotating projection would require shear for a non-axis-aligned retained leaf"
+            )
+        local_x_is_world_x = quarter_index % 2 == 0
+        if axis == "y":
+            return "x" if local_x_is_world_x else "y"
+        if axis == "x":
+            return "y" if local_x_is_world_x else "x"
+        raise ValueError(f"unsupported projection axis {axis!r}")
+
+    def projected_target(
+        current: _base.Mobject,
+        *,
+        axis: str,
+        pivot_point: _base.Vec2,
+        angle: float,
+        scale_key: str,
     ) -> _base.Mobject:
+        """Project a planar principal-axis rotation back onto the xy authoring plane."""
+
         target_snapshot = current.to_ir()
         transform = target_snapshot["transform"]
         translation = transform["translation"]
-        rotation = float(transform["rotation"])
         scale = transform["scale"]
+        compression = math.cos(angle)
         if axis == "y":
-            translation["x"] = 2.0 * pivot_point.x - float(translation["x"])
-            transform["rotation"] = math.pi - rotation
-            scale["y"] = -float(scale["y"])
+            translation["x"] = pivot_point.x + compression * (
+                float(translation["x"]) - pivot_point.x
+            )
         elif axis == "x":
-            translation["y"] = 2.0 * pivot_point.y - float(translation["y"])
-            transform["rotation"] = -rotation
-            scale["y"] = -float(scale["y"])
+            translation["y"] = pivot_point.y + compression * (
+                float(translation["y"]) - pivot_point.y
+            )
         else:
-            raise ValueError(f"unsupported reflection axis {axis!r}")
+            raise ValueError(f"unsupported projection axis {axis!r}")
+        scale[scale_key] = float(scale[scale_key]) * compression
         return animate._snapshot_mobject(target_snapshot)
 
     def schedule_family(
@@ -491,7 +526,7 @@ def _install_rotating_breadth() -> None:
         start_time: float,
         duration: float,
         easing: str,
-    ) -> None:
+    ) -> list[tuple[_base.Mobject, _base.Mobject]]:
         sources, detached = current_detached_members(scene, animation.mobject, start_time)
         pivot_point = pivot(detached, animation)
         axis, sign = axis_kind(animation.axis)
@@ -499,75 +534,74 @@ def _install_rotating_breadth() -> None:
             abs(animation.angle), math.pi, rel_tol=0.0, abs_tol=1e-12
         ):
             raise NotImplementedError(
-                "non-z Rotating currently supports the 180-degree projection used by Manim RotatingDemo"
+                "non-z Rotating currently supports the 180-degree planar turn used by Manim RotatingDemo"
             )
 
-        if axis == "z":
-            # Generic Transform's pointwise-rotation interpolation is intentionally
-            # target-state semantics: for a 180-degree source/target pair its matrix
-            # blend passes through zero scale at alpha=0.5. That is correct for
-            # ``mobject.animate.rotate`` but wrong for procedural Rotating families:
-            # circles collapse and independently retained Arrow shaft/tip members can
-            # visibly separate. Approximate the missing curved family-pivot channel
-            # with short deterministic Transform arcs, all sampled from the same
-            # global rate function. At <=5 degrees per interval the pointwise blend's
-            # worst midpoint scale factor is cos(2.5 degrees) > 0.999, while every
-            # family member remains synchronized at identical segment boundaries.
-            max_step = math.pi / 36.0
-            segment_count = max(1, math.ceil(abs(animation.angle) / max_step))
-            end_time = start_time + duration
-            for segment in range(segment_count):
-                alpha = (segment + 1) / segment_count
-                eased_alpha = rates.evaluate_rate_function(easing, alpha)
-                cumulative_angle = sign * animation.angle * eased_alpha
-                segment_start = start_time + duration * segment / segment_count
-                segment_end = (
-                    end_time
-                    if segment + 1 == segment_count
-                    else start_time + duration * (segment + 1) / segment_count
-                )
-                segment_duration = segment_end - segment_start
-                for index, (source, current) in enumerate(
-                    zip(sources, detached, strict=True)
-                ):
-                    assert source._object is not None
-                    obj = source._object
+        projection_keys: list[str] | None = None
+        if axis in {"x", "y"}:
+            projection_keys = [
+                projection_scale_key(current, axis=axis) for current in detached
+            ]
+
+        # Manim procedural Rotating restores the play-start geometry at every alpha
+        # and applies the current rotation. One generic source/target Transform cannot
+        # model that path: a 180-degree z turn collapses its matrix at the midpoint,
+        # while a principal x/y turn should follow an orthographic cos(theta)
+        # compression. Sample the one global rate function into short deterministic
+        # retained intervals, always deriving each endpoint from the original play-start
+        # snapshots. This keeps family members coherent without a Python frame callback
+        # or a renderer-specific primitive. The final interval endpoint is authored
+        # exactly at ``start_time + duration`` to avoid floating handoff drift.
+        max_step = math.pi / 36.0
+        segment_count = max(1, math.ceil(abs(animation.angle) / max_step))
+        end_time = start_time + duration
+        final_targets: list[tuple[_base.Mobject, _base.Mobject]] = []
+        for segment in range(segment_count):
+            alpha = (segment + 1) / segment_count
+            eased_alpha = rates.evaluate_rate_function(easing, alpha)
+            cumulative_angle = sign * animation.angle * eased_alpha
+            segment_start = start_time + duration * segment / segment_count
+            segment_end = (
+                end_time
+                if segment + 1 == segment_count
+                else start_time + duration * (segment + 1) / segment_count
+            )
+            segment_duration = segment_end - segment_start
+            for index, (source, current) in enumerate(
+                zip(sources, detached, strict=True)
+            ):
+                assert source._object is not None
+                obj = source._object
+                if axis == "z":
                     target = animate._snapshot_mobject(current.to_ir())
                     target.rotate(cumulative_angle, compat.OUT, about_point=pivot_point)
-                    object_key = scene._object_keys[obj.id]
-                    compat._BaseScene.play(
-                        scene,
-                        _base.Transform(
-                            source,
-                            target,
-                            key=(
-                                f"@rotating-family:{object_key}:{start_time:g}:{index}"
-                                f":segment:{segment}"
-                            ),
-                        ),
-                        run_time=segment_duration,
-                        start_time=segment_start,
-                        easing="linear",
+                else:
+                    assert projection_keys is not None
+                    target = projected_target(
+                        current,
+                        axis=axis,
+                        pivot_point=pivot_point,
+                        angle=cumulative_angle,
+                        scale_key=projection_keys[index],
                     )
-            return
-
-        for index, (source, current) in enumerate(zip(sources, detached, strict=True)):
-            assert source._object is not None
-            obj = source._object
-            target = reflected_target(current, axis=axis, pivot_point=pivot_point)
-
-            object_key = scene._object_keys[obj.id]
-            compat._BaseScene.play(
-                scene,
-                _base.Transform(
-                    source,
-                    target,
-                    key=f"@rotating-family:{object_key}:{start_time:g}:{index}",
-                ),
-                run_time=duration,
-                start_time=start_time,
-                easing=easing,
-            )
+                object_key = scene._object_keys[obj.id]
+                compat._BaseScene.play(
+                    scene,
+                    _base.Transform(
+                        source,
+                        target,
+                        key=(
+                            f"@rotating-family:{object_key}:{start_time:g}:{index}"
+                            f":segment:{segment}"
+                        ),
+                    ),
+                    run_time=segment_duration,
+                    start_time=segment_start,
+                    easing="linear",
+                )
+                if segment + 1 == segment_count:
+                    final_targets.append((source, target))
+        return final_targets
 
     def schedule(
         scene: object,
@@ -576,7 +610,7 @@ def _install_rotating_breadth() -> None:
         start_time: float,
         duration: float,
         easing: str,
-    ) -> None:
+    ) -> list[tuple[_base.Mobject, _base.Mobject]]:
         if not isinstance(animation.mobject, compat.Group):
             exact = rotate.Rotating(
                 animation.mobject,
@@ -594,8 +628,8 @@ def _install_rotating_breadth() -> None:
                 duration=duration,
                 easing=easing,
             )
-            return
-        schedule_family(
+            return []
+        return schedule_family(
             scene,
             animation,
             start_time=start_time,
@@ -656,6 +690,7 @@ def _install_rotating_breadth() -> None:
             animate._record_wrapper_state(animation.mobject, wrapper_states)
 
         max_end = base_start
+        semantic_targets: dict[int, tuple[_base.Mobject, _base.Mobject]] = {}
         try:
             for animation in broad:
                 animate._bind_for_animation(self, animation.mobject, start_time=base_start)
@@ -667,15 +702,22 @@ def _install_rotating_breadth() -> None:
                     play_rate_func=rate_func,
                     play_lag_ratio=lag_ratio,
                 )
-                schedule(
+                for source, target in schedule(
                     self,
                     animation,
                     start_time=base_start,
                     duration=resolved.run_time,
                     easing=resolved.rate_func,
-                )
+                ):
+                    semantic_targets[id(source)] = (source, target)
                 max_end = max(max_end, base_start + resolved.run_time)
             self._cursor = max(cursor_before, max_end)
+            # Internal family segments intentionally bypass the aligned scheduler to
+            # keep one deterministic global rate function. Mirror its successful-play
+            # ownership handoff once, after every segment has scheduled, so browser
+            # semantic handles and the legacy scene timeline agree for the next play.
+            for source, target in semantic_targets.values():
+                animate._semantic_handles.commit_transform_target(source, target)
             return self
         except Exception:
             self._restore_authoring_checkpoint(checkpoint)
