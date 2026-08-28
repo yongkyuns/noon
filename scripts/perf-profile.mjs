@@ -13,7 +13,17 @@ const repoRoot = path.resolve(scriptDir, "..");
 const port = Number(process.env.NOON_PERF_PORT ?? "4175");
 const baseUrl = `http://127.0.0.1:${port}`;
 const backend = process.env.NOON_PERF_BACKEND ?? "webgpu";
+const forceSoftwareWebGpu = process.env.NOON_PERF_FORCE_SOFTWARE_WEBGPU === "1";
+const requireGpuTimestamps = process.env.NOON_PERF_REQUIRE_GPU_TIMESTAMPS === "1";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
+assert.ok(
+  backend === "webgpu" || !forceSoftwareWebGpu,
+  "NOON_PERF_FORCE_SOFTWARE_WEBGPU requires the WebGPU backend",
+);
+assert.ok(
+  backend === "webgpu" || !requireGpuTimestamps,
+  "NOON_PERF_REQUIRE_GPU_TIMESTAMPS requires the WebGPU backend",
+);
 
 const counts = integerList(process.env.NOON_PERF_COUNTS ?? "1000,10000,100000");
 const layouts = stringList(process.env.NOON_PERF_LAYOUTS ?? "fit,fixed,overdraw");
@@ -56,7 +66,7 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: browserArgs(backend),
+    args: browserArgs(backend, forceSoftwareWebGpu),
   });
 
   const results = [];
@@ -100,6 +110,27 @@ try {
       assert.equal(report.workload.objects, objects);
       assert.equal(report.workload.layout, layout);
       assert.equal(report.environment.devicePixelRatio, dpr);
+      if (requireGpuTimestamps) {
+        assert.equal(
+          report.gpu?.timestampSupported,
+          true,
+          `${layout}/${objects} did not expose WebGPU timestamp queries`,
+        );
+        const minimumSamples = Math.min(frames, 8);
+        assert.ok(
+          report.gpu.samples >= minimumSamples,
+          `${layout}/${objects} produced ${report.gpu.samples} GPU samples; expected at least ${minimumSamples}`,
+        );
+        assert.equal(
+          report.gpu.failed,
+          0,
+          `${layout}/${objects} reported ${report.gpu.failed} failed GPU timestamp samples`,
+        );
+        assert.ok(
+          report.gpu.samples + report.gpu.dropped + report.gpu.failed >= frames,
+          `${layout}/${objects} left GPU timestamp samples unaccounted for`,
+        );
+      }
       results.push(report);
       console.log(
         `${format(report.cadence.effective?.effectiveFps)} FPS, ` +
@@ -125,7 +156,19 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, counts, layouts, warmup, frames, targetHz, width, height, dpr },
+    configuration: {
+      backend,
+      counts,
+      layouts,
+      warmup,
+      frames,
+      targetHz,
+      width,
+      height,
+      dpr,
+      forceSoftwareWebGpu,
+      requireGpuTimestamps,
+    },
     cases: results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -153,8 +196,23 @@ async function waitForServer() {
   throw new Error(`Performance server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function browserArgs(mode) {
+function browserArgs(mode, forceSoftware = false) {
   if (mode === "webgpu") {
+    if (forceSoftware) {
+      return [
+        "--enable-unsafe-webgpu",
+        "--enable-unsafe-swiftshader",
+        "--use-webgpu-adapter=swiftshader",
+        "--use-gpu-in-tests",
+        "--ignore-gpu-blocklist",
+        "--enable-features=Vulkan",
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--use-vulkan=swiftshader",
+        "--disable-gpu-sandbox",
+        "--disable-dev-shm-usage",
+      ];
+    }
     return [
       "--enable-unsafe-webgpu",
       "--use-gpu-in-tests",
