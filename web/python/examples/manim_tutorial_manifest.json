@@ -437,7 +437,7 @@
       "expected_duration": 3,
       "thumbnail": "thumbnails/manim/generated/using-focus-on.png",
       "thumbnail_alt": "Exact-source Manim UsingFocusOn",
-      "thumbnail_time": 1,
+      "thumbnail_time": 2.5,
       "order": 170
     },
     {
@@ -460,7 +460,7 @@
       "expected_duration": 2,
       "thumbnail": "thumbnails/manim/generated/using-indicate.png",
       "thumbnail_alt": "Exact-source Manim UsingIndicate",
-      "thumbnail_time": 0.5,
+      "thumbnail_time": 1.5,
       "order": 180
     },
     {
