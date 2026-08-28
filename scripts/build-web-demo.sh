@@ -18,6 +18,7 @@ node --check web/execution-transport.js
 node --check web/execution-canvas.js
 node --check web/execution-engine-worker.js
 node --check web/execution-render-worker.js
+node --check web/render-gpu-diagnostics.js
 node --check web/execution-worker-client.js
 node --check web/retained-execution-engine-worker.js
 node --check web/retained-execution-render-worker.js
@@ -64,6 +65,7 @@ node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
+node --test web/render-gpu-diagnostics.test.mjs
 node --test web/execution-worker-startup.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/authoring-out-of-order-races.test.mjs
