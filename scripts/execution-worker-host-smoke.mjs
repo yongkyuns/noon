@@ -14,6 +14,8 @@ const source = await readFile(
   path.join(repoRoot, "web/python/examples/slow_host_updater.py"),
   "utf8",
 );
+const teardownSource = source.replace("0.080", "0.300");
+assert.notEqual(teardownSource, source, "teardown smoke must extend the callback delay");
 
 let serverOutput = "";
 const server = spawn(
@@ -121,6 +123,59 @@ try {
   );
   assert.equal(after.engineMetrics.host.errors, 0);
 
+  const teardownAuthored = await page.evaluate(async (pythonSource) => {
+    const { authoring, client } = window.executionHostSmoke;
+    const authored = await authoring.run(pythonSource);
+    if (authored.kind !== "scene_document" || authored.callbacks === null) {
+      throw new Error("teardown smoke must author a callback scene");
+    }
+    await client.configureHostCallbacks(authored.callbacks, authoring);
+    return { callbackCount: authored.callbacks.slots.length };
+  }, teardownSource);
+  assert.equal(teardownAuthored.callbackCount, 1);
+
+  await page.waitForFunction(async () => {
+    const report = await window.executionHostSmoke.client.metrics();
+    return report.engineMetrics.host.enabled && report.engineMetrics.host.inFlight;
+  }, null, { timeout: 30_000 });
+
+  const teardown = await page.evaluate(async () => {
+    const { client } = window.executionHostSmoke;
+    const beforeState = await client.state();
+    const beforeMetrics = await client.metrics();
+    if (!beforeMetrics.engineMetrics.host.inFlight) {
+      throw new Error("teardown smoke lost the in-flight callback before invalidation");
+    }
+    await client.configureHostCallbacks(null);
+    const disabledMetrics = await client.metrics();
+    return { beforeState, beforeMetrics, disabledMetrics };
+  });
+  assert.equal(teardown.disabledMetrics.engineMetrics.host.enabled, false);
+
+  await page.waitForTimeout(420);
+  const afterTeardown = await page.evaluate(async () => ({
+    state: await window.executionHostSmoke.client.state(),
+    report: await window.executionHostSmoke.client.metrics(),
+  }));
+
+  assert.equal(
+    afterTeardown.state.nextPatchSequence,
+    teardown.beforeState.nextPatchSequence,
+    "callback result from an invalidated generation advanced the engine patch sequence",
+  );
+  assert.equal(afterTeardown.report.engineMetrics.host.enabled, false);
+  assert.equal(
+    afterTeardown.report.engineMetrics.host.committed,
+    0,
+    "callback result from the invalidated generation was committed",
+  );
+  assert.equal(afterTeardown.report.engineMetrics.host.errors, 0);
+  assert.ok(
+    afterTeardown.report.metrics.presentedFrames >
+      teardown.disabledMetrics.metrics.presentedFrames,
+    "native rendering stopped after callback teardown",
+  );
+
   const clientErrors = await page.evaluate(() => window.executionHostSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
   assert.deepEqual(browserErrors, []);
@@ -132,7 +187,8 @@ try {
   await page.close();
   console.log(
     `✓ slow Python host callback: ${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
-      `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented`,
+      `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented; ` +
+      "stale callback dropped after teardown",
   );
 } finally {
   await browser?.close();
