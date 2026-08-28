@@ -130,6 +130,10 @@ impl std::ops::AddAssign for TextGpuDrawStats {
 pub enum TextGpuDrawError {
     UnsupportedSampleCount(u32),
     MissingAtlasPlane(GlyphAtlasPlane),
+    UnsupportedAtlasPage {
+        plane: GlyphAtlasPlane,
+        page: u32,
+    },
     InstanceRangeOutOfBounds {
         plane: GlyphAtlasPlane,
         end: u32,
@@ -146,6 +150,10 @@ impl std::fmt::Display for TextGpuDrawError {
             Self::MissingAtlasPlane(plane) => {
                 write!(formatter, "{plane:?} glyph atlas texture is not resident")
             }
+            Self::UnsupportedAtlasPage { plane, page } => write!(
+                formatter,
+                "{plane:?} glyph atlas page {page} is not supported by the current GPU binding model"
+            ),
             Self::InstanceRangeOutOfBounds {
                 plane,
                 end,
@@ -416,6 +424,7 @@ impl TextGlyphGpuRenderer {
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
         let PreparedTextItem::GlyphBatch {
             plane,
+            page,
             instance_range,
             ..
         } = item
@@ -428,6 +437,7 @@ impl TextGlyphGpuRenderer {
         if instance_range.is_empty() {
             return Ok(TextGpuDrawStats::default());
         }
+        validate_atlas_page(*plane, *page)?;
 
         let (buffer, bind_group, available, pipeline) = match plane {
             GlyphAtlasPlane::Mask => (
@@ -500,6 +510,14 @@ impl TextGlyphGpuRenderer {
             (GlyphAtlasPlane::Color, TEXT_MSAA_SAMPLE_COUNT) => Ok(&self.color_pipeline_msaa),
             (_, count) => Err(TextGpuDrawError::UnsupportedSampleCount(count)),
         }
+    }
+}
+
+fn validate_atlas_page(plane: GlyphAtlasPlane, page: u32) -> Result<(), TextGpuDrawError> {
+    if page == 0 {
+        Ok(())
+    } else {
+        Err(TextGpuDrawError::UnsupportedAtlasPage { plane, page })
     }
 }
 
@@ -682,6 +700,7 @@ mod tests {
             text: text_handle(),
             run_index: 0,
             plane: GlyphAtlasPlane::Mask,
+            page: image.page,
             instance_range: 0..1,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
@@ -773,6 +792,7 @@ mod tests {
             text: text_handle(),
             run_index: 0,
             plane: GlyphAtlasPlane::Mask,
+            page: image.page,
             instance_range: 0..1,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
@@ -851,6 +871,18 @@ mod tests {
         };
         assert_eq!(stats.draw_calls, 0);
         assert_eq!(stats.deferred_items, 1);
+    }
+
+    #[test]
+    fn nonzero_atlas_page_is_rejected_before_draw() {
+        assert_eq!(validate_atlas_page(GlyphAtlasPlane::Mask, 0), Ok(()));
+        assert_eq!(
+            validate_atlas_page(GlyphAtlasPlane::Color, 3),
+            Err(TextGpuDrawError::UnsupportedAtlasPage {
+                plane: GlyphAtlasPlane::Color,
+                page: 3,
+            })
+        );
     }
 
     #[test]
