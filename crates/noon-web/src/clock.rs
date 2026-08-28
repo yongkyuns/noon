@@ -148,6 +148,10 @@ impl PlaybackClock {
         self.playing
     }
 
+    pub const fn is_paused(&self) -> bool {
+        !self.playing
+    }
+
     pub fn current_time(&self) -> f64 {
         if !self.playing {
             return self.anchor_scene_time;
@@ -248,7 +252,7 @@ mod tests {
         clock.scene_time(100.0).unwrap();
         assert_eq!(clock.scene_time(600.0).unwrap(), 0.5);
         clock.pause();
-        assert!(!clock.is_playing());
+        assert!(clock.is_paused());
         assert_eq!(clock.scene_time(1_600.0).unwrap(), 0.5);
         assert_eq!(clock.scene_time(5_600.0).unwrap(), 0.5);
         assert_eq!(clock.current_time(), 0.5);
