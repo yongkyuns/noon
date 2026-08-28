@@ -1,0 +1,71 @@
+name: Share browser GPU diagnostic policy
+
+on:
+  push:
+    branches:
+      - tmp/worker-gpu-diag-legacy-share
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature files
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /crates/noon-web/src/legacy.rs
+            /crates/noon-web/src/gpu_diagnostics.rs
+
+      - name: Consolidate uncaptured error policy
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("crates/noon-web/src/legacy.rs")
+          text = p.read_text()
+
+          def replace_once(old, new):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one legacy replacement target, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''        sync::{\n            atomic::{AtomicU32, Ordering},\n            Arc, Mutex,\n        },\n''',
+              '''        sync::{\n            atomic::{AtomicU32, Ordering},\n            Arc,\n        },\n''',
+          )
+          replace_once(
+              '''    use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};\n''',
+              '''    use crate::gpu_diagnostics::{GpuDiagnostic, GpuDiagnosticMailbox};\n\n    use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};\n''',
+          )
+
+          old_policy = '''    #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n    enum GpuUncapturedErrorKind {\n        Validation,\n        OutOfMemory,\n        Internal,\n    }\n\n    impl GpuUncapturedErrorKind {\n        const fn label(self) -> &'static str {\n            match self {\n                Self::Validation => "validation",\n                Self::OutOfMemory => "out-of-memory",\n                Self::Internal => "internal",\n            }\n        }\n\n        const fn is_fatal(self) -> bool {\n            !matches!(self, Self::Validation)\n        }\n    }\n\n    #[derive(Debug)]\n    struct GpuUncapturedError {\n        generation: u32,\n        kind: GpuUncapturedErrorKind,\n        message: String,\n    }\n\n    impl GpuUncapturedError {\n        fn from_wgpu(generation: u32, backend: wgpu::Backend, error: wgpu::Error) -> Self {\n            let kind = match &error {\n                wgpu::Error::Validation { .. } => GpuUncapturedErrorKind::Validation,\n                wgpu::Error::OutOfMemory { .. } => GpuUncapturedErrorKind::OutOfMemory,\n                wgpu::Error::Internal { .. } => GpuUncapturedErrorKind::Internal,\n            };\n            let backend = match backend {\n                wgpu::Backend::BrowserWebGpu => "WebGPU",\n                wgpu::Backend::Gl => "WebGL2",\n                _ => "GPU",\n            };\n            Self {\n                generation,\n                kind,\n                message: format!(\n                    "{backend} generation {generation} {} error: {error}",\n                    kind.label()\n                ),\n            }\n        }\n    }\n\n    #[derive(Clone, Default)]\n    struct GpuDeviceSignals {\n        lost_generation: Arc<AtomicU32>,\n        uncaptured_error: Arc<Mutex<Option<GpuUncapturedError>>>,\n    }\n\n    impl GpuDeviceSignals {\n        fn lost_generation(&self) -> u32 {\n            self.lost_generation.load(Ordering::Acquire)\n        }\n\n        fn mark_lost(&self, generation: u32) {\n            self.lost_generation.fetch_max(generation, Ordering::AcqRel);\n        }\n\n        fn report_uncaptured_error(\n            &self,\n            generation: u32,\n            backend: wgpu::Backend,\n            error: wgpu::Error,\n        ) {\n            let captured = GpuUncapturedError::from_wgpu(generation, backend, error);\n            self.with_error_slot(|pending| {\n                let replace = match pending.as_ref() {\n                    None => true,\n                    Some(current) if current.generation < generation => true,\n                    Some(current) if current.generation > generation => false,\n                    Some(current) => !current.kind.is_fatal() && captured.kind.is_fatal(),\n                };\n                if replace {\n                    *pending = Some(captured);\n                }\n            });\n        }\n\n        fn take_uncaptured_error(&self, generation: u32) -> Option<GpuUncapturedError> {\n            self.with_error_slot(|pending| {\n                let pending_generation = pending.as_ref().map(|error| error.generation);\n                match pending_generation {\n                    Some(current) if current < generation => {\n                        pending.take();\n                        None\n                    }\n                    Some(current) if current == generation => pending.take(),\n                    _ => None,\n                }\n            })\n        }\n\n        fn with_error_slot<R>(\n            &self,\n            operation: impl FnOnce(&mut Option<GpuUncapturedError>) -> R,\n        ) -> R {\n            let mut pending = match self.uncaptured_error.lock() {\n                Ok(pending) => pending,\n                Err(poisoned) => poisoned.into_inner(),\n            };\n            operation(&mut pending)\n        }\n    }\n'''
+          new_policy = '''    #[derive(Clone, Default)]\n    struct GpuDeviceSignals {\n        lost_generation: Arc<AtomicU32>,\n        uncaptured_error: GpuDiagnosticMailbox,\n    }\n\n    impl GpuDeviceSignals {\n        fn lost_generation(&self) -> u32 {\n            self.lost_generation.load(Ordering::Acquire)\n        }\n\n        fn mark_lost(&self, generation: u32) {\n            self.lost_generation.fetch_max(generation, Ordering::AcqRel);\n        }\n\n        fn report_uncaptured_error(\n            &self,\n            generation: u32,\n            backend: wgpu::Backend,\n            error: wgpu::Error,\n        ) {\n            self.uncaptured_error.record_wgpu(generation, backend, error);\n        }\n\n        fn take_uncaptured_error(&self, generation: u32) -> Option<GpuDiagnostic> {\n            self.uncaptured_error.take_for_generation(generation)\n        }\n    }\n'''
+          replace_once(old_policy, new_policy)
+
+          replace_once(
+              '''            if error.kind.is_fatal() {\n                self.gpu_fatal_error = Some(error.message.clone());\n            }\n            Err(js_message(&error.message))\n''',
+              '''            let message = error.formatted_message();\n            if error.is_fatal() {\n                self.gpu_fatal_error = Some(message.clone());\n            }\n            Err(js_message(&message))\n''',
+          )
+
+          p.write_text(text)
+          PY
+
+      - name: Validate and push
+        run: |
+          rustfmt --edition 2021 --check crates/noon-web/src/legacy.rs crates/noon-web/src/gpu_diagnostics.rs
+          ! grep -q 'GpuUncapturedError' crates/noon-web/src/legacy.rs
+          ! grep -q 'Mutex<Option<Gpu' crates/noon-web/src/legacy.rs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/legacy.rs
+          git commit -m "Share bounded GPU diagnostic policy"
+          git push origin HEAD:fix/worker-gpu-validation-diagnostics
