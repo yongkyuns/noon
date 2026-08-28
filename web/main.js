@@ -365,11 +365,12 @@ function warmAuthoringClient() {
       }
     },
     () => {
-      if (authoringClient === client && client.terminated) {
-        authoringClient = null;
-      }
-      status.dataset.authoringWarmup = "failed";
-    },
+    if (authoringClient !== client) return;
+    if (client.terminated) {
+      authoringClient = null;
+    }
+    status.dataset.authoringWarmup = "failed";
+  },
   );
 }
 

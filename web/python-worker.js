@@ -74,8 +74,13 @@ async function initializePyodide() {
     fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
     fetch(new URL("./python/_manim_camera.py", import.meta.url)),
   ]);
-  await noonWebReady;
-  const authoringStore = new WasmAuthoringStore();
+  const startupResourcesReady = Promise.all([
+  noonWebReady,
+  pyodideReady,
+  compatibilitySourcesReady,
+]);
+const [, pyodide, compatibilitySources] = await startupResourcesReady;
+const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -97,7 +102,6 @@ async function initializePyodide() {
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
 
-  const pyodide = await pyodideReady;
   const [
     apiResponse,
     irResponse,
@@ -119,7 +123,7 @@ async function initializePyodide() {
     reactiveResponse,
     updatersResponse,
     cameraResponse,
-  ] = await compatibilitySourcesReady;
+  ] = compatibilitySources;
   const responses = [
     [apiResponse, "Noon Python API"],
     [irResponse, "Noon Python IR emitter"],
