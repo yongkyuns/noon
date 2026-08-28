@@ -204,6 +204,19 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async pause() {
+    return this.#requestEngine("pause", {});
+  }
+
+  async resume() {
+    return this.#requestEngine("resume", {});
+  }
+
+  async seek(timeSeconds) {
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    return this.#requestEngine("seek", { time });
+  }
+
   async applyPatchBatch(patchBatchJson) {
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");
@@ -537,6 +550,18 @@ function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
     return null;
   }
   return validateLoopDurationSeconds(loopDurationSeconds);
+}
+
+function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
+  if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+    throw new TypeError("playback seek time must be finite and non-negative");
+  }
+  if (timeSeconds > loopDurationSeconds) {
+    throw new RangeError(
+      `playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
+    );
+  }
+  return timeSeconds;
 }
 
 function validateCallbacks(callbacks) {

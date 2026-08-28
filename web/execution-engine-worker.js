@@ -47,6 +47,9 @@ async function handleMainMessage(message) {
       case "replace_scene":
       case "reconcile_scene":
       case "set_loop_duration":
+      case "pause":
+      case "resume":
+      case "seek":
       case "apply_patch":
       case "configure_callbacks":
         enqueueControl(message);
@@ -60,6 +63,7 @@ async function handleMainMessage(message) {
         respond(message.requestId, {
           type: "state",
           time: player.time(),
+          playing: player.isPlaying(),
           nextPatchSequence: String(player.nextPatchSequence()),
           sceneJson: player.sceneJson(),
         });
@@ -301,6 +305,7 @@ function executeControl(message) {
       clearHostCallbacks();
       const delta = player.replaceSceneDeltaJson(message.sceneJson);
       applyOptionalLoopDuration(message.loopDurationSeconds);
+      latestTick = null;
       sendDeltaOrThrow(delta);
       respond(message.requestId, runtimeResult("replace_scene"));
       return;
@@ -323,6 +328,32 @@ function executeControl(message) {
       validateRequiredLoopDuration(message.loopDurationSeconds);
       player.setLoopDurationSeconds(message.loopDurationSeconds);
       respond(message.requestId, runtimeResult("set_loop_duration"));
+      return;
+    }
+    case "pause": {
+      player.pause();
+      latestTick = null;
+      respond(message.requestId, runtimeResult("pause"));
+      return;
+    }
+    case "resume": {
+      player.resume();
+      latestTick = null;
+      respond(message.requestId, runtimeResult("resume"));
+      return;
+    }
+    case "seek": {
+      if (hostCallbacks !== null) {
+        throw new Error(
+          "deterministic seek is not supported while Python host callbacks are active",
+        );
+      }
+      const delta = player.seekDeltaJson(message.time);
+      latestTick = null;
+      if (delta !== null && delta !== undefined) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, runtimeResult("seek"));
       return;
     }
     case "apply_patch": {
@@ -371,6 +402,7 @@ function runtimeResult(operation) {
     type: "result",
     operation,
     time: player.time(),
+    playing: player.isPlaying(),
     nextPatchSequence: String(player.nextPatchSequence()),
     sceneJson: player.sceneJson(),
   };
