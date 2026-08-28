@@ -58,6 +58,7 @@ node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
+node --test web/execution-worker-client.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/playground-generation.test.mjs
 node --test web/playground-startup.test.mjs
