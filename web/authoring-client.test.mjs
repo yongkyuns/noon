@@ -250,6 +250,104 @@ test("rejects only the request associated with a Python execution error", async 
   assert.equal(client.terminated, false, "ordinary Python errors keep the worker reusable");
 });
 
+test("accepts pending Python responses that complete out of order", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const first = client.run("result = first");
+  const second = client.run("result = second");
+  await Promise.resolve();
+  assert.deepEqual(
+    worker.messages.map(({ requestId }) => requestId),
+    [0, 1],
+  );
+
+  const secondBatch = { version: 1, sequence: 2, patches: [] };
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 1,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: secondBatch }),
+    }),
+  );
+  assert.deepEqual(await second, { kind: "patch_batch", document: secondBatch });
+
+  const firstBatch = { version: 1, sequence: 1, patches: [] };
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 0,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: firstBatch }),
+    }),
+  );
+  assert.deepEqual(await first, { kind: "patch_batch", document: firstBatch });
+  assert.deepEqual(client.diagnostics, {
+    nextRequestId: 2,
+    pendingRequests: 0,
+    staleResponses: 0,
+    terminated: false,
+  });
+});
+
+test("drops duplicate responses for already-issued requests without killing the worker", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  const batch = { version: 1, sequence: 0, patches: [] };
+  const resultPromise = client.run("result = batch");
+  await Promise.resolve();
+  const response = workerMessage("result", {
+    requestId: 0,
+    resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+  });
+  worker.emit("message", response);
+  assert.deepEqual(await resultPromise, { kind: "patch_batch", document: batch });
+
+  worker.emit("message", response);
+  assert.equal(client.terminated, false);
+  assert.equal(worker.terminated, false);
+  assert.equal(client.diagnostics.staleResponses, 1);
+
+  const retry = client.run("result = retry");
+  await Promise.resolve();
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 1,
+      resultJson: JSON.stringify({ kind: "patch_batch", document: batch }),
+    }),
+  );
+  await retry;
+  assert.equal(client.diagnostics.staleResponses, 1);
+});
+
+test("treats never-issued future response IDs as fatal protocol corruption", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready"));
+  await client.ready();
+
+  worker.emit(
+    "message",
+    workerMessage("result", {
+      requestId: 7,
+      resultJson: JSON.stringify({
+        kind: "patch_batch",
+        document: { version: 1, sequence: 0, patches: [] },
+      }),
+    }),
+  );
+
+  assert.equal(client.terminated, true);
+  assert.equal(worker.terminated, true);
+  assert.equal(client.diagnostics.staleResponses, 0);
+  await assert.rejects(client.run("result = retry"), /terminated/);
+});
+
 test("exposes fatal Python worker termination to recovery owners", async () => {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
