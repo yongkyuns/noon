@@ -15,6 +15,20 @@ use crate::{IrError, SceneDocument};
 /// is in progress, but new frontend semantics should converge on `SceneSpec`.
 pub const SCENE_SPEC_VERSION: u32 = 1;
 
+#[derive(Deserialize)]
+struct SceneSpecVersionProbe {
+    version: u32,
+}
+
+fn preflight_scene_spec_version(json: &str) -> Result<(), SceneSpecError> {
+    let probe: SceneSpecVersionProbe = serde_json::from_str(json).map_err(SceneSpecError::Json)?;
+    if probe.version == SCENE_SPEC_VERSION {
+        Ok(())
+    } else {
+        Err(SceneSpecError::UnsupportedVersion(probe.version))
+    }
+}
+
 /// Source-language identity at the canonical authoring boundary.
 ///
 /// This mirrors the semantic source kinds without making the IR depend on a
@@ -297,6 +311,7 @@ impl SceneSpec {
     }
 
     pub fn from_json(json: &str) -> Result<Self, SceneSpecError> {
+        preflight_scene_spec_version(json)?;
         let spec: Self = serde_json::from_str(json).map_err(SceneSpecError::Json)?;
         spec.validate()?;
         Ok(spec)
@@ -578,6 +593,46 @@ mod tests {
                 track: id,
                 error: TimelineError::InvalidDuration(0.0),
             }) if id == track.id
+        ));
+    }
+
+    #[test]
+    fn future_scene_spec_version_is_rejected_before_content_decode() {
+        let json = r#"{
+            "version": 2,
+            "objects": [{
+                "id": 7,
+                "content": {
+                    "kind": "future_content_kind",
+                    "value": {"future_only": true}
+                }
+            }],
+            "tracks": []
+        }"#;
+
+        assert!(matches!(
+            SceneSpec::from_json(json),
+            Err(SceneSpecError::UnsupportedVersion(2))
+        ));
+    }
+
+    #[test]
+    fn current_scene_spec_version_still_reports_unknown_content_as_json_error() {
+        let json = r#"{
+            "version": 1,
+            "objects": [{
+                "id": 7,
+                "content": {
+                    "kind": "future_content_kind",
+                    "value": {"future_only": true}
+                }
+            }],
+            "tracks": []
+        }"#;
+
+        assert!(matches!(
+            SceneSpec::from_json(json),
+            Err(SceneSpecError::Json(_))
         ));
     }
 
