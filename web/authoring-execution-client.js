@@ -1,3 +1,4 @@
+import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
 import { RetainedExecutionWorkerClient } from "./retained-execution-worker-client.js";
 
@@ -171,14 +172,19 @@ export class AuthoringExecutionClient {
 
   async restart() {
     return this.#withStablePlayer(async (player, mode) => {
-      const ready = await player.restart();
-      this.#canvas = player.canvas;
-      this.#mode = mode;
-      this.#rendererBackend = ready.render.backend;
-      this.#transportMode = ready.transportMode;
-      this.#observeCanvas();
-      this.#resizeCurrentCanvas();
-      return { ...ready, mode };
+      try {
+        const ready = await player.restart();
+        this.#canvas = player.canvas;
+        this.#mode = mode;
+        this.#rendererBackend = ready.render.backend;
+        this.#transportMode = ready.transportMode;
+        this.#observeCanvas();
+        this.#resizeCurrentCanvas();
+        return { ...ready, mode };
+      } catch (error) {
+        this.#adoptPlayerCanvas(player);
+        throw error;
+      }
     });
   }
 
@@ -221,6 +227,7 @@ export class AuthoringExecutionClient {
       return ready;
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -250,6 +257,7 @@ export class AuthoringExecutionClient {
       };
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -282,6 +290,7 @@ export class AuthoringExecutionClient {
       };
     } catch (error) {
       player.terminate();
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -332,24 +341,20 @@ export class AuthoringExecutionClient {
 
   #replaceTransferredCanvas() {
     this.#player?.terminate();
-    const previous = this.#canvas;
-    const replacement = previous.cloneNode(false);
-    replacement.width = previous.width;
-    replacement.height = previous.height;
-    replacement.className = previous.className;
-    replacement.id = previous.id;
-    for (const attribute of previous.getAttributeNames()) {
-      if (attribute !== "width" && attribute !== "height" && attribute !== "class" && attribute !== "id") {
-        replacement.setAttribute(attribute, previous.getAttribute(attribute));
-      }
-    }
-    previous.replaceWith(replacement);
-    this.#canvas = replacement;
+    this.#canvas = replaceExecutionCanvas(this.#canvas);
     this.#player = null;
     this.#mode = null;
     this.#rendererBackend = "";
     this.#observeCanvas();
-    return replacement;
+    return this.#canvas;
+  }
+
+  #adoptPlayerCanvas(player) {
+    if (this.#canvas === player.canvas) {
+      return;
+    }
+    this.#canvas = player.canvas;
+    this.#observeCanvas();
   }
 
   #observeCanvas() {
