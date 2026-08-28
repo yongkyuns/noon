@@ -175,6 +175,10 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
   }
 
+  async restartPlayback() {
+    return this.#withStablePlayer((player) => player.restartPlayback());
+  }
+
   async restart() {
     return this.#withStablePlayer(async (player, mode) => {
       try {

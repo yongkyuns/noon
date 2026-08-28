@@ -35,6 +35,7 @@ async function handleMainMessage(message) {
       case "pause":
       case "resume":
       case "seek":
+      case "restart_playback":
         enqueueControl(message);
         return;
       case "state":
@@ -242,6 +243,15 @@ function executeControl(message) {
         sendDeltaOrThrow(delta);
       }
       respond(message.requestId, runtimeResult("seek"));
+      return;
+    }
+    case "restart_playback": {
+      const delta = player.seekDeltaJson(0);
+      latestTick = null;
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, runtimeResult("restart_playback"));
       return;
     }
     default:

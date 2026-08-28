@@ -50,6 +50,7 @@ async function handleMainMessage(message) {
       case "pause":
       case "resume":
       case "seek":
+      case "restart_playback":
       case "apply_patch":
       case "configure_callbacks":
         enqueueControl(message);
@@ -208,7 +209,10 @@ function handleHostMessage(message) {
 
     if (message.type === "error") {
       hostMetrics.errors += 1;
-      postMain({ type: "host_callback_error", message: String(message.message || "host callback failed") });
+      postMain({
+        type: "host_callback_error",
+        message: String(message.message || "host callback failed"),
+      });
       requestLatestHostPhase();
       return;
     }
@@ -331,29 +335,35 @@ function executeControl(message) {
       return;
     }
     case "pause": {
+      beginPlaybackControl(false);
       player.pause();
-      latestTick = null;
       respond(message.requestId, runtimeResult("pause"));
       return;
     }
     case "resume": {
+      beginPlaybackControl(false);
       player.resume();
-      latestTick = null;
       respond(message.requestId, runtimeResult("resume"));
       return;
     }
     case "seek": {
-      if (hostCallbacks !== null) {
-        throw new Error(
-          "deterministic seek is not supported while Python host callbacks are active",
-        );
-      }
+      beginPlaybackControl(true);
       const delta = player.seekDeltaJson(message.time);
-      latestTick = null;
       if (delta !== null && delta !== undefined) {
         sendDeltaOrThrow(delta);
       }
+      requestLatestHostPhase();
       respond(message.requestId, runtimeResult("seek"));
+      return;
+    }
+    case "restart_playback": {
+      beginPlaybackControl(true);
+      const delta = player.seekDeltaJson(0);
+      if (delta !== null && delta !== undefined) {
+        sendDeltaOrThrow(delta);
+      }
+      requestLatestHostPhase();
+      respond(message.requestId, runtimeResult("restart_playback"));
       return;
     }
     case "apply_patch": {
@@ -376,6 +386,20 @@ function executeControl(message) {
     default:
       throw new Error(`unknown queued engine command ${message.type}`);
   }
+}
+
+function beginPlaybackControl(invalidateHostPhase) {
+  latestTick = null;
+  if (!invalidateHostPhase || hostCallbacks === null) {
+    return;
+  }
+  hostGeneration = checkedIncrement(hostGeneration, "host callback generation");
+  if (hostInFlight !== null || pendingHostResult !== null) {
+    hostMetrics.droppedLateResults += 1;
+  }
+  hostInFlight = null;
+  pendingHostResult = null;
+  lastHostPhaseTime = Number.NaN;
 }
 
 function validateRequiredLoopDuration(duration) {
@@ -665,8 +689,10 @@ function validateCallbackConfig(callbacks) {
       }
     }
     if (
-      slot.active_after !== undefined && slot.active_after !== null &&
-      slot.active_through !== undefined && slot.active_through !== null &&
+      slot.active_after !== undefined &&
+      slot.active_after !== null &&
+      slot.active_through !== undefined &&
+      slot.active_through !== null &&
       slot.active_through < slot.active_after
     ) {
       throw new Error("host callback slot has an invalid activation window");

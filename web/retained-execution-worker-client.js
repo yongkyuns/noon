@@ -180,6 +180,10 @@ export class RetainedExecutionWorkerClient {
     return this.#requestEngine("seek", { time });
   }
 
+  async restartPlayback() {
+    return this.#requestEngine("restart_playback", {});
+  }
+
   resize(width, height, devicePixelRatio = 1) {
     this.#requireStarted();
     if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(devicePixelRatio)) {
