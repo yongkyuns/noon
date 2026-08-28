@@ -58,6 +58,7 @@ try {
   const measurementStartMs = performance.now();
   let previousTimestamp = null;
   let measured = 0;
+  let metricWarmupFrames = 0;
   while (measured < measuredFrames) {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
     const timestamp = await nextAnimationFrame();
@@ -68,16 +69,32 @@ try {
       continue;
     }
 
-    const cpuFrameMs = player.lastCpuFrameMs();
+    const metrics = {
+      cpuFrameMs: player.lastCpuFrameMs(),
+      runtimeMs: player.lastRuntimeEvaluationMs(),
+      prepareMs: player.lastFramePrepareMs(),
+      uploadMs: player.lastUploadMs(),
+      encodeSubmitMs: player.lastEncodeSubmitMs(),
+    };
+    const invalidMetric = Object.entries(metrics).find(([, value]) => !Number.isFinite(value));
+    if (invalidMetric) {
+      const [label, value] = invalidMetric;
+      if (measured > 0 || metricWarmupFrames >= warmupFrames) {
+        throw new Error(`${label} metric is not finite: ${value}`);
+      }
+      metricWarmupFrames += 1;
+      continue;
+    }
+
     cadence.record(timestamp, browserCallMs);
-    recordPlayerMetric(windows.cpuFrameMs, cpuFrameMs, "cpu frame");
-    recordPlayerMetric(windows.runtimeMs, player.lastRuntimeEvaluationMs(), "runtime");
-    recordPlayerMetric(windows.prepareMs, player.lastFramePrepareMs(), "prepare");
-    recordPlayerMetric(windows.uploadMs, player.lastUploadMs(), "upload");
-    recordPlayerMetric(windows.encodeSubmitMs, player.lastEncodeSubmitMs(), "encode/submit");
+    recordPlayerMetric(windows.cpuFrameMs, metrics.cpuFrameMs, "cpu frame");
+    recordPlayerMetric(windows.runtimeMs, metrics.runtimeMs, "runtime");
+    recordPlayerMetric(windows.prepareMs, metrics.prepareMs, "prepare");
+    recordPlayerMetric(windows.uploadMs, metrics.uploadMs, "upload");
+    recordPlayerMetric(windows.encodeSubmitMs, metrics.encodeSubmitMs, "encode/submit");
     if (previousTimestamp !== null) {
       windows.unattributedFrameMs.record(
-        estimateUnattributedFrameMs(timestamp - previousTimestamp, cpuFrameMs),
+        estimateUnattributedFrameMs(timestamp - previousTimestamp, metrics.cpuFrameMs),
       );
     }
     previousTimestamp = timestamp;
@@ -114,6 +131,7 @@ try {
     setup: {
       playerCreateMs,
       warmupFrames,
+      metricWarmupFrames,
       measuredFrames: frame.frames,
     },
     cadence: {
