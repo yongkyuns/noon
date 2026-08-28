@@ -1,5 +1,8 @@
 use noon_compile::CompiledScene;
-use noon_core::{GeometryRef, ObjectId, SceneDefinition, ScenePatch, Transform2D, Vec2};
+use noon_core::{
+    Easing, GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, Vec2,
+};
 use noon_runtime::{RuntimePatchStats, SceneInstance};
 
 const SCENE_OBJECTS: usize = 10_000;
@@ -7,7 +10,7 @@ const FAILURE_ITERATIONS: u64 = 1_000;
 const TARGET_INDEX: usize = SCENE_OBJECTS / 2;
 
 #[test]
-fn rejected_property_churn_preserves_runtime_and_allows_recovery() {
+fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
     let mut definition = SceneDefinition::new();
     let mut objects = Vec::with_capacity(SCENE_OBJECTS);
     for _ in 0..SCENE_OBJECTS {
@@ -26,25 +29,29 @@ fn rejected_property_churn_preserves_runtime_and_allows_recovery() {
     for iteration in 0..FAILURE_ITERATIONS {
         let patch = if iteration % 2 == 0 {
             ScenePatch::SetTransform {
-                object: target,
-                transform: Transform2D {
-                    translation: Vec2::new(f32::NAN, 0.0),
-                    ..Transform2D::IDENTITY
-                },
-            }
-        } else {
-            ScenePatch::SetTransform {
                 object: ObjectId::new(1_000_000 + iteration),
                 transform: Transform2D {
                     translation: Vec2::new(1.0, -1.0),
                     ..Transform2D::IDENTITY
                 },
             }
+        } else {
+            ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(2_000_000 + iteration),
+                object: target,
+                property: Property::Opacity,
+                values: TrackValues::Scalar {
+                    from: f32::NAN,
+                    to: 0.5,
+                },
+                timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                time_map: Default::default(),
+            })
         };
 
         assert!(
             live.apply_patch(&patch).is_err(),
-            "iteration {iteration} must reject the invalid property edit"
+            "iteration {iteration} must reject the invalid patch"
         );
         assert_eq!(live.frame().objects.len(), frame_slots);
         assert_eq!(live.frame().objects[TARGET_INDEX], target_before);
