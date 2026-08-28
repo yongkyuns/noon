@@ -545,6 +545,10 @@ pub struct RetainedFramePreparer {
     snapshot_color_quads: Vec<GlyphQuadInstance>,
     snapshot_text_items: Vec<PreparedTextItem>,
     snapshot_text_stats: RetainedTextPrepareStats,
+    snapshot_prepare_stats: RetainedPrepareStats,
+    snapshot_metrics: Option<TextDeviceMetrics>,
+    prepared_generation_ready: bool,
+    prepared_generation_reuses: u64,
 }
 
 impl Default for RetainedFramePreparer {
@@ -570,6 +574,10 @@ impl Default for RetainedFramePreparer {
             snapshot_color_quads: Vec::new(),
             snapshot_text_items: Vec::new(),
             snapshot_text_stats: RetainedTextPrepareStats::default(),
+            snapshot_prepare_stats: RetainedPrepareStats::default(),
+            snapshot_metrics: None,
+            prepared_generation_ready: false,
+            prepared_generation_reuses: 0,
         }
     }
 }
@@ -633,6 +641,54 @@ impl RetainedFramePreparer {
         let scratch_reused =
             self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
 
+        if scratch_reused
+            && self.prepared_generation_ready
+            && self.snapshot_metrics == Some(metrics)
+        {
+            // The child preparer is privately owned and this generation was recorded
+            // only after a complete successful parent preparation. Matching metrics
+            // and an empty semantic change set therefore select its O(1) reuse path.
+            // Invalidate the parent generation first so any future fallible change in
+            // that contract cannot expose stale snapshots.
+            self.prepared_generation_ready = false;
+            {
+                let prepared = self
+                    .text
+                    .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+                debug_assert_eq!(prepared.mask_quads.len(), self.snapshot_mask_quads.len());
+                debug_assert_eq!(prepared.color_quads.len(), self.snapshot_color_quads.len());
+                debug_assert_eq!(prepared.items.len(), self.snapshot_text_items.len());
+                debug_assert_eq!(prepared.stats, self.snapshot_text_stats);
+            }
+
+            let no_changes = FrameChanges::default();
+            let geometry = self
+                .geometry
+                .prepare_incremental(&self.scratch, &no_changes);
+            self.prepared_generation_reuses =
+                self.prepared_generation_reuses.saturating_add(1);
+            self.prepared_generation_ready = true;
+            let text = PreparedRetainedTextSnapshot {
+                time: frame.time,
+                mask_quads: &self.snapshot_mask_quads,
+                color_quads: &self.snapshot_color_quads,
+                items: &self.snapshot_text_items,
+                stats: self.snapshot_text_stats,
+                atlas: self.text.atlas(),
+            };
+            return Ok(PreparedRetainedGpuFrame {
+                geometry,
+                text,
+                render_items: &self.render_items,
+                stats: self.snapshot_prepare_stats,
+            });
+        }
+
+        // Snapshot and painter-order state is only reusable after a complete parent
+        // preparation. Clear validity before the fallible text step so errors cannot
+        // leave an older successful generation eligible for empty-frame reuse.
+        self.prepared_generation_ready = false;
+
         // #339/#341 intentionally keep the atlas inside the retained text preparer.
         // Snapshot the lightweight prepared records once so that borrow can end and
         // the atlas can be borrowed alongside them for the parent GPU renderer.
@@ -680,6 +736,9 @@ impl RetainedFramePreparer {
             outline_cache_hits: outline_cache.hits,
             outline_cache_misses: outline_cache.misses,
         };
+        self.snapshot_prepare_stats = stats;
+        self.snapshot_metrics = Some(metrics);
+        self.prepared_generation_ready = true;
         let text = PreparedRetainedTextSnapshot {
             time: frame.time,
             mask_quads: &self.snapshot_mask_quads,
@@ -1624,6 +1683,7 @@ mod tests {
             assert_eq!(prepared.time(), 0.0);
             assert_eq!(prepared.geometry_stats().full_rebuilds, 1);
         }
+        assert_eq!(preparer.prepared_generation_reuses, 0);
         assert_eq!(
             preparer.incremental_stats(),
             RetainedFrameIncrementalStats {
@@ -1653,6 +1713,7 @@ mod tests {
             assert_eq!(geometry_stats.instances_repacked, 0);
             assert_eq!(geometry_stats.dirty_instance_count, 0);
         }
+        assert_eq!(preparer.prepared_generation_reuses, 1);
         assert_eq!(
             preparer.incremental_stats(),
             RetainedFrameIncrementalStats {
@@ -1661,6 +1722,61 @@ mod tests {
             }
         );
         assert_eq!(preparer.outline_cache_stats(), outline_stats);
+    }
+
+    #[test]
+    fn metric_change_does_not_reuse_parent_generation() {
+        let mut frame = RetainedFrameState {
+            time: 0.0,
+            objects: vec![RetainedFrameObjectState {
+                id: ObjectId::new(1),
+                content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                transform: Transform2D::default(),
+                style: Style::default(),
+                appearance: 1.0,
+            }],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+        };
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let first_metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let second_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                first_metrics,
+            )
+            .unwrap();
+        frame.time = 1.0;
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &fonts,
+                &geometries,
+                second_metrics,
+            )
+            .unwrap();
+
+        assert_eq!(prepared.time(), 1.0);
+        assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+        assert_eq!(preparer.prepared_generation_reuses, 0);
     }
 
     #[test]
