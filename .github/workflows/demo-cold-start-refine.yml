@@ -76,6 +76,12 @@ jobs:
 
           test_path = Path("web/playground-startup.test.mjs")
           test = test_path.read_text()
+          old_recovery = r'/authoringClient === client && client\.terminated[\s\S]*authoringClient = null/'
+          new_recovery = r'/authoringClient !== client\) return;[\s\S]*client\.terminated[\s\S]*authoringClient = null/'
+          if old_recovery not in test:
+              raise SystemExit("startup test recovery assertion anchor missing")
+          test = test.replace(old_recovery, new_recovery, 1)
+
           old_barrier = '''const firstBarrier = worker.indexOf("await noonWebReady;", initializeStart);
           assert.ok(firstBarrier > initializeStart, "Noon WASM readiness must remain an explicit barrier");'''
           new_barrier = '''const firstBarrier = worker.indexOf("await startupResourcesReady;", initializeStart);
