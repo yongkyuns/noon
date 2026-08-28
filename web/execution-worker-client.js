@@ -193,6 +193,24 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async pausePlayback() {
+    return this.#requestEngine("pause_playback", {});
+  }
+
+  async resumePlayback() {
+    return this.#requestEngine("resume_playback", {});
+  }
+
+  async seekPlayback(sceneTime) {
+    return this.#requestEngine("seek_playback", {
+      sceneTime: validatePlaybackSceneTime(sceneTime),
+    });
+  }
+
+  async restartPlayback() {
+    return this.#requestEngine("restart_playback", {});
+  }
+
   async applyPatchBatch(patchBatchJson) {
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");
@@ -475,6 +493,13 @@ function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
     return null;
   }
   return validateLoopDurationSeconds(loopDurationSeconds);
+}
+
+function validatePlaybackSceneTime(sceneTime) {
+  if (!Number.isFinite(sceneTime) || sceneTime < 0) {
+    throw new TypeError("playback scene time must be finite and non-negative");
+  }
+  return sceneTime;
 }
 
 function validateCallbacks(callbacks) {
