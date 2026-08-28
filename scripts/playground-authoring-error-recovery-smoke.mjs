@@ -192,6 +192,7 @@ try {
   diagnostics.browser = await browser.version();
   await page.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
   await waitForInitialScene(page);
+  await waitForObjectCount(page, 1);
   page.on("framenavigated", (frame) => {
     if (frame === page.mainFrame()) diagnostics.unexpectedNavigations += 1;
   });
