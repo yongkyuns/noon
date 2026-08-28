@@ -2,9 +2,13 @@ name: Manim raster differential
 
 on:
   pull_request:
+    paths-ignore:
+      - "crates/**/tests/**"
   push:
     branches:
       - master
+    paths-ignore:
+      - "crates/**/tests/**"
   workflow_dispatch:
 
 permissions:
