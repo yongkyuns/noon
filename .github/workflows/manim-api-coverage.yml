@@ -5,88 +5,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: manim-api-coverage-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  cold-start-format:
-    name: Normalize cold-start blocks
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-
-      - name: Normalize and validate
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          main_path = Path("web/main.js")
-          main = main_path.read_text()
-          bad_main = re.compile(
-              r'''    \(\) => \{\n    if \(authoringClient !== client\) return;\n    if \(client\.terminated\) \{\n      authoringClient = null;\n    \}\n    status\.dataset\.authoringWarmup = "failed";\n  \},\n  \);'''
-          )
-          good_main = '''    () => {
-              if (authoringClient !== client) return;
-              if (client.terminated) {
-                authoringClient = null;
-              }
-              status.dataset.authoringWarmup = "failed";
-            },
-          );'''
-          main, count = bad_main.subn(good_main, main, count=1)
-          if count not in (0, 1):
-              raise SystemExit(f"unexpected warmup block matches: {count}")
-          if count == 0 and good_main not in main:
-              raise SystemExit("warmup block is neither expected formatted nor unformatted form")
-          main_path.write_text(main)
-
-          worker_path = Path("web/python-worker.js")
-          worker = worker_path.read_text()
-          bad_worker = '''  const startupResourcesReady = Promise.all([
-          noonWebReady,
-          pyodideReady,
-          compatibilitySourcesReady,
-        ]);
-        const [, pyodide, compatibilitySources] = await startupResourcesReady;
-        const authoringStore = new WasmAuthoringStore();'''
-          good_worker = '''  const startupResourcesReady = Promise.all([
-            noonWebReady,
-            pyodideReady,
-            compatibilitySourcesReady,
-          ]);
-          const [, pyodide, compatibilitySources] = await startupResourcesReady;
-          const authoringStore = new WasmAuthoringStore();'''
-          if bad_worker in worker:
-              worker = worker.replace(bad_worker, good_worker, 1)
-          elif good_worker not in worker:
-              raise SystemExit("startup resource block is neither expected formatted nor unformatted form")
-          worker_path.write_text(worker)
-          PY
-          node --check web/main.js
-          node --check web/python-worker.js
-          node --test web/playground-startup.test.mjs
-          node --test web/authoring-client.test.mjs
-
-      - name: Commit cleanup if needed
-        run: |
-          if git diff --quiet -- web/main.js web/python-worker.js; then
-            echo "Cold-start blocks already formatted"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/main.js web/python-worker.js
-          git commit -m "Clean up cold-start concurrency blocks"
-          git push origin HEAD:${{ github.head_ref }}
-
   coverage:
     name: ManimCE 0.21.0 API inventory
     runs-on: ubuntu-latest
