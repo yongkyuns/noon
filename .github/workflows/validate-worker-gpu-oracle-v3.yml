@@ -1,0 +1,53 @@
+name: Validate revised worker GPU oracle
+
+on:
+  push:
+    branches:
+      - tmp/validate-worker-gpu-oracle-v3
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature head
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics-v2
+          fetch-depth: 1
+
+      - name: Download already-built browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: web-pkg
+          path: web
+          github-token: ${{ github.token }}
+          run-id: 33207331973
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Run revised worker validation oracle
+        env:
+          NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/render-worker-validation-artifact-recheck
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-validation-artifact-recheck
+          path: browser-smoke-artifacts/render-worker-validation-artifact-recheck
+          if-no-files-found: error
+          retention-days: 1
