@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::{
-    validate_track_definition, GeometryRef, ObjectDefinition, ObjectId, SceneDefinition, Style,
-    TimelineError, TrackDefinition, TrackId, Transform2D,
+    validate_track_definition, Color, GeometryRef, ObjectDefinition, ObjectId, PathCommand,
+    SceneDefinition, Style, TimelineError, TrackDefinition, TrackId, Transform2D, Vec2, VectorPath,
 };
 
 mod transaction_preflight;
@@ -95,12 +95,33 @@ impl MutationTransaction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectStateField {
+    Geometry,
+    Transform,
+    Style,
+}
+
+impl std::fmt::Display for ObjectStateField {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Geometry => "geometry",
+            Self::Transform => "transform",
+            Self::Style => "style",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatchError {
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
+    InvalidObjectState {
+        object: ObjectId,
+        field: ObjectStateField,
+    },
     InvalidTrack(TimelineError),
     ObjectIdExhausted,
     TrackIdExhausted,
@@ -113,6 +134,11 @@ impl std::fmt::Display for PatchError {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
             Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
+            Self::InvalidObjectState { object, field } => write!(
+                formatter,
+                "object {} contains non-finite {field} state",
+                object.get()
+            ),
             Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
             Self::ObjectIdExhausted => formatter.write_str("Noon object ID space exhausted"),
             Self::TrackIdExhausted => formatter.write_str("Noon track ID space exhausted"),
@@ -121,6 +147,86 @@ impl std::fmt::Display for PatchError {
 }
 
 impl std::error::Error for PatchError {}
+
+pub(super) fn validate_object_definition(object: &ObjectDefinition) -> Result<(), PatchError> {
+    validate_geometry(object.id, &object.geometry)?;
+    validate_transform(object.id, object.transform)?;
+    validate_style(object.id, object.style)
+}
+
+pub(super) fn validate_geometry(
+    object: ObjectId,
+    geometry: &GeometryRef,
+) -> Result<(), PatchError> {
+    let valid = match geometry {
+        GeometryRef::Circle { radius } => radius.is_finite(),
+        GeometryRef::Rectangle { size } => vec2_is_finite(*size),
+        GeometryRef::Line { start, end } => vec2_is_finite(*start) && vec2_is_finite(*end),
+        GeometryRef::VectorPath(path) => vector_path_is_finite(path),
+        GeometryRef::External(_) => true,
+    };
+    valid.then_some(()).ok_or(PatchError::InvalidObjectState {
+        object,
+        field: ObjectStateField::Geometry,
+    })
+}
+
+pub(super) fn validate_transform(
+    object: ObjectId,
+    transform: Transform2D,
+) -> Result<(), PatchError> {
+    let valid = vec2_is_finite(transform.translation)
+        && transform.rotation.is_finite()
+        && vec2_is_finite(transform.scale);
+    valid.then_some(()).ok_or(PatchError::InvalidObjectState {
+        object,
+        field: ObjectStateField::Transform,
+    })
+}
+
+pub(super) fn validate_style(object: ObjectId, style: Style) -> Result<(), PatchError> {
+    let valid = style.fill.is_none_or(color_is_finite)
+        && style.stroke.is_none_or(color_is_finite)
+        && style.stroke_width.is_finite()
+        && style.opacity.is_finite();
+    valid.then_some(()).ok_or(PatchError::InvalidObjectState {
+        object,
+        field: ObjectStateField::Style,
+    })
+}
+
+fn vec2_is_finite(value: Vec2) -> bool {
+    value.x.is_finite() && value.y.is_finite()
+}
+
+fn color_is_finite(color: Color) -> bool {
+    color.red.is_finite()
+        && color.green.is_finite()
+        && color.blue.is_finite()
+        && color.alpha.is_finite()
+}
+
+fn vector_path_is_finite(path: &VectorPath) -> bool {
+    path.commands().iter().all(|command| match *command {
+        PathCommand::MoveTo { to } | PathCommand::LineTo { to } => vec2_is_finite(to),
+        PathCommand::QuadraticTo { control, to } => vec2_is_finite(control) && vec2_is_finite(to),
+        PathCommand::CubicTo {
+            control1,
+            control2,
+            to,
+        } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
+        PathCommand::Close => true,
+    }) && path.morph_target().is_none_or(vector_path_is_finite)
+}
+
+pub(super) fn validate_property_patch(patch: &ScenePatch) -> Result<(), PatchError> {
+    match patch {
+        ScenePatch::SetGeometry { object, geometry } => validate_geometry(*object, geometry),
+        ScenePatch::SetTransform { object, transform } => validate_transform(*object, *transform),
+        ScenePatch::SetStyle { object, style } => validate_style(*object, *style),
+        _ => Ok(()),
+    }
+}
 
 impl SceneDefinition {
     /// Builds a scene from transported definitions in linear expected time while
@@ -140,6 +246,7 @@ impl SceneDefinition {
                 .get()
                 .checked_add(1)
                 .ok_or(PatchError::ObjectIdExhausted)?;
+            validate_object_definition(object)?;
             next_object_id = next_object_id.max(next);
         }
 
@@ -175,20 +282,32 @@ impl SceneDefinition {
             ScenePatch::CreateObject(object) => self.insert_object(object),
             ScenePatch::RemoveObject(id) => self.remove_object(id),
             ScenePatch::SetGeometry { object, geometry } => {
+                if self.object(object).is_none() {
+                    return Err(PatchError::UnknownObject(object));
+                }
+                validate_geometry(object, &geometry)?;
                 self.object_mut(object)
-                    .ok_or(PatchError::UnknownObject(object))?
+                    .expect("object existence was preflighted")
                     .geometry = geometry;
                 Ok(())
             }
             ScenePatch::SetTransform { object, transform } => {
+                if self.object(object).is_none() {
+                    return Err(PatchError::UnknownObject(object));
+                }
+                validate_transform(object, transform)?;
                 self.object_mut(object)
-                    .ok_or(PatchError::UnknownObject(object))?
+                    .expect("object existence was preflighted")
                     .transform = transform;
                 Ok(())
             }
             ScenePatch::SetStyle { object, style } => {
+                if self.object(object).is_none() {
+                    return Err(PatchError::UnknownObject(object));
+                }
+                validate_style(object, style)?;
                 self.object_mut(object)
-                    .ok_or(PatchError::UnknownObject(object))?
+                    .expect("object existence was preflighted")
                     .style = style;
                 Ok(())
             }
@@ -218,6 +337,7 @@ impl SceneDefinition {
                 if self.object(object).is_none() {
                     return Err(PatchError::UnknownObject(object));
                 }
+                validate_property_patch(mutation)?;
             }
             for mutation in transaction.mutations() {
                 self.apply_patch(mutation.clone())
@@ -243,6 +363,7 @@ impl SceneDefinition {
             .get()
             .checked_add(1)
             .ok_or(PatchError::ObjectIdExhausted)?;
+        validate_object_definition(&object)?;
         self.next_object_id = self.next_object_id.max(next);
         self.objects.push(object);
         Ok(())
@@ -335,6 +456,41 @@ mod tests {
     }
 
     #[test]
+    fn object_patches_reject_non_finite_state_without_mutation() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let before = scene.object(object).unwrap().clone();
+
+        assert!(matches!(
+            scene.apply_patch(ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    rotation: f32::NAN,
+                    ..Transform2D::IDENTITY
+                },
+            }),
+            Err(PatchError::InvalidObjectState {
+                object: rejected,
+                field: ObjectStateField::Transform,
+            }) if rejected == object
+        ));
+        assert_eq!(scene.object(object), Some(&before));
+
+        let style = Style {
+            stroke_width: f32::INFINITY,
+            ..Style::default()
+        };
+        assert!(matches!(
+            scene.apply_patch(ScenePatch::SetStyle { object, style }),
+            Err(PatchError::InvalidObjectState {
+                object: rejected,
+                field: ObjectStateField::Style,
+            }) if rejected == object
+        ));
+        assert_eq!(scene.object(object), Some(&before));
+    }
+
+    #[test]
     fn mutation_impact_matches_required_execution_work() {
         let object = ObjectId::new(1);
         assert_eq!(
@@ -420,6 +576,40 @@ mod tests {
         assert!(matches!(
             scene.apply_transaction(&transaction),
             Err(PatchError::UnknownObject(ObjectId(999)))
+        ));
+        assert_eq!(scene, before);
+    }
+
+    #[test]
+    fn property_transaction_rejects_non_finite_later_mutation_atomically() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let before = scene.clone();
+        let invalid_style = Style {
+            opacity: f32::NAN,
+            ..Style::default()
+        };
+
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(5.0, 2.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::SetStyle {
+                object,
+                style: invalid_style,
+            },
+        ]);
+
+        assert!(matches!(
+            scene.apply_transaction(&transaction),
+            Err(PatchError::InvalidObjectState {
+                object: rejected,
+                field: ObjectStateField::Style,
+            }) if rejected == object
         ));
         assert_eq!(scene, before);
     }
@@ -562,6 +752,37 @@ mod tests {
                 .expect("track must be valid"),
             TrackId::new(5)
         );
+    }
+
+    #[test]
+    fn bulk_construction_rejects_non_finite_object_state() {
+        let mut invalid = ObjectDefinition::new(ObjectId::new(7), GeometryRef::circle(1.0));
+        invalid.geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(f32::NAN, 1.0)),
+        );
+        assert!(matches!(
+            SceneDefinition::from_parts(vec![invalid], Vec::new()),
+            Err(PatchError::InvalidObjectState {
+                object: ObjectId(7),
+                field: ObjectStateField::Geometry,
+            })
+        ));
+
+        let mut invalid_morph = ObjectDefinition::new(ObjectId::new(8), GeometryRef::circle(1.0));
+        invalid_morph.geometry = GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .with_morph_target(VectorPath::new().line_to(Vec2::new(0.0, f32::INFINITY))),
+        );
+        assert!(matches!(
+            SceneDefinition::from_parts(vec![invalid_morph], Vec::new()),
+            Err(PatchError::InvalidObjectState {
+                object: ObjectId(8),
+                field: ObjectStateField::Geometry,
+            })
+        ));
     }
 
     #[test]
