@@ -77,7 +77,16 @@ def emit_scene_documents(output_dir: Path) -> None:
         print(f"{name}\t{output_path}")
 
 
+def _configure_manifest_stdout() -> None:
+    # CLI stdout is a machine-readable UTF-8 manifest. A redirected Windows
+    # stream may otherwise inherit a legacy code page and corrupt non-ASCII names.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: playground_examples.py OUTPUT_DIR")
+    _configure_manifest_stdout()
     emit_scene_documents(Path(sys.argv[1]).resolve())
