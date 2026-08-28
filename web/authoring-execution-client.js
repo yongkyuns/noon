@@ -30,18 +30,23 @@ export class AuthoringExecutionClient {
   #transportMode = null;
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #onError;
+  #onRecoverableError;
   #resizeObserver = null;
   #transition = null;
 
-  constructor(canvas, { onError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("AuthoringExecutionClient requires an HTMLCanvasElement");
     }
     if (onError !== null && typeof onError !== "function") {
       throw new TypeError("AuthoringExecutionClient onError must be a function");
     }
+    if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
+      throw new TypeError("AuthoringExecutionClient onRecoverableError must be a function");
+    }
     this.#canvas = canvas;
     this.#onError = onError;
+    this.#onRecoverableError = onRecoverableError;
     this.#observeCanvas();
   }
 
@@ -199,7 +204,10 @@ export class AuthoringExecutionClient {
   }
 
   async #startLegacy(sceneJson, options) {
-    const player = new ExecutionWorkerClient(this.#canvas, { onError: this.#onError });
+    const player = new ExecutionWorkerClient(this.#canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
     try {
       const ready = await player.start(sceneJson, options);
       this.#player = player;
@@ -244,7 +252,10 @@ export class AuthoringExecutionClient {
 
   async #rebuildLegacy(sceneJson, { callbacks, authoringClient }) {
     const canvas = this.#replaceTransferredCanvas();
-    const player = new ExecutionWorkerClient(canvas, { onError: this.#onError });
+    const player = new ExecutionWorkerClient(canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
     try {
       const ready = await player.start(sceneJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
