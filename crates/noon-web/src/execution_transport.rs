@@ -786,6 +786,29 @@ impl EngineScenePlayer {
         Ok(())
     }
 
+    pub fn pause(&mut self) {
+        self.clock.pause();
+    }
+
+    pub fn resume(&mut self) {
+        self.clock.resume();
+    }
+
+    pub fn seek_delta_json(
+        &mut self,
+        scene_time: f64,
+    ) -> Result<Option<String>, ExecutionTransportError> {
+        let mut clock = self.clock.clone();
+        clock.seek(scene_time)?;
+        self.player.advance_to(scene_time)?;
+        self.clock = clock;
+        self.take_delta_json()
+    }
+
+    pub const fn is_playing(&self) -> bool {
+        self.clock.is_playing()
+    }
+
     pub fn apply_patch_batch_delta_json(
         &mut self,
         json: &str,
@@ -906,6 +929,24 @@ mod wasm {
         #[wasm_bindgen(js_name = setLoopDurationSeconds)]
         pub fn set_loop_duration_seconds(&mut self, duration: f64) -> Result<(), JsValue> {
             self.inner.set_loop_duration(duration).map_err(js_error)
+        }
+
+        pub fn pause(&mut self) {
+            self.inner.pause();
+        }
+
+        pub fn resume(&mut self) {
+            self.inner.resume();
+        }
+
+        #[wasm_bindgen(js_name = seekDeltaJson)]
+        pub fn seek_delta_json(&mut self, scene_time: f64) -> Result<Option<String>, JsValue> {
+            self.inner.seek_delta_json(scene_time).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = isPlaying)]
+        pub fn is_playing(&self) -> bool {
+            self.inner.is_playing()
         }
 
         #[wasm_bindgen(js_name = applyPatchBatchDeltaJson)]
@@ -1171,6 +1212,51 @@ mod tests {
         player.tick_delta_json(3_100.0).unwrap();
         assert_eq!(player.time(), 0.0);
         assert_eq!(player.next_patch_sequence(), 1);
+    }
+
+    #[test]
+    fn playback_controls_preserve_session_and_patch_identity() {
+        let mut player = EngineScenePlayer::new(&scene_json(), 4.0, 23).unwrap();
+        let initial: ExecutionDeltaEnvelope =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        player.tick_delta_json(100.0).unwrap();
+        player.tick_delta_json(1_100.0).unwrap();
+        assert_eq!(player.time(), 1.0);
+
+        player.pause();
+        assert!(!player.is_playing());
+        assert!(player.tick_delta_json(5_100.0).unwrap().is_none());
+        assert_eq!(player.time(), 1.0);
+
+        let seek: ExecutionDeltaEnvelope =
+            serde_json::from_str(&player.seek_delta_json(0.25).unwrap().expect("seek delta"))
+                .unwrap();
+        assert_eq!(seek.session, initial.session);
+        assert_eq!(seek.time, 0.25);
+        assert_eq!(player.next_patch_sequence(), 0);
+        assert_eq!(player.time(), 0.25);
+        assert!(player.tick_delta_json(8_100.0).unwrap().is_none());
+        assert_eq!(player.time(), 0.25);
+
+        player.resume();
+        assert!(player.is_playing());
+        assert!(player.tick_delta_json(8_100.0).unwrap().is_none());
+        player.tick_delta_json(8_600.0).unwrap();
+        assert_eq!(player.time(), 0.75);
+    }
+
+    #[test]
+    fn exact_endpoint_seek_is_not_implicitly_wrapped() {
+        let mut player = EngineScenePlayer::new(&scene_json(), 4.0, 29).unwrap();
+        player.initial_delta_json().unwrap();
+        player.tick_delta_json(100.0).unwrap();
+
+        player.seek_delta_json(4.0).unwrap();
+        assert_eq!(player.time(), 4.0);
+        assert!(player.tick_delta_json(100.0).unwrap().is_none());
+        assert_eq!(player.time(), 4.0);
+        player.tick_delta_json(350.0).unwrap();
+        assert_eq!(player.time(), 0.25);
     }
 
     #[test]
