@@ -2,6 +2,8 @@ name: Manim differential
 
 on:
   pull_request:
+    paths-ignore:
+      - "crates/**/tests/**"
   workflow_dispatch:
 
 permissions:

@@ -6,6 +6,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - 'crates/**'
+      - '!crates/**/tests/**'
       - 'scripts/build-web-demo.sh'
       - 'scripts/build-python-worker.mjs'
       - 'scripts/check-web-package.mjs'
@@ -19,6 +20,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - 'crates/**'
+      - '!crates/**/tests/**'
       - 'scripts/build-web-demo.sh'
       - 'scripts/build-python-worker.mjs'
       - 'scripts/check-web-package.mjs'

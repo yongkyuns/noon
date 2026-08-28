@@ -52,6 +52,10 @@ The reactive/editor job runs:
 
 Rendering is a two-entry matrix over WebGPU and WebGL2 fallback. Both run the deterministic playground/browser smoke corpus and upload screenshots on success or failure. The required Linux browser path uses Playwright Chromium/SwiftShader so it is repeatable on hosted runners.
 
+### Test-only trigger policy
+
+A change whose crate paths are exclusively integration tests under `crates/**/tests/**` remains covered by normal CI and test coverage, but does not start the separate Manim semantic/API/raster, cross-browser, or platform/release matrices. Those product-validation workflows run unchanged as soon as the same change set includes any non-test crate path, Cargo metadata, browser/authoring source, workflow definition, or other path already owned by that workflow. This keeps new deterministic Rust regressions cheap to add without weakening validation of production changes.
+
 ## Platform and release validation
 
 `.github/workflows/platform-release.yml` is the compact portability and production-artifact lane. It runs when native/browser production paths or their build generators change, on pushes to `master`, and by manual dispatch.
