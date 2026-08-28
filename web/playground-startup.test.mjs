@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
-const worker = await readFile(new URL("./python-worker.js", import.meta.url), "utf8");
+const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
 const startupRegion = main.indexOf("const EMPTY_SCENE_JSON");
 assert.notEqual(startupRegion, -1, "playground startup region must exist");

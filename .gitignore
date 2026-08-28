@@ -3,5 +3,7 @@ Cargo.lock
 .DS_Store
 /web/pkg
 /web/python/compat-bundle.json
+/web/python/compat-bundle.*.json
+/web/python-worker.js
 /output/playwright
 /.playwright-cli
