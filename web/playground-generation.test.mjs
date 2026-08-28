@@ -61,6 +61,28 @@ test("a newer run supersedes an older run for the same example", () => {
   assert.equal(generations.isRunCurrent(second, "scene"), true);
 });
 
+test("invalid selection requests do not consume freshness generations", () => {
+  const generations = new PlaygroundGeneration();
+  const before = generations.diagnostics;
+
+  assert.throws(() => generations.beginSelectionRequest("   "), /non-empty example ID/);
+  assert.deepEqual(generations.diagnostics, before);
+
+  const request = generations.beginSelectionRequest("scene");
+  assert.equal(request.requestGeneration, 1);
+});
+
+test("invalid runs leave the current run authoritative", () => {
+  const generations = new PlaygroundGeneration();
+  generations.commitSelection(generations.beginSelectionRequest("scene"));
+  const current = generations.beginRun("scene");
+  const before = generations.diagnostics;
+
+  assert.throws(() => generations.beginRun(null), /non-empty example ID/);
+  assert.deepEqual(generations.diagnostics, before);
+  assert.equal(generations.isRunCurrent(current, "scene"), true);
+});
+
 test("stale-result diagnostics are monotonic and retain the last trace", () => {
   const generations = new PlaygroundGeneration();
   generations.commitSelection(generations.beginSelectionRequest("scene"));

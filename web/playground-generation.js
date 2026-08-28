@@ -28,14 +28,16 @@ export class PlaygroundGeneration {
   #lastStale = null;
 
   beginSelectionRequest(exampleId) {
-    this.#selectionRequestGeneration = checkedNext(
+    const normalizedExampleId = requireExampleId(exampleId);
+    const nextGeneration = checkedNext(
       this.#selectionRequestGeneration,
       "playground selection request generation",
     );
+    this.#selectionRequestGeneration = nextGeneration;
     return Object.freeze({
       kind: "selection-request",
-      requestGeneration: this.#selectionRequestGeneration,
-      exampleId: requireExampleId(exampleId),
+      requestGeneration: nextGeneration,
+      exampleId: normalizedExampleId,
     });
   }
 
@@ -50,18 +52,20 @@ export class PlaygroundGeneration {
     if (!this.isSelectionRequestCurrent(requestToken)) {
       return null;
     }
-    this.#selectionGeneration = checkedNext(
+    const nextSelectionGeneration = checkedNext(
       this.#selectionGeneration,
       "playground selection generation",
     );
-    // A newly committed selection supersedes any authoring result that belongs
-    // to the previously active example, even before the UI switches examples.
-    this.#runGeneration = checkedNext(this.#runGeneration, "playground run generation");
+    // Preflight both counters before publishing either new generation. A failed
+    // commit must not partially invalidate the currently visible selection/run.
+    const nextRunGeneration = checkedNext(this.#runGeneration, "playground run generation");
+    this.#selectionGeneration = nextSelectionGeneration;
+    this.#runGeneration = nextRunGeneration;
     return Object.freeze({
       kind: "selection",
       requestGeneration: requestToken.requestGeneration,
-      selectionGeneration: this.#selectionGeneration,
-      runGeneration: this.#runGeneration,
+      selectionGeneration: nextSelectionGeneration,
+      runGeneration: nextRunGeneration,
       exampleId: requestToken.exampleId,
     });
   }
@@ -75,12 +79,14 @@ export class PlaygroundGeneration {
   }
 
   beginRun(exampleId) {
-    this.#runGeneration = checkedNext(this.#runGeneration, "playground run generation");
+    const normalizedExampleId = requireExampleId(exampleId);
+    const nextGeneration = checkedNext(this.#runGeneration, "playground run generation");
+    this.#runGeneration = nextGeneration;
     return Object.freeze({
       kind: "run",
       selectionGeneration: this.#selectionGeneration,
-      runGeneration: this.#runGeneration,
-      exampleId: requireExampleId(exampleId),
+      runGeneration: nextGeneration,
+      exampleId: normalizedExampleId,
     });
   }
 
