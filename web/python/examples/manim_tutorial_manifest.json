@@ -509,7 +509,7 @@
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_dots.py",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
       "parity_fixture": "moving-dots",
       "expected_duration": 3,
       "thumbnail": "thumbnails/manim/moving-dots.svg",
