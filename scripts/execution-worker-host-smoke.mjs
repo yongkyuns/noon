@@ -14,6 +14,8 @@ const source = await readFile(
   path.join(repoRoot, "web/python/examples/slow_host_updater.py"),
   "utf8",
 );
+const teardownSource = source.replace("0.080", "1.000");
+assert.notEqual(teardownSource, source, "teardown smoke must extend the callback delay");
 
 let serverOutput = "";
 const server = spawn(
@@ -121,6 +123,68 @@ try {
   );
   assert.equal(after.engineMetrics.host.errors, 0);
 
+  const teardownAuthored = await page.evaluate(async (pythonSource) => {
+    const { authoring, client } = window.executionHostSmoke;
+    const authored = await authoring.run(pythonSource);
+    if (authored.kind !== "scene_document" || authored.callbacks === null) {
+      throw new Error("teardown smoke must author a callback scene");
+    }
+    await client.configureHostCallbacks(authored.callbacks, authoring);
+    return { callbackCount: authored.callbacks.slots.length };
+  }, teardownSource);
+  assert.equal(teardownAuthored.callbackCount, 1);
+
+  const teardown = await page.evaluate(async () => {
+    const { client } = window.executionHostSmoke;
+    const deadline = performance.now() + 30_000;
+    while (performance.now() < deadline) {
+      const observedMetrics = await client.metrics();
+      if (observedMetrics.engineMetrics.host.enabled && observedMetrics.engineMetrics.host.inFlight) {
+        // Invalidate the callback generation in the same task that first observes
+        // it in flight. A second host round trip here makes this oracle race the
+        // deliberately slow Python callback instead of testing generation invalidation.
+        await client.configureHostCallbacks(null);
+        return {
+          observedMetrics,
+          disabledState: await client.state(),
+          disabledMetrics: await client.metrics(),
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("teardown smoke never observed an in-flight host callback");
+  });
+  assert.equal(teardown.observedMetrics.engineMetrics.host.inFlight, true);
+  assert.equal(teardown.disabledMetrics.engineMetrics.host.enabled, false);
+
+  await page.waitForTimeout(1_100);
+  const afterTeardown = await page.evaluate(async () => ({
+    state: await window.executionHostSmoke.client.state(),
+    report: await window.executionHostSmoke.client.metrics(),
+  }));
+
+  assert.equal(
+    afterTeardown.state.nextPatchSequence,
+    teardown.disabledState.nextPatchSequence,
+    "callback result from an invalidated generation advanced the engine patch sequence",
+  );
+  assert.equal(afterTeardown.report.engineMetrics.host.enabled, false);
+  assert.equal(
+    afterTeardown.report.engineMetrics.host.committed,
+    teardown.disabledMetrics.engineMetrics.host.committed,
+    "callback result from the invalidated generation was committed",
+  );
+  assert.equal(
+    afterTeardown.report.engineMetrics.host.errors,
+    teardown.disabledMetrics.engineMetrics.host.errors,
+    "invalidated callback generation introduced a host error",
+  );
+  assert.ok(
+    afterTeardown.report.metrics.presentedFrames >
+      teardown.disabledMetrics.metrics.presentedFrames,
+    "native rendering stopped after callback teardown",
+  );
+
   const clientErrors = await page.evaluate(() => window.executionHostSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
   assert.deepEqual(browserErrors, []);
@@ -132,7 +196,8 @@ try {
   await page.close();
   console.log(
     `✓ slow Python host callback: ${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
-      `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented`,
+      `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented; ` +
+      "stale callback dropped after teardown",
   );
 } finally {
   await browser?.close();
