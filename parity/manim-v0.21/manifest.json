@@ -296,6 +296,11 @@
       "expected_duration": 1.0
     },
     {
+      "id": "moving-around",
+      "scene": "MovingAround",
+      "expected_duration": 4.0
+    },
+    {
       "id": "moving-dots",
       "scene": "MovingDots",
       "expected_duration": 3.0

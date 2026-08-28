@@ -13,6 +13,7 @@ export class PythonAuthoringClient {
   #rejectReady;
   #ready = false;
   #terminated = false;
+  #staleResponses = 0;
 
   constructor(worker = createAuthoringWorker()) {
     this.#worker = worker;
@@ -28,6 +29,15 @@ export class PythonAuthoringClient {
 
   get terminated() {
     return this.#terminated;
+  }
+
+  get diagnostics() {
+    return Object.freeze({
+      nextRequestId: this.#nextRequestId,
+      pendingRequests: this.#pending.size,
+      staleResponses: this.#staleResponses,
+      terminated: this.#terminated,
+    });
   }
 
   ready() {
@@ -163,10 +173,15 @@ export class PythonAuthoringClient {
     }
     const pending = this.#pending.get(requestId);
     if (!pending) {
-      throw new Error(`Python authoring response has unknown request ID ${requestId}`);
+      if (requestId < this.#nextRequestId) {
+        this.#staleResponses += 1;
+        return false;
+      }
+      throw new Error(`Python authoring response has unissued request ID ${requestId}`);
     }
     this.#pending.delete(requestId);
     settle(pending);
+    return true;
   }
 
   #fail(error) {
