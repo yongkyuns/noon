@@ -7,6 +7,7 @@ mod composition;
 mod determinism;
 mod execution_canvas;
 mod execution_transport;
+mod gpu_diagnostics;
 mod host_player;
 #[path = "legacy.rs"]
 mod legacy;

@@ -422,7 +422,7 @@ mod wasm {
         rc::Rc,
         sync::{
             atomic::{AtomicU32, Ordering},
-            Arc, Mutex,
+            Arc,
         },
     };
 
@@ -436,67 +436,18 @@ mod wasm {
     use wasm_bindgen_futures::spawn_local;
     use web_sys::{Event, HtmlCanvasElement};
 
+    use crate::gpu_diagnostics::{GpuDiagnostic, GpuDiagnosticMailbox};
+
     use super::{PlaybackClock, ReconcileOutcome, ScenePlayer};
 
     const GPU_QUERY_BYTES: u64 = 16;
     const GPU_PROFILE_SLOT_COUNT: usize = 4;
     const GPU_PROFILE_SAMPLE_CAPACITY: usize = 512;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GpuUncapturedErrorKind {
-        Validation,
-        OutOfMemory,
-        Internal,
-    }
-
-    impl GpuUncapturedErrorKind {
-        const fn label(self) -> &'static str {
-            match self {
-                Self::Validation => "validation",
-                Self::OutOfMemory => "out-of-memory",
-                Self::Internal => "internal",
-            }
-        }
-
-        const fn is_fatal(self) -> bool {
-            !matches!(self, Self::Validation)
-        }
-    }
-
-    #[derive(Debug)]
-    struct GpuUncapturedError {
-        generation: u32,
-        kind: GpuUncapturedErrorKind,
-        message: String,
-    }
-
-    impl GpuUncapturedError {
-        fn from_wgpu(generation: u32, backend: wgpu::Backend, error: wgpu::Error) -> Self {
-            let kind = match &error {
-                wgpu::Error::Validation { .. } => GpuUncapturedErrorKind::Validation,
-                wgpu::Error::OutOfMemory { .. } => GpuUncapturedErrorKind::OutOfMemory,
-                wgpu::Error::Internal { .. } => GpuUncapturedErrorKind::Internal,
-            };
-            let backend = match backend {
-                wgpu::Backend::BrowserWebGpu => "WebGPU",
-                wgpu::Backend::Gl => "WebGL2",
-                _ => "GPU",
-            };
-            Self {
-                generation,
-                kind,
-                message: format!(
-                    "{backend} generation {generation} {} error: {error}",
-                    kind.label()
-                ),
-            }
-        }
-    }
-
     #[derive(Clone, Default)]
     struct GpuDeviceSignals {
         lost_generation: Arc<AtomicU32>,
-        uncaptured_error: Arc<Mutex<Option<GpuUncapturedError>>>,
+        uncaptured_error: GpuDiagnosticMailbox,
     }
 
     impl GpuDeviceSignals {
@@ -514,43 +465,12 @@ mod wasm {
             backend: wgpu::Backend,
             error: wgpu::Error,
         ) {
-            let captured = GpuUncapturedError::from_wgpu(generation, backend, error);
-            self.with_error_slot(|pending| {
-                let replace = match pending.as_ref() {
-                    None => true,
-                    Some(current) if current.generation < generation => true,
-                    Some(current) if current.generation > generation => false,
-                    Some(current) => !current.kind.is_fatal() && captured.kind.is_fatal(),
-                };
-                if replace {
-                    *pending = Some(captured);
-                }
-            });
+            self.uncaptured_error
+                .record_wgpu(generation, backend, error);
         }
 
-        fn take_uncaptured_error(&self, generation: u32) -> Option<GpuUncapturedError> {
-            self.with_error_slot(|pending| {
-                let pending_generation = pending.as_ref().map(|error| error.generation);
-                match pending_generation {
-                    Some(current) if current < generation => {
-                        pending.take();
-                        None
-                    }
-                    Some(current) if current == generation => pending.take(),
-                    _ => None,
-                }
-            })
-        }
-
-        fn with_error_slot<R>(
-            &self,
-            operation: impl FnOnce(&mut Option<GpuUncapturedError>) -> R,
-        ) -> R {
-            let mut pending = match self.uncaptured_error.lock() {
-                Ok(pending) => pending,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            operation(&mut pending)
+        fn take_uncaptured_error(&self, generation: u32) -> Option<GpuDiagnostic> {
+            self.uncaptured_error.take_for_generation(generation)
         }
     }
 
@@ -1470,10 +1390,11 @@ mod wasm {
             let Some(error) = self.gpu_signals.take_uncaptured_error(self.gpu_generation) else {
                 return Ok(());
             };
-            if error.kind.is_fatal() {
-                self.gpu_fatal_error = Some(error.message.clone());
+            let message = error.formatted_message();
+            if error.is_fatal() {
+                self.gpu_fatal_error = Some(message.clone());
             }
-            Err(js_message(&error.message))
+            Err(js_message(&message))
         }
 
         fn gpu_commands_ready(&self) -> bool {
