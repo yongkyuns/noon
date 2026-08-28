@@ -225,6 +225,10 @@ export class ExecutionWorkerClient {
     return this.#requestEngine("seek", { time });
   }
 
+  async restartPlayback() {
+    return this.#requestEngine("restart_playback", {});
+  }
+
   async applyPatchBatch(patchBatchJson) {
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");

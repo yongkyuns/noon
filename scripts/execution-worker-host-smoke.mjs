@@ -123,6 +123,92 @@ try {
   );
   assert.equal(after.engineMetrics.host.errors, 0);
 
+  const barrierAuthored = await page.evaluate(async (pythonSource) => {
+    const { authoring, client } = window.executionHostSmoke;
+    const authored = await authoring.run(pythonSource);
+    if (authored.kind !== "scene_document" || authored.callbacks === null) {
+      throw new Error("seek barrier smoke must author a callback scene");
+    }
+    await client.configureHostCallbacks(authored.callbacks, authoring);
+    return { callbackCount: authored.callbacks.slots.length };
+  }, teardownSource);
+  assert.equal(barrierAuthored.callbackCount, 1);
+
+  const seekBarrier = await page.evaluate(async () => {
+    const { client } = window.executionHostSmoke;
+    const deadline = performance.now() + 30_000;
+    while (performance.now() < deadline) {
+      const observedMetrics = await client.metrics();
+      if (observedMetrics.engineMetrics.host.enabled && observedMetrics.engineMetrics.host.inFlight) {
+        const beforeState = await client.state();
+        const pausePromise = client.pause();
+        const seekPromise = client.seek(0.5);
+        const [paused, sought] = await Promise.all([pausePromise, seekPromise]);
+        return {
+          observedMetrics,
+          beforeState,
+          paused,
+          sought,
+          state: await client.state(),
+          report: await client.metrics(),
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("seek barrier smoke never observed an in-flight host callback");
+  });
+
+  assert.equal(seekBarrier.observedMetrics.engineMetrics.host.inFlight, true);
+  assert.equal(seekBarrier.paused.operation, "pause");
+  assert.equal(seekBarrier.sought.operation, "seek");
+  assert.equal(seekBarrier.sought.time, 0.5);
+  assert.equal(seekBarrier.sought.playing, false);
+  assert.equal(seekBarrier.state.time, 0.5);
+  assert.equal(seekBarrier.state.playing, false);
+  assert.equal(seekBarrier.report.engineMetrics.host.enabled, true);
+  assert.equal(
+    seekBarrier.report.engineMetrics.host.generation,
+    seekBarrier.observedMetrics.engineMetrics.host.generation + 1,
+    "seek did not advance the host callback generation",
+  );
+  assert.equal(
+    seekBarrier.report.engineMetrics.host.nextSequence,
+    seekBarrier.observedMetrics.engineMetrics.host.nextSequence,
+    "seek reset the host callback patch sequence",
+  );
+  assert.ok(
+    seekBarrier.report.engineMetrics.host.droppedLateResults >=
+      seekBarrier.observedMetrics.engineMetrics.host.droppedLateResults + 1,
+    "seek did not account for invalidated in-flight callback work",
+  );
+  assert.ok(
+    seekBarrier.report.engineMetrics.host.requests >=
+      seekBarrier.observedMetrics.engineMetrics.host.requests + 1,
+    "seek did not request a replacement callback phase",
+  );
+  assert.equal(seekBarrier.report.engineMetrics.host.inFlight, true);
+  assert.equal(
+    seekBarrier.report.engineMetrics.host.lastFrameTime,
+    0.5,
+    "seek did not request the callback phase at the exact sought time",
+  );
+  assert.equal(
+    seekBarrier.state.nextPatchSequence,
+    seekBarrier.beforeState.nextPatchSequence,
+    "seek consumed the interactive patch sequence",
+  );
+
+  await page.waitForTimeout(250);
+  const afterSeekBarrier = await page.evaluate(async () => ({
+    state: await window.executionHostSmoke.client.state(),
+    report: await window.executionHostSmoke.client.metrics(),
+  }));
+  assert.equal(afterSeekBarrier.state.time, 0.5);
+  assert.equal(afterSeekBarrier.state.playing, false);
+  assert.equal(afterSeekBarrier.report.engineMetrics.host.enabled, true);
+  assert.equal(afterSeekBarrier.report.engineMetrics.host.errors, 0);
+  await page.evaluate(() => window.executionHostSmoke.client.resume());
+
   const teardownAuthored = await page.evaluate(async (pythonSource) => {
     const { authoring, client } = window.executionHostSmoke;
     const authored = await authoring.run(pythonSource);
@@ -197,7 +283,7 @@ try {
   console.log(
     `✓ slow Python host callback: ${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
       `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented; ` +
-      "stale callback dropped after teardown",
+      "seek barrier and teardown both dropped stale callback work",
   );
 } finally {
   await browser?.close();

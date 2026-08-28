@@ -154,6 +154,9 @@ try {
     const mixedResume = await execution.resume();
     await new Promise((resolve) => setTimeout(resolve, 160));
     const mixedResumedState = await execution.state();
+    const mixedPlaybackRestart = await execution.restartPlayback();
+    const mixedPlaybackRestartCanvas = execution.canvas;
+    const mixedPlaybackRestartState = await execution.state();
 
     const mixedRestartReady = await execution.restart();
     const mixedRestartCanvas = execution.canvas;
@@ -202,6 +205,9 @@ try {
     const legacyResume = await execution.resume();
     await new Promise((resolve) => setTimeout(resolve, 160));
     const legacyResumedState = await execution.state();
+    const legacyPlaybackRestart = await execution.restartPlayback();
+    const legacyPlaybackRestartCanvas = execution.canvas;
+    const legacyPlaybackRestartState = await execution.state();
 
     const secondLegacy = await execution.reconcileScene(JSON.stringify(legacy.document), {
       retainedDocumentJson: JSON.stringify(legacy.retainedDocument),
@@ -233,6 +239,9 @@ try {
       mixedSeekState,
       mixedResume,
       mixedResumedState,
+      mixedPlaybackRestart,
+      mixedPlaybackRestartPreservedCanvas: mixedPlaybackRestartCanvas === mixedCanvas,
+      mixedPlaybackRestartState,
       mixedRestartMode: mixedRestartReady.mode,
       mixedRestartCanvasChanged: mixedRestartCanvas !== mixedCanvas,
       mixedRestartObjectCount: mixedRestartMetrics.metrics.objectCount,
@@ -254,6 +263,9 @@ try {
       legacySeekState,
       legacyResume,
       legacyResumedState,
+      legacyPlaybackRestart,
+      legacyPlaybackRestartPreservedCanvas: legacyPlaybackRestartCanvas === legacyCanvas,
+      legacyPlaybackRestartState,
       secondLegacyMode: secondLegacy.mode,
       secondLegacyRebuilt: secondLegacy.rebuilt,
       legacyRestartMode: legacyRestartReady.mode,
@@ -300,6 +312,12 @@ try {
   assert.equal(result.mixedResume.playing, true);
   assert.ok(result.mixedResumedState.time > 2.5);
   assert.equal(result.mixedResumedState.playing, true);
+  assert.equal(result.mixedPlaybackRestart.operation, "restart_playback");
+  assert.equal(result.mixedPlaybackRestart.time, 0);
+  assert.equal(result.mixedPlaybackRestart.playing, true);
+  assert.equal(result.mixedPlaybackRestartPreservedCanvas, true);
+  assert.equal(result.mixedPlaybackRestartState.time, 0);
+  assert.equal(result.mixedPlaybackRestartState.playing, true);
   assert.equal(result.mixedRestartMode, result.retainedMode);
   assert.equal(result.mixedRestartCanvasChanged, true);
   assert.equal(result.mixedRestartObjectCount, 3);
@@ -331,6 +349,12 @@ try {
   assert.equal(result.legacyResume.playing, true);
   assert.ok(result.legacyResumedState.time > 1.5);
   assert.equal(result.legacyResumedState.playing, true);
+  assert.equal(result.legacyPlaybackRestart.operation, "restart_playback");
+  assert.equal(result.legacyPlaybackRestart.time, 0);
+  assert.equal(result.legacyPlaybackRestart.playing, true);
+  assert.equal(result.legacyPlaybackRestartPreservedCanvas, true);
+  assert.equal(result.legacyPlaybackRestartState.time, 0);
+  assert.equal(result.legacyPlaybackRestartState.playing, true);
   assert.equal(result.secondLegacyMode, result.initialMode);
   assert.equal(result.secondLegacyRebuilt, false);
   assert.equal(result.legacyRestartMode, result.initialMode);
