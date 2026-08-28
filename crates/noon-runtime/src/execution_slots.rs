@@ -193,6 +193,101 @@ pub struct ExecutionSlotTable {
     last_mutation: ExecutionSlotMutationStats,
 }
 
+struct ExecutionSlotPreflight<'a> {
+    base: &'a ExecutionSlotTable,
+    free_head: Option<u32>,
+    next_new_slot: usize,
+    touched_slots: HashMap<u32, ExecutionSlot>,
+    object_overrides: HashMap<ObjectId, Option<ExecutionSlotId>>,
+}
+
+impl<'a> ExecutionSlotPreflight<'a> {
+    fn new(base: &'a ExecutionSlotTable) -> Self {
+        Self {
+            base,
+            free_head: base.free_head,
+            next_new_slot: base.slots.len(),
+            touched_slots: HashMap::new(),
+            object_overrides: HashMap::new(),
+        }
+    }
+
+    fn slots_indexed(&self) -> usize {
+        self.touched_slots.len()
+    }
+
+    fn slot_for_object(&self, object: ObjectId) -> Option<ExecutionSlotId> {
+        match self.object_overrides.get(&object) {
+            Some(slot) => *slot,
+            None => self.base.object_slots.get(&object).copied(),
+        }
+    }
+
+    fn slot_mut(&mut self, slot_index: u32) -> &mut ExecutionSlot {
+        if !self.touched_slots.contains_key(&slot_index) {
+            let slot = self.base.slots[slot_index as usize].clone();
+            self.touched_slots.insert(slot_index, slot);
+        }
+        self.touched_slots
+            .get_mut(&slot_index)
+            .expect("touched slot was materialized")
+    }
+
+    fn insert_object(&mut self, object: ObjectId) -> Result<(), ExecutionSlotError> {
+        if self.slot_for_object(object).is_some() {
+            return Err(ExecutionSlotError::DuplicateObject(object));
+        }
+
+        let id = if let Some(slot_index) = self.free_head {
+            let (generation, next_free) = {
+                let slot = self.slot_mut(slot_index);
+                (slot.generation, slot.next_free)
+            };
+            self.free_head = next_free;
+            let slot = self.slot_mut(slot_index);
+            slot.object = Some(object);
+            slot.next_free = None;
+            ExecutionSlotId::new(slot_index, generation)
+        } else {
+            let slot_index =
+                u32::try_from(self.next_new_slot).expect("Noon execution slot space exhausted");
+            self.next_new_slot += 1;
+            self.touched_slots.insert(
+                slot_index,
+                ExecutionSlot {
+                    generation: 0,
+                    object: Some(object),
+                    next_free: None,
+                },
+            );
+            ExecutionSlotId::new(slot_index, 0)
+        };
+        self.object_overrides.insert(object, Some(id));
+        Ok(())
+    }
+
+    fn remove_object(&mut self, object: ObjectId) -> Result<(), ExecutionSlotError> {
+        let id = self
+            .slot_for_object(object)
+            .ok_or(ExecutionSlotError::UnknownObject(object))?;
+        let next_generation = self
+            .slot_mut(id.slot)
+            .generation
+            .checked_add(1)
+            .ok_or(ExecutionSlotError::GenerationExhausted(id))?;
+        let free_head = self.free_head;
+        let slot = self.slot_mut(id.slot);
+        debug_assert_eq!(slot.generation, id.generation);
+        debug_assert_eq!(slot.object, Some(object));
+        slot.object = None;
+        slot.generation = next_generation;
+        slot.next_free = free_head;
+        self.free_head = Some(id.slot);
+        self.object_overrides.insert(object, None);
+        Ok(())
+    }
+}
+
 impl ExecutionSlotTable {
     pub fn new() -> Self {
         Self::default()
@@ -303,9 +398,8 @@ impl ExecutionSlotTable {
     fn preflight_transaction(
         &self,
         transaction: &MutationTransaction,
-    ) -> Result<(), ExecutionSlotError> {
-        // Slot metadata is cheap to stage and contains no frame/geometry payloads.
-        let mut shadow = self.clone();
+    ) -> Result<usize, ExecutionSlotError> {
+        let mut shadow = ExecutionSlotPreflight::new(self);
         for patch in transaction.mutations() {
             match patch {
                 ScenePatch::CreateObject(object) => {
@@ -317,7 +411,7 @@ impl ExecutionSlotTable {
                 _ => {}
             }
         }
-        Ok(())
+        Ok(shadow.slots_indexed())
     }
 }
 
@@ -396,6 +490,7 @@ impl ExecutionDelta {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExecutionTransactionPreflightStats {
     pub compiled: CompiledTransactionPreflightStats,
+    /// Unique execution slots materialized by sparse structural preflight.
     pub slots_indexed: usize,
     pub staged_runtime_clones: usize,
 }
@@ -666,10 +761,10 @@ impl SlottedSceneInstance {
         transaction: &MutationTransaction,
     ) -> Result<ExecutionTransactionPreflightStats, ExecutionTransactionError> {
         let compiled = self.inner.compiled.preflight_transaction(transaction)?;
-        self.slots.preflight_transaction(transaction)?;
+        let slots_indexed = self.slots.preflight_transaction(transaction)?;
         Ok(ExecutionTransactionPreflightStats {
             compiled,
-            slots_indexed: self.slots.slot_capacity(),
+            slots_indexed,
             staged_runtime_clones: 0,
         })
     }
@@ -960,6 +1055,25 @@ mod tests {
     }
 
     #[test]
+    fn structural_transaction_preflight_materializes_only_touched_slots() {
+        let mut slots = ExecutionSlotTable::new();
+        for index in 0..100_000u64 {
+            slots
+                .insert_object(ObjectId::new(index))
+                .expect("unique object");
+        }
+        let object = ObjectId::new(10);
+        let slot = slots.slot_for_object(object).expect("existing slot");
+        let transaction = MutationTransaction::from_mutations([ScenePatch::RemoveObject(object)]);
+
+        assert_eq!(slots.preflight_transaction(&transaction), Ok(1));
+        assert_eq!(slots.slot_capacity(), 100_000);
+        assert_eq!(slots.len(), 100_000);
+        assert_eq!(slots.slot_for_object(object), Some(slot));
+        assert_eq!(slots.object_for_slot(slot), Some(object));
+    }
+
+    #[test]
     fn generation_exhaustion_leaves_slot_table_unchanged() {
         let mut slots = ExecutionSlotTable::new();
         let object = ObjectId::new(7);
@@ -1073,6 +1187,7 @@ mod tests {
         let preflight = live
             .preflight_transaction(&transaction)
             .expect("transaction preflights");
+        assert_eq!(preflight.slots_indexed, 0);
         assert_eq!(preflight.staged_runtime_clones, 0);
         assert_eq!(preflight.compiled.staged_compiled_scene_clones, 0);
         live.apply_transaction(&transaction)
