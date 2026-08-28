@@ -53,25 +53,35 @@ assert.ok(
   ),
   "every public example must point to its canonical upstream source fixture",
 );
-assert.equal(
-  gallery.examples.find((entry) => entry.id === "parity-draw-border-then-fill-styled-square")
-    ?.parityStatus,
-  "parity-qualified",
+
+function assertQualifiedFixture(entryId, fixtureId, message) {
+  const entry = readyEntries.find((candidate) => candidate.id === entryId);
+  assert.equal(entry?.parity_status, "parity-qualified", message);
+  assert.equal(entry?.parity_fixture, fixtureId, `${entryId}: canonical fixture must remain stable`);
+  assert.ok(entry?.features.includes("pixel-parity"), `${entryId}: pixel evidence must remain declared`);
+  assert.ok(entry?.features.includes("time-parity"), `${entryId}: time evidence must remain declared`);
+  assert.ok(
+    parityManifest.fixtures.some((fixture) => fixture.id === fixtureId),
+    `${entryId}: qualified gallery entry must point at its canonical Manim fixture`,
+  );
+}
+
+assertQualifiedFixture(
+  "parity-draw-border-then-fill-styled-square",
+  "draw-border-then-fill-styled-square",
   "exact-source DrawBorderThenFill keeps its qualified raster/timeline evidence",
 );
-const movingCamera = readyEntries.find((entry) => entry.id === "manim-moving-camera-center");
-assert.equal(
-  movingCamera?.parity_status,
-  "parity-qualified",
+assertQualifiedFixture(
+  "parity-moving-dots",
+  "moving-dots",
+  "MovingDots must keep its qualified updater/raster/timeline evidence",
+);
+assertQualifiedFixture(
+  "manim-moving-camera-center",
+  "moving-camera-center",
   "MovingCameraCenter must keep its qualified camera/raster/timeline evidence",
 );
-assert.equal(movingCamera?.parity_fixture, "moving-camera-center");
-assert.ok(movingCamera?.features.includes("pixel-parity"));
-assert.ok(movingCamera?.features.includes("time-parity"));
-assert.ok(
-  parityManifest.fixtures.some((fixture) => fixture.id === movingCamera?.parity_fixture),
-  "a parity-qualified gallery entry must point at its canonical Manim fixture",
-);
+
 for (const id of [
   "manim-dot-example",
   "manim-ellipse-example",
