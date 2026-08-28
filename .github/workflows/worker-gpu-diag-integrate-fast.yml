@@ -1,0 +1,98 @@
+name: Sparse worker GPU diagnostic integration
+
+on:
+  push:
+    branches:
+      - tmp/worker-gpu-diag-integrate-fast
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature files
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /web/execution-worker-client.js
+            /web/retained-execution-worker-client.js
+            /web/authoring-execution-client.js
+            /web/render-gpu-diagnostics.js
+            /scripts/build-web-demo.sh
+
+      - name: Apply guarded integration edits
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one target, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "web/execution-worker-client.js",
+              '          if (message.type === "error") {\n',
+              '''          if (message.type === "recoverable_error") {\n            const error = new Error(\n              message.message || `${owner} worker reported a recoverable error`,\n            );\n            error.diagnostic = message.diagnostic ?? null;\n            this.#notifyRecoverableError(error, owner);\n            return;\n          }\n          if (message.type === "error") {\n''',
+          )
+          replace_once(
+              "web/retained-execution-worker-client.js",
+              '  #onError;\n  #fatalOwner = null;\n',
+              '  #onError;\n  #onRecoverableError;\n  #fatalOwner = null;\n',
+          )
+          replace_once(
+              "web/retained-execution-worker-client.js",
+              '''  constructor(canvas, { onError = null } = {}) {\n    if (!(canvas instanceof HTMLCanvasElement)) {\n      throw new TypeError("RetainedExecutionWorkerClient requires an HTMLCanvasElement");\n    }\n    if (onError !== null && typeof onError !== "function") {\n      throw new TypeError("RetainedExecutionWorkerClient onError must be a function");\n    }\n    this.#canvas = canvas;\n    this.#onError = onError;\n  }\n''',
+              '''  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {\n    if (!(canvas instanceof HTMLCanvasElement)) {\n      throw new TypeError("RetainedExecutionWorkerClient requires an HTMLCanvasElement");\n    }\n    if (onError !== null && typeof onError !== "function") {\n      throw new TypeError("RetainedExecutionWorkerClient onError must be a function");\n    }\n    if (onRecoverableError !== null && typeof onRecoverableError !== "function") {\n      throw new TypeError("RetainedExecutionWorkerClient onRecoverableError must be a function");\n    }\n    this.#canvas = canvas;\n    this.#onError = onError;\n    this.#onRecoverableError = onRecoverableError;\n  }\n''',
+          )
+          replace_once(
+              "web/retained-execution-worker-client.js",
+              '          if (message.type === "error") {\n',
+              '''          if (message.type === "recoverable_error") {\n            const error = new Error(\n              message.message || `${owner} mixed retained worker reported a recoverable error`,\n            );\n            error.diagnostic = message.diagnostic ?? null;\n            this.#notifyRecoverableError(error, owner);\n            return;\n          }\n          if (message.type === "error") {\n''',
+          )
+          replace_once(
+              "web/retained-execution-worker-client.js",
+              '  #rememberPlaying(result) {\n',
+              '''  #notifyRecoverableError(error, owner) {\n    if (this.#onRecoverableError !== null) {\n      this.#onRecoverableError(error, owner);\n      return;\n    }\n    console.warn(`[Noon retained execution] recoverable ${owner} error`, error);\n  }\n\n  #rememberPlaying(result) {\n''',
+          )
+          replace_once(
+              "web/authoring-execution-client.js",
+              '    const player = new RetainedExecutionWorkerClient(canvas, { onError: this.#onError });\n',
+              '''    const player = new RetainedExecutionWorkerClient(canvas, {\n      onError: this.#onError,\n      onRecoverableError: this.#onRecoverableError,\n    });\n''',
+          )
+
+          test_path = Path("web/render-gpu-diagnostics.test.mjs")
+          test_path.write_text('''import assert from "node:assert/strict";\nimport test from "node:test";\n\nimport { drainRendererGpuDiagnostics, formatGpuDiagnostic } from "./render-gpu-diagnostics.js";\n\nfunction fakeRenderer(records) {\n  const queue = [...records];\n  return { takeGpuDiagnosticJson: () => queue.shift() ?? null };\n}\n\nfunction encoded(kind, severity, message = "diagnostic") {\n  return JSON.stringify({ generation: 3, backend: "WebGPU", kind, severity, message });\n}\n\ntest("recoverable validation drains without stopping", () => {\n  const recoverable = [];\n  const fatal = [];\n  assert.equal(drainRendererGpuDiagnostics(fakeRenderer([encoded("validation", "recoverable", "invalid usage")]), {\n    onRecoverable: (value) => recoverable.push(value),\n    onFatal: (value) => fatal.push(value),\n  }), true);\n  assert.equal(recoverable.length, 1);\n  assert.deepEqual(fatal, []);\n});\n\ntest("fatal diagnostics stop draining", () => {\n  const recoverable = [];\n  const fatal = [];\n  assert.equal(drainRendererGpuDiagnostics(fakeRenderer([\n    encoded("out_of_memory", "fatal", "oom"),\n    encoded("validation", "recoverable", "must not drain"),\n  ]), {\n    onRecoverable: (value) => recoverable.push(value),\n    onFatal: (value) => fatal.push(value),\n  }), false);\n  assert.deepEqual(recoverable, []);\n  assert.equal(fatal.length, 1);\n});\n\ntest("rejects inconsistent severity", () => {\n  assert.throws(() => drainRendererGpuDiagnostics(fakeRenderer([encoded("validation", "fatal")]), {\n    onRecoverable() {},\n    onFatal() {},\n  }), /validation diagnostics must be recoverable/);\n});\n\ntest("formats diagnostic context", () => {\n  assert.equal(formatGpuDiagnostic({ generation: 5, backend: "WebGPU", kind: "validation", message: "invalid buffer" }), "WebGPU generation 5 validation: invalid buffer");\n});\n''')
+          replace_once(
+              "scripts/build-web-demo.sh",
+              'node --check web/execution-render-worker.js\n',
+              'node --check web/execution-render-worker.js\nnode --check web/render-gpu-diagnostics.js\n',
+          )
+          replace_once(
+              "scripts/build-web-demo.sh",
+              'node --test web/execution-worker-client.test.mjs\n',
+              'node --test web/execution-worker-client.test.mjs\nnode --test web/render-gpu-diagnostics.test.mjs\n',
+          )
+          PY
+
+      - name: Validate and push
+        run: |
+          node --check web/execution-worker-client.js
+          node --check web/retained-execution-worker-client.js
+          node --check web/authoring-execution-client.js
+          node --check web/render-gpu-diagnostics.js
+          node --test web/render-gpu-diagnostics.test.mjs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/execution-worker-client.js web/retained-execution-worker-client.js web/authoring-execution-client.js web/render-gpu-diagnostics.test.mjs scripts/build-web-demo.sh
+          git commit -m "Route worker GPU diagnostics through host clients"
+          git push origin HEAD:fix/worker-gpu-validation-diagnostics
