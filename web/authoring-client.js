@@ -145,14 +145,16 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "result") {
-        const result = parseAuthoringResult(message.resultJson);
-        this.#settle(message.requestId, ({ resolve }) => resolve(result));
+        this.#settle(message.requestId, ({ resolve }) => {
+          resolve(parseAuthoringResult(message.resultJson));
+        });
         return;
       }
 
       if (message.type === "callback_result") {
-        const batch = parsePatchBatchJson(message.patchBatchJson);
-        this.#settle(message.requestId, ({ resolve }) => resolve(batch));
+        this.#settle(message.requestId, ({ resolve }) => {
+          resolve(parsePatchBatchJson(message.patchBatchJson));
+        });
         return;
       }
 
@@ -179,8 +181,8 @@ export class PythonAuthoringClient {
       }
       throw new Error(`Python authoring response has unissued request ID ${requestId}`);
     }
-    this.#pending.delete(requestId);
     settle(pending);
+    this.#pending.delete(requestId);
     return true;
   }
 
