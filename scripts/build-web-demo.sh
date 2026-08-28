@@ -61,6 +61,7 @@ node --test web/execution-transport.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/playground-generation.test.mjs
 node --test web/python-editor.test.mjs
+node --test web/editor-runtime-boundary.test.mjs
 node --test web/python-worker-source.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs

@@ -1,5 +1,3 @@
-import "./python-editor.js";
-
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 5;
 export const NOON_IR_VERSION = 1;
