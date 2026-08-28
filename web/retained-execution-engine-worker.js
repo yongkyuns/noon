@@ -15,6 +15,7 @@ let transportMode = null;
 let transport = null;
 let player = null;
 let latestTick = null;
+let controlQueue = [];
 let initialized = false;
 let stopped = false;
 let resourceBundleBytes = 0;
@@ -31,16 +32,17 @@ async function handleMainMessage(message) {
         await initialize(message);
         return;
       case "set_loop_duration":
-        requireInitialized();
-        validateLoopDuration(message.loopDurationSeconds);
-        player.setLoopDurationSeconds(message.loopDurationSeconds);
-        respond(message.requestId, runtimeResult("set_loop_duration"));
+      case "pause":
+      case "resume":
+      case "seek":
+        enqueueControl(message);
         return;
       case "state":
         requireInitialized();
         respond(message.requestId, {
           type: "state",
           time: player.time(),
+          playing: player.isPlaying(),
           nextPatchSequence: "0",
           sceneJson: player.legacySceneJson(),
           retainedDocumentJson: player.retainedDocumentJson(),
@@ -54,6 +56,7 @@ async function handleMainMessage(message) {
             retained: true,
             mixed: true,
             time: player.time(),
+            playing: player.isPlaying(),
             resourceBundleBytes,
             resourceBundleTransfers: 1,
           },
@@ -69,6 +72,7 @@ async function handleMainMessage(message) {
         );
       case "stop":
         stopped = true;
+        controlQueue = [];
         latestTick = null;
         renderPort?.close?.();
         self.close();
@@ -172,10 +176,33 @@ function handleRenderMessage(message) {
   }
 }
 
+function enqueueControl(message) {
+  requireInitialized();
+  if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) {
+    throw new Error("mixed retained engine request ID must be a non-negative safe integer");
+  }
+  controlQueue.push(message);
+  drainWork();
+}
+
 function drainWork() {
   if (!initialized || stopped || player === null || transport === null) {
     return;
   }
+
+  while (controlQueue.length > 0 && transportCanSend()) {
+    const message = controlQueue.shift();
+    try {
+      executeControl(message);
+    } catch (error) {
+      fail(error, message.requestId);
+      return;
+    }
+  }
+  if (controlQueue.length > 0) {
+    return;
+  }
+
   if (latestTick === null || !transportCanSend()) {
     return;
   }
@@ -188,6 +215,37 @@ function drainWork() {
     }
   } catch (error) {
     fail(error, null);
+  }
+}
+
+function executeControl(message) {
+  switch (message.type) {
+    case "set_loop_duration":
+      validateLoopDuration(message.loopDurationSeconds);
+      player.setLoopDurationSeconds(message.loopDurationSeconds);
+      respond(message.requestId, runtimeResult("set_loop_duration"));
+      return;
+    case "pause":
+      player.pause();
+      latestTick = null;
+      respond(message.requestId, runtimeResult("pause"));
+      return;
+    case "resume":
+      player.resume();
+      latestTick = null;
+      respond(message.requestId, runtimeResult("resume"));
+      return;
+    case "seek": {
+      const delta = player.seekDeltaJson(message.time);
+      latestTick = null;
+      if (delta !== undefined && delta !== null) {
+        sendDeltaOrThrow(delta);
+      }
+      respond(message.requestId, runtimeResult("seek"));
+      return;
+    }
+    default:
+      throw new Error(`unknown mixed retained queued engine command ${message.type}`);
   }
 }
 
@@ -221,6 +279,7 @@ function runtimeResult(operation) {
     type: "result",
     operation,
     time: player.time(),
+    playing: player.isPlaying(),
     nextPatchSequence: "0",
     sceneJson: player.legacySceneJson(),
     retainedDocumentJson: player.retainedDocumentJson(),

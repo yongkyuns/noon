@@ -148,6 +148,31 @@ impl TrackValues {
             Self::Object { .. } => ValueKind::Object,
         }
     }
+
+    fn validate_numeric_values(&self, property: Property) -> Result<(), TimelineError> {
+        match self {
+            Self::Scalar { from, to } if !from.is_finite() || !to.is_finite() => {
+                Err(TimelineError::InvalidScalarValues {
+                    property,
+                    from: *from,
+                    to: *to,
+                })
+            }
+            Self::Vec2 { from, to }
+                if !from.x.is_finite()
+                    || !from.y.is_finite()
+                    || !to.x.is_finite()
+                    || !to.y.is_finite() =>
+            {
+                Err(TimelineError::InvalidVec2Values {
+                    property,
+                    from: *from,
+                    to: *to,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -196,6 +221,16 @@ pub enum TimelineError {
         expected: ValueKind,
         actual: ValueKind,
     },
+    InvalidScalarValues {
+        property: Property,
+        from: f32,
+        to: f32,
+    },
+    InvalidVec2Values {
+        property: Property,
+        from: Vec2,
+        to: Vec2,
+    },
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
     TrackIdExhausted,
@@ -218,6 +253,15 @@ impl std::fmt::Display for TimelineError {
             } => write!(
                 formatter,
                 "value type mismatch for {property:?}: expected {expected:?}, got {actual:?}"
+            ),
+            Self::InvalidScalarValues { property, from, to } => write!(
+                formatter,
+                "non-finite scalar values for {property:?}: from={from}, to={to}"
+            ),
+            Self::InvalidVec2Values { property, from, to } => write!(
+                formatter,
+                "non-finite vector values for {property:?}: from=({}, {}), to=({}, {})",
+                from.x, from.y, to.x, to.y
             ),
             Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
             Self::InstantTrackCannotUseTimeMap(property) => write!(
@@ -265,6 +309,7 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
             actual,
         });
     }
+    track.values.validate_numeric_values(track.property)?;
     if track.property.is_instant() && !track.time_map.is_identity() {
         return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
     }
@@ -654,6 +699,60 @@ mod tests {
             )
             .expect_err("invalid start time must fail");
         assert!(matches!(error, TimelineError::InvalidStartTime(_)));
+    }
+
+    #[test]
+    fn non_finite_scalar_values_are_rejected_without_consuming_track_ids() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+
+        for (from, to) in [
+            (f32::NAN, 1.0),
+            (0.0, f32::INFINITY),
+            (f32::NEG_INFINITY, 1.0),
+        ] {
+            assert!(matches!(
+                scene.animate_scalar(object, Property::Opacity, from, to, timing()),
+                Err(TimelineError::InvalidScalarValues {
+                    property: Property::Opacity,
+                    ..
+                })
+            ));
+        }
+        assert!(scene.tracks().is_empty());
+        assert_eq!(
+            scene
+                .animate_scalar(object, Property::Opacity, 1.0, 0.0, timing())
+                .unwrap(),
+            TrackId::new(0)
+        );
+    }
+
+    #[test]
+    fn non_finite_position_values_are_rejected_without_consuming_track_ids() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+
+        for (from, to) in [
+            (Vec2::new(f32::NAN, 0.0), Vec2::ONE),
+            (Vec2::ZERO, Vec2::new(1.0, f32::INFINITY)),
+            (Vec2::new(0.0, f32::NEG_INFINITY), Vec2::ONE),
+        ] {
+            assert!(matches!(
+                scene.animate_position(object, from, to, timing()),
+                Err(TimelineError::InvalidVec2Values {
+                    property: Property::Position,
+                    ..
+                })
+            ));
+        }
+        assert!(scene.tracks().is_empty());
+        assert_eq!(
+            scene
+                .animate_position(object, Vec2::ZERO, Vec2::ONE, timing())
+                .unwrap(),
+            TrackId::new(0)
+        );
     }
 
     #[test]
