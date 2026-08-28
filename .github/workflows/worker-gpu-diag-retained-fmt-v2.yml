@@ -1,0 +1,43 @@
+name: Format retained worker GPU diagnostic hook
+
+on:
+  push:
+    branches:
+      - tmp/worker-gpu-diag-retained-fmt-v2
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature file
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics-v2
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /crates/noon-web/src/retained_execution_canvas.rs
+
+      - name: Format handler call
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("crates/noon-web/src/retained_execution_canvas.rs")
+          text = path.read_text()
+          old = '''            install_wgpu_error_handler(\n                &device,\n                gpu_generation,\n                backend,\n                gpu_diagnostics.clone(),\n            );\n'''
+          new = '''            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());\n'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected one retained handler call, found {count}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          rustfmt --edition 2021 --check crates/noon-web/src/retained_execution_canvas.rs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/retained_execution_canvas.rs
+          git commit -m "Format retained GPU diagnostic hook"
+          git push origin HEAD:fix/worker-gpu-validation-diagnostics-v2
