@@ -48,7 +48,7 @@ jobs:
 
           replace_once(
               '''            } = initialize_gpu(&canvas, width, height).await?;\n            let renderer = GpuRenderer::new(&device, config.format);\n''',
-              '''            } = initialize_gpu(&canvas, width, height).await?;\n            let gpu_generation = 1;\n            let gpu_diagnostics = GpuDiagnosticMailbox::default();\n            install_wgpu_error_handler(\n                &device,\n                gpu_generation,\n                backend,\n                gpu_diagnostics.clone(),\n            );\n            let renderer = GpuRenderer::new(&device, config.format);\n''',
+              '''            } = initialize_gpu(&canvas, width, height).await?;\n            let gpu_generation = 1;\n            let gpu_diagnostics = GpuDiagnosticMailbox::default();\n            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());\n            let renderer = GpuRenderer::new(&device, config.format);\n''',
           )
 
           replace_once(
@@ -61,8 +61,6 @@ jobs:
               '''        #[wasm_bindgen(js_name = rendererBackend)]\n        pub fn renderer_backend(&self) -> String {\n            match self.backend {\n                wgpu::Backend::BrowserWebGpu => "WebGPU".to_owned(),\n                wgpu::Backend::Gl => "WebGL2".to_owned(),\n                other => format!("{other:?}"),\n            }\n        }\n\n        #[wasm_bindgen(js_name = gpuGeneration)]\n        pub fn gpu_generation(&self) -> u32 {\n            self.gpu_generation\n        }\n\n        #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]\n        pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {\n            self.gpu_diagnostics\n                .take_for_generation(self.gpu_generation)\n                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))\n                .transpose()\n        }\n\n        pub fn time(&self) -> f64 {\n''',
           )
 
-          # Guard the #490 architecture: diagnostics must not change the backend
-          # selection/commit sequence or reintroduce surface-first WebGPU setup.
           required = [
               'match initialize_webgpu(canvas, width, height).await',
               'compatible_surface: None,',
