@@ -191,9 +191,18 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
   assert.equal(client.diagnostics.engine.staleResponses, 1);
   assert.deepEqual(errors, []);
 
-  // Render has never issued request 4. Even though engine and render IDs are
-  // independent, an unissued ID from the current render worker remains fatal.
+  const metricsPromise = client.metrics();
+  await Promise.resolve();
+  const engineMetrics = requestMessage(engine, "metrics");
+  const renderMetrics = requestMessage(render, "metrics");
+  assert.equal(engineMetrics.requestId, 1);
+  assert.equal(renderMetrics.requestId, 0);
+
+  // Render has never issued request 4. A fatal protocol violation rejects the
+  // current render request immediately instead of leaving it hung for restart.
   render.emitMessage(renderMessage("metrics", { requestId: 4, metrics: {} }));
+  await assert.rejects(metricsPromise, /render worker returned unissued request ID 4/);
+  assert.equal(client.diagnostics.render.pendingRequests, 0);
   assert.equal(client.diagnostics.render.staleResponses, 0);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /render: render worker returned unissued request ID 4/);
@@ -203,8 +212,22 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
 test("ignores queued events from workers that were replaced by restart", async () => {
   const errors = [];
   const { client, engine: oldEngine, render: oldRender } = await startClient(errors);
-  const offset = FakeWorker.instances.length;
 
+  const beforeRestart = client.state();
+  await Promise.resolve();
+  const firstStateRequest = requestMessage(oldEngine, "state");
+  assert.equal(firstStateRequest.requestId, 0);
+  oldEngine.emitMessage(
+    engineMessage("state", {
+      requestId: 0,
+      time: 0,
+      nextPatchSequence: "0",
+      sceneJson: SCENE_JSON,
+    }),
+  );
+  await beforeRestart;
+
+  const offset = FakeWorker.instances.length;
   const restartPromise = client.restart();
   const { engine: newEngine, render: newRender } = workerPair(offset);
   newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
@@ -227,10 +250,14 @@ test("ignores queued events from workers that were replaced by restart", async (
   const statePromise = client.state();
   await Promise.resolve();
   const stateRequest = requestMessage(newEngine, "state");
-  assert.equal(stateRequest.requestId, 0);
+  assert.equal(
+    stateRequest.requestId,
+    1,
+    "restart must not reuse an engine request ID that an old worker may still emit",
+  );
   newEngine.emitMessage(
     engineMessage("state", {
-      requestId: 0,
+      requestId: 1,
       time: 0,
       nextPatchSequence: "0",
       sceneJson: SCENE_JSON,
