@@ -10,11 +10,18 @@ on:
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "scripts/renderer-webgpu-device-loss-smoke.mjs"
       - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/renderer-worker-webgpu-validation-error-smoke.mjs"
       - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
       - "web/execution-renderer-smoke.html"
       - "web/execution-renderer-smoke.js"
+      - "web/execution-render-worker.js"
+      - "web/retained-execution-render-worker.js"
+      - "web/execution-worker-client.js"
+      - "web/retained-execution-worker-client.js"
+      - "web/authoring-execution-client.js"
+      - "web/render-gpu-diagnostics.js"
   push:
     branches:
       - master
@@ -26,11 +33,18 @@ on:
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "scripts/renderer-webgpu-device-loss-smoke.mjs"
       - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/renderer-worker-webgpu-validation-error-smoke.mjs"
       - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
       - "web/execution-renderer-smoke.html"
       - "web/execution-renderer-smoke.js"
+      - "web/execution-render-worker.js"
+      - "web/retained-execution-render-worker.js"
+      - "web/execution-worker-client.js"
+      - "web/retained-execution-worker-client.js"
+      - "web/authoring-execution-client.js"
+      - "web/render-gpu-diagnostics.js"
   workflow_dispatch:
 
 permissions:
@@ -118,6 +132,12 @@ jobs:
           NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS: browser-smoke-artifacts/renderer-validation-error
         run: node scripts/renderer-webgpu-validation-error-smoke.mjs
 
+      - name: Test render-worker WebGPU validation propagation
+        id: worker_webgpu_validation_error
+        env:
+          NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/render-worker-validation-error
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
       - name: Upload renderer initialization diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,5 +171,14 @@ jobs:
         with:
           name: renderer-webgpu-validation-error
           path: browser-smoke-artifacts/renderer-validation-error
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload render-worker WebGPU validation diagnostics
+        if: always() && steps.worker_webgpu_validation_error.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-worker-webgpu-validation-error
+          path: browser-smoke-artifacts/render-worker-validation-error
           if-no-files-found: error
           retention-days: 7
