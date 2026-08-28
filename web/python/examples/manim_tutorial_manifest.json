@@ -608,12 +608,15 @@
         "animate",
         "move_to",
         "Square",
-        "Triangle"
+        "Triangle",
+        "pixel-parity",
+        "time-parity"
       ],
       "upstream": "reference/manim.scene.moving_camera_scene.MovingCameraScene.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_camera_center.py",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "moving-camera-center",
       "expected_duration": 2.6,
       "thumbnail": "thumbnails/manim/generated/moving-camera-center.png",
       "thumbnail_alt": "Exact-source Manim MovingCameraCenter",
