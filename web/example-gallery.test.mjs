@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 
 import {
   applyGalleryThumbnailFailure,
@@ -28,10 +28,20 @@ assert.ok(
   gallery.examples.every(
     (entry) =>
       entry.thumbnail.startsWith("./thumbnails/manim/") &&
-      (entry.thumbnail.endsWith(".webp") || entry.thumbnail.endsWith(".svg")),
+      (entry.thumbnail.endsWith(".webp") ||
+        entry.thumbnail.endsWith(".svg") ||
+        entry.thumbnail.endsWith(".png")),
   ),
   "ready gallery entries must use a checked-in Manim thumbnail/poster",
 );
+assert.equal(
+  readyEntries.some((entry) => entry.thumbnail === "thumbnails/manim/exact-source.svg"),
+  false,
+  "ready gallery entries must use real scene-specific posters rather than the generic placeholder",
+);
+for (const entry of readyEntries) {
+  await access(new URL(`./${entry.thumbnail}`, import.meta.url));
+}
 assert.ok(
   readyEntries.every(
     (entry) =>
@@ -197,4 +207,4 @@ assert.throws(
   /source-equivalent ManimCE/,
 );
 
-console.log("✓ Manim gallery manifest contract + thumbnail fallback");
+console.log("✓ Manim gallery manifest contract + real posters + thumbnail fallback");

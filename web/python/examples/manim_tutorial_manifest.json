@@ -18,7 +18,14 @@
       "status": "ready",
       "path": "python/examples/manim_parity_create_circle.py",
       "category": "quickstart",
-      "features": ["Scene", "Circle", "Create", "style", "pixel-parity", "time-parity"],
+      "features": [
+        "Scene",
+        "Circle",
+        "Create",
+        "style",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/create_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -26,7 +33,7 @@
       "parity_fixture": "create-circle",
       "thumbnail": "thumbnails/manim/create-circle.webp",
       "thumbnail_alt": "Pink filled circle on the Manim scene background",
-      "thumbnail_time": 1.0,
+      "thumbnail_time": 1,
       "order": 10
     },
     {
@@ -36,7 +43,15 @@
       "status": "ready",
       "path": "python/examples/manim_parity_square_to_circle.py",
       "category": "quickstart",
-      "features": ["Square", "Circle", "Create", "Transform", "FadeOut", "pixel-parity", "time-parity"],
+      "features": [
+        "Square",
+        "Circle",
+        "Create",
+        "Transform",
+        "FadeOut",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/square_to_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -54,7 +69,14 @@
       "status": "ready",
       "path": "python/examples/manim_parity_square_and_circle.py",
       "category": "quickstart",
-      "features": ["Circle", "Square", "next_to", "Create", "pixel-parity", "time-parity"],
+      "features": [
+        "Circle",
+        "Square",
+        "next_to",
+        "Create",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/square_and_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -62,7 +84,7 @@
       "parity_fixture": "square-and-circle",
       "thumbnail": "thumbnails/manim/square-and-circle.webp",
       "thumbnail_alt": "Pink circle next to a blue square",
-      "thumbnail_time": 1.0,
+      "thumbnail_time": 1,
       "order": 30
     },
     {
@@ -72,7 +94,14 @@
       "status": "ready",
       "path": "python/examples/manim_parity_animated_square_to_circle.py",
       "category": "quickstart",
-      "features": ["Create", "animate", "Transform", "style", "pixel-parity", "time-parity"],
+      "features": [
+        "Create",
+        "animate",
+        "Transform",
+        "style",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/animated_square_to_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -80,7 +109,7 @@
       "parity_fixture": "animated-square-to-circle",
       "thumbnail": "thumbnails/manim/animated-square-to-circle.webp",
       "thumbnail_alt": "Rotated square from the AnimatedSquareToCircle example",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 40
     },
     {
@@ -90,7 +119,13 @@
       "status": "ready",
       "path": "python/examples/manim_parity_different_rotations.py",
       "category": "quickstart",
-      "features": ["animate", "Rotate", "wait", "pixel-parity", "time-parity"],
+      "features": [
+        "animate",
+        "Rotate",
+        "wait",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/different_rotations.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -98,7 +133,7 @@
       "parity_fixture": "different-rotations",
       "thumbnail": "thumbnails/manim/different-rotations.webp",
       "thumbnail_alt": "Blue and green squares from the DifferentRotations example",
-      "thumbnail_time": 1.0,
+      "thumbnail_time": 1,
       "order": 50
     },
     {
@@ -108,15 +143,19 @@
       "status": "ready",
       "path": "python/examples/manim_example_dot.py",
       "category": "geometry",
-      "features": ["Dot", "Scene.add", "geometry"],
+      "features": [
+        "Dot",
+        "Scene.add",
+        "geometry"
+      ],
       "upstream": "reference/manim.mobject.geometry.arc.Dot.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/dot_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 0.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 0,
+      "thumbnail": "thumbnails/manim/generated/dot-example.png",
       "thumbnail_alt": "Exact-source Manim DotExample",
-      "thumbnail_time": 0.0,
+      "thumbnail_time": 0,
       "order": 60
     },
     {
@@ -126,15 +165,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_ellipse.py",
       "category": "geometry",
-      "features": ["Ellipse", "Group", "arrange", "Scene.add"],
+      "features": [
+        "Ellipse",
+        "Group",
+        "arrange",
+        "Scene.add"
+      ],
       "upstream": "reference/manim.mobject.geometry.arc.Ellipse.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/ellipse_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 0.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 0,
+      "thumbnail": "thumbnails/manim/generated/ellipse-example.png",
       "thumbnail_alt": "Exact-source Manim EllipseExample",
-      "thumbnail_time": 0.0,
+      "thumbnail_time": 0,
       "order": 70
     },
     {
@@ -144,13 +188,17 @@
       "status": "ready",
       "path": "python/examples/manim_example_show_uncreate.py",
       "category": "creation",
-      "features": ["Uncreate", "Square", "lifecycle"],
+      "features": [
+        "Uncreate",
+        "Square",
+        "lifecycle"
+      ],
       "upstream": "reference/manim.animation.creation.Uncreate.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_uncreate.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 1.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 1,
+      "thumbnail": "thumbnails/manim/generated/show-uncreate.png",
       "thumbnail_alt": "Exact-source Manim ShowUncreate",
       "thumbnail_time": 0.5,
       "order": 80
@@ -162,7 +210,14 @@
       "status": "ready",
       "path": "python/examples/manim_parity_draw_border_then_fill_styled_square.py",
       "category": "creation",
-      "features": ["DrawBorderThenFill", "Square", "style", "reveal", "pixel-parity", "time-parity"],
+      "features": [
+        "DrawBorderThenFill",
+        "Square",
+        "style",
+        "reveal",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "reference/manim.animation.creation.DrawBorderThenFill.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_draw_border_then_fill.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -180,13 +235,19 @@
       "status": "ready",
       "path": "python/examples/manim_example_show_increasing_subsets.py",
       "category": "creation",
-      "features": ["ShowIncreasingSubsets", "VGroup", "Dot", "Square", "Triangle"],
+      "features": [
+        "ShowIncreasingSubsets",
+        "VGroup",
+        "Dot",
+        "Square",
+        "Triangle"
+      ],
       "upstream": "reference/manim.animation.creation.ShowIncreasingSubsets.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_increasing_subsets_scene.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 2.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 2,
+      "thumbnail": "thumbnails/manim/generated/show-increasing-subsets.png",
       "thumbnail_alt": "Exact-source Manim ShowIncreasingSubsetsScene",
       "thumbnail_time": 0.5,
       "order": 100
@@ -198,15 +259,21 @@
       "status": "ready",
       "path": "python/examples/manim_example_add_with_run_time.py",
       "category": "composition",
-      "features": ["Add", "Succession", "VGroup", "arrange_in_grid", "smooth"],
+      "features": [
+        "Add",
+        "Succession",
+        "VGroup",
+        "arrange_in_grid",
+        "smooth"
+      ],
       "upstream": "reference/manim.animation.animation.Add.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/add_with_run_time_scene.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 6.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 6,
+      "thumbnail": "thumbnails/manim/generated/add-with-run-time.png",
       "thumbnail_alt": "Exact-source Manim AddWithRunTimeScene",
-      "thumbnail_time": 3.0,
+      "thumbnail_time": 3,
       "order": 110
     },
     {
@@ -216,15 +283,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_succession.py",
       "category": "composition",
-      "features": ["Succession", "Dot", "animate", "move_to"],
+      "features": [
+        "Succession",
+        "Dot",
+        "animate",
+        "move_to"
+      ],
       "upstream": "reference/manim.animation.composition.Succession.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/succession_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 4.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 4,
+      "thumbnail": "thumbnails/manim/generated/succession-example.png",
       "thumbnail_alt": "Exact-source Manim SuccessionExample",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 120
     },
     {
@@ -234,15 +306,21 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_point.py",
       "category": "growing",
-      "features": ["GrowFromPoint", "Dot", "Square", "VGroup", "get_color"],
+      "features": [
+        "GrowFromPoint",
+        "Dot",
+        "Square",
+        "VGroup",
+        "get_color"
+      ],
       "upstream": "reference/manim.animation.growing.GrowFromPoint.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_point_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 4.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 4,
+      "thumbnail": "thumbnails/manim/generated/grow-from-point.png",
       "thumbnail_alt": "Exact-source Manim GrowFromPointExample",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 130
     },
     {
@@ -252,15 +330,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_center.py",
       "category": "growing",
-      "features": ["GrowFromCenter", "Square", "VGroup", "point_color"],
+      "features": [
+        "GrowFromCenter",
+        "Square",
+        "VGroup",
+        "point_color"
+      ],
       "upstream": "reference/manim.animation.growing.GrowFromCenter.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_center_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 2.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 2,
+      "thumbnail": "thumbnails/manim/generated/grow-from-center.png",
       "thumbnail_alt": "Exact-source Manim GrowFromCenterExample",
-      "thumbnail_time": 1.0,
+      "thumbnail_time": 1,
       "order": 140
     },
     {
@@ -270,15 +353,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_edge.py",
       "category": "growing",
-      "features": ["GrowFromEdge", "Square", "VGroup", "point_color"],
+      "features": [
+        "GrowFromEdge",
+        "Square",
+        "VGroup",
+        "point_color"
+      ],
       "upstream": "reference/manim.animation.growing.GrowFromEdge.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_edge_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 4.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 4,
+      "thumbnail": "thumbnails/manim/generated/grow-from-edge.png",
       "thumbnail_alt": "Exact-source Manim GrowFromEdgeExample",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 150
     },
     {
@@ -288,13 +376,18 @@
       "status": "ready",
       "path": "python/examples/manim_example_spin_in_from_nothing.py",
       "category": "growing",
-      "features": ["SpinInFromNothing", "Square", "VGroup", "point_color"],
+      "features": [
+        "SpinInFromNothing",
+        "Square",
+        "VGroup",
+        "point_color"
+      ],
       "upstream": "reference/manim.animation.growing.SpinInFromNothing.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/spin_in_from_nothing_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 3.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 3,
+      "thumbnail": "thumbnails/manim/generated/spin-in-from-nothing.png",
       "thumbnail_alt": "Exact-source Manim SpinInFromNothingExample",
       "thumbnail_time": 1.5,
       "order": 160
@@ -306,15 +399,22 @@
       "status": "ready",
       "path": "python/examples/manim_example_rotating_demo.py",
       "category": "rotation",
-      "features": ["Rotating", "Arrow", "VGroup", "about_point", "about_edge", "axis"],
+      "features": [
+        "Rotating",
+        "Arrow",
+        "VGroup",
+        "about_point",
+        "about_edge",
+        "axis"
+      ],
       "upstream": "reference/manim.animation.rotation.Rotating.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/rotating_demo.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 18.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 18,
+      "thumbnail": "thumbnails/manim/generated/rotating-demo.png",
       "thumbnail_alt": "Exact-source Manim RotatingDemo",
-      "thumbnail_time": 9.0,
+      "thumbnail_time": 9,
       "order": 165
     },
     {
@@ -324,15 +424,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_using_focus_on.py",
       "category": "indication",
-      "features": ["FocusOn", "Tex", "Dot", "PURE_YELLOW"],
+      "features": [
+        "FocusOn",
+        "Tex",
+        "Dot",
+        "PURE_YELLOW"
+      ],
       "upstream": "reference/manim.animation.indication.FocusOn.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/using_focus_on.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 3.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 3,
+      "thumbnail": "thumbnails/manim/generated/using-focus-on.png",
       "thumbnail_alt": "Exact-source Manim UsingFocusOn",
-      "thumbnail_time": 1.0,
+      "thumbnail_time": 2.5,
       "order": 170
     },
     {
@@ -342,15 +447,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_using_indicate.py",
       "category": "indication",
-      "features": ["Indicate", "Tex", "scale", "wait"],
+      "features": [
+        "Indicate",
+        "Tex",
+        "scale",
+        "wait"
+      ],
       "upstream": "reference/manim.animation.indication.Indicate.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/using_indicate.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 2.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 2,
+      "thumbnail": "thumbnails/manim/generated/using-indicate.png",
       "thumbnail_alt": "Exact-source Manim UsingIndicate",
-      "thumbnail_time": 0.5,
+      "thumbnail_time": 1.5,
       "order": 180
     },
     {
@@ -360,15 +470,22 @@
       "status": "ready",
       "path": "python/examples/manim_example_lagged_start_map.py",
       "category": "composition",
-      "features": ["LaggedStartMap", "ApplyMethod", "Tex", "Dot", "arrange_in_grid", "there_and_back"],
+      "features": [
+        "LaggedStartMap",
+        "ApplyMethod",
+        "Tex",
+        "Dot",
+        "arrange_in_grid",
+        "there_and_back"
+      ],
       "upstream": "reference/manim.animation.composition.LaggedStartMap.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/lagged_start_map_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 4.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 4,
+      "thumbnail": "thumbnails/manim/generated/lagged-start-map.png",
       "thumbnail_alt": "Exact-source Manim LaggedStartMapExample",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 190
     },
     {
@@ -378,13 +495,23 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_moving_dots.py",
       "category": "animations",
-      "features": ["Dot", "VGroup", "arrange", "Line", "ValueTracker", "add_updater", "match_points", "pixel-parity", "time-parity"],
+      "features": [
+        "Dot",
+        "VGroup",
+        "arrange",
+        "Line",
+        "ValueTracker",
+        "add_updater",
+        "match_points",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_dots.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "moving-dots",
-      "expected_duration": 3.0,
+      "expected_duration": 3,
       "thumbnail": "thumbnails/manim/moving-dots.svg",
       "thumbnail_alt": "Blue and green dots connected by a red updater line",
       "thumbnail_time": 2.5,
@@ -397,15 +524,22 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_rotation_updater.py",
       "category": "animations",
-      "features": ["Line", "add_updater", "remove_updater", "rotate_about_origin", "wait", "host-callback-lifecycle"],
+      "features": [
+        "Line",
+        "add_updater",
+        "remove_updater",
+        "rotate_about_origin",
+        "wait",
+        "host-callback-lifecycle"
+      ],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/rotation_updater.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "expected_duration": 4.5,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail": "thumbnails/manim/generated/rotation-updater.png",
       "thumbnail_alt": "Exact-source Manim RotationUpdater",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 210
     },
     {
@@ -415,14 +549,21 @@
       "status": "ready",
       "path": "python/examples/manim_example_move_to_target.py",
       "category": "transform",
-      "features": ["MoveToTarget", "generate_target", "Circle", "Transform", "pixel-parity", "time-parity"],
+      "features": [
+        "MoveToTarget",
+        "generate_target",
+        "Circle",
+        "Transform",
+        "pixel-parity",
+        "time-parity"
+      ],
       "upstream": "reference/manim.animation.transform.MoveToTarget.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/move_to_target_example.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "move-to-target-circle",
-      "expected_duration": 1.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 1,
+      "thumbnail": "thumbnails/manim/generated/move-to-target.png",
       "thumbnail_alt": "Exact-source Manim MoveToTargetExample",
       "thumbnail_time": 0.5,
       "order": 215
@@ -434,15 +575,23 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_moving_around.py",
       "category": "animations",
-      "features": ["Square", "animate", "shift", "set_fill", "scale", "rotate", "tri-language-parity"],
+      "features": [
+        "Square",
+        "animate",
+        "shift",
+        "set_fill",
+        "scale",
+        "rotate",
+        "tri-language-parity"
+      ],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_around.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
-      "expected_duration": 4.0,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "expected_duration": 4,
+      "thumbnail": "thumbnails/manim/generated/moving-around.png",
       "thumbnail_alt": "Exact-source Manim MovingAround",
-      "thumbnail_time": 2.0,
+      "thumbnail_time": 2,
       "order": 220
     },
     {
@@ -452,13 +601,20 @@
       "status": "ready",
       "path": "python/examples/manim_example_moving_camera_center.py",
       "category": "tutorial/scene-camera",
-      "features": ["MovingCameraScene", "camera.frame", "animate", "move_to", "Square", "Triangle"],
+      "features": [
+        "MovingCameraScene",
+        "camera.frame",
+        "animate",
+        "move_to",
+        "Square",
+        "Triangle"
+      ],
       "upstream": "reference/manim.scene.moving_camera_scene.MovingCameraScene.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_camera_center.py",
       "reuse": "source-equivalent-manim-v0.21",
       "parity_status": "candidate",
       "expected_duration": 2.6,
-      "thumbnail": "thumbnails/manim/exact-source.svg",
+      "thumbnail": "thumbnails/manim/generated/moving-camera-center.png",
       "thumbnail_alt": "Exact-source Manim MovingCameraCenter",
       "thumbnail_time": 1.8,
       "order": 230
@@ -468,7 +624,13 @@
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
       "category": "tutorial/text-math",
-      "features": ["Text", "Tex", "MathTex", "Write", "glyph-raster-parity"],
+      "features": [
+        "Text",
+        "Tex",
+        "MathTex",
+        "Write",
+        "glyph-raster-parity"
+      ],
       "dependency": "#65/#83/#80"
     },
     {
@@ -476,7 +638,11 @@
       "title": "Axes and function plotting",
       "status": "blocked",
       "category": "tutorial/plotting",
-      "features": ["Axes", "plot", "NumberPlane"],
+      "features": [
+        "Axes",
+        "plot",
+        "NumberPlane"
+      ],
       "dependency": "#85/#83"
     },
     {
@@ -484,7 +650,11 @@
       "title": "Graph and DiGraph",
       "status": "blocked",
       "category": "tutorial/graphs",
-      "features": ["Graph", "DiGraph", "layouts"],
+      "features": [
+        "Graph",
+        "DiGraph",
+        "layouts"
+      ],
       "dependency": "#87/#77/#83"
     },
     {
@@ -492,7 +662,11 @@
       "title": "Zoomed camera inset support",
       "status": "blocked",
       "category": "tutorial/scene-camera",
-      "features": ["ZoomedScene", "zoomed_camera", "zoomed_display"],
+      "features": [
+        "ZoomedScene",
+        "zoomed_camera",
+        "zoomed_display"
+      ],
       "dependency": "#89"
     },
     {
@@ -500,7 +674,12 @@
       "title": "3D scenes and full non-z-axis rotation parity",
       "status": "deferred",
       "category": "tutorial/3d",
-      "features": ["ThreeDScene", "ThreeDAxes", "Surface", "3D intermediate-frame projection"],
+      "features": [
+        "ThreeDScene",
+        "ThreeDAxes",
+        "Surface",
+        "3D intermediate-frame projection"
+      ],
       "dependency": "#90"
     }
   ]
