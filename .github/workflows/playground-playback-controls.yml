@@ -8,6 +8,7 @@ on:
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
+      - "scripts/playground-playback-rerun-stress.mjs"
       - "web/**"
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
+      - "scripts/playground-playback-rerun-stress.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -88,11 +90,18 @@ jobs:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
         run: node scripts/playground-playback-controls-smoke.mjs
 
+      - name: Stress reruns across playback states
+        env:
+          NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
+        run: node scripts/playground-playback-rerun-stress.mjs
+
       - name: Upload playback diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playground-playback-controls
-          path: browser-smoke-artifacts/playground-playback-controls
+          path: |
+            browser-smoke-artifacts/playground-playback-controls
+            browser-smoke-artifacts/playground-playback-rerun-stress
           if-no-files-found: error
           retention-days: 7
