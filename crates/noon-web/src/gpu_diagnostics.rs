@@ -21,6 +21,14 @@ impl GpuDiagnosticKind {
     const fn is_fatal(self) -> bool {
         matches!(self.severity(), GpuDiagnosticSeverity::Fatal)
     }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Validation => "validation",
+            Self::OutOfMemory => "out-of-memory",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -63,15 +71,25 @@ impl GpuDiagnostic {
             wgpu::Error::Internal { .. } => GpuDiagnosticKind::Internal,
         };
         let backend = match backend {
-            wgpu::Backend::BrowserWebGpu => "WebGPU",
-            wgpu::Backend::Gl => "WebGL2",
-            other => return Self::new(generation, format!("{other:?}"), kind, error.to_string()),
+            wgpu::Backend::BrowserWebGpu => "WebGPU".to_owned(),
+            wgpu::Backend::Gl => "WebGL2".to_owned(),
+            other => format!("{other:?}"),
         };
         Self::new(generation, backend, kind, error.to_string())
     }
 
     pub(crate) fn is_fatal(&self) -> bool {
         self.kind.is_fatal()
+    }
+
+    pub(crate) fn formatted_message(&self) -> String {
+        format!(
+            "{} generation {} {} error: {}",
+            self.backend,
+            self.generation,
+            self.kind.label(),
+            self.message,
+        )
     }
 }
 
@@ -151,7 +169,7 @@ pub(crate) fn install_wgpu_error_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::{GpuDiagnostic, GpuDiagnosticKind, GpuDiagnosticSeverity, GpuDiagnosticMailbox};
+    use super::{GpuDiagnostic, GpuDiagnosticKind, GpuDiagnosticMailbox, GpuDiagnosticSeverity};
 
     fn diagnostic(generation: u32, kind: GpuDiagnosticKind, message: &str) -> GpuDiagnostic {
         GpuDiagnostic::new(generation, "WebGPU", kind, message)
@@ -208,5 +226,14 @@ mod tests {
 
         assert!(mailbox.take_for_generation(1).is_some());
         assert!(mailbox.take_for_generation(1).is_none());
+    }
+
+    #[test]
+    fn formatting_preserves_browser_error_context() {
+        let diagnostic = diagnostic(5, GpuDiagnosticKind::OutOfMemory, "allocation failed");
+        assert_eq!(
+            diagnostic.formatted_message(),
+            "WebGPU generation 5 out-of-memory error: allocation failed",
+        );
     }
 }
