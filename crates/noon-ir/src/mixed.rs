@@ -275,7 +275,11 @@ impl SceneSpec {
             }
         }
 
+        let mut track_ids = HashSet::with_capacity(self.tracks.len());
         for track in &self.tracks {
+            if !track_ids.insert(track.id) {
+                return Err(SceneSpecError::DuplicateTrack(track.id));
+            }
             if !ids.contains(&track.object) {
                 return Err(SceneSpecError::UnknownTrackObject {
                     track: track.id,
@@ -320,6 +324,7 @@ pub enum SceneSpecError {
         object_count: usize,
     },
     OrderedObjectIsNotText(ObjectId),
+    DuplicateTrack(TrackId),
     UnknownTrackObject {
         track: TrackId,
         object: ObjectId,
@@ -362,6 +367,9 @@ impl std::fmt::Display for SceneSpecError {
                 "ordered text adapter object {} does not contain text",
                 object.get()
             ),
+            Self::DuplicateTrack(track) => {
+                write!(formatter, "duplicate mixed SceneSpec track {}", track.get())
+            }
             Self::UnknownTrackObject { track, object } => write!(
                 formatter,
                 "mixed SceneSpec track {} targets unknown object {}",
@@ -547,6 +555,30 @@ mod tests {
             spec.validate(),
             Err(SceneSpecError::UnknownTrackObject { track: id, object })
                 if id == track.id && object == track.object
+        ));
+    }
+
+    #[test]
+    fn canonical_tracks_require_unique_stable_ids() {
+        let scene = scene_with_position_track();
+        let object = scene.objects()[0].id;
+        let track = scene.tracks()[0].clone();
+        let spec = SceneSpec {
+            version: SCENE_SPEC_VERSION,
+            objects: vec![ObjectSpec::geometry(object, GeometryRef::circle(1.0))],
+            tracks: vec![track.clone(), track.clone()],
+            camera_object: None,
+        };
+
+        assert!(matches!(
+            spec.validate(),
+            Err(SceneSpecError::DuplicateTrack(id)) if id == track.id
+        ));
+
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(matches!(
+            SceneSpec::from_json(&json),
+            Err(SceneSpecError::DuplicateTrack(id)) if id == track.id
         ));
     }
 
