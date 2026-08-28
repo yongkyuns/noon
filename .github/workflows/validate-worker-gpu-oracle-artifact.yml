@@ -1,0 +1,90 @@
+name: Validate worker GPU oracle against built artifact
+
+on:
+  push:
+    branches:
+      - tmp/validate-worker-gpu-oracle-artifact
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product head
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics-v2
+          fetch-depth: 1
+
+      - name: Download already-built browser package
+        uses: actions/download-artifact@v4
+        with:
+          name: web-pkg
+          path: web
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33207331973
+
+      - name: Apply oracle-only revision
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/renderer-worker-webgpu-validation-error-smoke.mjs")
+          text = path.read_text()
+          replacements = [
+              (
+                  '      const response = await fetch(`${baseUrl}/web/`);\n',
+                  '      const response = await fetch(`${baseUrl}/web/execution-worker-smoke.html`);\n',
+              ),
+              (
+                  '  await page.goto(`${baseUrl}/web/`, { waitUntil: "load" });\n',
+                  '  await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });\n',
+              ),
+              (
+                  '    document.body.innerHTML = "<canvas id=\'scene\' width=\'640\' height=\'360\'></canvas>";\n',
+                  '',
+              ),
+              (
+                  '''  await page.waitForFunction(\n    () =>\n      window.__noonValidationHarness.renderMessages.filter(\n        (message) => message?.channel === "noon.render" && message?.type === "recoverable_error",\n      ).length >= 1,\n    null,\n    { timeout: 10_000 },\n  );\n  await new Promise((resolve) => setTimeout(resolve, 250));\n\n''',
+                  '''  let diagnosticMetrics = null;\n  let recoverableCount = 0;\n  for (let attempt = 0; attempt < 40; attempt += 1) {\n    diagnosticMetrics = await renderMetrics(page, 150 + attempt);\n    recoverableCount = await page.evaluate(\n      () =>\n        window.__noonValidationHarness.renderMessages.filter(\n          (message) => message?.channel === "noon.render" && message?.type === "recoverable_error",\n        ).length,\n    );\n    if (recoverableCount >= 1) break;\n    await new Promise((resolve) => setTimeout(resolve, 10));\n  }\n  diagnostics.diagnosticMetrics = diagnosticMetrics;\n  assert.ok(\n    recoverableCount >= 1,\n    `worker control boundaries never surfaced the WebGPU validation diagnostic; last metrics=${JSON.stringify(diagnosticMetrics)}`,\n  );\n\n  for (let requestId = 190; requestId < 193; requestId += 1) {\n    await renderMetrics(page, requestId);\n  }\n\n''',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count == 1:
+                  text = text.replace(old, new, 1)
+              elif new in text or (old.startswith('    document.body.innerHTML') and old not in text):
+                  # Product branch may already contain the pending helper change.
+                  pass
+              else:
+                  raise SystemExit(f"unexpected oracle source; target count={count}: {old[:80]!r}")
+          path.write_text(text)
+          PY
+          node --check scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      - name: Run revised worker validation oracle
+        env:
+          NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/render-worker-validation-artifact-recheck
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-validation-artifact-recheck
+          path: browser-smoke-artifacts/render-worker-validation-artifact-recheck
+          if-no-files-found: error
+          retention-days: 1
