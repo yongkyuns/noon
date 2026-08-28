@@ -35,6 +35,7 @@ node --check web/gpu-profile.js
 node --check web/morph-profile.js
 node --check web/browser-jank.js
 node --check web/perf-profile.js
+node --check web/player-frame-metrics.js
 node --check web/perf-workloads.js
 node --check web/authoring-perf.js
 node --check web/scene-perf.js
@@ -65,6 +66,7 @@ node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
 node --test web/execution-worker-startup.test.mjs
 node --test web/authoring-client.test.mjs
+node --test web/authoring-out-of-order-races.test.mjs
 node --test web/playground-generation.test.mjs
 node --test web/playground-startup.test.mjs
 node --test web/python-editor.test.mjs
@@ -74,6 +76,7 @@ node --test web/python-compat-bundle.test.mjs
 node --test web/python-worker-source.test.mjs
 node --test web/scene-identity.test.mjs
 node --test web/frame-metrics.test.mjs
+node --test web/player-frame-metrics.test.mjs
 node --test web/browser-jank.test.mjs
 node --test web/perf-workloads.test.mjs
 node --test web/performance-corpus-manifest.test.mjs

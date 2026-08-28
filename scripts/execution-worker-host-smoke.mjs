@@ -123,6 +123,47 @@ try {
   );
   assert.equal(after.engineMetrics.host.errors, 0);
 
+  const reconnected = await page.evaluate(async () => {
+    const client = window.executionHostSmoke.client;
+    const canvas = client.canvas;
+    const beforeReconnect = await client.metrics();
+    const ready = await client.restart({ failedOwner: "engine" });
+    const immediate = await client.metrics();
+    return {
+      ready,
+      sameCanvas: client.canvas === canvas,
+      presentedBefore: beforeReconnect.metrics.presentedFrames,
+      immediate,
+    };
+  });
+  assert.equal(reconnected.ready.session, 2);
+  assert.equal(reconnected.sameCanvas, true, "host-callback engine reconnect replaced canvas");
+  assert.equal(reconnected.immediate.engineMetrics.host.enabled, true);
+  assert.ok(
+    reconnected.immediate.engineMetrics.host.requests >= 1,
+    "engine reconnect did not synchronously request the restored callback phase",
+  );
+  assert.ok(
+    reconnected.immediate.metrics.presentedFrames >= reconnected.presentedBefore,
+    "host-callback engine reconnect reset renderer presentation history",
+  );
+
+  const afterReconnect = await page.evaluate(async () => {
+    const client = window.executionHostSmoke.client;
+    const deadline = performance.now() + 30_000;
+    while (performance.now() < deadline) {
+      const report = await client.metrics();
+      if (report.engineMetrics.host.completed >= 1) {
+        return report;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error("reconnected host callback never completed");
+  });
+  assert.ok(afterReconnect.engineMetrics.host.requests >= 1);
+  assert.ok(afterReconnect.engineMetrics.host.completed >= 1);
+  assert.equal(afterReconnect.engineMetrics.host.errors, 0);
+
   const barrierAuthored = await page.evaluate(async (pythonSource) => {
     const { authoring, client } = window.executionHostSmoke;
     const authored = await authoring.run(pythonSource);
@@ -282,7 +323,7 @@ try {
   await page.close();
   console.log(
     `✓ slow Python host callback: ${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
-      `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented; ` +
+      `${afterReconnect.metrics.presentedFrames} frames across engine reconnect; ` +
       "seek barrier and teardown both dropped stale callback work",
   );
 } finally {

@@ -10,6 +10,7 @@ const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
+const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 
 export class RetainedExecutionWorkerClient {
   #canvas;
@@ -22,8 +23,12 @@ export class RetainedExecutionWorkerClient {
   #retainedDocumentJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
+  #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
   #ready = null;
+  #playing = true;
   #onError;
+  #fatalOwner = null;
+  #staleWorkerEvents = { engine: 0, render: 0 };
 
   constructor(canvas, { onError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -44,13 +49,20 @@ export class RetainedExecutionWorkerClient {
     return this.#transportMode;
   }
 
+  get diagnostics() {
+    return Object.freeze({
+      session: this.#session,
+      staleWorkerEvents: Object.freeze({ ...this.#staleWorkerEvents }),
+    });
+  }
+
   async start(
     sceneJson,
     retainedDocumentJson,
     {
       loopDurationSeconds = 4,
       transportMode = selectExecutionTransportMode(),
-      sharedSlotCapacity = 1024 * 1024,
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
@@ -79,6 +91,7 @@ export class RetainedExecutionWorkerClient {
     this.#retainedDocumentJson = retainedDocumentJson;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
+    this.#sharedSlotCapacity = sharedSlotCapacity;
     this.#session = checkedNext(this.#session, "mixed retained execution session");
 
     const devicePixelRatio = window.devicePixelRatio || 1;
@@ -132,7 +145,10 @@ export class RetainedExecutionWorkerClient {
         }),
         [channel.port1],
       );
-      return await this.#ready;
+      const ready = await this.#ready;
+      this.#playing = true;
+      this.#fatalOwner = null;
+      return ready;
     } catch (error) {
       this.#rollbackFailedStart(error, canvasTransferred);
       throw error;
@@ -163,25 +179,34 @@ export class RetainedExecutionWorkerClient {
     const result = await this.#requestEngine("set_loop_duration", {
       loopDurationSeconds: duration,
     });
+    this.#rememberPlaying(result);
     this.#loopDurationSeconds = duration;
     return result;
   }
 
   async pause() {
-    return this.#requestEngine("pause", {});
+    const result = await this.#requestEngine("pause", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async resume() {
-    return this.#requestEngine("resume", {});
+    const result = await this.#requestEngine("resume", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async seek(timeSeconds) {
     const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
-    return this.#requestEngine("seek", { time });
+    const result = await this.#requestEngine("seek", { time });
+    this.#rememberPlaying(result);
+    return result;
   }
 
   async restartPlayback() {
-    return this.#requestEngine("restart_playback", {});
+    const result = await this.#requestEngine("restart_playback", {});
+    this.#rememberPlaying(result);
+    return result;
   }
 
   resize(width, height, devicePixelRatio = 1) {
@@ -196,7 +221,7 @@ export class RetainedExecutionWorkerClient {
     );
   }
 
-  async restart() {
+  async restart({ failedOwner = this.#fatalOwner } = {}) {
     if (
       this.#sceneJson === null ||
       this.#retainedDocumentJson === null ||
@@ -204,18 +229,90 @@ export class RetainedExecutionWorkerClient {
     ) {
       throw new Error("RetainedExecutionWorkerClient has not been started");
     }
+    if (failedOwner !== null && failedOwner !== "engine" && failedOwner !== "render") {
+      throw new TypeError(`unsupported failed mixed retained owner ${failedOwner}`);
+    }
+    if (failedOwner === "engine" && this.#renderWorker !== null) {
+      return this.#restartEngine();
+    }
+    return this.#restartAll();
+  }
+
+  async #restartEngine() {
+    const wasPlaying = this.#playing;
+    const reconnectError = new Error("mixed retained engine worker restarting");
+    this.#engineWorker?.terminate();
+    this.#engineWorker = null;
+    this.#rejectOwner("engine", reconnectError);
+
+    const channel = new MessageChannel();
+    const renderAttached = this.#request(
+      this.#renderWorker,
+      "render",
+      renderEnvelope,
+      "attach_engine",
+      { port: channel.port2, transportMode: this.#transportMode },
+      [channel.port2],
+    ).catch((error) => {
+      this.#markFatalOwner("render");
+      throw error;
+    });
+    this.#session = checkedNext(this.#session, "mixed retained execution session");
+    this.#engineWorker = new Worker(
+      new URL("./retained-execution-engine-worker.js", import.meta.url),
+      { type: "module", name: "noon-mixed-retained-engine" },
+    );
+    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+    const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
+      engine,
+      render,
+      transportMode: this.#transportMode,
+      session: this.#session,
+    }));
+    this.#ready = nextReady;
+    this.#engineWorker.postMessage(
+      engineEnvelope("init", {
+        port: channel.port1,
+        sceneJson: this.#sceneJson,
+        retainedDocumentJson: this.#retainedDocumentJson,
+        loopDurationSeconds: this.#loopDurationSeconds,
+        transportMode: this.#transportMode,
+        sharedSlotCapacity: this.#sharedSlotCapacity,
+        session: this.#session,
+      }),
+      [channel.port1],
+    );
+
+    const ready = await nextReady;
+    this.#playing = true;
+    if (!wasPlaying) {
+      await this.pause();
+    }
+    this.#fatalOwner = null;
+    return ready;
+  }
+
+  async #restartAll() {
     const sceneJson = this.#sceneJson;
     const retainedDocumentJson = this.#retainedDocumentJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
+    const sharedSlotCapacity = this.#sharedSlotCapacity;
+    const wasPlaying = this.#playing;
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate();
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
-    return this.start(sceneJson, retainedDocumentJson, {
+    const ready = await this.start(sceneJson, retainedDocumentJson, {
       loopDurationSeconds,
       transportMode,
+      sharedSlotCapacity,
     });
+    if (!wasPlaying) {
+      await this.pause();
+    }
+    this.#fatalOwner = null;
+    return ready;
   }
 
   terminate() {
@@ -229,31 +326,36 @@ export class RetainedExecutionWorkerClient {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.#fatalOwner = null;
   }
 
-  async #requestEngine(type, payload) {
+  async #requestEngine(type, payload, transfer = []) {
     await this.ready();
-    return this.#request(this.#engineWorker, "engine", engineEnvelope, type, payload);
+    return this.#request(this.#engineWorker, "engine", engineEnvelope, type, payload, transfer);
   }
 
-  async #requestRender(type, payload) {
+  async #requestRender(type, payload, transfer = []) {
     await this.ready();
-    return this.#request(this.#renderWorker, "render", renderEnvelope, type, payload);
+    return this.#request(this.#renderWorker, "render", renderEnvelope, type, payload, transfer);
   }
 
-  #request(worker, owner, envelopeFactory, type, payload) {
+  #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
     const requestId = this.#nextRequestId;
     this.#nextRequestId = checkedNext(this.#nextRequestId, "mixed retained worker request ID");
     const result = new Promise((resolve, reject) => {
       this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
     });
-    worker.postMessage(envelopeFactory(type, { requestId, ...payload }));
+    worker.postMessage(envelopeFactory(type, { requestId, ...payload }), transfer);
     return result;
   }
 
   #workerReady(worker, channel, owner) {
     return new Promise((resolve, reject) => {
       worker.addEventListener("message", (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const message = event.data;
         try {
           validateWorkerEnvelope(message, channel);
@@ -265,7 +367,8 @@ export class RetainedExecutionWorkerClient {
             const error = new Error(message.message || `${owner} mixed retained worker failed`);
             if (message.requestId === null || message.requestId === undefined) {
               reject(error);
-              this.#onError?.(error, owner);
+              this.#rejectOwner(owner, error);
+              this.#notifyError(error, owner);
               return;
             }
             this.#settle(owner, message.requestId, ({ reject: rejectPending }) => {
@@ -280,20 +383,29 @@ export class RetainedExecutionWorkerClient {
           }
         } catch (error) {
           reject(error);
-          this.#onError?.(error, owner);
+          this.#rejectOwner(owner, error);
+          this.#notifyError(error, owner);
         }
       });
       worker.addEventListener("error", (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(event.message || `${owner} mixed retained worker crashed`);
         reject(error);
         this.#rejectOwner(owner, error);
-        this.#onError?.(error, owner);
+        this.#notifyError(error, owner);
       });
       worker.addEventListener("messageerror", () => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(`${owner} mixed retained worker message could not be decoded`);
         reject(error);
         this.#rejectOwner(owner, error);
-        this.#onError?.(error, owner);
+        this.#notifyError(error, owner);
       });
     });
   }
@@ -330,8 +442,34 @@ export class RetainedExecutionWorkerClient {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.#fatalOwner = null;
     if (replaceCanvas) {
       this.#canvas = replaceExecutionCanvas(this.#canvas);
+    }
+  }
+
+  #isCurrentWorker(owner, worker) {
+    return owner === "engine" ? this.#engineWorker === worker : this.#renderWorker === worker;
+  }
+
+  #recordStaleWorkerEvent(owner) {
+    this.#staleWorkerEvents[owner] += 1;
+  }
+
+  #markFatalOwner(owner) {
+    if (owner === "render" || this.#fatalOwner === null) {
+      this.#fatalOwner = owner;
+    }
+  }
+
+  #notifyError(error, owner) {
+    this.#markFatalOwner(owner);
+    this.#onError?.(error, owner);
+  }
+
+  #rememberPlaying(result) {
+    if (typeof result?.playing === "boolean") {
+      this.#playing = result.playing;
     }
   }
 

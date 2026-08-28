@@ -193,17 +193,51 @@ async function runMode(browser, transportMode) {
   assert.equal(afterRetime.engineMetrics.resourceBundleTransfers, 1);
   assert.equal(afterRetime.metrics.objectCount, 6);
 
-  const restarted = await page.evaluate(() => window.retainedExecutionSmoke.client.restart());
-  assert.equal(restarted.session, 2);
-  assert.equal(restarted.transportMode, transportMode);
-  assert.equal(restarted.render.retained, true);
-  assert.equal(restarted.render.mixed, true);
-  await page.waitForTimeout(350);
-  const afterRestart = await page.evaluate(() => window.retainedExecutionSmoke.client.metrics());
-  assert.equal(afterRestart.metrics.ready, true);
-  assert.equal(afterRestart.metrics.objectCount, 6);
-  assert.equal(afterRestart.engineMetrics.resourceBundleTransfers, 1);
-  assert.ok(afterRestart.engineMetrics.resourceBundleBytes > 0);
+  const reconnected = await page.evaluate(async () => {
+    const client = window.retainedExecutionSmoke.client;
+    const canvas = client.canvas;
+    const paused = await client.pause();
+    const beforeReconnect = await client.metrics();
+    const ready = await client.restart({ failedOwner: "engine" });
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const afterReconnect = await client.metrics();
+    const state = await client.state();
+    return {
+      ready,
+      paused,
+      state,
+      sameCanvas: client.canvas === canvas,
+      presentedBefore: beforeReconnect.metrics.presentedFrames,
+      presentedAfter: afterReconnect.metrics.presentedFrames,
+      metrics: afterReconnect.metrics,
+      engineMetrics: afterReconnect.engineMetrics,
+    };
+  });
+  assert.equal(reconnected.ready.session, 2);
+  assert.equal(reconnected.ready.transportMode, transportMode);
+  assert.equal(reconnected.ready.render.retained, true);
+  assert.equal(reconnected.ready.render.mixed, true);
+  assert.equal(reconnected.paused.playing, false);
+  assert.equal(
+    reconnected.state.playing,
+    false,
+    `${transportMode}: retained engine reconnect lost paused mode`,
+  );
+  assert.equal(reconnected.sameCanvas, true, `${transportMode}: retained engine reconnect replaced canvas`);
+  assert.ok(
+    reconnected.presentedAfter >= reconnected.presentedBefore,
+    `${transportMode}: retained engine reconnect reset renderer presentation history`,
+  );
+  assert.equal(reconnected.metrics.ready, true);
+  assert.equal(reconnected.metrics.objectCount, 6);
+  assert.equal(reconnected.metrics.resourceBundlePending, false);
+  assert.equal(reconnected.engineMetrics.resourceBundleTransfers, 1);
+  assert.ok(reconnected.engineMetrics.resourceBundleBytes > 0);
+  assert.ok(
+    reconnected.engineMetrics.time >= 0 && reconnected.engineMetrics.time < 0.9,
+    `${transportMode}: retained engine reconnect forgot the authored loop duration`,
+  );
+  await page.evaluate(() => window.retainedExecutionSmoke.client.resume());
 
   const clientErrors = await page.evaluate(() => window.retainedExecutionSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
@@ -212,7 +246,7 @@ async function runMode(browser, transportMode) {
   await page.close();
   console.log(
     `✓ mixed retained execution workers ${transportMode}: ${before.metrics.backend}, ` +
-      `${before.engineMetrics.resourceBundleBytes} resource bytes`,
+      `${reconnected.presentedAfter} frames with canvas-preserving engine reconnect`,
   );
 }
 

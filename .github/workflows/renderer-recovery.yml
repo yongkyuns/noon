@@ -9,6 +9,8 @@ on:
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "scripts/renderer-webgpu-device-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   push:
@@ -21,6 +23,8 @@ on:
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
       - "scripts/renderer-webgpu-device-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/webgpu-device-capture.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   workflow_dispatch:
@@ -104,6 +108,12 @@ jobs:
           NOON_RENDERER_DEVICE_LOSS_ARTIFACTS: browser-smoke-artifacts/renderer-device-loss
         run: node scripts/renderer-webgpu-device-loss-smoke.mjs
 
+      - name: Test WebGPU validation-error propagation
+        id: webgpu_validation_error
+        env:
+          NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS: browser-smoke-artifacts/renderer-validation-error
+        run: node scripts/renderer-webgpu-validation-error-smoke.mjs
+
       - name: Upload renderer initialization diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -128,5 +138,14 @@ jobs:
         with:
           name: renderer-webgpu-device-loss
           path: browser-smoke-artifacts/renderer-device-loss
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload WebGPU validation-error diagnostics
+        if: always() && steps.webgpu_validation_error.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-webgpu-validation-error
+          path: browser-smoke-artifacts/renderer-validation-error
           if-no-files-found: error
           retention-days: 7
