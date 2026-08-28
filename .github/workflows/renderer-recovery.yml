@@ -8,6 +8,7 @@ on:
       - "crates/noon-render-wgpu/**"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-device-loss-smoke.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   push:
@@ -19,6 +20,7 @@ on:
       - "crates/noon-render-wgpu/**"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/renderer-webgl-context-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-device-loss-smoke.mjs"
       - "web/browser-smoke.html"
       - "web/browser-smoke.js"
   workflow_dispatch:
@@ -32,7 +34,7 @@ concurrency:
 
 jobs:
   initialization-fallback:
-    name: Initialization, fallback, and WebGL recovery
+    name: Initialization, fallback, WebGL, and WebGPU recovery
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -96,6 +98,12 @@ jobs:
           NOON_RENDERER_CONTEXT_LOSS_ARTIFACTS: browser-smoke-artifacts/renderer-context-loss
         run: node scripts/renderer-webgl-context-loss-smoke.mjs
 
+      - name: Test WebGPU device loss and recovery
+        id: webgpu_device_loss
+        env:
+          NOON_RENDERER_DEVICE_LOSS_ARTIFACTS: browser-smoke-artifacts/renderer-device-loss
+        run: node scripts/renderer-webgpu-device-loss-smoke.mjs
+
       - name: Upload renderer initialization diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -111,5 +119,14 @@ jobs:
         with:
           name: renderer-webgl-context-loss
           path: browser-smoke-artifacts/renderer-context-loss
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload WebGPU recovery diagnostics
+        if: always() && steps.webgpu_device_loss.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-webgpu-device-loss
+          path: browser-smoke-artifacts/renderer-device-loss
           if-no-files-found: error
           retention-days: 7
