@@ -104,12 +104,7 @@ mod wasm {
                 .map_err(js_error)?;
             let gpu_generation = 1;
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
-            install_wgpu_error_handler(
-                &device,
-                gpu_generation,
-                backend,
-                gpu_diagnostics.clone(),
-            );
+            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
 
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
