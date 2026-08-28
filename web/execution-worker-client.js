@@ -22,18 +22,23 @@ export class ExecutionWorkerClient {
   #transportMode = null;
   #ready = null;
   #onError;
+  #onRecoverableError;
   #hostAuthoringClient = null;
   #hostCallbacks = null;
 
-  constructor(canvas, { onError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("ExecutionWorkerClient requires an HTMLCanvasElement");
     }
     if (onError !== null && typeof onError !== "function") {
       throw new TypeError("ExecutionWorkerClient onError must be a function");
     }
+    if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
+      throw new TypeError("ExecutionWorkerClient onRecoverableError must be a function");
+    }
     this.#canvas = canvas;
     this.#onError = onError;
+    this.#onRecoverableError = onRecoverableError;
   }
 
   get canvas() {
@@ -337,7 +342,10 @@ export class ExecutionWorkerClient {
             return;
           }
           if (message.type === "host_callback_error") {
-            this.#notifyError(new Error(message.message || "host callback failed"), "host");
+            this.#notifyRecoverableError(
+              new Error(message.message || "host callback failed"),
+              "host",
+            );
             return;
           }
           if (message.type === "error") {
@@ -402,6 +410,14 @@ export class ExecutionWorkerClient {
 
   #notifyError(error, owner) {
     this.#onError?.(error, owner);
+  }
+
+  #notifyRecoverableError(error, owner) {
+    if (this.#onRecoverableError !== null) {
+      this.#onRecoverableError(error, owner);
+      return;
+    }
+    console.warn(`[Noon execution] recoverable ${owner} error`, error);
   }
 
   #requireStarted() {
