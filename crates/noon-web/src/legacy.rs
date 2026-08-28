@@ -1362,7 +1362,8 @@ mod wasm {
             self.last_bytes_uploaded = 0;
             self.last_geometry_cache_misses = 0;
             self.last_cpu_frame_ms = f64::NAN;
-            self.last_runtime_evaluation_ms = f64::NAN;
+            // Runtime evaluation is independent of renderer generation and may already
+            // have been measured for the frame that installs a recovered renderer.
             self.last_frame_prepare_ms = f64::NAN;
             self.last_upload_ms = f64::NAN;
             self.last_encode_submit_ms = f64::NAN;
