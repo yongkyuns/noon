@@ -10,32 +10,13 @@ import initNoonWeb, {
   validatePresenceTransition,
   validateRetainedAuthoringDocumentJson,
 } from "./pkg/noon_web.js";
+import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 5;
 const HOST_CHANNEL = "noon.host-callback";
 const HOST_PROTOCOL_VERSION = 1;
-const PYTHON_MODULE_PATH = "/tmp/noon.py";
-const PYTHON_IR_MODULE_PATH = "/tmp/_noon_ir.py";
-const MANIM_COMPAT_MODULE_PATH = "/tmp/_manim_compat.py";
-const MANIM_SEMANTIC_HANDLES_MODULE_PATH = "/tmp/_manim_semantic_handles.py";
-const MANIM_TYPST_MODULE_PATH = "/tmp/_manim_typst.py";
-const MANIM_RATE_FUNCTIONS_MODULE_PATH = "/tmp/_manim_rate_functions.py";
-const MANIM_PHASE_B_MODULE_PATH = "/tmp/_manim_phase_b.py";
-const MANIM_GEOMETRY_MODULE_PATH = "/tmp/_manim_geometry.py";
-const MANIM_SHARED_GEOMETRY_MODULE_PATH = "/tmp/_manim_shared_geometry.py";
-const MANIM_ANIMATION_OPTIONS_MODULE_PATH = "/tmp/_manim_animation_options.py";
-const MANIM_ANIMATE_MODULE_PATH = "/tmp/_manim_animate.py";
-const MANIM_ROTATE_MODULE_PATH = "/tmp/_manim_rotate.py";
-const MANIM_COMPOSITION_MODULE_PATH = "/tmp/_manim_composition.py";
-const MANIM_LIFECYCLE_MODULE_PATH = "/tmp/_manim_lifecycle.py";
-const MANIM_GROWING_MODULE_PATH = "/tmp/_manim_growing.py";
-const MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH = "/tmp/_manim_draw_border_then_fill.py";
-const MANIM_INDICATION_MODULE_PATH = "/tmp/_manim_indication.py";
-const MANIM_REACTIVE_MODULE_PATH = "/tmp/_manim_reactive.py";
-const MANIM_UPDATERS_MODULE_PATH = "/tmp/_manim_updaters.py";
-const MANIM_CAMERA_MODULE_PATH = "/tmp/_manim_camera.py";
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -52,35 +33,14 @@ self.addEventListener("message", (event) => {
 async function initializePyodide() {
   const noonWebReady = initNoonWeb();
   const pyodideReady = loadPyodide();
-  const compatibilitySourcesReady = Promise.all([
-    fetch(new URL("./python/noon.py", import.meta.url)),
-    fetch(new URL("./python/_noon_ir.py", import.meta.url)),
-    fetch(new URL("./python/_manim_compat.py", import.meta.url)),
-    fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
-    fetch(new URL("./python/_manim_typst.py", import.meta.url)),
-    fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
-    fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
-    fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
-    fetch(new URL("./python/_manim_shared_geometry.py", import.meta.url)),
-    fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
-    fetch(new URL("./python/_manim_animate.py", import.meta.url)),
-    fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
-    fetch(new URL("./python/_manim_composition.py", import.meta.url)),
-    fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
-    fetch(new URL("./python/_manim_growing.py", import.meta.url)),
-    fetch(new URL("./python/_manim_draw_border_then_fill.py", import.meta.url)),
-    fetch(new URL("./python/_manim_indication.py", import.meta.url)),
-    fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
-    fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
-    fetch(new URL("./python/_manim_camera.py", import.meta.url)),
-  ]);
+  const compatibilityBundleReady = loadCompatibilityBundle();
   const startupResourcesReady = Promise.all([
-  noonWebReady,
-  pyodideReady,
-  compatibilitySourcesReady,
-]);
-const [, pyodide, compatibilitySources] = await startupResourcesReady;
-const authoringStore = new WasmAuthoringStore();
+    noonWebReady,
+    pyodideReady,
+    compatibilityBundleReady,
+  ]);
+  const [, pyodide, compatibilityModules] = await startupResourcesReady;
+  const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -102,80 +62,10 @@ const authoringStore = new WasmAuthoringStore();
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
 
-  const [
-    apiResponse,
-    irResponse,
-    compatResponse,
-    semanticHandlesResponse,
-    typstResponse,
-    rateFunctionsResponse,
-    phaseBResponse,
-    geometryResponse,
-    sharedGeometryResponse,
-    animationOptionsResponse,
-    animateResponse,
-    rotateResponse,
-    compositionResponse,
-    lifecycleResponse,
-    growingResponse,
-    drawBorderThenFillResponse,
-    indicationResponse,
-    reactiveResponse,
-    updatersResponse,
-    cameraResponse,
-  ] = compatibilitySources;
-  const responses = [
-    [apiResponse, "Noon Python API"],
-    [irResponse, "Noon Python IR emitter"],
-    [compatResponse, "Noon Manim compatibility layer"],
-    [semanticHandlesResponse, "Noon shared semantic handle layer"],
-    [typstResponse, "Noon retained Typst compatibility layer"],
-    [rateFunctionsResponse, "Noon Manim rate functions"],
-    [phaseBResponse, "Noon Manim Phase B layer"],
-    [geometryResponse, "Noon Manim geometry layer"],
-    [sharedGeometryResponse, "Noon shared Rust geometry adapter"],
-    [animationOptionsResponse, "Noon Manim animation options"],
-    [animateResponse, "Noon Manim animate layer"],
-    [rotateResponse, "Noon Manim Rotate layer"],
-    [compositionResponse, "Noon Manim composition layer"],
-    [lifecycleResponse, "Noon Manim lifecycle layer"],
-    [growingResponse, "Noon Manim growing layer"],
-    [drawBorderThenFillResponse, "Noon Manim DrawBorderThenFill layer"],
-    [indicationResponse, "Noon Manim indication layer"],
-    [reactiveResponse, "Noon reactive compatibility layer"],
-    [updatersResponse, "Noon Manim updater layer"],
-    [cameraResponse, "Noon Manim moving-camera adapter"],
-  ];
-  for (const [response, label] of responses) {
-    if (!response.ok) {
-      throw new Error(`Unable to load ${label}: HTTP ${response.status}`);
-    }
-  }
-
-  const modules = [
-    [PYTHON_MODULE_PATH, apiResponse],
-    [PYTHON_IR_MODULE_PATH, irResponse],
-    [MANIM_COMPAT_MODULE_PATH, compatResponse],
-    [MANIM_SEMANTIC_HANDLES_MODULE_PATH, semanticHandlesResponse],
-    [MANIM_TYPST_MODULE_PATH, typstResponse],
-    [MANIM_RATE_FUNCTIONS_MODULE_PATH, rateFunctionsResponse],
-    [MANIM_PHASE_B_MODULE_PATH, phaseBResponse],
-    [MANIM_GEOMETRY_MODULE_PATH, geometryResponse],
-    [MANIM_SHARED_GEOMETRY_MODULE_PATH, sharedGeometryResponse],
-    [MANIM_ANIMATION_OPTIONS_MODULE_PATH, animationOptionsResponse],
-    [MANIM_ANIMATE_MODULE_PATH, animateResponse],
-    [MANIM_ROTATE_MODULE_PATH, rotateResponse],
-    [MANIM_COMPOSITION_MODULE_PATH, compositionResponse],
-    [MANIM_LIFECYCLE_MODULE_PATH, lifecycleResponse],
-    [MANIM_GROWING_MODULE_PATH, growingResponse],
-    [MANIM_DRAW_BORDER_THEN_FILL_MODULE_PATH, drawBorderThenFillResponse],
-    [MANIM_INDICATION_MODULE_PATH, indicationResponse],
-    [MANIM_REACTIVE_MODULE_PATH, reactiveResponse],
-    [MANIM_UPDATERS_MODULE_PATH, updatersResponse],
-    [MANIM_CAMERA_MODULE_PATH, cameraResponse],
-  ];
-  for (const [path, response] of modules) {
-    pyodide.FS.writeFile(path, await response.text(), { encoding: "utf8" });
+  for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
+    pyodide.FS.writeFile(descriptor.runtimePath, compatibilityModules[index].source, {
+      encoding: "utf8",
+    });
   }
 
   pyodide.runPython(`
@@ -214,6 +104,34 @@ import _manim_camera
 _manim_camera.install()
 `);
   return pyodide;
+}
+
+async function loadCompatibilityBundle() {
+  const response = await fetch(new URL("./python/compat-bundle.json", import.meta.url));
+  if (!response.ok) {
+    throw new Error(`Unable to load Noon Python compatibility bundle: HTTP ${response.status}`);
+  }
+  const bundle = await response.json();
+  if (!isRecord(bundle) || bundle.version !== 1 || !Array.isArray(bundle.modules)) {
+    throw new Error("Noon Python compatibility bundle has an invalid envelope");
+  }
+  if (bundle.modules.length !== PYTHON_COMPAT_MODULES.length) {
+    throw new Error(
+      `Noon Python compatibility bundle module count ${bundle.modules.length} does not match manifest ${PYTHON_COMPAT_MODULES.length}`,
+    );
+  }
+  for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
+    const module = bundle.modules[index];
+    if (
+      !isRecord(module) ||
+      module.runtimePath !== descriptor.runtimePath ||
+      module.label !== descriptor.label ||
+      typeof module.source !== "string"
+    ) {
+      throw new Error(`Noon Python compatibility bundle is stale at ${descriptor.sourcePath}`);
+    }
+  }
+  return bundle.modules;
 }
 
 function resolveAnimationOptionsPlain(...args) {
