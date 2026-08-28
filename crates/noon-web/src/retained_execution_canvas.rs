@@ -7,7 +7,10 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
-    use crate::{InstalledRetainedExecutionMirror, RetainedTransportApplyOutcome};
+    use crate::{
+        gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
+        InstalledRetainedExecutionMirror, RetainedTransportApplyOutcome,
+    };
 
     const CLEAR_COLOR: wgpu::Color = wgpu::Color {
         r: 0.0,
@@ -54,6 +57,8 @@ mod wasm {
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
         last_outline_cache_misses: u64,
+        gpu_generation: u32,
+        gpu_diagnostics: GpuDiagnosticMailbox,
     }
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
@@ -97,6 +102,9 @@ mod wasm {
                 })
                 .await
                 .map_err(js_error)?;
+            let gpu_generation = 1;
+            let gpu_diagnostics = GpuDiagnosticMailbox::default();
+            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
 
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
@@ -131,6 +139,8 @@ mod wasm {
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
                 last_outline_cache_misses: 0,
+                gpu_generation,
+                gpu_diagnostics,
             };
             result.update_camera()?;
             Ok(result)
@@ -280,6 +290,19 @@ mod wasm {
                 wgpu::Backend::Gl => "WebGL2".to_owned(),
                 other => format!("{other:?}"),
             }
+        }
+
+        #[wasm_bindgen(js_name = gpuGeneration)]
+        pub fn gpu_generation(&self) -> u32 {
+            self.gpu_generation
+        }
+
+        #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
+        pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {
+            self.gpu_diagnostics
+                .take_for_generation(self.gpu_generation)
+                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
+                .transpose()
         }
 
         pub fn time(&self) -> f64 {

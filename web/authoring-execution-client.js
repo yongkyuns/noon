@@ -246,7 +246,10 @@ export class AuthoringExecutionClient {
 
   async #rebuildRetained(sceneJson, retainedDocumentJson) {
     const canvas = this.#replaceTransferredCanvas();
-    const player = new RetainedExecutionWorkerClient(canvas, { onError: this.#onError });
+    const player = new RetainedExecutionWorkerClient(canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
     try {
       const ready = await player.start(sceneJson, retainedDocumentJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
