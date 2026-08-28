@@ -14,6 +14,9 @@ fn every_playground_scene_executes_and_compiles() {
         .arg(&output_dir)
         .current_dir(&repository_root)
         .env("PYTHONDONTWRITEBYTECODE", "1")
+        // Exercise the manifest producer under a hostile inherited encoding.
+        // Its machine-readable stdout contract must remain UTF-8 on every host.
+        .env("PYTHONIOENCODING", "cp1252")
         .output()
         .expect("python3 is available for playground validation");
 

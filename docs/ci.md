@@ -52,6 +52,24 @@ The reactive/editor job runs:
 
 Rendering is a two-entry matrix over WebGPU and WebGL2 fallback. Both run the deterministic playground/browser smoke corpus and upload screenshots on success or failure. The required Linux browser path uses Playwright Chromium/SwiftShader so it is repeatable on hosted runners.
 
+## Platform and release validation
+
+`.github/workflows/platform-release.yml` is the compact portability and production-artifact lane. It runs when native/browser production paths or their build generators change, on pushes to `master`, and by manual dispatch.
+
+The workflow deliberately stays separate from fast main CI and provides three contracts:
+
+- **native platform matrix:** Linux, macOS, and Windows compile and run the workspace library/integration test set with stable Rust;
+- **release-mode native check:** `noon-core`, `noon-geometry`, and `noon-runtime` run their tests with release optimizations enabled to catch optimization-sensitive failures without tripling the cost across every OS;
+- **optimized browser artifact:** pinned `wasm-pack` 0.15.0 and Binaryen/`wasm-opt` version 132 build the real release package, including generated Python-worker assets; the normal package-surface validation runs, the optimized WASM is loaded/evaluated through deterministic Chromium replay, and the resulting package is retained as a short-lived artifact.
+
+The supported Rust policy for this lane is current stable Rust plus `wasm32-unknown-unknown`. If a minimum supported Rust version becomes a product requirement, add it as a separate explicit matrix entry rather than relying on whatever a hosted runner happens to contain. Binaryen is downloaded from its versioned release artifact and checksum-verified before adding its `wasm-opt` to `PATH`; this prevents wasm-pack's default "latest" optimizer download from making release output silently drift.
+
+The optimized job records `noon_web_bg.wasm` byte size in the workflow summary as diagnostic trend data. Size is not yet a required budget; establish a stable baseline before adding a ratchet.
+
+Machine-readable subprocess protocols used by the platform matrix must define their encoding rather than inherit a host locale. In particular, the playground scene manifest is explicitly UTF-8 and its integration test forces a hostile inherited Python encoding so the contract is deterministic on every runner.
+
+This matrix is intentionally compact. Add another operating system, browser, toolchain, or backend only when it proves a distinct product contract or catches a demonstrated class of failure. Browser-engine/DPR/UI variation belongs to the separate #110 lane rather than expanding this workflow combinatorially.
+
 ## Manim compatibility workflows
 
 Manim API-surface and semantic compatibility are separate workflows because they require a pinned ManimCE/Python environment. Manim Community v0.21.0 is the reference version. API inventory and semantic differential tests should remain separate: surface presence does not prove behavior, and behavioral fixtures should not become a second API manifest.
