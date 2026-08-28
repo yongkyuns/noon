@@ -10,10 +10,9 @@ const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_EXECUTION_HOST_PORT ?? "4185");
 const baseUrl = `http://127.0.0.1:${port}`;
-const source = await readFile(
-  path.join(repoRoot, "web/python/examples/slow_host_updater.py"),
-  "utf8",
-);
+const source = (
+  await readFile(path.join(repoRoot, "web/python/examples/slow_host_updater.py"), "utf8")
+).replace("0.080", "0.250");
 
 let serverOutput = "";
 const server = spawn(
@@ -91,13 +90,65 @@ try {
   assert.equal(started.ready.transportMode, "transferable");
   assert.equal(started.callbackCount, 1);
 
-  await page.waitForFunction(async () => {
+  const inFlightHandle = await page.waitForFunction(async () => {
     const report = await window.executionHostSmoke.client.metrics();
-    return report.engineMetrics.host.requests >= 1;
+    return report.engineMetrics.host.inFlight ? report : false;
   }, null, { timeout: 30_000 });
+  const beforeSeek = await inFlightHandle.jsonValue();
+  assert.equal(beforeSeek.engineMetrics.host.inFlight, true);
 
+  const seekRace = await page.evaluate(async () => {
+    const { client } = window.executionHostSmoke;
+    const paused = await client.pausePlayback();
+    const sought = await client.seekPlayback(0.5);
+    const after = await client.metrics();
+    return { paused, sought, after };
+  });
+
+  assert.equal(seekRace.paused.paused, true);
+  assert.equal(seekRace.sought.paused, true);
+  assert.equal(seekRace.sought.time, 0.5);
+  assert.equal(
+    seekRace.sought.nextPatchSequence,
+    beforeSeek.engineMetrics.host.nextSequence.toString(),
+    "playback seek must not consume the interactive patch sequence",
+  );
+  assert.equal(
+    seekRace.after.engineMetrics.host.generation,
+    beforeSeek.engineMetrics.host.generation + 1,
+    "seek must invalidate the pre-seek host callback generation",
+  );
+  assert.equal(
+    seekRace.after.engineMetrics.host.nextSequence,
+    beforeSeek.engineMetrics.host.nextSequence,
+    "seek must preserve the host callback patch sequence",
+  );
+  assert.ok(
+    seekRace.after.engineMetrics.host.droppedLateResults >=
+      beforeSeek.engineMetrics.host.droppedLateResults + 1,
+    "seek did not account for stale in-flight host callback work",
+  );
+  assert.ok(
+    seekRace.after.engineMetrics.host.requests >= beforeSeek.engineMetrics.host.requests + 1,
+    "seek did not request a callback phase for the sought time",
+  );
+  assert.equal(seekRace.after.engineMetrics.host.lastFrameTime, 0.5);
+
+  await page.waitForTimeout(320);
+  const afterSeekSettled = await page.evaluate(() => window.executionHostSmoke.client.metrics());
+  assert.equal(afterSeekSettled.engineMetrics.paused, true);
+  assert.equal(afterSeekSettled.engineMetrics.time, 0.5);
+  assert.equal(afterSeekSettled.engineMetrics.host.lastFrameTime, 0.5);
+  assert.equal(afterSeekSettled.engineMetrics.host.errors, 0);
+  assert.equal(
+    afterSeekSettled.engineMetrics.host.nextSequence,
+    beforeSeek.engineMetrics.host.nextSequence,
+    "stale pre-seek callback result committed after the generation barrier",
+  );
+
+  await page.evaluate(() => window.executionHostSmoke.client.resumePlayback());
   const before = await page.evaluate(() => window.executionHostSmoke.client.metrics());
-  await page.waitForTimeout(420);
+  await page.waitForTimeout(620);
   const after = await page.evaluate(() => window.executionHostSmoke.client.metrics());
 
   assert.equal(after.metrics.ready, true);
@@ -109,7 +160,7 @@ try {
     after.metrics.lastFrameTimestamp > before.metrics.lastFrameTimestamp,
     "render worker frame clock stopped while Python callback was slow",
   );
-  assert.ok(after.engineMetrics.host.requests >= 1, "host callback was never requested");
+  assert.ok(after.engineMetrics.host.requests >= 2, "host callback was never re-requested");
   assert.ok(after.engineMetrics.host.completed >= 1, "slow Python callback never completed");
   assert.ok(
     after.engineMetrics.host.missedDeadlines >= 1,
@@ -131,7 +182,9 @@ try {
   });
   await page.close();
   console.log(
-    `✓ slow Python host callback: ${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
+    `✓ slow Python host callback: seek generation ${beforeSeek.engineMetrics.host.generation} -> ` +
+      `${seekRace.after.engineMetrics.host.generation}, ` +
+      `${after.engineMetrics.host.missedDeadlines} missed deadlines, ` +
       `${after.metrics.presentedFrames - before.metrics.presentedFrames} native frames presented`,
   );
 } finally {
