@@ -355,6 +355,24 @@ function ensureAuthoringClient() {
   return authoringClient;
 }
 
+function warmAuthoringClient() {
+  const client = ensureAuthoringClient();
+  status.dataset.authoringWarmup = "started";
+  void client.ready().then(
+    () => {
+      if (authoringClient === client) {
+        status.dataset.authoringWarmup = "ready";
+      }
+    },
+    () => {
+      if (authoringClient === client && client.terminated) {
+        authoringClient = null;
+      }
+      status.dataset.authoringWarmup = "failed";
+    },
+  );
+}
+
 async function ensureExecutionReady() {
   if (!playerNeedsRestart) return;
   patchStatus.value = "Restarting runtime workers…";
@@ -671,6 +689,7 @@ document.addEventListener("keydown", (event) => {
 
 const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
 try {
+  warmAuthoringClient();
   player = new AuthoringExecutionClient(canvas, {
     onError(error) {
       playerNeedsRestart = true;

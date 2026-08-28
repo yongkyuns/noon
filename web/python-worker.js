@@ -50,7 +50,31 @@ self.addEventListener("message", (event) => {
 });
 
 async function initializePyodide() {
-  await initNoonWeb();
+  const noonWebReady = initNoonWeb();
+  const pyodideReady = loadPyodide();
+  const compatibilitySourcesReady = Promise.all([
+    fetch(new URL("./python/noon.py", import.meta.url)),
+    fetch(new URL("./python/_noon_ir.py", import.meta.url)),
+    fetch(new URL("./python/_manim_compat.py", import.meta.url)),
+    fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
+    fetch(new URL("./python/_manim_typst.py", import.meta.url)),
+    fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
+    fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
+    fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
+    fetch(new URL("./python/_manim_shared_geometry.py", import.meta.url)),
+    fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
+    fetch(new URL("./python/_manim_animate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
+    fetch(new URL("./python/_manim_composition.py", import.meta.url)),
+    fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
+    fetch(new URL("./python/_manim_growing.py", import.meta.url)),
+    fetch(new URL("./python/_manim_draw_border_then_fill.py", import.meta.url)),
+    fetch(new URL("./python/_manim_indication.py", import.meta.url)),
+    fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
+    fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
+    fetch(new URL("./python/_manim_camera.py", import.meta.url)),
+  ]);
+  await noonWebReady;
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
@@ -73,7 +97,7 @@ async function initializePyodide() {
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
 
-  const pyodide = await loadPyodide();
+  const pyodide = await pyodideReady;
   const [
     apiResponse,
     irResponse,
@@ -95,28 +119,7 @@ async function initializePyodide() {
     reactiveResponse,
     updatersResponse,
     cameraResponse,
-  ] = await Promise.all([
-    fetch(new URL("./python/noon.py", import.meta.url)),
-    fetch(new URL("./python/_noon_ir.py", import.meta.url)),
-    fetch(new URL("./python/_manim_compat.py", import.meta.url)),
-    fetch(new URL("./python/_manim_semantic_handles.py", import.meta.url)),
-    fetch(new URL("./python/_manim_typst.py", import.meta.url)),
-    fetch(new URL("./python/_manim_rate_functions.py", import.meta.url)),
-    fetch(new URL("./python/_manim_phase_b.py", import.meta.url)),
-    fetch(new URL("./python/_manim_geometry.py", import.meta.url)),
-    fetch(new URL("./python/_manim_shared_geometry.py", import.meta.url)),
-    fetch(new URL("./python/_manim_animation_options.py", import.meta.url)),
-    fetch(new URL("./python/_manim_animate.py", import.meta.url)),
-    fetch(new URL("./python/_manim_rotate.py", import.meta.url)),
-    fetch(new URL("./python/_manim_composition.py", import.meta.url)),
-    fetch(new URL("./python/_manim_lifecycle.py", import.meta.url)),
-    fetch(new URL("./python/_manim_growing.py", import.meta.url)),
-    fetch(new URL("./python/_manim_draw_border_then_fill.py", import.meta.url)),
-    fetch(new URL("./python/_manim_indication.py", import.meta.url)),
-    fetch(new URL("./python/_manim_reactive.py", import.meta.url)),
-    fetch(new URL("./python/_manim_updaters.py", import.meta.url)),
-    fetch(new URL("./python/_manim_camera.py", import.meta.url)),
-  ]);
+  ] = await compatibilitySourcesReady;
   const responses = [
     [apiResponse, "Noon Python API"],
     [irResponse, "Noon Python IR emitter"],
