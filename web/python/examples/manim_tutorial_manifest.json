@@ -560,7 +560,7 @@
       "upstream": "reference/manim.animation.transform.MoveToTarget.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/move_to_target_example.py",
       "reuse": "source-equivalent-manim-v0.21",
-      "parity_status": "candidate",
+      "parity_status": "parity-qualified",
       "parity_fixture": "move-to-target-circle",
       "expected_duration": 1,
       "thumbnail": "thumbnails/manim/generated/move-to-target.png",
