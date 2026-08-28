@@ -179,7 +179,14 @@ export class PlaygroundPlaybackControls {
         const target = this.#desiredSeek;
         this.#desiredSeek = null;
         const result = await this.#player.seek(target);
-        this.sync(result);
+        if (this.#desiredSeek === null) {
+          this.sync(result);
+        } else if (typeof result.playing === "boolean") {
+          // Keep the latest user-selected playhead visible while an older seek
+          // completion is superseded by another queued direct seek.
+          this.#playing = result.playing;
+          this.#renderDisabled();
+        }
       }
     } catch (error) {
       this.#desiredSeek = null;
@@ -204,7 +211,6 @@ export class PlaygroundPlaybackControls {
       "aria-label",
       this.#playing ? "Pause animation" : "Play animation",
     );
-    this.#playButton.setAttribute("aria-pressed", String(!this.#playing));
     this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
     this.#renderDisabled();
@@ -227,6 +233,7 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.disabled = this.#externalBusy || this.#commandPending;
     this.#root.dataset.busy = String(blockCommands);
     this.#root.dataset.playing = String(this.#playing);
+    this.#root.setAttribute("aria-busy", String(blockCommands));
   }
 }
 
