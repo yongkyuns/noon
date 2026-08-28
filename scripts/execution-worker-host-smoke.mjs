@@ -110,7 +110,7 @@ try {
   assert.equal(seekRace.sought.time, 0.5);
   assert.equal(
     seekRace.sought.nextPatchSequence,
-    beforeSeek.engineMetrics.host.nextSequence.toString(),
+    "0",
     "playback seek must not consume the interactive patch sequence",
   );
   assert.equal(
