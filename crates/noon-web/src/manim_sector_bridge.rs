@@ -100,8 +100,7 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use super::{
-        manim_annular_sector_snapshot_json, manim_annulus_snapshot_json,
-        manim_sector_snapshot_json,
+        manim_annular_sector_snapshot_json, manim_annulus_snapshot_json, manim_sector_snapshot_json,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -193,36 +192,67 @@ mod tests {
     #[test]
     fn annular_sector_bridge_keeps_shared_defaults_and_contour() {
         let snapshot = decode(
-            &manim_annular_sector_snapshot_json(1.0, 2.0, std::f64::consts::FRAC_PI_2, 0.0, 9, 0.0, 0.0)
-                .expect("valid annular sector"),
+            &manim_annular_sector_snapshot_json(
+                1.0,
+                2.0,
+                std::f64::consts::FRAC_PI_2,
+                0.0,
+                9,
+                0.0,
+                0.0,
+            )
+            .expect("valid annular sector"),
         );
         assert_eq!(path(&snapshot).len(), 20);
         assert_eq!(path(&snapshot).last(), Some(&PathCommand::Close));
         assert_eq!(snapshot.style.fill, Some(WHITE));
         assert_eq!(snapshot.style.stroke, Some(WHITE));
         assert_eq!(snapshot.style.stroke_width, 0.0);
-        assert_eq!(snapshot.style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+        assert_eq!(
+            snapshot.style.stroke_width_mode,
+            StrokeWidthMode::ScreenSpace
+        );
     }
 
     #[test]
     fn sector_bridge_preserves_zero_radius_inner_contour() {
         let snapshot = decode(
-            &manim_sector_snapshot_json(2.0, std::f64::consts::FRAC_PI_2, 0.0, 9, 1.0, -2.0)
-                .expect("valid sector"),
+            &manim_sector_snapshot_json(
+                2.0,
+                std::f64::consts::FRAC_PI_2,
+                0.0,
+                9,
+                1.0,
+                -2.0,
+            )
+            .expect("valid sector"),
         );
         let commands = path(&snapshot);
         assert_eq!(commands.len(), 20);
-        assert!(matches!(commands.first(), Some(PathCommand::MoveTo { to }) if *to == Vec2::new(1.0, -2.0)));
+        assert!(
+            matches!(commands.first(), Some(PathCommand::MoveTo { to }) if *to == Vec2::new(1.0, -2.0))
+        );
     }
 
     #[test]
     fn annulus_bridge_keeps_two_oppositely_wound_closed_contours() {
-        let snapshot = decode(
-            &manim_annulus_snapshot_json(0.5, 2.0, 9, 0.0, 0.0).expect("valid annulus"),
-        );
+        let snapshot =
+            decode(&manim_annulus_snapshot_json(0.5, 2.0, 9, 0.0, 0.0).expect("valid annulus"));
         let commands = path(&snapshot);
-        assert_eq!(commands.iter().filter(|command| matches!(command, PathCommand::MoveTo { .. })).count(), 2);
-        assert_eq!(commands.iter().filter(|command| matches!(command, PathCommand::Close)).count(), 2);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, PathCommand::MoveTo { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, PathCommand::Close))
+                .count(),
+            2
+        );
     }
 
     #[test]
