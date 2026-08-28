@@ -90,10 +90,12 @@ function launchOptions() {
 }
 
 async function capabilityProbe(page) {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const probeCanvas = document.createElement("canvas");
     let webgl2 = false;
     let offscreenWebgl2 = false;
+    let transferredWorkerWebgl2 = false;
+    let transferredWorkerWebgl2Error = "";
     try {
       webgl2 = probeCanvas.getContext("webgl2") !== null;
     } catch {
@@ -106,6 +108,54 @@ async function capabilityProbe(page) {
         offscreenWebgl2 = false;
       }
     }
+
+    const canTransferToWorker =
+      typeof Worker === "function" &&
+      typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function";
+    if (canTransferToWorker) {
+      const workerSource = `
+        self.onmessage = (event) => {
+          try {
+            const context = event.data.canvas.getContext("webgl2");
+            self.postMessage({ ok: context !== null, error: "" });
+          } catch (error) {
+            self.postMessage({ ok: false, error: String(error) });
+          }
+        };
+      `;
+      const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
+      const worker = new Worker(workerUrl);
+      try {
+        const transferCanvas = document.createElement("canvas");
+        transferCanvas.width = 2;
+        transferCanvas.height = 2;
+        const offscreen = transferCanvas.transferControlToOffscreen();
+        const result = await new Promise((resolve) => {
+          const timeout = setTimeout(
+            () => resolve({ ok: false, error: "worker WebGL2 probe timed out" }),
+            5000,
+          );
+          worker.onmessage = (event) => {
+            clearTimeout(timeout);
+            resolve(event.data);
+          };
+          worker.onerror = (event) => {
+            clearTimeout(timeout);
+            resolve({ ok: false, error: event.message || "worker WebGL2 probe crashed" });
+          };
+          worker.postMessage({ canvas: offscreen }, [offscreen]);
+        });
+        transferredWorkerWebgl2 = result?.ok === true;
+        transferredWorkerWebgl2Error = typeof result?.error === "string" ? result.error : "";
+      } catch (error) {
+        transferredWorkerWebgl2 = false;
+        transferredWorkerWebgl2Error = String(error);
+      } finally {
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+      }
+    }
+
     return {
       webAssembly: typeof WebAssembly === "object",
       worker: typeof Worker === "function",
@@ -114,6 +164,8 @@ async function capabilityProbe(page) {
         typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function",
       webgl2,
       offscreenWebgl2,
+      transferredWorkerWebgl2,
+      transferredWorkerWebgl2Error,
       webgpu: typeof navigator.gpu !== "undefined",
       userAgent: navigator.userAgent,
       devicePixelRatio: window.devicePixelRatio,
@@ -130,6 +182,7 @@ function missingRuntimeCapabilities(capabilities) {
     ["transferControlToOffscreen", capabilities.transferControlToOffscreen],
     ["WebGL2", capabilities.webgl2],
     ["OffscreenCanvas WebGL2", capabilities.offscreenWebgl2],
+    ["transferred worker WebGL2", capabilities.transferredWorkerWebgl2],
   ]
     .filter(([, available]) => !available)
     .map(([name]) => name);
@@ -194,7 +247,10 @@ async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
     (id) => {
       const patch = document.querySelector("#patch-status");
       const selected = document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId;
-      return selected === id && (patch?.dataset.state === "applied" || patch?.dataset.state === "error");
+      if (patch?.dataset.state === "error") {
+        return true;
+      }
+      return selected === id && patch?.dataset.state === "applied";
     },
     expectedExampleId,
     { timeout },
@@ -203,7 +259,12 @@ async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
   assert.equal(
     runtime.patchState,
     "applied",
-    `${browserName}/${profileName}: ${expectedExampleId} failed: ${runtime.patchText}`,
+    `${browserName}/${profileName}: ${expectedExampleId} failed: ${runtime.patchText} ${runtime.statusText}`,
+  );
+  assert.equal(
+    runtime.selectedExampleId,
+    expectedExampleId,
+    `${browserName}/${profileName}: ${expectedExampleId} did not remain selected`,
   );
   return runtime;
 }
@@ -240,7 +301,10 @@ async function editAndRerun(page, expectedExampleId) {
   await runButton.click();
   await waitForAppliedScene(page, expectedExampleId);
 
-  const source = await page.locator("#python-scene-source").inputValue();
+  // CodeMirror installs a JS accessor on the hidden textarea. Playwright's
+  // inputValue() reads the native backing value and bypasses that accessor, so
+  // inspect the same stable integration surface that the playground itself uses.
+  const source = await page.evaluate(() => document.querySelector("#python-scene-source")?.value ?? "");
   assert.ok(source.includes(editMarker), `${browserName}/${profileName}: edited source was not retained`);
 }
 
@@ -290,10 +354,9 @@ try {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
 
-  await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
-    waitUntil: "load",
-  });
-
+  // Probe the exact transferred-canvas worker path before Noon starts. Main-thread
+  // OffscreenCanvas WebGL2 is not sufficient: WebKit can advertise it while
+  // returning null only after an HTML canvas is transferred into a worker.
   capabilities = await capabilityProbe(page);
   assert.equal(
     capabilities.devicePixelRatio,
@@ -302,6 +365,10 @@ try {
   );
   const missing = missingRuntimeCapabilities(capabilities);
   runtimeSupported = missing.length === 0;
+
+  await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
+    waitUntil: "load",
+  });
 
   const initialShell = await shellSnapshot(page);
   assertShell(initialShell, `${browserName}/${profileName}`);
@@ -354,7 +421,7 @@ try {
       profile: profileName,
       runtimeSupported: true,
       missingCapabilities: [],
-      capabilities: await capabilityProbe(page),
+      capabilities,
       runtime: finalRuntime,
       pageErrors,
       consoleErrors,
