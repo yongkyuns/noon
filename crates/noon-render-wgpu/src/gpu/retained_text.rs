@@ -69,8 +69,8 @@ pub struct RetainedPrepareStats {
 /// Cumulative counters for retained mixed-frame preparation locality.
 ///
 /// A scratch reuse means the semantic object/text/vector/outline walk was skipped.
-/// Geometry packing, mixed-order rebuilding, and text snapshot copies remain separate
-/// follow-up costs and are intentionally not hidden by this counter.
+/// Mixed-order rebuilding and text snapshot copies remain separate follow-up costs
+/// and are intentionally not hidden by this counter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedFrameIncrementalStats {
     pub scratch_rebuilds: u64,
@@ -630,7 +630,8 @@ impl RetainedFramePreparer {
         geometries: &GeometryResourceArena,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
-        self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+        let scratch_reused =
+            self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
 
         // #339/#341 intentionally keep the atlas inside the retained text preparer.
         // Snapshot the lightweight prepared records once so that borrow can end and
@@ -650,7 +651,13 @@ impl RetainedFramePreparer {
             self.snapshot_text_stats = prepared.stats;
         }
 
-        let geometry = self.geometry.prepare(&self.scratch);
+        let geometry = if scratch_reused {
+            let no_changes = FrameChanges::default();
+            self.geometry
+                .prepare_incremental(&self.scratch, &no_changes)
+        } else {
+            self.geometry.prepare(&self.scratch)
+        };
         self.render_items.clear();
         rebuild_mixed_order(
             &mut self.render_items,
@@ -696,7 +703,7 @@ impl RetainedFramePreparer {
         texts: &TextResourceArena,
         fonts: &FontResourceArena,
         geometries: &GeometryResourceArena,
-    ) -> Result<(), RetainedPrepareError> {
+    ) -> Result<bool, RetainedPrepareError> {
         if self.scratch_ready
             && changes.is_empty()
             && frame.objects.len() == self.scratch_object_count
@@ -704,7 +711,7 @@ impl RetainedFramePreparer {
             self.scratch.time = frame.time;
             self.incremental_stats.scratch_reuses =
                 self.incremental_stats.scratch_reuses.saturating_add(1);
-            return Ok(());
+            return Ok(true);
         }
 
         // `build_scratch_frame` is fallible and mutates its destination as it walks.
@@ -716,7 +723,7 @@ impl RetainedFramePreparer {
         self.scratch_ready = true;
         self.incremental_stats.scratch_rebuilds =
             self.incremental_stats.scratch_rebuilds.saturating_add(1);
-        Ok(())
+        Ok(false)
     }
 
     fn build_scratch_frame(
@@ -1615,6 +1622,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(prepared.time(), 0.0);
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 1);
         }
         assert_eq!(
             preparer.incremental_stats(),
@@ -1640,6 +1648,10 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(prepared.time(), 1.0);
+            let geometry_stats = prepared.geometry_stats();
+            assert_eq!(geometry_stats.full_rebuilds, 0);
+            assert_eq!(geometry_stats.instances_repacked, 0);
+            assert_eq!(geometry_stats.dirty_instance_count, 0);
         }
         assert_eq!(
             preparer.incremental_stats(),
