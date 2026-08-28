@@ -330,6 +330,12 @@ function showSceneError(error) {
   patchStatus.dataset.state = "error";
 }
 
+function showRecoverableSceneError(error) {
+  console.warn("Recoverable Python callback error", error);
+  patchStatus.value = `Python callback failed: ${error}`;
+  patchStatus.dataset.state = "error";
+}
+
 function recordStale(token, stage) {
   const diagnostics = generations.recordStale(token, stage);
   status.dataset.staleResults = String(diagnostics.staleDrops);
@@ -732,6 +738,9 @@ try {
     onError(error) {
       playerNeedsRestart = true;
       showError(error);
+    },
+    onRecoverableError(error) {
+      showRecoverableSceneError(error);
     },
   });
   const ready = await player.start(EMPTY_SCENE_JSON, { loopDurationSeconds: 4.0 });
