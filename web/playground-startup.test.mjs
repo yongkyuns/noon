@@ -69,7 +69,7 @@ assert.ok(firstBarrier > initializeStart, "startup resources must share one hand
 for (const kickoff of [
   "const noonWebReady = initNoonWeb();",
   "const pyodideReady = loadPyodide();",
-  "const compatibilitySourcesReady = Promise.all([",
+  "const compatibilityBundleReady = loadCompatibilityBundle();",
   "const startupResourcesReady = Promise.all([",
 ]) {
   const position = worker.indexOf(kickoff, initializeStart);
@@ -80,14 +80,15 @@ assert.doesNotMatch(worker, /await initNoonWeb\(\)/, "Noon WASM must not seriali
 assert.doesNotMatch(worker, /await loadPyodide\(\)/, "Pyodide must not serialize Noon WASM startup");
 assert.doesNotMatch(
   worker,
-  /await (?:noonWebReady|pyodideReady|compatibilitySourcesReady)/,
+  /await (?:noonWebReady|pyodideReady|compatibilityBundleReady)/,
   "independent startup promises must be handled by the shared barrier",
 );
-assert.ok(
-  (worker.match(/fetch\(new URL\("\.\/python\//g) ?? []).length >= 20,
-  "compatibility source preload should cover the full Python compatibility surface",
+assert.match(
+  worker,
+  /const compatibilityBundleReady = loadCompatibilityBundle\(\);/,
+  "compatibility source loading must remain parallel with WASM and Pyodide startup",
 );
 
 console.log(
-  "✓ playground becomes interactive before Python autoplay and overlaps all cold-start resources",
+  "✓ playground becomes interactive before Python autoplay and overlaps bundled cold-start resources",
 );

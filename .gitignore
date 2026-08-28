@@ -2,5 +2,6 @@
 Cargo.lock
 .DS_Store
 /web/pkg
+/web/python/compat-bundle.json
 /output/playwright
 /.playwright-cli
