@@ -157,6 +157,18 @@ export class AuthoringExecutionClient {
     return result;
   }
 
+  async pause() {
+    return this.#withStablePlayer((player) => player.pause());
+  }
+
+  async resume() {
+    return this.#withStablePlayer((player) => player.resume());
+  }
+
+  async seek(timeSeconds) {
+    return this.#withStablePlayer((player) => player.seek(timeSeconds));
+  }
+
   async restart() {
     return this.#withStablePlayer(async (player, mode) => {
       const ready = await player.restart();

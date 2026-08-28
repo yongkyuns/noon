@@ -159,6 +159,19 @@ export class RetainedExecutionWorkerClient {
     return result;
   }
 
+  async pause() {
+    return this.#requestEngine("pause", {});
+  }
+
+  async resume() {
+    return this.#requestEngine("resume", {});
+  }
+
+  async seek(timeSeconds) {
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    return this.#requestEngine("seek", { time });
+  }
+
   resize(width, height, devicePixelRatio = 1) {
     this.#requireStarted();
     if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(devicePixelRatio)) {
@@ -367,6 +380,18 @@ function validateLoopDurationSeconds(loopDurationSeconds) {
     throw new TypeError("mixed retained loop duration must be positive and finite");
   }
   return loopDurationSeconds;
+}
+
+function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
+  if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+    throw new TypeError("mixed retained playback seek time must be finite and non-negative");
+  }
+  if (timeSeconds > loopDurationSeconds) {
+    throw new RangeError(
+      `mixed retained playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
+    );
+  }
+  return timeSeconds;
 }
 
 function checkedNext(current, label) {

@@ -152,16 +152,17 @@ impl GeometryResourceArena {
             .value
             .as_ref()
             .ok_or(GeometryResourceError::UnknownResource(id))?;
+        let next_version = entry
+            .version
+            .checked_add(1)
+            .ok_or(GeometryResourceError::VersionExhausted(id))?;
         self.retained_bytes = self
             .retained_bytes
             .saturating_sub(previous.retained_bytes());
         self.retained_bytes = self
             .retained_bytes
             .saturating_add(resource.retained_bytes());
-        entry.version = entry
-            .version
-            .checked_add(1)
-            .ok_or(GeometryResourceError::VersionExhausted(id))?;
+        entry.version = next_version;
         entry.value = Some(resource);
         Ok(GeometryResourceHandle {
             id,
@@ -174,18 +175,22 @@ impl GeometryResourceArena {
             .entries
             .get_mut(id.get() as usize)
             .ok_or(GeometryResourceError::UnknownResource(id))?;
-        let resource = entry
+        let previous = entry
             .value
-            .take()
+            .as_ref()
             .ok_or(GeometryResourceError::UnknownResource(id))?;
-        self.retained_bytes = self
-            .retained_bytes
-            .saturating_sub(resource.retained_bytes());
-        self.live_resources -= 1;
-        entry.version = entry
+        let next_version = entry
             .version
             .checked_add(1)
             .ok_or(GeometryResourceError::VersionExhausted(id))?;
+        let previous_retained_bytes = previous.retained_bytes();
+        let resource = entry
+            .value
+            .take()
+            .expect("resource presence was validated before mutation");
+        self.retained_bytes = self.retained_bytes.saturating_sub(previous_retained_bytes);
+        self.live_resources -= 1;
+        entry.version = next_version;
         Ok(resource)
     }
 
@@ -307,6 +312,57 @@ mod tests {
         arena.remove(first.id).unwrap();
         assert!(arena.get(first).is_none());
         assert_eq!(arena.current_handle(second.id), Some(second));
+    }
+
+    #[test]
+    fn replace_version_exhaustion_leaves_resource_and_accounting_unchanged() {
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert_path(large_path(4));
+        let entry = &mut arena.entries[first.id.get() as usize];
+        entry.version = u64::MAX;
+        let exhausted = GeometryResourceHandle {
+            id: first.id,
+            version: u64::MAX,
+        };
+        let before = arena.stats();
+        let GeometryResource::VectorPath(before_path) = arena.get(exhausted).unwrap();
+        let before_commands = before_path.commands().len();
+
+        assert_eq!(
+            arena.replace(
+                first.id,
+                GeometryResource::VectorPath(Arc::new(large_path(40))),
+            ),
+            Err(GeometryResourceError::VersionExhausted(first.id)),
+        );
+
+        assert_eq!(arena.stats(), before);
+        assert_eq!(arena.current_handle(first.id), Some(exhausted));
+        let GeometryResource::VectorPath(after_path) = arena.get(exhausted).unwrap();
+        assert_eq!(after_path.commands().len(), before_commands);
+    }
+
+    #[test]
+    fn remove_version_exhaustion_leaves_resource_and_accounting_unchanged() {
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert_path(large_path(12));
+        let entry = &mut arena.entries[first.id.get() as usize];
+        entry.version = u64::MAX;
+        let exhausted = GeometryResourceHandle {
+            id: first.id,
+            version: u64::MAX,
+        };
+        let before = arena.stats();
+
+        assert_eq!(
+            arena.remove(first.id),
+            Err(GeometryResourceError::VersionExhausted(first.id)),
+        );
+
+        assert_eq!(arena.stats(), before);
+        assert_eq!(arena.len(), 1);
+        assert_eq!(arena.current_handle(first.id), Some(exhausted));
+        assert!(arena.get(exhausted).is_some());
     }
 
     #[test]

@@ -9,12 +9,13 @@ const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
+const WORKER_OWNERS = Object.freeze(["engine", "render"]);
 
 export class ExecutionWorkerClient {
   #canvas;
   #engineWorker = null;
   #renderWorker = null;
-  #nextRequestId = 0;
+  #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #session = 0;
   #sceneJson = null;
@@ -25,6 +26,8 @@ export class ExecutionWorkerClient {
   #onRecoverableError;
   #hostAuthoringClient = null;
   #hostCallbacks = null;
+  #staleWorkerEvents = { engine: 0, render: 0 };
+  #staleResponses = { engine: 0, render: 0 };
 
   constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -47,6 +50,14 @@ export class ExecutionWorkerClient {
 
   get transportMode() {
     return this.#transportMode;
+  }
+
+  get diagnostics() {
+    return Object.freeze({
+      session: this.#session,
+      engine: this.#ownerDiagnostics("engine"),
+      render: this.#ownerDiagnostics("render"),
+    });
   }
 
   async start(
@@ -193,6 +204,19 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async pause() {
+    return this.#requestEngine("pause", {});
+  }
+
+  async resume() {
+    return this.#requestEngine("resume", {});
+  }
+
+  async seek(timeSeconds) {
+    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    return this.#requestEngine("seek", { time });
+  }
+
   async applyPatchBatch(patchBatchJson) {
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");
@@ -322,8 +346,9 @@ export class ExecutionWorkerClient {
   }
 
   #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
-    const requestId = this.#nextRequestId;
-    this.#nextRequestId = checkedNextRequestId(this.#nextRequestId);
+    validateWorkerOwner(owner);
+    const requestId = this.#nextRequestIds[owner];
+    this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
     const result = new Promise((resolve, reject) => {
       this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
     });
@@ -332,8 +357,13 @@ export class ExecutionWorkerClient {
   }
 
   #workerReady(worker, channel, owner) {
+    validateWorkerOwner(owner);
     return new Promise((resolve, reject) => {
       const onMessage = (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const message = event.data;
         try {
           validateWorkerEnvelope(message, channel);
@@ -352,6 +382,7 @@ export class ExecutionWorkerClient {
             const error = new Error(message.message || `${owner} worker failed`);
             if (message.requestId === null || message.requestId === undefined) {
               reject(error);
+              this.#rejectOwner(owner, error);
               this.#notifyError(error, owner);
               return;
             }
@@ -367,17 +398,26 @@ export class ExecutionWorkerClient {
           }
         } catch (error) {
           reject(error);
+          this.#rejectOwner(owner, error);
           this.#notifyError(error, owner);
         }
       };
       worker.addEventListener("message", onMessage);
       worker.addEventListener("error", (event) => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(event.message || `${owner} worker crashed`);
         reject(error);
         this.#rejectOwner(owner, error);
         this.#notifyError(error, owner);
       });
       worker.addEventListener("messageerror", () => {
+        if (!this.#isCurrentWorker(owner, worker)) {
+          this.#recordStaleWorkerEvent(owner);
+          return;
+        }
         const error = new Error(`${owner} worker message could not be decoded`);
         reject(error);
         this.#rejectOwner(owner, error);
@@ -387,16 +427,22 @@ export class ExecutionWorkerClient {
   }
 
   #settle(owner, requestId, settle) {
+    validateWorkerOwner(owner);
     if (!Number.isSafeInteger(requestId) || requestId < 0) {
       throw new Error(`${owner} worker returned an invalid request ID`);
     }
     const key = `${owner}:${requestId}`;
     const pending = this.#pending.get(key);
     if (!pending) {
-      throw new Error(`${owner} worker returned unknown request ID ${requestId}`);
+      if (requestId < this.#nextRequestIds[owner]) {
+        this.#staleResponses[owner] += 1;
+        return false;
+      }
+      throw new Error(`${owner} worker returned unissued request ID ${requestId}`);
     }
     this.#pending.delete(key);
     settle(pending);
+    return true;
   }
 
   #rejectOwner(owner, error) {
@@ -406,6 +452,29 @@ export class ExecutionWorkerClient {
         this.#pending.delete(key);
       }
     }
+  }
+
+  #isCurrentWorker(owner, worker) {
+    return owner === "engine" ? this.#engineWorker === worker : this.#renderWorker === worker;
+  }
+
+  #recordStaleWorkerEvent(owner) {
+    this.#staleWorkerEvents[owner] += 1;
+  }
+
+  #ownerDiagnostics(owner) {
+    let pendingRequests = 0;
+    for (const key of this.#pending.keys()) {
+      if (key.startsWith(`${owner}:`)) {
+        pendingRequests += 1;
+      }
+    }
+    return Object.freeze({
+      nextRequestId: this.#nextRequestIds[owner],
+      pendingRequests,
+      staleResponses: this.#staleResponses[owner],
+      staleWorkerEvents: this.#staleWorkerEvents[owner],
+    });
   }
 
   #notifyError(error, owner) {
@@ -457,6 +526,12 @@ function validateWorkerEnvelope(message, channel) {
   }
 }
 
+function validateWorkerOwner(owner) {
+  if (!WORKER_OWNERS.includes(owner)) {
+    throw new Error(`unknown execution worker owner ${owner}`);
+  }
+}
+
 function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
@@ -475,6 +550,18 @@ function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
     return null;
   }
   return validateLoopDurationSeconds(loopDurationSeconds);
+}
+
+function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
+  if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
+    throw new TypeError("playback seek time must be finite and non-negative");
+  }
+  if (timeSeconds > loopDurationSeconds) {
+    throw new RangeError(
+      `playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
+    );
+  }
+  return timeSeconds;
 }
 
 function validateCallbacks(callbacks) {
