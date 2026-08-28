@@ -101,11 +101,11 @@ impl PlaybackClock {
     }
 
     /// Re-anchor at an exact logical scene time without replaying intermediate frames.
-    pub fn seek(&mut self, scene_time: f64) -> Result<(), ClockError> {
+    pub fn seek(&mut self, scene_time: f64) -> Result<f64, ClockError> {
         self.validate_scene_time(scene_time)?;
         self.anchor_scene_time = scene_time;
         self.anchor_ms = if self.playing { None } else { self.previous_ms };
-        Ok(())
+        Ok(scene_time)
     }
 
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), ClockError> {
@@ -212,36 +212,32 @@ mod tests {
     #[test]
     fn clock_uses_first_frame_as_deterministic_origin() {
         let mut clock = PlaybackClock::once();
-
-        assert_eq!(clock.scene_time(4_250.0).expect("valid frame"), 0.0);
-        assert_eq!(clock.scene_time(5_500.0).expect("valid frame"), 1.25);
+        assert_eq!(clock.scene_time(4_250.0).unwrap(), 0.0);
+        assert_eq!(clock.scene_time(5_500.0).unwrap(), 1.25);
     }
 
     #[test]
     fn looping_clock_wraps_at_declared_duration() {
-        let mut clock = PlaybackClock::looping(2.0).expect("valid loop");
-
-        assert_eq!(clock.scene_time(100.0).expect("valid frame"), 0.0);
-        assert_eq!(clock.scene_time(2_600.0).expect("valid frame"), 0.5);
+        let mut clock = PlaybackClock::looping(2.0).unwrap();
+        assert_eq!(clock.scene_time(100.0).unwrap(), 0.0);
+        assert_eq!(clock.scene_time(2_600.0).unwrap(), 0.5);
     }
 
     #[test]
     fn changing_loop_duration_preserves_the_current_phase() {
-        let mut clock = PlaybackClock::looping(4.0).expect("valid loop");
-        assert_eq!(clock.scene_time(100.0).expect("valid frame"), 0.0);
-        assert_eq!(clock.scene_time(1_600.0).expect("valid frame"), 1.5);
-
+        let mut clock = PlaybackClock::looping(4.0).unwrap();
+        clock.scene_time(100.0).unwrap();
+        assert_eq!(clock.scene_time(1_600.0).unwrap(), 1.5);
         clock.set_loop_duration(3.0).unwrap();
-        assert_eq!(clock.scene_time(1_600.0).expect("same frame"), 1.5);
-        assert_eq!(clock.scene_time(3_100.0).expect("valid frame"), 0.0);
+        assert_eq!(clock.scene_time(1_600.0).unwrap(), 1.5);
+        assert_eq!(clock.scene_time(3_100.0).unwrap(), 0.0);
     }
 
     #[test]
     fn shrinking_loop_duration_normalizes_only_when_required() {
-        let mut clock = PlaybackClock::looping(5.0).expect("valid loop");
+        let mut clock = PlaybackClock::looping(5.0).unwrap();
         clock.scene_time(100.0).unwrap();
         assert_eq!(clock.scene_time(3_600.0).unwrap(), 3.5);
-
         clock.set_loop_duration(2.0).unwrap();
         assert_eq!(clock.scene_time(3_600.0).unwrap(), 1.5);
     }
@@ -251,7 +247,6 @@ mod tests {
         let mut clock = PlaybackClock::looping(4.0).unwrap();
         clock.scene_time(100.0).unwrap();
         assert_eq!(clock.scene_time(600.0).unwrap(), 0.5);
-
         clock.pause();
         assert!(!clock.is_playing());
         assert_eq!(clock.scene_time(1_600.0).unwrap(), 0.5);
@@ -266,7 +261,6 @@ mod tests {
         clock.scene_time(600.0).unwrap();
         clock.pause();
         clock.scene_time(5_600.0).unwrap();
-
         clock.resume();
         assert!(clock.is_playing());
         assert_eq!(clock.scene_time(7_000.0).unwrap(), 0.5);
@@ -278,8 +272,7 @@ mod tests {
         let mut clock = PlaybackClock::looping(4.0).unwrap();
         clock.scene_time(100.0).unwrap();
         clock.scene_time(1_100.0).unwrap();
-
-        clock.seek(1.25).unwrap();
+        assert_eq!(clock.seek(1.25).unwrap(), 1.25);
         assert_eq!(clock.current_time(), 1.25);
         assert_eq!(clock.scene_time(2_000.0).unwrap(), 1.25);
         assert_eq!(clock.scene_time(2_500.0).unwrap(), 1.75);
@@ -291,8 +284,7 @@ mod tests {
         clock.scene_time(100.0).unwrap();
         clock.scene_time(1_100.0).unwrap();
         clock.pause();
-
-        clock.seek(3.25).unwrap();
+        assert_eq!(clock.seek(3.25).unwrap(), 3.25);
         assert_eq!(clock.scene_time(5_000.0).unwrap(), 3.25);
         clock.resume();
         assert_eq!(clock.scene_time(7_000.0).unwrap(), 3.25);
@@ -303,8 +295,7 @@ mod tests {
     fn exact_loop_endpoint_survives_seek_until_playback_advances() {
         let mut clock = PlaybackClock::looping(4.0).unwrap();
         clock.scene_time(1_000.0).unwrap();
-        clock.seek(4.0).unwrap();
-
+        assert_eq!(clock.seek(4.0).unwrap(), 4.0);
         assert_eq!(clock.scene_time(2_000.0).unwrap(), 4.0);
         assert_eq!(clock.scene_time(2_250.0).unwrap(), 0.25);
     }
@@ -315,16 +306,9 @@ mod tests {
         clock.scene_time(100.0).unwrap();
         clock.scene_time(1_100.0).unwrap();
         let before = clock.clone();
-
-        assert!(matches!(
-            clock.seek(-1.0),
-            Err(ClockError::InvalidSceneTime(-1.0))
-        ));
+        assert!(matches!(clock.seek(-1.0), Err(ClockError::InvalidSceneTime(-1.0))));
         assert_eq!(clock, before);
-        assert!(matches!(
-            clock.seek(4.1),
-            Err(ClockError::SceneTimeOutsideLoop { .. })
-        ));
+        assert!(matches!(clock.seek(4.1), Err(ClockError::SceneTimeOutsideLoop { .. })));
         assert_eq!(clock, before);
     }
 
@@ -336,7 +320,6 @@ mod tests {
         clock.pause();
         clock.scene_time(6_100.0).unwrap();
         clock.resume();
-
         clock.set_loop_duration(3.0).unwrap();
         assert_eq!(clock.current_time(), 1.0);
         assert_eq!(clock.scene_time(7_000.0).unwrap(), 1.0);
@@ -349,7 +332,6 @@ mod tests {
         clock.scene_time(100.0).unwrap();
         clock.scene_time(1_100.0).unwrap();
         clock.seek(2.5).unwrap();
-
         clock.set_loop_duration(4.0).unwrap();
         assert_eq!(clock.current_time(), 2.5);
         assert_eq!(clock.scene_time(4_000.0).unwrap(), 2.5);
@@ -362,7 +344,6 @@ mod tests {
         clock.scene_time(100.0).unwrap();
         clock.seek(3.0).unwrap();
         clock.set_loop_duration(3.0).unwrap();
-
         assert_eq!(clock.scene_time(4_000.0).unwrap(), 3.0);
         assert_eq!(clock.scene_time(4_100.0).unwrap(), 0.1);
     }
@@ -375,7 +356,6 @@ mod tests {
         clock.pause();
         clock.seek(2.0).unwrap();
         clock.reset();
-
         assert!(clock.is_playing());
         assert_eq!(clock.current_time(), 0.0);
         assert_eq!(clock.scene_time(20.0).unwrap(), 0.0);
@@ -383,18 +363,11 @@ mod tests {
 
     #[test]
     fn invalid_or_regressing_timestamp_never_mutates_the_clock() {
-        assert!(matches!(
-            PlaybackClock::looping(0.0),
-            Err(ClockError::InvalidLoopDuration(0.0))
-        ));
-
+        assert!(matches!(PlaybackClock::looping(0.0), Err(ClockError::InvalidLoopDuration(0.0))));
         let mut clock = PlaybackClock::once();
         clock.scene_time(100.0).unwrap();
         let before = clock.clone();
-        assert!(matches!(
-            clock.scene_time(99.0),
-            Err(ClockError::TimestampWentBackwards { .. })
-        ));
+        assert!(matches!(clock.scene_time(99.0), Err(ClockError::TimestampWentBackwards { .. })));
         assert_eq!(clock, before);
         assert_eq!(clock.scene_time(200.0).unwrap(), 0.1);
     }
