@@ -77,6 +77,11 @@ assertQualifiedFixture(
   "MovingDots must keep its qualified updater/raster/timeline evidence",
 );
 assertQualifiedFixture(
+  "manim-move-to-target",
+  "move-to-target-circle",
+  "MoveToTargetExample must keep its qualified transform/raster/timeline evidence",
+);
+assertQualifiedFixture(
   "manim-moving-camera-center",
   "moving-camera-center",
   "MovingCameraCenter must keep its qualified camera/raster/timeline evidence",
