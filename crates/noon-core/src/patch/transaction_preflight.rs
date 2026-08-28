@@ -2,13 +2,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{validate_track_definition, ObjectId, SceneDefinition, TrackId};
 
-use super::{MutationTransaction, PatchError, ScenePatch};
+use super::{
+    validate_object_definition, validate_property_patch, MutationTransaction, PatchError,
+    ScenePatch,
+};
 
 /// Instrumentation for the local transaction preflight path.
 ///
 /// `staged_scene_clones` is deliberately part of the contract: structural
-/// and timeline transactions validate only identity metadata before commit,
-/// so heavy scene/geometry payloads are never cloned for atomicity.
+/// and timeline transactions validate compact identity and numeric metadata before
+/// commit, so heavy scene/geometry payloads are never cloned for atomicity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransactionPreflightStats {
     pub objects_indexed: usize,
@@ -45,6 +48,7 @@ pub fn preflight_transaction(
                     .get()
                     .checked_add(1)
                     .ok_or(PatchError::ObjectIdExhausted)?;
+                validate_object_definition(object)?;
             }
             ScenePatch::RemoveObject(id) => {
                 if !objects.remove(id) {
@@ -58,6 +62,7 @@ pub fn preflight_transaction(
                 if !objects.contains(object) {
                     return Err(PatchError::UnknownObject(*object));
                 }
+                validate_property_patch(mutation)?;
             }
             ScenePatch::AddTrack(track) => {
                 if tracks.contains_key(&track.id) {
@@ -98,7 +103,7 @@ pub fn preflight_transaction(
 
 #[cfg(test)]
 mod tests {
-    use crate::{GeometryRef, ObjectId, ScenePatch};
+    use crate::{GeometryRef, ObjectDefinition, ObjectId, ScenePatch, Style};
 
     use super::*;
 
@@ -114,5 +119,30 @@ mod tests {
         assert_eq!(stats.objects_indexed, 100_000);
         assert_eq!(stats.mutations_preflighted, 1);
         assert_eq!(stats.staged_scene_clones, 0);
+    }
+
+    #[test]
+    fn structural_preflight_rejects_non_finite_object_before_commit() {
+        let mut scene = SceneDefinition::new();
+        let existing = scene.add(GeometryRef::circle(1.0));
+        let before = scene.clone();
+        let mut invalid = ObjectDefinition::new(ObjectId::new(10), GeometryRef::circle(1.0));
+        invalid.style = Style {
+            opacity: f32::NAN,
+            ..Style::default()
+        };
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetGeometry {
+                object: existing,
+                geometry: GeometryRef::circle(2.0),
+            },
+            ScenePatch::CreateObject(invalid),
+        ]);
+
+        assert!(matches!(
+            scene.apply_transaction(&transaction),
+            Err(PatchError::InvalidObjectState { .. })
+        ));
+        assert_eq!(scene, before);
     }
 }
