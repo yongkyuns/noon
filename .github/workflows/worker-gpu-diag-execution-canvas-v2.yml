@@ -1,0 +1,91 @@
+name: Integrate worker GPU diagnostics with execution fallback
+
+on:
+  push:
+    branches:
+      - tmp/worker-gpu-diag-execution-canvas-v2
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature file
+        uses: actions/checkout@v4
+        with:
+          ref: fix/worker-gpu-validation-diagnostics-v2
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /crates/noon-web/src/execution_canvas.rs
+
+      - name: Add diagnostics after backend selection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/noon-web/src/execution_canvas.rs")
+          text = path.read_text()
+
+          def replace_once(old, new):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one replacement target, found {count}: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '    use crate::{ExecutionFrameMirror, TransportApplyOutcome};\n',
+              '''    use crate::{\n        gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},\n        ExecutionFrameMirror, TransportApplyOutcome,\n    };\n''',
+          )
+
+          replace_once(
+              '''        last_geometry_cache_misses: usize,\n    }\n''',
+              '''        last_geometry_cache_misses: usize,\n        gpu_generation: u32,\n        gpu_diagnostics: GpuDiagnosticMailbox,\n    }\n''',
+          )
+
+          replace_once(
+              '''            } = initialize_gpu(&canvas, width, height).await?;\n            let renderer = GpuRenderer::new(&device, config.format);\n''',
+              '''            } = initialize_gpu(&canvas, width, height).await?;\n            let gpu_generation = 1;\n            let gpu_diagnostics = GpuDiagnosticMailbox::default();\n            install_wgpu_error_handler(\n                &device,\n                gpu_generation,\n                backend,\n                gpu_diagnostics.clone(),\n            );\n            let renderer = GpuRenderer::new(&device, config.format);\n''',
+          )
+
+          replace_once(
+              '''                last_bytes_uploaded: 0,\n                last_geometry_cache_misses: 0,\n            };\n''',
+              '''                last_bytes_uploaded: 0,\n                last_geometry_cache_misses: 0,\n                gpu_generation,\n                gpu_diagnostics,\n            };\n''',
+          )
+
+          replace_once(
+              '''        #[wasm_bindgen(js_name = rendererBackend)]\n        pub fn renderer_backend(&self) -> String {\n            match self.backend {\n                wgpu::Backend::BrowserWebGpu => "WebGPU".to_owned(),\n                wgpu::Backend::Gl => "WebGL2".to_owned(),\n                other => format!("{other:?}"),\n            }\n        }\n\n        pub fn time(&self) -> f64 {\n''',
+              '''        #[wasm_bindgen(js_name = rendererBackend)]\n        pub fn renderer_backend(&self) -> String {\n            match self.backend {\n                wgpu::Backend::BrowserWebGpu => "WebGPU".to_owned(),\n                wgpu::Backend::Gl => "WebGL2".to_owned(),\n                other => format!("{other:?}"),\n            }\n        }\n\n        #[wasm_bindgen(js_name = gpuGeneration)]\n        pub fn gpu_generation(&self) -> u32 {\n            self.gpu_generation\n        }\n\n        #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]\n        pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {\n            self.gpu_diagnostics\n                .take_for_generation(self.gpu_generation)\n                .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))\n                .transpose()\n        }\n\n        pub fn time(&self) -> f64 {\n''',
+          )
+
+          # Guard the #490 architecture: diagnostics must not change the backend
+          # selection/commit sequence or reintroduce surface-first WebGPU setup.
+          required = [
+              'match initialize_webgpu(canvas, width, height).await',
+              'compatible_surface: None,',
+              'let (device, queue) = request_device(&adapter, backend).await?;',
+              'let surface = create_surface(&instance, canvas).map_err(js_value_message)?;',
+              'initialize_webgl(canvas, width, height)',
+          ]
+          for needle in required:
+              if needle not in text:
+                  raise SystemExit(f"#490 initialization invariant missing: {needle}")
+
+          path.write_text(text)
+          PY
+
+      - name: Validate and push
+        run: |
+          rustfmt --edition 2021 --check crates/noon-web/src/execution_canvas.rs
+          grep -q 'compatible_surface: None' crates/noon-web/src/execution_canvas.rs
+          grep -q 'install_wgpu_error_handler' crates/noon-web/src/execution_canvas.rs
+          grep -q 'takeGpuDiagnosticJson' crates/noon-web/src/execution_canvas.rs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/execution_canvas.rs
+          git commit -m "Capture execution renderer GPU diagnostics"
+          git push origin HEAD:fix/worker-gpu-validation-diagnostics-v2
