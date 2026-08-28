@@ -369,6 +369,7 @@ export class ExecutionWorkerClient {
             const error = new Error(message.message || `${owner} worker failed`);
             if (message.requestId === null || message.requestId === undefined) {
               reject(error);
+              this.#rejectOwner(owner, error);
               this.#notifyError(error, owner);
               return;
             }
@@ -384,6 +385,7 @@ export class ExecutionWorkerClient {
           }
         } catch (error) {
           reject(error);
+          this.#rejectOwner(owner, error);
           this.#notifyError(error, owner);
         }
       };
