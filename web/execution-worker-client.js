@@ -467,6 +467,7 @@ function validateLoopDurationSeconds(loopDurationSeconds) {
   if (!Number.isFinite(loopDurationSeconds) || loopDurationSeconds <= 0) {
     throw new TypeError("loop duration must be positive and finite");
   }
+  return loopDurationSeconds;
 }
 
 function validateOptionalLoopDurationSeconds(loopDurationSeconds) {
