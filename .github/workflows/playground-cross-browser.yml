@@ -4,8 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/playground-cross-browser.yml"
-      - "crates/noon-render-wgpu/**"
-      - "crates/noon-web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "web/**"
@@ -14,8 +15,9 @@ on:
       - master
     paths:
       - ".github/workflows/playground-cross-browser.yml"
-      - "crates/noon-render-wgpu/**"
-      - "crates/noon-web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "web/**"
