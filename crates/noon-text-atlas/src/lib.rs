@@ -41,9 +41,7 @@ impl GlyphAtlasPlane {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphAtlasImage {
     pub plane: GlyphAtlasPlane,
-    /// Texture page containing this image. The current live GPU atlas emits page
-    /// zero only; keeping page identity in the retained entry lets multi-page GPU
-    /// residency land without changing glyph/quad identity again.
+    /// Texture page containing this image.
     pub page: u32,
     /// Top-left texel containing visible glyph pixels, excluding the transparent gutter.
     pub origin: [u32; 2],
@@ -313,20 +311,16 @@ fn page_allocation(
 struct AtlasPlaneState {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    packer: ShelfPacker,
 }
 
 impl AtlasPlaneState {
-    fn new(
-        device: &wgpu::Device,
-        plane: GlyphAtlasPlane,
-        extent: u32,
-    ) -> Result<Self, GlyphAtlasError> {
+    fn new(device: &wgpu::Device, plane: GlyphAtlasPlane, extent: u32, page: u32) -> Self {
+        let label = match plane {
+            GlyphAtlasPlane::Mask => format!("Noon glyph mask atlas page {page}"),
+            GlyphAtlasPlane::Color => format!("Noon glyph color atlas page {page}"),
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(match plane {
-                GlyphAtlasPlane::Mask => "Noon glyph mask atlas",
-                GlyphAtlasPlane::Color => "Noon glyph color atlas",
-            }),
+            label: Some(&label),
             size: wgpu::Extent3d {
                 width: extent,
                 height: extent,
@@ -340,39 +334,45 @@ impl AtlasPlaneState {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Ok(Self {
-            texture,
-            view,
-            packer: ShelfPacker::new(extent)?,
-        })
+        Self { texture, view }
     }
 }
 
-/// Lazily allocated two-plane glyph atlas.
+/// Lazily allocated two-plane glyph atlas with an explicit bounded page budget.
 ///
-/// Alpha-mask and color glyphs use independent textures because they have different
-/// formats and shader semantics. Neither texture is allocated until the first image
-/// for that plane is uploaded. Empty glyphs are cached without consuming GPU space.
+/// Alpha-mask and color glyphs use independent page vectors because they have
+/// different formats and shader semantics. Textures remain lazy: a plane allocates
+/// only the pages actually reached by deterministic shelf packing. Empty glyphs are
+/// cached without consuming GPU space.
 ///
-/// The live GPU implementation intentionally remains one page per plane in this
-/// foundation slice. Entries already carry page identity and the pure page allocator
-/// above defines deterministic rollover; subsequent work can move texture ownership
-/// to page vectors without another retained-entry format change.
+/// `GpuGlyphAtlas::new` preserves the historical one-page-per-plane policy. Callers
+/// must opt into a larger bounded budget with `with_page_limit`; eviction/reuse is a
+/// separate residency policy layered on top of this structural page ownership.
 pub struct GpuGlyphAtlas {
     extent: u32,
-    mask: Option<AtlasPlaneState>,
-    color: Option<AtlasPlaneState>,
+    mask_allocator: GlyphAtlasPageAllocator,
+    color_allocator: GlyphAtlasPageAllocator,
+    mask_pages: Vec<AtlasPlaneState>,
+    color_pages: Vec<AtlasPlaneState>,
     entries: HashMap<GlyphRasterKey, GlyphAtlasEntry>,
     stats: GlyphAtlasStats,
 }
 
 impl GpuGlyphAtlas {
     pub fn new(extent: u32) -> Result<Self, GlyphAtlasError> {
-        ShelfPacker::new(extent)?;
+        Self::with_page_limit(extent, 1)
+    }
+
+    pub fn with_page_limit(
+        extent: u32,
+        max_pages_per_plane: usize,
+    ) -> Result<Self, GlyphAtlasError> {
         Ok(Self {
             extent,
-            mask: None,
-            color: None,
+            mask_allocator: GlyphAtlasPageAllocator::new(extent, max_pages_per_plane)?,
+            color_allocator: GlyphAtlasPageAllocator::new(extent, max_pages_per_plane)?,
+            mask_pages: Vec::new(),
+            color_pages: Vec::new(),
             entries: HashMap::new(),
             stats: GlyphAtlasStats::default(),
         })
@@ -398,10 +398,31 @@ impl GpuGlyphAtlas {
         self.entries.is_empty()
     }
 
-    pub fn texture_view(&self, plane: GlyphAtlasPlane) -> Option<&wgpu::TextureView> {
+    pub fn max_pages_per_plane(&self) -> usize {
+        self.mask_allocator.max_pages()
+    }
+
+    pub fn page_count(&self, plane: GlyphAtlasPlane) -> usize {
         match plane {
-            GlyphAtlasPlane::Mask => self.mask.as_ref().map(|state| &state.view),
-            GlyphAtlasPlane::Color => self.color.as_ref().map(|state| &state.view),
+            GlyphAtlasPlane::Mask => self.mask_pages.len(),
+            GlyphAtlasPlane::Color => self.color_pages.len(),
+        }
+    }
+
+    /// Compatibility accessor for page zero of a plane.
+    pub fn texture_view(&self, plane: GlyphAtlasPlane) -> Option<&wgpu::TextureView> {
+        self.texture_view_for_page(plane, 0)
+    }
+
+    pub fn texture_view_for_page(
+        &self,
+        plane: GlyphAtlasPlane,
+        page: u32,
+    ) -> Option<&wgpu::TextureView> {
+        let page = usize::try_from(page).ok()?;
+        match plane {
+            GlyphAtlasPlane::Mask => self.mask_pages.get(page).map(|state| &state.view),
+            GlyphAtlasPlane::Color => self.color_pages.get(page).map(|state| &state.view),
         }
     }
 
@@ -457,7 +478,7 @@ impl GpuGlyphAtlas {
             });
         }
 
-        // Reject impossible images before lazily allocating the GPU plane.
+        // Reject impossible images before mutating allocator state or allocating a GPU page.
         let gutter_twice = GLYPH_ATLAS_GUTTER
             .checked_mul(2)
             .ok_or(GlyphAtlasError::DimensionOverflow)?;
@@ -481,18 +502,15 @@ impl GpuGlyphAtlas {
             });
         }
 
-        let extent = self.extent;
-        let state = self.ensure_plane(device, plane)?;
-        let allocation =
-            state
-                .packer
-                .allocate(plane, image.placement.width, image.placement.height)?;
         let upload = padded_upload(
             &image.data,
             image.placement.width,
             image.placement.height,
             bytes_per_pixel,
         )?;
+        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
+        let extent = self.extent;
+        let state = self.ensure_page(device, plane, allocation.page)?;
         let bytes_per_row = allocation.outer_size[0]
             .checked_mul(bytes_per_pixel as u32)
             .ok_or(GlyphAtlasError::DimensionOverflow)?;
@@ -524,7 +542,7 @@ impl GpuGlyphAtlas {
         let size = [image.placement.width, image.placement.height];
         let atlas_image = GlyphAtlasImage {
             plane,
-            page: 0,
+            page: allocation.page,
             origin,
             size,
             uv_min: [
@@ -551,29 +569,44 @@ impl GpuGlyphAtlas {
         Ok(entry)
     }
 
-    fn ensure_plane(
+    fn allocate(
+        &mut self,
+        plane: GlyphAtlasPlane,
+        width: u32,
+        height: u32,
+    ) -> Result<GlyphAtlasPageAllocation, GlyphAtlasError> {
+        match plane {
+            GlyphAtlasPlane::Mask => self.mask_allocator.allocate(plane, width, height),
+            GlyphAtlasPlane::Color => self.color_allocator.allocate(plane, width, height),
+        }
+    }
+
+    fn ensure_page(
         &mut self,
         device: &wgpu::Device,
         plane: GlyphAtlasPlane,
+        page: u32,
     ) -> Result<&mut AtlasPlaneState, GlyphAtlasError> {
-        match plane {
-            GlyphAtlasPlane::Mask => {
-                if self.mask.is_none() {
-                    self.mask = Some(AtlasPlaneState::new(device, plane, self.extent)?);
-                    self.stats.texture_allocations =
-                        self.stats.texture_allocations.saturating_add(1);
-                }
-                Ok(self.mask.as_mut().expect("mask atlas was initialized"))
+        let page_index = usize::try_from(page).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let required = page_index
+            .checked_add(1)
+            .ok_or(GlyphAtlasError::DimensionOverflow)?;
+        let missing = required.saturating_sub(self.page_count(plane));
+        for _ in 0..missing {
+            let next_page = u32::try_from(self.page_count(plane))
+                .map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+            let state = AtlasPlaneState::new(device, plane, self.extent, next_page);
+            match plane {
+                GlyphAtlasPlane::Mask => self.mask_pages.push(state),
+                GlyphAtlasPlane::Color => self.color_pages.push(state),
             }
-            GlyphAtlasPlane::Color => {
-                if self.color.is_none() {
-                    self.color = Some(AtlasPlaneState::new(device, plane, self.extent)?);
-                    self.stats.texture_allocations =
-                        self.stats.texture_allocations.saturating_add(1);
-                }
-                Ok(self.color.as_mut().expect("color atlas was initialized"))
-            }
+            self.stats.texture_allocations = self.stats.texture_allocations.saturating_add(1);
         }
+        match plane {
+            GlyphAtlasPlane::Mask => self.mask_pages.get_mut(page_index),
+            GlyphAtlasPlane::Color => self.color_pages.get_mut(page_index),
+        }
+        .ok_or(GlyphAtlasError::DimensionOverflow)
     }
 }
 
@@ -707,6 +740,18 @@ mod tests {
             GlyphAtlasPageAllocator::new(8, 0).unwrap_err(),
             GlyphAtlasError::InvalidPageCount
         );
+        assert!(matches!(
+            GpuGlyphAtlas::with_page_limit(8, 0),
+            Err(GlyphAtlasError::InvalidPageCount)
+        ));
+    }
+
+    #[test]
+    fn default_gpu_atlas_page_budget_stays_one() {
+        let atlas = GpuGlyphAtlas::new(8).unwrap();
+        assert_eq!(atlas.max_pages_per_plane(), 1);
+        assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 0);
+        assert_eq!(atlas.page_count(GlyphAtlasPlane::Color), 0);
     }
 
     #[test]
