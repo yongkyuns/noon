@@ -487,6 +487,14 @@ export class ExecutionWorkerClient {
             );
             return;
           }
+          if (message.type === "recoverable_error") {
+            const error = new Error(
+              message.message || `${owner} worker reported a recoverable error`,
+            );
+            error.diagnostic = message.diagnostic ?? null;
+            this.#notifyRecoverableError(error, owner);
+            return;
+          }
           if (message.type === "error") {
             const error = new Error(message.message || `${owner} worker failed`);
             if (message.requestId === null || message.requestId === undefined) {

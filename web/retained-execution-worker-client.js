@@ -27,18 +27,23 @@ export class RetainedExecutionWorkerClient {
   #ready = null;
   #playing = true;
   #onError;
+  #onRecoverableError;
   #fatalOwner = null;
   #staleWorkerEvents = { engine: 0, render: 0 };
 
-  constructor(canvas, { onError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("RetainedExecutionWorkerClient requires an HTMLCanvasElement");
     }
     if (onError !== null && typeof onError !== "function") {
       throw new TypeError("RetainedExecutionWorkerClient onError must be a function");
     }
+    if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
+      throw new TypeError("RetainedExecutionWorkerClient onRecoverableError must be a function");
+    }
     this.#canvas = canvas;
     this.#onError = onError;
+    this.#onRecoverableError = onRecoverableError;
   }
 
   get canvas() {
@@ -363,6 +368,14 @@ export class RetainedExecutionWorkerClient {
             resolve(message);
             return;
           }
+          if (message.type === "recoverable_error") {
+            const error = new Error(
+              message.message || `${owner} mixed retained worker reported a recoverable error`,
+            );
+            error.diagnostic = message.diagnostic ?? null;
+            this.#notifyRecoverableError(error, owner);
+            return;
+          }
           if (message.type === "error") {
             const error = new Error(message.message || `${owner} mixed retained worker failed`);
             if (message.requestId === null || message.requestId === undefined) {
@@ -465,6 +478,14 @@ export class RetainedExecutionWorkerClient {
   #notifyError(error, owner) {
     this.#markFatalOwner(owner);
     this.#onError?.(error, owner);
+  }
+
+  #notifyRecoverableError(error, owner) {
+    if (this.#onRecoverableError !== null) {
+      this.#onRecoverableError(error, owner);
+      return;
+    }
+    console.warn(`[Noon retained execution] recoverable ${owner} error`, error);
   }
 
   #rememberPlaying(result) {
