@@ -69,6 +69,39 @@ fn prepared_mask_frame<'a>(
 }
 
 #[test]
+fn empty_glyphs_do_not_accumulate_gpu_atlas_metadata() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
+
+    for glyph_id in 1..=1_024_u16 {
+        assert_eq!(
+            atlas
+                .insert(&device, &queue, raster_key(glyph_id), &GlyphRaster::Empty)
+                .unwrap(),
+            GlyphAtlasEntry::Empty
+        );
+    }
+    assert_eq!(
+        atlas
+            .insert(&device, &queue, raster_key(2_000), &mask_raster(0, 3, 255))
+            .unwrap(),
+        GlyphAtlasEntry::Empty
+    );
+
+    assert!(atlas.is_empty());
+    assert_eq!(atlas.len(), 0);
+    assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 0);
+    assert_eq!(atlas.page_count(GlyphAtlasPlane::Color), 0);
+    assert_eq!(atlas.stats().entries, 0);
+    assert_eq!(atlas.stats().mask_entries, 0);
+    assert_eq!(atlas.stats().color_entries, 0);
+    assert_eq!(atlas.stats().empty_entries, 0);
+    assert_eq!(atlas.stats().texture_allocations, 0);
+    assert_eq!(atlas.stats().hits, 0);
+    assert_eq!(atlas.stats().misses, 1_025);
+}
+
+#[test]
 fn renderer_extends_bindings_when_persistent_atlas_grows() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
