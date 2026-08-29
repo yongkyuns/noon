@@ -759,13 +759,8 @@ impl GpuGlyphAtlas {
         for _ in 0..missing {
             let next_page = u32::try_from(self.page_count(plane))
                 .map_err(|_| GlyphAtlasError::DimensionOverflow)?;
-            let state = AtlasPlaneState::new(
-                device,
-                plane,
-                self.extent,
-                next_page,
-                self.generation,
-            );
+            let state =
+                AtlasPlaneState::new(device, plane, self.extent, next_page, self.generation);
             match plane {
                 GlyphAtlasPlane::Mask => self.mask_pages.push(state),
                 GlyphAtlasPlane::Color => self.color_pages.push(state),
