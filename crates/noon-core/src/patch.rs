@@ -148,7 +148,8 @@ impl std::fmt::Display for PatchError {
 
 impl std::error::Error for PatchError {}
 
-pub(super) fn validate_object_definition(object: &ObjectDefinition) -> Result<(), PatchError> {
+/// Validates all renderer-independent state carried by one object definition.
+pub fn validate_object_definition(object: &ObjectDefinition) -> Result<(), PatchError> {
     validate_geometry(object.id, &object.geometry)?;
     validate_transform(object.id, object.transform)?;
     validate_style(object.id, object.style)
@@ -219,7 +220,9 @@ fn vector_path_is_finite(path: &VectorPath) -> bool {
     }) && path.morph_target().is_none_or(vector_path_is_finite)
 }
 
-pub(super) fn validate_property_patch(patch: &ScenePatch) -> Result<(), PatchError> {
+/// Validates renderer-independent state carried by an object-property patch.
+/// Non-property patch variants carry no object-state payload and are accepted.
+pub fn validate_property_patch(patch: &ScenePatch) -> Result<(), PatchError> {
     match patch {
         ScenePatch::SetGeometry { object, geometry } => validate_geometry(*object, geometry),
         ScenePatch::SetTransform { object, transform } => validate_transform(*object, *transform),

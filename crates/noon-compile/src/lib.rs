@@ -6,9 +6,10 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use noon_core::{
-    validate_track_definition, CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId,
-    Property, SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, VectorPath,
+    validate_object_definition, validate_property_patch, validate_track_definition,
+    CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
+    SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D, VectorPath,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -316,8 +317,15 @@ pub enum CompilePatchError {
     UnknownObject(ObjectId),
     DuplicateTrack(TrackId),
     UnknownTrack(TrackId),
+    InvalidObjectState {
+        object: ObjectId,
+        field: ObjectStateField,
+    },
     InvalidTrack(TimelineError),
-    DiscontinuousPresence { previous: TrackId, next: TrackId },
+    DiscontinuousPresence {
+        previous: TrackId,
+        next: TrackId,
+    },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
@@ -333,6 +341,11 @@ impl std::fmt::Display for CompilePatchError {
             Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::DuplicateTrack(id) => write!(formatter, "duplicate track id {}", id.get()),
             Self::UnknownTrack(id) => write!(formatter, "unknown track id {}", id.get()),
+            Self::InvalidObjectState { object, field } => write!(
+                formatter,
+                "object {} contains non-finite {field} state",
+                object.get()
+            ),
             Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
             Self::DiscontinuousPresence { previous, next } => write!(
                 formatter,
@@ -538,6 +551,7 @@ impl CompiledScene {
                     }
                     let index = u32::try_from(next_object_index)
                         .map_err(|_| CompilePatchError::TooManyObjects(next_object_index))?;
+                    validate_object_definition(object).map_err(map_object_state_error)?;
                     next_object_index += 1;
                     object_indices.insert(object.id, index);
                 }
@@ -553,6 +567,7 @@ impl CompiledScene {
                     if !object_indices.contains_key(object) {
                         return Err(CompilePatchError::UnknownObject(*object));
                     }
+                    validate_property_patch(patch).map_err(map_object_state_error)?;
                 }
                 ScenePatch::AddTrack(track) => {
                     if tracks.iter().any(|existing| existing.id == track.id) {
@@ -625,6 +640,7 @@ impl CompiledScene {
                 }
                 let index = u32::try_from(self.objects.len())
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
+                validate_object_definition(object).map_err(map_object_state_error)?;
                 self.objects.push(CompiledObject {
                     id: object.id,
                     geometry: object.geometry.clone(),
@@ -668,18 +684,21 @@ impl CompiledScene {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_property_patch(patch).map_err(map_object_state_error)?;
                 self.objects[index as usize].geometry = geometry.clone();
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_property_patch(patch).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_transform = *transform;
             }
             ScenePatch::SetStyle { object, style } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_property_patch(patch).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_style = *style;
             }
             ScenePatch::AddTrack(track) => {
@@ -1027,6 +1046,15 @@ fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePa
         TransformCompileFailure::UnsafeFilledPath => {
             CompilePatchError::UnsafeFilledPathTransform(id)
         }
+    }
+}
+
+fn map_object_state_error(error: noon_core::PatchError) -> CompilePatchError {
+    match error {
+        noon_core::PatchError::InvalidObjectState { object, field } => {
+            CompilePatchError::InvalidObjectState { object, field }
+        }
+        other => unreachable!("object-state validator returned unexpected error: {other}"),
     }
 }
 
@@ -1718,6 +1746,7 @@ mod tests {
         );
         assert_eq!(compiled.tracks(), before);
     }
+
     #[test]
     fn removing_middle_object_keeps_compiled_slots_and_track_targets_stable() {
         let mut scene = SceneDefinition::new();
