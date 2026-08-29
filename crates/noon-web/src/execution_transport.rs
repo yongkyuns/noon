@@ -74,6 +74,7 @@ pub enum ExecutionTransportError {
     InvalidTime(f64),
     InvalidCameraState,
     InvalidCameraObject(ObjectId),
+    InvalidViewportAspect(f32),
     SequenceExhausted,
     SessionRequiresSnapshot { session: u32, sequence: u64 },
     SequenceGap { expected: u64, actual: u64 },
@@ -111,6 +112,10 @@ impl std::fmt::Display for ExecutionTransportError {
                 formatter,
                 "camera object {} is missing or not a supported 2D frame",
                 object.get()
+            ),
+            Self::InvalidViewportAspect(aspect) => write!(
+                formatter,
+                "execution viewport aspect must be positive and finite, got {aspect}"
             ),
             Self::SequenceExhausted => {
                 formatter.write_str("execution transport sequence exhausted")
@@ -802,6 +807,20 @@ impl EngineScenePlayer {
         self.take_delta_json()
     }
 
+    pub fn viewport_visibility_json(&self, aspect: f32) -> Result<String, ExecutionTransportError> {
+        let camera = self.encoder.camera_state(self.player.frame())?;
+        let bounds = camera
+            .viewport_bounds(aspect)
+            .ok_or(ExecutionTransportError::InvalidViewportAspect(aspect))?;
+        serde_json::to_string(&self.player.viewport_visibility(
+            bounds.min.x,
+            bounds.min.y,
+            bounds.max.x,
+            bounds.max.y,
+        ))
+        .map_err(ExecutionTransportError::from)
+    }
+
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), ExecutionTransportError> {
         self.clock.set_loop_duration(duration)?;
         Ok(())
@@ -945,6 +964,13 @@ mod wasm {
         #[wasm_bindgen(js_name = tickDeltaJson)]
         pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, JsValue> {
             self.inner.tick_delta_json(timestamp_ms).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = viewportVisibilityJson)]
+        pub fn viewport_visibility_json(&self, aspect: f32) -> Result<String, JsValue> {
+            self.inner
+                .viewport_visibility_json(aspect)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setLoopDurationSeconds)]
@@ -1098,6 +1124,27 @@ mod tests {
         encode_scene(&scene).unwrap()
     }
 
+    fn camera_visibility_scene_json() -> String {
+        let mut scene = SceneDefinition::new();
+        let target = scene.add(GeometryRef::circle(1.0));
+        scene.object_mut(target).unwrap().transform.translation = Vec2::new(6.0, 0.0);
+        let frame = scene.add(GeometryRef::rectangle(
+            DEFAULT_FRAME_WIDTH,
+            DEFAULT_FRAME_HEIGHT,
+        ));
+        scene.object_mut(frame).unwrap().style.opacity = 0.0;
+        assert!(scene.set_camera_object(frame));
+        scene
+            .animate_position(
+                frame,
+                Vec2::ZERO,
+                Vec2::new(6.0, 0.0),
+                TrackTiming::new(0.0, 2.0, noon_core::Easing::Linear),
+            )
+            .unwrap();
+        encode_scene(&scene).unwrap()
+    }
+
     #[test]
     fn snapshot_then_dirty_delta_round_trip() {
         let mut player = ScenePlayer::from_scene_json(&scene_json()).unwrap();
@@ -1154,6 +1201,31 @@ mod tests {
         mirror.apply(initial).unwrap();
         mirror.apply(delta).unwrap();
         assert!((mirror.camera().center.x - 1.5).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn engine_visibility_uses_post_advance_camera_and_render_aspect() {
+        let mut player = EngineScenePlayer::new(&camera_visibility_scene_json(), 4.0, 37).unwrap();
+        player.initial_delta_json().unwrap();
+
+        let narrow: crate::ExecutionVisibilityEnvelope =
+            serde_json::from_str(&player.viewport_visibility_json(1.0).unwrap()).unwrap();
+        assert_eq!(narrow.time, 0.0);
+        assert!(!narrow.slots.iter().any(|slot| slot.slot == 0));
+
+        let wide: crate::ExecutionVisibilityEnvelope =
+            serde_json::from_str(&player.viewport_visibility_json(2.0).unwrap()).unwrap();
+        assert!(wide.slots.iter().any(|slot| slot.slot == 0));
+
+        player.seek_delta_json(2.0).unwrap();
+        let moved: crate::ExecutionVisibilityEnvelope =
+            serde_json::from_str(&player.viewport_visibility_json(1.0).unwrap()).unwrap();
+        assert_eq!(moved.time, 2.0);
+        assert!(moved.slots.iter().any(|slot| slot.slot == 0));
+        assert!(matches!(
+            player.viewport_visibility_json(0.0),
+            Err(ExecutionTransportError::InvalidViewportAspect(aspect)) if aspect == 0.0
+        ));
     }
 
     #[test]
