@@ -52,11 +52,13 @@ fn validate_proportion(alpha: f32) -> Result<(), PathProportionError> {
 /// Construction collects drawable curves and performs Manim's ten-sample Bezier
 /// length approximation exactly once. [`Self::point`] then reuses those immutable
 /// sampled lengths, avoiding repeated curve collection, allocation, and length
-/// sampling during animation playback.
+/// sampling during animation playback. Finite paths additionally keep cumulative
+/// curve lengths so each point query selects its curve in logarithmic time.
 #[derive(Clone, Debug)]
 pub struct PathProportionPlan {
     curves: Vec<Curve>,
     lengths: Vec<f32>,
+    cumulative_lengths: Vec<f32>,
     total_length: f32,
 }
 
@@ -73,11 +75,17 @@ impl PathProportionPlan {
             .copied()
             .map(sampled_curve_length)
             .collect::<Vec<_>>();
-        let total_length = lengths.iter().sum();
+        let mut cumulative_lengths = Vec::with_capacity(lengths.len());
+        let mut total_length = 0.0_f32;
+        for &length in &lengths {
+            total_length += length;
+            cumulative_lengths.push(total_length);
+        }
 
         Ok(Self {
             curves,
             lengths,
+            cumulative_lengths,
             total_length,
         })
     }
@@ -95,27 +103,46 @@ impl PathProportionPlan {
         }
 
         let target_length = alpha * self.total_length;
-        let mut current_length = 0.0_f32;
-
-        for (curve, length) in self
-            .curves
-            .iter()
-            .copied()
-            .zip(self.lengths.iter().copied())
-        {
-            if current_length + length >= target_length {
+        if target_length.is_finite() {
+            let curve_index = self
+                .cumulative_lengths
+                .partition_point(|&end_length| end_length < target_length);
+            if curve_index < self.curves.len() {
+                let current_length = curve_index
+                    .checked_sub(1)
+                    .map_or(0.0, |index| self.cumulative_lengths[index]);
+                let length = self.lengths[curve_index];
                 let residue = if length > 0.0 {
                     ((target_length - current_length) / length).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                return Ok(curve_point(curve, residue));
+                return Ok(curve_point(self.curves[curve_index], residue));
             }
-            current_length += length;
+        } else {
+            // Keep the historical malformed-geometry behavior. Valid retained paths are finite,
+            // but direct callers can still construct a VectorPath containing non-finite points.
+            let mut current_length = 0.0_f32;
+            for (curve, length) in self
+                .curves
+                .iter()
+                .copied()
+                .zip(self.lengths.iter().copied())
+            {
+                if current_length + length >= target_length {
+                    let residue = if length > 0.0 {
+                        ((target_length - current_length) / length).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    return Ok(curve_point(curve, residue));
+                }
+                current_length += length;
+            }
         }
 
-        // The target is computed from the same finite sampled lengths above, so only
-        // floating-point roundoff (or malformed non-finite geometry) can reach this fallback.
+        // The target is computed from the same sampled lengths above, so only
+        // floating-point roundoff or malformed non-finite geometry can reach this fallback.
         Ok(self
             .curves
             .last()
@@ -428,10 +455,27 @@ mod tests {
 
         assert_eq!(plan.curves.len(), 2);
         assert_eq!(plan.lengths, vec![3.0, 1.0]);
+        assert_eq!(plan.cumulative_lengths, vec![3.0, 4.0]);
         assert_eq!(plan.total_length, 4.0);
         assert_vec2(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
         assert_vec2(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
         assert_vec2(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
+    }
+
+    #[test]
+    fn prepared_proportion_plan_preserves_first_curve_at_exact_length_boundary() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(3.0, 0.0))
+            .line_to(Vec2::new(3.0, 1.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+
+        assert_vec2(plan.point(0.75).unwrap(), Vec2::new(3.0, 0.0));
+        assert_eq!(
+            plan.cumulative_lengths
+                .partition_point(|&end_length| end_length < 3.0),
+            0
+        );
     }
 
     #[test]
