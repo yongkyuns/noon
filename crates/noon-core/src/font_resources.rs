@@ -201,9 +201,13 @@ mod tests {
     use super::*;
 
     fn face(variation: &str) -> FontFaceIdentity {
+        keyed_face("test-sans-v1", variation)
+    }
+
+    fn keyed_face(face_key: &str, variation: &str) -> FontFaceIdentity {
         FontFaceIdentity {
             family: Arc::from("Test Sans"),
-            face_key: Arc::from("test-sans-v1"),
+            face_key: Arc::from(face_key),
             face_index: 0,
             variation_key: Arc::from(variation),
         }
@@ -267,5 +271,67 @@ mod tests {
         assert_eq!(first.version, 0);
         assert_eq!(arena.get(first).unwrap().data.as_ref(), &[1, 2, 3]);
         assert_eq!(arena.stats().live_resources, 1);
+    }
+
+    #[test]
+    fn bounded_working_set_churn_reaches_a_stable_resource_plateau() {
+        const CYCLES: usize = 1_000;
+        const WORKING_SET: usize = 4;
+
+        let mut arena = FontResourceArena::new();
+        let mut expected_handles = [None; WORKING_SET];
+        let mut plateau = None;
+
+        for cycle in 0..CYCLES {
+            for (index, expected_handle) in expected_handles.iter_mut().enumerate() {
+                let key = format!("test-sans-{index}");
+                let bytes = Arc::<[u8]>::from([index as u8, 17, 29, 43]);
+                let handle = arena
+                    .intern_face(&keyed_face(&key, "wght=400"), bytes)
+                    .unwrap();
+
+                match expected_handle {
+                    Some(expected) => assert_eq!(handle, *expected),
+                    None => *expected_handle = Some(handle),
+                }
+            }
+
+            if cycle == 0 {
+                plateau = Some(arena.stats());
+            } else {
+                assert_eq!(arena.stats(), plateau.unwrap());
+            }
+        }
+
+        let plateau = plateau.unwrap();
+        assert_eq!(plateau.live_resources, WORKING_SET);
+        assert_eq!(plateau.font_bytes, WORKING_SET * 4);
+    }
+
+    #[test]
+    fn rejected_churn_does_not_grow_or_mutate_the_live_resource_set() {
+        const ATTEMPTS: usize = 1_000;
+
+        let mut arena = FontResourceArena::new();
+        let stable_face = keyed_face("stable-face", "");
+        let stable_handle = arena
+            .intern_face(&stable_face, Arc::<[u8]>::from([1, 2, 3, 4]))
+            .unwrap();
+        let baseline = arena.stats();
+
+        for attempt in 0..ATTEMPTS {
+            let conflicting = Arc::<[u8]>::from([
+                9,
+                (attempt & 0xff) as u8,
+                ((attempt >> 8) & 0xff) as u8,
+                7,
+            ]);
+            assert!(matches!(
+                arena.intern_face(&stable_face, conflicting),
+                Err(FontResourceError::ConflictingResource(_))
+            ));
+            assert_eq!(arena.stats(), baseline);
+            assert_eq!(arena.get(stable_handle).unwrap().data.as_ref(), &[1, 2, 3, 4]);
+        }
     }
 }
