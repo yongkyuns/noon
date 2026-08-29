@@ -80,10 +80,8 @@ fn bounded_working_set_reaches_a_stable_residency_plateau() {
     let byte_limit = sample_bytes
         .checked_mul(WORKING_SET)
         .expect("test cache byte limit must fit usize");
-    let mut cache = TextCompileCache::with_limits(TextCompileCacheLimits::new(
-        WORKING_SET,
-        byte_limit,
-    ));
+    let mut cache =
+        TextCompileCache::with_limits(TextCompileCacheLimits::new(WORKING_SET, byte_limit));
     let keys = [key("0000"), key("0001"), key("0002"), key("0003")];
     let mut plateau_bytes = None;
 
@@ -107,10 +105,7 @@ fn bounded_working_set_reaches_a_stable_residency_plateau() {
     assert_eq!(compiler.calls.get(), WORKING_SET as u64);
     assert_eq!(stats.compilations, WORKING_SET as u64);
     assert_eq!(stats.misses, WORKING_SET as u64);
-    assert_eq!(
-        stats.hits,
-        (WORKING_SET * (CHURN_ITERATIONS - 1)) as u64
-    );
+    assert_eq!(stats.hits, (WORKING_SET * (CHURN_ITERATIONS - 1)) as u64);
     assert_eq!(stats.insertions, WORKING_SET as u64);
     assert_eq!(stats.evictions, 0);
     assert_eq!(stats.rejected_admissions, 0);
@@ -123,10 +118,8 @@ fn unique_source_churn_never_exceeds_entry_or_byte_budget() {
     let byte_limit = sample_bytes
         .checked_mul(WORKING_SET)
         .expect("test cache byte limit must fit usize");
-    let mut cache = TextCompileCache::with_limits(TextCompileCacheLimits::new(
-        WORKING_SET,
-        byte_limit,
-    ));
+    let mut cache =
+        TextCompileCache::with_limits(TextCompileCacheLimits::new(WORKING_SET, byte_limit));
 
     for index in 0..CHURN_ITERATIONS {
         let source = format!("{index:04}");
@@ -149,10 +142,7 @@ fn unique_source_churn_never_exceeds_entry_or_byte_budget() {
     assert_eq!(stats.misses, CHURN_ITERATIONS as u64);
     assert_eq!(stats.hits, 0);
     assert_eq!(stats.insertions, CHURN_ITERATIONS as u64);
-    assert_eq!(
-        stats.evictions,
-        (CHURN_ITERATIONS - WORKING_SET) as u64
-    );
+    assert_eq!(stats.evictions, (CHURN_ITERATIONS - WORKING_SET) as u64);
     assert_eq!(stats.rejected_admissions, 0);
 }
 
@@ -161,10 +151,8 @@ fn repeated_compile_failures_do_not_accumulate_resident_state() {
     let compiler = FailingCompiler {
         calls: Cell::new(0),
     };
-    let mut cache = TextCompileCache::with_limits(TextCompileCacheLimits::new(
-        WORKING_SET,
-        usize::MAX,
-    ));
+    let mut cache =
+        TextCompileCache::with_limits(TextCompileCacheLimits::new(WORKING_SET, usize::MAX));
 
     for index in 0..CHURN_ITERATIONS {
         let source = format!("{index:04}");
