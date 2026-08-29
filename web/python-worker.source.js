@@ -2,7 +2,6 @@ import initNoonWeb, {
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
   manimDotSnapshotJson,
-  manimTriangleSnapshotJson,
   resolveAnimationOptions,
   resolveCompositionSchedule,
   resolveLifecyclePlan,
@@ -30,6 +29,10 @@ self.addEventListener("message", (event) => {
   requestQueue = requestQueue.then(() => handleRequest(event.data));
 });
 
+function optionalNumber(value) {
+  return value == null ? undefined : Number(value);
+}
+
 async function initializePyodide() {
   const noonWebReady = initNoonWeb();
   const pyodideReady = loadPyodide();
@@ -45,14 +48,52 @@ async function initializePyodide() {
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
-  self.noonCreateAuthoringTriangleHandle = () =>
-    authoringStore.createMobject(manimTriangleSnapshotJson());
+  self.noonCreateAuthoringTriangleHandle = () => authoringStore.createManimTriangle();
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
   self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
   self.noonCreateAuthoringRectangleHandle = (width, height) =>
     authoringStore.createManimRectangle(width, height);
   self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
     authoringStore.createManimLine(startX, startY, endX, endY);
+  self.noonCreateAuthoringPolygonHandle = (coordinates) =>
+    authoringStore.createManimPolygon(Float64Array.from(coordinates));
+  self.noonCreateAuthoringPolygramHandle = (coordinates, groupLengths) =>
+    authoringStore.createManimPolygram(
+      Float64Array.from(coordinates),
+      Uint32Array.from(groupLengths),
+    );
+  self.noonCreateAuthoringRegularPolygonHandle = (numVertices, radius, startAngle) =>
+    authoringStore.createManimRegularPolygon(
+      Number(numVertices),
+      Number(radius),
+      optionalNumber(startAngle),
+    );
+  self.noonCreateAuthoringRegularPolygramHandle = (
+    numVertices,
+    density,
+    radius,
+    startAngle,
+  ) =>
+    authoringStore.createManimRegularPolygram(
+      Number(numVertices),
+      Number(density),
+      Number(radius),
+      optionalNumber(startAngle),
+    );
+  self.noonCreateAuthoringStarHandle = (
+    points,
+    outerRadius,
+    innerRadius,
+    density,
+    startAngle,
+  ) =>
+    authoringStore.createManimStar(
+      Number(points),
+      Number(outerRadius),
+      optionalNumber(innerRadius),
+      Number(density),
+      optionalNumber(startAngle),
+    );
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
   self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
     new RetainedTypstAuthoringHandle(source, math, fontSize);
