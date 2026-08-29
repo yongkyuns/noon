@@ -41,9 +41,10 @@ pub mod prelude {
         MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
         ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
         RoundedRectangle, RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
-        SurroundingRectangle, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
+        SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
         VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
-        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
+        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+        DEFAULT_NATIVE_TEXT_FONT_SIZE, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
         DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{

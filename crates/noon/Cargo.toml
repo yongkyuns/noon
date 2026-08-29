@@ -8,7 +8,10 @@ description = "Ergonomic language-neutral authoring facade for Noon"
 [dependencies]
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
+noon-text-native = { path = "../noon-text-native" }
 noon-typst = { path = "../noon-typst" }
+swash = "=0.2.10"
+typst-assets = { version = "=0.15.1", features = ["fonts"] }
 
 [dev-dependencies]
 noon-ir = { path = "../noon-ir" }
