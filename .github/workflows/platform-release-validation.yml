@@ -147,7 +147,6 @@ jobs:
       - name: Smoke optimized artifact in browser
         env:
           NOON_BROWSER_SMOKE_BACKEND: webgl
-          NOON_BROWSER_SMOKE_EXAMPLE: parity-create-circle
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/optimized-webgl
         run: node scripts/browser-smoke.mjs
 
