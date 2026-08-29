@@ -68,6 +68,7 @@ node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
 node --test web/render-gpu-diagnostics.test.mjs
 node --test web/execution-worker-startup.test.mjs
+node --test web/authoring-execution-lifecycle.test.mjs
 node --test web/authoring-client.test.mjs
 node --test web/authoring-out-of-order-races.test.mjs
 node --test web/playground-generation.test.mjs
