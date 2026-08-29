@@ -18,6 +18,7 @@ pub struct DynamicProperties {
     pub transform: bool,
     pub position: bool,
     pub rotation: bool,
+    pub scale: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -31,6 +32,7 @@ impl DynamicProperties {
             Property::Transform => self.transform = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
+            Property::Scale => self.scale = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -43,6 +45,7 @@ impl DynamicProperties {
             || self.transform
             || self.position
             || self.rotation
+            || self.scale
             || self.opacity
             || self.appearance
             || self.reveal
@@ -1151,10 +1154,11 @@ const fn property_rank(property: Property) -> u8 {
         Property::Transform => 1,
         Property::Position => 2,
         Property::Rotation => 3,
-        Property::Opacity => 4,
-        Property::Appearance => 5,
-        Property::Reveal => 6,
-        Property::Morph => 7,
+        Property::Scale => 4,
+        Property::Opacity => 5,
+        Property::Appearance => 6,
+        Property::Reveal => 7,
+        Property::Morph => 8,
     }
 }
 
@@ -1344,6 +1348,7 @@ mod tests {
                 transform: false,
                 position: false,
                 rotation: false,
+                scale: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1351,6 +1356,28 @@ mod tests {
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
+    }
+
+    #[test]
+    fn scale_tracks_mark_only_scale_dynamic() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_scale(
+                object,
+                Vec2::ONE,
+                Vec2::new(2.0, 0.5),
+                TrackTiming::new(0.0, 1.0, Easing::Linear),
+            )
+            .expect("valid scale track");
+        let compiled = CompiledScene::compile(&scene).expect("scene must compile");
+        assert_eq!(
+            compiled.objects()[0].dynamic,
+            DynamicProperties {
+                scale: true,
+                ..DynamicProperties::default()
+            }
+        );
     }
 
     #[test]
@@ -1489,6 +1516,7 @@ mod tests {
                 transform: false,
                 position: false,
                 rotation: false,
+                scale: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

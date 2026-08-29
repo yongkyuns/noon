@@ -88,6 +88,7 @@ pub enum Property {
     Transform,
     Position,
     Rotation,
+    Scale,
     Opacity,
     Appearance,
     Reveal,
@@ -107,7 +108,7 @@ impl Property {
         match self {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
-            Self::Position => ValueKind::Vec2,
+            Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
                 ValueKind::Scalar
             }
@@ -478,6 +479,21 @@ impl SceneDefinition {
         )
     }
 
+    pub fn animate_scale(
+        &mut self,
+        object: ObjectId,
+        from: Vec2,
+        to: Vec2,
+        timing: TrackTiming,
+    ) -> Result<TrackId, TimelineError> {
+        self.add_track(
+            object,
+            Property::Scale,
+            TrackValues::Vec2 { from, to },
+            timing,
+        )
+    }
+
     pub fn animate_scalar(
         &mut self,
         object: ObjectId,
@@ -680,6 +696,24 @@ mod tests {
             ),
             Err(TimelineError::InvalidDuration(0.0))
         ));
+    }
+
+    #[test]
+    fn scale_is_a_vec2_timeline_property() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let track = scene
+            .animate_scale(object, Vec2::ONE, Vec2::new(2.0, 0.5), timing())
+            .expect("valid scale track");
+        assert_eq!(track, TrackId::new(0));
+        assert_eq!(scene.tracks()[0].property, Property::Scale);
+        assert_eq!(
+            scene.tracks()[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::ONE,
+                to: Vec2::new(2.0, 0.5)
+            }
+        );
     }
 
     #[test]
