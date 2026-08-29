@@ -1,6 +1,7 @@
 use noon_compile::CompiledScene;
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, Style, TrackTiming, Transform2D, Vec2,
+    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, ScenePatch, Style, TrackTiming,
+    Transform2D, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
@@ -94,4 +95,54 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
     assert_eq!(steady.stats.geometry_cache_misses, 0);
     assert!(!steady.path_geometry_dirty);
     assert_eq!(preparer.cached_path_mesh_count(), 0);
+}
+
+#[test]
+fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
+    const EDIT_COUNT: usize = 1_000;
+
+    let mut scene = SceneDefinition::new();
+    let static_line = scene.add(GeometryRef::line(
+        Vec2::new(-1.0, 0.0),
+        Vec2::new(1.0, 0.0),
+    ));
+    let moving_line = scene.add(GeometryRef::line(
+        Vec2::new(-1.0, 0.0),
+        Vec2::new(1.0, 0.0),
+    ));
+
+    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let static_before = instance.frame().objects[static_line.0].clone();
+    let mut preparer = FramePreparer::new();
+    let initial_changes = instance.take_frame_changes();
+    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    assert_eq!(initial.stats.geometry_cache_misses, 0);
+    assert_eq!(preparer.cached_path_mesh_count(), 0);
+
+    for edit in 0..EDIT_COUNT {
+        let step = (edit + 1) as f32;
+        let transform = Transform2D {
+            translation: Vec2::new(step * 0.001, -step * 0.0005),
+            ..Transform2D::IDENTITY
+        };
+        instance
+            .apply_patch(&ScenePatch::SetTransform {
+                object: moving_line,
+                transform,
+            })
+            .unwrap();
+
+        let changes = instance.take_frame_changes();
+        assert_eq!(changes.object_indices(), &[moving_line.0]);
+        let prepared = preparer.prepare_incremental(instance.frame(), &changes);
+
+        assert_eq!(instance.frame().objects[moving_line.0].transform, transform);
+        assert_eq!(instance.frame().objects[static_line.0], static_before);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.line_dirty_ranges.as_slice(), &[moving_line.0..moving_line.0 + 1]);
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert!(!prepared.path_geometry_dirty);
+        assert_eq!(preparer.cached_path_mesh_count(), 0);
+    }
 }
