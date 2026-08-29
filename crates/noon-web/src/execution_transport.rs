@@ -50,6 +50,8 @@ pub struct ExecutionDeltaEnvelope {
     pub snapshot: bool,
     pub time: f64,
     #[serde(default)]
+    pub layout_generation: u64,
+    #[serde(default)]
     pub camera: Camera2DState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<TransportSlotId>,
@@ -210,6 +212,7 @@ pub struct ExecutionDeltaEncoder {
     slot_orders: HashMap<TransportSlotId, u32>,
     next_order: u32,
     camera_object: Option<ObjectId>,
+    layout_generation: u64,
 }
 
 impl ExecutionDeltaEncoder {
@@ -221,6 +224,7 @@ impl ExecutionDeltaEncoder {
             slot_orders: HashMap::new(),
             next_order: 0,
             camera_object: None,
+            layout_generation: 0,
         }
     }
 
@@ -242,6 +246,10 @@ impl ExecutionDeltaEncoder {
 
     pub fn set_camera_object(&mut self, camera_object: Option<ObjectId>) {
         self.camera_object = camera_object;
+    }
+
+    pub fn set_layout_generation(&mut self, layout_generation: u64) {
+        self.layout_generation = layout_generation;
     }
 
     pub fn contains_slot(&self, slot: ExecutionSlotId) -> bool {
@@ -281,6 +289,7 @@ impl ExecutionDeltaEncoder {
             sequence,
             snapshot: true,
             time: frame.time,
+            layout_generation: self.layout_generation,
             camera,
             removed: Vec::new(),
             objects,
@@ -351,6 +360,7 @@ impl ExecutionDeltaEncoder {
             sequence,
             snapshot: false,
             time: frame.time,
+            layout_generation: self.layout_generation,
             camera,
             removed,
             objects,
@@ -417,6 +427,7 @@ impl ExecutionDeltaEncoder {
 pub struct ExecutionFrameMirror {
     session: Option<u32>,
     next_sequence: u64,
+    layout_generation: u64,
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
     object_slots: HashMap<ObjectId, TransportSlotId>,
@@ -439,6 +450,14 @@ impl ExecutionFrameMirror {
 
     pub const fn next_sequence(&self) -> u64 {
         self.next_sequence
+    }
+
+    pub const fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    pub fn frame_index_for_slot(&self, slot: TransportSlotId) -> Option<usize> {
+        self.slot_indices.get(&slot).copied()
     }
 
     pub fn live_object_count(&self) -> usize {
@@ -489,6 +508,7 @@ impl ExecutionFrameMirror {
             self.apply_partial(&delta)?
         };
         self.camera = delta.camera;
+        self.layout_generation = delta.layout_generation;
         self.next_sequence = delta
             .sequence
             .checked_add(1)
@@ -526,6 +546,7 @@ impl ExecutionFrameMirror {
     fn reset_for_session(&mut self, session: u32) {
         self.session = Some(session);
         self.next_sequence = 0;
+        self.layout_generation = 0;
         self.slots.clear();
         self.slot_indices.clear();
         self.object_slots.clear();
@@ -688,6 +709,7 @@ fn encode_player_delta(
     player: &mut ScenePlayer,
     force_snapshot: bool,
 ) -> Result<Option<ExecutionDeltaEnvelope>, ExecutionTransportError> {
+    encoder.set_layout_generation(player.layout_generation());
     let changes = player.take_frame_changes();
     let execution_delta = player.take_execution_delta();
     if force_snapshot || !encoder.is_initialized() || changes.is_all() {
@@ -1085,9 +1107,11 @@ mod tests {
 
         let initial = encode_current(&mut encoder, &mut player);
         assert!(initial.snapshot);
+        assert_eq!(initial.layout_generation, player.layout_generation());
         let (outcome, changes) = mirror.apply(initial).unwrap();
         assert_eq!(outcome, TransportApplyOutcome::Applied);
         assert!(changes.is_all());
+        assert_eq!(mirror.layout_generation(), player.layout_generation());
         assert_eq!(mirror.frame().unwrap(), player.frame());
 
         player.advance_to(0.5).unwrap();
@@ -1144,6 +1168,7 @@ mod tests {
         assert_eq!(mirror.live_object_count(), 1);
         assert_eq!(mirror.frame().unwrap().objects.len(), 2);
         assert!(!mirror.frame().unwrap().presences[0]);
+        assert_eq!(mirror.frame_index_for_slot(surviving_slot), Some(1));
         assert_eq!(mirror.slots[1], surviving_slot);
     }
 
@@ -1178,6 +1203,7 @@ mod tests {
             sequence: 3,
             snapshot: false,
             time: 0.0,
+            layout_generation: 0,
             camera: Camera2DState::default(),
             removed: Vec::new(),
             objects: Vec::new(),
@@ -1267,6 +1293,7 @@ mod tests {
 
         let initial = encode_current(&mut encoder, &mut player);
         let surviving_slot = initial.objects[1].slot;
+        let initial_generation = initial.layout_generation;
         mirror.apply(initial.clone()).unwrap();
 
         let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ObjectId::new(0))]);
@@ -1278,19 +1305,24 @@ mod tests {
         mirror.apply(removal).unwrap();
         assert_eq!(mirror.frame().unwrap().objects.len(), 2);
         assert_eq!(mirror.live_object_count(), 1);
+        assert_eq!(mirror.frame_index_for_slot(surviving_slot), Some(1));
 
         let stats = player.compact_retired_slots().unwrap();
         assert_eq!(stats.frame_slots_reclaimed, 1);
         let compacted = encode_current(&mut encoder, &mut player);
         assert!(compacted.snapshot);
+        assert!(compacted.layout_generation > initial_generation);
+        assert_eq!(compacted.layout_generation, player.layout_generation());
         assert_eq!(compacted.objects.len(), 1);
         assert_eq!(compacted.objects[0].slot, surviving_slot);
         assert_eq!(compacted.objects[0].order, 0);
 
         let (_, changes) = mirror.apply(compacted).unwrap();
         assert!(changes.is_all());
+        assert_eq!(mirror.layout_generation(), player.layout_generation());
         assert_eq!(mirror.live_object_count(), 1);
         assert_eq!(mirror.frame().unwrap().objects.len(), 1);
+        assert_eq!(mirror.frame_index_for_slot(surviving_slot), Some(0));
         assert_eq!(mirror.slots, vec![surviving_slot]);
         assert_eq!(mirror.frame().unwrap(), player.frame());
     }
