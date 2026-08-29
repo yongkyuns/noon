@@ -32,6 +32,27 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
     }
 }
 
+fn single_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
+    let transform = Transform2D {
+        scale: Vec2::new(0.05, 0.05),
+        ..Transform2D::IDENTITY
+    };
+    RetainedFrameState {
+        time: 0.0,
+        objects: vec![RetainedFrameObjectState {
+            id: ObjectId::new(1),
+            content: ObjectContentRef::Text(text),
+            transform,
+            style: Style::default(),
+            appearance: 1.0,
+        }],
+        presences: vec![true],
+        reveals: vec![1.0],
+        morphs: vec![0.0],
+        render_geometries: vec![None],
+    }
+}
+
 #[test]
 fn one_changed_text_object_stays_object_local_after_warmup() {
     let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
@@ -164,4 +185,71 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
             fallback_rebuilds: 0,
         }
     );
+}
+
+#[test]
+fn atlas_generation_advances_only_for_full_rebuilds() {
+    let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+    let mut texts = TextResourceArena::new();
+    let text = texts.insert(artifact.resource).unwrap();
+    let mut frame = single_text_frame(text);
+    let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+
+    let initial_generation = preparer.atlas().generation();
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::all(),
+            &texts,
+            &artifact.fonts,
+            metrics,
+        )
+        .unwrap();
+    let rebuilt_generation = preparer.atlas().generation();
+    assert_eq!(rebuilt_generation, initial_generation + 1);
+
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::default(),
+            &texts,
+            &artifact.fonts,
+            metrics,
+        )
+        .unwrap();
+    assert_eq!(preparer.atlas().generation(), rebuilt_generation);
+
+    frame.objects[0].transform.translation = Vec2::new(1.0, -2.0);
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![0]),
+            &texts,
+            &artifact.fonts,
+            metrics,
+        )
+        .unwrap();
+    assert_eq!(preparer.atlas().generation(), rebuilt_generation);
+
+    frame.objects[0].transform.scale = Vec2::new(0.1, 0.1);
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![0]),
+            &texts,
+            &artifact.fonts,
+            metrics,
+        )
+        .unwrap();
+    assert_eq!(preparer.atlas().generation(), rebuilt_generation + 1);
 }

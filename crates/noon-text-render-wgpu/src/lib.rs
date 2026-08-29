@@ -475,6 +475,7 @@ impl RetainedTextQuadPreparer {
     ) -> Result<(), TextPrepareError> {
         self.incremental_stats.rebuild_attempts =
             self.incremental_stats.rebuild_attempts.saturating_add(1);
+        self.atlas.begin_generation();
         // A fallible rebuild must never leave an old successful generation reusable.
         // Clear validity before mutating any prepared arrays and restore it only after
         // the complete frame has been rebuilt successfully.
