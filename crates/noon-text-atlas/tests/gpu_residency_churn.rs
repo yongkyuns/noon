@@ -81,8 +81,5 @@ fn two_page_atlas_churn_plateaus_without_texture_reallocation() {
     let stats = atlas.stats();
     assert_eq!(stats.page_evictions, u64::from(GENERATIONS));
     assert_eq!(stats.page_reuses, u64::from(GENERATIONS));
-    assert_eq!(
-        stats.image_entries_evicted,
-        u64::from(GENERATIONS) * 2
-    );
+    assert_eq!(stats.image_entries_evicted, u64::from(GENERATIONS) * 2);
 }
