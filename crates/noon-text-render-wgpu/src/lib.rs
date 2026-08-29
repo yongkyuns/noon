@@ -24,6 +24,7 @@ use noon_text_raster::{
     GlyphRasterStats,
 };
 
+pub const DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE: usize = 2;
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES: usize = 8_192;
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 pub const GLYPH_RASTER_SIZE_BUCKET_RATIO: f32 = 1.125;
@@ -246,7 +247,10 @@ impl RetainedTextQuadPreparer {
     ) -> Result<Self, GlyphAtlasError> {
         Ok(Self {
             raster_cache: GlyphRasterCache::with_limits(raster_limits),
-            atlas: GpuGlyphAtlas::new(atlas_extent)?,
+            atlas: GpuGlyphAtlas::with_page_limit(
+                atlas_extent,
+                DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE,
+            )?,
             mask_quads: Vec::new(),
             color_quads: Vec::new(),
             items: Vec::new(),
@@ -276,6 +280,15 @@ impl RetainedTextQuadPreparer {
 
     pub const fn atlas_stats(&self) -> GlyphAtlasStats {
         self.atlas.stats()
+    }
+
+    /// GPU texture bytes currently resident in lazily allocated atlas pages.
+    pub fn atlas_resident_texture_bytes(&self) -> u64 {
+        atlas_texture_bytes(
+            self.atlas.extent(),
+            self.atlas.page_count(GlyphAtlasPlane::Mask),
+            self.atlas.page_count(GlyphAtlasPlane::Color),
+        )
     }
 
     pub const fn incremental_stats(&self) -> RetainedTextIncrementalStats {
@@ -698,6 +711,15 @@ impl Default for RetainedTextQuadPreparer {
     }
 }
 
+fn atlas_texture_bytes(extent: u32, mask_pages: usize, color_pages: usize) -> u64 {
+    let extent = u64::from(extent);
+    let page_texels = extent.saturating_mul(extent);
+    let mask_pages = u64::try_from(mask_pages).unwrap_or(u64::MAX);
+    let color_pages = u64::try_from(color_pages).unwrap_or(u64::MAX);
+    let weighted_pages = mask_pages.saturating_add(color_pages.saturating_mul(4));
+    page_texels.saturating_mul(weighted_pages)
+}
+
 fn raster_pixel_size(
     run: &GlyphRun,
     object_transform: Transform2D,
@@ -881,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn renderer_uses_finite_default_raster_cache_limits() {
+    fn renderer_uses_finite_default_residency_limits() {
         let preparer = RetainedTextQuadPreparer::new(128).unwrap();
         assert_eq!(
             preparer.raster_cache_limits(),
@@ -889,6 +911,23 @@ mod tests {
         );
         assert!(preparer.raster_cache_limits().max_entries < usize::MAX);
         assert!(preparer.raster_cache_limits().max_image_bytes < usize::MAX);
+        assert_eq!(
+            preparer.atlas().max_pages_per_plane(),
+            DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE
+        );
+        assert_eq!(preparer.atlas_resident_texture_bytes(), 0);
+    }
+
+    #[test]
+    fn default_atlas_policy_caps_texture_residency_at_forty_mib() {
+        assert_eq!(
+            atlas_texture_bytes(
+                DEFAULT_GLYPH_ATLAS_EXTENT,
+                DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE,
+                DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE,
+            ),
+            40 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -950,6 +989,9 @@ mod tests {
             .atlas()
             .texture_view(GlyphAtlasPlane::Color)
             .is_none());
+        assert_eq!(preparer.atlas().page_count(GlyphAtlasPlane::Mask), 1);
+        assert_eq!(preparer.atlas().page_count(GlyphAtlasPlane::Color), 0);
+        assert_eq!(preparer.atlas_resident_texture_bytes(), 128 * 128);
     }
 
     #[test]
