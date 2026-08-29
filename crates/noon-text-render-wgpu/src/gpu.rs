@@ -130,6 +130,12 @@ impl std::ops::AddAssign for TextGpuDrawStats {
 pub enum TextGpuDrawError {
     UnsupportedSampleCount(u32),
     MissingAtlasPlane(GlyphAtlasPlane),
+    MissingAtlasPage {
+        plane: GlyphAtlasPlane,
+        page: u32,
+    },
+    /// Retained for compatibility with callers compiled against the page-identity
+    /// foundation. Live page-aware bindings no longer emit this error.
     UnsupportedAtlasPage {
         plane: GlyphAtlasPlane,
         page: u32,
@@ -149,6 +155,9 @@ impl std::fmt::Display for TextGpuDrawError {
             }
             Self::MissingAtlasPlane(plane) => {
                 write!(formatter, "{plane:?} glyph atlas texture is not resident")
+            }
+            Self::MissingAtlasPage { plane, page } => {
+                write!(formatter, "{plane:?} glyph atlas page {page} is not resident")
             }
             Self::UnsupportedAtlasPage { plane, page } => write!(
                 formatter,
@@ -182,8 +191,8 @@ pub struct TextGlyphGpuRenderer {
     camera_bind_group: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    mask_bind_group: Option<wgpu::BindGroup>,
-    color_bind_group: Option<wgpu::BindGroup>,
+    mask_bind_groups: Vec<wgpu::BindGroup>,
+    color_bind_groups: Vec<wgpu::BindGroup>,
     mask_buffer: wgpu::Buffer,
     color_buffer: wgpu::Buffer,
     mask_capacity_bytes: usize,
@@ -313,8 +322,8 @@ impl TextGlyphGpuRenderer {
             camera_bind_group,
             atlas_layout,
             sampler,
-            mask_bind_group: None,
-            color_bind_group: None,
+            mask_bind_groups: Vec::new(),
+            color_bind_groups: Vec::new(),
             mask_buffer: empty_instance_buffer(device, "Noon text mask glyph instances"),
             color_buffer: empty_instance_buffer(device, "Noon text color glyph instances"),
             mask_capacity_bytes: 0,
@@ -340,8 +349,8 @@ impl TextGlyphGpuRenderer {
 
     /// Drop texture bind groups when switching to a different persistent atlas.
     pub fn reset_atlas_bindings(&mut self) {
-        self.mask_bind_group = None;
-        self.color_bind_group = None;
+        self.mask_bind_groups.clear();
+        self.color_bind_groups.clear();
     }
 
     pub fn upload(
@@ -392,28 +401,24 @@ impl TextGlyphGpuRenderer {
     }
 
     fn refresh_atlas_bind_groups(&mut self, device: &wgpu::Device, atlas: &GpuGlyphAtlas) {
-        if self.mask_bind_group.is_none() {
-            if let Some(view) = atlas.texture_view(GlyphAtlasPlane::Mask) {
-                self.mask_bind_group = Some(create_atlas_bind_group(
-                    device,
-                    &self.atlas_layout,
-                    &self.sampler,
-                    view,
-                    "Noon mask glyph atlas bind group",
-                ));
-            }
-        }
-        if self.color_bind_group.is_none() {
-            if let Some(view) = atlas.texture_view(GlyphAtlasPlane::Color) {
-                self.color_bind_group = Some(create_atlas_bind_group(
-                    device,
-                    &self.atlas_layout,
-                    &self.sampler,
-                    view,
-                    "Noon color glyph atlas bind group",
-                ));
-            }
-        }
+        refresh_plane_bind_groups(
+            device,
+            &self.atlas_layout,
+            &self.sampler,
+            &mut self.mask_bind_groups,
+            atlas,
+            GlyphAtlasPlane::Mask,
+            "Noon mask glyph atlas bind group",
+        );
+        refresh_plane_bind_groups(
+            device,
+            &self.atlas_layout,
+            &self.sampler,
+            &mut self.color_bind_groups,
+            atlas,
+            GlyphAtlasPlane::Color,
+            "Noon color glyph atlas bind group",
+        );
     }
 
     pub fn draw_item<'a>(
@@ -437,26 +442,35 @@ impl TextGlyphGpuRenderer {
         if instance_range.is_empty() {
             return Ok(TextGpuDrawStats::default());
         }
-        validate_atlas_page(*plane, *page)?;
 
-        let (buffer, bind_group, available, pipeline) = match plane {
+        let (buffer, bind_groups, available, pipeline) = match plane {
             GlyphAtlasPlane::Mask => (
                 &self.mask_buffer,
-                self.mask_bind_group
-                    .as_ref()
-                    .ok_or(TextGpuDrawError::MissingAtlasPlane(*plane))?,
+                &self.mask_bind_groups,
                 self.mask_instances,
                 self.pipeline(GlyphAtlasPlane::Mask, sample_count)?,
             ),
             GlyphAtlasPlane::Color => (
                 &self.color_buffer,
-                self.color_bind_group
-                    .as_ref()
-                    .ok_or(TextGpuDrawError::MissingAtlasPlane(*plane))?,
+                &self.color_bind_groups,
                 self.color_instances,
                 self.pipeline(GlyphAtlasPlane::Color, sample_count)?,
             ),
         };
+        let page_index = usize::try_from(*page).map_err(|_| TextGpuDrawError::MissingAtlasPage {
+            plane: *plane,
+            page: *page,
+        })?;
+        let bind_group = bind_groups.get(page_index).ok_or_else(|| {
+            if *page == 0 && bind_groups.is_empty() {
+                TextGpuDrawError::MissingAtlasPlane(*plane)
+            } else {
+                TextGpuDrawError::MissingAtlasPage {
+                    plane: *plane,
+                    page: *page,
+                }
+            }
+        })?;
         if instance_range.end > available {
             return Err(TextGpuDrawError::InstanceRangeOutOfBounds {
                 plane: *plane,
@@ -513,11 +527,25 @@ impl TextGlyphGpuRenderer {
     }
 }
 
-fn validate_atlas_page(plane: GlyphAtlasPlane, page: u32) -> Result<(), TextGpuDrawError> {
-    if page == 0 {
-        Ok(())
-    } else {
-        Err(TextGpuDrawError::UnsupportedAtlasPage { plane, page })
+fn refresh_plane_bind_groups(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    bind_groups: &mut Vec<wgpu::BindGroup>,
+    atlas: &GpuGlyphAtlas,
+    plane: GlyphAtlasPlane,
+    label: &'static str,
+) {
+    let page_count = atlas.page_count(plane);
+    if bind_groups.len() > page_count {
+        bind_groups.truncate(page_count);
+    }
+    while bind_groups.len() < page_count {
+        let page = u32::try_from(bind_groups.len()).expect("glyph atlas page count exceeds u32");
+        let view = atlas
+            .texture_view_for_page(plane, page)
+            .expect("resident glyph atlas page must expose its texture view");
+        bind_groups.push(create_atlas_bind_group(device, layout, sampler, view, label));
     }
 }
 
@@ -648,6 +676,19 @@ mod tests {
         }
     }
 
+    fn mask_raster(width: u32, height: u32, value: u8) -> GlyphRaster {
+        GlyphRaster::Image(GlyphRasterImage {
+            format: GlyphRasterFormat::Alpha8,
+            placement: GlyphRasterPlacement {
+                left: 0,
+                top: height as i32,
+                width,
+                height,
+            },
+            data: Arc::from(vec![value; (width * height) as usize]),
+        })
+    }
+
     fn prepared_mask_frame<'a>(
         quads: &'a [GlyphQuadInstance],
         items: &'a [PreparedTextItem],
@@ -666,6 +707,28 @@ mod tests {
             id: TextResourceId::new(0),
             version: 0,
         }
+    }
+
+    fn noop_target(
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        (target, view)
     }
 
     #[test]
@@ -714,21 +777,7 @@ mod tests {
         assert_eq!(upload.bytes_uploaded, size_of::<GlyphQuadInstance>());
         assert_eq!(upload.buffer_reallocations, 1);
 
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Noon text glyph noop render target"),
-            size: wgpu::Extent3d {
-                width: 16,
-                height: 16,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let (_target, view) = noop_target(&device, "Noon text glyph noop render target");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Noon text glyph noop encoder"),
         });
@@ -758,6 +807,83 @@ mod tests {
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(stats.instances_drawn, 1);
         assert_eq!(stats.deferred_items, 0);
+    }
+
+    #[test]
+    fn noop_device_draws_from_nonzero_atlas_page() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
+        for glyph_id in 1..=2 {
+            let image = mask_raster(4, 2, 100 + glyph_id as u8);
+            let GlyphAtlasEntry::Image(entry) = atlas
+                .insert(&device, &queue, raster_key(glyph_id), &image)
+                .unwrap()
+            else {
+                panic!("visible mask glyph must allocate an atlas image");
+            };
+            assert_eq!(entry.page, 0);
+        }
+        let raster = mask_raster(1, 1, 255);
+        let GlyphAtlasEntry::Image(page_one) = atlas
+            .insert(&device, &queue, raster_key(3), &raster)
+            .unwrap()
+        else {
+            panic!("visible mask glyph must allocate an atlas image");
+        };
+        assert_eq!(page_one.page, 1);
+        assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 2);
+
+        let quads = [GlyphQuadInstance {
+            origin: [-0.5, -0.5],
+            axis_x: [1.0, 0.0],
+            axis_y: [0.0, 1.0],
+            uv_min: page_one.uv_min,
+            uv_max: page_one.uv_max,
+            color: [1.0; 4],
+        }];
+        let items = [PreparedTextItem::GlyphBatch {
+            object_index: 0,
+            text: text_handle(),
+            run_index: 0,
+            plane: GlyphAtlasPlane::Mask,
+            page: page_one.page,
+            instance_range: 0..1,
+        }];
+        let prepared = prepared_mask_frame(&quads, &items);
+        let mut renderer = TextGlyphGpuRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            TextCamera2D::DEFAULT,
+        );
+        renderer.upload(&device, &queue, &prepared, &atlas);
+        assert_eq!(renderer.mask_bind_groups.len(), 2);
+
+        let (_target, view) = noop_target(&device, "Noon text page-one noop target");
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let stats = {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Noon text page-one noop pass"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            renderer.draw_item(&mut pass, &items[0], 1).unwrap()
+        };
+        queue.submit(Some(encoder.finish()));
+        assert_eq!(stats.draw_calls, 1);
+        assert_eq!(stats.instances_drawn, 1);
     }
 
     #[test]
@@ -833,21 +959,7 @@ mod tests {
             morph: 0.0,
         };
 
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Noon text deferred noop render target"),
-            size: wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let (_target, view) = noop_target(&device, "Noon text deferred noop render target");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
@@ -871,18 +983,6 @@ mod tests {
         };
         assert_eq!(stats.draw_calls, 0);
         assert_eq!(stats.deferred_items, 1);
-    }
-
-    #[test]
-    fn nonzero_atlas_page_is_rejected_before_draw() {
-        assert_eq!(validate_atlas_page(GlyphAtlasPlane::Mask, 0), Ok(()));
-        assert_eq!(
-            validate_atlas_page(GlyphAtlasPlane::Color, 3),
-            Err(TextGpuDrawError::UnsupportedAtlasPage {
-                plane: GlyphAtlasPlane::Color,
-                page: 3,
-            })
-        );
     }
 
     #[test]
