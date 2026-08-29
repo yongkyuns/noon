@@ -188,6 +188,23 @@ function differingPixelCount(beforeBuffer, afterBuffer, region) {
   return differing;
 }
 
+function pixelAt(buffer, xFraction, yFraction) {
+  const png = PNG.sync.read(buffer);
+  const x = Math.max(0, Math.min(png.width - 1, Math.round((png.width - 1) * xFraction)));
+  const y = Math.max(0, Math.min(png.height - 1, Math.round((png.height - 1) * yFraction)));
+  const offset = (y * png.width + x) * 4;
+  return [
+    png.data[offset],
+    png.data[offset + 1],
+    png.data[offset + 2],
+    png.data[offset + 3],
+  ];
+}
+
+function pixelDistance(left, right) {
+  return left.reduce((distance, channel, index) => distance + Math.abs(channel - right[index]), 0);
+}
+
 function latestSceneEnd(document) {
   assert.ok(document.tracks.length > 0, "playground scene must contain at least one track");
   return Math.max(
@@ -318,6 +335,39 @@ try {
             `${visiblePixels} visible pixels`,
         );
       }
+    }
+
+    if (example.name === "Filled path Transform") {
+      const fillCheckpoints = [
+        ["fill-start", 0],
+        ["fill-mid", latestEnd * 0.5],
+        ["fill-end", latestEnd],
+      ];
+      const centerColors = [];
+      for (const [checkpoint, time] of fillCheckpoints) {
+        const capture = await renderAndCapture(
+          page,
+          time,
+          path.join(artifactDir, artifactName(index, example.name, checkpoint)),
+        );
+        assert.equal(capture.metrics.error, null, `${example.name}: ${checkpoint} runtime error`);
+        const center = pixelAt(capture.screenshot, 0.5, 0.5);
+        const background = pixelAt(capture.screenshot, 0, 0);
+        const fillSeparation = pixelDistance(center, background);
+        assert.ok(
+          fillSeparation >= 64,
+          `${example.name}: center fill disappeared at ${checkpoint} (${fillSeparation} channel-distance)`,
+        );
+        centerColors.push(center);
+      }
+      const endpointColorDelta = pixelDistance(centerColors[0], centerColors.at(-1));
+      assert.ok(
+        endpointColorDelta >= 48,
+        `${example.name}: fill color failed to change across the transform (${endpointColorDelta} channel-distance)`,
+      );
+      console.log(
+        `✓ ${example.name}: fill remains raster-visible and endpoint color changes (${endpointColorDelta} channel-distance)`,
+      );
     }
 
     if (example.name === "Create shapes") {
