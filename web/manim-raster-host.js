@@ -92,9 +92,10 @@ async function load(source, loopDurationSeconds) {
 
 async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
-  await presentDelta(deterministicDelta);
 
-  if (host !== null) {
+  if (host === null) {
+    await presentDelta(deterministicDelta);
+  } else {
     host.advanceTo(time);
     const frame = JSON.parse(host.callbackFrameJson());
     if (Math.abs(Number(frame.time) - Number(time)) > 1e-9) {
@@ -106,9 +107,14 @@ async function advanceOneFrame(frameIndex, time) {
     const batch = await client.runCallbackPhase(callbackSessionId, frame, sequence);
     const batchJson = JSON.stringify(batch);
     host.commitPatchBatch(batchJson);
+    engine.applyHostPatchBatchDeltaJson(batchJson);
 
-    const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    await presentDelta(hostDelta);
+    // A Manim frame includes both deterministic timeline evaluation and its updater
+    // phase. Presenting the deterministic delta first exposes an intermediate state
+    // to the browser compositor; WebGL may screenshot that first present even after
+    // the callback present. A fresh transport snapshot is a supported sequence-gap
+    // resynchronization barrier, so capture only the completed logical frame.
+    await presentDelta(engine.snapshotDeltaJson());
   }
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
