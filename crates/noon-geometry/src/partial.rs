@@ -40,6 +40,90 @@ impl std::fmt::Display for PathProportionError {
 
 impl std::error::Error for PathProportionError {}
 
+fn validate_proportion(alpha: f32) -> Result<(), PathProportionError> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(PathProportionError::InvalidProportion(alpha));
+    }
+    Ok(())
+}
+
+/// Reusable ManimCE v0.21 path-proportion measure for repeated point queries.
+///
+/// Construction collects drawable curves and performs Manim's ten-sample Bezier
+/// length approximation exactly once. [`Self::point`] then reuses those immutable
+/// sampled lengths, avoiding repeated curve collection, allocation, and length
+/// sampling during animation playback.
+#[derive(Clone, Debug)]
+pub struct PathProportionPlan {
+    curves: Vec<Curve>,
+    lengths: Vec<f32>,
+    total_length: f32,
+}
+
+impl PathProportionPlan {
+    /// Prepare the reusable proportion measure for `path`.
+    pub fn new(path: &VectorPath) -> Result<Self, PathProportionError> {
+        let curves = collect_curves(path);
+        if curves.is_empty() {
+            return Err(PathProportionError::EmptyPath);
+        }
+
+        let lengths = curves
+            .iter()
+            .copied()
+            .map(sampled_curve_length)
+            .collect::<Vec<_>>();
+        let total_length = lengths.iter().sum();
+
+        Ok(Self {
+            curves,
+            lengths,
+            total_length,
+        })
+    }
+
+    /// Return the point at `alpha` using the prepared Manim-compatible measure.
+    pub fn point(&self, alpha: f32) -> Result<Vec2, PathProportionError> {
+        validate_proportion(alpha)?;
+
+        if alpha == 1.0 {
+            return Ok(self
+                .curves
+                .last()
+                .expect("path proportion plans are never empty")
+                .to);
+        }
+
+        let target_length = alpha * self.total_length;
+        let mut current_length = 0.0_f32;
+
+        for (curve, length) in self
+            .curves
+            .iter()
+            .copied()
+            .zip(self.lengths.iter().copied())
+        {
+            if current_length + length >= target_length {
+                let residue = if length > 0.0 {
+                    ((target_length - current_length) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                return Ok(curve_point(curve, residue));
+            }
+            current_length += length;
+        }
+
+        // The target is computed from the same finite sampled lengths above, so only
+        // floating-point roundoff (or malformed non-finite geometry) can reach this fallback.
+        Ok(self
+            .curves
+            .last()
+            .expect("path proportion plans are never empty")
+            .to)
+    }
+}
+
 /// Return the point at `alpha` using ManimCE v0.21's `VMobject.point_from_proportion` measure.
 ///
 /// Manim approximates every Bezier curve length from ten uniformly spaced parameter
@@ -48,40 +132,11 @@ impl std::error::Error for PathProportionError {}
 /// parameter rather than an arc-length inversion. Keeping this separate from
 /// [`pointwise_partial_path`] matters because Create/partial paths use uniform curve-count
 /// progress instead of this length-weighted measure.
+///
+/// Repeated callers should prepare a [`PathProportionPlan`] once and reuse it.
 pub fn point_from_proportion(path: &VectorPath, alpha: f32) -> Result<Vec2, PathProportionError> {
-    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-        return Err(PathProportionError::InvalidProportion(alpha));
-    }
-
-    let curves = collect_curves(path);
-    let first = curves.first().ok_or(PathProportionError::EmptyPath)?;
-    if alpha == 1.0 {
-        return Ok(curves.last().expect("non-empty curves").to);
-    }
-
-    let lengths = curves
-        .iter()
-        .copied()
-        .map(sampled_curve_length)
-        .collect::<Vec<_>>();
-    let target_length = alpha * lengths.iter().sum::<f32>();
-    let mut current_length = 0.0_f32;
-
-    for (curve, length) in curves.iter().copied().zip(lengths) {
-        if current_length + length >= target_length {
-            let residue = if length > 0.0 {
-                ((target_length - current_length) / length).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            return Ok(curve_point(curve, residue));
-        }
-        current_length += length;
-    }
-
-    // The target is computed from the same finite sampled lengths above, so only
-    // floating-point roundoff can reach this fallback.
-    Ok(curves.last().unwrap_or(first).to)
+    validate_proportion(alpha)?;
+    PathProportionPlan::new(path)?.point(alpha)
 }
 
 /// Return the portion of a vector path whose global Bezier parameter lies in `[a, b]`.
@@ -364,6 +419,38 @@ mod tests {
     }
 
     #[test]
+    fn prepared_proportion_plan_reuses_the_sampled_measure() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(3.0, 0.0))
+            .line_to(Vec2::new(3.0, 1.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+
+        assert_eq!(plan.curves.len(), 2);
+        assert_eq!(plan.lengths, vec![3.0, 1.0]);
+        assert_eq!(plan.total_length, 4.0);
+        assert_vec2(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
+        assert_vec2(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
+        assert_vec2(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
+    }
+
+    #[test]
+    fn prepared_proportion_plan_owns_its_curve_measure() {
+        let mut path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(2.0, 0.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+
+        path = path.line_to(Vec2::new(2.0, 8.0));
+
+        assert_vec2(plan.point(0.5).unwrap(), Vec2::new(1.0, 0.0));
+        assert_vec2(
+            point_from_proportion(&path, 0.5).unwrap(),
+            Vec2::new(2.0, 3.0),
+        );
+    }
+
+    #[test]
     fn proportion_preserves_exact_endpoints_and_rejects_invalid_inputs() {
         let path = VectorPath::new()
             .move_to(Vec2::new(-1.0, 2.0))
@@ -388,6 +475,23 @@ mod tests {
             point_from_proportion(&VectorPath::new(), 0.5),
             Err(PathProportionError::EmptyPath)
         );
+        assert_eq!(
+            point_from_proportion(&VectorPath::new(), -0.01),
+            Err(PathProportionError::InvalidProportion(-0.01))
+        );
+        assert_eq!(
+            PathProportionPlan::new(&VectorPath::new()).map(|_| ()),
+            Err(PathProportionError::EmptyPath)
+        );
+        let plan = PathProportionPlan::new(&path).unwrap();
+        assert_eq!(
+            plan.point(-0.01),
+            Err(PathProportionError::InvalidProportion(-0.01))
+        );
+        assert!(matches!(
+            plan.point(f32::NAN),
+            Err(PathProportionError::InvalidProportion(alpha)) if alpha.is_nan()
+        ));
     }
 
     #[test]
