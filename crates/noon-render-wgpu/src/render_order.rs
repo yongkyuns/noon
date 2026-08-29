@@ -1,7 +1,7 @@
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
-use crate::{FramePreparer, PreparedSlot};
-use noon_runtime::FrameState;
+use crate::{FramePreparer, MegaPathBatch, PreparedFrame, PreparedSlot, RenderStats};
+use noon_runtime::{FrameChanges, FrameState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RenderOrderKey {
@@ -57,6 +57,120 @@ impl std::fmt::Display for RenderOrderError {
 }
 
 impl std::error::Error for RenderOrderError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VisibleRenderError {
+    ObjectIndexOutOfRange { index: usize, objects: usize },
+    DuplicateObjectIndex(usize),
+}
+
+impl std::fmt::Display for VisibleRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ObjectIndexOutOfRange { index, objects } => write!(
+                formatter,
+                "visible render object index {index} is outside frame object count {objects}"
+            ),
+            Self::DuplicateObjectIndex(index) => {
+                write!(formatter, "duplicate visible render object index {index}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VisibleRenderError {}
+
+/// Incremental frame preparation with an independent candidate-only submission view.
+///
+/// The inner `FramePreparer` always retains the canonical all-live painter batches and
+/// packed GPU/cache state. Visibility preparation projects only the retained candidate
+/// rows into dedicated candidate-sized draw descriptors, so culling never poisons a
+/// later uncullled preparation and never requires an all-live rebuild to switch modes.
+#[derive(Debug, Default)]
+pub struct VisibilityFramePreparer {
+    preparer: FramePreparer,
+    raw_render_batches: Vec<OrderedRenderBatch>,
+    render_batches: Vec<OrderedRenderBatch>,
+    mega_path_batches: Vec<MegaPathBatch>,
+}
+
+impl VisibilityFramePreparer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Prepare the ordinary all-live submission view while preserving retained caches.
+    pub fn prepare_incremental<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+    ) -> PreparedFrame<'a> {
+        self.raw_render_batches.clear();
+        self.render_batches.clear();
+        self.mega_path_batches.clear();
+        self.preparer.prepare_incremental(frame, changes)
+    }
+
+    /// Prepare one incremental frame while limiting ordered draw submission to the
+    /// supplied retained-visibility candidates.
+    ///
+    /// `visible_object_indices` must already be in back-to-front painter order, as
+    /// returned by the retained viewport query. The ordinary incremental preparation
+    /// still updates packed instance and mesh caches for dirty objects; this method
+    /// projects only candidate-sized draw descriptors while the canonical all-live
+    /// painter batches remain untouched inside the retained preparer.
+    pub fn prepare_incremental_visible<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        visible_object_indices: &[usize],
+    ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
+        let mut seen = HashSet::with_capacity(visible_object_indices.len());
+        for &object_index in visible_object_indices {
+            if object_index >= frame.objects.len() {
+                return Err(VisibleRenderError::ObjectIndexOutOfRange {
+                    index: object_index,
+                    objects: frame.objects.len(),
+                });
+            }
+            if !seen.insert(object_index) {
+                return Err(VisibleRenderError::DuplicateObjectIndex(object_index));
+            }
+        }
+
+        let mut stats = self.preparer.prepare_incremental(frame, changes).stats;
+
+        self.raw_render_batches.clear();
+        for &object_index in visible_object_indices {
+            push_slot_batches(
+                &mut self.raw_render_batches,
+                self.preparer.slots[object_index],
+            );
+        }
+        project_mega_render_batches(
+            &self.preparer,
+            &self.raw_render_batches,
+            &mut self.render_batches,
+            &mut self.mega_path_batches,
+        );
+
+        stats.batch_count = self.render_batches.len();
+        stats.mega_path_count = self
+            .mega_path_batches
+            .iter()
+            .map(|batch| batch.path_count)
+            .sum();
+        stats.mega_path_batch_count = self.mega_path_batches.len();
+
+        Ok(projected_frame(
+            &self.preparer,
+            &self.render_batches,
+            &self.mega_path_batches,
+            frame.time,
+            stats,
+        ))
+    }
+}
 
 impl FramePreparer {
     /// Install explicit semantic z/painter keys for subsequent preparations.
@@ -127,6 +241,109 @@ impl FramePreparer {
         for slot in self.slots.iter().copied() {
             push_slot_batches(&mut self.render_batches, slot);
         }
+    }
+}
+
+fn project_mega_render_batches(
+    preparer: &FramePreparer,
+    ordered: &[OrderedRenderBatch],
+    render_batches: &mut Vec<OrderedRenderBatch>,
+    mega_path_batches: &mut Vec<MegaPathBatch>,
+) {
+    render_batches.clear();
+    mega_path_batches.clear();
+    let mut active_mega = None::<usize>;
+
+    for ordered_batch in ordered.iter().cloned() {
+        let RenderPrimitive::Path {
+            batch: path_batch_index,
+        } = ordered_batch.primitive
+        else {
+            active_mega = None;
+            render_batches.push(ordered_batch);
+            continue;
+        };
+
+        let segment = preparer
+            .mega_path_segments
+            .get(path_batch_index)
+            .and_then(|segment| segment.as_ref())
+            .filter(|_| {
+                !preparer
+                    .mega_path_detached
+                    .get(path_batch_index)
+                    .copied()
+                    .unwrap_or(true)
+            })
+            .cloned();
+        let Some(segment) = segment else {
+            active_mega = None;
+            render_batches.push(ordered_batch);
+            continue;
+        };
+
+        if let Some(mega_index) = active_mega {
+            let mega = &mut mega_path_batches[mega_index];
+            if mega.index_range.end == segment.start {
+                mega.index_range.end = segment.end;
+                mega.path_count += 1;
+                let ordered = render_batches
+                    .last_mut()
+                    .expect("active visible mega batch must have an ordered batch");
+                ordered.instance_range.end += 1;
+                continue;
+            }
+        }
+
+        let mega_index = mega_path_batches.len();
+        mega_path_batches.push(MegaPathBatch {
+            index_range: segment,
+            path_count: 1,
+        });
+        render_batches.push(OrderedRenderBatch {
+            primitive: RenderPrimitive::MegaPath { batch: mega_index },
+            instance_range: 0..1,
+        });
+        active_mega = Some(mega_index);
+    }
+}
+
+fn projected_frame<'a>(
+    preparer: &'a FramePreparer,
+    render_batches: &'a [OrderedRenderBatch],
+    mega_path_batches: &'a [MegaPathBatch],
+    time: f64,
+    stats: RenderStats,
+) -> PreparedFrame<'a> {
+    PreparedFrame {
+        time,
+        circle_ids: &preparer.circle_ids,
+        circles: &preparer.circles,
+        rectangle_ids: &preparer.rectangle_ids,
+        rectangles: &preparer.rectangles,
+        line_ids: &preparer.line_ids,
+        lines: &preparer.lines,
+        path_ids: &preparer.path_ids,
+        paths: &preparer.paths,
+        path_vertices: &preparer.path_vertices,
+        path_indices: &preparer.path_indices,
+        path_batches: &preparer.path_batches,
+        mega_path_indices: &preparer.mega_path_indices,
+        mega_path_vertex_instances: &preparer.mega_path_vertex_instances,
+        mega_path_batches,
+        render_batches,
+        unsupported: &preparer.unsupported,
+        circle_dirty_ranges: &preparer.circle_dirty_ranges,
+        rectangle_dirty_ranges: &preparer.rectangle_dirty_ranges,
+        line_dirty_ranges: &preparer.line_dirty_ranges,
+        path_dirty_ranges: &preparer.path_dirty_ranges,
+        path_vertex_dirty_ranges: &preparer.path_vertex_dirty_ranges,
+        path_index_dirty_ranges: &preparer.path_index_dirty_ranges,
+        mega_path_instance_dirty_ranges: &preparer.mega_path_instance_dirty_ranges,
+        mega_path_index_dirty_ranges: &preparer.mega_path_index_dirty_ranges,
+        mega_path_index_dirty: preparer.mega_path_index_dirty,
+        path_geometry_dirty: preparer.path_geometry_dirty,
+        stats,
     }
 }
 
@@ -286,5 +503,111 @@ mod tests {
                 keys: 0
             })
         ));
+    }
+
+    #[test]
+    fn visible_preparation_filters_draw_batches_without_repacking_storage() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+            object(2, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = VisibilityFramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 2])
+            .unwrap();
+
+        assert_eq!(prepared.circles.len(), 2);
+        assert_eq!(prepared.rectangles.len(), 1);
+        assert_eq!(prepared.stats.instance_count, 3);
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert_eq!(
+            prepared.render_batches,
+            &[OrderedRenderBatch {
+                primitive: RenderPrimitive::Circle,
+                instance_range: 0..2,
+            }]
+        );
+    }
+
+    #[test]
+    fn visible_preparation_preserves_candidate_painter_order() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+            object(2, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = VisibilityFramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[1, 2])
+            .unwrap();
+
+        assert_eq!(prepared.render_batches.len(), 2);
+        assert_eq!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::Rectangle
+        );
+        assert_eq!(
+            prepared.render_batches[1].primitive,
+            RenderPrimitive::Circle
+        );
+        assert_eq!(prepared.render_batches[1].instance_range, 1..2);
+    }
+
+    #[test]
+    fn empty_visibility_keeps_packed_instances_but_submits_no_draws() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+        ]);
+        let mut preparer = VisibilityFramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[])
+            .unwrap();
+
+        assert_eq!(prepared.stats.instance_count, 2);
+        assert_eq!(prepared.stats.batch_count, 0);
+        assert!(prepared.render_batches.is_empty());
+    }
+
+    #[test]
+    fn invalid_visibility_is_rejected_before_preparation() {
+        let frame = frame(vec![object(0, GeometryRef::circle(1.0))]);
+        let mut preparer = VisibilityFramePreparer::new();
+
+        assert!(matches!(
+            preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[1]),
+            Err(VisibleRenderError::ObjectIndexOutOfRange {
+                index: 1,
+                objects: 1
+            })
+        ));
+        assert!(matches!(
+            preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 0]),
+            Err(VisibleRenderError::DuplicateObjectIndex(0))
+        ));
+    }
+
+    #[test]
+    fn visibility_projection_does_not_poison_unculled_submission() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+            object(2, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = VisibilityFramePreparer::new();
+
+        let visible = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0])
+            .unwrap();
+        assert_eq!(visible.render_batches.len(), 1);
+        assert_eq!(visible.stats.batch_count, 1);
+
+        let full = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        assert_eq!(full.render_batches.len(), 3);
+        assert_eq!(full.stats.batch_count, 3);
+        assert_eq!(full.render_batches[0].primitive, RenderPrimitive::Circle);
+        assert_eq!(full.render_batches[1].primitive, RenderPrimitive::Rectangle);
+        assert_eq!(full.render_batches[2].primitive, RenderPrimitive::Circle);
     }
 }
