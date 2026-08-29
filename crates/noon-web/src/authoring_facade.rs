@@ -6,6 +6,11 @@ use noon::{
 };
 use noon_core::{Color, RateFunction, Vec2};
 
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::{
+    polygon_snapshot, polygram_snapshot, regular_polygon_snapshot, regular_polygram_snapshot,
+    star_snapshot, triangle_snapshot,
+};
 use crate::FrontendMobjectHandle;
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
@@ -92,6 +97,53 @@ impl FrontendDetachedMobject {
         Ok(Self::from_snapshot(
             Line::new(vec2("start", start_x, start_y)?, vec2("end", end_x, end_y)?).into_snapshot(),
         ))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn polygon(coordinates: &[f64]) -> Result<Self, String> {
+        polygon_snapshot(coordinates).map(Self::from_snapshot)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn polygram(coordinates: &[f64], group_lengths: &[u32]) -> Result<Self, String> {
+        polygram_snapshot(coordinates, group_lengths).map(Self::from_snapshot)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn regular_polygon(
+        num_vertices: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, String> {
+        regular_polygon_snapshot(num_vertices, radius, start_angle).map(Self::from_snapshot)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn regular_polygram(
+        num_vertices: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, String> {
+        regular_polygram_snapshot(num_vertices, density, radius, start_angle)
+            .map(Self::from_snapshot)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn triangle() -> Self {
+        Self::from_snapshot(triangle_snapshot())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn star(
+        points: u32,
+        outer_radius: f64,
+        inner_radius: Option<f64>,
+        density: u32,
+        start_angle: Option<f64>,
+    ) -> Result<Self, String> {
+        star_snapshot(points, outer_radius, inner_radius, density, start_angle)
+            .map(Self::from_snapshot)
     }
 
     pub fn shift(&mut self, x: f64, y: f64) -> Result<&mut Self, String> {
@@ -493,6 +545,8 @@ impl FrontendAuthoringScene {
 mod wasm {
     use wasm_bindgen::prelude::*;
 
+    use crate::WasmPolygramVertexGroups;
+
     use super::{
         FrontendAnimate, FrontendAuthoringScene, FrontendDetachedMobject, FrontendPlayBatch,
     };
@@ -575,6 +629,11 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = manimVertexGroups)]
+        pub fn manim_vertex_groups(&self) -> Result<WasmPolygramVertexGroups, JsValue> {
+            WasmPolygramVertexGroups::from_snapshot(self.0.handle.snapshot()).map_err(js_error)
+        }
+
         #[wasm_bindgen(getter, js_name = centerX)]
         pub fn center_x(&self) -> f64 {
             self.0.center().0
@@ -627,6 +686,70 @@ mod wasm {
         FrontendDetachedMobject::line(start_x, start_y, end_x, end_y)
             .map(DetachedMobjectCore)
             .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = authoringPolygon)]
+    pub fn authoring_polygon(coordinates: &[f64]) -> Result<DetachedMobjectCore, JsValue> {
+        FrontendDetachedMobject::polygon(coordinates)
+            .map(DetachedMobjectCore)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = authoringPolygram)]
+    pub fn authoring_polygram(
+        coordinates: &[f64],
+        group_lengths: &[u32],
+    ) -> Result<DetachedMobjectCore, JsValue> {
+        FrontendDetachedMobject::polygram(coordinates, group_lengths)
+            .map(DetachedMobjectCore)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = authoringRegularPolygon)]
+    pub fn authoring_regular_polygon(
+        num_vertices: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<DetachedMobjectCore, JsValue> {
+        FrontendDetachedMobject::regular_polygon(num_vertices, radius, start_angle)
+            .map(DetachedMobjectCore)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = authoringRegularPolygram)]
+    pub fn authoring_regular_polygram(
+        num_vertices: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<DetachedMobjectCore, JsValue> {
+        FrontendDetachedMobject::regular_polygram(num_vertices, density, radius, start_angle)
+            .map(DetachedMobjectCore)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = authoringTriangle)]
+    pub fn authoring_triangle() -> DetachedMobjectCore {
+        DetachedMobjectCore(FrontendDetachedMobject::triangle())
+    }
+
+    #[wasm_bindgen(js_name = authoringStar)]
+    pub fn authoring_star(
+        points: u32,
+        outer_radius: f64,
+        inner_radius: Option<f64>,
+        density: u32,
+        start_angle: Option<f64>,
+    ) -> Result<DetachedMobjectCore, JsValue> {
+        FrontendDetachedMobject::star(
+            points,
+            outer_radius,
+            inner_radius,
+            density,
+            start_angle,
+        )
+        .map(DetachedMobjectCore)
+        .map_err(js_error)
     }
 
     #[wasm_bindgen]
@@ -850,6 +973,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
+    use noon::polygram_vertex_groups;
     use noon_core::{Property, RateFunction};
 
     use super::*;
@@ -869,6 +993,35 @@ mod tests {
         let gap = square_snapshot.world_bounds().unwrap().min.x
             - circle_snapshot.world_bounds().unwrap().max.x;
         assert!((gap - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn browser_facade_polygon_family_reuses_shared_geometry_queries() {
+        let mut polygon =
+            FrontendDetachedMobject::polygon(&[-1.0, -1.0, 2.0, -1.0, 0.0, 3.0]).unwrap();
+        polygon.shift(1.0, 0.0).unwrap();
+        let groups = polygram_vertex_groups(polygon.handle.snapshot());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], vec![Vec2::new(0.0, -1.0), Vec2::new(3.0, -1.0), Vec2::new(1.0, 3.0)]);
+
+        let disconnected = FrontendDetachedMobject::regular_polygram(6, 2, 1.0, None).unwrap();
+        let groups = polygram_vertex_groups(disconnected.handle.snapshot());
+        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 3]);
+
+        assert_eq!(
+            polygram_vertex_groups(FrontendDetachedMobject::triangle().handle.snapshot())[0].len(),
+            3
+        );
+        assert_eq!(
+            polygram_vertex_groups(
+                FrontendDetachedMobject::star(5, 1.0, None, 2, Some(std::f64::consts::FRAC_PI_2))
+                    .unwrap()
+                    .handle
+                    .snapshot()
+            )[0]
+            .len(),
+            10
+        );
     }
 
     #[test]
