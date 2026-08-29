@@ -111,6 +111,35 @@ fn text_replacement_churn_keeps_one_live_resource_and_stable_accounting() {
 }
 
 #[test]
+fn text_remove_reinsert_does_not_alias_stale_identity() {
+    let mut arena = TextResourceArena::new();
+    let stale = arena
+        .insert(empty_text("old"))
+        .expect("initial text resource must insert");
+
+    arena
+        .remove(stale.id)
+        .expect("initial text resource must be removable");
+
+    let replacement = arena
+        .insert(empty_text("new"))
+        .expect("replacement text resource must insert");
+
+    assert_ne!(
+        replacement.id, stale.id,
+        "a removed bare TextResourceId must not alias a new occupant"
+    );
+    assert!(
+        arena.get(stale).is_none(),
+        "a stale handle must remain invalid after a new resource is inserted"
+    );
+    assert!(
+        arena.get(replacement).is_some(),
+        "the replacement handle must resolve independently"
+    );
+}
+
+#[test]
 fn repeated_font_interning_reuses_one_immutable_buffer() {
     let mut arena = FontResourceArena::new();
     let bytes: Arc<[u8]> = Arc::from([1_u8, 2, 3, 4]);
