@@ -320,18 +320,17 @@ mod tests {
         let baseline = arena.stats();
 
         for attempt in 0..ATTEMPTS {
-            let conflicting = Arc::<[u8]>::from([
-                9,
-                (attempt & 0xff) as u8,
-                ((attempt >> 8) & 0xff) as u8,
-                7,
-            ]);
+            let conflicting =
+                Arc::<[u8]>::from([9, (attempt & 0xff) as u8, ((attempt >> 8) & 0xff) as u8, 7]);
             assert!(matches!(
                 arena.intern_face(&stable_face, conflicting),
                 Err(FontResourceError::ConflictingResource(_))
             ));
             assert_eq!(arena.stats(), baseline);
-            assert_eq!(arena.get(stable_handle).unwrap().data.as_ref(), &[1, 2, 3, 4]);
+            assert_eq!(
+                arena.get(stable_handle).unwrap().data.as_ref(),
+                &[1, 2, 3, 4]
+            );
         }
     }
 }
