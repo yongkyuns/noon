@@ -161,6 +161,7 @@ async function assertUnstarted(client) {
   assert.equal(client.rendererBackend, "");
   assert.equal(client.transportMode, null);
   await assert.rejects(client.state(), /has not been started/);
+  await assert.rejects(client.metrics(), /has not been started/);
   assert.equal(activeObservers.size, 0, "terminated client must not re-observe a stale canvas");
 }
 
