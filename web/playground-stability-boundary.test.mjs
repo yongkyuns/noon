@@ -40,9 +40,30 @@ assert.match(
   /constructor\(canvas, \{ onError = null, onRecoverableError = null \} = \{\}\)/,
   "authoring execution must preserve the recoverable error callback boundary",
 );
-assert.ok(
-  (authoringExecutionClient.match(/onRecoverableError: this\.#onRecoverableError/g) ?? []).length >= 2,
-  "legacy authoring execution must forward recoverable errors on initial start and rebuild",
+assert.equal(
+  (authoringExecutionClient.match(/onRecoverableError: this\.#onRecoverableError/g) ?? []).length,
+  1,
+  "authoring execution must configure recoverable errors once on its persistent execution owner",
+);
+assert.doesNotMatch(
+  authoringExecutionClient,
+  /RetainedExecutionWorkerClient/,
+  "authoring mode transitions must not construct a second retained execution client",
+);
+assert.match(
+  authoringExecutionClient,
+  /player\.switchToRetained\(/,
+  "legacy to retained authoring must switch the persistent execution owner in place",
+);
+assert.match(
+  authoringExecutionClient,
+  /player\.rebuildRetained\(/,
+  "retained authoring edits must rebuild on the persistent execution owner",
+);
+assert.match(
+  authoringExecutionClient,
+  /player\.switchToLegacy\(/,
+  "retained to legacy authoring must switch the persistent execution owner in place",
 );
 
 const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady()");
