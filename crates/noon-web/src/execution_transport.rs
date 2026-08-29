@@ -968,7 +968,9 @@ mod wasm {
 
         #[wasm_bindgen(js_name = viewportVisibilityJson)]
         pub fn viewport_visibility_json(&self, aspect: f32) -> Result<String, JsValue> {
-            self.inner.viewport_visibility_json(aspect).map_err(js_error)
+            self.inner
+                .viewport_visibility_json(aspect)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setLoopDurationSeconds)]
