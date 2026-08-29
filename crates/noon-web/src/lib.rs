@@ -14,6 +14,7 @@ mod host_player;
 mod legacy;
 mod lifecycle;
 mod manim_geometry_bridge;
+#[cfg(any(target_arch = "wasm32", test))]
 mod manim_polygram_handle;
 mod reactive_authoring_facade;
 mod reactive_player;
