@@ -268,7 +268,10 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 pub enum CompileError {
     TooManyObjects(usize),
     UnknownObject(ObjectId),
-    DiscontinuousPresence { previous: TrackId, next: TrackId },
+    DiscontinuousPresence {
+        previous: TrackId,
+        next: TrackId,
+    },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
     UnsafeFilledPathTransform(TrackId),
