@@ -32,6 +32,7 @@ node --check scripts/execution-worker-smoke.mjs
 node --check scripts/execution-worker-host-smoke.mjs
 node --check scripts/retained-execution-worker-smoke.mjs
 node --check scripts/authoring-execution-router-smoke.mjs
+node --check scripts/authoring-execution-lifecycle-smoke.mjs
 node --check web/scene-pipeline-perf.mjs
 node --check web/gpu-profile.js
 node --check web/morph-profile.js
