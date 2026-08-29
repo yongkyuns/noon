@@ -1,3 +1,9 @@
+//! Browser-facing serialization for retained spatial-index queries.
+//!
+//! Inputs are Noon world coordinates. Results preserve retained painter order and
+//! opaque execution-slot generations so browser consumers never need a scene scan or
+//! semantic-ID/frame-row remapping.
+
 use noon_core::{Rect, Vec2};
 use noon_runtime::SpatialQueryResult;
 use serde_json::json;
