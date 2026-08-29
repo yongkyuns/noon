@@ -130,6 +130,31 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+
+  const deferredContract = await page.evaluate(() => {
+    const status = document.querySelector("#status");
+    return {
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      rendererBackend: status?.dataset.rendererBackend ?? "",
+      hasPlaybackControls: document.querySelector(".playback-controls") !== null,
+      cards: document.querySelectorAll(".example-card").length,
+      selected: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
+    };
+  });
+  assert.equal(deferredContract.runtimeStartup, "deferred", "layout smoke must begin before runtime startup");
+  assert.equal(deferredContract.rendererBackend, "", "deferred layout must not initialize a renderer");
+  assert.equal(deferredContract.hasPlaybackControls, false, "deferred layout must not allocate playback controls");
+  assert.ok(deferredContract.cards > 0, "deferred gallery must expose ready examples");
+  assert.ok(deferredContract.cards <= 18, `deferred gallery materialized ${deferredContract.cards} cards`);
+  assert.equal(deferredContract.selected, "parity-square-and-circle");
+
+  const deferredDesktop = await layout(page);
+  assertAspect(deferredDesktop.canvas, 16 / 9, "deferred desktop");
+  assertCentered(deferredDesktop.canvas, deferredDesktop.wrap, "deferred desktop");
+  assertNoOverflow(deferredDesktop, "deferred desktop");
+
+  await page.locator("#replace-scene").click();
   await page.waitForFunction(
     () =>
       document.querySelector("#status")?.dataset.rendererBackend === "WebGL2" &&
@@ -150,14 +175,11 @@ try {
     href: location.href,
   }));
   assert.ok(galleryContract.cards > 0, "gallery must render ready Manim parity examples");
+  assert.ok(galleryContract.cards <= 18, `gallery must cap live cards at 18, got ${galleryContract.cards}`);
   assert.equal(
     galleryContract.exampleIds.includes("parity-focus-on-point"),
     false,
     "Noon-specific FocusOn probe must stay out of the public exact-source gallery",
-  );
-  assert.ok(
-    galleryContract.exampleIds.includes("parity-draw-border-then-fill-styled-square"),
-    "gallery must retain literal upstream parity-qualified examples",
   );
   assert.equal(galleryContract.canvases, 1, "thumbnail gallery must keep exactly one live canvas");
   assert.equal(galleryContract.selected, "parity-square-and-circle");
@@ -260,6 +282,7 @@ try {
   assert.match(page.url(), /example=parity-different-rotations/);
   assert.match(await sceneSource(page), /Rotate\(right_square/);
 
+  await page.locator("#python-scene-source").focus();
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true']");
   await page.locator("#scene-editor-panel .cm-content").fill("# local draft\n");
   assert.equal(await page.locator(".reset-example").isDisabled(), false);
@@ -284,7 +307,7 @@ try {
 
   assert.deepEqual(browserErrors, [], `playground emitted browser errors:\n${browserErrors.join("\n")}`);
   console.log(
-    `✓ Manim gallery + aligned WebGL2 viewport @ DPR ${deviceScaleFactor}: ` +
+    `✓ deferred Manim gallery + aligned WebGL2 viewport @ DPR ${deviceScaleFactor}: ` +
       `${galleryContract.cards} cards, desktop ${desktop.canvas.width.toFixed(0)}×${desktop.canvas.height.toFixed(0)}, ` +
       `mobile ${mobile.canvas.width.toFixed(0)}×${mobile.canvas.height.toFixed(0)}`,
   );

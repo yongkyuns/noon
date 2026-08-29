@@ -74,6 +74,7 @@ async function snapshot(page) {
     const patch = document.querySelector("#patch-status");
     return {
       runtimeState: status?.dataset.state ?? "",
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
       rendererBackend: status?.dataset.rendererBackend ?? "",
       executionMode: status?.dataset.executionMode ?? "",
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
@@ -89,9 +90,21 @@ async function snapshot(page) {
 }
 
 async function waitForInitialScene(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await snapshot(page);
+  assert.equal(deferred.runtimeStartup, "deferred", "authoring runtime must stay deferred on page load");
+  assert.equal(deferred.rendererBackend, "", "deferred authoring page must not initialize the renderer");
+  assert.equal(deferred.presentedFrames, 0, "deferred authoring page must not render frames");
+
+  const sourceTextarea = page.locator("#python-scene-source");
+  await sourceTextarea.focus();
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content", {
     timeout: 30_000,
   });
+
+  const runButton = page.locator("#replace-scene");
+  assert.equal(await runButton.isEnabled(), true, "Run must remain available after lazy editor startup");
+  await runButton.click();
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");

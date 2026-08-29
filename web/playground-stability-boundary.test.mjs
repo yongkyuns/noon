@@ -45,10 +45,17 @@ assert.ok(
   "legacy authoring execution must forward recoverable errors on initial start and rebuild",
 );
 
-const playgroundConstruction = main.match(
-  /player = new AuthoringExecutionClient\(canvas, \{([\s\S]*?)\n\s*\}\);/,
+const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady()");
+const runtimeReadyEnd = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
+assert.ok(
+  runtimeReadyStart >= 0 && runtimeReadyEnd > runtimeReadyStart,
+  "playground must keep an explicit on-demand runtime boundary",
+);
+const runtimeReadyBody = main.slice(runtimeReadyStart, runtimeReadyEnd);
+const playgroundConstruction = runtimeReadyBody.match(
+  /const nextPlayer = new AuthoringExecutionClient\(canvas, \{([\s\S]*?)\n\s*\}\);/,
 )?.[1];
-assert.ok(playgroundConstruction, "playground must configure its authoring execution client");
+assert.ok(playgroundConstruction, "deferred runtime must configure its authoring execution client");
 assert.match(
   playgroundConstruction,
   /onRecoverableError\(error\) \{\s*showRecoverableSceneError\(error\);\s*\}/,
@@ -73,4 +80,4 @@ assert.match(
   "superseded playground deployments must be cancelled",
 );
 
-console.log("✓ playground keeps recoverable scene errors visible and outside fatal recovery");
+console.log("✓ deferred playground runtime keeps recoverable scene errors outside fatal recovery");

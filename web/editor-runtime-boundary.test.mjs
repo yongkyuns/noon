@@ -12,10 +12,20 @@ assert.doesNotMatch(
   /python-editor\.js/,
   "runtime authoring client must not depend on presentation/editor enhancement",
 );
+assert.doesNotMatch(
+  playgroundEntry,
+  /^void import\(["']\.\/python-editor\.js["']\)/m,
+  "playground startup must not eagerly load editor enhancement",
+);
 assert.match(
   playgroundEntry,
-  /void import\(["']\.\/python-editor\.js["']\)\.catch\(/,
-  "playground entrypoint must own editor enhancement through a fail-soft dynamic import",
+  /function loadEnhancedPythonEditor\(\)[\s\S]*?import\(["']\.\/python-editor\.js["']\)\.catch\(/,
+  "playground entrypoint must own editor enhancement through a fail-soft lazy dynamic import",
+);
+assert.match(
+  playgroundEntry,
+  /sceneSourceEditor\.addEventListener\([\s\S]*?["']focus["'][\s\S]*?loadEnhancedPythonEditor\(\)[\s\S]*?\{ once: true \}/,
+  "editor enhancement must begin only on the first source-editor focus",
 );
 
-console.log("✓ editor enhancement is outside the runtime authoring dependency graph");
+console.log("✓ lazy editor enhancement stays outside the runtime authoring dependency graph");

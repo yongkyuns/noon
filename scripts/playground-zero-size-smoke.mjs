@@ -56,6 +56,7 @@ async function snapshot(page) {
       rectHeight: rect.height,
       rendererBackend: status?.dataset.rendererBackend ?? "",
       runtimeState: status?.dataset.state ?? "",
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       executionMode: status?.dataset.executionMode ?? "",
       metricTime: document.querySelector("#metric-time")?.value ?? "",
@@ -63,6 +64,28 @@ async function snapshot(page) {
       patchText: patchStatus?.value ?? patchStatus?.textContent ?? "",
     };
   });
+}
+
+async function startDeferredRuntime(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await snapshot(page);
+  assert.equal(deferred.runtimeStartup, "deferred", "resize page load must leave runtime deferred");
+  assert.equal(deferred.rendererBackend, "", "deferred resize page must not initialize renderer");
+  assert.equal(deferred.presentedFrames, 0, "deferred resize page must not present frames");
+  await page.locator("#replace-scene").click();
+  await page.waitForFunction(
+    () => {
+      const status = document.querySelector("#status");
+      const patch = document.querySelector("#patch-status");
+      return (
+        status?.dataset.rendererBackend === "WebGL2" &&
+        patch?.dataset.state === "applied" &&
+        Number(status?.dataset.presentedFrames ?? "0") > 0
+      );
+    },
+    null,
+    { timeout: 60_000 },
+  );
 }
 
 async function waitForFrameAfter(page, previousFrames, label) {
@@ -174,19 +197,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
-  await page.waitForFunction(
-    () => {
-      const status = document.querySelector("#status");
-      const patch = document.querySelector("#patch-status");
-      return (
-        status?.dataset.rendererBackend === "WebGL2" &&
-        patch?.dataset.state === "applied" &&
-        Number(status?.dataset.presentedFrames ?? "0") > 0
-      );
-    },
-    null,
-    { timeout: 60_000 },
-  );
+  await startDeferredRuntime(page);
 
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.ok(diagnostics.snapshots.baseline.cssWidth >= 320, "baseline canvas must be visible");

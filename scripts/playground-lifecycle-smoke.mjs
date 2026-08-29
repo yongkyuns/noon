@@ -51,6 +51,7 @@ async function snapshot(page) {
       visibilityState: document.visibilityState,
       rendererBackend: status?.dataset.rendererBackend ?? "",
       runtimeState: status?.dataset.state ?? "",
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       executionMode: status?.dataset.executionMode ?? "",
       metricTime: document.querySelector("#metric-time")?.value ?? "",
@@ -58,6 +59,37 @@ async function snapshot(page) {
       patchText: patchStatus?.value ?? patchStatus?.textContent ?? "",
     };
   });
+}
+
+async function startDeferredRuntime(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await snapshot(page);
+  assert.equal(deferred.runtimeStartup, "deferred", "page load must leave lifecycle runtime deferred");
+  assert.equal(deferred.rendererBackend, "", "deferred page load must not initialize a renderer");
+  assert.equal(deferred.presentedFrames, 0, "deferred page load must not render frames");
+  const visibleExampleCount = await page.evaluate(
+    () => window.__noonExampleGallery?.visibleExampleCount ?? Infinity,
+  );
+  assert.ok(
+    Number.isSafeInteger(visibleExampleCount) &&
+      visibleExampleCount > 0 &&
+      visibleExampleCount <= 18,
+    `initial gallery page materialized ${visibleExampleCount} examples`,
+  );
+  await page.locator("#replace-scene").click();
+  await page.waitForFunction(
+    () => {
+      const status = document.querySelector("#status");
+      const patch = document.querySelector("#patch-status");
+      return (
+        status?.dataset.rendererBackend === "WebGL2" &&
+        patch?.dataset.state === "applied" &&
+        Number(status?.dataset.presentedFrames ?? "0") > 0
+      );
+    },
+    null,
+    { timeout: 60_000 },
+  );
 }
 
 async function waitForFrameAfter(page, previousFrames, label) {
@@ -122,19 +154,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
-  await page.waitForFunction(
-    () => {
-      const status = document.querySelector("#status");
-      const patch = document.querySelector("#patch-status");
-      return (
-        status?.dataset.rendererBackend === "WebGL2" &&
-        patch?.dataset.state === "applied" &&
-        Number(status?.dataset.presentedFrames ?? "0") > 0
-      );
-    },
-    null,
-    { timeout: 60_000 },
-  );
+  await startDeferredRuntime(page);
 
   diagnostics.snapshots.baseline = await snapshot(page);
   await page.locator("#scene").screenshot({ path: path.join(artifactDir, "baseline.png") });
