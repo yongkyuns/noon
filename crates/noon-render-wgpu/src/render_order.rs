@@ -1,7 +1,7 @@
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
-use crate::{FramePreparer, PreparedSlot};
-use noon_runtime::FrameState;
+use crate::{FramePreparer, PreparedFrame, PreparedSlot};
+use noon_runtime::{FrameChanges, FrameState};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RenderOrderKey {
@@ -58,6 +58,28 @@ impl std::fmt::Display for RenderOrderError {
 
 impl std::error::Error for RenderOrderError {}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VisibleRenderError {
+    ObjectIndexOutOfRange { index: usize, objects: usize },
+    DuplicateObjectIndex(usize),
+}
+
+impl std::fmt::Display for VisibleRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ObjectIndexOutOfRange { index, objects } => write!(
+                formatter,
+                "visible render object index {index} is outside frame object count {objects}"
+            ),
+            Self::DuplicateObjectIndex(index) => {
+                write!(formatter, "duplicate visible render object index {index}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VisibleRenderError {}
+
 impl FramePreparer {
     /// Install explicit semantic z/painter keys for subsequent preparations.
     ///
@@ -89,6 +111,53 @@ impl FramePreparer {
             self.render_order_keys.clear();
             self.initialized = false;
         }
+    }
+
+    /// Prepare one incremental frame while limiting ordered draw submission to the
+    /// supplied retained-visibility candidates.
+    ///
+    /// `visible_object_indices` must already be in back-to-front painter order, as
+    /// returned by the retained viewport query. The ordinary incremental preparation
+    /// still updates packed instance and mesh caches for dirty objects; this method
+    /// only rebuilds the lightweight ordered draw descriptors from visible slots, so
+    /// offscreen objects remain resident and can re-enter without a cache rebuild.
+    pub fn prepare_incremental_visible<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        visible_object_indices: &[usize],
+    ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
+        let mut seen = HashSet::with_capacity(visible_object_indices.len());
+        for &object_index in visible_object_indices {
+            if object_index >= frame.objects.len() {
+                return Err(VisibleRenderError::ObjectIndexOutOfRange {
+                    index: object_index,
+                    objects: frame.objects.len(),
+                });
+            }
+            if !seen.insert(object_index) {
+                return Err(VisibleRenderError::DuplicateObjectIndex(object_index));
+            }
+        }
+
+        let stats = self.prepare_incremental(frame, changes).stats;
+        self.render_batches.clear();
+        for &object_index in visible_object_indices {
+            push_slot_batches(&mut self.render_batches, self.slots[object_index]);
+        }
+        self.rebuild_mega_render_batches();
+
+        Ok(self.prepared_frame(
+            frame.time,
+            stats.capacity_growths,
+            stats.instances_repacked,
+            stats.geometry_cache_misses,
+            stats.path_vertices_repacked,
+            stats.path_indices_repacked,
+            stats.structural_slots_added,
+            stats.structural_slots_retired,
+            stats.full_rebuilds,
+        ))
     }
 
     pub(crate) fn append_ordered_render_slot(&mut self, slot: PreparedSlot) {
@@ -285,6 +354,86 @@ mod tests {
                 objects: 1,
                 keys: 0
             })
+        ));
+    }
+
+    #[test]
+    fn visible_preparation_filters_draw_batches_without_repacking_storage() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+            object(2, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 2])
+            .unwrap();
+
+        assert_eq!(prepared.circles.len(), 2);
+        assert_eq!(prepared.rectangles.len(), 1);
+        assert_eq!(prepared.stats.instance_count, 3);
+        assert_eq!(prepared.stats.batch_count, 1);
+        assert_eq!(
+            prepared.render_batches,
+            &[OrderedRenderBatch {
+                primitive: RenderPrimitive::Circle,
+                instance_range: 0..2,
+            }]
+        );
+    }
+
+    #[test]
+    fn visible_preparation_preserves_candidate_painter_order() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+            object(2, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[1, 2])
+            .unwrap();
+
+        assert_eq!(prepared.render_batches.len(), 2);
+        assert_eq!(
+            prepared.render_batches[0].primitive,
+            RenderPrimitive::Rectangle
+        );
+        assert_eq!(prepared.render_batches[1].primitive, RenderPrimitive::Circle);
+        assert_eq!(prepared.render_batches[1].instance_range, 1..2);
+    }
+
+    #[test]
+    fn empty_visibility_keeps_packed_instances_but_submits_no_draws() {
+        let frame = frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(2.0, 2.0)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[])
+            .unwrap();
+
+        assert_eq!(prepared.stats.instance_count, 2);
+        assert_eq!(prepared.stats.batch_count, 0);
+        assert!(prepared.render_batches.is_empty());
+    }
+
+    #[test]
+    fn invalid_visibility_is_rejected_before_preparation() {
+        let frame = frame(vec![object(0, GeometryRef::circle(1.0))]);
+        let mut preparer = FramePreparer::new();
+
+        assert!(matches!(
+            preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[1]),
+            Err(VisibleRenderError::ObjectIndexOutOfRange {
+                index: 1,
+                objects: 1
+            })
+        ));
+        assert!(matches!(
+            preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 0]),
+            Err(VisibleRenderError::DuplicateObjectIndex(0))
         ));
     }
 }
