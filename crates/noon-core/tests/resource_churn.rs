@@ -129,6 +129,11 @@ fn text_remove_reinsert_does_not_alias_stale_identity() {
         replacement.id, stale.id,
         "a removed bare TextResourceId must not alias a new occupant"
     );
+    assert_eq!(
+        arena.slot_capacity(),
+        1,
+        "remove/reinsert must reuse the released physical slot"
+    );
     assert!(
         arena.get(stale).is_none(),
         "a stale handle must remain invalid after a new resource is inserted"
@@ -158,6 +163,11 @@ fn text_remove_reinsert_churn_keeps_every_stale_identity_rejected() {
             .insert(empty_text("x"))
             .expect("replacement text resource must insert");
         assert_eq!(arena.stats(), baseline, "live accounting must stay bounded");
+        assert_eq!(
+            arena.slot_capacity(),
+            1,
+            "physical slot storage must stay at the live high-water mark"
+        );
     }
 
     for handle in stale {
