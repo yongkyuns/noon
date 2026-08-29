@@ -63,6 +63,23 @@ def _set_y(self: _base.Mobject, y: float) -> _base.Mobject:
     )
 
 
+def _rotate_about_origin(
+    self: _base.Mobject,
+    angle: float,
+    axis: object = _compat.OUT,
+    **kwargs: Any,
+) -> _base.Mobject:
+    """Rotate through the shared Rust transform path around Manim's origin."""
+
+    return _shared._rotate(
+        self,
+        angle,
+        axis,
+        about_point=_base.ORIGIN,
+        **kwargs,
+    )
+
+
 def _dot_init(
     self: _geometry.Dot,
     point: object = _base.ORIGIN,
@@ -120,6 +137,7 @@ def install() -> None:
     _INSTALLED = True
     _base.Mobject.set_x = _set_x
     _base.Mobject.set_y = _set_y
+    _base.Mobject.rotate_about_origin = _rotate_about_origin
     if _create_dot_handle is not None:
         _geometry.Dot.__init__ = _dot_init
     if _create_triangle_handle is not None:
