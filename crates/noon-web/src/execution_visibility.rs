@@ -4,7 +4,7 @@ use noon_core::{Rect, Vec2};
 use noon_runtime::SpatialQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::{ScenePlayer, TransportSlotId};
+use crate::{ExecutionFrameMirror, ScenePlayer, TransportSlotId};
 
 pub const EXECUTION_VISIBILITY_CHANNEL: &str = "noon.execution.visibility";
 pub const EXECUTION_VISIBILITY_VERSION: u32 = 1;
@@ -34,7 +34,11 @@ pub enum ExecutionVisibilityError {
     InvalidChannel(String),
     UnsupportedVersion(u32),
     InvalidTime,
+    MissingFrame,
     StaleLayout { expected: u64, actual: u64 },
+    FrameTimeMismatch { expected_bits: u64, actual_bits: u64 },
+    LiveSetMismatch { expected: usize, actual: usize },
+    UnknownSlot(TransportSlotId),
     DuplicateSlot(TransportSlotId),
     InvalidResultCount { slots: usize, reported: usize },
     ResultsExceedLiveSet { results: usize, total_live: usize },
@@ -52,9 +56,30 @@ impl std::fmt::Display for ExecutionVisibilityError {
                 write!(formatter, "unsupported execution visibility version {version}")
             }
             Self::InvalidTime => formatter.write_str("invalid execution visibility time"),
+            Self::MissingFrame => {
+                formatter.write_str("execution visibility requires a mirrored frame")
+            }
             Self::StaleLayout { expected, actual } => write!(
                 formatter,
                 "stale execution visibility layout generation: expected {expected}, got {actual}",
+            ),
+            Self::FrameTimeMismatch {
+                expected_bits,
+                actual_bits,
+            } => write!(
+                formatter,
+                "execution visibility frame time mismatch: expected {}, got {}",
+                f64::from_bits(*expected_bits),
+                f64::from_bits(*actual_bits),
+            ),
+            Self::LiveSetMismatch { expected, actual } => write!(
+                formatter,
+                "execution visibility live-set mismatch: expected {expected}, got {actual}",
+            ),
+            Self::UnknownSlot(slot) => write!(
+                formatter,
+                "execution visibility references unknown slot {}:{}",
+                slot.slot, slot.generation,
             ),
             Self::DuplicateSlot(slot) => write!(
                 formatter,
@@ -141,6 +166,37 @@ impl ExecutionVisibilityEnvelope {
         }
     }
 
+    pub fn resolve_for_mirror(
+        &self,
+        mirror: &ExecutionFrameMirror,
+    ) -> Result<Vec<usize>, ExecutionVisibilityError> {
+        self.validate()?;
+        self.validate_layout_generation(mirror.layout_generation())?;
+        let frame = mirror.frame().ok_or(ExecutionVisibilityError::MissingFrame)?;
+        if self.time.to_bits() != frame.time.to_bits() {
+            return Err(ExecutionVisibilityError::FrameTimeMismatch {
+                expected_bits: frame.time.to_bits(),
+                actual_bits: self.time.to_bits(),
+            });
+        }
+        if self.total_live != mirror.live_object_count() {
+            return Err(ExecutionVisibilityError::LiveSetMismatch {
+                expected: mirror.live_object_count(),
+                actual: self.total_live,
+            });
+        }
+
+        self.slots
+            .iter()
+            .copied()
+            .map(|slot| {
+                mirror
+                    .frame_index_for_slot(slot)
+                    .ok_or(ExecutionVisibilityError::UnknownSlot(slot))
+            })
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<(), ExecutionVisibilityError> {
         if self.channel != EXECUTION_VISIBILITY_CHANNEL {
             return Err(ExecutionVisibilityError::InvalidChannel(
@@ -218,13 +274,25 @@ mod tests {
     use noon_ir::encode_scene;
 
     use super::*;
+    use crate::EngineScenePlayer;
 
-    fn player_with_overlapping_objects() -> ScenePlayer {
+    fn overlapping_scene_json() -> String {
         let mut scene = SceneDefinition::new();
         scene.add(GeometryRef::circle(1.0));
         scene.add(GeometryRef::rectangle(1.0, 1.0));
-        let json = encode_scene(&scene).unwrap();
-        ScenePlayer::from_scene_json(&json).unwrap()
+        encode_scene(&scene).unwrap()
+    }
+
+    fn player_with_overlapping_objects() -> ScenePlayer {
+        ScenePlayer::from_scene_json(&overlapping_scene_json()).unwrap()
+    }
+
+    fn mirror_with_overlapping_objects() -> ExecutionFrameMirror {
+        let mut engine = EngineScenePlayer::new(&overlapping_scene_json(), 4.0, 17).unwrap();
+        let mut mirror = ExecutionFrameMirror::default();
+        let initial = engine.initial_delta_json().unwrap();
+        mirror.apply_json(&initial).unwrap();
+        mirror
     }
 
     #[test]
@@ -274,6 +342,50 @@ mod tests {
                 expected: 1,
                 actual: 0,
             })
+        ));
+    }
+
+    #[test]
+    fn visibility_resolves_to_ordered_mirror_rows_only_for_exact_frame() {
+        let player = player_with_overlapping_objects();
+        let mirror = mirror_with_overlapping_objects();
+        let envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+
+        assert_eq!(envelope.resolve_for_mirror(&mirror).unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn visibility_rejects_stale_frame_and_slot_identity() {
+        let player = player_with_overlapping_objects();
+        let mirror = mirror_with_overlapping_objects();
+        let envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+
+        let mut stale_layout = envelope.clone();
+        stale_layout.layout_generation += 1;
+        assert!(matches!(
+            stale_layout.resolve_for_mirror(&mirror),
+            Err(ExecutionVisibilityError::StaleLayout { .. })
+        ));
+
+        let mut stale_time = envelope.clone();
+        stale_time.time = 0.5;
+        assert!(matches!(
+            stale_time.resolve_for_mirror(&mirror),
+            Err(ExecutionVisibilityError::FrameTimeMismatch { .. })
+        ));
+
+        let mut stale_slot = envelope.clone();
+        stale_slot.slots[0].generation += 1;
+        assert!(matches!(
+            stale_slot.resolve_for_mirror(&mirror),
+            Err(ExecutionVisibilityError::UnknownSlot(_))
+        ));
+
+        let mut stale_live_set = envelope;
+        stale_live_set.total_live += 1;
+        assert!(matches!(
+            stale_live_set.resolve_for_mirror(&mirror),
+            Err(ExecutionVisibilityError::LiveSetMismatch { .. })
         ));
     }
 
