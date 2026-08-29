@@ -229,9 +229,8 @@ impl GeometryResourceArena {
         // fully exhausted physical slot is therefore retired instead of recycled.
         if let Some(next_generation) = entry.generation.checked_add(1) {
             entry.generation = next_generation;
-            self.free_slots.push(
-                u32::try_from(index).expect("Noon geometry resource slot space exhausted"),
-            );
+            self.free_slots
+                .push(u32::try_from(index).expect("Noon geometry resource slot space exhausted"));
         }
 
         Ok(resource)
@@ -382,7 +381,10 @@ mod tests {
         assert_eq!(original_capacity, 1);
         assert_eq!(arena.slot_capacity(), original_capacity);
         assert_ne!(first.id, second.id);
-        assert_eq!(geometry_resource_slot(first.id), geometry_resource_slot(second.id));
+        assert_eq!(
+            geometry_resource_slot(first.id),
+            geometry_resource_slot(second.id)
+        );
         assert!(arena.get(first).is_none());
         assert_eq!(arena.current_handle(first.id), None);
         assert_eq!(
