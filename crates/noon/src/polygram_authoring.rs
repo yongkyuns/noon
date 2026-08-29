@@ -122,14 +122,11 @@ impl Polygram {
     }
 
     pub fn get_vertices(&self) -> Vec<Vec2> {
-        snapshot_vertex_groups(&self.0)
-            .into_iter()
-            .flatten()
-            .collect()
+        polygram_vertices(&self.0)
     }
 
     pub fn get_vertex_groups(&self) -> Vec<Vec<Vec2>> {
-        snapshot_vertex_groups(&self.0)
+        polygram_vertex_groups(&self.0)
     }
 }
 
@@ -139,7 +136,11 @@ impl IntoSnapshot for Polygram {
     }
 }
 
-fn snapshot_vertex_groups(snapshot: &ObjectSnapshot) -> Vec<Vec<Vec2>> {
+/// Return transformed world-space vertex groups for any retained polygon/polygram snapshot.
+///
+/// This is the shared frontend query boundary: adapters should call this instead of
+/// reconstructing retained path commands or transform math in their host language.
+pub fn polygram_vertex_groups(snapshot: &ObjectSnapshot) -> Vec<Vec<Vec2>> {
     let GeometryRef::VectorPath(path) = &snapshot.geometry else {
         return Vec::new();
     };
@@ -172,19 +173,24 @@ fn snapshot_vertex_groups(snapshot: &ObjectSnapshot) -> Vec<Vec<Vec2>> {
     groups
 }
 
+/// Return transformed world-space vertices flattened in retained group order.
+pub fn polygram_vertices(snapshot: &ObjectSnapshot) -> Vec<Vec2> {
+    polygram_vertex_groups(snapshot)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
 macro_rules! impl_polygram_queries {
     ($($shape:ty),+ $(,)?) => {
         $(
             impl $shape {
                 pub fn get_vertices(&self) -> Vec<Vec2> {
-                    snapshot_vertex_groups(self.snapshot())
-                        .into_iter()
-                        .flatten()
-                        .collect()
+                    polygram_vertices(self.snapshot())
                 }
 
                 pub fn get_vertex_groups(&self) -> Vec<Vec<Vec2>> {
-                    snapshot_vertex_groups(self.snapshot())
+                    polygram_vertex_groups(self.snapshot())
                 }
             }
         )+
@@ -277,6 +283,21 @@ mod tests {
             ]
         );
         assert_eq!(polygram.get_vertex_groups().len(), 1);
+    }
+
+    #[test]
+    fn shared_query_functions_match_shape_methods() {
+        let polygon = Polygon::new([
+            Vec2::new(-1.0, -1.0),
+            Vec2::new(2.0, -1.0),
+            Vec2::new(0.0, 3.0),
+        ])
+        .shift(Vec2::new(4.0, 2.0));
+        assert_eq!(polygram_vertices(polygon.snapshot()), polygon.get_vertices());
+        assert_eq!(
+            polygram_vertex_groups(polygon.snapshot()),
+            polygon.get_vertex_groups()
+        );
     }
 
     #[test]
