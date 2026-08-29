@@ -344,14 +344,22 @@ mod tests {
     }
 
     #[test]
-    fn regular_polygon_defaults_and_explicit_rotation_stay_shared() {
+    fn regular_polygon_default_even_orientation_matches_zero_angle() {
         let default = regular_polygon_snapshot(4, 1.0, None).unwrap();
-        let rotated = regular_polygon_snapshot(4, 1.0, Some(0.0)).unwrap();
+        let zero_angle = regular_polygon_snapshot(4, 1.0, Some(0.0)).unwrap();
+        let quarter_turn =
+            regular_polygon_snapshot(4, 1.0, Some(f64::from(FRAC_PI_2))).unwrap();
+
         let default_vertices = encode_vertex_groups(&default).unwrap().coordinates;
-        let rotated_vertices = encode_vertex_groups(&rotated).unwrap().coordinates;
-        assert_ne!(default_vertices, rotated_vertices);
-        assert!((default_vertices[1] - 1.0).abs() < 1e-6);
-        assert!((rotated_vertices[0] - 1.0).abs() < 1e-6);
+        let zero_vertices = encode_vertex_groups(&zero_angle).unwrap().coordinates;
+        let quarter_vertices = encode_vertex_groups(&quarter_turn).unwrap().coordinates;
+
+        assert_eq!(default_vertices, zero_vertices);
+        assert_ne!(default_vertices, quarter_vertices);
+        assert!((default_vertices[0] - 1.0).abs() < 1e-6);
+        assert!(default_vertices[1].abs() < 1e-6);
+        assert!(quarter_vertices[0].abs() < 1e-6);
+        assert!((quarter_vertices[1] - 1.0).abs() < 1e-6);
     }
 
     #[test]
