@@ -69,6 +69,7 @@ node --test scripts/manim-reference-inventory.test.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
+node --test web/execution-worker-preflight.test.mjs
 node --test web/render-gpu-diagnostics.test.mjs
 node --test web/execution-worker-startup.test.mjs
 node --test web/authoring-client.test.mjs

@@ -20,6 +20,8 @@ const LIFECYCLE_CANCELLED_MESSAGE =
 export class ExecutionWorkerClient {
   #canvas;
   #engineWorker = null;
+  #candidateEngineWorker = null;
+  #candidateEngineReject = null;
   #renderWorker = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
@@ -316,13 +318,53 @@ export class ExecutionWorkerClient {
     const previousMode = this.#mode;
     const wasPlaying = this.#playing;
     const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
+    const oldEngine = this.#engineWorker;
+    const nextSession = checkedNextSession(this.#session);
+    const channel = new MessageChannel();
+    const candidate = this.#createEngineWorker(nextMode);
+    this.#candidateEngineWorker = candidate;
+
+    let candidateReady;
+    try {
+      const candidateReadyPromise = this.#candidateWorkerReady(candidate);
+      this.#postEngineInit(
+        candidate,
+        channel.port1,
+        nextMode,
+        sceneJson,
+        retainedDocumentJson,
+        duration,
+        nextSession,
+      );
+      candidateReady = await candidateReadyPromise;
+      this.#assertLifecycleCurrent(generation);
+    } catch (error) {
+      if (this.#candidateEngineWorker === candidate) {
+        this.#candidateEngineWorker = null;
+        candidate.terminate();
+      }
+      channel.port2.close?.();
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      // Candidate initialization failed before the render owner was touched.
+      // Keep the existing engine, renderer, mode, and recovery state authoritative.
+      throw error;
+    }
+
+    // Candidate readiness is emitted only after its immutable resources/transport
+    // setup and first complete snapshot have been queued on the MessageChannel.
+    // Commit ownership only now, so engine/WASM bootstrap latency cannot blank the
+    // live surface and preflight failure leaves the old session untouched.
     const reconnectError = new Error(`execution engine transitioning to ${nextMode}`);
-    this.#engineWorker?.terminate();
-    this.#engineWorker = null;
+    this.#candidateEngineWorker = null;
+    this.#engineWorker = candidate;
+    this.#attachCurrentWorkerEvents(candidate, ENGINE_CHANNEL, "engine");
+    this.#session = nextSession;
+    oldEngine?.terminate();
     this.#rejectOwner("engine", reconnectError);
 
     try {
-      const channel = new MessageChannel();
       const renderSwitched = this.#request(
         this.#renderWorker,
         "render",
@@ -338,25 +380,13 @@ export class ExecutionWorkerClient {
         this.#markFatalOwner("render");
         throw error;
       });
-
-      this.#session = checkedNextSession(this.#session);
-      this.#engineWorker = this.#createEngineWorker(nextMode);
-      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-      const nextReady = Promise.all([engineReady, renderSwitched]).then(([engine, render]) => ({
-        engine,
+      const nextReady = renderSwitched.then((render) => ({
+        engine: candidateReady,
         render,
         transportMode: this.#transportMode,
         session: this.#session,
       }));
       this.#ready = nextReady;
-      this.#postEngineInit(
-        this.#engineWorker,
-        channel.port1,
-        nextMode,
-        sceneJson,
-        retainedDocumentJson,
-        duration,
-      );
 
       const ready = await nextReady;
       this.#assertLifecycleCurrent(generation);
@@ -391,9 +421,9 @@ export class ExecutionWorkerClient {
       if (generation !== this.#lifecycleGeneration) {
         throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
       }
-      // A failed renderer transition can leave the live render worker between
-      // renderer generations. Force a full-surface recovery on the next restart
-      // rather than trying to infer partial render ownership.
+      // Once the render transition begins, a failure can leave the live render
+      // worker between renderer generations. Keep the conservative full-surface
+      // recovery policy for this post-preflight failure boundary.
       this.#fatalOwner = "render";
       this.#mode = previousMode;
       throw error;
@@ -622,6 +652,11 @@ export class ExecutionWorkerClient {
 
   terminate({ preserveHostConfiguration = false } = {}) {
     this.#lifecycleGeneration += 1;
+    const cancellation = new Error(LIFECYCLE_CANCELLED_MESSAGE);
+    this.#candidateEngineReject?.(cancellation);
+    this.#candidateEngineReject = null;
+    this.#candidateEngineWorker?.terminate();
+    this.#candidateEngineWorker = null;
     this.#engineWorker?.terminate();
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
@@ -680,77 +715,142 @@ export class ExecutionWorkerClient {
   #workerReady(worker, channel, owner) {
     validateWorkerOwner(owner);
     return new Promise((resolve, reject) => {
-      const onMessage = (event) => {
-        if (!this.#isCurrentWorker(owner, worker)) {
-          this.#recordStaleWorkerEvent(owner);
+      this.#attachCurrentWorkerEvents(worker, channel, owner, {
+        resolveReady: resolve,
+        rejectReady: reject,
+      });
+    });
+  }
+
+  #attachCurrentWorkerEvents(
+    worker,
+    channel,
+    owner,
+    { resolveReady = null, rejectReady = null } = {},
+  ) {
+    validateWorkerOwner(owner);
+    const rejectInitial = (error) => rejectReady?.(error);
+    const onMessage = (event) => {
+      if (!this.#isCurrentWorker(owner, worker)) {
+        this.#recordStaleWorkerEvent(owner);
+        return;
+      }
+      const message = event.data;
+      try {
+        validateWorkerEnvelope(message, channel);
+        if (message.type === "ready") {
+          resolveReady?.(message);
           return;
         }
-        const message = event.data;
+        if (message.type === "host_callback_error") {
+          this.#notifyRecoverableError(
+            new Error(message.message || "host callback failed"),
+            "host",
+          );
+          return;
+        }
+        if (message.type === "recoverable_error") {
+          const error = new Error(
+            message.message || `${owner} worker reported a recoverable error`,
+          );
+          error.diagnostic = message.diagnostic ?? null;
+          this.#notifyRecoverableError(error, owner);
+          return;
+        }
+        if (message.type === "error") {
+          const error = new Error(message.message || `${owner} worker failed`);
+          if (message.requestId === null || message.requestId === undefined) {
+            rejectInitial(error);
+            this.#rejectOwner(owner, error);
+            this.#notifyError(error, owner);
+            return;
+          }
+          this.#settle(owner, message.requestId, ({ reject: rejectPending }) => {
+            rejectPending(error);
+          });
+          return;
+        }
+        if (message.requestId !== undefined) {
+          this.#settle(owner, message.requestId, ({ resolve: resolvePending }) => {
+            resolvePending(message);
+          });
+        }
+      } catch (error) {
+        rejectInitial(error);
+        this.#rejectOwner(owner, error);
+        this.#notifyError(error, owner);
+      }
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", (event) => {
+      if (!this.#isCurrentWorker(owner, worker)) {
+        this.#recordStaleWorkerEvent(owner);
+        return;
+      }
+      const error = new Error(event.message || `${owner} worker crashed`);
+      rejectInitial(error);
+      this.#rejectOwner(owner, error);
+      this.#notifyError(error, owner);
+    });
+    worker.addEventListener("messageerror", () => {
+      if (!this.#isCurrentWorker(owner, worker)) {
+        this.#recordStaleWorkerEvent(owner);
+        return;
+      }
+      const error = new Error(`${owner} worker message could not be decoded`);
+      rejectInitial(error);
+      this.#rejectOwner(owner, error);
+      this.#notifyError(error, owner);
+    });
+  }
+
+  #candidateWorkerReady(worker) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.#candidateEngineReject === cancel) {
+          this.#candidateEngineReject = null;
+        }
+        callback(value);
+      };
+      const cancel = (error) => settle(reject, error);
+      this.#candidateEngineReject = cancel;
+
+      worker.addEventListener("message", (event) => {
+        if (this.#candidateEngineWorker !== worker) {
+          return;
+        }
         try {
-          validateWorkerEnvelope(message, channel);
+          const message = event.data;
+          validateWorkerEnvelope(message, ENGINE_CHANNEL);
           if (message.type === "ready") {
-            resolve(message);
-            return;
-          }
-          if (message.type === "host_callback_error") {
-            this.#notifyRecoverableError(
-              new Error(message.message || "host callback failed"),
-              "host",
-            );
-            return;
-          }
-          if (message.type === "recoverable_error") {
-            const error = new Error(
-              message.message || `${owner} worker reported a recoverable error`,
-            );
-            error.diagnostic = message.diagnostic ?? null;
-            this.#notifyRecoverableError(error, owner);
+            settle(resolve, message);
             return;
           }
           if (message.type === "error") {
-            const error = new Error(message.message || `${owner} worker failed`);
-            if (message.requestId === null || message.requestId === undefined) {
-              reject(error);
-              this.#rejectOwner(owner, error);
-              this.#notifyError(error, owner);
-              return;
-            }
-            this.#settle(owner, message.requestId, ({ reject: rejectPending }) => {
-              rejectPending(error);
-            });
+            settle(reject, new Error(message.message || "candidate engine worker failed"));
             return;
           }
-          if (message.requestId !== undefined) {
-            this.#settle(owner, message.requestId, ({ resolve: resolvePending }) => {
-              resolvePending(message);
-            });
-          }
+          throw new Error(
+            `candidate engine emitted unexpected ${message.type ?? "message"} before ready`,
+          );
         } catch (error) {
-          reject(error);
-          this.#rejectOwner(owner, error);
-          this.#notifyError(error, owner);
+          settle(reject, error);
         }
-      };
-      worker.addEventListener("message", onMessage);
+      });
       worker.addEventListener("error", (event) => {
-        if (!this.#isCurrentWorker(owner, worker)) {
-          this.#recordStaleWorkerEvent(owner);
-          return;
+        if (this.#candidateEngineWorker === worker) {
+          settle(reject, new Error(event.message || "candidate engine worker crashed"));
         }
-        const error = new Error(event.message || `${owner} worker crashed`);
-        reject(error);
-        this.#rejectOwner(owner, error);
-        this.#notifyError(error, owner);
       });
       worker.addEventListener("messageerror", () => {
-        if (!this.#isCurrentWorker(owner, worker)) {
-          this.#recordStaleWorkerEvent(owner);
-          return;
+        if (this.#candidateEngineWorker === worker) {
+          settle(reject, new Error("candidate engine worker message could not be decoded"));
         }
-        const error = new Error(`${owner} worker message could not be decoded`);
-        reject(error);
-        this.#rejectOwner(owner, error);
-        this.#notifyError(error, owner);
       });
     });
   }
@@ -819,6 +919,7 @@ export class ExecutionWorkerClient {
     sceneJson,
     retainedDocumentJson,
     loopDurationSeconds,
+    session = this.#session,
   ) {
     const payload = {
       port,
@@ -826,7 +927,7 @@ export class ExecutionWorkerClient {
       loopDurationSeconds,
       transportMode: this.#transportMode,
       sharedSlotCapacity: this.#sharedSlotCapacity,
-      session: this.#session,
+      session,
     };
     if (mode === EXECUTION_MODE_RETAINED) {
       payload.retainedDocumentJson = retainedDocumentJson;
