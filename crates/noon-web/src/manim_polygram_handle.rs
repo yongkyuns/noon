@@ -323,17 +323,16 @@ mod tests {
         let snapshot = polygon_snapshot(&[-1.0, -1.0, 2.0, -1.0, 0.0, 3.0]).unwrap();
         let encoded = encode_vertex_groups(&snapshot).unwrap();
         assert_eq!(encoded.group_lengths, vec![3]);
-        assert_eq!(
-            encoded.coordinates,
-            vec![-1.0, -1.0, 2.0, -1.0, 0.0, 3.0]
-        );
+        assert_eq!(encoded.coordinates, vec![-1.0, -1.0, 2.0, -1.0, 0.0, 3.0]);
         assert!(matches!(snapshot.geometry, GeometryRef::VectorPath(_)));
     }
 
     #[test]
     fn polygram_bridge_preserves_disconnected_groups() {
         let snapshot = polygram_snapshot(
-            &[0.0, 2.0, -1.0, -1.0, 1.0, -1.0, 0.0, -2.0, -1.0, 1.0, 1.0, 1.0],
+            &[
+                0.0, 2.0, -1.0, -1.0, 1.0, -1.0, 0.0, -2.0, -1.0, 1.0, 1.0, 1.0,
+            ],
             &[3, 3],
         )
         .unwrap();
