@@ -19,10 +19,21 @@ let currentLogicalTime = 0;
 let activeFrameTimes = null;
 let authoredDuration = null;
 
+function waitForAnimationFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
 function waitForPaint() {
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   });
+}
+
+async function waitForSubmittedFrame() {
+  while (!renderer.pollSubmissionComplete()) {
+    await waitForAnimationFrame();
+  }
+  await waitForPaint();
 }
 
 async function presentDelta(deltaJson) {
@@ -36,7 +47,7 @@ async function presentDelta(deltaJson) {
   if (!presented) {
     throw new Error("host raster renderer could not present an applied execution delta");
   }
-  await waitForPaint();
+  await waitForSubmittedFrame();
   return true;
 }
 
@@ -79,7 +90,7 @@ async function load(source, loopDurationSeconds) {
   if (!presented) {
     throw new Error("host raster renderer could not present its initial snapshot");
   }
-  await waitForPaint();
+  await waitForSubmittedFrame();
 
   return {
     kind: result.kind,
@@ -176,6 +187,8 @@ async function renderThrough(frameIndex, frameTimes) {
     instances: renderer.lastInstancesDrawn(),
     uploadBytes: renderer.lastBytesUploaded(),
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    submissionGeneration: renderer.submissionGeneration(),
+    completedSubmissionGeneration: renderer.completedSubmissionGeneration(),
     authoredDuration,
     frameIndex: currentFrameIndex,
   };
