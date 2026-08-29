@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use noon_core::{
     FontFaceIdentity, FontResourceArena, GeometryResource, GeometryResourceArena, Rect,
-    TextResource, TextResourceArena, TextSourceKind, Vec2, VectorPath,
+    TextResource, TextResourceArena, TextResourceError, TextSourceKind, Vec2, VectorPath,
 };
 
 const CHURN_ITERATIONS: u64 = 1_000;
@@ -137,6 +137,51 @@ fn text_remove_reinsert_does_not_alias_stale_identity() {
         arena.get(replacement).is_some(),
         "the replacement handle must resolve independently"
     );
+}
+
+#[test]
+fn text_remove_reinsert_churn_keeps_every_stale_identity_rejected() {
+    let mut arena = TextResourceArena::new();
+    let mut current = arena
+        .insert(empty_text("x"))
+        .expect("initial text resource must insert");
+    let baseline = arena.stats();
+    let mut stale = Vec::with_capacity(CHURN_ITERATIONS as usize);
+
+    for _ in 0..CHURN_ITERATIONS {
+        arena
+            .remove(current.id)
+            .expect("current text resource must be removable");
+        stale.push(current);
+
+        current = arena
+            .insert(empty_text("x"))
+            .expect("replacement text resource must insert");
+        assert_eq!(arena.stats(), baseline, "live accounting must stay bounded");
+    }
+
+    for handle in stale {
+        assert!(arena.get(handle).is_none(), "stale handle must not resolve");
+        assert!(
+            arena.current_handle(handle.id).is_none(),
+            "stale bare ID must not resolve to a later occupant"
+        );
+        assert!(matches!(
+            arena.replace(handle.id, empty_text("x")),
+            Err(TextResourceError::UnknownResource(id)) if id == handle.id
+        ));
+        assert!(matches!(
+            arena.remove(handle.id),
+            Err(TextResourceError::UnknownResource(id)) if id == handle.id
+        ));
+        assert_eq!(
+            arena.stats(),
+            baseline,
+            "rejected stale mutation must leave accounting unchanged"
+        );
+    }
+
+    assert!(arena.get(current).is_some(), "current occupant must remain live");
 }
 
 #[test]
