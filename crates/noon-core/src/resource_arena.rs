@@ -5,6 +5,9 @@ use std::{
 
 use crate::{GeometryId, GeometryRef, Vec2, VectorPath};
 
+const GEOMETRY_RESOURCE_SLOT_BITS: u32 = 32;
+const GEOMETRY_RESOURCE_SLOT_MASK: u64 = u32::MAX as u64;
+
 /// Versioned reference to one immutable heavy geometry resource.
 ///
 /// Replacing a resource preserves its stable ID for reconciliation but increments
@@ -51,6 +54,7 @@ impl StoredGeometry {
 
 #[derive(Clone, Debug)]
 struct ResourceEntry {
+    generation: u32,
     version: u64,
     value: Option<GeometryResource>,
 }
@@ -63,9 +67,14 @@ pub struct GeometryResourceStats {
 }
 
 /// Stable-ID arena for immutable geometry payloads.
+///
+/// `GeometryId` encodes a physical slot plus its generation. This lets the arena
+/// reuse storage at the live-working-set high-water mark without allowing a stale
+/// bare ID to alias a later occupant of the same slot.
 #[derive(Clone, Debug, Default)]
 pub struct GeometryResourceArena {
     entries: Vec<ResourceEntry>,
+    free_slots: Vec<u32>,
     live_resources: usize,
     retained_bytes: usize,
 }
@@ -80,18 +89,31 @@ impl GeometryResourceArena {
     }
 
     pub fn insert(&mut self, resource: GeometryResource) -> GeometryResourceHandle {
-        let id = GeometryId::new(
-            u64::try_from(self.entries.len()).expect("Noon geometry resource ID space exhausted"),
-        );
-        self.retained_bytes = self
-            .retained_bytes
-            .saturating_add(resource.retained_bytes());
-        self.entries.push(ResourceEntry {
-            version: 0,
-            value: Some(resource),
-        });
+        let resource_bytes = resource.retained_bytes();
+        let handle = if let Some(slot) = self.free_slots.pop() {
+            let index = slot as usize;
+            let entry = &mut self.entries[index];
+            debug_assert!(entry.value.is_none());
+            entry.version = 0;
+            entry.value = Some(resource);
+            GeometryResourceHandle {
+                id: geometry_resource_id(index, entry.generation),
+                version: 0,
+            }
+        } else {
+            let index = self.entries.len();
+            let id = geometry_resource_id(index, 0);
+            self.entries.push(ResourceEntry {
+                generation: 0,
+                version: 0,
+                value: Some(resource),
+            });
+            GeometryResourceHandle { id, version: 0 }
+        };
+
+        self.retained_bytes = self.retained_bytes.saturating_add(resource_bytes);
         self.live_resources += 1;
-        GeometryResourceHandle { id, version: 0 }
+        handle
     }
 
     /// Promote a legacy geometry value to the new storage model.
@@ -122,15 +144,22 @@ impl GeometryResourceArena {
     }
 
     pub fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
-        let entry = self.entries.get(handle.id.get() as usize)?;
-        if entry.version != handle.version {
+        let index = geometry_resource_slot(handle.id);
+        let entry = self.entries.get(index)?;
+        if geometry_resource_id(index, entry.generation) != handle.id
+            || entry.version != handle.version
+        {
             return None;
         }
         entry.value.as_ref()
     }
 
     pub fn current_handle(&self, id: GeometryId) -> Option<GeometryResourceHandle> {
-        let entry = self.entries.get(id.get() as usize)?;
+        let index = geometry_resource_slot(id);
+        let entry = self.entries.get(index)?;
+        if geometry_resource_id(index, entry.generation) != id {
+            return None;
+        }
         entry.value.as_ref()?;
         Some(GeometryResourceHandle {
             id,
@@ -144,9 +173,11 @@ impl GeometryResourceArena {
         id: GeometryId,
         resource: GeometryResource,
     ) -> Result<GeometryResourceHandle, GeometryResourceError> {
+        let index = geometry_resource_slot(id);
         let entry = self
             .entries
-            .get_mut(id.get() as usize)
+            .get_mut(index)
+            .filter(|entry| geometry_resource_id(index, entry.generation) == id)
             .ok_or(GeometryResourceError::UnknownResource(id))?;
         let previous = entry
             .value
@@ -171,9 +202,11 @@ impl GeometryResourceArena {
     }
 
     pub fn remove(&mut self, id: GeometryId) -> Result<GeometryResource, GeometryResourceError> {
+        let index = geometry_resource_slot(id);
         let entry = self
             .entries
-            .get_mut(id.get() as usize)
+            .get_mut(index)
+            .filter(|entry| geometry_resource_id(index, entry.generation) == id)
             .ok_or(GeometryResourceError::UnknownResource(id))?;
         let previous = entry
             .value
@@ -191,6 +224,15 @@ impl GeometryResourceArena {
         self.retained_bytes = self.retained_bytes.saturating_sub(previous_retained_bytes);
         self.live_resources -= 1;
         entry.version = next_version;
+
+        // Generation wrap must never make an old bare GeometryId valid again. A
+        // fully exhausted physical slot is therefore retired instead of recycled.
+        if let Some(next_generation) = entry.generation.checked_add(1) {
+            entry.generation = next_generation;
+            self.free_slots
+                .push(u32::try_from(index).expect("Noon geometry resource slot space exhausted"));
+        }
+
         Ok(resource)
     }
 
@@ -209,6 +251,11 @@ impl GeometryResourceArena {
         }
     }
 
+    /// Number of physical arena slots retained at the current high-water mark.
+    pub fn slot_capacity(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn len(&self) -> usize {
         self.live_resources
     }
@@ -216,6 +263,15 @@ impl GeometryResourceArena {
     pub fn is_empty(&self) -> bool {
         self.live_resources == 0
     }
+}
+
+fn geometry_resource_id(slot: usize, generation: u32) -> GeometryId {
+    let slot = u32::try_from(slot).expect("Noon geometry resource slot space exhausted");
+    GeometryId::new((u64::from(generation) << GEOMETRY_RESOURCE_SLOT_BITS) | u64::from(slot))
+}
+
+fn geometry_resource_slot(id: GeometryId) -> usize {
+    (id.get() & GEOMETRY_RESOURCE_SLOT_MASK) as usize
 }
 
 fn vector_path_retained_bytes(path: &VectorPath) -> usize {
@@ -315,10 +371,81 @@ mod tests {
     }
 
     #[test]
+    fn recycled_slot_gets_new_id_and_rejects_stale_bare_id() {
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert_path(large_path(4));
+        let original_capacity = arena.slot_capacity();
+        arena.remove(first.id).unwrap();
+        let second = arena.insert_path(large_path(8));
+
+        assert_eq!(original_capacity, 1);
+        assert_eq!(arena.slot_capacity(), original_capacity);
+        assert_ne!(first.id, second.id);
+        assert_eq!(
+            geometry_resource_slot(first.id),
+            geometry_resource_slot(second.id)
+        );
+        assert!(arena.get(first).is_none());
+        assert_eq!(arena.current_handle(first.id), None);
+        assert_eq!(
+            arena.replace(
+                first.id,
+                GeometryResource::VectorPath(Arc::new(large_path(16))),
+            ),
+            Err(GeometryResourceError::UnknownResource(first.id)),
+        );
+        assert_eq!(
+            arena.remove(first.id),
+            Err(GeometryResourceError::UnknownResource(first.id)),
+        );
+        assert!(arena.get(second).is_some());
+    }
+
+    #[test]
+    fn repeated_remove_insert_churn_reuses_one_physical_slot() {
+        let mut arena = GeometryResourceArena::new();
+        let mut current = arena.insert_path(large_path(2));
+
+        for index in 0..1_000 {
+            let stale = current;
+            arena.remove(stale.id).unwrap();
+            current = arena.insert_path(large_path(2 + (index % 3)));
+
+            assert_eq!(arena.len(), 1);
+            assert_eq!(arena.slot_capacity(), 1);
+            assert_ne!(current.id, stale.id);
+            assert!(arena.get(stale).is_none());
+            assert_eq!(arena.current_handle(stale.id), None);
+            assert!(arena.get(current).is_some());
+        }
+    }
+
+    #[test]
+    fn generation_exhaustion_retires_slot_instead_of_aliasing() {
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert_path(large_path(4));
+        let slot = geometry_resource_slot(first.id);
+        arena.entries[slot].generation = u32::MAX;
+        let exhausted_id = geometry_resource_id(slot, u32::MAX);
+        let exhausted = GeometryResourceHandle {
+            id: exhausted_id,
+            version: first.version,
+        };
+
+        arena.remove(exhausted_id).unwrap();
+        let replacement = arena.insert_path(large_path(8));
+
+        assert_eq!(arena.slot_capacity(), 2);
+        assert_ne!(replacement.id, exhausted.id);
+        assert!(arena.get(exhausted).is_none());
+        assert_eq!(arena.current_handle(exhausted.id), None);
+    }
+
+    #[test]
     fn replace_version_exhaustion_leaves_resource_and_accounting_unchanged() {
         let mut arena = GeometryResourceArena::new();
         let first = arena.insert_path(large_path(4));
-        let entry = &mut arena.entries[first.id.get() as usize];
+        let entry = &mut arena.entries[geometry_resource_slot(first.id)];
         entry.version = u64::MAX;
         let exhausted = GeometryResourceHandle {
             id: first.id,
@@ -346,7 +473,7 @@ mod tests {
     fn remove_version_exhaustion_leaves_resource_and_accounting_unchanged() {
         let mut arena = GeometryResourceArena::new();
         let first = arena.insert_path(large_path(12));
-        let entry = &mut arena.entries[first.id.get() as usize];
+        let entry = &mut arena.entries[geometry_resource_slot(first.id)];
         entry.version = u64::MAX;
         let exhausted = GeometryResourceHandle {
             id: first.id,
