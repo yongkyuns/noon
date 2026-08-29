@@ -1,7 +1,7 @@
 use noon_compile::CompiledScene;
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, ScenePatch, Style, TrackTiming, Transform2D,
-    Vec2,
+    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, ScenePatch, Style, TrackTiming,
+    Transform2D, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
@@ -104,10 +104,8 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     const MOVING_INDEX: usize = 1;
 
     let mut scene = SceneDefinition::new();
-    let _static_line =
-        scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    let moving_line =
-        scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
+    let _static_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
+    let moving_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     let static_before = instance.frame().objects[STATIC_INDEX].clone();
