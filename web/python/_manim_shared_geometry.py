@@ -41,25 +41,68 @@ def _set_shared_color(self: _base.Mobject, color: object) -> None:
     _shared._set_color(self, parsed)
 
 
-def _set_x(self: _base.Mobject, x: float) -> _base.Mobject:
-    """Set the center x coordinate through Rust-owned ``move_to`` semantics."""
+def _coordinate_mask(dim: int) -> tuple[float, float, float]:
+    if isinstance(dim, bool) or not isinstance(dim, int):
+        raise TypeError("dim must be an integer")
+    if dim == 0:
+        return (1.0, 0.0, 0.0)
+    if dim == 1:
+        return (0.0, 1.0, 0.0)
+    raise NotImplementedError("Noon's shared 2D coordinate placement supports only x/y")
 
-    value = _shared._ir._finite_number("x", x)
+
+def _set_coord(
+    self: _base.Mobject,
+    value: float,
+    dim: int,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Set a directional coordinate through shared critical-point placement."""
+
+    coordinate = _shared._ir._finite_number("value", value)
+    mask = _coordinate_mask(dim)
+    point = _base.Vec2(coordinate if dim == 0 else 0.0, coordinate if dim == 1 else 0.0)
     return _shared._move_to(
         self,
-        _base.Vec2(value, 0.0),
-        coor_mask=(1.0, 0.0, 0.0),
+        point,
+        aligned_edge=direction,
+        coor_mask=mask,
     )
 
 
-def _set_y(self: _base.Mobject, y: float) -> _base.Mobject:
-    """Set the center y coordinate through Rust-owned ``move_to`` semantics."""
+def _set_x(
+    self: _base.Mobject,
+    x: float,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Set a directional x coordinate through shared ``set_coord`` semantics."""
 
-    value = _shared._ir._finite_number("y", y)
+    return _set_coord(self, x, 0, direction)
+
+
+def _set_y(
+    self: _base.Mobject,
+    y: float,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Set a directional y coordinate through shared ``set_coord`` semantics."""
+
+    return _set_coord(self, y, 1, direction)
+
+
+def _match_coord(
+    self: _base.Mobject,
+    mobject: _base.Mobject,
+    dim: int,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Match a directional coordinate through shared critical-point placement."""
+
     return _shared._move_to(
         self,
-        _base.Vec2(0.0, value),
-        coor_mask=(0.0, 1.0, 0.0),
+        mobject,
+        aligned_edge=direction,
+        coor_mask=_coordinate_mask(dim),
     )
 
 
@@ -68,14 +111,9 @@ def _match_x(
     mobject: _base.Mobject,
     direction: object = _base.ORIGIN,
 ) -> _base.Mobject:
-    """Match a directional x coordinate through shared ``move_to`` semantics."""
+    """Match a directional x coordinate through shared ``match_coord`` semantics."""
 
-    return _shared._move_to(
-        self,
-        mobject,
-        aligned_edge=direction,
-        coor_mask=(1.0, 0.0, 0.0),
-    )
+    return _match_coord(self, mobject, 0, direction)
 
 
 def _match_y(
@@ -83,14 +121,9 @@ def _match_y(
     mobject: _base.Mobject,
     direction: object = _base.ORIGIN,
 ) -> _base.Mobject:
-    """Match a directional y coordinate through shared ``move_to`` semantics."""
+    """Match a directional y coordinate through shared ``match_coord`` semantics."""
 
-    return _shared._move_to(
-        self,
-        mobject,
-        aligned_edge=direction,
-        coor_mask=(0.0, 1.0, 0.0),
-    )
+    return _match_coord(self, mobject, 1, direction)
 
 
 def _rotate_about_origin(
@@ -165,8 +198,10 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
+    _base.Mobject.set_coord = _set_coord
     _base.Mobject.set_x = _set_x
     _base.Mobject.set_y = _set_y
+    _base.Mobject.match_coord = _match_coord
     _base.Mobject.match_x = _match_x
     _base.Mobject.match_y = _match_y
     _base.Mobject.rotate_about_origin = _rotate_about_origin
