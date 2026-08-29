@@ -91,9 +91,7 @@ impl RetainedTextAuthoringSpec {
                 if font_family.trim().is_empty() {
                     return Err("retained native text font_family must not be empty".to_owned());
                 }
-                if !line_spacing.is_finite()
-                    || (*line_spacing != -1.0 && *line_spacing <= -1.0)
-                {
+                if !line_spacing.is_finite() || (*line_spacing != -1.0 && *line_spacing <= -1.0) {
                     return Err(
                         "retained native text line_spacing must be -1 or greater than -1"
                             .to_owned(),
@@ -462,13 +460,9 @@ mod tests {
 
     #[test]
     fn backend_neutral_wire_stays_source_level() {
-        let mut native = RetainedTextAuthoringSpec::native(
-            "Native Noon",
-            "DejaVu Sans Mono",
-            48.0,
-            -1.0,
-        )
-        .unwrap();
+        let mut native =
+            RetainedTextAuthoringSpec::native("Native Noon", "DejaVu Sans Mono", 48.0, -1.0)
+                .unwrap();
         native.shift(Vec2::new(1.0, -2.0)).unwrap();
         let typst = RetainedTextAuthoringSpec::new("*Hello* from _Typst!_", false, 96.0).unwrap();
         for spec in [native, typst] {
@@ -484,13 +478,8 @@ mod tests {
 
     #[test]
     fn backend_identity_is_explicit_on_wire() {
-        let native = RetainedTextAuthoringSpec::native(
-            "Noon",
-            "DejaVu Sans Mono",
-            48.0,
-            0.3,
-        )
-        .unwrap();
+        let native =
+            RetainedTextAuthoringSpec::native("Noon", "DejaVu Sans Mono", 48.0, 0.3).unwrap();
         assert!(matches!(
             native.backend,
             RetainedTextBackendSpec::Native {
@@ -499,8 +488,7 @@ mod tests {
             } if font_family == "DejaVu Sans Mono"
         ));
         let math =
-            RetainedTextAuthoringSpec::new("sum_(k=1)^n k = (n(n + 1)) / 2", true, 72.0)
-                .unwrap();
+            RetainedTextAuthoringSpec::new("sum_(k=1)^n k = (n(n + 1)) / 2", true, 72.0).unwrap();
         assert!(matches!(
             math.backend,
             RetainedTextBackendSpec::Typst { math: true }
@@ -513,13 +501,8 @@ mod tests {
             RetainedAuthoringTextObject {
                 object: ObjectId::new(9),
                 order: 1,
-                text: RetainedTextAuthoringSpec::native(
-                    "B",
-                    "DejaVu Sans Mono",
-                    48.0,
-                    -1.0,
-                )
-                .unwrap(),
+                text: RetainedTextAuthoringSpec::native("B", "DejaVu Sans Mono", 48.0, -1.0)
+                    .unwrap(),
             },
             RetainedAuthoringTextObject {
                 object: ObjectId::new(4),
