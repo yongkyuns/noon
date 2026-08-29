@@ -109,6 +109,7 @@ async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
   const deterministic = await presentDelta(deterministicDelta);
   let hostPatch = null;
+  let hostSnapshot = null;
 
   if (host !== null) {
     host.advanceTo(time);
@@ -125,12 +126,16 @@ async function advanceOneFrame(frameIndex, time) {
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
     hostPatch = await presentDelta(hostDelta);
+    if (frameIndex === 90) {
+      hostSnapshot = JSON.parse(engine.snapshotDeltaJson());
+    }
   }
   lastFramePhases = {
     frameIndex,
     time,
     deterministic,
     hostPatch,
+    hostSnapshot,
   };
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
