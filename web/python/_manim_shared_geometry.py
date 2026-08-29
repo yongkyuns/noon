@@ -1,7 +1,7 @@
-"""Thin Manim geometry constructor adapters backed by shared Rust semantics.
+"""Thin Manim geometry adapters backed by shared Rust semantics.
 
-This module intentionally patches only constructors whose full observable geometry/layout
-contract is already owned by Rust.  Class identity and inheritance remain unchanged.
+This module patches only operations whose full observable geometry/layout contract is
+already owned by Rust. Class identity and inheritance remain unchanged.
 """
 
 from __future__ import annotations
@@ -32,13 +32,35 @@ def _set_shared_color(self: _base.Mobject, color: object) -> None:
     """Apply Manim ``color`` through the shared semantic handle.
 
     The generic Phase-B setter rebuilds a Python snapshot before handing it back to
-    Rust.  Shared constructors must not re-enter that compatibility path: parse the
+    Rust. Shared constructors must not re-enter that compatibility path: parse the
     host color once, then use the semantic-handle mutation that preserves each
     channel's existing opacity.
     """
 
     parsed = _shared._phase_b._as_color("color", color)
     _shared._set_color(self, parsed)
+
+
+def _set_x(self: _base.Mobject, x: float) -> _base.Mobject:
+    """Set the center x coordinate through Rust-owned ``move_to`` semantics."""
+
+    value = _shared._ir._finite_number("x", x)
+    return _shared._move_to(
+        self,
+        _base.Vec2(value, 0.0),
+        coor_mask=(1.0, 0.0, 0.0),
+    )
+
+
+def _set_y(self: _base.Mobject, y: float) -> _base.Mobject:
+    """Set the center y coordinate through Rust-owned ``move_to`` semantics."""
+
+    value = _shared._ir._finite_number("y", y)
+    return _shared._move_to(
+        self,
+        _base.Vec2(0.0, value),
+        coor_mask=(0.0, 1.0, 0.0),
+    )
 
 
 def _dot_init(
@@ -96,6 +118,8 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
+    _base.Mobject.set_x = _set_x
+    _base.Mobject.set_y = _set_y
     if _create_dot_handle is not None:
         _geometry.Dot.__init__ = _dot_init
     if _create_triangle_handle is not None:

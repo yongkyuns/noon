@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimSharedGeometryTests(unittest.TestCase):
-    def test_dot_and_triangle_bypass_python_geometry_construction(self) -> None:
+    def test_dot_triangle_and_axis_placement_bypass_python_geometry_semantics(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing = env.get("PYTHONPATH")
@@ -24,6 +24,7 @@ class ManimSharedGeometryTests(unittest.TestCase):
 
             fake_js = types.ModuleType("js")
             calls = []
+            placement_calls = []
 
             class FakeHandle:
                 def __init__(self, snapshot):
@@ -37,6 +38,16 @@ class ManimSharedGeometryTests(unittest.TestCase):
                 def setStrokeColor(self, r, g, b, a):
                     alpha = self.snapshot["style"]["stroke"]["alpha"]
                     self.snapshot["style"]["stroke"] = {"red": float(r), "green": float(g), "blue": float(b), "alpha": alpha}
+                def manimMoveToPoint(self, x, y, edge_x, edge_y, mask_x, mask_y):
+                    placement_calls.append((
+                        float(x), float(y), float(edge_x), float(edge_y),
+                        float(mask_x), float(mask_y),
+                    ))
+                    translation = self.snapshot["transform"]["translation"]
+                    if mask_x:
+                        translation["x"] = float(x)
+                    if mask_y:
+                        translation["y"] = float(y)
 
             def base_style(color, *, fill_alpha=0.0, stroke_width=0.04):
                 return {
@@ -121,6 +132,19 @@ class ManimSharedGeometryTests(unittest.TestCase):
             assert dot_obj.style["stroke_width"] == 0.0
             assert triangle_obj.style["stroke"]["red"] == BLUE[0]
             assert "vector_path" in triangle_obj.geometry
+
+            # set_x/set_y must delegate axis placement to the shared Rust move-to
+            # contract rather than reading the center and calculating a Python delta.
+            dot_obj.get_center = lambda: (_ for _ in ()).throw(
+                AssertionError("Python center math was used by set_x/set_y")
+            )
+            assert dot_obj.set_x(5.0) is dot_obj
+            assert dot_obj.set_y(4.0) is dot_obj
+            assert placement_calls == [
+                (5.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+                (0.0, 4.0, 0.0, 0.0, 0.0, 1.0),
+            ]
+            assert dot_obj.transform["translation"] == {"x": 5.0, "y": 4.0}
             """
         )
         completed = subprocess.run(
