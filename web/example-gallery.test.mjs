@@ -54,6 +54,22 @@ assert.ok(
   "every public example must point to its canonical upstream source fixture",
 );
 
+const basicConceptCases = new Map([
+  ["ManimCELogo", "#83/#76/#74/#177/#180"],
+  ["BraceAnnotation", "#84/#83"],
+  ["VectorArrow", "#77/#85/#83"],
+  ["GradientImageFromArray", "#79/#76"],
+  ["BooleanOperations", "#78/#83/#74"],
+]);
+for (const [title, dependency] of basicConceptCases) {
+  const entry = manifest.entries.find((candidate) => candidate.title === title);
+  assert.ok(entry, `${title}: Manim Basic Concepts gallery case must remain explicitly tracked`);
+  assert.equal(entry.status, "blocked", `${title}: unsupported gallery case must remain explicit`);
+  assert.equal(entry.category, "gallery/basic-concepts", `${title}: gallery section must remain stable`);
+  assert.equal(entry.upstream, "examples.html#basic-concepts", `${title}: upstream provenance must remain explicit`);
+  assert.equal(entry.dependency, dependency, `${title}: owning implementation issues must remain explicit`);
+}
+
 function assertQualifiedFixture(entryId, fixtureId, message) {
   const entry = readyEntries.find((candidate) => candidate.id === entryId);
   assert.equal(entry?.parity_status, "parity-qualified", message);

@@ -624,6 +624,85 @@
       "order": 230
     },
     {
+      "id": "gallery-basic-manim-ce-logo",
+      "title": "ManimCELogo",
+      "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until MathTex, Triangle, retained VGroup layout, and exact camera/background parity are complete.",
+      "status": "blocked",
+      "category": "gallery/basic-concepts",
+      "features": [
+        "MathTex",
+        "Triangle",
+        "VGroup",
+        "arrange",
+        "camera-background"
+      ],
+      "upstream": "examples.html#basic-concepts",
+      "dependency": "#83/#76/#74/#177/#180"
+    },
+    {
+      "id": "gallery-basic-brace-annotation",
+      "title": "BraceAnnotation",
+      "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until Brace/get_text/get_tex layout and text/math support are complete.",
+      "status": "blocked",
+      "category": "gallery/basic-concepts",
+      "features": [
+        "Brace",
+        "get_text",
+        "get_tex",
+        "Line",
+        "Dot"
+      ],
+      "upstream": "examples.html#basic-concepts",
+      "dependency": "#84/#83"
+    },
+    {
+      "id": "gallery-basic-vector-arrow",
+      "title": "VectorArrow",
+      "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until Arrow, NumberPlane, native Text, and endpoint/layout parity are complete.",
+      "status": "blocked",
+      "category": "gallery/basic-concepts",
+      "features": [
+        "Arrow",
+        "NumberPlane",
+        "Text",
+        "layout"
+      ],
+      "upstream": "examples.html#basic-concepts",
+      "dependency": "#77/#85/#83"
+    },
+    {
+      "id": "gallery-basic-gradient-image-from-array",
+      "title": "GradientImageFromArray",
+      "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until array-backed ImageMobject and SurroundingRectangle parity are complete.",
+      "status": "blocked",
+      "category": "gallery/basic-concepts",
+      "features": [
+        "ImageMobject",
+        "SurroundingRectangle",
+        "array-image",
+        "filtering"
+      ],
+      "upstream": "examples.html#basic-concepts",
+      "dependency": "#79/#76"
+    },
+    {
+      "id": "gallery-basic-boolean-operations",
+      "title": "BooleanOperations",
+      "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until boolean geometry, text/markup, and retained group/layout parity are complete.",
+      "status": "blocked",
+      "category": "gallery/basic-concepts",
+      "features": [
+        "Intersection",
+        "Union",
+        "Exclusion",
+        "Difference",
+        "MarkupText",
+        "VGroup"
+      ],
+      "upstream": "examples.html#basic-concepts",
+      "dependency": "#78/#83/#74"
+    },
+    {
       "id": "text-and-math",
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
