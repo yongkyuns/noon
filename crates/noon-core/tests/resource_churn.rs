@@ -181,7 +181,10 @@ fn text_remove_reinsert_churn_keeps_every_stale_identity_rejected() {
         );
     }
 
-    assert!(arena.get(current).is_some(), "current occupant must remain live");
+    assert!(
+        arena.get(current).is_some(),
+        "current occupant must remain live"
+    );
 }
 
 #[test]
