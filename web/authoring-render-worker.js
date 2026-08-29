@@ -32,12 +32,14 @@ let width = 1;
 let height = 1;
 let bootstrapQueue = [];
 let bootstrapPromise = null;
-let switchRequestId = null;
+let transitionRequestId = null;
+let transitionResponseType = null;
 let needsPresent = false;
 let running = false;
 let lastFrameTimestamp = null;
 let presentedFrames = 0;
 let modeSwitches = 0;
+let rendererRebuilds = 0;
 
 self.addEventListener("message", (event) => {
   void handleMainMessage(event.data);
@@ -55,6 +57,9 @@ async function handleMainMessage(message) {
         return;
       case "switch_engine":
         switchEngine(message);
+        return;
+      case "rebuild_engine":
+        rebuildEngine(message);
         return;
       case "resize":
         resize(message);
@@ -122,16 +127,33 @@ function attachEngine(message) {
 
 function switchEngine(message) {
   requireBootstrappedRenderer("switch mode");
-  validateEnginePort(message.port, "authoring render mode switch");
-  validateMatchingTransport(message.transportMode, "authoring render mode switch");
   const nextMode = validateMode(message.mode);
   if (nextMode === mode) {
     throw new Error(
       `authoring render mode switch requires a different mode; ${mode} is already active`,
     );
   }
-  if (switchRequestId !== null || bootstrapPromise !== null) {
-    throw new Error("authoring render mode switch is already in progress");
+  beginRendererTransition(message, nextMode, "mode_switched");
+  modeSwitches += 1;
+}
+
+function rebuildEngine(message) {
+  requireBootstrappedRenderer("rebuild renderer");
+  const requestedMode = validateMode(message.mode ?? mode);
+  if (requestedMode !== mode) {
+    throw new Error(
+      `authoring render rebuild mode ${requestedMode} does not match active mode ${mode}`,
+    );
+  }
+  beginRendererTransition(message, mode, "renderer_rebuilt");
+  rendererRebuilds += 1;
+}
+
+function beginRendererTransition(message, nextMode, responseType) {
+  validateEnginePort(message.port, "authoring render engine transition");
+  validateMatchingTransport(message.transportMode, "authoring render engine transition");
+  if (transitionRequestId !== null || bootstrapPromise !== null) {
+    throw new Error("authoring render engine transition is already in progress");
   }
 
   detachRenderPort();
@@ -141,8 +163,8 @@ function switchEngine(message) {
   reconnectResourceBundlePending = false;
   needsPresent = false;
   mode = nextMode;
-  switchRequestId = validateRequestId(message.requestId);
-  modeSwitches += 1;
+  transitionRequestId = validateRequestId(message.requestId);
+  transitionResponseType = responseType;
   attachRenderPort(message.port);
 }
 
@@ -319,12 +341,14 @@ async function bootstrapRenderer(initial) {
       backend: renderer.rendererBackend(),
       gpuGeneration: renderer.gpuGeneration(),
     };
-    if (switchRequestId === null) {
+    if (transitionRequestId === null) {
       postMain({ type: "ready", ...ready });
     } else {
-      const requestId = switchRequestId;
-      switchRequestId = null;
-      respond(requestId, { type: "mode_switched", ...ready });
+      const requestId = transitionRequestId;
+      const responseType = transitionResponseType;
+      transitionRequestId = null;
+      transitionResponseType = null;
+      respond(requestId, { type: responseType, ...ready });
     }
 
     flushBootstrapQueue();
@@ -333,8 +357,9 @@ async function bootstrapRenderer(initial) {
       scheduleFrame();
     }
   } catch (error) {
-    const requestId = switchRequestId;
-    switchRequestId = null;
+    const requestId = transitionRequestId;
+    transitionRequestId = null;
+    transitionResponseType = null;
     fail(error, requestId);
   } finally {
     bootstrapPromise = null;
@@ -432,6 +457,7 @@ function currentMetrics() {
     transportMode,
     presentedFrames,
     modeSwitches,
+    rendererRebuilds,
     lastFrameTimestamp,
     bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
     needsPresent,
@@ -520,8 +546,9 @@ function validateRequestId(requestId) {
 
 function fail(error, requestId) {
   running = false;
-  const effectiveRequestId = requestId ?? switchRequestId;
-  switchRequestId = null;
+  const effectiveRequestId = requestId ?? transitionRequestId;
+  transitionRequestId = null;
+  transitionResponseType = null;
   const message = String(error?.message ?? error);
   renderPort?.postMessage({ type: "render_error", message });
   postMain({ type: "error", requestId: effectiveRequestId, message });
