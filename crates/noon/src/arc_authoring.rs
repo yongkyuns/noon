@@ -481,9 +481,14 @@ impl ArcBetweenPoints {
 
         if resolved_angle == 0.0 {
             let path = VectorPath::new().move_to(start).line_to(end);
+            let resolved_radius = if radius_was_explicit {
+                base_radius
+            } else {
+                f32::INFINITY
+            };
             return Ok(Self::from_parts(
                 arc_snapshot(path),
-                base_radius,
+                resolved_radius,
                 0.0,
                 resolved_angle,
                 num_components,
@@ -749,7 +754,8 @@ mod tests {
         assert_vec_close(arc.get_start(), start);
         assert_vec_close(arc.get_end(), end);
         assert_vec_close(arc.get_arc_center(), Vec2::ZERO);
-        assert_close(arc.radius(), 1.0);
+        assert!(arc.radius().is_infinite());
+        assert!(arc.radius().is_sign_positive());
         assert_close(arc.angle(), 0.0);
         assert_eq!(arc_start_from_snapshot(arc.snapshot()), Some(start));
         assert_eq!(arc_end_from_snapshot(arc.snapshot()), Some(end));
@@ -758,6 +764,19 @@ mod tests {
             arc_stop_angle_from_snapshot(arc.snapshot()),
             Some((end.y.atan2(end.x)).rem_euclid(TAU))
         );
+    }
+
+    #[test]
+    fn zero_resolved_angle_with_explicit_radius_preserves_radius() {
+        let point = Vec2::new(2.0, -1.0);
+        let arc = ArcBetweenPoints::with_options(point, point, 0.0, Some(3.0), 9)
+            .expect("coincident endpoints with explicit radius are valid");
+        let commands = commands(arc.snapshot());
+        assert_eq!(commands.len(), 2);
+        assert_eq!(endpoint(commands[0]), point);
+        assert_eq!(endpoint(commands[1]), point);
+        assert_close(arc.radius(), 3.0);
+        assert_close(arc.angle(), 0.0);
     }
 
     #[test]
