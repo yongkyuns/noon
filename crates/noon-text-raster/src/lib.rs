@@ -256,6 +256,7 @@ impl GlyphRasterCache {
 
     pub fn clear_images(&mut self) {
         self.entries.clear();
+        self.faces.clear();
         self.image_bytes = 0;
         self.access_clock = 0;
         self.hits = 0;
@@ -340,6 +341,7 @@ impl GlyphRasterCache {
         }
 
         self.image_bytes = self.image_bytes.saturating_add(image_bytes);
+        self.faces.entry(font_handle).or_insert(face);
         self.entries.insert(
             key,
             CachedGlyphRaster {
@@ -375,11 +377,14 @@ impl GlyphRasterCache {
                 .expect("selected glyph raster cache entry must still exist");
             self.image_bytes = self.image_bytes.saturating_sub(removed.image_bytes);
             self.evictions = self.evictions.saturating_add(1);
+            if !self.entries.keys().any(|key| key.font == oldest_key.font) {
+                self.faces.remove(&oldest_key.font);
+            }
         }
     }
 
     fn swash_face(
-        &mut self,
+        &self,
         handle: FontResourceHandle,
         resource: &FontResource,
     ) -> Result<SwashFace, GlyphRasterError> {
@@ -388,12 +393,10 @@ impl GlyphRasterCache {
         }
         let font = FontRef::from_index(resource.data.as_ref(), resource.key.face_index as usize)
             .ok_or(GlyphRasterError::InvalidFontData(handle))?;
-        let face = SwashFace {
+        Ok(SwashFace {
             offset: font.offset,
             key: font.key,
-        };
-        self.faces.insert(handle, face);
-        Ok(face)
+        })
     }
 
     fn rasterize(
@@ -543,6 +546,7 @@ mod tests {
         assert_eq!(stats.evictions, 1);
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 3);
+        assert!(stats.font_faces <= stats.entries);
 
         cache
             .get_or_rasterize(&artifact.fonts, run, b, 48.0)
@@ -567,13 +571,32 @@ mod tests {
         assert!(image.data.len() > 1);
         assert_eq!(cache.stats().entries, 0);
         assert_eq!(cache.stats().image_bytes, 0);
+        assert_eq!(cache.stats().font_faces, 0);
         assert_eq!(cache.stats().rejected_admissions, 1);
 
         cache
             .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 64.0)
             .unwrap();
         assert_eq!(cache.stats().misses, 2);
+        assert_eq!(cache.stats().font_faces, 0);
         assert_eq!(cache.stats().rejected_admissions, 2);
+    }
+
+    #[test]
+    fn clearing_images_releases_cached_font_faces() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::new();
+
+        cache
+            .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 48.0)
+            .unwrap();
+        assert_eq!(cache.stats().font_faces, 1);
+
+        cache.clear_images();
+        assert_eq!(cache.stats().entries, 0);
+        assert_eq!(cache.stats().font_faces, 0);
     }
 
     #[test]
@@ -590,6 +613,7 @@ mod tests {
 
         cache.set_limits(GlyphRasterCacheLimits::new(1, usize::MAX));
         assert_eq!(cache.stats().entries, 1);
+        assert!(cache.stats().font_faces <= cache.stats().entries);
         assert!(cache.stats().evictions >= 1);
     }
 
