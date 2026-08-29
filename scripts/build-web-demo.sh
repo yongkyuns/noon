@@ -6,45 +6,24 @@ noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
 node scripts/build-python-worker.mjs
-node --check web/main.js
-node --check web/playground-generation.js
-node --check web/example-gallery.js
-node --check web/authoring-client.js
-node --check web/python-editor.js
-node --check web/python-compat-modules.js
-node --check web/python-worker.source.js
-node --check web/python-worker.js
-node --check web/native-inputs.js
-node --check web/execution-transport.js
-node --check web/execution-canvas.js
-node --check web/execution-engine-worker.js
-node --check web/execution-render-worker.js
-node --check web/authoring-render-worker.js
-node --check web/render-gpu-diagnostics.js
-node --check web/execution-worker-client.js
-node --check web/retained-execution-engine-worker.js
-node --check web/retained-execution-render-worker.js
-node --check web/retained-execution-worker-client.js
-node --check web/authoring-execution-client.js
-node --check web/noon-authoring.js
-node --check web/js/examples/manim-quickstart-equivalents.js
+
+# Keep top-level browser modules and tests self-registering with the required web build.
+# This prevents a new JavaScript file or regression test from silently escaping syntax
+# validation / execution because this script's hand-maintained inventory was not updated.
+while IFS= read -r source; do
+  node --check "$source"
+done < <(find web -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print | sort)
+
+while IFS= read -r source; do
+  node --check "$source"
+done < <(find web/js -type f -name '*.js' -print | sort)
+
 node --check scripts/build-python-worker.mjs
 node --check scripts/execution-worker-smoke.mjs
 node --check scripts/execution-worker-host-smoke.mjs
 node --check scripts/retained-execution-worker-smoke.mjs
 node --check scripts/authoring-execution-router-smoke.mjs
 node --check scripts/authoring-execution-lifecycle-smoke.mjs
-node --check web/scene-pipeline-perf.mjs
-node --check web/gpu-profile.js
-node --check web/morph-profile.js
-node --check web/browser-jank.js
-node --check web/perf-profile.js
-node --check web/player-frame-metrics.js
-node --check web/perf-workloads.js
-node --check web/authoring-perf.js
-node --check web/scene-perf.js
-node --check web/host-callback-perf.js
-node --check web/browser-smoke.js
 node --check scripts/browser-smoke.mjs
 node --check scripts/manim-raster-differential.mjs
 node --check scripts/manim-seek-playback-raster.mjs
@@ -67,29 +46,11 @@ node --check scripts/reactive-runtime-smoke.mjs
 node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
 node --test scripts/manim-reference-inventory.test.mjs
-node --test web/example-gallery.test.mjs
-node --test web/execution-transport.test.mjs
-node --test web/execution-worker-client.test.mjs
-node --test web/execution-worker-preflight.test.mjs
-node --test web/authoring-render-transition.test.mjs
-node --test web/render-gpu-diagnostics.test.mjs
-node --test web/execution-worker-startup.test.mjs
-node --test web/authoring-client.test.mjs
-node --test web/authoring-out-of-order-races.test.mjs
-node --test web/playground-generation.test.mjs
-node --test web/playground-startup.test.mjs
-node --test web/python-editor.test.mjs
-node --test web/editor-runtime-boundary.test.mjs
-node --test web/playground-stability-boundary.test.mjs
-node --test web/python-compat-bundle.test.mjs
-node --test web/python-worker-source.test.mjs
-node --test web/scene-identity.test.mjs
-node --test web/frame-metrics.test.mjs
-node --test web/player-frame-metrics.test.mjs
-node --test web/browser-jank.test.mjs
-node --test web/perf-workloads.test.mjs
-node --test web/performance-corpus-manifest.test.mjs
-node --test web/wire-contracts.test.mjs
+
+for test_file in web/*.test.mjs; do
+  node --test "$test_file"
+done
+
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_compat.py \
   web/python/_manim_typst.py \
