@@ -70,14 +70,14 @@ const browserArgs = [
 
 const retainedScene = JSON.stringify({
   channel: "noon.authoring.retained",
-  protocol_version: 1,
+  protocol_version: 2,
   objects: [
     {
       object: 4503599627370496,
       order: 1,
       text: {
         source: "*Hello* from _Typst!_",
-        math: false,
+        backend: { kind: "typst", math: false },
         font_size: 64,
         transform: {
           translation: { x: 0, y: 1.1 },
@@ -93,7 +93,7 @@ const retainedScene = JSON.stringify({
       order: 4,
       text: {
         source: "frac(x, 2)",
-        math: true,
+        backend: { kind: "typst", math: true },
         font_size: 72,
         transform: {
           translation: { x: 0, y: -1 },

@@ -32,11 +32,29 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`retained Typst authoring smoke server did not start: ${lastError}\n${serverOutput}`);
+  throw new Error(`retained text authoring smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-// Pinned ManimCE v0.21 examples from parity/manim-v0.21/typst_scenes.py.
-// As with Noon's existing parity corpus, only the import is substituted.
+// Pinned ManimCE v0.21 Typst examples plus the native Text surface that replaces
+// Noon's temporary geometry-backed demo labels. Only the import is substituted.
+const helloTextSource = `from noon import *
+
+
+class HelloText(Scene):
+    def construct(self):
+        text = Text("Native Noon", font_size=48)
+        self.add(text)
+`;
+
+const multilineTextSource = `from noon import *
+
+
+class MultilineText(Scene):
+    def construct(self):
+        text = Text("first\\nsecond", font_size=36, line_spacing=0.5, color=YELLOW)
+        self.add(text)
+`;
+
 const helloTypstSource = `from noon import *
 
 
@@ -61,28 +79,41 @@ const mixedPainterSource = `from noon import *
 class MixedPainterOrder(Scene):
     def construct(self):
         self.add(Circle(radius=0.25))
-        self.add(Typst("middle", font_size=48))
+        self.add(Text("middle", font_size=48))
         self.add(Square(side_length=0.5))
 `;
 
-function assertSourceLevelSidecar(result, { source, math, fontSize, order }) {
+function retainedObject(result, { source, fontSize, order }) {
   assert.equal(result.kind, "scene_document");
   assert.ok(result.retained_document, "scene result must include a retained authoring document");
   assert.equal(result.retained_document.channel, "noon.authoring.retained");
-  assert.equal(result.retained_document.protocol_version, 1);
+  assert.equal(result.retained_document.protocol_version, 2);
   assert.equal(result.retained_document.objects.length, 1);
   const object = result.retained_document.objects[0];
   assert.ok(Number.isSafeInteger(object.object), "retained object identity must survive JSON exactly");
   assert.ok(object.object >= 2 ** 52 && object.object < Number.MAX_SAFE_INTEGER);
   assert.equal(object.order, order);
   assert.equal(object.text.source, source);
-  assert.equal(object.text.math, math);
   assert.equal(object.text.font_size, fontSize);
 
   const wire = JSON.stringify(result.retained_document);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
     assert.ok(!wire.includes(forbidden), `retained authoring wire must not contain ${forbidden}`);
   }
+  return object;
+}
+
+function assertNativeText(result, expected) {
+  const object = retainedObject(result, expected);
+  assert.equal(object.text.backend.kind, "native");
+  assert.equal(object.text.backend.font_family, expected.fontFamily ?? "DejaVu Sans Mono");
+  assert.equal(object.text.backend.line_spacing, expected.lineSpacing ?? -1);
+}
+
+function assertTypst(result, expected) {
+  const object = retainedObject(result, expected);
+  assert.equal(object.text.backend.kind, "typst");
+  assert.equal(object.text.backend.math, expected.math);
 }
 
 let browser = null;
@@ -103,7 +134,7 @@ try {
   await page.goto(`${baseUrl}/web/`, { waitUntil: "load" });
   await page.evaluate(() => {
     const worker = new Worker(new URL("./python-worker.js", location.href), {
-      name: "noon-retained-typst-authoring-smoke",
+      name: "noon-retained-text-authoring-smoke",
       type: "module",
     });
     let nextRequestId = 0;
@@ -116,7 +147,7 @@ try {
     });
 
     worker.addEventListener("error", (event) => {
-      const error = new Error(event.message || "retained Typst worker crashed");
+      const error = new Error(event.message || "retained text worker crashed");
       rejectReady(error);
       for (const { reject } of pending.values()) reject(error);
       pending.clear();
@@ -124,7 +155,7 @@ try {
     worker.addEventListener("message", (event) => {
       const message = event.data;
       if (message?.channel !== "noon.authoring" || message?.protocolVersion !== 5) {
-        const error = new Error("invalid retained Typst worker envelope");
+        const error = new Error("invalid retained text worker envelope");
         rejectReady(error);
         for (const { reject } of pending.values()) reject(error);
         pending.clear();
@@ -135,7 +166,7 @@ try {
         return;
       }
       if (message.type === "error") {
-        const error = new Error(String(message.message || "retained Typst authoring failed"));
+        const error = new Error(String(message.message || "retained text authoring failed"));
         if (message.requestId === null) {
           rejectReady(error);
           for (const { reject } of pending.values()) reject(error);
@@ -157,7 +188,7 @@ try {
       }
     });
 
-    window.noonRetainedTypstSmoke = {
+    window.noonRetainedTextSmoke = {
       ready: () => ready,
       run: async (source) => {
         await ready;
@@ -176,14 +207,41 @@ try {
       stop: () => worker.terminate(),
     };
   });
-  await page.evaluate(() => window.noonRetainedTypstSmoke.ready());
+  await page.evaluate(() => window.noonRetainedTextSmoke.ready());
+
+  const helloText = await page.evaluate(
+    (source) => window.noonRetainedTextSmoke.run(source),
+    helloTextSource,
+  );
+  assert.equal(helloText.document.objects.length, 0, "Text must not create placeholder geometry");
+  assertNativeText(helloText, {
+    source: "Native Noon",
+    fontSize: 48,
+    order: 0,
+  });
+
+  const multilineText = await page.evaluate(
+    (source) => window.noonRetainedTextSmoke.run(source),
+    multilineTextSource,
+  );
+  assert.equal(
+    multilineText.document.objects.length,
+    0,
+    "multiline Text must not create placeholder geometry",
+  );
+  assertNativeText(multilineText, {
+    source: "first\nsecond",
+    fontSize: 36,
+    lineSpacing: 0.5,
+    order: 0,
+  });
 
   const helloTypst = await page.evaluate(
-    (source) => window.noonRetainedTypstSmoke.run(source),
+    (source) => window.noonRetainedTextSmoke.run(source),
     helloTypstSource,
   );
   assert.equal(helloTypst.document.objects.length, 0, "Typst must not create placeholder geometry");
-  assertSourceLevelSidecar(helloTypst, {
+  assertTypst(helloTypst, {
     source: "*Hello* from _Typst!_",
     math: false,
     fontSize: 96,
@@ -191,7 +249,7 @@ try {
   });
 
   const helloMathTypst = await page.evaluate(
-    (source) => window.noonRetainedTypstSmoke.run(source),
+    (source) => window.noonRetainedTextSmoke.run(source),
     helloMathTypstSource,
   );
   assert.equal(
@@ -199,7 +257,7 @@ try {
     0,
     "MathTypst must not create placeholder geometry",
   );
-  assertSourceLevelSidecar(helloMathTypst, {
+  assertTypst(helloMathTypst, {
     source: "sum_(k=1)^n k = (n(n + 1)) / 2",
     math: true,
     fontSize: 72,
@@ -207,23 +265,22 @@ try {
   });
 
   const mixed = await page.evaluate(
-    (source) => window.noonRetainedTypstSmoke.run(source),
+    (source) => window.noonRetainedTextSmoke.run(source),
     mixedPainterSource,
   );
   assert.equal(mixed.document.objects.length, 2, "only the circle and square belong to legacy geometry");
   assert.equal(mixed.document.objects[0].id, 0);
   assert.equal(mixed.document.objects[1].id, 1);
-  assertSourceLevelSidecar(mixed, {
+  assertNativeText(mixed, {
     source: "middle",
-    math: false,
     fontSize: 48,
     order: 1,
   });
 
-  await page.evaluate(() => window.noonRetainedTypstSmoke.stop());
-  assert.deepEqual(errors, [], `browser errors while testing retained Typst authoring:\n${errors.join("\n")}`);
+  await page.evaluate(() => window.noonRetainedTextSmoke.stop());
+  assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
   console.log(
-    "Retained Typst authoring smoke passed: pinned Manim v0.21 Typst/MathTypst sources (import-only substitution) emit source-only retained sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Retained text authoring smoke passed: native Text and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();
