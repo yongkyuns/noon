@@ -97,6 +97,7 @@ pub enum PreparedTextItem {
         text: TextResourceHandle,
         run_index: u32,
         plane: GlyphAtlasPlane,
+        page: u32,
         instance_range: Range<u32>,
     },
     Vector {
@@ -639,6 +640,7 @@ impl RetainedTextQuadPreparer {
                 text_handle,
                 run_index,
                 atlas_image.plane,
+                atlas_image.page,
                 instance_index,
             );
         }
@@ -651,6 +653,7 @@ impl RetainedTextQuadPreparer {
         text: TextResourceHandle,
         run_index: u32,
         plane: GlyphAtlasPlane,
+        page: u32,
         instance_index: usize,
     ) {
         let start = u32::try_from(instance_index).expect("text quad count exceeds u32 draw limits");
@@ -662,6 +665,7 @@ impl RetainedTextQuadPreparer {
             text: last_text,
             run_index: last_run,
             plane: last_plane,
+            page: last_page,
             instance_range,
         }) = self.items.last_mut()
         {
@@ -669,6 +673,7 @@ impl RetainedTextQuadPreparer {
                 && *last_text == text
                 && *last_run == run_index
                 && *last_plane == plane
+                && *last_page == page
                 && instance_range.end == start
             {
                 instance_range.end = end;
@@ -680,6 +685,7 @@ impl RetainedTextQuadPreparer {
             text,
             run_index,
             plane,
+            page,
             instance_range: start..end,
         });
     }
