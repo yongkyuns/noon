@@ -52,7 +52,7 @@ async function presentDelta(deltaJson) {
     throw new Error("host raster renderer could not present an applied execution delta");
   }
   await waitForPaint();
-  return renderMetrics(true, true);
+  return true;
 }
 
 async function load(source, loopDurationSeconds) {
@@ -125,9 +125,12 @@ async function advanceOneFrame(frameIndex, time) {
     host.commitPatchBatch(batchJson);
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    hostPatch = await presentDelta(hostDelta);
     if (frameIndex === 90) {
-      hostSnapshot = JSON.parse(engine.snapshotDeltaJson());
+      const snapshotJson = engine.snapshotDeltaJson();
+      hostSnapshot = JSON.parse(snapshotJson);
+      hostPatch = await presentDelta(snapshotJson);
+    } else {
+      hostPatch = await presentDelta(hostDelta);
     }
   }
   lastFramePhases = {
