@@ -1,7 +1,7 @@
 use noon_compile::{CompilePatchError, CompiledScene};
 use noon_core::{
-    GeometryRef, MutationTransaction, ObjectDefinition, ObjectId, ObjectStateField, SceneDefinition,
-    ScenePatch, Style, Transform2D, Vec2, VectorPath,
+    GeometryRef, MutationTransaction, ObjectDefinition, ObjectId, ObjectStateField,
+    SceneDefinition, ScenePatch, Style, Transform2D, Vec2, VectorPath,
 };
 
 #[test]
@@ -50,7 +50,10 @@ fn compiled_property_patches_reject_non_finite_state_without_mutation() {
             compiled.apply_patch(&patch),
             Err(CompilePatchError::InvalidObjectState { object, field })
         );
-        assert_eq!(compiled, before, "rejected {field} patch mutated compiled state");
+        assert_eq!(
+            compiled, before,
+            "rejected {field} patch mutated compiled state"
+        );
     }
 }
 
