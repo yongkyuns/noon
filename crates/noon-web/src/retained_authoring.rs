@@ -91,7 +91,7 @@ impl RetainedTextAuthoringSpec {
                 if font_family.trim().is_empty() {
                     return Err("retained native text font_family must not be empty".to_owned());
                 }
-                if !line_spacing.is_finite() || (*line_spacing != -1.0 && *line_spacing <= -1.0) {
+                if !line_spacing.is_finite() || *line_spacing < -1.0 {
                     return Err(
                         "retained native text line_spacing must be -1 or greater than -1"
                             .to_owned(),
