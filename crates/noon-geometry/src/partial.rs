@@ -28,7 +28,10 @@ impl std::fmt::Display for PathProportionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidProportion(alpha) => {
-                write!(formatter, "path proportion must be finite and between 0 and 1: {alpha}")
+                write!(
+                    formatter,
+                    "path proportion must be finite and between 0 and 1: {alpha}"
+                )
             }
             Self::EmptyPath => formatter.write_str("path has no drawable curves"),
         }
@@ -45,10 +48,7 @@ impl std::error::Error for PathProportionError {}
 /// parameter rather than an arc-length inversion. Keeping this separate from
 /// [`pointwise_partial_path`] matters because Create/partial paths use uniform curve-count
 /// progress instead of this length-weighted measure.
-pub fn point_from_proportion(
-    path: &VectorPath,
-    alpha: f32,
-) -> Result<Vec2, PathProportionError> {
+pub fn point_from_proportion(path: &VectorPath, alpha: f32) -> Result<Vec2, PathProportionError> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
         return Err(PathProportionError::InvalidProportion(alpha));
     }
