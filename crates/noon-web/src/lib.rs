@@ -14,6 +14,7 @@ mod host_player;
 mod legacy;
 mod lifecycle;
 mod manim_geometry_bridge;
+mod manim_polygram_handle;
 mod reactive_authoring_facade;
 mod reactive_player;
 mod retained_authoring;
@@ -38,6 +39,8 @@ pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
 pub use manim_geometry_bridge::*;
+#[cfg(target_arch = "wasm32")]
+pub use manim_polygram_handle::*;
 pub use reactive_authoring_facade::*;
 pub use reactive_player::*;
 pub use retained_authoring::*;
