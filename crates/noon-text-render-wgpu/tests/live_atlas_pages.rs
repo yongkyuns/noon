@@ -81,6 +81,12 @@ fn empty_glyphs_do_not_accumulate_gpu_atlas_metadata() {
             GlyphAtlasEntry::Empty
         );
     }
+    assert_eq!(
+        atlas
+            .insert(&device, &queue, raster_key(2_000), &mask_raster(0, 3, 255))
+            .unwrap(),
+        GlyphAtlasEntry::Empty
+    );
 
     assert!(atlas.is_empty());
     assert_eq!(atlas.len(), 0);
@@ -92,7 +98,7 @@ fn empty_glyphs_do_not_accumulate_gpu_atlas_metadata() {
     assert_eq!(atlas.stats().empty_entries, 0);
     assert_eq!(atlas.stats().texture_allocations, 0);
     assert_eq!(atlas.stats().hits, 0);
-    assert_eq!(atlas.stats().misses, 1_024);
+    assert_eq!(atlas.stats().misses, 1_025);
 }
 
 #[test]
