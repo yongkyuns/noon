@@ -226,6 +226,57 @@ async function runMode(browser, transportMode) {
   );
   await page.evaluate(() => window.executionSmoke.client.resume());
 
+  const locality = await page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    const client = window.executionSmoke.client;
+    const scene = JSON.parse(wasm.demoSceneJson());
+    const template = scene.objects[0];
+    const objectCount = 513;
+    scene.objects = Array.from({ length: objectCount }, (_, index) => {
+      const object = structuredClone(template);
+      object.id = index;
+      object.transform.translation = {
+        x: index === 0 ? 0 : 32 + index * 4,
+        y: 0,
+      };
+      return object;
+    });
+    scene.tracks = [];
+    delete scene.camera_object;
+    delete scene.reactive;
+
+    await client.replaceScene(JSON.stringify(scene));
+    const deadline = performance.now() + 3000;
+    let metrics = null;
+    while (performance.now() < deadline) {
+      const candidate = await client.metrics();
+      if (
+        candidate.metrics.visibilityTotalLive === objectCount &&
+        candidate.metrics.visibilityResults === 1
+      ) {
+        metrics = candidate;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    metrics ??= await client.metrics();
+    const state = await client.state();
+    return { metrics, state, objectCount };
+  });
+  assert.equal(locality.metrics.metrics.objectCount, locality.objectCount);
+  assert.equal(locality.metrics.metrics.visibilityTotalLive, locality.objectCount);
+  assert.equal(locality.metrics.metrics.visibilityResults, 1);
+  assert.equal(locality.metrics.metrics.instancesDrawn, 1);
+  assert.ok(
+    locality.metrics.metrics.visibilityCandidatesTested <= 16,
+    `${transportMode}: viewport query tested too many offscreen candidates`,
+  );
+  assert.ok(
+    locality.metrics.metrics.visibilityCandidatesTested * 16 < locality.objectCount,
+    `${transportMode}: viewport culling did not stay sublinear to the live set`,
+  );
+  assert.equal(JSON.parse(locality.state.sceneJson).objects.length, locality.objectCount);
+
   const clientErrors = await page.evaluate(() => window.executionSmoke.errors.slice());
   assert.deepEqual(clientErrors, []);
   assert.deepEqual(browserErrors, []);
@@ -236,7 +287,8 @@ async function runMode(browser, transportMode) {
   await page.close();
   console.log(
     `✓ execution workers ${transportMode}: ${before.metrics.backend}, ` +
-      `${reconnected.presentedAfter} frames with canvas-preserving engine reconnect`,
+      `${reconnected.presentedAfter} frames with canvas-preserving engine reconnect; ` +
+      `${locality.metrics.metrics.visibilityCandidatesTested}/${locality.objectCount} visibility candidates`,
   );
 }
 
