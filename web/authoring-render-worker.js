@@ -11,6 +11,7 @@ import {
   EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaReader,
   TransferableExecutionDeltaReceiver,
+  executionDeltaMetadata,
 } from "./execution-transport.js";
 
 const RENDER_CHANNEL = "noon.render";
@@ -25,11 +26,13 @@ let mode = null;
 let sharedReader = null;
 let transferableReceiver = null;
 let renderer = null;
+let executionMetadata = null;
 let resourceBytes = null;
 let reconnectResourceBundlePending = false;
 let canvas = null;
 let width = 1;
 let height = 1;
+let resizePending = false;
 let bootstrapQueue = [];
 let bootstrapPromise = null;
 let transitionRequestId = null;
@@ -37,6 +40,10 @@ let transitionResponseType = null;
 let transitionMode = null;
 let transitionResourceBytes = null;
 let needsPresent = false;
+let visibilityActive = false;
+let visibilityActivationPending = false;
+let awaitingVisibility = false;
+let visibilityReady = false;
 let running = false;
 let lastFrameTimestamp = null;
 let presentedFrames = 0;
@@ -178,6 +185,21 @@ function resize(message) {
   if (renderer === null) {
     return;
   }
+  if (
+    mode === MODE_LEGACY &&
+    (visibilityActivationPending || awaitingVisibility || needsPresent)
+  ) {
+    resizePending = true;
+    return;
+  }
+  applyRendererResize();
+}
+
+function applyRendererResize() {
+  if (renderer === null) {
+    return;
+  }
+  resizePending = false;
   renderer.resize(width, height);
   if (!drainGpuDiagnostics()) return;
   if (mode === MODE_RETAINED) {
@@ -223,10 +245,23 @@ function resetTransportState() {
   transferableReceiver = null;
   bootstrapQueue = [];
   bootstrapPromise = null;
+  executionMetadata = null;
+  visibilityActive = false;
+  visibilityActivationPending = false;
+  awaitingVisibility = false;
+  visibilityReady = false;
 }
 
 function handleEngineMessage(message) {
   if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.type === "visibility_active") {
+    handleVisibilityActivation();
+    return;
+  }
+  if (message.type === "visibility") {
+    handleVisibility(message);
     return;
   }
   if (message.type === "retained_resources") {
@@ -248,6 +283,46 @@ function handleEngineMessage(message) {
   }
   if (message.type === "shared_delta") {
     drainTransport();
+  }
+}
+
+function handleVisibilityActivation() {
+  if (mode !== MODE_LEGACY || !visibilityActivationPending || visibilityActive) {
+    fail(new Error("authoring render worker received unexpected visibility activation"), null);
+    return;
+  }
+  visibilityActivationPending = false;
+  visibilityActive = true;
+}
+
+function handleVisibility(message) {
+  try {
+    if (mode !== MODE_LEGACY || !visibilityActive) {
+      throw new Error("authoring render worker received visibility outside active legacy mode");
+    }
+    if (renderer === null) {
+      throw new Error("authoring render worker received visibility before renderer bootstrap");
+    }
+    if (typeof message.json !== "string") {
+      throw new Error("authoring render visibility requires a JSON payload");
+    }
+    if (
+      executionMetadata === null ||
+      message.session !== executionMetadata.session ||
+      message.sequence !== executionMetadata.sequence
+    ) {
+      throw new Error("authoring render visibility does not match the applied execution frame");
+    }
+    renderer.applyVisibilityJson(message.json);
+    awaitingVisibility = false;
+    visibilityReady = true;
+    needsPresent = true;
+    if (tryPresent()) {
+      flushBootstrapQueue();
+      drainTransport();
+    }
+  } catch (error) {
+    fail(error, null);
   }
 }
 
@@ -326,12 +401,17 @@ function consumeDelta(json) {
   if (needsPresent) {
     return false;
   }
+  const metadata = executionDeltaMetadata(json);
   const applied = renderer.applyDeltaJson(json);
   if (!applied) {
     return true;
   }
+  executionMetadata = metadata;
   needsPresent = true;
-  tryPresent();
+  visibilityReady = false;
+  if (mode === MODE_RETAINED || !visibilityActive) {
+    tryPresent();
+  }
   return true;
 }
 
@@ -355,6 +435,7 @@ function commitRendererTransition(initial) {
   resourceBytes = nextResourceBytes;
   reconnectResourceBundlePending = false;
   needsPresent = false;
+  visibilityReady = false;
   mode = nextMode;
   bootstrapPromise = bootstrapRenderer(initial);
   return true;
@@ -363,6 +444,7 @@ function commitRendererTransition(initial) {
 async function bootstrapRenderer(initial) {
   const wasRunning = running;
   try {
+    const initialMetadata = executionDeltaMetadata(initial);
     if (mode === MODE_RETAINED) {
       renderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
       resourceBytes = null;
@@ -373,7 +455,9 @@ async function bootstrapRenderer(initial) {
     } else {
       renderer = await ExecutionCanvasRenderer.create(canvas, initial);
     }
+    executionMetadata = initialMetadata;
     renderer.resize(width, height);
+    resizePending = false;
     if (!drainGpuDiagnostics()) return;
     needsPresent = true;
     running = true;
@@ -416,12 +500,19 @@ function tryPresent() {
   if (renderer === null || !needsPresent || !drainGpuDiagnostics()) {
     return false;
   }
+  if (mode === MODE_LEGACY && visibilityActive && !visibilityReady) {
+    return false;
+  }
   if (!renderer.render()) {
     drainGpuDiagnostics();
     return false;
   }
   needsPresent = false;
+  visibilityReady = false;
   presentedFrames += 1;
+  if (resizePending) {
+    applyRendererResize();
+  }
   return drainGpuDiagnostics();
 }
 
@@ -431,10 +522,12 @@ function flushBootstrapQueue() {
   }
   while (!needsPresent && bootstrapQueue.length > 0) {
     const json = bootstrapQueue.shift();
+    const metadata = executionDeltaMetadata(json);
     const applied = renderer.applyDeltaJson(json);
     if (!applied) {
       continue;
     }
+    executionMetadata = metadata;
     needsPresent = true;
     if (!tryPresent()) {
       break;
@@ -469,7 +562,23 @@ function frame(timestamp) {
   if (!running || !drainGpuDiagnostics()) {
     return;
   }
-  renderPort?.postMessage({ type: "tick", timestamp });
+  if (transitionMode !== null || bootstrapPromise !== null || renderer === null) {
+    scheduleFrame();
+    return;
+  }
+  if (mode === MODE_LEGACY) {
+    if (!visibilityActivationPending && !awaitingVisibility && !needsPresent) {
+      visibilityActivationPending = !visibilityActive;
+      awaitingVisibility = true;
+      renderPort?.postMessage({
+        type: "tick",
+        timestamp,
+        aspect: width / height,
+      });
+    }
+  } else {
+    renderPort?.postMessage({ type: "tick", timestamp });
+  }
   scheduleFrame();
 }
 
@@ -508,6 +617,10 @@ function currentMetrics() {
     lastFrameTimestamp,
     bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
     needsPresent,
+    resizePending,
+    visibilityActive,
+    visibilityActivationPending,
+    awaitingVisibility,
   };
   if (renderer === null) {
     return {
@@ -529,6 +642,10 @@ function currentMetrics() {
   if (mode === MODE_RETAINED) {
     metrics.outlineCacheMisses = renderer.lastOutlineCacheMisses();
     metrics.resourceBundlePending = reconnectResourceBundlePending;
+  } else {
+    metrics.visibilityCandidatesTested = renderer.lastVisibilityCandidatesTested();
+    metrics.visibilityResults = renderer.lastVisibilityResults();
+    metrics.visibilityTotalLive = renderer.lastVisibilityTotalLive();
   }
   return metrics;
 }

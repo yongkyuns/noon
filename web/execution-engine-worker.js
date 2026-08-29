@@ -5,6 +5,7 @@ import {
   SharedExecutionDeltaWriter,
   TransferableExecutionDeltaSender,
   createSharedExecutionMailbox,
+  executionDeltaMetadata,
 } from "./execution-transport.js";
 
 const ENGINE_CHANNEL = "noon.engine";
@@ -17,6 +18,9 @@ let transportMode = null;
 let transport = null;
 let player = null;
 let latestTick = null;
+let viewportAspect = null;
+let pendingVisibility = null;
+let lastVisibility = null;
 let controlQueue = [];
 let initialized = false;
 let stopped = false;
@@ -81,6 +85,9 @@ async function handleMainMessage(message) {
         stopped = true;
         controlQueue = [];
         latestTick = null;
+        viewportAspect = null;
+        pendingVisibility = null;
+        lastVisibility = null;
         clearHostCallbacks();
         hostPort?.close?.();
         hostPort = null;
@@ -139,8 +146,8 @@ async function initialize(message) {
     });
   } else {
     transport = new TransferableExecutionDeltaSender(renderPort, {
-      maxInFlight: 2,
-      onWritable: drainWork,
+      maxInFlight: 1,
+      onWritable: handleTransportWritable,
     });
   }
 
@@ -160,21 +167,45 @@ function handleRenderMessage(message) {
       fail(new Error("render worker sent a non-finite frame timestamp"), null);
       return;
     }
+    const requestsVisibility = message.aspect !== undefined && message.aspect !== null;
+    if (requestsVisibility && (!Number.isFinite(message.aspect) || message.aspect <= 0)) {
+      fail(new Error("render worker sent an invalid viewport aspect"), null);
+      return;
+    }
     if (hostInFlight !== null && message.timestamp > hostInFlight.presentationTimestamp) {
       hostInFlight.late = true;
       hostMetrics.missedDeadlines += 1;
     }
-    latestTick = message.timestamp;
+    if (requestsVisibility) {
+      const activatingVisibility = viewportAspect === null;
+      viewportAspect = message.aspect;
+      if (activatingVisibility) {
+        renderPort.postMessage({ type: "visibility_active" });
+      }
+    }
+    latestTick = {
+      timestamp: message.timestamp,
+      aspect: requestsVisibility ? message.aspect : null,
+    };
     drainWork();
     return;
   }
   if (message.type === "transport_writable") {
-    drainWork();
+    handleTransportWritable();
     return;
   }
   if (message.type === "render_error") {
     fail(new Error(`render worker failed: ${message.message}`), null);
   }
+}
+
+function handleTransportWritable() {
+  if (pendingVisibility !== null) {
+    sendVisibilityOrThrow(pendingVisibility);
+    lastVisibility = pendingVisibility;
+    pendingVisibility = null;
+  }
+  drainWork();
 }
 
 function attachHostPort(message) {
@@ -290,14 +321,26 @@ function drainWork() {
     return;
   }
 
-  const timestamp = latestTick;
+  const tick = latestTick;
   latestTick = null;
+  if (tick.aspect !== null) {
+    viewportAspect = tick.aspect;
+  }
   try {
-    const delta = player.tickDeltaJson(timestamp);
+    const delta = player.tickDeltaJson(tick.timestamp);
     if (delta !== undefined && delta !== null) {
       sendDeltaOrThrow(delta);
+    } else if (tick.aspect === null) {
+      // Ordinary execution ticks do not participate in viewport visibility culling.
+    } else if (lastVisibility !== null && Object.is(lastVisibility.aspect, viewportAspect)) {
+      sendVisibilityOrThrow(lastVisibility);
+    } else {
+      // The mirror must advance to the same semantic frame before accepting a new
+      // visibility envelope. A complete snapshot is needed only for first activation
+      // or an aspect change when evaluation produced no object delta.
+      sendDeltaOrThrow(player.snapshotDeltaJson());
     }
-    maybeRequestHostCallback(timestamp);
+    maybeRequestHostCallback(tick.timestamp);
   } catch (error) {
     fail(error, null);
   }
@@ -603,14 +646,14 @@ function applyHostMirror(delta) {
 }
 
 function transportCanSend() {
-  if (transport === null) {
+  if (transport === null || pendingVisibility !== null) {
     return false;
   }
   if (typeof transport.canSend === "function") {
     return transport.canSend();
   }
   if (typeof transport.inFlight === "function") {
-    return transport.inFlight() < 2;
+    return transport.inFlight() < 1;
   }
   return true;
 }
@@ -619,6 +662,7 @@ function sendDeltaOrThrow(json) {
   if (json === undefined || json === null) {
     return;
   }
+  const metadata = executionDeltaMetadata(json);
   const decoded = hostCallbacks === null ? null : JSON.parse(json);
   if (!transport.send(json)) {
     throw new Error("execution transport became backpressured after work was admitted");
@@ -629,10 +673,37 @@ function sendDeltaOrThrow(json) {
   if (transportMode === EXECUTION_TRANSPORT_SHARED) {
     renderPort.postMessage({ type: "shared_delta" });
   }
+  if (viewportAspect !== null) {
+    pendingVisibility = {
+      session: metadata.session,
+      sequence: metadata.sequence,
+      aspect: viewportAspect,
+      json: player.viewportVisibilityJson(viewportAspect),
+    };
+  }
+}
+
+function sendVisibilityOrThrow(visibility) {
+  if (visibility === null) {
+    return;
+  }
+  renderPort.postMessage({
+    type: "visibility",
+    session: visibility.session,
+    sequence: visibility.sequence,
+    json: visibility.json,
+  });
 }
 
 function currentEngineMetrics() {
   return {
+    visibility: {
+      active: viewportAspect !== null,
+      aspect: viewportAspect,
+      pending: pendingVisibility !== null,
+      lastSession: lastVisibility?.session ?? null,
+      lastSequence: lastVisibility?.sequence ?? null,
+    },
     host: {
       enabled: hostCallbacks !== null,
       inFlight: hostInFlight !== null,

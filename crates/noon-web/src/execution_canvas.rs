@@ -14,14 +14,14 @@ mod wasm {
     use std::mem;
 
     use noon_core::Vec2;
-    use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
+    use noon_render_wgpu::{Camera2D, GpuRenderer, VisibilityFramePreparer};
     use noon_runtime::FrameChanges;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        ExecutionFrameMirror, TransportApplyOutcome,
+        ExecutionFrameMirror, ExecutionVisibilityEnvelope, TransportApplyOutcome,
     };
 
     use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
@@ -44,6 +44,13 @@ mod wasm {
         config: wgpu::SurfaceConfiguration,
     }
 
+    #[derive(Debug)]
+    struct PendingVisibility {
+        rows: Vec<usize>,
+        candidates_tested: usize,
+        total_live: usize,
+    }
+
     #[wasm_bindgen(js_name = ExecutionCanvasRenderer)]
     pub struct WasmExecutionCanvasRenderer {
         instance: wgpu::Instance,
@@ -56,7 +63,8 @@ mod wasm {
         drawable: bool,
         mirror: ExecutionFrameMirror,
         pending_changes: FrameChanges,
-        preparer: FramePreparer,
+        pending_visibility: Option<PendingVisibility>,
+        preparer: VisibilityFramePreparer,
         renderer: GpuRenderer,
         camera_center: Vec2,
         camera_height: f32,
@@ -65,6 +73,9 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        last_visibility_candidates_tested: usize,
+        last_visibility_results: usize,
+        last_visibility_total_live: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
     }
@@ -111,7 +122,8 @@ mod wasm {
                 drawable: true,
                 mirror,
                 pending_changes,
-                preparer: FramePreparer::new(),
+                pending_visibility: None,
+                preparer: VisibilityFramePreparer::new(),
                 renderer,
                 camera_center: camera.center,
                 camera_height: camera.height,
@@ -120,6 +132,9 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                last_visibility_candidates_tested: 0,
+                last_visibility_results: 0,
+                last_visibility_total_live: 0,
                 gpu_generation,
                 gpu_diagnostics,
             };
@@ -129,9 +144,9 @@ mod wasm {
 
         #[wasm_bindgen(js_name = applyDeltaJson)]
         pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
-            if !self.pending_changes.is_empty() {
+            if !self.pending_changes.is_empty() || self.pending_visibility.is_some() {
                 return Err(js_message(
-                    "render worker must present the applied execution delta before accepting another",
+                    "render worker must present the pending execution frame before accepting another delta",
                 ));
             }
             let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
@@ -150,8 +165,29 @@ mod wasm {
             }
         }
 
+        #[wasm_bindgen(js_name = applyVisibilityJson)]
+        pub fn apply_visibility_json(&mut self, json: &str) -> Result<(), JsValue> {
+            if self.pending_visibility.is_some() {
+                return Err(js_message(
+                    "render worker must present pending execution visibility before accepting another",
+                ));
+            }
+            let visibility = ExecutionVisibilityEnvelope::from_json(json).map_err(js_error)?;
+            let rows = visibility
+                .resolve_for_mirror(&self.mirror)
+                .map_err(js_error)?;
+            self.pending_visibility = Some(PendingVisibility {
+                rows,
+                candidates_tested: visibility.stats.candidates_tested,
+                total_live: visibility.total_live,
+            });
+            Ok(())
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
-            if !self.drawable || self.pending_changes.is_empty() {
+            if !self.drawable
+                || (self.pending_changes.is_empty() && self.pending_visibility.is_none())
+            {
                 return Ok(false);
             }
 
@@ -177,11 +213,21 @@ mod wasm {
                 };
 
             let changes = mem::take(&mut self.pending_changes);
+            let visibility = self.pending_visibility.take();
             let frame = self
                 .mirror
                 .frame()
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
+            let prepared = if let Some(visibility) = visibility {
+                self.last_visibility_candidates_tested = visibility.candidates_tested;
+                self.last_visibility_results = visibility.rows.len();
+                self.last_visibility_total_live = visibility.total_live;
+                self.preparer
+                    .prepare_incremental_visible(frame, &changes, &visibility.rows)
+                    .map_err(js_error)?
+            } else {
+                self.preparer.prepare_incremental(frame, &changes)
+            };
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
@@ -288,6 +334,21 @@ mod wasm {
         #[wasm_bindgen(js_name = lastGeometryCacheMisses)]
         pub fn last_geometry_cache_misses(&self) -> usize {
             self.last_geometry_cache_misses
+        }
+
+        #[wasm_bindgen(js_name = lastVisibilityCandidatesTested)]
+        pub fn last_visibility_candidates_tested(&self) -> usize {
+            self.last_visibility_candidates_tested
+        }
+
+        #[wasm_bindgen(js_name = lastVisibilityResults)]
+        pub fn last_visibility_results(&self) -> usize {
+            self.last_visibility_results
+        }
+
+        #[wasm_bindgen(js_name = lastVisibilityTotalLive)]
+        pub fn last_visibility_total_live(&self) -> usize {
+            self.last_visibility_total_live
         }
     }
 
