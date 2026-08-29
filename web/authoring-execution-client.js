@@ -1,6 +1,4 @@
-import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { ExecutionWorkerClient } from "./execution-worker-client.js";
-import { RetainedExecutionWorkerClient } from "./retained-execution-worker-client.js";
 
 export const AUTHORING_EXECUTION_LEGACY = "legacy";
 export const AUTHORING_EXECUTION_RETAINED = "retained";
@@ -17,13 +15,13 @@ const EMPTY_HOST_METRICS = Object.freeze({
 
 /// One browser execution owner for Python authoring output.
 ///
-/// Legacy SceneDocument-only results keep using the mature execution worker pair.
-/// Results with retained objects in a `noon.authoring.retained` sidecar switch
-/// atomically to the mixed retained engine/render workers. Empty sidecars remain on
-/// legacy execution so ordinary geometry scenes do not pay retained rebuild costs.
-/// Because the retained worker does not yet support in-place scene reconciliation,
-/// retained edits rebuild only at authoring boundaries; playback remains fully
-/// retained and performs no per-frame Python/source work.
+/// The execution client owns one render worker and one transferred OffscreenCanvas
+/// for its lifetime. Geometry-only results keep a legacy engine attached to that
+/// owner. Results with retained objects switch only the engine type and renderer
+/// implementation at an authoring boundary; the render worker, HTML canvas, and
+/// OffscreenCanvas ownership remain stable. Empty retained sidecars stay on legacy
+/// execution. Retained edits still rebuild engine state at authoring boundaries;
+/// playback itself remains retained with no per-frame Python/source work.
 export class AuthoringExecutionClient {
   #canvas;
   #player = null;
@@ -126,7 +124,14 @@ export class AuthoringExecutionClient {
             "split the callback work from retained text instead of silently dropping either",
         );
       }
-      return this.#runTransition(() => this.#rebuildRetained(sceneJson, retainedDocumentJson));
+      if (this.#mode === AUTHORING_EXECUTION_RETAINED) {
+        return this.#runTransition(() =>
+          this.#rebuildRetained(sceneJson, retainedDocumentJson),
+        );
+      }
+      return this.#runTransition(() =>
+        this.#switchRetained(sceneJson, retainedDocumentJson),
+      );
     }
 
     if (this.#mode === AUTHORING_EXECUTION_LEGACY) {
@@ -138,7 +143,9 @@ export class AuthoringExecutionClient {
       return { ...result, mode: this.#mode, rebuilt: false };
     }
 
-    return this.#runTransition(() => this.#rebuildLegacy(sceneJson, { callbacks, authoringClient }));
+    return this.#runTransition(() =>
+      this.#switchLegacy(sceneJson, { callbacks, authoringClient }),
+    );
   }
 
   async state() {
@@ -184,8 +191,10 @@ export class AuthoringExecutionClient {
 
   async restart() {
     return this.#withStablePlayer(async (player, mode) => {
+      const generation = this.#lifecycleGeneration;
       try {
         const ready = await player.restart();
+        this.#assertLifecycleCurrent(generation);
         this.#canvas = player.canvas;
         this.#mode = mode;
         this.#rendererBackend = ready.render.backend;
@@ -194,6 +203,9 @@ export class AuthoringExecutionClient {
         this.#resizeCurrentCanvas();
         return { ...ready, mode };
       } catch (error) {
+        if (generation !== this.#lifecycleGeneration) {
+          throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+        }
         this.#adoptPlayerCanvas(player);
         throw error;
       }
@@ -227,6 +239,7 @@ export class AuthoringExecutionClient {
     this.#player = null;
     this.#mode = null;
     this.#rendererBackend = "";
+    this.#transportMode = null;
   }
 
   async #startLegacy(sceneJson, options) {
@@ -253,32 +266,26 @@ export class AuthoringExecutionClient {
       if (generation === this.#lifecycleGeneration) {
         this.#adoptPlayerCanvas(player);
       }
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
       throw error;
     }
   }
 
-  async #rebuildRetained(sceneJson, retainedDocumentJson) {
+  async #switchRetained(sceneJson, retainedDocumentJson) {
     const generation = this.#lifecycleGeneration;
-    const canvas = this.#replaceTransferredCanvas();
-    const player = new RetainedExecutionWorkerClient(canvas, {
-      onError: this.#onError,
-      onRecoverableError: this.#onRecoverableError,
-    });
-    const terminateCandidate = createIdempotentTerminator(player);
-    let published = false;
+    const player = this.#player;
     try {
-      const ready = await player.start(sceneJson, retainedDocumentJson, {
+      const ready = await player.switchToRetained(sceneJson, retainedDocumentJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
-        transportMode: this.#transportMode,
-        sharedSlotCapacity: this.#sharedSlotCapacity,
       });
-      this.#assertLifecycleCurrent(generation, terminateCandidate);
-      this.#player = player;
-      published = true;
+      this.#assertLifecycleCurrent(generation);
       this.#mode = AUTHORING_EXECUTION_RETAINED;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
       const state = await player.state();
+      this.#assertLifecycleCurrent(generation);
       return {
         type: "result",
         operation: "rebuild_retained_scene",
@@ -289,42 +296,60 @@ export class AuthoringExecutionClient {
         ...state,
       };
     } catch (error) {
-      if (!published || generation === this.#lifecycleGeneration) {
-        terminateCandidate();
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
       }
-      if (generation === this.#lifecycleGeneration) {
-        this.#adoptPlayerCanvas(player);
-      }
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
 
-  async #rebuildLegacy(sceneJson, { callbacks, authoringClient }) {
+  async #rebuildRetained(sceneJson, retainedDocumentJson) {
     const generation = this.#lifecycleGeneration;
-    const canvas = this.#replaceTransferredCanvas();
-    const player = new ExecutionWorkerClient(canvas, {
-      onError: this.#onError,
-      onRecoverableError: this.#onRecoverableError,
-    });
-    const terminateCandidate = createIdempotentTerminator(player);
-    let published = false;
+    const player = this.#player;
     try {
-      const ready = await player.start(sceneJson, {
+      const ready = await player.rebuildRetained(sceneJson, retainedDocumentJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
-        transportMode: this.#transportMode,
-        sharedSlotCapacity: this.#sharedSlotCapacity,
       });
-      this.#assertLifecycleCurrent(generation, terminateCandidate);
-      if (callbacks !== null && callbacks !== undefined) {
-        await player.configureHostCallbacks(callbacks, authoringClient);
-        this.#assertLifecycleCurrent(generation, terminateCandidate);
+      this.#assertLifecycleCurrent(generation);
+      this.#mode = AUTHORING_EXECUTION_RETAINED;
+      this.#rendererBackend = ready.render.backend;
+      this.#resizeCurrentCanvas();
+      const state = await player.state();
+      this.#assertLifecycleCurrent(generation);
+      return {
+        type: "result",
+        operation: "rebuild_retained_scene",
+        incremental: false,
+        rebuilt: true,
+        mode: this.#mode,
+        ready,
+        ...state,
+      };
+    } catch (error) {
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
       }
-      this.#player = player;
-      published = true;
+      this.#adoptPlayerCanvas(player);
+      throw error;
+    }
+  }
+
+  async #switchLegacy(sceneJson, { callbacks, authoringClient }) {
+    const generation = this.#lifecycleGeneration;
+    const player = this.#player;
+    try {
+      const ready = await player.switchToLegacy(sceneJson, {
+        callbacks,
+        authoringClient,
+        loopDurationSeconds: this.#loopDurationSeconds,
+      });
+      this.#assertLifecycleCurrent(generation);
       this.#mode = AUTHORING_EXECUTION_LEGACY;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
       const state = await player.state();
+      this.#assertLifecycleCurrent(generation);
       return {
         type: "result",
         operation: "rebuild_legacy_scene",
@@ -335,12 +360,10 @@ export class AuthoringExecutionClient {
         ...state,
       };
     } catch (error) {
-      if (!published || generation === this.#lifecycleGeneration) {
-        terminateCandidate();
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
       }
-      if (generation === this.#lifecycleGeneration) {
-        this.#adoptPlayerCanvas(player);
-      }
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -389,16 +412,6 @@ export class AuthoringExecutionClient {
     }
   }
 
-  #replaceTransferredCanvas() {
-    this.#player?.terminate();
-    this.#canvas = replaceExecutionCanvas(this.#canvas);
-    this.#player = null;
-    this.#mode = null;
-    this.#rendererBackend = "";
-    this.#observeCanvas();
-    return this.#canvas;
-  }
-
   #adoptPlayerCanvas(player) {
     if (this.#canvas === player.canvas) {
       return;
@@ -429,11 +442,11 @@ export class AuthoringExecutionClient {
     this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
   }
 
-  #assertLifecycleCurrent(generation, terminateCandidate) {
+  #assertLifecycleCurrent(generation, terminateCandidate = null) {
     if (generation === this.#lifecycleGeneration) {
       return;
     }
-    terminateCandidate();
+    terminateCandidate?.();
     throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
   }
 
