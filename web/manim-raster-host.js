@@ -52,7 +52,7 @@ async function presentDelta(deltaJson) {
     throw new Error("host raster renderer could not present an applied execution delta");
   }
   await waitForPaint();
-  return true;
+  return renderMetrics(true, true);
 }
 
 async function load(source, loopDurationSeconds) {
