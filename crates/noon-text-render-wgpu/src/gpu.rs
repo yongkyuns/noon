@@ -462,7 +462,7 @@ impl TextGlyphGpuRenderer {
                 plane: *plane,
                 page: *page,
             })?;
-        let bind_group = bind_groups.get(page_index).ok_or_else(|| {
+        let bind_group = bind_groups.get(page_index).ok_or({
             if *page == 0 && bind_groups.is_empty() {
                 TextGpuDrawError::MissingAtlasPlane(*plane)
             } else {
