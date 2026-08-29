@@ -1,6 +1,4 @@
-use noon_core::{
-    ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D, Vec2,
-};
+use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D, Vec2};
 use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
 use noon_text_render_wgpu::{
     RetainedTextIncrementalStats, RetainedTextQuadPreparer, TextDeviceMetrics,
