@@ -129,6 +129,11 @@ fn text_remove_reinsert_does_not_alias_stale_identity() {
         replacement.id, stale.id,
         "a removed bare TextResourceId must not alias a new occupant"
     );
+    assert_eq!(
+        arena.slot_capacity(),
+        1,
+        "remove/reinsert must reuse the released physical slot"
+    );
     assert!(
         arena.get(stale).is_none(),
         "a stale handle must remain invalid after a new resource is inserted"
@@ -136,6 +141,34 @@ fn text_remove_reinsert_does_not_alias_stale_identity() {
     assert!(
         arena.get(replacement).is_some(),
         "the replacement handle must resolve independently"
+    );
+}
+
+#[test]
+fn text_slot_reuse_preserves_unrelated_live_identity() {
+    let mut arena = TextResourceArena::new();
+    let recycled = arena
+        .insert(empty_text("recycled"))
+        .expect("recycled text resource must insert");
+    let unrelated = arena
+        .insert(empty_text("unrelated"))
+        .expect("unrelated text resource must insert");
+
+    arena
+        .remove(recycled.id)
+        .expect("recycled text resource must be removable");
+    let replacement = arena
+        .insert(empty_text("replacement"))
+        .expect("replacement text resource must insert");
+
+    assert_eq!(arena.slot_capacity(), 2);
+    assert_ne!(replacement.id, recycled.id);
+    assert_eq!(arena.current_handle(unrelated.id), Some(unrelated));
+    assert_eq!(
+        arena
+            .get(unrelated)
+            .map(|resource| resource.source.as_ref()),
+        Some("unrelated")
     );
 }
 
@@ -158,6 +191,11 @@ fn text_remove_reinsert_churn_keeps_every_stale_identity_rejected() {
             .insert(empty_text("x"))
             .expect("replacement text resource must insert");
         assert_eq!(arena.stats(), baseline, "live accounting must stay bounded");
+        assert_eq!(
+            arena.slot_capacity(),
+            1,
+            "physical slot storage must stay at the live high-water mark"
+        );
     }
 
     for handle in stale {
