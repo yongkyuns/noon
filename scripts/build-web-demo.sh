@@ -48,6 +48,7 @@ node --check scripts/browser-smoke.mjs
 node --check scripts/manim-raster-differential.mjs
 node --check scripts/manim-seek-playback-raster.mjs
 node --check scripts/manim-typst-authoring-smoke.mjs
+node --check scripts/manim-reference-inventory.mjs
 node --check scripts/perf-profile.mjs
 node --check scripts/authoring-perf.mjs
 node --check scripts/perf-device-run.mjs
@@ -64,6 +65,7 @@ node --check scripts/reactive-authoring-smoke.mjs
 node --check scripts/reactive-runtime-smoke.mjs
 node --check scripts/native-input-smoke.mjs
 node --check scripts/updater-callback-smoke.mjs
+node --test scripts/manim-reference-inventory.test.mjs
 node --test web/example-gallery.test.mjs
 node --test web/execution-transport.test.mjs
 node --test web/execution-worker-client.test.mjs
