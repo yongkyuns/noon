@@ -7,6 +7,8 @@ export const AUTHORING_EXECUTION_RETAINED = "retained";
 
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
+const LIFECYCLE_CANCELLED_MESSAGE =
+  "AuthoringExecutionClient was terminated during an asynchronous operation";
 const EMPTY_HOST_METRICS = Object.freeze({
   enabled: false,
   missedDeadlines: 0,
@@ -34,6 +36,7 @@ export class AuthoringExecutionClient {
   #onRecoverableError;
   #resizeObserver = null;
   #transition = null;
+  #lifecycleGeneration = 0;
 
   constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
@@ -217,6 +220,7 @@ export class AuthoringExecutionClient {
   }
 
   terminate() {
+    this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
     this.#player?.terminate();
@@ -226,37 +230,51 @@ export class AuthoringExecutionClient {
   }
 
   async #startLegacy(sceneJson, options) {
+    const generation = this.#lifecycleGeneration;
     const player = new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
       onRecoverableError: this.#onRecoverableError,
     });
+    const terminateCandidate = createIdempotentTerminator(player);
+    let published = false;
     try {
       const ready = await player.start(sceneJson, options);
+      this.#assertLifecycleCurrent(generation, terminateCandidate);
       this.#player = player;
+      published = true;
       this.#mode = AUTHORING_EXECUTION_LEGACY;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
       return ready;
     } catch (error) {
-      player.terminate();
-      this.#adoptPlayerCanvas(player);
+      if (!published || generation === this.#lifecycleGeneration) {
+        terminateCandidate();
+      }
+      if (generation === this.#lifecycleGeneration) {
+        this.#adoptPlayerCanvas(player);
+      }
       throw error;
     }
   }
 
   async #rebuildRetained(sceneJson, retainedDocumentJson) {
+    const generation = this.#lifecycleGeneration;
     const canvas = this.#replaceTransferredCanvas();
     const player = new RetainedExecutionWorkerClient(canvas, {
       onError: this.#onError,
       onRecoverableError: this.#onRecoverableError,
     });
+    const terminateCandidate = createIdempotentTerminator(player);
+    let published = false;
     try {
       const ready = await player.start(sceneJson, retainedDocumentJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
         transportMode: this.#transportMode,
         sharedSlotCapacity: this.#sharedSlotCapacity,
       });
+      this.#assertLifecycleCurrent(generation, terminateCandidate);
       this.#player = player;
+      published = true;
       this.#mode = AUTHORING_EXECUTION_RETAINED;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
@@ -271,28 +289,38 @@ export class AuthoringExecutionClient {
         ...state,
       };
     } catch (error) {
-      player.terminate();
-      this.#adoptPlayerCanvas(player);
+      if (!published || generation === this.#lifecycleGeneration) {
+        terminateCandidate();
+      }
+      if (generation === this.#lifecycleGeneration) {
+        this.#adoptPlayerCanvas(player);
+      }
       throw error;
     }
   }
 
   async #rebuildLegacy(sceneJson, { callbacks, authoringClient }) {
+    const generation = this.#lifecycleGeneration;
     const canvas = this.#replaceTransferredCanvas();
     const player = new ExecutionWorkerClient(canvas, {
       onError: this.#onError,
       onRecoverableError: this.#onRecoverableError,
     });
+    const terminateCandidate = createIdempotentTerminator(player);
+    let published = false;
     try {
       const ready = await player.start(sceneJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
         transportMode: this.#transportMode,
         sharedSlotCapacity: this.#sharedSlotCapacity,
       });
+      this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (callbacks !== null && callbacks !== undefined) {
         await player.configureHostCallbacks(callbacks, authoringClient);
+        this.#assertLifecycleCurrent(generation, terminateCandidate);
       }
       this.#player = player;
+      published = true;
       this.#mode = AUTHORING_EXECUTION_LEGACY;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
@@ -307,8 +335,12 @@ export class AuthoringExecutionClient {
         ...state,
       };
     } catch (error) {
-      player.terminate();
-      this.#adoptPlayerCanvas(player);
+      if (!published || generation === this.#lifecycleGeneration) {
+        terminateCandidate();
+      }
+      if (generation === this.#lifecycleGeneration) {
+        this.#adoptPlayerCanvas(player);
+      }
       throw error;
     }
   }
@@ -397,11 +429,30 @@ export class AuthoringExecutionClient {
     this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
   }
 
+  #assertLifecycleCurrent(generation, terminateCandidate) {
+    if (generation === this.#lifecycleGeneration) {
+      return;
+    }
+    terminateCandidate();
+    throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+  }
+
   #requireStarted() {
     if (this.#player === null) {
       throw new Error("AuthoringExecutionClient has not been started");
     }
   }
+}
+
+function createIdempotentTerminator(player) {
+  let terminated = false;
+  return () => {
+    if (terminated) {
+      return;
+    }
+    terminated = true;
+    player.terminate();
+  };
 }
 
 function validateSceneJson(sceneJson) {
