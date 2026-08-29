@@ -2,9 +2,7 @@
 
 use std::{mem::size_of, sync::Arc};
 
-use noon_core::{
-    FontResourceHandle, FontResourceId, TextResourceHandle, TextResourceId,
-};
+use noon_core::{FontResourceHandle, FontResourceId, TextResourceHandle, TextResourceId};
 use noon_text_atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
 use noon_text_raster::{
     GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
