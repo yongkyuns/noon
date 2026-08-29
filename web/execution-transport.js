@@ -1,12 +1,13 @@
 export const EXECUTION_TRANSPORT_CHANNEL = "noon.execution";
 export const RETAINED_EXECUTION_TRANSPORT_CHANNEL = "noon.execution.retained";
-export const EXECUTION_TRANSPORT_VERSION = 1;
+export const EXECUTION_TRANSPORT_VERSION = 2;
+export const RETAINED_EXECUTION_TRANSPORT_VERSION = 1;
 export const EXECUTION_TRANSPORT_SHARED = "shared";
 export const EXECUTION_TRANSPORT_TRANSFERABLE = "transferable";
 
-const EXECUTION_TRANSPORT_CHANNELS = new Set([
-  EXECUTION_TRANSPORT_CHANNEL,
-  RETAINED_EXECUTION_TRANSPORT_CHANNEL,
+const EXECUTION_TRANSPORT_VERSIONS = new Map([
+  [EXECUTION_TRANSPORT_CHANNEL, EXECUTION_TRANSPORT_VERSION],
+  [RETAINED_EXECUTION_TRANSPORT_CHANNEL, RETAINED_EXECUTION_TRANSPORT_VERSION],
 ]);
 const SLOT_FREE = 0;
 const SLOT_WRITING = 1;
@@ -38,11 +39,17 @@ export function executionDeltaMetadata(json) {
   } catch (error) {
     throw new Error(`execution delta is invalid JSON: ${error.message}`);
   }
-  if (!isRecord(delta) || !EXECUTION_TRANSPORT_CHANNELS.has(delta.channel)) {
+  if (!isRecord(delta)) {
     throw new Error("execution delta has an invalid channel");
   }
-  if (delta.protocol_version !== EXECUTION_TRANSPORT_VERSION) {
-    throw new Error(`unsupported execution transport version ${delta.protocol_version}`);
+  const expectedVersion = EXECUTION_TRANSPORT_VERSIONS.get(delta.channel);
+  if (expectedVersion === undefined) {
+    throw new Error("execution delta has an invalid channel");
+  }
+  if (delta.protocol_version !== expectedVersion) {
+    throw new Error(
+      `unsupported execution transport version ${delta.protocol_version} for ${delta.channel}`,
+    );
   }
   if (!Number.isSafeInteger(delta.session) || delta.session < 0) {
     throw new Error("execution delta has an invalid session");
