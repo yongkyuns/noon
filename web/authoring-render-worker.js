@@ -34,6 +34,8 @@ let bootstrapQueue = [];
 let bootstrapPromise = null;
 let transitionRequestId = null;
 let transitionResponseType = null;
+let transitionMode = null;
+let transitionResourceBytes = null;
 let needsPresent = false;
 let running = false;
 let lastFrameTimestamp = null;
@@ -152,17 +154,19 @@ function rebuildEngine(message) {
 function beginRendererTransition(message, nextMode, responseType) {
   validateEnginePort(message.port, "authoring render engine transition");
   validateMatchingTransport(message.transportMode, "authoring render engine transition");
-  if (transitionRequestId !== null || bootstrapPromise !== null) {
+  if (
+    transitionRequestId !== null ||
+    transitionMode !== null ||
+    bootstrapPromise !== null
+  ) {
     throw new Error("authoring render engine transition is already in progress");
   }
 
   detachRenderPort();
-  disposeRenderer();
   resetTransportState();
-  resourceBytes = null;
   reconnectResourceBundlePending = false;
-  needsPresent = false;
-  mode = nextMode;
+  transitionMode = nextMode;
+  transitionResourceBytes = null;
   transitionRequestId = validateRequestId(message.requestId);
   transitionResponseType = responseType;
   attachRenderPort(message.port);
@@ -185,6 +189,8 @@ function resize(message) {
 function stop() {
   running = false;
   bootstrapQueue = [];
+  transitionMode = null;
+  transitionResourceBytes = null;
   detachRenderPort();
   disposeRenderer();
   self.close();
@@ -247,11 +253,23 @@ function handleEngineMessage(message) {
 
 function handleRetainedResources(message) {
   try {
-    if (mode !== MODE_RETAINED) {
-      throw new Error("legacy authoring render mode cannot accept retained resources");
-    }
     if (!(message.bytes instanceof Uint8Array) || message.bytes.byteLength === 0) {
       throw new Error("retained resource bundle must be a non-empty Uint8Array");
+    }
+    if (transitionMode !== null) {
+      if (transitionMode !== MODE_RETAINED) {
+        throw new Error("legacy authoring render transition cannot accept retained resources");
+      }
+      if (transitionResourceBytes !== null || bootstrapPromise !== null) {
+        throw new Error(
+          "retained transition resource bundle may be installed only once before the snapshot",
+        );
+      }
+      transitionResourceBytes = message.bytes;
+      return;
+    }
+    if (mode !== MODE_RETAINED) {
+      throw new Error("legacy authoring render mode cannot accept retained resources");
     }
     if (renderer !== null) {
       if (!reconnectResourceBundlePending) {
@@ -284,6 +302,9 @@ function drainTransport() {
 }
 
 function consumeDelta(json) {
+  if (transitionMode !== null) {
+    return commitRendererTransition(json);
+  }
   if (renderer === null) {
     if (mode === MODE_RETAINED && resourceBytes === null) {
       throw new Error("retained authoring snapshot arrived before its resource bundle");
@@ -311,6 +332,31 @@ function consumeDelta(json) {
   }
   needsPresent = true;
   tryPresent();
+  return true;
+}
+
+function commitRendererTransition(initial) {
+  const nextMode = transitionMode;
+  if (nextMode === null) {
+    throw new Error("authoring render transition has no pending mode");
+  }
+  if (nextMode === MODE_RETAINED && transitionResourceBytes === null) {
+    throw new Error("retained authoring transition snapshot arrived before its resource bundle");
+  }
+
+  const nextResourceBytes = transitionResourceBytes;
+  transitionMode = null;
+  transitionResourceBytes = null;
+
+  // The replacement engine has already queued a complete bootstrap payload.
+  // Retire the currently presenting renderer only once that payload reaches
+  // this worker; renderer/device construction is the only remaining blank-window seam.
+  disposeRenderer();
+  resourceBytes = nextResourceBytes;
+  reconnectResourceBundlePending = false;
+  needsPresent = false;
+  mode = nextMode;
+  bootstrapPromise = bootstrapRenderer(initial);
   return true;
 }
 
@@ -458,6 +504,7 @@ function currentMetrics() {
     presentedFrames,
     modeSwitches,
     rendererRebuilds,
+    transitionMode,
     lastFrameTimestamp,
     bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
     needsPresent,
@@ -549,6 +596,8 @@ function fail(error, requestId) {
   const effectiveRequestId = requestId ?? transitionRequestId;
   transitionRequestId = null;
   transitionResponseType = null;
+  transitionMode = null;
+  transitionResourceBytes = null;
   const message = String(error?.message ?? error);
   renderPort?.postMessage({ type: "render_error", message });
   postMain({ type: "error", requestId: effectiveRequestId, message });
