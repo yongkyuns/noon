@@ -1,0 +1,71 @@
+name: WebGL host phase diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "web/manim-raster-host.js"
+      - "scripts/webgl-host-phase-diagnostic.mjs"
+      - ".github/workflows/webgl-host-phase-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: RotationUpdater frame 90 phases
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install diagnostic dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      - name: Capture frame 90 phase metrics
+        run: node scripts/webgl-host-phase-diagnostic.mjs
+
+      - name: Upload phase diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webgl-host-phase-diagnostic
+          path: webgl-host-phase-diagnostic
+          if-no-files-found: warn
+          retention-days: 3
