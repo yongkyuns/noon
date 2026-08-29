@@ -309,6 +309,12 @@
       "id": "moving-camera-center",
       "scene": "MovingCameraCenter",
       "expected_duration": 2.6
+    },
+    {
+      "id": "rotation-updater",
+      "scene": "RotationUpdater",
+      "expected_duration": 4.5,
+      "source": "parity/manim-v0.21/upstream-examples/rotation_updater.py"
     }
   ],
   "sample_fractions": [
