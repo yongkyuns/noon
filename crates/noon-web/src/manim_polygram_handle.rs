@@ -20,7 +20,7 @@ fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
 }
 
 fn vertices_from_flat(name: &str, coordinates: &[f64]) -> Result<Vec<Vec2>, String> {
-    if !coordinates.len().is_multiple_of(2) {
+    if coordinates.len() % 2 != 0 {
         return Err(format!("{name} must contain x/y coordinate pairs"));
     }
     coordinates
