@@ -1,6 +1,5 @@
 export const EXECUTION_TRANSPORT_CHANNEL = "noon.execution";
 export const RETAINED_EXECUTION_TRANSPORT_CHANNEL = "noon.execution.retained";
-export const EXECUTION_TRANSPORT_VERSION = 1;
 export const EXECUTION_TRANSPORT_SHARED = "shared";
 export const EXECUTION_TRANSPORT_TRANSFERABLE = "transferable";
 
@@ -40,9 +39,6 @@ export function executionDeltaMetadata(json) {
   }
   if (!isRecord(delta) || !EXECUTION_TRANSPORT_CHANNELS.has(delta.channel)) {
     throw new Error("execution delta has an invalid channel");
-  }
-  if (delta.protocol_version !== EXECUTION_TRANSPORT_VERSION) {
-    throw new Error(`unsupported execution transport version ${delta.protocol_version}`);
   }
   if (!Number.isSafeInteger(delta.session) || delta.session < 0) {
     throw new Error("execution delta has an invalid session");

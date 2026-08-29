@@ -19,7 +19,6 @@ import {
 function delta(sequence, { session = 1, snapshot = sequence === 0, channel = "noon.execution" } = {}) {
   return JSON.stringify({
     channel,
-    protocol_version: 1,
     session,
     sequence,
     snapshot,
@@ -189,7 +188,8 @@ test("transferable envelope metadata must match encoded payload", () => {
   );
 });
 
-test("metadata accepts only known execution channels and rejects future protocols", () => {
+test("metadata validates the current execution schema directly", () => {
+  assert.equal(executionDeltaMetadata(delta(0)).sequence, 0);
   assert.equal(
     executionDeltaMetadata(delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL })).sequence,
     0,
@@ -200,13 +200,6 @@ test("metadata accepts only known execution channels and rejects future protocol
   assert.throws(
     () => executionDeltaMetadata(JSON.stringify(unrelated)),
     /invalid channel/,
-  );
-
-  const future = JSON.parse(delta(0));
-  future.protocol_version = 2;
-  assert.throws(
-    () => executionDeltaMetadata(JSON.stringify(future)),
-    /unsupported execution transport version 2/,
   );
 
   const unsafe = JSON.parse(delta(0));
