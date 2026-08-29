@@ -11,7 +11,13 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::mem;
+    use std::{
+        mem,
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        },
+    };
 
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
@@ -65,6 +71,8 @@ mod wasm {
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
+        submission_generation: u32,
+        completed_submission_generation: Arc<AtomicU32>,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
     }
@@ -120,6 +128,8 @@ mod wasm {
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
+                submission_generation: 0,
+                completed_submission_generation: Arc::new(AtomicU32::new(0)),
                 gpu_generation,
                 gpu_diagnostics,
             };
@@ -155,6 +165,10 @@ mod wasm {
                 return Ok(false);
             }
 
+            let submission_generation = self
+                .submission_generation
+                .checked_add(1)
+                .ok_or_else(|| js_message("execution renderer submission generation exhausted"))?;
             let (surface_texture, reconfigure_after_present) =
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
@@ -198,6 +212,11 @@ mod wasm {
                 .renderer
                 .encode(&mut encoder, &view, &prepared, self.clear_color);
             self.queue.submit(Some(encoder.finish()));
+            self.submission_generation = submission_generation;
+            let completed_submission_generation = Arc::clone(&self.completed_submission_generation);
+            self.queue.on_submitted_work_done(move || {
+                completed_submission_generation.fetch_max(submission_generation, Ordering::Release);
+            });
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
@@ -205,6 +224,23 @@ mod wasm {
                 self.surface.configure(&self.device, &self.config);
             }
             Ok(true)
+        }
+
+        #[wasm_bindgen(js_name = pollSubmissionComplete)]
+        pub fn poll_submission_complete(&self) -> Result<bool, JsValue> {
+            self.device.poll(wgpu::PollType::Poll).map_err(js_error)?;
+            Ok(self.completed_submission_generation.load(Ordering::Acquire)
+                >= self.submission_generation)
+        }
+
+        #[wasm_bindgen(js_name = submissionGeneration)]
+        pub fn submission_generation(&self) -> u32 {
+            self.submission_generation
+        }
+
+        #[wasm_bindgen(js_name = completedSubmissionGeneration)]
+        pub fn completed_submission_generation(&self) -> u32 {
+            self.completed_submission_generation.load(Ordering::Acquire)
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
