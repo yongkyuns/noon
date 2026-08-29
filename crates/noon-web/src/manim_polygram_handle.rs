@@ -72,11 +72,11 @@ fn optional_angle(name: &str, value: Option<f64>) -> Result<Option<f32>, String>
     value.map(|value| finite_f32(name, value)).transpose()
 }
 
-fn polygon_snapshot(coordinates: &[f64]) -> Result<ObjectSnapshot, String> {
+pub(crate) fn polygon_snapshot(coordinates: &[f64]) -> Result<ObjectSnapshot, String> {
     Ok(Polygon::new(vertices_from_flat("vertices", coordinates)?).into_snapshot())
 }
 
-fn polygram_snapshot(
+pub(crate) fn polygram_snapshot(
     coordinates: &[f64],
     group_lengths: &[u32],
 ) -> Result<ObjectSnapshot, String> {
@@ -85,7 +85,7 @@ fn polygram_snapshot(
         .map_err(|error| error.to_string())
 }
 
-fn regular_polygon_snapshot(
+pub(crate) fn regular_polygon_snapshot(
     num_vertices: u32,
     radius: f64,
     start_angle: Option<f64>,
@@ -99,7 +99,7 @@ fn regular_polygon_snapshot(
     .map_err(|error| error.to_string())
 }
 
-fn regular_polygram_snapshot(
+pub(crate) fn regular_polygram_snapshot(
     num_vertices: u32,
     density: u32,
     radius: f64,
@@ -115,7 +115,7 @@ fn regular_polygram_snapshot(
     .map_err(|error| error.to_string())
 }
 
-fn star_snapshot(
+pub(crate) fn star_snapshot(
     points: u32,
     outer_radius: f64,
     inner_radius: Option<f64>,
@@ -135,17 +135,19 @@ fn star_snapshot(
     .map_err(|error| error.to_string())
 }
 
-fn triangle_snapshot() -> ObjectSnapshot {
+pub(crate) fn triangle_snapshot() -> ObjectSnapshot {
     Triangle::new().into_snapshot()
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct EncodedVertexGroups {
+pub(crate) struct EncodedVertexGroups {
     coordinates: Vec<f64>,
     group_lengths: Vec<u32>,
 }
 
-fn encode_vertex_groups(snapshot: &ObjectSnapshot) -> Result<EncodedVertexGroups, String> {
+pub(crate) fn encode_vertex_groups(
+    snapshot: &ObjectSnapshot,
+) -> Result<EncodedVertexGroups, String> {
     let groups = polygram_vertex_groups(snapshot);
     let mut coordinates = Vec::new();
     let mut group_lengths = Vec::with_capacity(groups.len());
@@ -203,6 +205,12 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct WasmPolygramVertexGroups(EncodedVertexGroups);
+
+    impl WasmPolygramVertexGroups {
+        pub(crate) fn from_snapshot(snapshot: &noon_core::ObjectSnapshot) -> Result<Self, String> {
+            encode_vertex_groups(snapshot).map(Self)
+        }
+    }
 
     #[wasm_bindgen]
     impl WasmPolygramVertexGroups {
@@ -294,9 +302,7 @@ mod wasm {
         #[wasm_bindgen(js_name = manimVertexGroups)]
         pub fn manim_vertex_groups(&self) -> Result<WasmPolygramVertexGroups, JsValue> {
             let snapshot = snapshot_from_handle(self)?;
-            encode_vertex_groups(&snapshot)
-                .map(WasmPolygramVertexGroups)
-                .map_err(js_error)
+            WasmPolygramVertexGroups::from_snapshot(&snapshot).map_err(js_error)
         }
     }
 }
