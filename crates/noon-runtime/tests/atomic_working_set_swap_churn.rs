@@ -36,12 +36,15 @@ fn atomic_working_set_swaps_reuse_execution_slots_without_capacity_growth() {
 
         let mut next_objects = Vec::with_capacity(WORKING_SET);
         let mut mutations = Vec::with_capacity(WORKING_SET * 2);
-        mutations.extend(current_objects.iter().copied().map(ScenePatch::RemoveObject));
+        mutations.extend(
+            current_objects
+                .iter()
+                .copied()
+                .map(ScenePatch::RemoveObject),
+        );
 
         for index in 0..WORKING_SET {
-            let object = ObjectId::new(
-                OBJECT_ID_BASE + (swap * WORKING_SET + index) as u64,
-            );
+            let object = ObjectId::new(OBJECT_ID_BASE + (swap * WORKING_SET + index) as u64);
             let geometry = if swap % 2 == 0 {
                 GeometryRef::rectangle(1.0, 1.0)
             } else {
