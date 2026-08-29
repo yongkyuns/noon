@@ -144,6 +144,16 @@ try {
     const mixedMetrics = await execution.metrics();
     const mixedCanvas = execution.canvas;
 
+    const secondMixed = await execution.reconcileScene(JSON.stringify(mixed.document), {
+      retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
+      callbacks: mixed.callbacks,
+      authoringClient: authoring,
+      loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const secondMixedMetrics = await execution.metrics();
+    const secondMixedCanvas = execution.canvas;
+
     const mixedPause = await execution.pause();
     const mixedPausedCanvas = execution.canvas;
     const mixedPausedState = await execution.state();
@@ -231,6 +241,10 @@ try {
       mixedRaceMode: mixedRaceMetrics.executionMode,
       mixedRaceRetainedChannel: JSON.parse(mixedRaceState.retainedDocumentJson).channel,
       mixedMetrics,
+      secondMixedMode: secondMixed.mode,
+      secondMixedRebuilt: secondMixed.rebuilt,
+      secondMixedPreservedCanvas: secondMixedCanvas === mixedCanvas,
+      secondMixedMetrics,
       mixedPause,
       mixedPausePreservedCanvas: mixedPausedCanvas === mixedCanvas,
       mixedPausedState,
@@ -287,16 +301,27 @@ try {
   assert.ok([result.initialMode, result.retainedMode].includes(result.legacyRaceModeBeforeMixed));
   assert.equal(result.mixedMode, result.retainedMode);
   assert.equal(result.mixedRebuilt, true);
-  assert.equal(result.mixedCanvasChanged, true);
+  assert.equal(result.mixedCanvasChanged, false);
   assert.equal(result.mixedRaceMode, result.retainedMode);
   assert.equal(result.mixedRaceRetainedChannel, "noon.authoring.retained");
   assert.equal(result.mixedMetrics.executionMode, result.retainedMode);
   assert.equal(result.mixedMetrics.metrics.ready, true);
   assert.equal(result.mixedMetrics.metrics.objectCount, 3);
   assert.ok(result.mixedMetrics.metrics.presentedFrames >= 1);
+  assert.equal(result.mixedMetrics.metrics.modeSwitches, 1);
   assert.equal(result.mixedMetrics.engineMetrics.resourceBundleTransfers, 1);
   assert.ok(result.mixedMetrics.engineMetrics.resourceBundleBytes > 0);
   assert.equal(result.mixedMetrics.engineMetrics.host.enabled, false);
+  assert.equal(result.secondMixedMode, result.retainedMode);
+  assert.equal(result.secondMixedRebuilt, true);
+  assert.equal(result.secondMixedPreservedCanvas, true);
+  assert.equal(result.secondMixedMetrics.metrics.objectCount, 3);
+  assert.equal(result.secondMixedMetrics.metrics.modeSwitches, 1);
+  assert.equal(result.secondMixedMetrics.metrics.rendererRebuilds, 1);
+  assert.ok(
+    result.secondMixedMetrics.metrics.presentedFrames >=
+      result.mixedMetrics.metrics.presentedFrames,
+  );
   assert.equal(result.mixedPause.operation, "pause");
   assert.equal(result.mixedPause.playing, false);
   assert.equal(result.mixedPausePreservedCanvas, true);
@@ -328,11 +353,12 @@ try {
   assert.ok([result.retainedMode, result.initialMode].includes(result.retainedRaceModeBeforeLegacy));
   assert.equal(result.legacyMode, result.initialMode);
   assert.equal(result.legacyRebuilt, true);
-  assert.equal(result.legacyCanvasChanged, true);
+  assert.equal(result.legacyCanvasChanged, false);
   assert.equal(result.legacyRaceMode, result.initialMode);
   assert.equal(result.legacyRaceObjectCount, 2);
   assert.equal(result.legacyMetrics.executionMode, result.initialMode);
   assert.equal(result.legacyMetrics.metrics.objectCount, 2);
+  assert.equal(result.legacyMetrics.metrics.modeSwitches, 1);
   assert.equal(typeof result.legacyMetrics.engineMetrics.host.enabled, "boolean");
   assert.equal(result.legacyPause.operation, "pause");
   assert.equal(result.legacyPause.playing, false);
@@ -365,7 +391,7 @@ try {
   assert.deepEqual(result.clientErrors, []);
   assert.deepEqual(browserErrors, []);
   console.log(
-    `✓ authoring execution router: deterministic controls across retained/legacy on ${result.rendererBackend}`,
+    `✓ authoring execution router: persistent render ownership across retained/legacy on ${result.rendererBackend}`,
   );
 } finally {
   await browser?.close();
