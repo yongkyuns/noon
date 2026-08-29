@@ -25,6 +25,7 @@ mod retained_execution_transport;
 mod retained_resource_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
+mod spatial_query;
 
 pub use authoring_facade::*;
 pub use authoring_mobject::*;
