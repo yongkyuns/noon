@@ -28,11 +28,17 @@ if (typeof document !== "undefined") {
   });
 }
 
+function isVisiblePythonTextarea(textarea) {
+  if (!textarea || textarea.hidden) return false;
+  const editorPanel = textarea.closest(".editor-panel");
+  return editorPanel === null || editorPanel.dataset.active === "true";
+}
+
 async function enhancePythonEditors() {
   const textareas = [
     document.querySelector("#python-scene-source"),
     document.querySelector("#python-source"),
-  ].filter((textarea) => textarea && !textarea.hidden);
+  ].filter(isVisiblePythonTextarea);
   if (textareas.length === 0) {
     return;
   }
