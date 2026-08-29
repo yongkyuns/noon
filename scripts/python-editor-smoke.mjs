@@ -104,9 +104,13 @@ try {
 
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = [];
+  const ruffRequests = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+  page.on("request", (request) => {
+    if (request.url().includes("ruff-wasm")) ruffRequests.push(request.url());
   });
 
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
@@ -145,12 +149,23 @@ try {
   });
   assert.equal(
     await page.locator(".python-code-editor[data-editor-ready='true']").count(),
-    2,
-    "both Python textareas should be enhanced after the first editor focus",
+    1,
+    "only the visible Python source textarea should be enhanced after focus",
+  );
+  assert.equal(
+    await page.locator("#patch-editor-panel .python-code-editor").count(),
+    0,
+    "the hidden patch editor must not allocate a CodeMirror instance",
   );
 
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
+  await page.waitForTimeout(750);
+  assert.equal(
+    ruffRequests.length,
+    0,
+    "Ruff WASM must stay unloaded while the user only inspects highlighted source",
+  );
 
   await page.locator("#replace-scene").click();
   await waitForRuntime(page, errors, "enhanced editor");
@@ -199,15 +214,15 @@ try {
     `desktop preview should remain horizontally centered; ${JSON.stringify(layout)}`,
   );
 
-  await page.evaluate(() => {
-    document.querySelector("#python-scene-source").value =
-      "import os\n\ndef broken():\n    return missing_name\n";
-  });
+  await page.locator("#scene-editor-panel .cm-content").fill(
+    "import os\n\ndef broken():\n    return missing_name\n",
+  );
   await page.waitForSelector("#scene-editor-panel .cm-lintRange-warning", {
     timeout: 30_000,
   });
   const lintRanges = await page.locator("#scene-editor-panel .cm-lintRange-warning").count();
-  assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics");
+  assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics after real editor input");
+  assert.ok(ruffRequests.length >= 1, "the first real editor input should load Ruff on demand");
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   await page.close();
@@ -290,7 +305,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: deferred startup + enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback with a fresh two-object render.`,
+    `Python editor smoke passed: deferred startup + one visible CodeMirror + deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();

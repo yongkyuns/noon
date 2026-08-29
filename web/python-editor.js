@@ -17,6 +17,7 @@ export const PYTHON_RUFF_SETTINGS = {
 };
 
 let ruffWorkspacePromise = null;
+const ruffEnabledViews = new WeakSet();
 
 if (typeof document !== "undefined") {
   // CodeMirror/Ruff are progressive enhancement. A transient CDN, CSP, or WASM
@@ -27,16 +28,22 @@ if (typeof document !== "undefined") {
   });
 }
 
+function isVisiblePythonTextarea(textarea) {
+  if (!textarea || textarea.hidden) return false;
+  const editorPanel = textarea.closest(".editor-panel");
+  return editorPanel === null || editorPanel.dataset.active === "true";
+}
+
 async function enhancePythonEditors() {
   const textareas = [
     document.querySelector("#python-scene-source"),
     document.querySelector("#python-source"),
-  ].filter(Boolean);
+  ].filter(isVisiblePythonTextarea);
   if (textareas.length === 0) {
     return;
   }
 
-  const [{ EditorView, basicSetup }, { python }, { linter, lintGutter }, { oneDark }] =
+  const [{ EditorView, basicSetup }, { python }, { linter, lintGutter, forceLinting }, { oneDark }] =
     await Promise.all([
       import(CODEMIRROR_URL),
       import(PYTHON_URL),
@@ -98,8 +105,12 @@ async function enhancePythonEditors() {
     // Keep the hidden textarea as the stable integration surface for the
     // playground. Programmatic .value writes are projected into CodeMirror,
     // while real user edits emit the textarea input event expected by gallery
-    // draft/reset state and any other existing consumers.
+    // draft/reset state and any other existing consumers. Ruff is intentionally
+    // activated by the first real editor input so merely inspecting source does
+    // not allocate its additional WASM runtime.
     view.contentDOM.addEventListener("input", () => {
+      ruffEnabledViews.add(view);
+      forceLinting(view);
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
@@ -144,6 +155,9 @@ async function enhancePythonEditors() {
 }
 
 async function runRuff(view) {
+  if (!ruffEnabledViews.has(view)) {
+    return [];
+  }
   try {
     const workspace = await getRuffWorkspace();
     const diagnostics = workspace.check(view.state.doc.toString());
