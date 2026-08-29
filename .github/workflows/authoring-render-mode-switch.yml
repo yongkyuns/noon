@@ -1,0 +1,100 @@
+name: Authoring render mode switch
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/authoring-render-mode-switch.yml"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-text-render-wgpu/**"
+      - "crates/noon-web/**"
+      - "scripts/authoring-render-mode-switch-smoke.mjs"
+      - "scripts/build-web-demo.sh"
+      - "web/authoring-render-worker.js"
+      - "web/execution-engine-worker.js"
+      - "web/retained-execution-engine-worker.js"
+      - "web/execution-transport.js"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/authoring-render-mode-switch.yml"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-text-render-wgpu/**"
+      - "crates/noon-web/**"
+      - "scripts/authoring-render-mode-switch-smoke.mjs"
+      - "scripts/build-web-demo.sh"
+      - "web/authoring-render-worker.js"
+      - "web/execution-engine-worker.js"
+      - "web/retained-execution-engine-worker.js"
+      - "web/execution-transport.js"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authoring-render-mode-switch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mode-switch:
+    name: Persistent render owner
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Validate mode-switch sources
+        run: |
+          node --check web/authoring-render-worker.js
+          node --check scripts/authoring-render-mode-switch-smoke.mjs
+
+      - name: Build browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      - name: Switch legacy retained legacy on one render owner
+        run: node scripts/authoring-render-mode-switch-smoke.mjs
