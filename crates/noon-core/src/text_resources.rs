@@ -575,8 +575,7 @@ impl TextResourceArena {
     pub fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
         let index = text_resource_slot(handle.id);
         let entry = self.entries.get(index)?;
-        if text_resource_id(index, entry.generation) != handle.id
-            || entry.version != handle.version
+        if text_resource_id(index, entry.generation) != handle.id || entry.version != handle.version
         {
             return None;
         }
