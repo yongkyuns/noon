@@ -22,6 +22,7 @@ mod retained_authoring_scene;
 mod retained_execution_canvas;
 mod retained_execution_resources;
 mod retained_execution_transport;
+mod retained_resource_mutation_transport;
 mod retained_resource_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
@@ -47,6 +48,7 @@ pub use retained_authoring_scene::*;
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;
 pub use retained_execution_transport::*;
+pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
