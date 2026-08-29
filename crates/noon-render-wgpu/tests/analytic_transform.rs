@@ -114,8 +114,9 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     assert_eq!(initial.stats.geometry_cache_misses, 0);
     assert_eq!(preparer.cached_path_mesh_count(), 0);
 
-    for edit in 0..EDIT_COUNT {
-        let step = (edit + 1) as f32;
+    let mut step = 0.0_f32;
+    for _ in 0..EDIT_COUNT {
+        step += 1.0;
         let transform = Transform2D {
             translation: Vec2::new(step * 0.001, -step * 0.0005),
             ..Transform2D::IDENTITY
