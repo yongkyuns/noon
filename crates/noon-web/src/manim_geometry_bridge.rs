@@ -1,4 +1,4 @@
-use noon::{Dot, IntoSnapshot, Triangle};
+use noon::{Dot, IntoSnapshot, RoundedRectangle, Triangle};
 use noon_core::{ObjectSnapshot, Vec2};
 
 fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
@@ -33,11 +33,28 @@ pub fn manim_triangle_snapshot_json() -> Result<String, String> {
     snapshot_json(Triangle::new().into_snapshot())
 }
 
+pub fn manim_rounded_rectangle_snapshot_json(
+    width: f64,
+    height: f64,
+    corner_radius: f64,
+) -> Result<String, String> {
+    let rectangle = RoundedRectangle::new(
+        positive_f32("width", width)?,
+        positive_f32("height", height)?,
+        finite_f32("corner_radius", corner_radius)?,
+    )
+    .map_err(|error| error.to_string())?;
+    snapshot_json(rectangle.into_snapshot())
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::{manim_dot_snapshot_json, manim_triangle_snapshot_json};
+    use super::{
+        manim_dot_snapshot_json, manim_rounded_rectangle_snapshot_json,
+        manim_triangle_snapshot_json,
+    };
 
     fn js_error(error: String) -> JsValue {
         JsValue::from_str(&error)
@@ -51,6 +68,15 @@ mod wasm {
     #[wasm_bindgen(js_name = manimTriangleSnapshotJson)]
     pub fn manim_triangle_snapshot() -> Result<String, JsValue> {
         manim_triangle_snapshot_json().map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = manimRoundedRectangleSnapshotJson)]
+    pub fn manim_rounded_rectangle_snapshot(
+        width: f64,
+        height: f64,
+        corner_radius: f64,
+    ) -> Result<String, JsValue> {
+        manim_rounded_rectangle_snapshot_json(width, height, corner_radius).map_err(js_error)
     }
 }
 
@@ -92,8 +118,35 @@ mod tests {
     }
 
     #[test]
-    fn dot_bridge_rejects_non_renderable_values() {
+    fn rounded_rectangle_bridge_uses_shared_path_and_clamping() {
+        let snapshot = decode(&manim_rounded_rectangle_snapshot_json(4.0, 2.0, 10.0).unwrap());
+        assert_eq!(snapshot.style.stroke, Some(WHITE));
+        let GeometryRef::VectorPath(ref path) = snapshot.geometry else {
+            panic!("expected retained vector path")
+        };
+        // Clamping to radius 1 collapses the two vertical straight spans, leaving
+        // Move + four cubic corners + two horizontal edges.
+        assert_eq!(path.commands().len(), 7);
+        assert_eq!(snapshot.width(), 4.0);
+        assert_eq!(snapshot.height(), 2.0);
+        assert!(matches!(path.commands()[1], PathCommand::CubicTo { .. }));
+    }
+
+    #[test]
+    fn rounded_rectangle_bridge_preserves_negative_corner_radius() {
+        let positive = decode(&manim_rounded_rectangle_snapshot_json(4.0, 2.0, 0.5).unwrap());
+        let negative = decode(&manim_rounded_rectangle_snapshot_json(4.0, 2.0, -0.5).unwrap());
+        assert_ne!(positive.geometry, negative.geometry);
+        assert_eq!(positive.width(), negative.width());
+        assert_eq!(positive.height(), negative.height());
+    }
+
+    #[test]
+    fn geometry_bridge_rejects_non_renderable_values() {
         assert!(manim_dot_snapshot_json(f64::NAN, 0.0, 0.08).is_err());
         assert!(manim_dot_snapshot_json(0.0, 0.0, 0.0).is_err());
+        assert!(manim_rounded_rectangle_snapshot_json(0.0, 2.0, 0.5).is_err());
+        assert!(manim_rounded_rectangle_snapshot_json(4.0, f64::INFINITY, 0.5).is_err());
+        assert!(manim_rounded_rectangle_snapshot_json(4.0, 2.0, f64::NAN).is_err());
     }
 }
