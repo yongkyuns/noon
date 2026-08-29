@@ -1,4 +1,9 @@
 #[cfg(any(target_arch = "wasm32", test))]
+use crate::{
+    ExecutionFrameMirror, ExecutionVisibilityEnvelope, ExecutionVisibilityError, TransportSlotId,
+};
+
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
 
 #[cfg(target_arch = "wasm32")]
@@ -9,10 +14,83 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq)]
+enum ExecutionVisibilityResolveError {
+    Envelope(ExecutionVisibilityError),
+    MissingFrame,
+    FrameTimeMismatch { expected: f64, actual: f64 },
+    LiveCountMismatch { expected: usize, actual: usize },
+    UnknownSlot(TransportSlotId),
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl std::fmt::Display for ExecutionVisibilityResolveError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Envelope(error) => error.fmt(formatter),
+            Self::MissingFrame => formatter.write_str("execution visibility has no mirrored frame"),
+            Self::FrameTimeMismatch { expected, actual } => write!(
+                formatter,
+                "execution visibility frame time mismatch: expected {expected}, got {actual}",
+            ),
+            Self::LiveCountMismatch { expected, actual } => write!(
+                formatter,
+                "execution visibility live-count mismatch: expected {expected}, got {actual}",
+            ),
+            Self::UnknownSlot(slot) => write!(
+                formatter,
+                "execution visibility slot {}:{} is not present in the mirrored layout",
+                slot.slot, slot.generation,
+            ),
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl std::error::Error for ExecutionVisibilityResolveError {}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_visibility_indices(
+    mirror: &ExecutionFrameMirror,
+    json: &str,
+) -> Result<Vec<usize>, ExecutionVisibilityResolveError> {
+    let envelope = ExecutionVisibilityEnvelope::from_json(json)
+        .map_err(ExecutionVisibilityResolveError::Envelope)?;
+    envelope
+        .validate_layout_generation(mirror.layout_generation())
+        .map_err(ExecutionVisibilityResolveError::Envelope)?;
+    let frame = mirror
+        .frame()
+        .ok_or(ExecutionVisibilityResolveError::MissingFrame)?;
+    if envelope.time != frame.time {
+        return Err(ExecutionVisibilityResolveError::FrameTimeMismatch {
+            expected: frame.time,
+            actual: envelope.time,
+        });
+    }
+    let live_count = mirror.live_object_count();
+    if envelope.total_live != live_count {
+        return Err(ExecutionVisibilityResolveError::LiveCountMismatch {
+            expected: live_count,
+            actual: envelope.total_live,
+        });
+    }
+
+    envelope
+        .slots
+        .iter()
+        .copied()
+        .map(|slot| {
+            mirror
+                .frame_index_for_slot(slot)
+                .ok_or(ExecutionVisibilityResolveError::UnknownSlot(slot))
+        })
+        .collect()
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::mem;
-
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
     use noon_runtime::FrameChanges;
@@ -24,7 +102,9 @@ mod wasm {
         ExecutionFrameMirror, TransportApplyOutcome,
     };
 
-    use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
+    use super::{
+        resolve_visibility_indices, MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR,
+    };
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -56,6 +136,7 @@ mod wasm {
         drawable: bool,
         mirror: ExecutionFrameMirror,
         pending_changes: FrameChanges,
+        pending_visible_indices: Option<Vec<usize>>,
         preparer: FramePreparer,
         renderer: GpuRenderer,
         camera_center: Vec2,
@@ -111,6 +192,7 @@ mod wasm {
                 drawable: true,
                 mirror,
                 pending_changes,
+                pending_visible_indices: None,
                 preparer: FramePreparer::new(),
                 renderer,
                 camera_center: camera.center,
@@ -144,10 +226,23 @@ mod wasm {
                         self.update_camera()?;
                     }
                     self.pending_changes = changes;
+                    self.pending_visible_indices = None;
                     Ok(true)
                 }
                 TransportApplyOutcome::DroppedStale => Ok(false),
             }
+        }
+
+        #[wasm_bindgen(js_name = applyVisibilityJson)]
+        pub fn apply_visibility_json(&mut self, json: &str) -> Result<(), JsValue> {
+            if self.pending_changes.is_empty() {
+                return Err(js_message(
+                    "execution visibility requires an unpresented execution frame",
+                ));
+            }
+            let visible_indices = resolve_visibility_indices(&self.mirror, json).map_err(js_error)?;
+            self.pending_visible_indices = Some(visible_indices);
+            Ok(())
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
@@ -176,12 +271,17 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            let changes = mem::take(&mut self.pending_changes);
             let frame = self
                 .mirror
                 .frame()
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
+            let prepared = if let Some(visible_indices) = self.pending_visible_indices.as_deref() {
+                self.preparer
+                    .prepare_incremental_visible(frame, &self.pending_changes, visible_indices)
+                    .map_err(js_error)?
+            } else {
+                self.preparer.prepare_incremental(frame, &self.pending_changes)
+            };
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
@@ -201,6 +301,8 @@ mod wasm {
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
+            self.pending_changes = FrameChanges::default();
+            self.pending_visible_indices = None;
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
@@ -467,10 +569,132 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use super::MANIM_DEFAULT_CAMERA_HEIGHT;
+    use noon_core::{Camera2DState, GeometryRef, ObjectId, Style, Transform2D};
+
+    use crate::{
+        ExecutionDeltaEnvelope, ExecutionFrameMirror, ExecutionVisibilityEnvelope, TransportObjectState,
+        TransportSlotId, VisibilityQueryStats, EXECUTION_TRANSPORT_CHANNEL,
+        EXECUTION_TRANSPORT_VERSION, EXECUTION_VISIBILITY_CHANNEL, EXECUTION_VISIBILITY_VERSION,
+    };
+
+    use super::{
+        resolve_visibility_indices, ExecutionVisibilityResolveError, MANIM_DEFAULT_CAMERA_HEIGHT,
+    };
+
+    fn mirror() -> (ExecutionFrameMirror, TransportSlotId, TransportSlotId) {
+        let first = TransportSlotId {
+            slot: 4,
+            generation: 2,
+        };
+        let second = TransportSlotId {
+            slot: 9,
+            generation: 7,
+        };
+        let object = |slot: TransportSlotId, order: u32, id: u64| TransportObjectState {
+            slot,
+            order,
+            object: ObjectId::new(id),
+            geometry: GeometryRef::circle(1.0),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            render_geometry: None,
+        };
+        let delta = ExecutionDeltaEnvelope {
+            channel: EXECUTION_TRANSPORT_CHANNEL.to_owned(),
+            protocol_version: EXECUTION_TRANSPORT_VERSION,
+            session: 3,
+            sequence: 0,
+            snapshot: true,
+            time: 1.25,
+            layout_generation: 11,
+            camera: Camera2DState::default(),
+            removed: Vec::new(),
+            objects: vec![object(first, 0, 1), object(second, 1, 2)],
+        };
+        let mut mirror = ExecutionFrameMirror::default();
+        mirror.apply(delta).unwrap();
+        (mirror, first, second)
+    }
+
+    fn visibility_json(
+        slots: Vec<TransportSlotId>,
+        time: f64,
+        layout_generation: u64,
+        total_live: usize,
+    ) -> String {
+        ExecutionVisibilityEnvelope {
+            channel: EXECUTION_VISIBILITY_CHANNEL.to_owned(),
+            protocol_version: EXECUTION_VISIBILITY_VERSION,
+            time,
+            layout_generation,
+            total_live,
+            stats: VisibilityQueryStats {
+                cells_visited: 1,
+                candidates_tested: slots.len(),
+                results: slots.len(),
+                full_scan_fallbacks: 0,
+            },
+            slots,
+        }
+        .to_json()
+        .unwrap()
+    }
 
     #[test]
     fn default_camera_matches_manim_frame_height() {
         assert_eq!(MANIM_DEFAULT_CAMERA_HEIGHT, 8.0);
+    }
+
+    #[test]
+    fn visibility_slots_resolve_to_current_frame_rows_in_painter_order() {
+        let (mirror, first, second) = mirror();
+        let json = visibility_json(vec![second, first], 1.25, 11, 2);
+
+        assert_eq!(resolve_visibility_indices(&mirror, &json).unwrap(), vec![1, 0]);
+    }
+
+    #[test]
+    fn visibility_resolution_rejects_stale_or_mismatched_frame_metadata() {
+        let (mirror, first, _) = mirror();
+
+        assert!(matches!(
+            resolve_visibility_indices(&mirror, &visibility_json(vec![first], 1.25, 10, 2)),
+            Err(ExecutionVisibilityResolveError::Envelope(_))
+        ));
+        assert_eq!(
+            resolve_visibility_indices(&mirror, &visibility_json(vec![first], 2.0, 11, 2))
+                .unwrap_err(),
+            ExecutionVisibilityResolveError::FrameTimeMismatch {
+                expected: 1.25,
+                actual: 2.0,
+            }
+        );
+        assert_eq!(
+            resolve_visibility_indices(&mirror, &visibility_json(vec![first], 1.25, 11, 1))
+                .unwrap_err(),
+            ExecutionVisibilityResolveError::LiveCountMismatch {
+                expected: 2,
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn visibility_resolution_rejects_unknown_generation_safe_slots() {
+        let (mirror, _, _) = mirror();
+        let unknown = TransportSlotId {
+            slot: 4,
+            generation: 3,
+        };
+        let json = visibility_json(vec![unknown], 1.25, 11, 2);
+
+        assert_eq!(
+            resolve_visibility_indices(&mirror, &json).unwrap_err(),
+            ExecutionVisibilityResolveError::UnknownSlot(unknown)
+        );
     }
 }
