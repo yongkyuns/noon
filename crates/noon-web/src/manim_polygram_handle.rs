@@ -20,11 +20,13 @@ fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
 }
 
 fn vertices_from_flat(name: &str, coordinates: &[f64]) -> Result<Vec<Vec2>, String> {
-    if coordinates.len() % 2 != 0 {
+    if !coordinates.len().is_multiple_of(2) {
         return Err(format!("{name} must contain x/y coordinate pairs"));
     }
     coordinates
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .enumerate()
         .map(|(index, pair)| {
             Ok(Vec2::new(
@@ -358,6 +360,14 @@ mod tests {
         assert!(regular_polygram_snapshot(5, 0, 1.0, None).is_err());
         assert!(star_snapshot(7, 2.0, None, 3, Some(f64::from(FRAC_PI_2))).is_ok());
         assert!(star_snapshot(5, 1.0, None, 3, None).is_err());
+    }
+
+    #[test]
+    fn triangle_bridge_uses_shared_triangle_constructor() {
+        let snapshot = triangle_snapshot();
+        let encoded = encode_vertex_groups(&snapshot).unwrap();
+        assert_eq!(encoded.group_lengths, vec![3]);
+        assert_eq!(encoded.coordinates.len(), 6);
     }
 
     #[test]
