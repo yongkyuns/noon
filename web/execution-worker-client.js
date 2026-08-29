@@ -11,7 +11,11 @@ const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const WORKER_OWNERS = Object.freeze(["engine", "render"]);
+const EXECUTION_MODE_LEGACY = "legacy";
+const EXECUTION_MODE_RETAINED = "retained";
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
+const LIFECYCLE_CANCELLED_MESSAGE =
+  "execution worker client was terminated during an asynchronous operation";
 
 export class ExecutionWorkerClient {
   #canvas;
@@ -20,7 +24,9 @@ export class ExecutionWorkerClient {
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #session = 0;
+  #mode = EXECUTION_MODE_LEGACY;
   #sceneJson = null;
+  #retainedDocumentJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
@@ -31,6 +37,7 @@ export class ExecutionWorkerClient {
   #hostAuthoringClient = null;
   #hostCallbacks = null;
   #fatalOwner = null;
+  #lifecycleGeneration = 0;
   #staleWorkerEvents = { engine: 0, render: 0 };
   #staleResponses = { engine: 0, render: 0 };
 
@@ -53,6 +60,10 @@ export class ExecutionWorkerClient {
     return this.#canvas;
   }
 
+  get mode() {
+    return this.#mode;
+  }
+
   get transportMode() {
     return this.#transportMode;
   }
@@ -73,18 +84,35 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
+    validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
+    return this.#startMode(EXECUTION_MODE_LEGACY, sceneJson, null, {
+      loopDurationSeconds,
+      transportMode,
+      sharedSlotCapacity,
+    });
+  }
+
+  async #startMode(
+    mode,
+    sceneJson,
+    retainedDocumentJson,
+    {
+      loopDurationSeconds,
+      transportMode,
+      sharedSlotCapacity,
+    },
+  ) {
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
+    validateExecutionMode(mode);
     validateSceneJson(sceneJson);
-    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    validateLoopDurationSeconds(loopDurationSeconds);
-    if (
-      transportMode !== EXECUTION_TRANSPORT_SHARED &&
-      transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
-    ) {
-      throw new TypeError(`unsupported execution transport mode ${transportMode}`);
+    if (mode === EXECUTION_MODE_RETAINED) {
+      validateRetainedDocumentJson(retainedDocumentJson);
     }
+    validateLoopDurationSeconds(loopDurationSeconds);
+    validateTransportMode(transportMode);
     if (
       transportMode === EXECUTION_TRANSPORT_SHARED &&
       selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED
@@ -95,17 +123,15 @@ export class ExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
+    this.#mode = mode;
     this.#sceneJson = sceneJson;
+    this.#retainedDocumentJson =
+      mode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
-    this.#sharedSlotCapacity = sharedSlotCapacity;
+    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
     this.#session = checkedNextSession(this.#session);
 
-    // The OffscreenCanvas inherits the HTML canvas backing-store dimensions at
-    // transfer time. Size that backing store from the already-laid-out CSS box
-    // before handing control to the render worker; otherwise Chrome/WebGL can
-    // create its first surface at the HTML default 300×150 and only correct it
-    // after renderer startup.
     const devicePixelRatio = window.devicePixelRatio || 1;
     const initialWidth = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
     const initialHeight = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
@@ -117,10 +143,7 @@ export class ExecutionWorkerClient {
       const channel = new MessageChannel();
       const offscreen = this.#canvas.transferControlToOffscreen();
       canvasTransferred = true;
-      this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
-        type: "module",
-        name: "noon-engine",
-      });
+      this.#engineWorker = this.#createEngineWorker(mode);
       this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
         type: "module",
         name: "noon-render",
@@ -140,25 +163,27 @@ export class ExecutionWorkerClient {
           canvas: offscreen,
           port: channel.port2,
           transportMode,
+          mode,
           width: initialWidth,
           height: initialHeight,
         }),
         [offscreen, channel.port2],
       );
-      this.#engineWorker.postMessage(
-        engineEnvelope("init", {
-          port: channel.port1,
-          sceneJson,
-          loopDurationSeconds,
-          transportMode,
-          sharedSlotCapacity,
-          session: this.#session,
-        }),
-        [channel.port1],
+      this.#postEngineInit(
+        this.#engineWorker,
+        channel.port1,
+        mode,
+        sceneJson,
+        retainedDocumentJson,
+        loopDurationSeconds,
       );
       const ready = await this.#ready;
       this.#playing = true;
       this.#fatalOwner = null;
+      if (mode === EXECUTION_MODE_RETAINED) {
+        this.#hostAuthoringClient = null;
+        this.#hostCallbacks = null;
+      }
       return ready;
     } catch (error) {
       this.#rollbackFailedStart(error, canvasTransferred);
@@ -177,6 +202,7 @@ export class ExecutionWorkerClient {
     sceneJson,
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
+    this.#requireLegacyMode("replace scenes");
     validateSceneJson(sceneJson);
     sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
@@ -197,6 +223,7 @@ export class ExecutionWorkerClient {
     sceneJson,
     { callbacks = null, authoringClient = null, loopDurationSeconds = null } = {},
   ) {
+    this.#requireLegacyMode("reconcile scenes");
     validateSceneJson(sceneJson);
     sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
@@ -211,6 +238,166 @@ export class ExecutionWorkerClient {
     }
     await this.configureHostCallbacks(callbacks, authoringClient);
     return result;
+  }
+
+  async switchToRetained(
+    sceneJson,
+    retainedDocumentJson,
+    { loopDurationSeconds = null } = {},
+  ) {
+    validateSceneJson(sceneJson);
+    validateRetainedDocumentJson(retainedDocumentJson);
+    return this.#transitionEngine(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
+      loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
+      callbacks: null,
+      authoringClient: null,
+      renderCommand: "switch_engine",
+    });
+  }
+
+  async rebuildRetained(
+    sceneJson,
+    retainedDocumentJson,
+    { loopDurationSeconds = null } = {},
+  ) {
+    validateSceneJson(sceneJson);
+    validateRetainedDocumentJson(retainedDocumentJson);
+    return this.#transitionEngine(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
+      loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
+      callbacks: null,
+      authoringClient: null,
+      renderCommand: "rebuild_engine",
+    });
+  }
+
+  async switchToLegacy(
+    sceneJson,
+    {
+      callbacks = null,
+      authoringClient = null,
+      loopDurationSeconds = null,
+    } = {},
+  ) {
+    validateSceneJson(sceneJson);
+    sceneJson = projectLegacyReactiveSceneJson(sceneJson);
+    if (callbacks !== null && callbacks !== undefined) {
+      validateCallbacks(callbacks);
+      validateAuthoringClient(authoringClient);
+    }
+    return this.#transitionEngine(EXECUTION_MODE_LEGACY, sceneJson, null, {
+      loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
+      callbacks,
+      authoringClient,
+      renderCommand: "switch_engine",
+    });
+  }
+
+  async #transitionEngine(
+    nextMode,
+    sceneJson,
+    retainedDocumentJson,
+    { loopDurationSeconds, callbacks, authoringClient, renderCommand },
+  ) {
+    this.#requireStarted();
+    validateExecutionMode(nextMode);
+    if (renderCommand === "switch_engine" && nextMode === this.#mode) {
+      throw new Error(`execution worker client is already in ${nextMode} mode`);
+    }
+    if (renderCommand === "rebuild_engine" && nextMode !== this.#mode) {
+      throw new Error(
+        `execution renderer rebuild mode ${nextMode} does not match active mode ${this.#mode}`,
+      );
+    }
+    if (renderCommand !== "switch_engine" && renderCommand !== "rebuild_engine") {
+      throw new Error(`unsupported execution renderer transition ${renderCommand}`);
+    }
+
+    const generation = this.#lifecycleGeneration;
+    const previousMode = this.#mode;
+    const wasPlaying = this.#playing;
+    const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
+    const reconnectError = new Error(`execution engine transitioning to ${nextMode}`);
+    this.#engineWorker?.terminate();
+    this.#engineWorker = null;
+    this.#rejectOwner("engine", reconnectError);
+
+    try {
+      const channel = new MessageChannel();
+      const renderSwitched = this.#request(
+        this.#renderWorker,
+        "render",
+        renderEnvelope,
+        renderCommand,
+        {
+          port: channel.port2,
+          transportMode: this.#transportMode,
+          mode: nextMode,
+        },
+        [channel.port2],
+      ).catch((error) => {
+        this.#markFatalOwner("render");
+        throw error;
+      });
+
+      this.#session = checkedNextSession(this.#session);
+      this.#engineWorker = this.#createEngineWorker(nextMode);
+      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+      const nextReady = Promise.all([engineReady, renderSwitched]).then(([engine, render]) => ({
+        engine,
+        render,
+        transportMode: this.#transportMode,
+        session: this.#session,
+      }));
+      this.#ready = nextReady;
+      this.#postEngineInit(
+        this.#engineWorker,
+        channel.port1,
+        nextMode,
+        sceneJson,
+        retainedDocumentJson,
+        duration,
+      );
+
+      const ready = await nextReady;
+      this.#assertLifecycleCurrent(generation);
+      this.#playing = true;
+      if (!wasPlaying) {
+        const paused = await this.#requestEngine("pause", {});
+        this.#rememberPlaying(paused);
+        this.#assertLifecycleCurrent(generation);
+      }
+
+      if (
+        nextMode === EXECUTION_MODE_LEGACY &&
+        callbacks !== null &&
+        callbacks !== undefined
+      ) {
+        this.#hostAuthoringClient = null;
+        await this.#configureHostCallbacks(callbacks, authoringClient);
+        this.#assertLifecycleCurrent(generation);
+      } else {
+        this.#hostAuthoringClient = null;
+        this.#hostCallbacks = null;
+      }
+
+      this.#mode = nextMode;
+      this.#sceneJson = sceneJson;
+      this.#retainedDocumentJson =
+        nextMode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
+      this.#loopDurationSeconds = duration;
+      this.#fatalOwner = null;
+      return ready;
+    } catch (error) {
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      // A failed renderer transition can leave the live render worker between
+      // renderer generations. Force a full-surface recovery on the next restart
+      // rather than trying to infer partial render ownership.
+      this.#fatalOwner = "render";
+      this.#mode = previousMode;
+      throw error;
+    }
   }
 
   async setLoopDurationSeconds(loopDurationSeconds) {
@@ -249,6 +436,7 @@ export class ExecutionWorkerClient {
   }
 
   async applyPatchBatch(patchBatchJson) {
+    this.#requireLegacyMode("apply patch batches");
     if (typeof patchBatchJson !== "string" || patchBatchJson.trim() === "") {
       throw new TypeError("patch batch must be non-empty JSON text");
     }
@@ -261,16 +449,19 @@ export class ExecutionWorkerClient {
   }
 
   async configureHostCallbacks(callbacks, authoringClient = null) {
+    this.#requireLegacyMode("configure host callbacks");
     await this.ready();
+    return this.#configureHostCallbacks(callbacks, authoringClient);
+  }
+
+  async #configureHostCallbacks(callbacks, authoringClient) {
     if (callbacks === null || callbacks === undefined) {
       this.#hostCallbacks = null;
       await this.#requestEngine("configure_callbacks", { callbacks: null });
       return;
     }
     validateCallbacks(callbacks);
-    if (!authoringClient || typeof authoringClient.attachEnginePort !== "function") {
-      throw new TypeError("host callbacks require a PythonAuthoringClient");
-    }
+    validateAuthoringClient(authoringClient);
     if (this.#hostAuthoringClient !== authoringClient) {
       const channel = new MessageChannel();
       await authoringClient.attachEnginePort(channel.port2);
@@ -304,8 +495,6 @@ export class ExecutionWorkerClient {
     }
     const physicalWidth = Math.max(1, Math.round(width * devicePixelRatio));
     const physicalHeight = Math.max(1, Math.round(height * devicePixelRatio));
-    // Once control has moved to OffscreenCanvas, HTMLCanvasElement bitmap sizing
-    // belongs to the render worker. Writing width/height here throws InvalidStateError.
     this.#renderWorker.postMessage(
       renderEnvelope("resize", { width: physicalWidth, height: physicalHeight }),
     );
@@ -325,94 +514,114 @@ export class ExecutionWorkerClient {
   }
 
   async #restartEngine() {
+    const generation = this.#lifecycleGeneration;
+    const mode = this.#mode;
     const wasPlaying = this.#playing;
-    const callbacks = this.#hostCallbacks;
-    const authoringClient = this.#hostAuthoringClient;
+    const callbacks = mode === EXECUTION_MODE_LEGACY ? this.#hostCallbacks : null;
+    const authoringClient =
+      mode === EXECUTION_MODE_LEGACY ? this.#hostAuthoringClient : null;
     const reconnectError = new Error("execution engine worker restarting");
     this.#engineWorker?.terminate();
     this.#engineWorker = null;
     this.#rejectOwner("engine", reconnectError);
 
-    const channel = new MessageChannel();
-    const renderAttached = this.#request(
-      this.#renderWorker,
-      "render",
-      renderEnvelope,
-      "attach_engine",
-      { port: channel.port2, transportMode: this.#transportMode },
-      [channel.port2],
-    ).catch((error) => {
-      this.#markFatalOwner("render");
-      throw error;
-    });
-    this.#session = checkedNextSession(this.#session);
-    this.#engineWorker = new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
-      type: "module",
-      name: "noon-engine",
-    });
-    const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
-    const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
-      engine,
-      render,
-      transportMode: this.#transportMode,
-      session: this.#session,
-    }));
-    this.#ready = nextReady;
-    this.#engineWorker.postMessage(
-      engineEnvelope("init", {
-        port: channel.port1,
-        sceneJson: this.#sceneJson,
-        loopDurationSeconds: this.#loopDurationSeconds,
+    try {
+      const channel = new MessageChannel();
+      const renderAttached = this.#request(
+        this.#renderWorker,
+        "render",
+        renderEnvelope,
+        "attach_engine",
+        {
+          port: channel.port2,
+          transportMode: this.#transportMode,
+          mode,
+        },
+        [channel.port2],
+      ).catch((error) => {
+        this.#markFatalOwner("render");
+        throw error;
+      });
+      this.#session = checkedNextSession(this.#session);
+      this.#engineWorker = this.#createEngineWorker(mode);
+      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+      const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
+        engine,
+        render,
         transportMode: this.#transportMode,
-        sharedSlotCapacity: this.#sharedSlotCapacity,
         session: this.#session,
-      }),
-      [channel.port1],
-    );
+      }));
+      this.#ready = nextReady;
+      this.#postEngineInit(
+        this.#engineWorker,
+        channel.port1,
+        mode,
+        this.#sceneJson,
+        this.#retainedDocumentJson,
+        this.#loopDurationSeconds,
+      );
 
-    const ready = await nextReady;
-    this.#playing = true;
-    if (!wasPlaying) {
-      await this.pause();
+      const ready = await nextReady;
+      this.#assertLifecycleCurrent(generation);
+      this.#playing = true;
+      if (!wasPlaying) {
+        const paused = await this.#requestEngine("pause", {});
+        this.#rememberPlaying(paused);
+        this.#assertLifecycleCurrent(generation);
+      }
+      if (callbacks !== null && authoringClient !== null) {
+        this.#hostAuthoringClient = null;
+        await this.#configureHostCallbacks(callbacks, authoringClient);
+        this.#assertLifecycleCurrent(generation);
+        await this.#requestEngine("request_callback_phase", {});
+        this.#assertLifecycleCurrent(generation);
+      }
+      this.#fatalOwner = null;
+      return ready;
+    } catch (error) {
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      throw error;
     }
-    if (callbacks !== null && authoringClient !== null) {
-      this.#hostAuthoringClient = null;
-      await this.configureHostCallbacks(callbacks, authoringClient);
-      await this.#requestEngine("request_callback_phase", {});
-    }
-    this.#fatalOwner = null;
-    return ready;
   }
 
   async #restartAll() {
+    const mode = this.#mode;
     const sceneJson = this.#sceneJson;
+    const retainedDocumentJson = this.#retainedDocumentJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
     const sharedSlotCapacity = this.#sharedSlotCapacity;
     const wasPlaying = this.#playing;
-    const callbacks = this.#hostCallbacks;
-    const authoringClient = this.#hostAuthoringClient;
+    const callbacks = mode === EXECUTION_MODE_LEGACY ? this.#hostCallbacks : null;
+    const authoringClient =
+      mode === EXECUTION_MODE_LEGACY ? this.#hostAuthoringClient : null;
+
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
-    const ready = await this.start(sceneJson, {
+
+    const ready = await this.#startMode(mode, sceneJson, retainedDocumentJson, {
       loopDurationSeconds,
       transportMode,
       sharedSlotCapacity,
     });
     if (!wasPlaying) {
-      await this.pause();
+      const paused = await this.#requestEngine("pause", {});
+      this.#rememberPlaying(paused);
     }
     if (callbacks !== null && authoringClient !== null) {
       this.#hostAuthoringClient = null;
-      await this.configureHostCallbacks(callbacks, authoringClient);
+      await this.#configureHostCallbacks(callbacks, authoringClient);
     }
     this.#fatalOwner = null;
     return ready;
   }
 
   terminate({ preserveHostConfiguration = false } = {}) {
+    this.#lifecycleGeneration += 1;
     this.#engineWorker?.terminate();
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
@@ -456,6 +665,9 @@ export class ExecutionWorkerClient {
 
   #request(worker, owner, envelopeFactory, type, payload, transfer = []) {
     validateWorkerOwner(owner);
+    if (worker === null) {
+      throw new Error(`${owner} worker is unavailable`);
+    }
     const requestId = this.#nextRequestIds[owner];
     this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
     const result = new Promise((resolve, reject) => {
@@ -587,6 +799,41 @@ export class ExecutionWorkerClient {
     }
   }
 
+  #createEngineWorker(mode) {
+    if (mode === EXECUTION_MODE_RETAINED) {
+      return new Worker(new URL("./retained-execution-engine-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-mixed-retained-engine",
+      });
+    }
+    return new Worker(new URL("./execution-engine-worker.js", import.meta.url), {
+      type: "module",
+      name: "noon-engine",
+    });
+  }
+
+  #postEngineInit(
+    worker,
+    port,
+    mode,
+    sceneJson,
+    retainedDocumentJson,
+    loopDurationSeconds,
+  ) {
+    const payload = {
+      port,
+      sceneJson,
+      loopDurationSeconds,
+      transportMode: this.#transportMode,
+      sharedSlotCapacity: this.#sharedSlotCapacity,
+      session: this.#session,
+    };
+    if (mode === EXECUTION_MODE_RETAINED) {
+      payload.retainedDocumentJson = retainedDocumentJson;
+    }
+    worker.postMessage(engineEnvelope("init", payload), [port]);
+  }
+
   #isCurrentWorker(owner, worker) {
     return owner === "engine" ? this.#engineWorker === worker : this.#renderWorker === worker;
   }
@@ -635,6 +882,19 @@ export class ExecutionWorkerClient {
     }
   }
 
+  #assertLifecycleCurrent(generation) {
+    if (generation !== this.#lifecycleGeneration) {
+      throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+    }
+  }
+
+  #requireLegacyMode(operation) {
+    this.#requireStarted();
+    if (this.#mode !== EXECUTION_MODE_LEGACY) {
+      throw new Error(`${operation} require legacy execution mode`);
+    }
+  }
+
   #requireStarted() {
     if (this.#engineWorker === null || this.#renderWorker === null) {
       throw new Error("ExecutionWorkerClient has not been started");
@@ -678,9 +938,44 @@ function validateWorkerOwner(owner) {
   }
 }
 
+function validateExecutionMode(mode) {
+  if (mode !== EXECUTION_MODE_LEGACY && mode !== EXECUTION_MODE_RETAINED) {
+    throw new TypeError(`unsupported execution mode ${mode}`);
+  }
+  return mode;
+}
+
+function validateTransportMode(transportMode) {
+  if (
+    transportMode !== EXECUTION_TRANSPORT_SHARED &&
+    transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
+  ) {
+    throw new TypeError(`unsupported execution transport mode ${transportMode}`);
+  }
+  return transportMode;
+}
+
 function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
+  }
+}
+
+function validateRetainedDocumentJson(retainedDocumentJson) {
+  if (typeof retainedDocumentJson !== "string" || retainedDocumentJson.trim() === "") {
+    throw new TypeError("retained document must be non-empty JSON text");
+  }
+  let document;
+  try {
+    document = JSON.parse(retainedDocumentJson);
+  } catch (error) {
+    throw new TypeError(`retained document must be valid JSON: ${error}`);
+  }
+  if (document?.channel !== "noon.authoring.retained") {
+    throw new TypeError("retained document must use noon.authoring.retained");
+  }
+  if (!Array.isArray(document.objects) || document.objects.length === 0) {
+    throw new TypeError("retained document must contain objects");
   }
 }
 
@@ -710,6 +1005,13 @@ function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
   return timeSeconds;
 }
 
+function validateSharedSlotCapacity(sharedSlotCapacity) {
+  if (!Number.isSafeInteger(sharedSlotCapacity) || sharedSlotCapacity <= 0) {
+    throw new TypeError("shared execution slot capacity must be a positive safe integer");
+  }
+  return sharedSlotCapacity;
+}
+
 function validateCallbacks(callbacks) {
   if (!callbacks || typeof callbacks !== "object") {
     throw new TypeError("callback configuration must be an object");
@@ -719,6 +1021,12 @@ function validateCallbacks(callbacks) {
   }
   if (!Array.isArray(callbacks.slots) || callbacks.slots.length === 0) {
     throw new TypeError("callback configuration must contain slots");
+  }
+}
+
+function validateAuthoringClient(authoringClient) {
+  if (!authoringClient || typeof authoringClient.attachEnginePort !== "function") {
+    throw new TypeError("host callbacks require a PythonAuthoringClient");
   }
 }
 
