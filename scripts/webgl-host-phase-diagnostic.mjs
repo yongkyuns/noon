@@ -26,6 +26,10 @@ function noonRotationUpdaterSource() {
   });
 }
 
+function staticRotationSource() {
+  return `from noon import *\n\nclass StaticRotation(Scene):\n    def construct(self):\n        line_reference = Line(ORIGIN, LEFT).set_color(WHITE)\n        line_moving = Line(ORIGIN, LEFT).set_color(YELLOW)\n        line_moving.rotate_about_origin(0.9666666666666667)\n        self.add(line_reference, line_moving)\n        self.wait(0.5)\n\nresult = StaticRotation()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
+}
+
 function referenceFrameTimes(frameCount) {
   const times = [0];
   let time = 0;
@@ -50,6 +54,14 @@ async function waitForServer() {
   throw new Error("timed out waiting for diagnostic web server");
 }
 
+async function createHostPage(browser) {
+  const page = await browser.newPage({ viewport: { width: 1000, height: 580 } });
+  await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+  await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+  await page.evaluate(() => window.noonHostRaster.ready());
+  return page;
+}
+
 const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1"], {
   cwd: repoRoot,
   stdio: ["ignore", "ignore", "inherit"],
@@ -72,13 +84,10 @@ try {
       "--disable-dev-shm-usage",
     ],
   });
-  const page = await browser.newPage({ viewport: { width: 1000, height: 580 } });
-  await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
-  await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
-  await page.evaluate(() => window.noonHostRaster.ready());
 
+  const updaterPage = await createHostPage(browser);
   const source = await noonRotationUpdaterSource();
-  const loaded = await page.evaluate(
+  const loaded = await updaterPage.evaluate(
     ({ sourceText, loopDuration }) => window.noonHostRaster.load(sourceText, loopDuration),
     { sourceText: source, loopDuration: 5.5 },
   );
@@ -87,7 +96,7 @@ try {
   assert.ok(loaded.callbackSlots > 0, "RotationUpdater must use host callbacks");
 
   const frameTimes = referenceFrameTimes(121);
-  const metrics = await page.evaluate(
+  const metrics = await updaterPage.evaluate(
     ({ targetFrame, times }) => window.noonHostRaster.renderThrough(targetFrame, times),
     { targetFrame: 90, times: frameTimes },
   );
@@ -96,11 +105,26 @@ try {
   assert.ok(metrics.phases, "frame 90 phase metrics");
   assert.equal(metrics.phases.frameIndex, 90, "phase metrics frame index");
   assert.ok(metrics.phases.hostPatch, "frame 90 host patch phase");
+  await updaterPage.locator("#scene").screenshot({
+    path: path.join(artifactDir, "frame-0090-updater.png"),
+  });
+  await updaterPage.close();
 
-  const reportPath = path.join(artifactDir, "frame-0090.json");
-  await writeFile(reportPath, `${JSON.stringify({ loaded, metrics }, null, 2)}\n`);
-  await page.locator("#scene").screenshot({ path: path.join(artifactDir, "frame-0090.png") });
-  console.log(JSON.stringify({ loaded, metrics }, null, 2));
+  const staticPage = await createHostPage(browser);
+  const staticLoaded = await staticPage.evaluate(
+    ({ sourceText, loopDuration }) => window.noonHostRaster.load(sourceText, loopDuration),
+    { sourceText: staticRotationSource(), loopDuration: 1.5 },
+  );
+  assert.equal(staticLoaded.rendererBackend, "WebGL2", "static diagnostic must exercise WebGL2");
+  assert.equal(staticLoaded.callbackSlots, 0, "static rotation must not use host callbacks");
+  await staticPage.locator("#scene").screenshot({
+    path: path.join(artifactDir, "frame-static-rotation.png"),
+  });
+  await staticPage.close();
+
+  const report = { loaded, metrics, staticLoaded, staticRotation: 0.9666666666666667 };
+  await writeFile(path.join(artifactDir, "frame-0090.json"), `${JSON.stringify(report, null, 2)}\n`);
+  console.log(JSON.stringify(report, null, 2));
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
