@@ -104,14 +104,8 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     const MOVING_INDEX: usize = 1;
 
     let mut scene = SceneDefinition::new();
-    let _static_line = scene.add(GeometryRef::line(
-        Vec2::new(-1.0, 0.0),
-        Vec2::new(1.0, 0.0),
-    ));
-    let moving_line = scene.add(GeometryRef::line(
-        Vec2::new(-1.0, 0.0),
-        Vec2::new(1.0, 0.0),
-    ));
+    let _static_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
+    let moving_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     let static_before = instance.frame().objects[STATIC_INDEX].clone();
@@ -142,7 +136,10 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
         assert_eq!(instance.frame().objects[STATIC_INDEX], static_before);
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
-        assert_eq!(prepared.line_dirty_ranges.as_slice(), &[MOVING_INDEX..MOVING_INDEX + 1]);
+        assert_eq!(
+            prepared.line_dirty_ranges.as_slice(),
+            &[MOVING_INDEX..MOVING_INDEX + 1]
+        );
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert!(!prepared.path_geometry_dirty);
         assert_eq!(preparer.cached_path_mesh_count(), 0);
