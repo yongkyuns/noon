@@ -1,0 +1,60 @@
+name: Manim polygon adapters
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon/src/polygram_authoring.rs"
+      - "crates/noon-web/src/lib.rs"
+      - "crates/noon-web/src/manim_polygram_handle.rs"
+      - "web/python/_manim_shared_geometry.py"
+      - "web/python-worker.source.js"
+      - "scripts/check-polygram-web-package.mjs"
+      - "scripts/manim-polygram-adapters-smoke.mjs"
+      - ".github/workflows/manim-polygram-adapters.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "crates/noon/src/polygram_authoring.rs"
+      - "crates/noon-web/src/lib.rs"
+      - "crates/noon-web/src/manim_polygram_handle.rs"
+      - "web/python/_manim_shared_geometry.py"
+      - "web/python-worker.source.js"
+      - "scripts/check-polygram-web-package.mjs"
+      - "scripts/manim-polygram-adapters-smoke.mjs"
+      - ".github/workflows/manim-polygram-adapters.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  polygon-adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@wasm-pack
+
+      - name: Build browser package and Python bundle
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: ./scripts/build-web-demo.sh
+
+      - name: Validate polygon package surface
+        run: node scripts/check-polygram-web-package.mjs
+
+      - name: Install Chromium smoke dependency
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+
+      - name: Test shared Python and JavaScript polygon adapters
+        run: node scripts/manim-polygram-adapters-smoke.mjs
