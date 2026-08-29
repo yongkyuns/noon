@@ -44,6 +44,10 @@ pub use text_resources::*;
 mod resource_mutation;
 pub use resource_mutation::*;
 
+#[path = "resource_transaction.rs"]
+mod resource_transaction;
+pub use resource_transaction::*;
+
 #[path = "object_content.rs"]
 mod object_content;
 pub use object_content::*;
