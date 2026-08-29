@@ -100,9 +100,11 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
 #[test]
 fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     const EDIT_COUNT: usize = 1_000;
+    const STATIC_INDEX: usize = 0;
+    const MOVING_INDEX: usize = 1;
 
     let mut scene = SceneDefinition::new();
-    let static_line = scene.add(GeometryRef::line(
+    let _static_line = scene.add(GeometryRef::line(
         Vec2::new(-1.0, 0.0),
         Vec2::new(1.0, 0.0),
     ));
@@ -112,7 +114,7 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     ));
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
-    let static_before = instance.frame().objects[static_line.0].clone();
+    let static_before = instance.frame().objects[STATIC_INDEX].clone();
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
@@ -133,14 +135,14 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
             .unwrap();
 
         let changes = instance.take_frame_changes();
-        assert_eq!(changes.object_indices(), &[moving_line.0]);
+        assert_eq!(changes.object_indices(), &[MOVING_INDEX]);
         let prepared = preparer.prepare_incremental(instance.frame(), &changes);
 
-        assert_eq!(instance.frame().objects[moving_line.0].transform, transform);
-        assert_eq!(instance.frame().objects[static_line.0], static_before);
+        assert_eq!(instance.frame().objects[MOVING_INDEX].transform, transform);
+        assert_eq!(instance.frame().objects[STATIC_INDEX], static_before);
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.dirty_instance_count, 1);
-        assert_eq!(prepared.line_dirty_ranges.as_slice(), &[moving_line.0..moving_line.0 + 1]);
+        assert_eq!(prepared.line_dirty_ranges.as_slice(), &[MOVING_INDEX..MOVING_INDEX + 1]);
         assert_eq!(prepared.stats.geometry_cache_misses, 0);
         assert!(!prepared.path_geometry_dirty);
         assert_eq!(preparer.cached_path_mesh_count(), 0);
