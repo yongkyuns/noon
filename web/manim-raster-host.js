@@ -25,6 +25,18 @@ function waitForPaint() {
   });
 }
 
+function finishWebGlDiagnosticSubmission() {
+  if (renderer?.rendererBackend() !== "WebGL2") return;
+  const gl = offscreen.getContext("webgl2");
+  if (gl === null) {
+    throw new Error("host raster WebGL diagnostic could not recover the owned WebGL2 context");
+  }
+  // Diagnostic only: prove whether the failing host-updater sample is caused by
+  // screenshot visibility racing the final WebGL submission. This direct context
+  // fence must be replaced by a renderer-owned completion contract before merge.
+  gl.finish();
+}
+
 async function presentDelta(deltaJson) {
   if (deltaJson === undefined || deltaJson === null) return false;
   const applied = renderer.applyDeltaJson(deltaJson);
@@ -36,6 +48,7 @@ async function presentDelta(deltaJson) {
   if (!presented) {
     throw new Error("host raster renderer could not present an applied execution delta");
   }
+  finishWebGlDiagnosticSubmission();
   await waitForPaint();
   return true;
 }
@@ -79,6 +92,7 @@ async function load(source, loopDurationSeconds) {
   if (!presented) {
     throw new Error("host raster renderer could not present its initial snapshot");
   }
+  finishWebGlDiagnosticSubmission();
   await waitForPaint();
 
   return {
