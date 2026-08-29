@@ -457,10 +457,11 @@ impl TextGlyphGpuRenderer {
                 self.pipeline(GlyphAtlasPlane::Color, sample_count)?,
             ),
         };
-        let page_index = usize::try_from(*page).map_err(|_| TextGpuDrawError::MissingAtlasPage {
-            plane: *plane,
-            page: *page,
-        })?;
+        let page_index =
+            usize::try_from(*page).map_err(|_| TextGpuDrawError::MissingAtlasPage {
+                plane: *plane,
+                page: *page,
+            })?;
         let bind_group = bind_groups.get(page_index).ok_or_else(|| {
             if *page == 0 && bind_groups.is_empty() {
                 TextGpuDrawError::MissingAtlasPlane(*plane)
@@ -545,7 +546,9 @@ fn refresh_plane_bind_groups(
         let view = atlas
             .texture_view_for_page(plane, page)
             .expect("resident glyph atlas page must expose its texture view");
-        bind_groups.push(create_atlas_bind_group(device, layout, sampler, view, label));
+        bind_groups.push(create_atlas_bind_group(
+            device, layout, sampler, view, label,
+        ));
     }
 }
 

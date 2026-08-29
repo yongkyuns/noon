@@ -508,11 +508,7 @@ impl GpuGlyphAtlas {
             image.placement.height,
             bytes_per_pixel,
         )?;
-        let allocation = self.allocate(
-            plane,
-            image.placement.width,
-            image.placement.height,
-        )?;
+        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
         let extent = self.extent;
         let state = self.ensure_page(device, plane, allocation.page)?;
         let bytes_per_row = allocation.outer_size[0]
