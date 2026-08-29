@@ -63,6 +63,36 @@ def _set_y(self: _base.Mobject, y: float) -> _base.Mobject:
     )
 
 
+def _match_x(
+    self: _base.Mobject,
+    mobject: _base.Mobject,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Match a directional x coordinate through shared ``move_to`` semantics."""
+
+    return _shared._move_to(
+        self,
+        mobject,
+        aligned_edge=direction,
+        coor_mask=(1.0, 0.0, 0.0),
+    )
+
+
+def _match_y(
+    self: _base.Mobject,
+    mobject: _base.Mobject,
+    direction: object = _base.ORIGIN,
+) -> _base.Mobject:
+    """Match a directional y coordinate through shared ``move_to`` semantics."""
+
+    return _shared._move_to(
+        self,
+        mobject,
+        aligned_edge=direction,
+        coor_mask=(0.0, 1.0, 0.0),
+    )
+
+
 def _rotate_about_origin(
     self: _base.Mobject,
     angle: float,
@@ -137,6 +167,8 @@ def install() -> None:
     _INSTALLED = True
     _base.Mobject.set_x = _set_x
     _base.Mobject.set_y = _set_y
+    _base.Mobject.match_x = _match_x
+    _base.Mobject.match_y = _match_y
     _base.Mobject.rotate_about_origin = _rotate_about_origin
     if _create_dot_handle is not None:
         _geometry.Dot.__init__ = _dot_init
