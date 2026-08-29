@@ -368,7 +368,8 @@ impl AtlasPlaneState {
 /// Alpha-mask and color glyphs use independent page vectors because they have
 /// different formats and shader semantics. Textures remain lazy: a plane allocates
 /// only the pages actually reached by deterministic shelf packing. Empty glyphs are
-/// cached without consuming GPU space.
+/// returned without GPU-side residency; the bounded CPU raster cache owns their
+/// identity.
 ///
 /// `GpuGlyphAtlas::new` preserves the historical one-page-per-plane policy. Callers
 /// must opt into a larger bounded budget with `with_page_limit`. Page reuse is also
@@ -496,15 +497,9 @@ impl GpuGlyphAtlas {
         self.stats.misses = self.stats.misses.saturating_add(1);
 
         let GlyphRaster::Image(image) = raster else {
-            self.entries.insert(key, GlyphAtlasEntry::Empty);
-            self.stats.entries = self.entries.len();
-            self.stats.empty_entries = self.stats.empty_entries.saturating_add(1);
             return Ok(GlyphAtlasEntry::Empty);
         };
         if image.placement.width == 0 || image.placement.height == 0 {
-            self.entries.insert(key, GlyphAtlasEntry::Empty);
-            self.stats.entries = self.entries.len();
-            self.stats.empty_entries = self.stats.empty_entries.saturating_add(1);
             return Ok(GlyphAtlasEntry::Empty);
         }
 
