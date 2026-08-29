@@ -110,15 +110,6 @@ try {
   });
 
   await page.goto(`${baseUrl}/web/index.html`, { waitUntil: "load" });
-  await page.waitForSelector(".python-code-editor[data-editor-ready='true'] .cm-editor", {
-    timeout: 30_000,
-  });
-  assert.equal(
-    await page.locator(".python-code-editor[data-editor-ready='true']").count(),
-    2,
-    "both Python textareas should be enhanced",
-  );
-
   await page.waitForFunction(
     () =>
       document.querySelector("#python-scene-source")?.value.includes("from noon import") ||
@@ -130,6 +121,7 @@ try {
     sourceLoaded:
       document.querySelector("#python-scene-source")?.value.includes("from noon import") ?? false,
     state: document.querySelector("#status")?.dataset.state ?? null,
+    runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
     text:
       document.querySelector("#status-text")?.textContent ??
       document.querySelector("#status")?.textContent ??
@@ -140,10 +132,29 @@ try {
     true,
     `playground failed before loading editor source: ${JSON.stringify(startup)}\n${errors.join("\n")}`,
   );
+  assert.equal(startup.runtimeStartup, "deferred", "page load must not start the execution runtime");
+  assert.equal(
+    await page.locator(".python-code-editor").count(),
+    0,
+    "CodeMirror/Ruff must remain unloaded until the source editor is focused",
+  );
+
+  await page.locator("#python-scene-source").focus();
+  await page.waitForSelector(".python-code-editor[data-editor-ready='true'] .cm-editor", {
+    timeout: 30_000,
+  });
+  assert.equal(
+    await page.locator(".python-code-editor[data-editor-ready='true']").count(),
+    2,
+    "both Python textareas should be enhanced after the first editor focus",
+  );
+
   const highlightedSpans = await page.locator("#scene-editor-panel .cm-line span").count();
   assert.ok(highlightedSpans > 0, "Python source should contain syntax-highlighted spans");
 
+  await page.locator("#replace-scene").click();
   await waitForRuntime(page, errors, "enhanced editor");
+  await waitForAppliedScene(page, errors, "enhanced editor");
 
   const layout = await page.evaluate(() => {
     const scroller = document
@@ -226,8 +237,14 @@ try {
     null,
     { timeout: 30_000 },
   );
-  await waitForRuntime(fallbackPage, fallbackErrors, "textarea fallback");
-  await waitForAppliedScene(fallbackPage, fallbackErrors, "textarea fallback");
+  const enhancementWarning = fallbackPage.waitForEvent("console", {
+    predicate: (message) =>
+      message.type() === "warning" &&
+      message.text().includes("Enhanced Python editor unavailable; using textarea fallback"),
+    timeout: 30_000,
+  });
+  await fallbackPage.locator("#python-scene-source").focus();
+  await enhancementWarning;
 
   const fallback = await fallbackPage.evaluate(() => {
     const textarea = document.querySelector("#python-scene-source");
@@ -235,13 +252,21 @@ try {
       textareaHidden: textarea?.hidden ?? true,
       editorCount: document.querySelectorAll(".python-code-editor").length,
       source: textarea?.value ?? "",
-      backend: document.querySelector("#status")?.dataset.rendererBackend ?? null,
+      runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
     };
   });
   assert.equal(fallback.textareaHidden, false, "CDN failure must keep the native textarea visible");
   assert.equal(fallback.editorCount, 0, "failed enhancement must not leave partial editor hosts");
   assert.match(fallback.source, /from noon import \*/);
-  assert.equal(fallback.backend, "WebGL2");
+  assert.equal(fallback.runtimeStartup, "deferred", "editor fallback must not start the runtime");
+
+  await fallbackPage.locator("#replace-scene").click();
+  await waitForRuntime(fallbackPage, fallbackErrors, "textarea fallback");
+  await waitForAppliedScene(fallbackPage, fallbackErrors, "textarea fallback");
+  assert.equal(
+    await fallbackPage.locator("#status").getAttribute("data-renderer-backend"),
+    "WebGL2",
+  );
 
   await fallbackPage.locator("#python-scene-source").fill(
     "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
@@ -265,7 +290,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback with a fresh two-object render.`,
+    `Python editor smoke passed: deferred startup + enhanced editor + ${lintRanges} Ruff diagnostic(s) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();
