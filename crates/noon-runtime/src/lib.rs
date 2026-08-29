@@ -523,7 +523,12 @@ impl SceneInstance {
                 self.frame.objects[index].transform = *transform;
                 self.reapply_properties(
                     index,
-                    &[Property::Transform, Property::Position, Property::Rotation],
+                    &[
+                        Property::Transform,
+                        Property::Position,
+                        Property::Rotation,
+                        Property::Scale,
+                    ],
                 );
             }
             ScenePatch::SetStyle { style, .. } => {
@@ -696,11 +701,12 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 8] = [
+const PROPERTY_ORDER: [Property; 9] = [
     Property::Presence,
     Property::Transform,
     Property::Position,
     Property::Rotation,
+    Property::Scale,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -927,6 +933,12 @@ fn apply_evaluated_value(
             let object = &mut frame.objects[object_index];
             let changed = object.transform.rotation != value;
             object.transform.rotation = value;
+            changed
+        }
+        (Property::Scale, EvaluatedValue::Vec2(value)) => {
+            let object = &mut frame.objects[object_index];
+            let changed = object.transform.scale != value;
+            object.transform.scale = value;
             changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
@@ -1380,6 +1392,40 @@ mod tests {
                 .transform
                 .translation,
             Vec2::new(10.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn scale_timeline_endpoints_and_midpoint_are_exact() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .animate_scale(
+                object,
+                Vec2::ONE,
+                Vec2::new(3.0, 2.0),
+                TrackTiming::new(1.0, 2.0, Easing::Linear),
+            )
+            .expect("valid scale track");
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"));
+        assert_eq!(
+            instance.seek(1.0).expect("valid time").objects[0]
+                .transform
+                .scale,
+            Vec2::ONE
+        );
+        assert_eq!(
+            instance.seek(2.0).expect("valid time").objects[0]
+                .transform
+                .scale,
+            Vec2::new(2.0, 1.5)
+        );
+        assert_eq!(
+            instance.seek(3.0).expect("valid time").objects[0]
+                .transform
+                .scale,
+            Vec2::new(3.0, 2.0)
         );
     }
 

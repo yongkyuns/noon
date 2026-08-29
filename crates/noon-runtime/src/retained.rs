@@ -373,6 +373,11 @@ fn retained_apply_evaluated_value(
             frame.objects[index].transform.rotation = value;
             changed
         }
+        (Property::Scale, EvaluatedValue::Vec2(value)) => {
+            let changed = frame.objects[index].transform.scale != value;
+            frame.objects[index].transform.scale = value;
+            changed
+        }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
             let changed = frame.objects[index].style.opacity != value;
             frame.objects[index].style.opacity = value;
@@ -539,6 +544,36 @@ mod tests {
         assert!((frame.objects[0].style.opacity - 0.6).abs() < 1e-6);
         assert_eq!(frame.appearance(0), 0.5);
         assert_eq!(frame.text(0), Some(text_handle()));
+    }
+
+    #[test]
+    fn retained_text_scale_track_preserves_resource_identity() {
+        let object = ObjectId::new(3);
+        let handle = text_handle();
+        let objects = [RetainedObjectDefinition::text(object, handle)];
+        let tracks = [text_track(
+            0,
+            object,
+            Property::Scale,
+            TrackValues::Vec2 {
+                from: Vec2::ONE,
+                to: Vec2::new(0.0, 0.0),
+            },
+            0.0,
+            2.0,
+        )];
+        let compiled = RetainedCompiledScene::compile(&objects, &tracks).unwrap();
+        let mut runtime = RetainedSceneInstance::new(compiled);
+
+        let midpoint = runtime.seek(1.0).unwrap();
+        assert_eq!(midpoint.objects[0].transform.scale, Vec2::new(0.5, 0.5));
+        assert_eq!(midpoint.text(0), Some(handle));
+        assert_eq!(midpoint.render_geometry(0), None);
+
+        let end = runtime.seek(2.0).unwrap();
+        assert_eq!(end.objects[0].transform.scale, Vec2::ZERO);
+        assert_eq!(end.text(0), Some(handle));
+        assert_eq!(end.render_geometry(0), None);
     }
 
     #[test]

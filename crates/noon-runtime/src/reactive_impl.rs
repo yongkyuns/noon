@@ -107,11 +107,12 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
-        const PROPERTIES: [Property; 8] = [
+        const PROPERTIES: [Property; 9] = [
             Property::Presence,
             Property::Transform,
             Property::Position,
             Property::Rotation,
+            Property::Scale,
             Property::Opacity,
             Property::Appearance,
             Property::Reveal,
@@ -286,10 +287,11 @@ const fn property_slot(property: Property) -> u8 {
         Property::Transform => 1,
         Property::Position => 2,
         Property::Rotation => 3,
-        Property::Opacity => 4,
-        Property::Appearance => 5,
-        Property::Reveal => 6,
-        Property::Morph => 7,
+        Property::Scale => 4,
+        Property::Opacity => 5,
+        Property::Appearance => 6,
+        Property::Reveal => 7,
+        Property::Morph => 8,
     }
 }
 
@@ -315,6 +317,12 @@ fn apply_reactive_value(
             let object = &mut frame.objects[object_index];
             let changed = object.transform.rotation != *value;
             object.transform.rotation = *value;
+            changed
+        }
+        (Property::Scale, ReactiveValue::Vec2(value)) => {
+            let object = &mut frame.objects[object_index];
+            let changed = object.transform.scale != *value;
+            object.transform.scale = *value;
             changed
         }
         (Property::Opacity, ReactiveValue::Scalar(value)) => {
@@ -367,6 +375,28 @@ mod tests {
             instance.frame().objects[0].transform.translation,
             Vec2::new(3.0, -2.0)
         );
+    }
+
+    #[test]
+    fn reactive_scale_updates_transform_without_touching_geometry() {
+        let mut scene = SemanticScene::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let scale = scene.add_input(Vec2::ONE);
+        scene.bind(scale, object, Property::Scale);
+
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        assert_eq!(instance.frame().objects[0].transform.scale, Vec2::ONE);
+        assert_eq!(instance.frame().objects[0].geometry, GeometryRef::circle(1.0));
+
+        instance
+            .set_reactive_input(scale, Vec2::new(0.25, 2.0))
+            .expect("scale input update must work");
+        assert_eq!(
+            instance.frame().objects[0].transform.scale,
+            Vec2::new(0.25, 2.0)
+        );
+        assert_eq!(instance.frame().objects[0].geometry, GeometryRef::circle(1.0));
     }
 
     #[test]
@@ -514,5 +544,4 @@ mod tests {
         assert!(!instance.frame().presences[1]);
         assert_eq!(instance.last_reactive_stats().dense_targets_applied, 1);
     }
-
 }
