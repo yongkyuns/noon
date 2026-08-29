@@ -87,10 +87,21 @@ async function snapshot(page) {
       canvasCount: document.querySelectorAll("canvas").length,
       rendererBackend: status?.dataset.rendererBackend ?? null,
       runtimeState: status?.dataset.state ?? null,
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
       generationDiagnostics: window.__noonExampleGallery?.generationDiagnostics ?? null,
       authoringCount: window.__noonRerunStress?.authoringCount ?? 0,
     };
   });
+}
+
+async function startDeferredRuntime(page, exampleId) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await snapshot(page);
+  assert.equal(deferred.runtimeStartup, "deferred", "rerun stress must begin without a runtime");
+  assert.equal(deferred.rendererBackend, null, "deferred rerun stress must not initialize a renderer");
+  assert.equal(deferred.playing, null, "deferred rerun stress must not allocate playback controls");
+  await page.locator("#replace-scene").click();
+  await waitForApplied(page, exampleId);
 }
 
 async function holdNextRun(page, exampleId) {
@@ -166,7 +177,7 @@ try {
 
   const exampleId = "parity-create-circle";
   await page.goto(`${baseUrl}/web/index.html?example=${exampleId}`, { waitUntil: "load" });
-  await waitForApplied(page, exampleId);
+  await startDeferredRuntime(page, exampleId);
   await page.waitForSelector(".playback-controls");
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
   await page.evaluate(() => {

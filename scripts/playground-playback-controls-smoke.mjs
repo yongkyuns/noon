@@ -73,6 +73,29 @@ async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
   assert.equal(snapshot.state, "applied", `${expectedExampleId} failed: ${snapshot.text}`);
 }
 
+async function startDeferredRuntime(page, expectedExampleId) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await page.evaluate(() => {
+    const status = document.querySelector("#status");
+    return {
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      executionMode: window.__noonExampleGallery?.executionMode ?? null,
+      visibleExampleCount: window.__noonExampleGallery?.visibleExampleCount ?? Infinity,
+      hasPlaybackControls: document.querySelector(".playback-controls") !== null,
+    };
+  });
+  assert.equal(deferred.runtimeStartup, "deferred", "playground must not start runtime on page load");
+  assert.equal(deferred.executionMode, null, "deferred playground must not own an execution runtime yet");
+  assert.equal(deferred.hasPlaybackControls, false, "playback controls must not allocate before runtime start");
+  assert.ok(deferred.visibleExampleCount <= 18, "gallery DOM residency must remain bounded on startup");
+
+  const runButton = page.locator("#replace-scene");
+  await runButton.waitFor({ state: "attached" });
+  assert.equal(await runButton.isDisabled(), false, "Run must be available before runtime startup");
+  await runButton.click();
+  await waitForAppliedScene(page, expectedExampleId);
+}
+
 async function playbackSnapshot(page) {
   return page.evaluate(() => {
     const controls = document.querySelector(".playback-controls");
@@ -169,7 +192,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
-  await waitForAppliedScene(page, "parity-square-and-circle");
+  await startDeferredRuntime(page, "parity-square-and-circle");
   await page.waitForSelector(".playback-controls");
   await page.evaluate(() => {
     document.querySelector("#scene").dataset.playbackSmokeIdentity = "original";
@@ -200,8 +223,16 @@ try {
   assert.equal(pausedB.canvasIdentity, "original");
   assert.equal(pausedB.rendererBackend, initial.rendererBackend);
   assert.ok(
-    Math.abs(parseSeconds(pausedB.metricTime) - parseSeconds(pausedA.metricTime)) <= 0.02,
-    `pause did not freeze logical time: ${pausedA.metricTime} -> ${pausedB.metricTime}`,
+    Math.abs(parseSeconds(pausedB.timeText) - parseSeconds(pausedA.timeText)) <= 0.02,
+    `pause did not freeze logical time: ${pausedA.timeText} -> ${pausedB.timeText}`,
+  );
+  const pausedTime = parseSeconds(pausedB.timeText);
+  await waitForMetricNear(page, pausedTime, 0.03);
+  const pausedMetrics = await playbackSnapshot(page);
+  diagnostics.paused.metricsConverged = pausedMetrics;
+  assert.ok(
+    Math.abs(parseSeconds(pausedMetrics.metricTime) - pausedTime) <= 0.03,
+    `polled metrics did not converge to paused logical time: ${pausedMetrics.metricTime} vs ${pausedB.timeText}`,
   );
 
   const duration = Number(pausedB.scrubberMax);

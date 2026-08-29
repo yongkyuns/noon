@@ -12,10 +12,6 @@ import {
   requestedExampleId,
 } from "./example-gallery.js";
 
-void import("./python-editor.js").catch((error) => {
-  console.warn("Optional Python editor unavailable; using textarea fallback", error);
-});
-
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
@@ -42,6 +38,17 @@ patchPanel.hidden = true;
 sourceEditor.hidden = true;
 sceneTab.hidden = true;
 sceneButton.textContent = "Run";
+
+let pythonEditorLoadPromise = null;
+function loadEnhancedPythonEditor() {
+  pythonEditorLoadPromise ??= import("./python-editor.js").catch((error) => {
+    console.warn("Optional Python editor unavailable; using textarea fallback", error);
+  });
+  return pythonEditorLoadPromise;
+}
+
+const GALLERY_PAGE_SIZE = 18;
+const METRICS_POLL_MS = 500;
 
 const galleryStyle = document.createElement("style");
 galleryStyle.textContent = `
@@ -99,6 +106,39 @@ galleryStyle.textContent = `
     color: var(--muted);
     font-size: 0.76rem;
   }
+  .gallery-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    min-height: 3rem;
+    padding: 0.55rem 0.85rem;
+    border-top: 1px solid var(--border);
+    background: rgb(9 13 21 / 72%);
+  }
+  .gallery-pager[hidden] { display: none; }
+  .gallery-pager-status {
+    color: var(--muted-2);
+    font: 0.68rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .gallery-pager-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .gallery-page-button {
+    border: 1px solid #303d58;
+    border-radius: 0.55rem;
+    padding: 0.38rem 0.58rem;
+    background: #111722;
+    color: #dbe2ef;
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+  .gallery-page-button:disabled {
+    cursor: default;
+    opacity: 0.42;
+  }
   .example-card {
     min-width: 0;
     padding: 0;
@@ -109,6 +149,8 @@ galleryStyle.textContent = `
     color: inherit;
     cursor: pointer;
     text-align: left;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 12rem;
   }
   .example-card:hover { border-color: #4a5e87; }
   .example-card[aria-selected="true"] {
@@ -201,6 +243,9 @@ galleryStyle.textContent = `
   @media (max-width: 44rem) {
     .gallery-controls { grid-template-columns: 1fr; }
     .gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; padding: 0.6rem; }
+    .gallery-pager { align-items: stretch; flex-direction: column; }
+    .gallery-pager-actions { width: 100%; }
+    .gallery-page-button { flex: 1; }
     .selected-example { flex-direction: column; }
     .selected-tags { justify-content: flex-start; max-width: none; }
   }
@@ -247,7 +292,24 @@ galleryControls.append(gallerySearch, categorySelect, paritySelect);
 galleryHead.append(galleryTitle, galleryControls);
 const galleryGrid = document.createElement("div");
 galleryGrid.className = "gallery-grid";
-gallerySection.append(galleryHead, galleryGrid);
+const galleryPager = document.createElement("div");
+galleryPager.className = "gallery-pager";
+const galleryPagerStatus = document.createElement("span");
+galleryPagerStatus.className = "gallery-pager-status";
+galleryPagerStatus.setAttribute("aria-live", "polite");
+const galleryPagerActions = document.createElement("div");
+galleryPagerActions.className = "gallery-pager-actions";
+const previousGalleryPage = document.createElement("button");
+previousGalleryPage.type = "button";
+previousGalleryPage.className = "gallery-page-button";
+previousGalleryPage.textContent = "Previous";
+const nextGalleryPage = document.createElement("button");
+nextGalleryPage.type = "button";
+nextGalleryPage.className = "gallery-page-button";
+nextGalleryPage.textContent = "Next";
+galleryPagerActions.append(previousGalleryPage, nextGalleryPage);
+galleryPager.append(galleryPagerStatus, galleryPagerActions);
+gallerySection.append(galleryHead, galleryGrid, galleryPager);
 workspace.before(gallerySection);
 
 const selectedExampleStrip = document.createElement("div");
@@ -284,9 +346,12 @@ let playbackControls = null;
 let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
+let runtimeStartPromise = null;
 let playerNeedsRestart = false;
-let startupAutoplayPending = false;
 let busyDepth = 0;
+let galleryPage = 0;
+let metricsTimer = null;
+let metricsPending = false;
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -303,9 +368,16 @@ function setBusy(busy) {
   gallerySearch.disabled = busy;
   categorySelect.disabled = busy;
   paritySelect.disabled = busy;
+  previousGalleryPage.disabled = busy || galleryPage === 0;
+  if (busy) {
+    nextGalleryPage.disabled = true;
+  }
   playbackControls?.setBusy(busy);
   for (const card of galleryGrid.querySelectorAll(".example-card")) {
     card.disabled = busy;
+  }
+  if (!busy) {
+    updateGalleryPagerControls();
   }
 }
 
@@ -392,37 +464,72 @@ function warmAuthoringClient() {
   return client;
 }
 
-function cancelStartupAutoplay(reason = "cancelled") {
-  if (!startupAutoplayPending) return;
-  startupAutoplayPending = false;
-  status.dataset.startupAutoplay = reason;
-}
+async function ensureRuntimeReady() {
+  if (runtimeStartPromise !== null) return runtimeStartPromise;
+  if (player !== null) return;
 
-function scheduleStartupAutoplay(exampleId, client) {
-  startupAutoplayPending = true;
-  status.dataset.startupAutoplay = "waiting";
-  void client.ready().then(
-    () => {
-      if (!startupAutoplayPending) return;
-      if (
-        authoringClient !== client ||
-        selectedExampleId !== exampleId ||
-        sceneRunPromise !== null ||
-        sceneSourceEditor.value !== canonicalSource
-      ) {
-        cancelStartupAutoplay("skipped");
-        return;
-      }
-      startupAutoplayPending = false;
-      status.dataset.startupAutoplay = "running";
-      void runScene().then((result) => {
-        status.dataset.startupAutoplay = result?.error ? "failed" : "settled";
+  const task = (async () => {
+    setRuntimeStatus("Starting runtime on demand…", "running");
+    patchStatus.value = "Starting Python + GPU runtime…";
+    patchStatus.dataset.state = "running";
+    warmAuthoringClient();
+
+    const nextPlayer = new AuthoringExecutionClient(canvas, {
+      onError(error) {
+        playerNeedsRestart = true;
+        showError(error);
+      },
+      onRecoverableError(error) {
+        showRecoverableSceneError(error);
+      },
+    });
+    player = nextPlayer;
+    try {
+      const ready = await nextPlayer.start('{"version":1,"objects":[],"tracks":[]}', {
+        loopDurationSeconds: 4.0,
       });
-    },
-    () => {
-      cancelStartupAutoplay("failed");
-    },
-  );
+      playerNeedsRestart = false;
+      rendererBackend = ready.render.backend;
+      status.dataset.rendererBackend = rendererBackend;
+      status.dataset.executionMode = nextPlayer.mode;
+      status.dataset.executionTopology = "authoring-engine-render-workers";
+      status.dataset.runtimeStartup = "started-on-demand";
+      playbackControls = new PlaygroundPlaybackControls(
+        nextPlayer,
+        document.querySelector(".preview-pane"),
+        {
+          durationSeconds: playbackDurationSeconds,
+          onError: showPlaybackError,
+        },
+      );
+
+      const initialState = await nextPlayer.state();
+      patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
+      playbackControls.sync({
+        time: initialState.time,
+        playing: initialState.playing,
+        durationSeconds: playbackDurationSeconds,
+      });
+      startMetricsPolling();
+    } catch (error) {
+      nextPlayer.terminate();
+      if (player === nextPlayer) {
+        player = null;
+        playbackControls?.destroy();
+        playbackControls = null;
+      }
+      throw error;
+    }
+  })();
+
+  runtimeStartPromise = task;
+  try {
+    await task;
+  } finally {
+    if (runtimeStartPromise === task) {
+      runtimeStartPromise = null;
+    }
+  }
 }
 
 async function ensureExecutionReady() {
@@ -479,13 +586,38 @@ function renderSelectedMetadata() {
   }
 }
 
-function renderGallery() {
-  const visible = filterGalleryExamples(SCENE_EXAMPLES, {
+function filteredGalleryExamples() {
+  return filterGalleryExamples(SCENE_EXAMPLES, {
     query: gallerySearch.value,
     category: categorySelect.value,
     parityStatus: paritySelect.value,
   });
+}
+
+function updateGalleryPagerControls(visible = filteredGalleryExamples()) {
+  const pageCount = Math.max(1, Math.ceil(visible.length / GALLERY_PAGE_SIZE));
+  galleryPage = Math.min(Math.max(0, galleryPage), pageCount - 1);
+  const start = visible.length === 0 ? 0 : galleryPage * GALLERY_PAGE_SIZE + 1;
+  const end = Math.min((galleryPage + 1) * GALLERY_PAGE_SIZE, visible.length);
+  galleryPager.hidden = visible.length <= GALLERY_PAGE_SIZE;
+  galleryPagerStatus.textContent = visible.length === 0 ? "0 examples" : `${start}–${end} of ${visible.length}`;
+  previousGalleryPage.disabled = busyDepth > 0 || galleryPage === 0;
+  nextGalleryPage.disabled = busyDepth > 0 || galleryPage >= pageCount - 1;
+}
+
+function renderGallery({ keepSelectedVisible = false } = {}) {
+  const visible = filteredGalleryExamples();
+  if (keepSelectedVisible && selectedExampleId !== null) {
+    const selectedIndex = visible.findIndex((example) => example.id === selectedExampleId);
+    if (selectedIndex >= 0) {
+      galleryPage = Math.floor(selectedIndex / GALLERY_PAGE_SIZE);
+    }
+  }
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / GALLERY_PAGE_SIZE));
+  galleryPage = Math.min(Math.max(0, galleryPage), pageCount - 1);
   galleryGrid.replaceChildren();
+  updateGalleryPagerControls(visible);
   if (visible.length === 0) {
     const empty = document.createElement("div");
     empty.className = "gallery-empty";
@@ -493,11 +625,15 @@ function renderGallery() {
     galleryGrid.append(empty);
     return;
   }
-  for (const example of visible) {
+
+  const start = galleryPage * GALLERY_PAGE_SIZE;
+  const pageExamples = visible.slice(start, start + GALLERY_PAGE_SIZE);
+  for (const example of pageExamples) {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "example-card";
     card.dataset.exampleId = example.id;
+    card.disabled = busyDepth > 0;
     card.setAttribute("aria-selected", String(example.id === selectedExampleId));
     const image = document.createElement("img");
     image.className = "example-thumb";
@@ -505,6 +641,7 @@ function renderGallery() {
     image.alt = example.thumbnailAlt;
     image.loading = "lazy";
     image.decoding = "async";
+    image.fetchPriority = "low";
     const copy = document.createElement("span");
     copy.className = "example-card-copy";
     const title = document.createElement("span");
@@ -533,16 +670,17 @@ function isCurrentRun(runToken) {
 }
 
 async function runScene() {
-  cancelStartupAutoplay();
   if (sceneRunPromise !== null) return sceneRunPromise;
   const example = currentExample();
-  if (!example || !player) return null;
+  if (!example) return null;
 
   const runToken = generations.beginRun(example.id);
   const source = sceneSourceEditor.value;
   const releaseBusy = beginBusy();
   const task = (async () => {
     try {
+      await ensureRuntimeReady();
+      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
       await ensureExecutionReady();
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
 
@@ -621,7 +759,7 @@ async function runScene() {
       if (!isCurrentRun(runToken)) {
         return recordStale(runToken, "error");
       }
-      if (playerNeedsRestart) {
+      if (player === null || playerNeedsRestart) {
         showError(error);
       } else {
         showSceneError(error);
@@ -686,7 +824,7 @@ async function selectExample(
     sceneSourceEditor.value = drafts.get(id) ?? source;
     resetButton.disabled = sceneSourceEditor.value === canonicalSource;
     renderSelectedMetadata();
-    renderGallery();
+    renderGallery({ keepSelectedVisible: true });
     patchStatus.value = `${example.title} loaded · ${parityLabel(example.parityStatus)}`;
     patchStatus.dataset.state = "ready";
     patchStatus.dataset.exampleId = example.id;
@@ -720,12 +858,23 @@ async function selectExample(
 }
 
 function refreshGalleryFilters() {
+  galleryPage = 0;
   renderGallery();
+}
+
+function moveGalleryPage(delta) {
+  const visible = filteredGalleryExamples();
+  const pageCount = Math.max(1, Math.ceil(visible.length / GALLERY_PAGE_SIZE));
+  galleryPage = Math.min(Math.max(0, galleryPage + delta), pageCount - 1);
+  renderGallery();
+  gallerySection.scrollIntoView({ block: "start" });
 }
 
 gallerySearch.addEventListener("input", refreshGalleryFilters);
 categorySelect.addEventListener("change", refreshGalleryFilters);
 paritySelect.addEventListener("change", refreshGalleryFilters);
+previousGalleryPage.addEventListener("click", () => moveGalleryPage(-1));
+nextGalleryPage.addEventListener("click", () => moveGalleryPage(1));
 sceneButton.addEventListener("click", runScene);
 resetButton.addEventListener("click", async () => {
   const example = currentExample();
@@ -737,8 +886,14 @@ resetButton.addEventListener("click", async () => {
   patchStatus.value = `${example.title} reset to canonical Manim source`;
   patchStatus.dataset.state = "ready";
 });
+sceneSourceEditor.addEventListener(
+  "focus",
+  () => {
+    void loadEnhancedPythonEditor();
+  },
+  { once: true },
+);
 sceneSourceEditor.addEventListener("input", () => {
-  cancelStartupAutoplay();
   const example = currentExample();
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
@@ -756,28 +911,77 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-const EMPTY_SCENE_JSON = '{"version":1,"objects":[],"tracks":[]}';
-try {
-  const startupAuthoringClient = warmAuthoringClient();
-  player = new AuthoringExecutionClient(canvas, {
-    onError(error) {
-      playerNeedsRestart = true;
+async function updateWorkerMetrics() {
+  if (
+    metricsPending ||
+    player === null ||
+    document.visibilityState === "hidden" ||
+    busyDepth > 0 ||
+    sceneRunPromise !== null ||
+    playerNeedsRestart
+  ) {
+    return;
+  }
+  metricsPending = true;
+  try {
+    const report = await player.metrics();
+    const metrics = report.metrics;
+    const host = report.engineMetrics.host;
+    rendererBackend = player.rendererBackend;
+    status.dataset.rendererBackend = rendererBackend;
+    status.dataset.executionMode = report.executionMode;
+    setRuntimeStatus(
+      `${metrics.objectCount} objects · ${rendererBackend} ${report.executionMode} worker`,
+      "running",
+    );
+    metricObjects.value = String(metrics.objectCount);
+    metricDraws.value = String(metrics.drawCalls);
+    metricUpload.value = formatBytes(metrics.bytesUploaded);
+    metricTime.value = `${metrics.time.toFixed(2)} s`;
+    playbackControls?.updateTime(metrics.time);
+    status.dataset.instances = String(metrics.instancesDrawn);
+    status.dataset.uploadBytes = String(metrics.bytesUploaded);
+    status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
+    status.dataset.hostMissedDeadlines = String(host.missedDeadlines);
+    status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
+    status.dataset.presentedFrames = String(metrics.presentedFrames);
+  } catch (error) {
+    if (!playerNeedsRestart) {
       showError(error);
-    },
-    onRecoverableError(error) {
-      showRecoverableSceneError(error);
-    },
-  });
-  const ready = await player.start(EMPTY_SCENE_JSON, { loopDurationSeconds: 4.0 });
-  rendererBackend = ready.render.backend;
-  status.dataset.rendererBackend = rendererBackend;
-  status.dataset.executionMode = player.mode;
-  status.dataset.executionTopology = "authoring-engine-render-workers";
-  playbackControls = new PlaygroundPlaybackControls(player, document.querySelector(".preview-pane"), {
-    durationSeconds: playbackDurationSeconds,
-    onError: showPlaybackError,
-  });
+    }
+  } finally {
+    metricsPending = false;
+  }
+}
 
+function stopMetricsPolling() {
+  if (metricsTimer !== null) {
+    clearTimeout(metricsTimer);
+    metricsTimer = null;
+  }
+}
+
+function startMetricsPolling() {
+  if (metricsTimer !== null || player === null || document.visibilityState === "hidden") return;
+  const poll = async () => {
+    metricsTimer = null;
+    await updateWorkerMetrics();
+    if (player !== null && document.visibilityState !== "hidden") {
+      metricsTimer = setTimeout(poll, METRICS_POLL_MS);
+    }
+  };
+  metricsTimer = setTimeout(poll, METRICS_POLL_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    stopMetricsPolling();
+  } else {
+    startMetricsPolling();
+  }
+});
+
+try {
   const requested = requestedExampleId();
   const initialExample = SCENE_EXAMPLES.some((example) => example.id === requested)
     ? requested
@@ -785,14 +989,10 @@ try {
   history.replaceState({ example: initialExample }, "", exampleUrl(initialExample));
   renderGallery();
   await selectExample(initialExample, { run: false });
-
-  const initialState = await player.state();
-  patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
-  playbackControls.sync({
-    time: initialState.time,
-    playing: initialState.playing,
-    durationSeconds: playbackDurationSeconds,
-  });
+  patchStatus.dataset.sequence = "0";
+  status.dataset.runtimeStartup = "deferred";
+  status.dataset.executionTopology = "deferred-until-run";
+  setRuntimeStatus("Ready · runtime starts when you run an example", "ready");
 
   window.__noonExampleGallery = {
     get selectedExampleId() {
@@ -800,6 +1000,9 @@ try {
     },
     get exampleCount() {
       return SCENE_EXAMPLES.length;
+    },
+    get visibleExampleCount() {
+      return galleryGrid.querySelectorAll(".example-card").length;
     },
     get executionMode() {
       return player?.mode ?? null;
@@ -818,68 +1021,19 @@ try {
     },
   };
 
-  scheduleStartupAutoplay(initialExample, startupAuthoringClient);
-
   window.addEventListener(
     "pagehide",
     () => {
+      stopMetricsPolling();
       playbackControls?.destroy();
+      playbackControls = null;
       authoringClient?.terminate();
+      authoringClient = null;
       player?.terminate();
+      player = null;
     },
     { once: true },
   );
-
-  let lastStatusUpdate = -Infinity;
-  let metricsPending = false;
-  async function updateWorkerMetrics(timestamp) {
-    if (
-      metricsPending ||
-      busyDepth > 0 ||
-      sceneRunPromise !== null ||
-      playerNeedsRestart ||
-      timestamp - lastStatusUpdate <= 200
-    ) {
-      return;
-    }
-    metricsPending = true;
-    try {
-      const report = await player.metrics();
-      const metrics = report.metrics;
-      const host = report.engineMetrics.host;
-      rendererBackend = player.rendererBackend;
-      status.dataset.rendererBackend = rendererBackend;
-      status.dataset.executionMode = report.executionMode;
-      setRuntimeStatus(
-        `${metrics.objectCount} objects · ${rendererBackend} ${report.executionMode} worker`,
-        "running",
-      );
-      metricObjects.value = String(metrics.objectCount);
-      metricDraws.value = String(metrics.drawCalls);
-      metricUpload.value = formatBytes(metrics.bytesUploaded);
-      metricTime.value = `${metrics.time.toFixed(2)} s`;
-      playbackControls?.updateTime(metrics.time);
-      status.dataset.instances = String(metrics.instancesDrawn);
-      status.dataset.uploadBytes = String(metrics.bytesUploaded);
-      status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
-      status.dataset.hostMissedDeadlines = String(host.missedDeadlines);
-      status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
-      status.dataset.presentedFrames = String(metrics.presentedFrames);
-      lastStatusUpdate = timestamp;
-    } catch (error) {
-      if (!playerNeedsRestart) {
-        showError(error);
-      }
-    } finally {
-      metricsPending = false;
-    }
-  }
-
-  function frame(timestamp) {
-    void updateWorkerMetrics(timestamp);
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
 } catch (error) {
   showError(error);
 }

@@ -231,12 +231,15 @@ async function runtimeSnapshot(page) {
     return {
       rendererBackend: status?.dataset.rendererBackend ?? null,
       executionMode: status?.dataset.executionMode ?? null,
+      runtimeStartup: status?.dataset.runtimeStartup ?? null,
       statusState: status?.dataset.state ?? null,
       statusText: document.querySelector("#status-text")?.textContent ?? "",
       patchState: patch?.dataset.state ?? null,
       patchText: patch?.value ?? patch?.textContent ?? "",
       selectedExampleId:
         document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
+      visibleExampleCount: window.__noonExampleGallery?.visibleExampleCount ?? null,
+      hasPlaybackControls: document.querySelector(".playback-controls") !== null,
       canvases: document.querySelectorAll("canvas").length,
     };
   });
@@ -265,6 +268,31 @@ async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
     runtime.selectedExampleId,
     expectedExampleId,
     `${browserName}/${profileName}: ${expectedExampleId} did not remain selected`,
+  );
+  return runtime;
+}
+
+async function assertDeferredRuntime(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const runtime = await runtimeSnapshot(page);
+  assert.equal(
+    runtime.runtimeStartup,
+    "deferred",
+    `${browserName}/${profileName}: page load started the runtime eagerly`,
+  );
+  assert.equal(
+    runtime.executionMode,
+    null,
+    `${browserName}/${profileName}: deferred page already owns an execution mode`,
+  );
+  assert.equal(
+    runtime.hasPlaybackControls,
+    false,
+    `${browserName}/${profileName}: deferred page allocated playback controls`,
+  );
+  assert.ok(
+    Number(runtime.visibleExampleCount) <= 18,
+    `${browserName}/${profileName}: gallery materialized ${runtime.visibleExampleCount} cards`,
   );
   return runtime;
 }
@@ -372,9 +400,9 @@ try {
 
   const initialShell = await shellSnapshot(page);
   assertShell(initialShell, `${browserName}/${profileName}`);
+  finalRuntime = await assertDeferredRuntime(page);
 
   if (!runtimeSupported) {
-    finalRuntime = await runtimeSnapshot(page);
     await page.screenshot({ path: path.join(artifactDir, "unsupported.png"), fullPage: true });
     await writeDiagnostics("diagnostics.json", {
       browser: browserName,
@@ -391,6 +419,9 @@ try {
       `↷ ${browserName}/${profileName}: runtime unsupported by capability probe (${missing.join(", ")})`,
     );
   } else {
+    const runButton = page.locator("#replace-scene");
+    assert.equal(await runButton.isDisabled(), false, `${browserName}/${profileName}: Run stayed disabled`);
+    await runButton.click();
     finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
     assert.ok(
       finalRuntime.rendererBackend === "WebGL2" || finalRuntime.rendererBackend === "WebGPU",
@@ -427,7 +458,7 @@ try {
       consoleErrors,
     });
     console.log(
-      `✓ ${browserName}/${profileName}: ${finalRuntime.rendererBackend} public UI select/edit/rerun + resize`,
+      `✓ ${browserName}/${profileName}: ${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
     );
   }
 } catch (error) {

@@ -116,7 +116,13 @@ export class PlaygroundPlaybackControls {
   }
 
   updateTime(time) {
-    if (!Number.isFinite(time) || time < 0 || this.#seekActive || this.#desiredSeek !== null) {
+    if (
+      !Number.isFinite(time) ||
+      time < 0 ||
+      !this.#playing ||
+      this.#seekActive ||
+      this.#desiredSeek !== null
+    ) {
       return;
     }
     this.#timeSeconds = Math.min(time, this.#durationSeconds);
