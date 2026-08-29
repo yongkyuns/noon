@@ -7,6 +7,7 @@ mod composition;
 mod determinism;
 mod execution_canvas;
 mod execution_transport;
+mod execution_visibility;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
 mod host_player;
@@ -35,6 +36,7 @@ pub use determinism::*;
 #[cfg(target_arch = "wasm32")]
 pub use execution_canvas::*;
 pub use execution_transport::*;
+pub use execution_visibility::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
