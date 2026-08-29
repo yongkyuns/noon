@@ -178,12 +178,7 @@ fn noop_device_reuses_oldest_unpinned_page_without_reallocating_texture() {
 
     for glyph_id in 1..=4 {
         let GlyphAtlasEntry::Image(image) = atlas
-            .insert(
-                &device,
-                &queue,
-                glyph_key(glyph_id),
-                &full_page_raster,
-            )
+            .insert(&device, &queue, glyph_key(glyph_id), &full_page_raster)
             .unwrap()
         else {
             panic!("visible mask glyph must occupy the atlas");
