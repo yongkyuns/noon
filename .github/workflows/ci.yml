@@ -198,6 +198,9 @@ jobs:
       - name: Test Python authoring execution routing
         run: node scripts/authoring-execution-router-smoke.mjs
 
+      - name: Test authoring execution termination races
+        run: node scripts/authoring-execution-lifecycle-smoke.mjs
+
       - name: Test slow Python callbacks do not block rendering
         run: node scripts/execution-worker-host-smoke.mjs
 
