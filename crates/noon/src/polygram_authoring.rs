@@ -293,7 +293,10 @@ mod tests {
             Vec2::new(0.0, 3.0),
         ])
         .shift(Vec2::new(4.0, 2.0));
-        assert_eq!(polygram_vertices(polygon.snapshot()), polygon.get_vertices());
+        assert_eq!(
+            polygram_vertices(polygon.snapshot()),
+            polygon.get_vertices()
+        );
         assert_eq!(
             polygram_vertex_groups(polygon.snapshot()),
             polygon.get_vertex_groups()
