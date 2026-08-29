@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use noon_core::{
-    FontFaceIdentity, FontResourceArena, GeometryResource, GeometryResourceArena, Rect,
-    TextResource, TextResourceArena, TextSourceKind, Vec2, VectorPath,
+    FontFaceIdentity, FontResourceArena, GeometryResource, GeometryResourceArena, Rect, TextPart,
+    TextResource, TextResourceArena, TextResourceError, TextResourceValidationError, TextSourceKind,
+    TextSourceSpan, Vec2, VectorPath,
 };
 
 const CHURN_ITERATIONS: u64 = 1_000;
@@ -27,6 +28,19 @@ fn empty_text(source: &str) -> TextResource {
         baseline: 0.0,
         layout_artifact: None,
     }
+}
+
+fn invalid_text(source: &str) -> TextResource {
+    let mut resource = empty_text(source);
+    resource.parts = Arc::from([TextPart {
+        source_span: TextSourceSpan::new(0, source.len() as u32 + 1),
+        first_cluster: 0,
+        cluster_count: 0,
+        first_vector: 0,
+        vector_count: 0,
+        semantic_key: None,
+    }]);
+    resource
 }
 
 fn face(variation: &str) -> FontFaceIdentity {
@@ -102,6 +116,50 @@ fn text_replacement_churn_keeps_one_live_resource_and_stable_accounting() {
     arena
         .remove(initial.id)
         .expect("final removal must succeed");
+    let released = arena.stats();
+    assert_eq!(released.live_resources, 0);
+    assert_eq!(released.retained_bytes, 0);
+    assert_eq!(released.glyphs, 0);
+    assert_eq!(released.vectors, 0);
+    assert_eq!(released.parts, 0);
+}
+
+#[test]
+fn failed_text_replacement_churn_preserves_last_good_resource_and_accounting() {
+    let mut arena = TextResourceArena::new();
+    let initial = arena
+        .insert(empty_text("stable"))
+        .expect("initial text resource must be valid");
+    let baseline = arena.stats();
+
+    for _ in 0..CHURN_ITERATIONS {
+        let error = arena
+            .replace(initial.id, invalid_text("invalid"))
+            .expect_err("invalid replacement must be rejected");
+
+        assert_eq!(
+            error,
+            TextResourceError::InvalidResource(TextResourceValidationError::InvalidSourceSpan)
+        );
+        assert_eq!(
+            arena.current_handle(initial.id),
+            Some(initial),
+            "failed replacement must not advance the live generation"
+        );
+        assert!(
+            arena.get(initial).is_some(),
+            "last good resource must remain resolvable"
+        );
+        assert_eq!(
+            arena.stats(),
+            baseline,
+            "failed replacement must not leak retained accounting"
+        );
+    }
+
+    arena
+        .remove(initial.id)
+        .expect("last good resource must remain removable");
     let released = arena.stats();
     assert_eq!(released.live_resources, 0);
     assert_eq!(released.retained_bytes, 0);
