@@ -67,6 +67,9 @@ pub struct GlyphAtlasStats {
     pub bytes_uploaded: usize,
     pub hits: u64,
     pub misses: u64,
+    pub page_evictions: u64,
+    pub page_reuses: u64,
+    pub image_entries_evicted: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -293,6 +296,15 @@ impl GlyphAtlasPageAllocator {
         self.pages.push(page);
         page_allocation(page_index, allocation)
     }
+
+    fn reset_page(&mut self, page_index: usize) -> Result<(), GlyphAtlasError> {
+        let page = self
+            .pages
+            .get_mut(page_index)
+            .ok_or(GlyphAtlasError::DimensionOverflow)?;
+        *page = ShelfPacker::new(self.extent)?;
+        Ok(())
+    }
 }
 
 fn page_allocation(
@@ -311,10 +323,18 @@ fn page_allocation(
 struct AtlasPlaneState {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    last_used_generation: u64,
+    keys: Vec<GlyphRasterKey>,
 }
 
 impl AtlasPlaneState {
-    fn new(device: &wgpu::Device, plane: GlyphAtlasPlane, extent: u32, page: u32) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        plane: GlyphAtlasPlane,
+        extent: u32,
+        page: u32,
+        generation: u64,
+    ) -> Self {
         let label = match plane {
             GlyphAtlasPlane::Mask => format!("Noon glyph mask atlas page {page}"),
             GlyphAtlasPlane::Color => format!("Noon glyph color atlas page {page}"),
@@ -334,7 +354,12 @@ impl AtlasPlaneState {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self { texture, view }
+        Self {
+            texture,
+            view,
+            last_used_generation: generation,
+            keys: Vec::new(),
+        }
     }
 }
 
@@ -346,8 +371,10 @@ impl AtlasPlaneState {
 /// cached without consuming GPU space.
 ///
 /// `GpuGlyphAtlas::new` preserves the historical one-page-per-plane policy. Callers
-/// must opt into a larger bounded budget with `with_page_limit`; eviction/reuse is a
-/// separate residency policy layered on top of this structural page ownership.
+/// must opt into a larger bounded budget with `with_page_limit`. Page reuse is also
+/// explicit: callers advance preparation generations with `begin_generation`, and
+/// only pages untouched in the current generation are eligible for deterministic
+/// oldest-page reuse.
 pub struct GpuGlyphAtlas {
     extent: u32,
     mask_allocator: GlyphAtlasPageAllocator,
@@ -356,6 +383,7 @@ pub struct GpuGlyphAtlas {
     color_pages: Vec<AtlasPlaneState>,
     entries: HashMap<GlyphRasterKey, GlyphAtlasEntry>,
     stats: GlyphAtlasStats,
+    generation: u64,
 }
 
 impl GpuGlyphAtlas {
@@ -375,6 +403,7 @@ impl GpuGlyphAtlas {
             color_pages: Vec::new(),
             entries: HashMap::new(),
             stats: GlyphAtlasStats::default(),
+            generation: 1,
         })
     }
 
@@ -390,6 +419,29 @@ impl GpuGlyphAtlas {
         self.stats
     }
 
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Advance the residency generation used to pin pages referenced by one
+    /// preparation pass. Pages touched by `insert` during this generation cannot be
+    /// recycled until a later generation begins.
+    pub fn begin_generation(&mut self) -> u64 {
+        if self.generation == u64::MAX {
+            self.generation = 1;
+            for state in self
+                .mask_pages
+                .iter_mut()
+                .chain(self.color_pages.iter_mut())
+            {
+                state.last_used_generation = 0;
+            }
+        } else {
+            self.generation += 1;
+        }
+        self.generation
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -403,10 +455,7 @@ impl GpuGlyphAtlas {
     }
 
     pub fn page_count(&self, plane: GlyphAtlasPlane) -> usize {
-        match plane {
-            GlyphAtlasPlane::Mask => self.mask_pages.len(),
-            GlyphAtlasPlane::Color => self.color_pages.len(),
-        }
+        self.page_states(plane).len()
     }
 
     /// Compatibility accessor for page zero of a plane.
@@ -420,10 +469,7 @@ impl GpuGlyphAtlas {
         page: u32,
     ) -> Option<&wgpu::TextureView> {
         let page = usize::try_from(page).ok()?;
-        match plane {
-            GlyphAtlasPlane::Mask => self.mask_pages.get(page).map(|state| &state.view),
-            GlyphAtlasPlane::Color => self.color_pages.get(page).map(|state| &state.view),
-        }
+        self.page_states(plane).get(page).map(|state| &state.view)
     }
 
     pub fn get(&self, key: GlyphRasterKey) -> Option<GlyphAtlasEntry> {
@@ -444,6 +490,7 @@ impl GpuGlyphAtlas {
     ) -> Result<GlyphAtlasEntry, GlyphAtlasError> {
         if let Some(entry) = self.entries.get(&key).copied() {
             self.stats.hits = self.stats.hits.saturating_add(1);
+            self.touch_entry(entry);
             return Ok(entry);
         }
         self.stats.misses = self.stats.misses.saturating_add(1);
@@ -554,6 +601,7 @@ impl GpuGlyphAtlas {
                 (origin[1] + size[1]) as f32 / extent as f32,
             ],
         };
+        self.record_page_key(plane, allocation.page, key)?;
         let entry = GlyphAtlasEntry::Image(atlas_image);
         self.entries.insert(key, entry);
         self.stats.entries = self.entries.len();
@@ -575,9 +623,125 @@ impl GpuGlyphAtlas {
         width: u32,
         height: u32,
     ) -> Result<GlyphAtlasPageAllocation, GlyphAtlasError> {
+        match self.allocate_without_reuse(plane, width, height) {
+            Err(error @ GlyphAtlasError::Full { .. }) => {
+                let Some(victim) = self.eviction_victim(plane) else {
+                    return Err(error);
+                };
+                self.recycle_page(plane, victim)?;
+                self.allocate_without_reuse(plane, width, height)
+            }
+            result => result,
+        }
+    }
+
+    fn allocate_without_reuse(
+        &mut self,
+        plane: GlyphAtlasPlane,
+        width: u32,
+        height: u32,
+    ) -> Result<GlyphAtlasPageAllocation, GlyphAtlasError> {
         match plane {
             GlyphAtlasPlane::Mask => self.mask_allocator.allocate(plane, width, height),
             GlyphAtlasPlane::Color => self.color_allocator.allocate(plane, width, height),
+        }
+    }
+
+    fn eviction_victim(&self, plane: GlyphAtlasPlane) -> Option<usize> {
+        self.page_states(plane)
+            .iter()
+            .enumerate()
+            .filter(|(_, state)| state.last_used_generation != self.generation)
+            .min_by_key(|(page_index, state)| (state.last_used_generation, *page_index))
+            .map(|(page_index, _)| page_index)
+    }
+
+    fn recycle_page(
+        &mut self,
+        plane: GlyphAtlasPlane,
+        page_index: usize,
+    ) -> Result<(), GlyphAtlasError> {
+        match plane {
+            GlyphAtlasPlane::Mask => self.mask_allocator.reset_page(page_index)?,
+            GlyphAtlasPlane::Color => self.color_allocator.reset_page(page_index)?,
+        }
+
+        let generation = self.generation;
+        let keys = {
+            let state = self
+                .page_states_mut(plane)
+                .get_mut(page_index)
+                .ok_or(GlyphAtlasError::DimensionOverflow)?;
+            state.last_used_generation = generation;
+            std::mem::take(&mut state.keys)
+        };
+        let removed = keys
+            .iter()
+            .filter(|key| self.entries.remove(key).is_some())
+            .count();
+        debug_assert_eq!(removed, keys.len());
+        self.stats.entries = self.entries.len();
+        match plane {
+            GlyphAtlasPlane::Mask => {
+                self.stats.mask_entries = self.stats.mask_entries.saturating_sub(removed)
+            }
+            GlyphAtlasPlane::Color => {
+                self.stats.color_entries = self.stats.color_entries.saturating_sub(removed)
+            }
+        }
+        self.stats.page_evictions = self.stats.page_evictions.saturating_add(1);
+        self.stats.page_reuses = self.stats.page_reuses.saturating_add(1);
+        self.stats.image_entries_evicted = self
+            .stats
+            .image_entries_evicted
+            .saturating_add(removed as u64);
+        Ok(())
+    }
+
+    fn touch_entry(&mut self, entry: GlyphAtlasEntry) {
+        let GlyphAtlasEntry::Image(image) = entry else {
+            return;
+        };
+        let Ok(page_index) = usize::try_from(image.page) else {
+            debug_assert!(false, "cached glyph atlas page must fit usize");
+            return;
+        };
+        let generation = self.generation;
+        if let Some(state) = self.page_states_mut(image.plane).get_mut(page_index) {
+            state.last_used_generation = generation;
+        } else {
+            debug_assert!(false, "cached glyph atlas page must remain resident");
+        }
+    }
+
+    fn record_page_key(
+        &mut self,
+        plane: GlyphAtlasPlane,
+        page: u32,
+        key: GlyphRasterKey,
+    ) -> Result<(), GlyphAtlasError> {
+        let page_index = usize::try_from(page).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let generation = self.generation;
+        let state = self
+            .page_states_mut(plane)
+            .get_mut(page_index)
+            .ok_or(GlyphAtlasError::DimensionOverflow)?;
+        state.last_used_generation = generation;
+        state.keys.push(key);
+        Ok(())
+    }
+
+    fn page_states(&self, plane: GlyphAtlasPlane) -> &[AtlasPlaneState] {
+        match plane {
+            GlyphAtlasPlane::Mask => &self.mask_pages,
+            GlyphAtlasPlane::Color => &self.color_pages,
+        }
+    }
+
+    fn page_states_mut(&mut self, plane: GlyphAtlasPlane) -> &mut [AtlasPlaneState] {
+        match plane {
+            GlyphAtlasPlane::Mask => &mut self.mask_pages,
+            GlyphAtlasPlane::Color => &mut self.color_pages,
         }
     }
 
@@ -595,7 +759,8 @@ impl GpuGlyphAtlas {
         for _ in 0..missing {
             let next_page = u32::try_from(self.page_count(plane))
                 .map_err(|_| GlyphAtlasError::DimensionOverflow)?;
-            let state = AtlasPlaneState::new(device, plane, self.extent, next_page);
+            let state =
+                AtlasPlaneState::new(device, plane, self.extent, next_page, self.generation);
             match plane {
                 GlyphAtlasPlane::Mask => self.mask_pages.push(state),
                 GlyphAtlasPlane::Color => self.color_pages.push(state),
@@ -752,6 +917,14 @@ mod tests {
         assert_eq!(atlas.max_pages_per_plane(), 1);
         assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 0);
         assert_eq!(atlas.page_count(GlyphAtlasPlane::Color), 0);
+        assert_eq!(atlas.generation(), 1);
+    }
+
+    #[test]
+    fn generation_wrap_releases_old_page_pins() {
+        let mut atlas = GpuGlyphAtlas::new(8).unwrap();
+        atlas.generation = u64::MAX;
+        assert_eq!(atlas.begin_generation(), 1);
     }
 
     #[test]

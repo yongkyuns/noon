@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use noon_core::{FontResourceHandle, FontResourceId};
-use noon_text_atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
+use noon_text_atlas::{GlyphAtlasEntry, GlyphAtlasError, GlyphAtlasPlane, GpuGlyphAtlas};
 use noon_text_raster::{
     GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
 };
@@ -138,4 +138,81 @@ fn noop_device_allocates_live_pages_within_explicit_budget() {
         .texture_view_for_page(GlyphAtlasPlane::Mask, 2)
         .is_none());
     assert_eq!(atlas.stats().texture_allocations, 2);
+}
+
+#[test]
+fn noop_device_keeps_current_generation_pages_pinned() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut atlas = GpuGlyphAtlas::with_page_limit(8, 1).unwrap();
+    let raster = mask_raster(4, 2, 200);
+
+    for glyph_id in 1..=2 {
+        atlas
+            .insert(&device, &queue, glyph_key(glyph_id), &raster)
+            .unwrap();
+    }
+    assert_eq!(atlas.stats().texture_allocations, 1);
+
+    let error = atlas
+        .insert(&device, &queue, glyph_key(3), &mask_raster(1, 1, 255))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        GlyphAtlasError::Full {
+            plane: GlyphAtlasPlane::Mask,
+            extent: 8,
+        }
+    );
+    assert_eq!(atlas.stats().page_evictions, 0);
+    assert_eq!(atlas.stats().page_reuses, 0);
+    assert_eq!(atlas.stats().texture_allocations, 1);
+    assert!(atlas.get(glyph_key(1)).is_some());
+    assert!(atlas.get(glyph_key(2)).is_some());
+}
+
+#[test]
+fn noop_device_reuses_oldest_unpinned_page_without_reallocating_texture() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
+    let full_page_raster = mask_raster(4, 2, 180);
+
+    for glyph_id in 1..=4 {
+        let GlyphAtlasEntry::Image(image) = atlas
+            .insert(&device, &queue, glyph_key(glyph_id), &full_page_raster)
+            .unwrap()
+        else {
+            panic!("visible mask glyph must occupy the atlas");
+        };
+        assert_eq!(image.page, u32::from(glyph_id > 2));
+    }
+    assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 2);
+    assert_eq!(atlas.stats().texture_allocations, 2);
+
+    assert_eq!(atlas.begin_generation(), 2);
+    atlas
+        .insert(&device, &queue, glyph_key(4), &full_page_raster)
+        .unwrap();
+
+    let GlyphAtlasEntry::Image(reused) = atlas
+        .insert(&device, &queue, glyph_key(5), &mask_raster(1, 1, 255))
+        .unwrap()
+    else {
+        panic!("visible mask glyph must occupy the atlas");
+    };
+    assert_eq!(reused.page, 0);
+    assert_eq!(reused.origin, [1, 1]);
+
+    assert_eq!(atlas.get(glyph_key(1)), None);
+    assert_eq!(atlas.get(glyph_key(2)), None);
+    assert!(atlas.get(glyph_key(3)).is_some());
+    assert!(atlas.get(glyph_key(4)).is_some());
+    assert!(atlas.get(glyph_key(5)).is_some());
+
+    let stats = atlas.stats();
+    assert_eq!(stats.entries, 3);
+    assert_eq!(stats.mask_entries, 3);
+    assert_eq!(stats.texture_allocations, 2);
+    assert_eq!(stats.page_evictions, 1);
+    assert_eq!(stats.page_reuses, 1);
+    assert_eq!(stats.image_entries_evicted, 2);
 }
