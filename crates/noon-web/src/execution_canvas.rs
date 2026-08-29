@@ -11,8 +11,6 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::mem;
-
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
     use noon_runtime::FrameChanges;
@@ -21,7 +19,7 @@ mod wasm {
 
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        ExecutionFrameMirror, TransportApplyOutcome,
+        ExecutionFrameMirror, ExecutionVisibilityEnvelope, TransportApplyOutcome,
     };
 
     use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
@@ -56,6 +54,7 @@ mod wasm {
         drawable: bool,
         mirror: ExecutionFrameMirror,
         pending_changes: FrameChanges,
+        pending_visible_indices: Option<Vec<usize>>,
         preparer: FramePreparer,
         renderer: GpuRenderer,
         camera_center: Vec2,
@@ -111,6 +110,7 @@ mod wasm {
                 drawable: true,
                 mirror,
                 pending_changes,
+                pending_visible_indices: None,
                 preparer: FramePreparer::new(),
                 renderer,
                 camera_center: camera.center,
@@ -144,10 +144,24 @@ mod wasm {
                         self.update_camera()?;
                     }
                     self.pending_changes = changes;
+                    self.pending_visible_indices = None;
                     Ok(true)
                 }
                 TransportApplyOutcome::DroppedStale => Ok(false),
             }
+        }
+
+        #[wasm_bindgen(js_name = applyVisibilityJson)]
+        pub fn apply_visibility_json(&mut self, json: &str) -> Result<(), JsValue> {
+            if self.pending_changes.is_empty() {
+                return Err(js_message(
+                    "execution visibility requires an unpresented execution frame",
+                ));
+            }
+            let envelope = ExecutionVisibilityEnvelope::from_json(json).map_err(js_error)?;
+            let visible_indices = envelope.resolve_for_mirror(&self.mirror).map_err(js_error)?;
+            self.pending_visible_indices = Some(visible_indices);
+            Ok(())
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
@@ -176,12 +190,17 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            let changes = mem::take(&mut self.pending_changes);
             let frame = self
                 .mirror
                 .frame()
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
+            let prepared = if let Some(visible_indices) = self.pending_visible_indices.as_deref() {
+                self.preparer
+                    .prepare_incremental_visible(frame, &self.pending_changes, visible_indices)
+                    .map_err(js_error)?
+            } else {
+                self.preparer.prepare_incremental(frame, &self.pending_changes)
+            };
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
             let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
             self.last_bytes_uploaded = upload.bytes_uploaded;
@@ -201,6 +220,8 @@ mod wasm {
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
+            self.pending_changes = FrameChanges::default();
+            self.pending_visible_indices = None;
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
