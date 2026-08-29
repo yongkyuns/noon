@@ -18,6 +18,7 @@ let currentFrameIndex = -1;
 let currentLogicalTime = 0;
 let activeFrameTimes = null;
 let authoredDuration = null;
+let lastFramePhases = null;
 
 function waitForPaint() {
   return new Promise((resolve) => {
@@ -25,10 +26,24 @@ function waitForPaint() {
   });
 }
 
+function renderMetrics(applied, presented) {
+  return {
+    applied,
+    presented,
+    rendererTime: renderer.time(),
+    drawCalls: renderer.lastDrawCalls(),
+    instances: renderer.lastInstancesDrawn(),
+    uploadBytes: renderer.lastBytesUploaded(),
+    geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+  };
+}
+
 async function presentDelta(deltaJson) {
-  if (deltaJson === undefined || deltaJson === null) return false;
+  if (deltaJson === undefined || deltaJson === null) {
+    return renderMetrics(false, false);
+  }
   const applied = renderer.applyDeltaJson(deltaJson);
-  if (!applied) return false;
+  if (!applied) return renderMetrics(false, false);
   let presented = false;
   for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
     presented = renderer.render();
@@ -37,7 +52,7 @@ async function presentDelta(deltaJson) {
     throw new Error("host raster renderer could not present an applied execution delta");
   }
   await waitForPaint();
-  return true;
+  return renderMetrics(true, true);
 }
 
 async function load(source, loopDurationSeconds) {
@@ -92,7 +107,8 @@ async function load(source, loopDurationSeconds) {
 
 async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
-  await presentDelta(deterministicDelta);
+  const deterministic = await presentDelta(deterministicDelta);
+  let hostPatch = null;
 
   if (host !== null) {
     host.advanceTo(time);
@@ -108,8 +124,14 @@ async function advanceOneFrame(frameIndex, time) {
     host.commitPatchBatch(batchJson);
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    await presentDelta(hostDelta);
+    hostPatch = await presentDelta(hostDelta);
   }
+  lastFramePhases = {
+    frameIndex,
+    time,
+    deterministic,
+    hostPatch,
+  };
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
 }
@@ -176,6 +198,7 @@ async function renderThrough(frameIndex, frameTimes) {
     instances: renderer.lastInstancesDrawn(),
     uploadBytes: renderer.lastBytesUploaded(),
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    phases: lastFramePhases,
     authoredDuration,
     frameIndex: currentFrameIndex,
   };
