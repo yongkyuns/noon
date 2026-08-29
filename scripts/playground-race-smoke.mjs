@@ -102,6 +102,22 @@ async function waitForApplied(page, exampleId, browserErrors) {
   );
 }
 
+async function startDeferredRuntime(page) {
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const deferred = await page.evaluate(() => {
+    const status = document.querySelector("#status");
+    return {
+      runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      rendererBackend: status?.dataset.rendererBackend ?? "",
+      presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
+    };
+  });
+  assert.equal(deferred.runtimeStartup, "deferred", "race page load must leave runtime deferred");
+  assert.equal(deferred.rendererBackend, "", "deferred race page must not initialize a renderer");
+  assert.equal(deferred.presentedFrames, 0, "deferred race page must not present frames");
+  await page.locator("#replace-scene").click();
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -154,6 +170,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
+  await startDeferredRuntime(page);
   await waitForApplied(page, "parity-square-and-circle", browserErrors);
 
   const raceBaseline = await page.evaluate(() => window.__noonRace.reconciles.length);
