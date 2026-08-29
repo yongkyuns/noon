@@ -5,6 +5,9 @@ use std::{
 
 use crate::{Color, GeometryResourceHandle, Rect, StrokeCap, StrokeJoin, Vec2};
 
+const TEXT_RESOURCE_SLOT_BITS: u32 = 32;
+const TEXT_RESOURCE_SLOT_MASK: u64 = u32::MAX as u64;
+
 /// Stable identity for one retained text/math resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextResourceId(u64);
@@ -502,6 +505,7 @@ pub struct GlyphOutlineResource {
 
 #[derive(Clone, Debug)]
 struct TextResourceEntry {
+    generation: u32,
     version: u64,
     value: Option<Arc<TextResource>>,
 }
@@ -516,9 +520,14 @@ pub struct TextResourceStats {
 }
 
 /// Stable-ID arena for immutable shaped text/math payloads.
+///
+/// `TextResourceId` encodes a physical slot plus its generation. This lets the arena
+/// reuse storage at the live-working-set high-water mark without allowing a stale
+/// bare ID to alias a later occupant of the same slot.
 #[derive(Clone, Debug, Default)]
 pub struct TextResourceArena {
     entries: Vec<TextResourceEntry>,
+    free_slots: Vec<u32>,
     live_resources: usize,
     retained_bytes: usize,
     glyphs: usize,
@@ -536,28 +545,49 @@ impl TextResourceArena {
         resource: TextResource,
     ) -> Result<TextResourceHandle, TextResourceValidationError> {
         resource.validate()?;
-        let id = TextResourceId::new(
-            u64::try_from(self.entries.len()).expect("Noon text resource ID space exhausted"),
-        );
-        self.add_stats(&resource);
-        self.entries.push(TextResourceEntry {
-            version: 0,
-            value: Some(Arc::new(resource)),
-        });
+        let resource = Arc::new(resource);
+        let handle = if let Some(slot) = self.free_slots.pop() {
+            let index = slot as usize;
+            let entry = &mut self.entries[index];
+            debug_assert!(entry.value.is_none());
+            entry.version = 0;
+            entry.value = Some(resource.clone());
+            TextResourceHandle {
+                id: text_resource_id(index, entry.generation),
+                version: 0,
+            }
+        } else {
+            let index = self.entries.len();
+            let id = text_resource_id(index, 0);
+            self.entries.push(TextResourceEntry {
+                generation: 0,
+                version: 0,
+                value: Some(resource.clone()),
+            });
+            TextResourceHandle { id, version: 0 }
+        };
+
+        self.add_stats(resource.as_ref());
         self.live_resources += 1;
-        Ok(TextResourceHandle { id, version: 0 })
+        Ok(handle)
     }
 
     pub fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
-        let entry = self.entries.get(handle.id.get() as usize)?;
-        if entry.version != handle.version {
+        let index = text_resource_slot(handle.id);
+        let entry = self.entries.get(index)?;
+        if text_resource_id(index, entry.generation) != handle.id || entry.version != handle.version
+        {
             return None;
         }
         entry.value.as_deref()
     }
 
     pub fn current_handle(&self, id: TextResourceId) -> Option<TextResourceHandle> {
-        let entry = self.entries.get(id.get() as usize)?;
+        let index = text_resource_slot(id);
+        let entry = self.entries.get(index)?;
+        if text_resource_id(index, entry.generation) != id {
+            return None;
+        }
         entry.value.as_ref()?;
         Some(TextResourceHandle {
             id,
@@ -573,11 +603,12 @@ impl TextResourceArena {
         resource
             .validate()
             .map_err(TextResourceError::InvalidResource)?;
-        let index = id.get() as usize;
+        let index = text_resource_slot(id);
         let (version, previous) = {
             let entry = self
                 .entries
                 .get_mut(index)
+                .filter(|entry| text_resource_id(index, entry.generation) == id)
                 .ok_or(TextResourceError::UnknownResource(id))?;
             entry
                 .value
@@ -602,11 +633,12 @@ impl TextResourceArena {
     }
 
     pub fn remove(&mut self, id: TextResourceId) -> Result<Arc<TextResource>, TextResourceError> {
-        let index = id.get() as usize;
-        let resource = {
+        let index = text_resource_slot(id);
+        let (resource, next_generation) = {
             let entry = self
                 .entries
                 .get_mut(index)
+                .filter(|entry| text_resource_id(index, entry.generation) == id)
                 .ok_or(TextResourceError::UnknownResource(id))?;
             entry
                 .value
@@ -621,11 +653,20 @@ impl TextResourceArena {
                 .take()
                 .expect("text resource presence was preflighted");
             entry.version = version;
-            resource
+            (resource, entry.generation.checked_add(1))
         };
 
         self.subtract_stats(resource.as_ref());
         self.live_resources -= 1;
+
+        // Generation wrap must never make an old bare TextResourceId valid again.
+        // A fully exhausted physical slot is therefore retired instead of recycled.
+        if let Some(next_generation) = next_generation {
+            self.entries[index].generation = next_generation;
+            self.free_slots
+                .push(u32::try_from(index).expect("Noon text resource slot space exhausted"));
+        }
+
         Ok(resource)
     }
 
@@ -637,6 +678,11 @@ impl TextResourceArena {
             vectors: self.vectors,
             parts: self.parts,
         }
+    }
+
+    /// Number of physical arena slots retained at the current high-water mark.
+    pub fn slot_capacity(&self) -> usize {
+        self.entries.len()
     }
 
     pub const fn len(&self) -> usize {
@@ -664,6 +710,15 @@ impl TextResourceArena {
         self.vectors = self.vectors.saturating_sub(resource.vector_count());
         self.parts = self.parts.saturating_sub(resource.parts.len());
     }
+}
+
+fn text_resource_id(slot: usize, generation: u32) -> TextResourceId {
+    let slot = u32::try_from(slot).expect("Noon text resource slot space exhausted");
+    TextResourceId::new((u64::from(generation) << TEXT_RESOURCE_SLOT_BITS) | u64::from(slot))
+}
+
+fn text_resource_slot(id: TextResourceId) -> usize {
+    (id.get() & TEXT_RESOURCE_SLOT_MASK) as usize
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -779,10 +834,25 @@ mod tests {
     }
 
     #[test]
+    fn removed_slot_is_reused_without_revalidating_stale_id() {
+        let mut arena = TextResourceArena::new();
+        let first = arena.insert(sample_text("old")).unwrap();
+        assert_eq!(arena.slot_capacity(), 1);
+        arena.remove(first.id).unwrap();
+
+        let second = arena.insert(sample_text("new")).unwrap();
+        assert_eq!(arena.slot_capacity(), 1);
+        assert_ne!(first.id, second.id);
+        assert!(arena.get(first).is_none());
+        assert!(arena.current_handle(first.id).is_none());
+        assert_eq!(arena.get(second).unwrap().source.as_ref(), "new");
+    }
+
+    #[test]
     fn replacement_version_exhaustion_leaves_resource_and_stats_unchanged() {
         let mut arena = TextResourceArena::new();
         let inserted = arena.insert(sample_text("x")).unwrap();
-        arena.entries[inserted.id.get() as usize].version = u64::MAX;
+        arena.entries[text_resource_slot(inserted.id)].version = u64::MAX;
         let current = arena.current_handle(inserted.id).unwrap();
         let stats = arena.stats();
 
@@ -799,7 +869,7 @@ mod tests {
     fn removal_version_exhaustion_leaves_resource_and_stats_unchanged() {
         let mut arena = TextResourceArena::new();
         let inserted = arena.insert(sample_text("xyz")).unwrap();
-        arena.entries[inserted.id.get() as usize].version = u64::MAX;
+        arena.entries[text_resource_slot(inserted.id)].version = u64::MAX;
         let current = arena.current_handle(inserted.id).unwrap();
         let stats = arena.stats();
 
@@ -810,6 +880,25 @@ mod tests {
         assert_eq!(arena.current_handle(inserted.id), Some(current));
         assert_eq!(arena.stats(), stats);
         assert_eq!(arena.get(current).unwrap().source.as_ref(), "xyz");
+    }
+
+    #[test]
+    fn exhausted_generation_retires_slot_instead_of_wrapping_identity() {
+        let mut arena = TextResourceArena::new();
+        let inserted = arena.insert(sample_text("old")).unwrap();
+        let index = text_resource_slot(inserted.id);
+        arena.entries[index].generation = u32::MAX;
+        let exhausted_id = text_resource_id(index, u32::MAX);
+        let exhausted_handle = arena.current_handle(exhausted_id).unwrap();
+
+        arena.remove(exhausted_id).unwrap();
+        assert!(arena.get(exhausted_handle).is_none());
+        assert!(arena.current_handle(exhausted_id).is_none());
+
+        let replacement = arena.insert(sample_text("new")).unwrap();
+        assert_eq!(arena.slot_capacity(), 2);
+        assert_ne!(replacement.id, exhausted_id);
+        assert_eq!(arena.get(replacement).unwrap().source.as_ref(), "new");
     }
 
     #[test]
