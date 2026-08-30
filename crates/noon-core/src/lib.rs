@@ -537,7 +537,7 @@ impl VectorPath {
     }
 
     fn transformed_conservative_bounds(&self, transform: Transform2D) -> Option<Rect> {
-        let mut bounds = None;
+        let mut bounds: Option<Rect> = None;
         let mut include = |point: Vec2| {
             let point = transform.transform_point(point);
             match &mut bounds {
