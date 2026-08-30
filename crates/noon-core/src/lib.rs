@@ -533,27 +533,39 @@ impl VectorPath {
     }
 
     pub fn conservative_bounds(&self) -> Option<Rect> {
-        let mut points = Vec::new();
+        self.transformed_conservative_bounds(Transform2D::IDENTITY)
+    }
+
+    fn transformed_conservative_bounds(&self, transform: Transform2D) -> Option<Rect> {
+        let mut bounds = None;
+        let mut include = |point: Vec2| {
+            let point = transform.transform_point(point);
+            match &mut bounds {
+                Some(bounds) => bounds.include(point),
+                None => bounds = Some(Rect::new(point, point)),
+            }
+        };
+
         for command in &self.commands {
             match *command {
-                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => points.push(to),
+                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => include(to),
                 PathCommand::QuadraticTo { control, to } => {
-                    points.push(control);
-                    points.push(to);
+                    include(control);
+                    include(to);
                 }
                 PathCommand::CubicTo {
                     control1,
                     control2,
                     to,
                 } => {
-                    points.push(control1);
-                    points.push(control2);
-                    points.push(to);
+                    include(control1);
+                    include(control2);
+                    include(to);
                 }
                 PathCommand::Close => {}
             }
         }
-        Rect::from_points(points)
+        bounds
     }
 }
 
@@ -623,6 +635,27 @@ impl GeometryRef {
             }
             Self::Line { start, end } => Rect::from_points([*start, *end]),
             Self::VectorPath(path) => path.conservative_bounds(),
+            Self::External(_) => None,
+        }
+    }
+
+    pub fn world_bounds(&self, transform: Transform2D) -> Option<Rect> {
+        match self {
+            Self::Line { start, end } => Rect::from_points([
+                transform.transform_point(*start),
+                transform.transform_point(*end),
+            ]),
+            Self::VectorPath(path) => path.transformed_conservative_bounds(transform),
+            Self::Circle { .. } | Self::Rectangle { .. } => {
+                let bounds = self.local_bounds()?;
+                let corners = [
+                    Vec2::new(bounds.min.x, bounds.min.y),
+                    Vec2::new(bounds.min.x, bounds.max.y),
+                    Vec2::new(bounds.max.x, bounds.min.y),
+                    Vec2::new(bounds.max.x, bounds.max.y),
+                ];
+                Rect::from_points(corners.map(|point| transform.transform_point(point)))
+            }
             Self::External(_) => None,
         }
     }
@@ -757,14 +790,7 @@ impl ObjectSnapshot {
     }
 
     pub fn world_bounds(&self) -> Option<Rect> {
-        let bounds = self.local_bounds()?;
-        let corners = [
-            Vec2::new(bounds.min.x, bounds.min.y),
-            Vec2::new(bounds.min.x, bounds.max.y),
-            Vec2::new(bounds.max.x, bounds.min.y),
-            Vec2::new(bounds.max.x, bounds.max.y),
-        ];
-        Rect::from_points(corners.map(|point| self.transform.transform_point(point)))
+        self.geometry.world_bounds(self.transform)
     }
 
     pub fn width(&self) -> f32 {
@@ -1061,6 +1087,49 @@ mod tests {
         assert!((bounds.width() - 1.0).abs() < 1e-5);
         assert!((bounds.height() - 4.0).abs() < 1e-5);
         assert!((bounds.center().x - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn line_world_bounds_follow_transformed_endpoints() {
+        let snapshot = ObjectSnapshot::new(GeometryRef::line(
+            Vec2::new(-1.0, -1.0),
+            Vec2::new(1.0, 1.0),
+        ))
+        .rotate_by(PI / 4.0)
+        .shift(RIGHT * 3.0);
+        let bounds = snapshot.world_bounds().expect("line has bounds");
+        assert!(bounds.width().abs() < 1e-5);
+        assert!((bounds.height() - 2.0_f32.sqrt() * 2.0).abs() < 1e-5);
+        assert!((bounds.center().x - 3.0).abs() < 1e-5);
+        assert!(bounds.center().y.abs() < 1e-5);
+    }
+
+    #[test]
+    fn vector_path_world_bounds_transform_retained_points_directly() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(0.0, 1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let snapshot = ObjectSnapshot::new(GeometryRef::path(path)).rotate_by(PI / 4.0);
+        let bounds = snapshot.world_bounds().expect("path has bounds");
+        let root_two = 2.0_f32.sqrt();
+        assert!((bounds.width() - root_two).abs() < 1e-5);
+        assert!((bounds.height() - root_two * 0.5).abs() < 1e-5);
+        assert!(bounds.center().x.abs() < 1e-5);
+        assert!((bounds.center().y - 3.0 * root_two * 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn vector_path_world_bounds_keep_curve_controls_conservative() {
+        let path = VectorPath::new()
+            .move_to(ORIGIN)
+            .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(2.0, 0.0));
+        let snapshot = ObjectSnapshot::new(GeometryRef::path(path)).rotate_by(PI / 2.0);
+        let bounds = snapshot.world_bounds().expect("path has bounds");
+        assert!((bounds.min.x + 2.0).abs() < 1e-5);
+        assert!(bounds.max.x.abs() < 1e-5);
+        assert!(bounds.min.y.abs() < 1e-5);
+        assert!((bounds.max.y - 2.0).abs() < 1e-5);
     }
 
     #[test]
