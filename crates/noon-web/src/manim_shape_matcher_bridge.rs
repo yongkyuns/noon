@@ -1,7 +1,6 @@
 use noon::{
     BackgroundRectangle, Cross, IntoSnapshot, SurroundingRectangle, Underline,
-    BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
-    DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+    SURROUNDING_RECTANGLE_DEFAULT_COLOR,
 };
 use noon_core::{ObjectSnapshot, Vec2, BLACK, RED};
 
@@ -155,7 +154,10 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon::{IntoSnapshot, Rectangle};
+    use noon::{
+        IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
+        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_UNDERLINE_BUFF,
+    };
     use noon_core::{GeometryRef, Vec2, BLACK, RED, SMALL_BUFF};
 
     use super::*;
