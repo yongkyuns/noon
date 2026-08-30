@@ -150,6 +150,39 @@ function assertDurationContract(entry, result) {
   );
 }
 
+function authoredObjectCount(entry, result) {
+  const geometryCount = result.document.objects.length;
+  const retained = result.retainedDocument ?? null;
+  const expectsRetainedText = entry.features?.includes("retained-text") ?? false;
+
+  if (expectsRetainedText) {
+    assert.equal(
+      geometryCount,
+      0,
+      `${entry.id}: retained text must not create placeholder geometry`,
+    );
+    assert.ok(retained, `${entry.id}: retained text requires a retained authoring document`);
+  }
+
+  if (retained == null) return geometryCount;
+
+  assert.equal(
+    retained.channel,
+    "noon.authoring.retained",
+    `${entry.id}: retained objects require the canonical retained authoring channel`,
+  );
+  assert.equal(
+    retained.protocol_version,
+    2,
+    `${entry.id}: retained objects require protocol v2`,
+  );
+  assert.ok(
+    Array.isArray(retained.objects),
+    `${entry.id}: retained authoring document requires an object list`,
+  );
+  return geometryCount + retained.objects.length;
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -177,7 +210,7 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
-    assert.ok(result.document.objects.length > 0, `${entry.id}: expected scene objects`);
+    assert.ok(authoredObjectCount(entry, result) > 0, `${entry.id}: expected scene objects`);
     assertDurationContract(entry, result);
     console.log(`[PASS] ${entry.id}`);
   }
