@@ -34,14 +34,20 @@ impl std::fmt::Display for DashedLineAuthoringError {
             }
             Self::NonFiniteLineLength => write!(formatter, "dashed line length must be finite"),
             Self::InvalidDashLength(value) => {
-                write!(formatter, "dash length must be positive and finite, got {value}")
+                write!(
+                    formatter,
+                    "dash length must be positive and finite, got {value}"
+                )
             }
             Self::InvalidDashedRatio(value) => write!(
                 formatter,
                 "dashed ratio must be finite and within [0, 1], got {value}"
             ),
             Self::DashCountOverflow(value) => {
-                write!(formatter, "dashed line requires an unrepresentable dash count {value}")
+                write!(
+                    formatter,
+                    "dashed line requires an unrepresentable dash count {value}"
+                )
             }
         }
     }
@@ -94,10 +100,9 @@ impl DashedLine {
         // ManimCE v0.21: max(2, ceil(length / dash_length * dashed_ratio)).
         // Use f64 for the count calculation so valid f32 geometry does not lose
         // an integer boundary solely because the intermediate quotient is large.
-        let requested =
-            (f64::from(length) / f64::from(dash_length) * f64::from(dashed_ratio))
-                .ceil()
-                .max(2.0);
+        let requested = (f64::from(length) / f64::from(dash_length) * f64::from(dashed_ratio))
+            .ceil()
+            .max(2.0);
         if !requested.is_finite() || requested > usize::MAX as f64 {
             return Err(DashedLineAuthoringError::DashCountOverflow(requested));
         }
@@ -249,13 +254,8 @@ mod tests {
 
     #[test]
     fn custom_dash_length_preserves_open_curve_end_dashes() {
-        let line = DashedLine::with_options(
-            Vec2::new(-4.0, 0.0),
-            Vec2::new(4.0, 0.0),
-            2.0,
-            0.5,
-        )
-        .unwrap();
+        let line =
+            DashedLine::with_options(Vec2::new(-4.0, 0.0), Vec2::new(4.0, 0.0), 2.0, 0.5).unwrap();
         let commands = commands(&line);
 
         assert_eq!(line.num_dashes(), 2);
@@ -307,16 +307,23 @@ mod tests {
     fn dashed_ratio_endpoints_remain_deterministic() {
         let empty = DashedLine::with_options(Vec2::ZERO, Vec2::new(2.0, 0.0), 0.5, 0.0).unwrap();
         assert_eq!(empty.num_dashes(), 2);
-        assert!(commands(&empty).chunks_exact(2).all(|dash| {
-            command_point(&dash[0]) == command_point(&dash[1])
-        }));
+        assert!(commands(&empty)
+            .chunks_exact(2)
+            .all(|dash| { command_point(&dash[0]) == command_point(&dash[1]) }));
 
         let solid = DashedLine::with_options(Vec2::ZERO, Vec2::new(2.0, 0.0), 0.5, 1.0).unwrap();
         assert_eq!(solid.num_dashes(), 4);
         let solid_commands = commands(&solid);
         assert_point_close(command_point(&solid_commands[0]), Vec2::ZERO);
-        assert_point_close(command_point(solid_commands.last().unwrap()), Vec2::new(2.0, 0.0));
-        for pair in solid_commands.chunks_exact(2).collect::<Vec<_>>().windows(2) {
+        assert_point_close(
+            command_point(solid_commands.last().unwrap()),
+            Vec2::new(2.0, 0.0),
+        );
+        for pair in solid_commands
+            .chunks_exact(2)
+            .collect::<Vec<_>>()
+            .windows(2)
+        {
             assert_point_close(command_point(&pair[0][1]), command_point(&pair[1][0]));
         }
     }
@@ -348,10 +355,7 @@ mod tests {
             Err(DashedLineAuthoringError::InvalidDashedRatio(value)) if value.is_nan()
         ));
         assert!(matches!(
-            DashedLine::new(
-                Vec2::new(-f32::MAX, 0.0),
-                Vec2::new(f32::MAX, 0.0)
-            ),
+            DashedLine::new(Vec2::new(-f32::MAX, 0.0), Vec2::new(f32::MAX, 0.0)),
             Err(DashedLineAuthoringError::NonFiniteLineLength)
         ));
     }
