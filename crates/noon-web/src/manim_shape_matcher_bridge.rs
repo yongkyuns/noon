@@ -137,12 +137,8 @@ mod wasm {
         stroke_width: f64,
         scale_factor: f64,
     ) -> Result<String, JsValue> {
-        manim_cross_snapshot_json(
-            target_snapshot_json.as_deref(),
-            stroke_width,
-            scale_factor,
-        )
-        .map_err(js_error)
+        manim_cross_snapshot_json(target_snapshot_json.as_deref(), stroke_width, scale_factor)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = manimUnderlineSnapshotJson)]
@@ -186,7 +182,10 @@ mod tests {
         assert_eq!(snapshot.center(), Vec2::new(1.0, -2.0));
         assert!((snapshot.width() - 4.5).abs() <= 1e-5);
         assert!((snapshot.height() - 3.0).abs() <= 1e-5);
-        assert_eq!(snapshot.style.stroke, Some(SURROUNDING_RECTANGLE_DEFAULT_COLOR));
+        assert_eq!(
+            snapshot.style.stroke,
+            Some(SURROUNDING_RECTANGLE_DEFAULT_COLOR)
+        );
         assert!(matches!(snapshot.geometry, GeometryRef::VectorPath(_)));
     }
 
@@ -203,7 +202,10 @@ mod tests {
             .expect("valid background"),
         );
         let fill = snapshot.style.fill.expect("background fill");
-        assert_eq!((fill.red, fill.green, fill.blue), (BLACK.red, BLACK.green, BLACK.blue));
+        assert_eq!(
+            (fill.red, fill.green, fill.blue),
+            (BLACK.red, BLACK.green, BLACK.blue)
+        );
         assert!((fill.alpha - BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY).abs() <= 1e-5);
         assert_eq!(snapshot.style.stroke_width, 0.0);
     }
@@ -253,13 +255,10 @@ mod tests {
     #[test]
     fn matcher_bridge_rejects_malformed_and_non_finite_inputs() {
         assert!(manim_underline_snapshot_json("not json", 0.1).is_err());
-        assert!(manim_surrounding_rectangle_snapshot_json(
-            &target_json(),
-            f64::NAN,
-            0.1,
-            0.0,
-        )
-        .is_err());
+        assert!(
+            manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0,)
+                .is_err()
+        );
         assert!(manim_cross_snapshot_json(None, f64::INFINITY, 1.0).is_err());
     }
 }
