@@ -23,6 +23,7 @@ export class ExecutionWorkerClient {
   #candidateEngineWorker = null;
   #candidateEngineReject = null;
   #renderWorker = null;
+  #renderPrepared = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #session = 0;
@@ -78,14 +79,72 @@ export class ExecutionWorkerClient {
     });
   }
 
-  async start(
-    sceneJson,
+  async prepare(
     {
-      loopDurationSeconds = 4,
       transportMode = selectExecutionTransportMode(),
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
     } = {},
   ) {
+    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+      throw new Error("ExecutionWorkerClient is already started or prepared");
+    }
+    validateTransportMode(transportMode);
+    if (
+      transportMode === EXECUTION_TRANSPORT_SHARED &&
+      selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED
+    ) {
+      throw new Error("shared execution transport requires cross-origin isolation");
+    }
+    if (typeof this.#canvas.transferControlToOffscreen !== "function") {
+      throw new Error("OffscreenCanvas transfer is unavailable in this browser");
+    }
+
+    this.#transportMode = transportMode;
+    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    const { width, height } = this.#prepareCanvasDimensions();
+    const transferredCanvas = this.#canvas;
+
+    let canvasTransferred = false;
+    try {
+      const offscreen = this.#canvas.transferControlToOffscreen();
+      canvasTransferred = true;
+      this.#renderWorker = new Worker(new URL("./execution-render-worker.js", import.meta.url), {
+        type: "module",
+        name: "noon-render",
+      });
+      this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
+      this.#renderPrepared = this.#request(
+        this.#renderWorker,
+        "render",
+        renderEnvelope,
+        "prepare",
+        {
+          canvas: offscreen,
+          transportMode,
+          width,
+          height,
+        },
+        [offscreen],
+      );
+      const render = await this.#renderPrepared;
+      this.#fatalOwner = null;
+      return { render, transportMode };
+    } catch (error) {
+      this.#rollbackFailedStart(
+        error,
+        canvasTransferred && this.#canvas === transferredCanvas,
+      );
+      throw error;
+    }
+  }
+
+  async start(sceneJson, options = {}) {
+    const loopDurationSeconds = options.loopDurationSeconds ?? 4;
+    const transportMode =
+      options.transportMode ?? this.#transportMode ?? selectExecutionTransportMode();
+    const sharedSlotCapacity =
+      options.sharedSlotCapacity ??
+      (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
     validateSceneJson(sceneJson);
     sceneJson = projectLegacyReactiveSceneJson(sceneJson);
     return this.#startMode(EXECUTION_MODE_LEGACY, sceneJson, null, {
@@ -95,15 +154,13 @@ export class ExecutionWorkerClient {
     });
   }
 
-  async startRetained(
-    sceneJson,
-    retainedDocumentJson,
-    {
-      loopDurationSeconds = 4,
-      transportMode = selectExecutionTransportMode(),
-      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
-    } = {},
-  ) {
+  async startRetained(sceneJson, retainedDocumentJson, options = {}) {
+    const loopDurationSeconds = options.loopDurationSeconds ?? 4;
+    const transportMode =
+      options.transportMode ?? this.#transportMode ?? selectExecutionTransportMode();
+    const sharedSlotCapacity =
+      options.sharedSlotCapacity ??
+      (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
     validateSceneJson(sceneJson);
     validateRetainedDocumentJson(retainedDocumentJson);
     return this.#startMode(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
@@ -123,8 +180,12 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity,
     },
   ) {
-    if (this.#engineWorker !== null || this.#renderWorker !== null) {
+    if (this.#engineWorker !== null) {
       throw new Error("ExecutionWorkerClient is already started");
+    }
+    const preparedRender = this.#renderWorker !== null;
+    if (preparedRender && this.#renderPrepared === null) {
+      throw new Error("ExecutionWorkerClient render owner is not in a prepared state");
     }
     validateExecutionMode(mode);
     validateSceneJson(sceneJson);
@@ -133,30 +194,43 @@ export class ExecutionWorkerClient {
     }
     validateLoopDurationSeconds(loopDurationSeconds);
     validateTransportMode(transportMode);
+    const slotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
     if (
       transportMode === EXECUTION_TRANSPORT_SHARED &&
       selectExecutionTransportMode() !== EXECUTION_TRANSPORT_SHARED
     ) {
       throw new Error("shared execution transport requires cross-origin isolation");
     }
+
+    if (preparedRender) {
+      if (transportMode !== this.#transportMode) {
+        throw new Error("prepared render transport mode does not match execution startup");
+      }
+      if (slotCapacity !== this.#sharedSlotCapacity) {
+        throw new Error("prepared shared slot capacity does not match execution startup");
+      }
+      await this.#renderPrepared;
+      return this.#startPreparedMode(
+        mode,
+        sceneJson,
+        retainedDocumentJson,
+        loopDurationSeconds,
+      );
+    }
+
     if (typeof this.#canvas.transferControlToOffscreen !== "function") {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    this.#mode = mode;
-    this.#sceneJson = sceneJson;
-    this.#retainedDocumentJson =
-      mode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
-    this.#loopDurationSeconds = loopDurationSeconds;
-    this.#transportMode = transportMode;
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    this.#session = checkedNextSession(this.#session);
-
-    const devicePixelRatio = window.devicePixelRatio || 1;
-    const initialWidth = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
-    const initialHeight = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
-    this.#canvas.width = initialWidth;
-    this.#canvas.height = initialHeight;
+    this.#configureStart(
+      mode,
+      sceneJson,
+      retainedDocumentJson,
+      loopDurationSeconds,
+      transportMode,
+      slotCapacity,
+    );
+    const { width: initialWidth, height: initialHeight } = this.#prepareCanvasDimensions();
 
     let canvasTransferred = false;
     try {
@@ -209,6 +283,88 @@ export class ExecutionWorkerClient {
       this.#rollbackFailedStart(error, canvasTransferred);
       throw error;
     }
+  }
+
+  async #startPreparedMode(mode, sceneJson, retainedDocumentJson, loopDurationSeconds) {
+    this.#configureStart(
+      mode,
+      sceneJson,
+      retainedDocumentJson,
+      loopDurationSeconds,
+      this.#transportMode,
+      this.#sharedSlotCapacity,
+    );
+    try {
+      const channel = new MessageChannel();
+      this.#engineWorker = this.#createEngineWorker(mode);
+      const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
+      const renderReady = this.#request(
+        this.#renderWorker,
+        "render",
+        renderEnvelope,
+        "start_engine",
+        {
+          port: channel.port2,
+          transportMode: this.#transportMode,
+          mode,
+        },
+        [channel.port2],
+      );
+      this.#ready = Promise.all([engineReady, renderReady]).then(([engine, render]) => ({
+        engine,
+        render,
+        transportMode: this.#transportMode,
+        session: this.#session,
+      }));
+      this.#postEngineInit(
+        this.#engineWorker,
+        channel.port1,
+        mode,
+        sceneJson,
+        retainedDocumentJson,
+        loopDurationSeconds,
+      );
+      const ready = await this.#ready;
+      this.#renderPrepared = null;
+      this.#playing = true;
+      this.#fatalOwner = null;
+      if (mode === EXECUTION_MODE_RETAINED) {
+        this.#hostAuthoringClient = null;
+        this.#hostCallbacks = null;
+      }
+      return ready;
+    } catch (error) {
+      this.#renderPrepared = null;
+      this.#rollbackFailedStart(error, true);
+      throw error;
+    }
+  }
+
+  #configureStart(
+    mode,
+    sceneJson,
+    retainedDocumentJson,
+    loopDurationSeconds,
+    transportMode,
+    sharedSlotCapacity,
+  ) {
+    this.#mode = mode;
+    this.#sceneJson = sceneJson;
+    this.#retainedDocumentJson =
+      mode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
+    this.#loopDurationSeconds = loopDurationSeconds;
+    this.#transportMode = transportMode;
+    this.#sharedSlotCapacity = sharedSlotCapacity;
+    this.#session = checkedNextSession(this.#session);
+  }
+
+  #prepareCanvasDimensions() {
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(this.#canvas.clientWidth * devicePixelRatio));
+    const height = Math.max(1, Math.round(this.#canvas.clientHeight * devicePixelRatio));
+    this.#canvas.width = width;
+    this.#canvas.height = height;
+    return { width, height };
   }
 
   ready() {
@@ -669,6 +825,10 @@ export class ExecutionWorkerClient {
   }
 
   terminate({ preserveHostConfiguration = false } = {}) {
+    const restorePreparedCanvas =
+      this.#engineWorker === null &&
+      this.#renderWorker !== null &&
+      this.#renderPrepared !== null;
     this.#lifecycleGeneration += 1;
     const cancellation = new Error(LIFECYCLE_CANCELLED_MESSAGE);
     this.#candidateEngineReject?.(cancellation);
@@ -679,12 +839,16 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#renderPrepared = null;
     this.#ready = null;
     const error = new Error("execution worker client terminated");
     for (const pending of this.#pending.values()) {
       pending.reject(error);
     }
     this.#pending.clear();
+    if (restorePreparedCanvas) {
+      this.#canvas = replaceExecutionCanvas(this.#canvas);
+    }
     if (!preserveHostConfiguration) {
       this.#hostAuthoringClient = null;
       this.#hostCallbacks = null;
@@ -906,6 +1070,7 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#renderPrepared = null;
     this.#ready = null;
     for (const pending of this.#pending.values()) {
       pending.reject(error);
