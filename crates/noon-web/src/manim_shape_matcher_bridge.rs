@@ -256,8 +256,7 @@ mod tests {
     fn matcher_bridge_rejects_malformed_and_non_finite_inputs() {
         assert!(manim_underline_snapshot_json("not json", 0.1).is_err());
         assert!(
-            manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0,)
-                .is_err()
+            manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0,).is_err()
         );
         assert!(manim_cross_snapshot_json(None, f64::INFINITY, 1.0).is_err());
     }
