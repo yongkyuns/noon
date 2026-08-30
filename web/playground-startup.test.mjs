@@ -4,13 +4,40 @@ import { readFile } from "node:fs/promises";
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
-const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({");
+const createRuntimeStart = main.indexOf("function createRuntimeClient()");
+const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({", preparationStart);
 const executionReadyStart = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
-  runtimeReadyStart >= 0 && executionReadyStart > runtimeReadyStart,
-  "on-demand runtime startup boundary must exist",
+  createRuntimeStart >= 0 &&
+    preparationStart > createRuntimeStart &&
+    runtimeReadyStart > preparationStart &&
+    executionReadyStart > runtimeReadyStart,
+  "on-demand preparation and authored-engine startup boundaries must exist in order",
 );
+const createRuntimeBody = main.slice(createRuntimeStart, preparationStart);
+const preparationBody = main.slice(preparationStart, runtimeReadyStart);
 const runtimeReadyBody = main.slice(runtimeReadyStart, executionReadyStart);
+assert.match(
+  createRuntimeBody,
+  /new AuthoringExecutionClient\(canvas,/,
+  "first Run must create the GPU execution owner on demand",
+);
+assert.match(
+  preparationBody,
+  /const ready = candidate\.prepare\(\);/,
+  "first Run must prepare the mode-free render owner before engine selection",
+);
+assert.doesNotMatch(
+  preparationBody,
+  /candidate\.start(?:Retained)?\(/,
+  "mode-free preparation must not speculate a legacy or retained engine",
+);
+assert.match(
+  preparationBody,
+  /if \(runtimePreparation !== null\) return runtimePreparation;/,
+  "failed or stale Python runs must be able to reuse an already prepared candidate",
+);
 assert.doesNotMatch(
   runtimeReadyBody,
   /warmAuthoringClient\(/,
@@ -18,18 +45,23 @@ assert.doesNotMatch(
 );
 assert.match(
   runtimeReadyBody,
-  /new AuthoringExecutionClient\(canvas,/,
-  "first authored scene must create the GPU execution owner on demand",
+  /const prepared = preparation \?\? ensureRuntimePreparation\(\);/,
+  "authored startup must consume the candidate prepared in parallel with Python",
+);
+assert.match(
+  runtimeReadyBody,
+  /await prepared\.ready;/,
+  "authored engine attachment must wait for render-owner preparation",
 );
 assert.match(
   runtimeReadyBody,
   /await nextPlayer\.startRetained\(sceneJson, retainedDocumentJson,/,
-  "retained first runs must start directly in retained mode",
+  "retained first runs must attach directly in retained mode",
 );
 assert.match(
   runtimeReadyBody,
   /await nextPlayer\.start\(sceneJson,/,
-  "geometry-only first runs must start their authored scene directly",
+  "geometry-only first runs must attach their authored scene directly",
 );
 assert.doesNotMatch(
   runtimeReadyBody,
@@ -51,6 +83,11 @@ assert.ok(
 );
 assert.match(
   runtimeReadyBody,
+  /if \(runtimePreparation === prepared\) \{\s*runtimePreparation = null;/,
+  "successful engine publication must consume the prepared candidate exactly once",
+);
+assert.match(
+  runtimeReadyBody,
   /playerNeedsRestart = false;/,
   "successful fresh runtime startup must clear stale restart state",
 );
@@ -64,14 +101,26 @@ const runSceneStart = main.indexOf("async function runScene()");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
+const preparationCall = runSceneBody.indexOf(
+  "const preparation = player === null ? ensureRuntimePreparation() : null;",
+);
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
 const reconcileCall = runSceneBody.indexOf("result = await player.reconcileScene(sceneJson,");
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
+  preparationCall >= 0 && preparationCall < authoringCall,
+  "cold Run must kick render/WASM preparation before awaiting Python authoring",
+);
+assert.ok(
   ensureRuntimeCall > authoringCall,
-  "cold execution startup must wait until authoring identifies the required engine mode",
+  "engine selection and attachment must still wait until authoring identifies the required mode",
+);
+assert.match(
+  runSceneBody,
+  /result = await ensureRuntimeReady\(\{\s*preparation,/,
+  "cold authored startup must consume the preparation kicked off before Python",
 );
 assert.ok(
   ensureExecutionCall > authoringCall && reconcileCall > ensureExecutionCall,
@@ -90,7 +139,7 @@ assert.ok(bootCatch > bootStart, "playground boot boundary must terminate cleanl
 const bootBody = main.slice(bootStart, bootCatch);
 assert.doesNotMatch(
   bootBody,
-  /ensureAuthoringClient\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
+  /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
   "initial page boot must not create Python or GPU runtime resources",
 );
 assert.doesNotMatch(
@@ -169,8 +218,8 @@ assert.match(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*player\?\.terminate\(\)/,
-  "page teardown must release metrics, Python, and execution resources",
+  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\?\.candidate\.terminate\(\)[\s\S]*player\?\.terminate\(\)/,
+  "page teardown must release metrics, Python, unpublished preparation, and execution resources",
 );
 
 const initializeStart = worker.indexOf("async function initializePyodide()");
@@ -201,5 +250,5 @@ assert.match(
 );
 
 console.log(
-  "✓ playground defers heavyweight startup, starts the authored engine mode directly, bounds gallery residency, and preserves parallel Python bootstrap",
+  "✓ playground defers page-load work, overlaps first-Run Python/render preparation, and selects the authored engine only after authoring",
 );

@@ -89,7 +89,7 @@ async function snapshot(page) {
   });
 }
 
-async function waitForInitialScene(page) {
+async function waitForDeferredEditor(page) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   const deferred = await snapshot(page);
   assert.equal(deferred.runtimeStartup, "deferred", "authoring runtime must stay deferred on page load");
@@ -97,6 +97,7 @@ async function waitForInitialScene(page) {
   assert.equal(deferred.presentedFrames, 0, "deferred authoring page must not render frames");
 
   const sourceTextarea = page.locator("#python-scene-source");
+  const initialSource = await sourceTextarea.inputValue();
   await sourceTextarea.focus();
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content", {
     timeout: 30_000,
@@ -104,21 +105,7 @@ async function waitForInitialScene(page) {
 
   const runButton = page.locator("#replace-scene");
   assert.equal(await runButton.isEnabled(), true, "Run must remain available after lazy editor startup");
-  await runButton.click();
-  await page.waitForFunction(
-    () => {
-      const status = document.querySelector("#status");
-      const patch = document.querySelector("#patch-status");
-      return (
-        status?.dataset.state === "running" &&
-        status?.dataset.rendererBackend === "WebGL2" &&
-        patch?.dataset.state === "applied" &&
-        !document.querySelector("#replace-scene")?.disabled
-      );
-    },
-    null,
-    { timeout: 60_000 },
-  );
+  return initialSource;
 }
 
 async function setEditorSource(page, source) {
@@ -204,19 +191,52 @@ try {
 
   diagnostics.browser = await browser.version();
   await page.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
-  await waitForInitialScene(page);
-  await waitForObjectCount(page, 1);
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) diagnostics.unexpectedNavigations += 1;
-  });
+  const initialSource = await waitForDeferredEditor(page);
 
-  phase = "baseline";
+  phase = "cold-syntax-error";
+  await setEditorSource(page, SOURCES.syntaxError);
+  await runAndWait(page, "error");
+  await page.waitForFunction(
+    () => document.querySelector("#status")?.dataset.runtimeStartup === "prepared-on-run",
+    null,
+    { timeout: 60_000 },
+  );
+  diagnostics.snapshots.coldSyntaxError = await snapshot(page);
+  assert.equal(
+    diagnostics.snapshots.coldSyntaxError.runtimeStartup,
+    "prepared-on-run",
+    "cold Python failure must leave the mode-free render owner prepared for retry",
+  );
+  assert.equal(
+    diagnostics.snapshots.coldSyntaxError.rendererBackend,
+    "",
+    "cold Python failure must not publish a renderer backend before engine selection",
+  );
+  assert.equal(
+    diagnostics.snapshots.coldSyntaxError.executionMode,
+    "",
+    "cold Python failure must not publish an execution mode",
+  );
+  assert.equal(
+    diagnostics.snapshots.coldSyntaxError.presentedFrames,
+    0,
+    "cold Python failure must not present a frame from a speculative engine",
+  );
+
+  phase = "cold-recovery";
+  await setEditorSource(page, initialSource);
+  await runAndWait(page, "applied");
+  await waitForObjectCount(page, 1);
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.equal(diagnostics.snapshots.baseline.runtimeState, "running");
+  assert.equal(diagnostics.snapshots.baseline.runtimeStartup, "started-on-demand");
   assert.equal(diagnostics.snapshots.baseline.rendererBackend, "WebGL2");
   assert.equal(diagnostics.snapshots.baseline.exampleId, "parity-create-circle");
   assert.notEqual(diagnostics.snapshots.baseline.patchSequence, "");
   await page.screenshot({ path: path.join(artifactDir, "baseline.png"), fullPage: true });
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) diagnostics.unexpectedNavigations += 1;
+  });
 
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
@@ -273,10 +293,20 @@ try {
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
+  const coldSyntaxConsole = diagnostics.consoleErrors.filter(
+    (entry) => entry.phase === "cold-syntax-error",
+  );
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
   const runtimeConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "runtime-error");
   const unexpectedConsole = diagnostics.consoleErrors.filter(
-    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error",
+    (entry) =>
+      entry.phase !== "cold-syntax-error" &&
+      entry.phase !== "syntax-error" &&
+      entry.phase !== "runtime-error",
+  );
+  assert.ok(
+    coldSyntaxConsole.some((entry) => /SyntaxError|invalid syntax|expected ':'/i.test(entry.text)),
+    `cold syntax failure should be diagnostic in the console: ${JSON.stringify(coldSyntaxConsole)}`,
   );
   assert.ok(
     syntaxConsole.some((entry) => /SyntaxError|invalid syntax|expected ':'/i.test(entry.text)),
@@ -293,7 +323,7 @@ try {
   diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground authoring recovery ok: ${diagnostics.snapshots.baseline.objectCount} -> ` +
+    `playground authoring recovery ok: cold failure -> ${diagnostics.snapshots.baseline.objectCount} -> ` +
       `${diagnostics.snapshots.syntaxRecovered.objectCount} -> ${diagnostics.snapshots.runtimeRecovered.objectCount} objects`,
   );
 } catch (error) {
