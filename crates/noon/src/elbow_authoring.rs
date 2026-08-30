@@ -56,12 +56,8 @@ impl Elbow {
         }
 
         let (sin, cos) = angle.sin_cos();
-        let rotate = |point: Vec2| {
-            Vec2::new(
-                point.x * cos - point.y * sin,
-                point.x * sin + point.y * cos,
-            )
-        };
+        let rotate =
+            |point: Vec2| Vec2::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
         let path = VectorPath::new()
             .move_to(rotate(Vec2::new(0.0, width)))
             .line_to(rotate(Vec2::new(width, width)))
