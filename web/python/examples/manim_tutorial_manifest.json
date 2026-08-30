@@ -520,6 +520,24 @@
       "order": 260
     },
     {
+      "id": "manim-shrink-to-center-text",
+      "title": "ShrinkToCenterExample",
+      "summary": "ManimCE v0.21 ShrinkToCenter reference example, unchanged except for the import module, animated through Noon's retained native Text Scale track.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_shrink_to_center.py",
+      "category": "transform",
+      "features": ["ShrinkToCenter", "Text", "ScaleInPlace", "retained-text", "retained-animation"],
+      "upstream": "reference/manim.animation.transform.ShrinkToCenter.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/shrink_to_center_example.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "expected_duration": 1,
+      "thumbnail": "thumbnails/manim/shrink-to-center-text.svg",
+      "thumbnail_alt": "Hello World text halfway through shrinking toward the scene center",
+      "thumbnail_time": 0.5,
+      "order": 270
+    },
+    {
       "id": "manim-dashed-line-reference",
       "title": "DashedLineExample",
       "summary": "ManimCE v0.21 DashedLine reference example; tracked by exact pinned provenance and blocked until DashedLine parity lands.",

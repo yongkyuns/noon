@@ -23,6 +23,7 @@ assert.ok(ready.length >= 1, "expected exact-source Manim examples");
 const parityManifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
 const parityManifest = JSON.parse(await readFile(parityManifestPath, "utf8"));
 const parityFixtures = new Map(parityManifest.fixtures.map((fixture) => [fixture.id, fixture]));
+const retainedTextAnimationId = "manim-shrink-to-center-text";
 
 function noonSourceFromUpstream(source, id) {
   const upstreamImport = "from manim import *";
@@ -183,6 +184,37 @@ function authoredObjectCount(entry, result) {
   return geometryCount + retained.objects.length;
 }
 
+function assertRetainedShrinkTrack(result) {
+  assert.equal(
+    result.document.objects.length,
+    0,
+    `${retainedTextAnimationId}: animated retained Text must emit zero legacy geometry`,
+  );
+  const retained = result.retainedDocument;
+  assert.ok(retained, `${retainedTextAnimationId}: retained sidecar is required`);
+  assert.equal(retained.channel, "noon.authoring.retained");
+  assert.equal(retained.protocol_version, 2);
+  assert.equal(retained.objects.length, 1);
+  assert.equal(retained.objects[0].text.source, "Hello World!");
+  assert.ok(Array.isArray(retained.tracks), `${retainedTextAnimationId}: retained tracks are required`);
+  assert.equal(retained.tracks.length, 1);
+  const track = retained.tracks[0];
+  assert.equal(track.object, retained.objects[0].object);
+  assert.equal(track.property, "scale");
+  assert.deepEqual(track.values, {
+    vec2: {
+      from: { x: 1, y: 1 },
+      to: { x: 0, y: 0 },
+    },
+  });
+  assert.deepEqual(track.timing, {
+    start_time: 0,
+    duration: 1,
+    easing: "smooth",
+  });
+  assert.equal(sceneDuration(result), 1);
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -212,6 +244,9 @@ try {
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
     assert.ok(authoredObjectCount(entry, result) > 0, `${entry.id}: expected scene objects`);
     assertDurationContract(entry, result);
+    if (entry.id === retainedTextAnimationId) {
+      assertRetainedShrinkTrack(result);
+    }
     console.log(`[PASS] ${entry.id}`);
   }
 

@@ -1,4 +1,4 @@
-from noon import *
+from manim import *
 
 
 class ShrinkToCenterExample(Scene):

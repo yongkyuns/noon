@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">ShrinkToCenter Text poster</title>
+  <desc id="desc">Hello World text halfway through shrinking toward the center of a Manim scene.</desc>
+  <rect width="640" height="360" fill="#000000"/>
+  <g transform="translate(320 180) scale(.5)">
+    <text x="0" y="0" fill="#ffffff" font-family="DejaVu Sans Mono, monospace" font-size="48" text-anchor="middle" dominant-baseline="middle">Hello World!</text>
+  </g>
+</svg>

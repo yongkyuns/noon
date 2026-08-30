@@ -42,6 +42,7 @@ impl RetainedAuthoringPlayer {
         session: u32,
     ) -> Result<Self, RetainedAuthoringPlayerError> {
         let camera_object = mixed.camera_object();
+        let compiled = mixed.compile()?;
         let scene = mixed.into_scene();
         let bundle = RetainedResourceBundle::capture(
             scene
@@ -53,9 +54,6 @@ impl RetainedAuthoringPlayer {
             scene.fonts(),
         )?;
         let resource_bundle = bundle.encode_binary()?;
-        let compiled = scene
-            .compile()
-            .map_err(RetainedAuthoringPlayerError::Compile)?;
         let runtime = RetainedSceneInstance::new(compiled);
         Ok(Self {
             scene,
@@ -245,7 +243,6 @@ impl RetainedAuthoringEnginePlayer {
 #[derive(Debug)]
 pub enum RetainedAuthoringPlayerError {
     Authoring(MixedRetainedAuthoringError),
-    Compile(noon::TextAuthoringError),
     Resource(RetainedResourceTransportError),
     Evaluation(EvaluationError),
     Transport(RetainedExecutionTransportError),
@@ -258,7 +255,6 @@ impl std::fmt::Display for RetainedAuthoringPlayerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
-            Self::Compile(error) => error.fmt(formatter),
             Self::Resource(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
@@ -406,13 +402,13 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, ObjectContentRef, RateFunction, SceneDefinition, TextSourceKind, TrackTiming,
-        Vec2,
+        GeometryRef, ObjectContentRef, Property, RateFunction, SceneDefinition, TextSourceKind,
+        TrackTiming, TrackValues, Vec2,
     };
 
     use crate::{
-        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTypstAuthoringSpec,
-        TransportObjectContent,
+        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTextAuthoringSpec,
+        RetainedTrackAuthoringSpec, RetainedTypstAuthoringSpec, TransportObjectContent,
     };
 
     use super::*;
@@ -427,6 +423,25 @@ mod tests {
             object,
             order,
             text: RetainedTypstAuthoringSpec::new(source, math, 48.0).unwrap(),
+        }])
+        .unwrap()
+    }
+
+    fn native_text_document(
+        source: &str,
+        order: u32,
+        object: ObjectId,
+    ) -> RetainedAuthoringDocument {
+        RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
+            object,
+            order,
+            text: RetainedTextAuthoringSpec::native(
+                source,
+                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+                48.0,
+                -1.0,
+            )
+            .unwrap(),
         }])
         .unwrap()
     }
@@ -473,6 +488,52 @@ mod tests {
         let bundle = RetainedResourceBundle::decode_binary(player.resource_bundle_bytes()).unwrap();
         assert_eq!(bundle.text_count(), 1);
         assert!(bundle.font_count() >= 1);
+    }
+
+    #[test]
+    fn retained_native_text_scale_track_evaluates_without_replacing_resource_identity() {
+        let legacy = SceneDefinition::new();
+        let text_id = ObjectId::new(1_u64 << 52);
+        let base_scale = noon::NATIVE_POINT_TO_SCENE_SCALE;
+        let track = RetainedTrackAuthoringSpec::new(
+            text_id,
+            Property::Scale,
+            TrackValues::Vec2 {
+                from: Vec2::ONE,
+                to: Vec2::ZERO,
+            },
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        let mixed = MixedRetainedAuthoringScene::from_parts_with_tracks(
+            &legacy,
+            native_text_document("Shrink", 0, text_id),
+            vec![track],
+        )
+        .unwrap();
+        let mut player = RetainedAuthoringPlayer::new(mixed, 21).unwrap();
+        let text_handle = player.scene().objects()[0].content.text().unwrap();
+
+        let initial = player.evaluate_delta(0.0).unwrap().unwrap();
+        assert!(initial.snapshot);
+        let midpoint = player.evaluate_delta(0.5).unwrap().unwrap();
+        assert!(!midpoint.snapshot);
+        assert_eq!(midpoint.objects.len(), 1);
+        assert_eq!(midpoint.objects[0].object, text_id);
+        assert!((midpoint.objects[0].transform.scale.x - base_scale * 0.5).abs() < 1.0e-6);
+        assert!((midpoint.objects[0].transform.scale.y - base_scale * 0.5).abs() < 1.0e-6);
+        let TransportObjectContent::Text { text } = midpoint.objects[0].content else {
+            panic!("scaled retained Text must stay text-backed");
+        };
+        assert_eq!(text.id, text_handle.id.get());
+        assert_eq!(text.version, text_handle.version);
+
+        let endpoint = player.evaluate_delta(1.0).unwrap().unwrap();
+        assert_eq!(endpoint.objects.len(), 1);
+        assert_eq!(endpoint.objects[0].transform.scale, Vec2::ZERO);
+        assert_eq!(
+            player.scene().objects()[0].content,
+            ObjectContentRef::Text(text_handle)
+        );
     }
 
     #[test]

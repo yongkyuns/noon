@@ -4,6 +4,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_compat.py", runtimePath: "/tmp/_manim_compat.py", label: "Noon Manim compatibility layer" },
   { sourcePath: "python/_manim_semantic_handles.py", runtimePath: "/tmp/_manim_semantic_handles.py", label: "Noon shared semantic handle layer" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
+  { sourcePath: "python/_manim_retained_animate.py", runtimePath: "/tmp/_manim_retained_animate.py", label: "Noon retained text animation layer" },
   { sourcePath: "python/_manim_rate_functions.py", runtimePath: "/tmp/_manim_rate_functions.py", label: "Noon Manim rate functions" },
   { sourcePath: "python/_manim_phase_b.py", runtimePath: "/tmp/_manim_phase_b.py", label: "Noon Manim Phase B layer" },
   { sourcePath: "python/_manim_geometry.py", runtimePath: "/tmp/_manim_geometry.py", label: "Noon Manim geometry layer" },

@@ -103,6 +103,11 @@ import _manim_lifecycle
 # it is intercepted before any legacy geometry binding occurs.
 import _manim_typst
 _manim_typst.install()
+# Install retained animation before later Scene.play adapters capture their
+# predecessor. This keeps retained dispatch inside the normal wrapper chain and
+# avoids Python call-expression binding races for Scene.play(ShrinkToCenter(Text(...))).
+import _manim_retained_animate
+_manim_retained_animate.install()
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill

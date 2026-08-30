@@ -1,11 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use noon::{MathTypst, RetainedScene, Text as NativeText, TextAuthoringError, Typst};
-use noon_core::{ObjectId, SceneDefinition};
+use noon_compile::{RetainedCompileError, RetainedCompiledScene};
+use noon_core::{ObjectId, SceneDefinition, TrackDefinition, Vec2};
 
 use crate::{
-    RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTextAuthoringSpec,
-    RetainedTextBackendSpec,
+    materialize_retained_tracks, RetainedAuthoringDocument, RetainedAuthoringTextObject,
+    RetainedTextAuthoringSpec, RetainedTextBackendSpec, RetainedTrackAuthoringSpec,
+    RetainedTrackMaterializationError,
 };
 
 /// One resource-aware scene assembled from the legacy geometry document and the
@@ -17,10 +19,12 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct MixedRetainedAuthoringScene {
     scene: RetainedScene,
+    tracks: Vec<TrackDefinition>,
     camera_object: Option<ObjectId>,
 }
 
 impl MixedRetainedAuthoringScene {
+    #[cfg(test)]
     pub fn from_json(
         legacy_scene_json: &str,
         retained_document_json: &str,
@@ -35,11 +39,27 @@ impl MixedRetainedAuthoringScene {
         legacy: &SceneDefinition,
         retained: RetainedAuthoringDocument,
     ) -> Result<Self, MixedRetainedAuthoringError> {
+        Self::from_parts_with_tracks(legacy, retained, Vec::new())
+    }
+
+    /// Merge source-level retained tracks with the legacy scene after semantic object
+    /// identity and painter order have been unified.
+    ///
+    /// Frontends deliberately do not assign `TrackId`s. IDs are materialized after
+    /// the legacy range, then the exact object/track set is compiled before this
+    /// constructor commits a mixed scene. Invalid or text-incompatible tracks therefore
+    /// fail transactionally without introducing a second animation validator.
+    pub fn from_parts_with_tracks(
+        legacy: &SceneDefinition,
+        retained: RetainedAuthoringDocument,
+        retained_tracks: Vec<RetainedTrackAuthoringSpec>,
+    ) -> Result<Self, MixedRetainedAuthoringError> {
         retained
             .validate()
             .map_err(MixedRetainedAuthoringError::RetainedDocument)?;
         preflight_merge(legacy, &retained)?;
 
+        let retained_scale_factors = retained_scale_factors(&retained.objects);
         let camera_object = legacy.camera_object();
         let mut scene = RetainedScene::from_legacy(legacy)?;
         let mut text_objects = retained.objects;
@@ -48,14 +68,30 @@ impl MixedRetainedAuthoringScene {
             insert_text_object(&mut scene, object)?;
         }
 
+        let tracks =
+            materialize_retained_tracks(legacy.tracks(), retained_tracks, &retained_scale_factors)?;
+        RetainedCompiledScene::compile(scene.objects(), &tracks)?;
+
         Ok(Self {
             scene,
+            tracks,
             camera_object,
         })
     }
 
     pub const fn scene(&self) -> &RetainedScene {
         &self.scene
+    }
+
+    pub fn tracks(&self) -> &[TrackDefinition] {
+        &self.tracks
+    }
+
+    pub fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
+        Ok(RetainedCompiledScene::compile(
+            self.scene.objects(),
+            &self.tracks,
+        )?)
     }
 
     pub fn into_scene(self) -> RetainedScene {
@@ -72,6 +108,8 @@ pub enum MixedRetainedAuthoringError {
     LegacyScene(noon_ir::IrError),
     RetainedDocument(String),
     Text(TextAuthoringError),
+    TrackMaterialization(RetainedTrackMaterializationError),
+    Compile(RetainedCompileError),
     ObjectCountOverflow,
     PainterOrderOutOfRange { order: u32, object_count: usize },
     ObjectIdentityCollision(ObjectId),
@@ -83,6 +121,8 @@ impl std::fmt::Display for MixedRetainedAuthoringError {
             Self::LegacyScene(error) => error.fmt(formatter),
             Self::RetainedDocument(error) => formatter.write_str(error),
             Self::Text(error) => error.fmt(formatter),
+            Self::TrackMaterialization(error) => error.fmt(formatter),
+            Self::Compile(error) => error.fmt(formatter),
             Self::ObjectCountOverflow => {
                 formatter.write_str("mixed retained authoring object count overflow")
             }
@@ -113,6 +153,18 @@ impl From<noon_ir::IrError> for MixedRetainedAuthoringError {
 impl From<TextAuthoringError> for MixedRetainedAuthoringError {
     fn from(value: TextAuthoringError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<RetainedTrackMaterializationError> for MixedRetainedAuthoringError {
+    fn from(value: RetainedTrackMaterializationError) -> Self {
+        Self::TrackMaterialization(value)
+    }
+}
+
+impl From<RetainedCompileError> for MixedRetainedAuthoringError {
+    fn from(value: RetainedCompileError) -> Self {
+        Self::Compile(value)
     }
 }
 
@@ -149,6 +201,21 @@ fn preflight_merge(
         ));
     }
     Ok(())
+}
+
+fn retained_scale_factors(objects: &[RetainedAuthoringTextObject]) -> BTreeMap<ObjectId, Vec2> {
+    objects
+        .iter()
+        .map(|object| {
+            let factor = match &object.text.backend {
+                RetainedTextBackendSpec::Native { .. } => noon::NATIVE_POINT_TO_SCENE_SCALE,
+                RetainedTextBackendSpec::Typst { .. } => {
+                    object.text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT
+                }
+            };
+            (object.object, Vec2::new(factor, factor))
+        })
+        .collect()
 }
 
 fn insert_text_object(
@@ -210,7 +277,10 @@ fn insert_text_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{Color, GeometryRef, ObjectContentRef, TextSourceKind, Transform2D, Vec2};
+    use noon_core::{
+        Color, GeometryRef, ObjectContentRef, Property, RateFunction, TextSourceKind, TrackId,
+        TrackTiming, TrackValues, Transform2D,
+    };
     use noon_ir::encode_scene;
 
     fn retained_document(objects: Vec<RetainedAuthoringTextObject>) -> RetainedAuthoringDocument {
@@ -229,6 +299,15 @@ mod tests {
             -1.0,
         )
         .unwrap()
+    }
+
+    fn scale_track(object: ObjectId, from: Vec2, to: Vec2) -> RetainedTrackAuthoringSpec {
+        RetainedTrackAuthoringSpec::new(
+            object,
+            Property::Scale,
+            TrackValues::Vec2 { from, to },
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        )
     }
 
     #[test]
@@ -295,10 +374,97 @@ mod tests {
             TextSourceKind::Plain
         );
 
-        let compiled = mixed.scene().compile().unwrap();
+        let compiled = mixed.compile().unwrap();
         assert_eq!(compiled.object_index(circle), Some(0));
         assert_eq!(compiled.object_index(text_id), Some(1));
         assert_eq!(compiled.object_index(square), Some(2));
+    }
+
+    #[test]
+    fn retained_scale_track_compiles_against_native_text_without_geometry_snapshot() {
+        let legacy = SceneDefinition::new();
+        let text_id = ObjectId::new(1_u64 << 52);
+        let retained = retained_document(vec![RetainedAuthoringTextObject {
+            object: text_id,
+            order: 0,
+            text: native_spec("Shrink", 48.0),
+        }]);
+        let mixed = MixedRetainedAuthoringScene::from_parts_with_tracks(
+            &legacy,
+            retained,
+            vec![scale_track(text_id, Vec2::ONE, Vec2::ZERO)],
+        )
+        .unwrap();
+
+        assert_eq!(mixed.tracks().len(), 1);
+        assert_eq!(mixed.tracks()[0].id, TrackId::new(0));
+        assert_eq!(mixed.tracks()[0].property, Property::Scale);
+        assert_eq!(
+            mixed.tracks()[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(
+                    noon::NATIVE_POINT_TO_SCENE_SCALE,
+                    noon::NATIVE_POINT_TO_SCENE_SCALE,
+                ),
+                to: Vec2::ZERO,
+            }
+        );
+        let source_handle = mixed.scene().objects()[0].content.text().unwrap();
+        let compiled = mixed.compile().unwrap();
+        assert_eq!(compiled.objects()[0].text(), Some(source_handle));
+        assert!(compiled.objects()[0].dynamic.scale);
+        assert!(compiled.objects()[0].geometry().is_none());
+    }
+
+    #[test]
+    fn typst_scale_track_uses_font_size_owned_intrinsic_scale() {
+        let legacy = SceneDefinition::new();
+        let text_id = ObjectId::new(1_u64 << 52);
+        let retained = retained_document(vec![RetainedAuthoringTextObject {
+            object: text_id,
+            order: 0,
+            text: typst_spec("Noon", false, 72.0),
+        }]);
+        let mixed = MixedRetainedAuthoringScene::from_parts_with_tracks(
+            &legacy,
+            retained,
+            vec![scale_track(text_id, Vec2::ONE, Vec2::ZERO)],
+        )
+        .unwrap();
+        let expected = 72.0 * noon::SCALE_FACTOR_PER_FONT_POINT;
+        assert_eq!(
+            mixed.tracks()[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(expected, expected),
+                to: Vec2::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn retained_track_unknown_object_fails_transactionally_during_merge() {
+        let legacy = SceneDefinition::new();
+        let text_id = ObjectId::new(1_u64 << 52);
+        let retained = retained_document(vec![RetainedAuthoringTextObject {
+            object: text_id,
+            order: 0,
+            text: native_spec("Known", 48.0),
+        }]);
+        let error = MixedRetainedAuthoringScene::from_parts_with_tracks(
+            &legacy,
+            retained,
+            vec![scale_track(
+                ObjectId::new(text_id.get() + 1),
+                Vec2::ONE,
+                Vec2::ZERO,
+            )],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            MixedRetainedAuthoringError::Compile(RetainedCompileError::UnknownObject(object))
+                if object == ObjectId::new(text_id.get() + 1)
+        ));
     }
 
     #[test]

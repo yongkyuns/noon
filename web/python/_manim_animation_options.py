@@ -130,6 +130,16 @@ def _scale_in_place_builder(
     if not math.isfinite(factor):
         raise ValueError("scale factor must be finite")
 
+    # Retained Text/Typst uses a source-level sidecar rather than legacy geometry.
+    # Install its scheduler lazily at the first retained scale helper so ordinary
+    # geometry-only authoring and worker startup remain untouched.
+    import _manim_typst as _typst
+
+    if isinstance(mobject, _typst._RetainedTextMobject):
+        import _manim_retained_animate as _retained_animate
+
+        _retained_animate.install()
+
     # Import lazily to avoid a cycle: this adapter is imported by _manim_animate.
     # Calls happen only after the animation module has finished installing its aligned
     # builder. Subclassing that builder keeps implicit binding, rollback, shared option

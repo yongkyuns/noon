@@ -29,9 +29,18 @@ const actualHash = createHash("sha256")
   .update(JSON.stringify(bundlePayload))
   .digest("hex");
 
-assert.equal(PYTHON_COMPAT_MODULES.length, 20, "compatibility manifest must cover all bootstrap modules");
-assert.equal(new Set(PYTHON_COMPAT_MODULES.map((module) => module.sourcePath)).size, 20);
-assert.equal(new Set(PYTHON_COMPAT_MODULES.map((module) => module.runtimePath)).size, 20);
+const moduleCount = PYTHON_COMPAT_MODULES.length;
+assert.ok(moduleCount >= 21, "compatibility manifest must not regress the bootstrap surface");
+assert.equal(new Set(PYTHON_COMPAT_MODULES.map((module) => module.sourcePath)).size, moduleCount);
+assert.equal(new Set(PYTHON_COMPAT_MODULES.map((module) => module.runtimePath)).size, moduleCount);
+assert.ok(
+  PYTHON_COMPAT_MODULES.some(
+    (module) =>
+      module.sourcePath === "python/_manim_retained_animate.py" &&
+      module.runtimePath === "/tmp/_manim_retained_animate.py",
+  ),
+  "retained Text animation scheduling must ship in the compatibility bundle",
+);
 assert.equal(generated.version, 1);
 assert.equal(generated.modules.length, PYTHON_COMPAT_MODULES.length);
 assert.equal(contentHash, expectedHash, "bundle envelope hash must match its immutable filename");
