@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::Rect;
 use noon_core::{Color, ObjectId, Transform2D, Vec2, WHITE};
 use serde::{Deserialize, Serialize};
 
@@ -262,6 +264,61 @@ const fn default_opacity() -> f32 {
     1.0
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn native_text_intrinsic_bounds(spec: &RetainedTextAuthoringSpec) -> Result<Rect, String> {
+    let RetainedTextBackendSpec::Native {
+        font_family,
+        line_spacing,
+    } = &spec.backend
+    else {
+        return Err("native text bounds require the native backend".to_owned());
+    };
+
+    let mut scene = noon::RetainedScene::new();
+    scene
+        .add_text(
+            noon::Text::new(spec.source.clone())
+                .with_font(font_family.clone())
+                .with_font_size(spec.font_size)
+                .with_line_spacing(*line_spacing),
+        )
+        .map_err(|error| error.to_string())?;
+    let object = scene
+        .objects()
+        .first()
+        .ok_or_else(|| "native text measurement produced no retained object".to_owned())?;
+    let handle = object
+        .content
+        .text()
+        .ok_or_else(|| "native text measurement produced no text resource".to_owned())?;
+    let resource = scene
+        .texts()
+        .get(handle)
+        .ok_or_else(|| "native text measurement lost its text resource".to_owned())?;
+    let scale = object.transform.scale;
+    Ok(Rect::new(
+        Vec2::new(
+            resource.bounds.min.x * scale.x,
+            resource.bounds.min.y * scale.y,
+        ),
+        Vec2::new(
+            resource.bounds.max.x * scale.x,
+            resource.bounds.max.y * scale.y,
+        ),
+    ))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn transformed_bounds(bounds: Rect, transform: Transform2D) -> Rect {
+    Rect::from_points([
+        transform.transform_point(bounds.min),
+        transform.transform_point(Vec2::new(bounds.min.x, bounds.max.y)),
+        transform.transform_point(Vec2::new(bounds.max.x, bounds.min.y)),
+        transform.transform_point(bounds.max),
+    ])
+    .expect("four transformed text bounds corners are never empty")
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
@@ -344,10 +401,19 @@ mod wasm {
     }
 
     /// Rust-owned source handle for native plain text. Font discovery, shaping,
-    /// exact font bytes, glyphs, and atlas state never cross into Python.
+    /// exact font bytes, glyphs, and atlas state never cross into Python. The
+    /// canonical native compiler is also used once at construction to cache only
+    /// the scene-space layout bounds required by authoring-time placement queries.
     #[wasm_bindgen(js_name = RetainedNativeTextAuthoringHandle)]
     pub struct WasmRetainedNativeTextAuthoringHandle {
         inner: RetainedTextAuthoringSpec,
+        intrinsic_bounds: Rect,
+    }
+
+    impl WasmRetainedNativeTextAuthoringHandle {
+        fn bounds(&self) -> Rect {
+            transformed_bounds(self.intrinsic_bounds, self.inner.transform)
+        }
     }
 
     #[wasm_bindgen(js_class = RetainedNativeTextAuthoringHandle)]
@@ -359,14 +425,13 @@ mod wasm {
             font_size: f32,
             line_spacing: f32,
         ) -> Result<Self, JsValue> {
+            let inner =
+                RetainedTextAuthoringSpec::native(source, font_family, font_size, line_spacing)
+                    .map_err(js_error)?;
+            let intrinsic_bounds = native_text_intrinsic_bounds(&inner).map_err(js_error)?;
             Ok(Self {
-                inner: RetainedTextAuthoringSpec::native(
-                    source,
-                    font_family,
-                    font_size,
-                    line_spacing,
-                )
-                .map_err(js_error)?,
+                inner,
+                intrinsic_bounds,
             })
         }
 
@@ -394,6 +459,42 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = fontSize)]
         pub fn font_size(&self) -> f32 {
             self.inner.font_size
+        }
+
+        #[wasm_bindgen(getter, js_name = centerX)]
+        pub fn center_x(&self) -> f64 {
+            f64::from(self.bounds().center().x)
+        }
+
+        #[wasm_bindgen(getter, js_name = centerY)]
+        pub fn center_y(&self) -> f64 {
+            f64::from(self.bounds().center().y)
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn width(&self) -> f64 {
+            f64::from(self.bounds().width())
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn height(&self) -> f64 {
+            f64::from(self.bounds().height())
+        }
+
+        #[wasm_bindgen(js_name = criticalX)]
+        pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> f64 {
+            let point = self
+                .bounds()
+                .critical_point(Vec2::new(direction_x as f32, direction_y as f32));
+            f64::from(point.x)
+        }
+
+        #[wasm_bindgen(js_name = criticalY)]
+        pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> f64 {
+            let point = self
+                .bounds()
+                .critical_point(Vec2::new(direction_x as f32, direction_y as f32));
+            f64::from(point.y)
         }
 
         #[wasm_bindgen(js_name = shift)]
@@ -474,6 +575,39 @@ mod tests {
             let round_trip: RetainedTextAuthoringSpec = serde_json::from_str(&json).unwrap();
             assert_eq!(round_trip, spec);
         }
+    }
+
+    #[test]
+    fn native_layout_bounds_reuse_canonical_text_authoring() {
+        let spec = RetainedTextAuthoringSpec::native(
+            "Native Noon",
+            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+            48.0,
+            -1.0,
+        )
+        .unwrap();
+        let bounds = native_text_intrinsic_bounds(&spec).unwrap();
+        assert!(bounds.width() > 0.0);
+        assert!(bounds.height() > 0.0);
+        assert!(bounds.center().x.abs() < 1.0e-5);
+        assert!(bounds.center().y.abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn retained_layout_transform_produces_world_space_aabb() {
+        let bounds = Rect::new(Vec2::new(-1.0, -0.5), Vec2::new(1.0, 0.5));
+        let transformed = transformed_bounds(
+            bounds,
+            Transform2D {
+                translation: Vec2::new(3.0, -2.0),
+                scale: Vec2::new(2.0, 1.0),
+                rotation: std::f32::consts::FRAC_PI_2,
+            },
+        );
+        assert!((transformed.center().x - 3.0).abs() < 1.0e-6);
+        assert!((transformed.center().y + 2.0).abs() < 1.0e-6);
+        assert!((transformed.width() - 1.0).abs() < 1.0e-5);
+        assert!((transformed.height() - 4.0).abs() < 1.0e-5);
     }
 
     #[test]
