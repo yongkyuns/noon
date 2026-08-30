@@ -18,14 +18,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_create_circle.py",
       "category": "quickstart",
-      "features": [
-        "Scene",
-        "Circle",
-        "Create",
-        "style",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["Scene", "Circle", "Create", "style", "pixel-parity", "time-parity"],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/create_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -43,15 +36,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_square_to_circle.py",
       "category": "quickstart",
-      "features": [
-        "Square",
-        "Circle",
-        "Create",
-        "Transform",
-        "FadeOut",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["Square", "Circle", "Create", "Transform", "FadeOut", "pixel-parity", "time-parity"],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/square_to_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -69,14 +54,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_square_and_circle.py",
       "category": "quickstart",
-      "features": [
-        "Circle",
-        "Square",
-        "next_to",
-        "Create",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["Circle", "Square", "next_to", "Create", "pixel-parity", "time-parity"],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/square_and_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -94,14 +72,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_animated_square_to_circle.py",
       "category": "quickstart",
-      "features": [
-        "Create",
-        "animate",
-        "Transform",
-        "style",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["Create", "animate", "Transform", "style", "pixel-parity", "time-parity"],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/animated_square_to_circle.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -119,13 +90,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_different_rotations.py",
       "category": "quickstart",
-      "features": [
-        "animate",
-        "Rotate",
-        "wait",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["animate", "Rotate", "wait", "pixel-parity", "time-parity"],
       "upstream": "tutorials/quickstart.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/different_rotations.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -143,11 +108,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_dot.py",
       "category": "geometry",
-      "features": [
-        "Dot",
-        "Scene.add",
-        "geometry"
-      ],
+      "features": ["Dot", "Scene.add", "geometry"],
       "upstream": "reference/manim.mobject.geometry.arc.Dot.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/dot_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -165,12 +126,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_ellipse.py",
       "category": "geometry",
-      "features": [
-        "Ellipse",
-        "Group",
-        "arrange",
-        "Scene.add"
-      ],
+      "features": ["Ellipse", "Group", "arrange", "Scene.add"],
       "upstream": "reference/manim.mobject.geometry.arc.Ellipse.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/ellipse_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -188,11 +144,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_show_uncreate.py",
       "category": "creation",
-      "features": [
-        "Uncreate",
-        "Square",
-        "lifecycle"
-      ],
+      "features": ["Uncreate", "Square", "lifecycle"],
       "upstream": "reference/manim.animation.creation.Uncreate.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_uncreate.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -210,14 +162,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_draw_border_then_fill_styled_square.py",
       "category": "creation",
-      "features": [
-        "DrawBorderThenFill",
-        "Square",
-        "style",
-        "reveal",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["DrawBorderThenFill", "Square", "style", "reveal", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.animation.creation.DrawBorderThenFill.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_draw_border_then_fill.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -235,13 +180,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_show_increasing_subsets.py",
       "category": "creation",
-      "features": [
-        "ShowIncreasingSubsets",
-        "VGroup",
-        "Dot",
-        "Square",
-        "Triangle"
-      ],
+      "features": ["ShowIncreasingSubsets", "VGroup", "Dot", "Square", "Triangle"],
       "upstream": "reference/manim.animation.creation.ShowIncreasingSubsets.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/show_increasing_subsets_scene.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -259,13 +198,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_add_with_run_time.py",
       "category": "composition",
-      "features": [
-        "Add",
-        "Succession",
-        "VGroup",
-        "arrange_in_grid",
-        "smooth"
-      ],
+      "features": ["Add", "Succession", "VGroup", "arrange_in_grid", "smooth"],
       "upstream": "reference/manim.animation.animation.Add.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/add_with_run_time_scene.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -283,12 +216,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_succession.py",
       "category": "composition",
-      "features": [
-        "Succession",
-        "Dot",
-        "animate",
-        "move_to"
-      ],
+      "features": ["Succession", "Dot", "animate", "move_to"],
       "upstream": "reference/manim.animation.composition.Succession.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/succession_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -306,13 +234,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_point.py",
       "category": "growing",
-      "features": [
-        "GrowFromPoint",
-        "Dot",
-        "Square",
-        "VGroup",
-        "get_color"
-      ],
+      "features": ["GrowFromPoint", "Dot", "Square", "VGroup", "get_color"],
       "upstream": "reference/manim.animation.growing.GrowFromPoint.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_point_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -330,12 +252,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_center.py",
       "category": "growing",
-      "features": [
-        "GrowFromCenter",
-        "Square",
-        "VGroup",
-        "point_color"
-      ],
+      "features": ["GrowFromCenter", "Square", "VGroup", "point_color"],
       "upstream": "reference/manim.animation.growing.GrowFromCenter.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_center_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -353,12 +270,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_grow_from_edge.py",
       "category": "growing",
-      "features": [
-        "GrowFromEdge",
-        "Square",
-        "VGroup",
-        "point_color"
-      ],
+      "features": ["GrowFromEdge", "Square", "VGroup", "point_color"],
       "upstream": "reference/manim.animation.growing.GrowFromEdge.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/grow_from_edge_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -376,12 +288,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_spin_in_from_nothing.py",
       "category": "growing",
-      "features": [
-        "SpinInFromNothing",
-        "Square",
-        "VGroup",
-        "point_color"
-      ],
+      "features": ["SpinInFromNothing", "Square", "VGroup", "point_color"],
       "upstream": "reference/manim.animation.growing.SpinInFromNothing.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/spin_in_from_nothing_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -399,14 +306,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_rotating_demo.py",
       "category": "rotation",
-      "features": [
-        "Rotating",
-        "Arrow",
-        "VGroup",
-        "about_point",
-        "about_edge",
-        "axis"
-      ],
+      "features": ["Rotating", "Arrow", "VGroup", "about_point", "about_edge", "axis"],
       "upstream": "reference/manim.animation.rotation.Rotating.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/rotating_demo.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -424,12 +324,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_using_focus_on.py",
       "category": "indication",
-      "features": [
-        "FocusOn",
-        "Tex",
-        "Dot",
-        "PURE_YELLOW"
-      ],
+      "features": ["FocusOn", "Tex", "Dot", "PURE_YELLOW"],
       "upstream": "reference/manim.animation.indication.FocusOn.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/using_focus_on.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -447,12 +342,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_using_indicate.py",
       "category": "indication",
-      "features": [
-        "Indicate",
-        "Tex",
-        "scale",
-        "wait"
-      ],
+      "features": ["Indicate", "Tex", "scale", "wait"],
       "upstream": "reference/manim.animation.indication.Indicate.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/using_indicate.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -470,14 +360,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_lagged_start_map.py",
       "category": "composition",
-      "features": [
-        "LaggedStartMap",
-        "ApplyMethod",
-        "Tex",
-        "Dot",
-        "arrange_in_grid",
-        "there_and_back"
-      ],
+      "features": ["LaggedStartMap", "ApplyMethod", "Tex", "Dot", "arrange_in_grid", "there_and_back"],
       "upstream": "reference/manim.animation.composition.LaggedStartMap.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/lagged_start_map_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -495,17 +378,7 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_moving_dots.py",
       "category": "animations",
-      "features": [
-        "Dot",
-        "VGroup",
-        "arrange",
-        "Line",
-        "ValueTracker",
-        "add_updater",
-        "match_points",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["Dot", "VGroup", "arrange", "Line", "ValueTracker", "add_updater", "match_points", "pixel-parity", "time-parity"],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_dots.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -524,14 +397,7 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_rotation_updater.py",
       "category": "animations",
-      "features": [
-        "Line",
-        "add_updater",
-        "remove_updater",
-        "rotate_about_origin",
-        "wait",
-        "host-callback-lifecycle"
-      ],
+      "features": ["Line", "add_updater", "remove_updater", "rotate_about_origin", "wait", "host-callback-lifecycle"],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/rotation_updater.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -549,14 +415,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_move_to_target.py",
       "category": "transform",
-      "features": [
-        "MoveToTarget",
-        "generate_target",
-        "Circle",
-        "Transform",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["MoveToTarget", "generate_target", "Circle", "Transform", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.animation.transform.MoveToTarget.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/move_to_target_example.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -575,15 +434,7 @@
       "status": "ready",
       "path": "python/examples/manim_gallery_moving_around.py",
       "category": "animations",
-      "features": [
-        "Square",
-        "animate",
-        "shift",
-        "set_fill",
-        "scale",
-        "rotate",
-        "tri-language-parity"
-      ],
+      "features": ["Square", "animate", "shift", "set_fill", "scale", "rotate", "tri-language-parity"],
       "upstream": "examples.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_around.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -602,16 +453,7 @@
       "status": "ready",
       "path": "python/examples/manim_example_moving_camera_center.py",
       "category": "tutorial/scene-camera",
-      "features": [
-        "MovingCameraScene",
-        "camera.frame",
-        "animate",
-        "move_to",
-        "Square",
-        "Triangle",
-        "pixel-parity",
-        "time-parity"
-      ],
+      "features": ["MovingCameraScene", "camera.frame", "animate", "move_to", "Square", "Triangle", "pixel-parity", "time-parity"],
       "upstream": "reference/manim.scene.moving_camera_scene.MovingCameraScene.html",
       "upstream_source": "parity/manim-v0.21/upstream-examples/moving_camera_center.py",
       "reuse": "source-equivalent-manim-v0.21",
@@ -624,18 +466,30 @@
       "order": 230
     },
     {
+      "id": "manim-example1-text",
+      "title": "Example1Text",
+      "summary": "ManimCE v0.21 Text reference example, unchanged except for the import module, rendered through Noon's retained native Text resources.",
+      "status": "ready",
+      "path": "python/examples/manim_example_text.py",
+      "category": "text",
+      "features": ["Text", "scale", "Scene.add", "retained-text"],
+      "upstream": "reference/manim.mobject.text.text_mobject.Text.html",
+      "upstream_source": "parity/manim-v0.21/upstream-examples/example1_text.py",
+      "reuse": "source-equivalent-manim-v0.21",
+      "parity_status": "candidate",
+      "expected_duration": 0,
+      "thumbnail": "thumbnails/manim/example1-text.svg",
+      "thumbnail_alt": "White Hello world text centered on the Manim scene background",
+      "thumbnail_time": 0,
+      "order": 240
+    },
+    {
       "id": "gallery-basic-manim-ce-logo",
       "title": "ManimCELogo",
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until MathTex, Triangle, retained VGroup layout, and exact camera/background parity are complete.",
       "status": "blocked",
       "category": "gallery/basic-concepts",
-      "features": [
-        "MathTex",
-        "Triangle",
-        "VGroup",
-        "arrange",
-        "camera-background"
-      ],
+      "features": ["MathTex", "Triangle", "VGroup", "arrange", "camera-background"],
       "upstream": "examples.html#basic-concepts",
       "dependency": "#83/#76/#74/#177/#180"
     },
@@ -645,13 +499,7 @@
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until Brace/get_text/get_tex layout and text/math support are complete.",
       "status": "blocked",
       "category": "gallery/basic-concepts",
-      "features": [
-        "Brace",
-        "get_text",
-        "get_tex",
-        "Line",
-        "Dot"
-      ],
+      "features": ["Brace", "get_text", "get_tex", "Line", "Dot"],
       "upstream": "examples.html#basic-concepts",
       "dependency": "#84/#83"
     },
@@ -661,12 +509,7 @@
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until Arrow, NumberPlane, native Text, and endpoint/layout parity are complete.",
       "status": "blocked",
       "category": "gallery/basic-concepts",
-      "features": [
-        "Arrow",
-        "NumberPlane",
-        "Text",
-        "layout"
-      ],
+      "features": ["Arrow", "NumberPlane", "Text", "layout"],
       "upstream": "examples.html#basic-concepts",
       "dependency": "#77/#85/#83"
     },
@@ -676,12 +519,7 @@
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until array-backed ImageMobject and SurroundingRectangle parity are complete.",
       "status": "blocked",
       "category": "gallery/basic-concepts",
-      "features": [
-        "ImageMobject",
-        "SurroundingRectangle",
-        "array-image",
-        "filtering"
-      ],
+      "features": ["ImageMobject", "SurroundingRectangle", "array-image", "filtering"],
       "upstream": "examples.html#basic-concepts",
       "dependency": "#79/#76"
     },
@@ -691,14 +529,7 @@
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until boolean geometry, text/markup, and retained group/layout parity are complete.",
       "status": "blocked",
       "category": "gallery/basic-concepts",
-      "features": [
-        "Intersection",
-        "Union",
-        "Exclusion",
-        "Difference",
-        "MarkupText",
-        "VGroup"
-      ],
+      "features": ["Intersection", "Union", "Exclusion", "Difference", "MarkupText", "VGroup"],
       "upstream": "examples.html#basic-concepts",
       "dependency": "#78/#83/#74"
     },
@@ -707,13 +538,7 @@
       "title": "Full text and mathematical notation parity",
       "status": "blocked",
       "category": "tutorial/text-math",
-      "features": [
-        "Text",
-        "Tex",
-        "MathTex",
-        "Write",
-        "glyph-raster-parity"
-      ],
+      "features": ["Text", "Tex", "MathTex", "Write", "glyph-raster-parity"],
       "dependency": "#65/#83/#80"
     },
     {
@@ -721,11 +546,7 @@
       "title": "Axes and function plotting",
       "status": "blocked",
       "category": "tutorial/plotting",
-      "features": [
-        "Axes",
-        "plot",
-        "NumberPlane"
-      ],
+      "features": ["Axes", "plot", "NumberPlane"],
       "dependency": "#85/#83"
     },
     {
@@ -733,11 +554,7 @@
       "title": "Graph and DiGraph",
       "status": "blocked",
       "category": "tutorial/graphs",
-      "features": [
-        "Graph",
-        "DiGraph",
-        "layouts"
-      ],
+      "features": ["Graph", "DiGraph", "layouts"],
       "dependency": "#87/#77/#83"
     },
     {
@@ -745,11 +562,7 @@
       "title": "Zoomed camera inset support",
       "status": "blocked",
       "category": "tutorial/scene-camera",
-      "features": [
-        "ZoomedScene",
-        "zoomed_camera",
-        "zoomed_display"
-      ],
+      "features": ["ZoomedScene", "zoomed_camera", "zoomed_display"],
       "dependency": "#89"
     },
     {
@@ -757,12 +570,7 @@
       "title": "3D scenes and full non-z-axis rotation parity",
       "status": "deferred",
       "category": "tutorial/3d",
-      "features": [
-        "ThreeDScene",
-        "ThreeDAxes",
-        "Surface",
-        "3D intermediate-frame projection"
-      ],
+      "features": ["ThreeDScene", "ThreeDAxes", "Surface", "3D intermediate-frame projection"],
       "dependency": "#90"
     }
   ]
