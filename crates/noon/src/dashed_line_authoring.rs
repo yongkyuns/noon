@@ -91,16 +91,19 @@ impl DashedLine {
             return Err(DashedLineAuthoringError::InvalidDashedRatio(dashed_ratio));
         }
 
-        let delta = end - start;
-        let length = delta.length();
+        // Manim stores VMobject points in float64. Keep length and dash-proportion
+        // arithmetic at the same precision, then quantize only the retained Vec2.
+        // Computing end - start in f64 also avoids overflow for finite f32 endpoints.
+        let delta_x = f64::from(end.x) - f64::from(start.x);
+        let delta_y = f64::from(end.y) - f64::from(start.y);
+        let length = delta_x.hypot(delta_y);
         if !length.is_finite() {
             return Err(DashedLineAuthoringError::NonFiniteLineLength);
         }
 
         // ManimCE v0.21: max(2, ceil(length / dash_length * dashed_ratio)).
-        // Use f64 for the count calculation so valid f32 geometry does not lose
-        // an integer boundary solely because the intermediate quotient is large.
-        let requested = (f64::from(length) / f64::from(dash_length) * f64::from(dashed_ratio))
+        let ratio = f64::from(dashed_ratio);
+        let requested = (length / f64::from(dash_length) * ratio)
             .ceil()
             .max(2.0);
         if !requested.is_finite() || requested > usize::MAX as f64 {
@@ -110,17 +113,17 @@ impl DashedLine {
 
         // DashedVMobject's default equal-length path is exact for a straight line.
         // Open curves start and end with a dash, so n dashes have n-1 equal gaps.
-        let dash_fraction = dashed_ratio / num_dashes as f32;
-        let gap_fraction = (1.0 - dashed_ratio) / (num_dashes - 1) as f32;
+        let dash_fraction = ratio / num_dashes as f64;
+        let gap_fraction = (1.0 - ratio) / (num_dashes - 1) as f64;
         let period = dash_fraction + gap_fraction;
 
         let mut path = VectorPath::new();
         for index in 0..num_dashes {
-            let start_fraction = index as f32 * period;
+            let start_fraction = index as f64 * period;
             let end_fraction = (start_fraction + dash_fraction).min(1.0);
             path = path
-                .move_to(start + delta * start_fraction)
-                .line_to(start + delta * end_fraction);
+                .move_to(interpolate(start, end, start_fraction))
+                .line_to(interpolate(start, end, end_fraction));
         }
 
         Ok(Self {
@@ -195,6 +198,12 @@ impl IntoSnapshot for DashedLine {
 
 fn point_is_finite(point: Vec2) -> bool {
     point.x.is_finite() && point.y.is_finite()
+}
+
+fn interpolate(start: Vec2, end: Vec2, alpha: f64) -> Vec2 {
+    let x = f64::from(start.x) + (f64::from(end.x) - f64::from(start.x)) * alpha;
+    let y = f64::from(start.y) + (f64::from(end.y) - f64::from(start.y)) * alpha;
+    Vec2::new(x as f32, y as f32)
 }
 
 #[cfg(test)]
@@ -355,8 +364,13 @@ mod tests {
             Err(DashedLineAuthoringError::InvalidDashedRatio(value)) if value.is_nan()
         ));
         assert!(matches!(
-            DashedLine::new(Vec2::new(-f32::MAX, 0.0), Vec2::new(f32::MAX, 0.0)),
-            Err(DashedLineAuthoringError::NonFiniteLineLength)
+            DashedLine::with_options(
+                Vec2::new(-f32::MAX, 0.0),
+                Vec2::new(f32::MAX, 0.0),
+                f32::MIN_POSITIVE,
+                1.0,
+            ),
+            Err(DashedLineAuthoringError::DashCountOverflow(_))
         ));
     }
 }
