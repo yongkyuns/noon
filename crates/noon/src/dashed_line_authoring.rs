@@ -10,16 +10,16 @@
 use crate::legacy::{IntoSnapshot, Path};
 use noon_core::{Color, ObjectSnapshot, Vec2, VectorPath};
 
-pub const DEFAULT_DASH_LENGTH: f32 = 0.05;
-pub const DEFAULT_DASHED_RATIO: f32 = 0.5;
+pub const DEFAULT_DASH_LENGTH: f64 = 0.05;
+pub const DEFAULT_DASHED_RATIO: f64 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DashedLineAuthoringError {
     NonFiniteStart(Vec2),
     NonFiniteEnd(Vec2),
     NonFiniteLineLength,
-    InvalidDashLength(f32),
-    InvalidDashedRatio(f32),
+    InvalidDashLength(f64),
+    InvalidDashedRatio(f64),
     DashCountOverflow(f64),
 }
 
@@ -72,11 +72,15 @@ impl DashedLine {
     /// This intentionally does not synthesize `Line`'s `buff`, `path_arc`, or
     /// mobject-boundary semantics. Those belong to the shared Line facade and can
     /// be composed here once that constructor surface is canonicalized.
+    ///
+    /// Dash scalars stay `f64` because Manim/Python evaluates the dash-count
+    /// `ceil()` at double precision. Retained coordinates are quantized to `Vec2`
+    /// only after that semantic decision has been made.
     pub fn with_options(
         start: Vec2,
         end: Vec2,
-        dash_length: f32,
-        dashed_ratio: f32,
+        dash_length: f64,
+        dashed_ratio: f64,
     ) -> Result<Self, DashedLineAuthoringError> {
         if !point_is_finite(start) {
             return Err(DashedLineAuthoringError::NonFiniteStart(start));
@@ -102,10 +106,7 @@ impl DashedLine {
         }
 
         // ManimCE v0.21: max(2, ceil(length / dash_length * dashed_ratio)).
-        let ratio = f64::from(dashed_ratio);
-        let requested = (length / f64::from(dash_length) * ratio)
-            .ceil()
-            .max(2.0);
+        let requested = (length / dash_length * dashed_ratio).ceil().max(2.0);
         // Keep acceptance identical on 64-bit native and wasm32. Every u32 value
         // is also exactly representable as f64, so subsequent proportion math does
         // not introduce a target-dependent integer conversion boundary.
@@ -116,8 +117,8 @@ impl DashedLine {
 
         // DashedVMobject's default equal-length path is exact for a straight line.
         // Open curves start and end with a dash, so n dashes have n-1 equal gaps.
-        let dash_fraction = ratio / num_dashes as f64;
-        let gap_fraction = (1.0 - ratio) / (num_dashes - 1) as f64;
+        let dash_fraction = dashed_ratio / num_dashes as f64;
+        let gap_fraction = (1.0 - dashed_ratio) / (num_dashes - 1) as f64;
         let period = dash_fraction + gap_fraction;
 
         let mut path = VectorPath::new();
@@ -299,20 +300,16 @@ mod tests {
 
     #[test]
     fn diagonal_dashes_interpolate_along_the_original_line() {
-        let line = DashedLine::with_options(
-            Vec2::new(1.0, 2.0),
-            Vec2::new(5.0, 6.0),
-            2.0_f32.sqrt(),
-            0.5,
-        )
-        .unwrap();
+        let line =
+            DashedLine::with_options(Vec2::new(1.0, 2.0), Vec2::new(4.0, 6.0), 1.25, 0.5)
+                .unwrap();
         let commands = commands(&line);
 
         assert_eq!(line.num_dashes(), 2);
         assert_point_close(command_point(&commands[0]), Vec2::new(1.0, 2.0));
-        assert_point_close(command_point(&commands[1]), Vec2::new(2.0, 3.0));
-        assert_point_close(command_point(&commands[2]), Vec2::new(4.0, 5.0));
-        assert_point_close(command_point(&commands[3]), Vec2::new(5.0, 6.0));
+        assert_point_close(command_point(&commands[1]), Vec2::new(1.75, 3.0));
+        assert_point_close(command_point(&commands[2]), Vec2::new(3.25, 5.0));
+        assert_point_close(command_point(&commands[3]), Vec2::new(4.0, 6.0));
     }
 
     #[test]
@@ -355,7 +352,7 @@ mod tests {
             Err(DashedLineAuthoringError::InvalidDashLength(0.0))
         ));
         assert!(matches!(
-            DashedLine::with_options(Vec2::ZERO, Vec2::ONE, f32::NAN, 0.5),
+            DashedLine::with_options(Vec2::ZERO, Vec2::ONE, f64::NAN, 0.5),
             Err(DashedLineAuthoringError::InvalidDashLength(value)) if value.is_nan()
         ));
         assert!(matches!(
@@ -363,14 +360,14 @@ mod tests {
             Err(DashedLineAuthoringError::InvalidDashedRatio(value)) if value == 1.1
         ));
         assert!(matches!(
-            DashedLine::with_options(Vec2::ZERO, Vec2::ONE, 0.05, f32::NAN),
+            DashedLine::with_options(Vec2::ZERO, Vec2::ONE, 0.05, f64::NAN),
             Err(DashedLineAuthoringError::InvalidDashedRatio(value)) if value.is_nan()
         ));
         assert!(matches!(
             DashedLine::with_options(
                 Vec2::new(-f32::MAX, 0.0),
                 Vec2::new(f32::MAX, 0.0),
-                f32::MIN_POSITIVE,
+                f64::MIN_POSITIVE,
                 1.0,
             ),
             Err(DashedLineAuthoringError::DashCountOverflow(_))
