@@ -4,33 +4,50 @@ import { readFile } from "node:fs/promises";
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
-const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady()");
+const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({");
 const executionReadyStart = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
   runtimeReadyStart >= 0 && executionReadyStart > runtimeReadyStart,
   "on-demand runtime startup boundary must exist",
 );
 const runtimeReadyBody = main.slice(runtimeReadyStart, executionReadyStart);
-assert.match(
+assert.doesNotMatch(
   runtimeReadyBody,
-  /warmAuthoringClient\(\);/,
-  "first runtime request must begin Python warmup",
+  /warmAuthoringClient\(/,
+  "execution startup must not bootstrap Python after the authored scene is already available",
 );
 assert.match(
   runtimeReadyBody,
   /new AuthoringExecutionClient\(canvas,/,
-  "first runtime request must create the GPU execution owner",
+  "first authored scene must create the GPU execution owner on demand",
 );
 assert.match(
   runtimeReadyBody,
-  /await nextPlayer\.start\(/,
-  "on-demand startup must await execution readiness before publishing controls",
+  /await nextPlayer\.startRetained\(sceneJson, retainedDocumentJson,/,
+  "retained first runs must start directly in retained mode",
+);
+assert.match(
+  runtimeReadyBody,
+  /await nextPlayer\.start\(sceneJson,/,
+  "geometry-only first runs must start their authored scene directly",
+);
+assert.doesNotMatch(
+  runtimeReadyBody,
+  /\{\\"version\\":1,\\"objects\\":\[\],\\"tracks\\":\[\]\}/,
+  "cold startup must not boot a throwaway empty legacy scene",
 );
 const inFlightGuard = runtimeReadyBody.indexOf("if (runtimeStartPromise !== null)");
 const livePlayerGuard = runtimeReadyBody.indexOf("if (player !== null)");
 assert.ok(
   inFlightGuard >= 0 && livePlayerGuard > inFlightGuard,
   "concurrent startup callers must await the in-flight startup before observing the published player",
+);
+const playerPublish = runtimeReadyBody.indexOf("player = nextPlayer;");
+const retainedStart = runtimeReadyBody.indexOf("await nextPlayer.startRetained");
+const legacyStart = runtimeReadyBody.indexOf("await nextPlayer.start(sceneJson");
+assert.ok(
+  playerPublish > retainedStart && playerPublish > legacyStart,
+  "the execution owner must publish only after the selected engine mode is ready",
 );
 assert.match(
   runtimeReadyBody,
@@ -47,12 +64,23 @@ const runSceneStart = main.indexOf("async function runScene()");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
-const ensureRuntimeCall = runSceneBody.indexOf("await ensureRuntimeReady();");
+const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
+const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
-assert.ok(ensureRuntimeCall >= 0, "Run must start the deferred runtime");
+const reconcileCall = runSceneBody.indexOf("result = await player.reconcileScene(sceneJson,");
+assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
-  ensureExecutionCall > ensureRuntimeCall,
-  "runtime startup must complete before execution recovery/reconciliation",
+  ensureRuntimeCall > authoringCall,
+  "cold execution startup must wait until authoring identifies the required engine mode",
+);
+assert.ok(
+  ensureExecutionCall > authoringCall && reconcileCall > ensureExecutionCall,
+  "warm runs must preserve recovery before incremental reconciliation",
+);
+assert.match(
+  runSceneBody,
+  /const startRetained = \(authored\.retainedDocument\?\.objects\?\.length \?\? 0\) > 0;/,
+  "first-run engine selection must derive from the authored retained sidecar",
 );
 
 const bootStart = main.indexOf("try {\n  const requested = requestedExampleId();");
@@ -62,7 +90,7 @@ assert.ok(bootCatch > bootStart, "playground boot boundary must terminate cleanl
 const bootBody = main.slice(bootStart, bootCatch);
 assert.doesNotMatch(
   bootBody,
-  /warmAuthoringClient\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
+  /ensureAuthoringClient\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
   "initial page boot must not create Python or GPU runtime resources",
 );
 assert.doesNotMatch(
@@ -173,5 +201,5 @@ assert.match(
 );
 
 console.log(
-  "✓ playground defers heavyweight startup, bounds gallery residency, and preserves parallel Python bootstrap",
+  "✓ playground defers heavyweight startup, starts the authored engine mode directly, bounds gallery residency, and preserves parallel Python bootstrap",
 );

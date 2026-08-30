@@ -95,6 +95,24 @@ export class ExecutionWorkerClient {
     });
   }
 
+  async startRetained(
+    sceneJson,
+    retainedDocumentJson,
+    {
+      loopDurationSeconds = 4,
+      transportMode = selectExecutionTransportMode(),
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+    } = {},
+  ) {
+    validateSceneJson(sceneJson);
+    validateRetainedDocumentJson(retainedDocumentJson);
+    return this.#startMode(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
+      loopDurationSeconds,
+      transportMode,
+      sharedSlotCapacity,
+    });
+  }
+
   async #startMode(
     mode,
     sceneJson,

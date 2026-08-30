@@ -66,7 +66,7 @@ assert.match(
   "retained to legacy authoring must switch the persistent execution owner in place",
 );
 
-const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady()");
+const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady(");
 const runtimeReadyEnd = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
   runtimeReadyStart >= 0 && runtimeReadyEnd > runtimeReadyStart,

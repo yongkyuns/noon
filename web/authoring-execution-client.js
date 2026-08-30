@@ -89,7 +89,48 @@ export class AuthoringExecutionClient {
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
     }
-    const ready = await this.#startLegacy(sceneJson, options);
+    const ready = await this.#startMode(
+      AUTHORING_EXECUTION_LEGACY,
+      sceneJson,
+      null,
+      options,
+    );
+    this.#transportMode = ready.transportMode;
+    return ready;
+  }
+
+  async startRetained(
+    sceneJson,
+    retainedDocumentJson,
+    {
+      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
+      transportMode = undefined,
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+    } = {},
+  ) {
+    if (this.#player !== null || this.#transition !== null) {
+      throw new Error("AuthoringExecutionClient is already started");
+    }
+    validateSceneJson(sceneJson);
+    const retainedDocument = validateRetainedDocumentJson(retainedDocumentJson);
+    if (retainedDocument.objects.length === 0) {
+      throw new TypeError("retained startup requires at least one retained object");
+    }
+    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
+    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    const options = {
+      loopDurationSeconds: this.#loopDurationSeconds,
+      sharedSlotCapacity: this.#sharedSlotCapacity,
+    };
+    if (transportMode !== undefined) {
+      options.transportMode = transportMode;
+    }
+    const ready = await this.#startMode(
+      AUTHORING_EXECUTION_RETAINED,
+      sceneJson,
+      retainedDocumentJson,
+      options,
+    );
     this.#transportMode = ready.transportMode;
     return ready;
   }
@@ -242,7 +283,7 @@ export class AuthoringExecutionClient {
     this.#transportMode = null;
   }
 
-  async #startLegacy(sceneJson, options) {
+  async #startMode(mode, sceneJson, retainedDocumentJson, options) {
     const generation = this.#lifecycleGeneration;
     const player = new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
@@ -251,11 +292,14 @@ export class AuthoringExecutionClient {
     const terminateCandidate = createIdempotentTerminator(player);
     let published = false;
     try {
-      const ready = await player.start(sceneJson, options);
+      const ready =
+        mode === AUTHORING_EXECUTION_RETAINED
+          ? await player.startRetained(sceneJson, retainedDocumentJson, options)
+          : await player.start(sceneJson, options);
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       this.#player = player;
       published = true;
-      this.#mode = AUTHORING_EXECUTION_LEGACY;
+      this.#mode = mode;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
       return ready;
