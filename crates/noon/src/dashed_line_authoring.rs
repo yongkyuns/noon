@@ -301,8 +301,7 @@ mod tests {
     #[test]
     fn diagonal_dashes_interpolate_along_the_original_line() {
         let line =
-            DashedLine::with_options(Vec2::new(1.0, 2.0), Vec2::new(4.0, 6.0), 1.25, 0.5)
-                .unwrap();
+            DashedLine::with_options(Vec2::new(1.0, 2.0), Vec2::new(4.0, 6.0), 1.25, 0.5).unwrap();
         let commands = commands(&line);
 
         assert_eq!(line.num_dashes(), 2);
