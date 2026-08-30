@@ -84,7 +84,7 @@ impl std::fmt::Display for TangentSegmentError {
             }
             Self::InvalidDelta(delta) => write!(
                 formatter,
-                "tangent sample delta must be finite and greater than zero, got {delta}"
+                "tangent sample delta must be finite and nonzero, got {delta}"
             ),
             Self::DegenerateSample => {
                 formatter.write_str("tangent sample points collapse to one world-space point")
@@ -111,8 +111,9 @@ impl From<GeometryProportionError> for TangentSegmentError {
 /// the local tangent transformed after normalization.
 ///
 /// Negative finite lengths are intentionally supported and reverse the segment,
-/// matching a negative scale factor. A zero length collapses both endpoints to the
-/// sampled chord center.
+/// matching a negative scale factor. Negative finite sample deltas are also kept:
+/// they reverse the sampled chord just as Manim does. A zero length collapses both
+/// endpoints to the sampled chord center.
 pub fn tangent_segment_from_geometry_proportion(
     geometry: &GeometryRef,
     transform: Transform2D,
@@ -124,7 +125,7 @@ pub fn tangent_segment_from_geometry_proportion(
     if !length.is_finite() {
         return Err(TangentSegmentError::NonFiniteLength(length));
     }
-    if !d_alpha.is_finite() || d_alpha <= 0.0 {
+    if !d_alpha.is_finite() || d_alpha == 0.0 {
         return Err(TangentSegmentError::InvalidDelta(d_alpha));
     }
 
@@ -310,14 +311,19 @@ mod tests {
         assert_point(negative.start, Vec2::new(1.0, 0.0));
         assert_point(negative.end, Vec2::new(-1.0, 0.0));
 
+        let negative_delta = tangent_segment_from_geometry_proportion(
+            &line,
+            Transform2D::IDENTITY,
+            0.5,
+            2.0,
+            -1.0e-3,
+        )
+        .unwrap();
+        assert_point(negative_delta.start, Vec2::new(1.0, 0.0));
+        assert_point(negative_delta.end, Vec2::new(-1.0, 0.0));
+
         assert!(matches!(
-            tangent_segment_from_geometry_proportion(
-                &line,
-                Transform2D::IDENTITY,
-                0.5,
-                1.0,
-                0.0,
-            ),
+            tangent_segment_from_geometry_proportion(&line, Transform2D::IDENTITY, 0.5, 1.0, 0.0,),
             Err(TangentSegmentError::InvalidDelta(0.0))
         ));
         assert!(matches!(
