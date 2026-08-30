@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateReferenceLedger } from "./manim-reference-ledger.mjs";
+import {
+  referenceInventoryFingerprint,
+  validateReferenceLedger,
+} from "./manim-reference-ledger.mjs";
 
 const upstream = {
   repository: "ManimCommunity/manim",
@@ -19,55 +22,64 @@ function example(sourcePath, directiveLine, name, hashByte) {
 }
 
 function fixture() {
-  const first = example("docs/source/a.rst", 10, "First", "a");
-  const second = example("manim/mobject/b.py", 20, null, "b");
+  const examples = [
+    example("docs/source/a.rst", 10, "First", "a"),
+    example("manim/mobject/b.py", 20, null, "b"),
+  ];
   return {
-    inventory: { schema_version: 1, upstream, examples: [first, second] },
-    ledger: { schema_version: 1, upstream, entries: [first, second] },
+    inventory: { schema_version: 1, upstream, examples },
+    ledger: {
+      schema_version: 1,
+      upstream,
+      example_count: examples.length,
+      provenance_sha256: referenceInventoryFingerprint(examples),
+    },
   };
 }
 
-test("accepts an exact pinned reference ledger", () => {
+test("accepts an exact pinned reference inventory lock", () => {
   const { inventory, ledger } = fixture();
   assert.deepEqual(validateReferenceLedger(inventory, ledger), {
     schema_version: 1,
     upstream,
     tracked_examples: 2,
+    provenance_sha256: ledger.provenance_sha256,
   });
 });
 
-test("rejects silently missing pinned examples", () => {
+test("rejects added or removed pinned examples", () => {
   const { inventory, ledger } = fixture();
-  ledger.entries.pop();
+  inventory.examples.pop();
   assert.throws(
     () => validateReferenceLedger(inventory, ledger),
-    /ledger is missing 1 pinned reference example/u,
+    /reference example count drift: expected 2, extracted 1/u,
   );
 });
 
-test("rejects stale source provenance at the same directive location", () => {
-  const { inventory, ledger } = fixture();
-  ledger.entries[0] = { ...ledger.entries[0], source_sha256: "c".repeat(64) };
-  assert.throws(
-    () => validateReferenceLedger(inventory, ledger),
-    /ledger provenance drift at docs\/source\/a\.rst:10/u,
-  );
+test("rejects moved, renamed, or source-changed reference examples", () => {
+  for (const mutation of [
+    (exampleValue) => ({ ...exampleValue, source_path: "docs/source/moved.rst" }),
+    (exampleValue) => ({ ...exampleValue, name: "Renamed" }),
+    (exampleValue) => ({ ...exampleValue, source_sha256: "c".repeat(64) }),
+  ]) {
+    const { inventory, ledger } = fixture();
+    inventory.examples[0] = mutation(inventory.examples[0]);
+    assert.throws(
+      () => validateReferenceLedger(inventory, ledger),
+      /reference inventory provenance drift/u,
+    );
+  }
 });
 
-test("rejects extra and duplicate ledger locations", () => {
-  const { inventory, ledger } = fixture();
-  ledger.entries.push(example("docs/source/extra.rst", 30, "Extra", "d"));
-  assert.throws(
-    () => validateReferenceLedger(inventory, ledger),
-    /ledger contains reference absent from pinned inventory/u,
-  );
-
-  const duplicate = fixture();
-  duplicate.ledger.entries.push({ ...duplicate.ledger.entries[0] });
-  assert.throws(
-    () => validateReferenceLedger(duplicate.inventory, duplicate.ledger),
-    /duplicate ledger reference location/u,
-  );
+test("fingerprint ignores directive options and extracted source payload", () => {
+  const { inventory } = fixture();
+  const baseline = referenceInventoryFingerprint(inventory.examples);
+  inventory.examples[0] = {
+    ...inventory.examples[0],
+    options: { save_last_frame: true },
+    source: "class First(Scene): pass",
+  };
+  assert.equal(referenceInventoryFingerprint(inventory.examples), baseline);
 });
 
 test("rejects upstream revision drift", () => {
