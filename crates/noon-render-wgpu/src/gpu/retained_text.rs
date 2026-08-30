@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
     mem::{size_of, size_of_val},
+    ops::Range,
     sync::Arc,
 };
 
@@ -12,7 +13,7 @@ use noon_core::{
     TextResourceArena, TextVectorItem, Transform2D, Vec2, VectorPath,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RetainedFrameState};
-use noon_text_atlas::GpuGlyphAtlas;
+use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
 use noon_text_render_wgpu::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
     RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
@@ -103,6 +104,8 @@ impl PreparedRetainedTextSnapshot<'_> {
 pub struct PreparedRetainedGpuFrame<'a> {
     geometry: PreparedFrame<'a>,
     text_generation: u64,
+    text_atlas_generation: u64,
+    text_dirty_object_indices: &'a [usize],
     pub text: PreparedRetainedTextSnapshot<'a>,
     pub render_items: &'a [RetainedRenderItem],
     pub stats: RetainedPrepareStats,
@@ -545,6 +548,7 @@ pub struct RetainedFramePreparer {
     snapshot_mask_quads: Vec<GlyphQuadInstance>,
     snapshot_color_quads: Vec<GlyphQuadInstance>,
     snapshot_text_items: Vec<PreparedTextItem>,
+    snapshot_text_dirty_object_indices: Vec<usize>,
     snapshot_text_stats: RetainedTextPrepareStats,
     snapshot_prepare_stats: RetainedPrepareStats,
     snapshot_metrics: Option<TextDeviceMetrics>,
@@ -575,6 +579,7 @@ impl Default for RetainedFramePreparer {
             snapshot_mask_quads: Vec::new(),
             snapshot_color_quads: Vec::new(),
             snapshot_text_items: Vec::new(),
+            snapshot_text_dirty_object_indices: Vec::new(),
             snapshot_text_stats: RetainedTextPrepareStats::default(),
             snapshot_prepare_stats: RetainedPrepareStats::default(),
             snapshot_metrics: None,
@@ -681,6 +686,8 @@ impl RetainedFramePreparer {
             return Ok(PreparedRetainedGpuFrame {
                 geometry,
                 text_generation: self.text_generation,
+                text_atlas_generation: self.text.atlas().generation(),
+                text_dirty_object_indices: &self.snapshot_text_dirty_object_indices,
                 text,
                 render_items: &self.render_items,
                 stats: self.snapshot_prepare_stats,
@@ -709,6 +716,9 @@ impl RetainedFramePreparer {
             self.snapshot_text_items.extend_from_slice(prepared.items);
             self.snapshot_text_stats = prepared.stats;
         }
+        self.snapshot_text_dirty_object_indices.clear();
+        self.snapshot_text_dirty_object_indices
+            .extend_from_slice(changes.object_indices());
         self.text_generation = self
             .text_generation
             .checked_add(1)
@@ -757,6 +767,8 @@ impl RetainedFramePreparer {
         Ok(PreparedRetainedGpuFrame {
             geometry,
             text_generation: self.text_generation,
+            text_atlas_generation: self.text.atlas().generation(),
+            text_dirty_object_indices: &self.snapshot_text_dirty_object_indices,
             text,
             render_items: &self.render_items,
             stats,
@@ -1333,6 +1345,9 @@ pub struct RetainedDrawStats {
 pub struct RetainedTextGpuState {
     glyphs: TextGlyphGpuRenderer,
     last_uploaded_generation: Option<u64>,
+    last_uploaded_atlas_generation: Option<u64>,
+    mask_dirty_ranges: Vec<Range<u32>>,
+    color_dirty_ranges: Vec<Range<u32>>,
 }
 
 impl RetainedTextGpuState {
@@ -1345,12 +1360,80 @@ impl RetainedTextGpuState {
         Self {
             glyphs: TextGlyphGpuRenderer::new(device, queue, target_format, text_camera(camera)),
             last_uploaded_generation: None,
+            last_uploaded_atlas_generation: None,
+            mask_dirty_ranges: Vec::new(),
+            color_dirty_ranges: Vec::new(),
         }
     }
 }
 
-fn text_upload_needed(last_uploaded_generation: Option<u64>, generation: u64) -> bool {
-    last_uploaded_generation != Some(generation)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextUploadMode {
+    None,
+    Full,
+    Ranges,
+}
+
+fn text_upload_mode(
+    last_uploaded_generation: Option<u64>,
+    last_uploaded_atlas_generation: Option<u64>,
+    generation: u64,
+    atlas_generation: u64,
+) -> TextUploadMode {
+    if last_uploaded_generation == Some(generation) {
+        return TextUploadMode::None;
+    }
+    if last_uploaded_generation.and_then(|value| value.checked_add(1)) == Some(generation)
+        && last_uploaded_atlas_generation == Some(atlas_generation)
+    {
+        TextUploadMode::Ranges
+    } else {
+        TextUploadMode::Full
+    }
+}
+
+fn collect_dirty_glyph_ranges(
+    items: &[PreparedTextItem],
+    dirty_object_indices: &[usize],
+    mask_ranges: &mut Vec<Range<u32>>,
+    color_ranges: &mut Vec<Range<u32>>,
+) {
+    mask_ranges.clear();
+    color_ranges.clear();
+    for item in items {
+        let PreparedTextItem::GlyphBatch {
+            object_index,
+            plane,
+            instance_range,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        let Ok(object_index) = usize::try_from(*object_index) else {
+            continue;
+        };
+        if dirty_object_indices.binary_search(&object_index).is_err() {
+            continue;
+        }
+        match plane {
+            GlyphAtlasPlane::Mask => push_dirty_range(mask_ranges, instance_range.clone()),
+            GlyphAtlasPlane::Color => push_dirty_range(color_ranges, instance_range.clone()),
+        }
+    }
+}
+
+fn push_dirty_range(ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
+    if range.is_empty() {
+        return;
+    }
+    if let Some(last) = ranges.last_mut() {
+        if range.start <= last.end {
+            last.end = last.end.max(range.end);
+            return;
+        }
+    }
+    ranges.push(range);
 }
 
 impl GpuRenderer {
@@ -1373,20 +1456,39 @@ impl GpuRenderer {
         text_state
             .glyphs
             .set_camera(queue, text_camera(self.camera));
-        let text = if text_upload_needed(
+        let mode = text_upload_mode(
             text_state.last_uploaded_generation,
+            text_state.last_uploaded_atlas_generation,
             prepared.text_generation,
-        ) {
-            let text_frame = prepared.text.as_prepared_frame();
-            let uploaded =
-                text_state
-                    .glyphs
-                    .upload(device, queue, &text_frame, prepared.text.atlas);
-            text_state.last_uploaded_generation = Some(prepared.text_generation);
-            uploaded
-        } else {
-            TextGpuUploadStats::default()
+            prepared.text_atlas_generation,
+        );
+        let text_frame = prepared.text.as_prepared_frame();
+        let text = match mode {
+            TextUploadMode::None => TextGpuUploadStats::default(),
+            TextUploadMode::Full => text_state
+                .glyphs
+                .upload(device, queue, &text_frame, prepared.text.atlas),
+            TextUploadMode::Ranges => {
+                collect_dirty_glyph_ranges(
+                    prepared.text.items,
+                    prepared.text_dirty_object_indices,
+                    &mut text_state.mask_dirty_ranges,
+                    &mut text_state.color_dirty_ranges,
+                );
+                text_state.glyphs.upload_ranges(
+                    device,
+                    queue,
+                    &text_frame,
+                    prepared.text.atlas,
+                    &text_state.mask_dirty_ranges,
+                    &text_state.color_dirty_ranges,
+                )
+            }
         };
+        if mode != TextUploadMode::None {
+            text_state.last_uploaded_generation = Some(prepared.text_generation);
+            text_state.last_uploaded_atlas_generation = Some(prepared.text_atlas_generation);
+        }
         RetainedUploadStats { geometry, text }
     }
 
@@ -1574,7 +1676,7 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::FontResourceId;
+    use noon_core::{FontResourceId, TextResourceId};
     use noon_runtime::RetainedFrameObjectState;
 
     use super::*;
@@ -1669,10 +1771,89 @@ mod tests {
     }
 
     #[test]
-    fn new_or_changed_text_generation_requires_gpu_upload() {
-        assert!(text_upload_needed(None, 1));
-        assert!(!text_upload_needed(Some(1), 1));
-        assert!(text_upload_needed(Some(1), 2));
+    fn text_upload_mode_requires_consecutive_matching_atlas_generation_for_ranges() {
+        assert_eq!(
+            text_upload_mode(None, None, 1, 7),
+            TextUploadMode::Full
+        );
+        assert_eq!(
+            text_upload_mode(Some(1), Some(7), 1, 7),
+            TextUploadMode::None
+        );
+        assert_eq!(
+            text_upload_mode(Some(1), Some(7), 2, 7),
+            TextUploadMode::Ranges
+        );
+        assert_eq!(
+            text_upload_mode(Some(1), Some(7), 3, 7),
+            TextUploadMode::Full
+        );
+        assert_eq!(
+            text_upload_mode(Some(1), Some(7), 2, 8),
+            TextUploadMode::Full
+        );
+        assert_eq!(
+            text_upload_mode(Some(u64::MAX), Some(7), 0, 7),
+            TextUploadMode::Full
+        );
+    }
+
+    #[test]
+    fn dirty_glyph_ranges_filter_objects_split_planes_and_coalesce() {
+        let text = noon_core::TextResourceHandle {
+            id: TextResourceId::new(1),
+            version: 0,
+        };
+        let items = vec![
+            PreparedTextItem::GlyphBatch {
+                object_index: 0,
+                text,
+                run_index: 0,
+                plane: GlyphAtlasPlane::Mask,
+                page: 0,
+                instance_range: 0..2,
+            },
+            PreparedTextItem::GlyphBatch {
+                object_index: 1,
+                text,
+                run_index: 0,
+                plane: GlyphAtlasPlane::Mask,
+                page: 0,
+                instance_range: 2..4,
+            },
+            PreparedTextItem::GlyphBatch {
+                object_index: 1,
+                text,
+                run_index: 0,
+                plane: GlyphAtlasPlane::Color,
+                page: 0,
+                instance_range: 0..1,
+            },
+            PreparedTextItem::GlyphBatch {
+                object_index: 1,
+                text,
+                run_index: 0,
+                plane: GlyphAtlasPlane::Mask,
+                page: 0,
+                instance_range: 4..5,
+            },
+            PreparedTextItem::GlyphBatch {
+                object_index: 2,
+                text,
+                run_index: 0,
+                plane: GlyphAtlasPlane::Mask,
+                page: 0,
+                instance_range: 5..7,
+            },
+        ];
+        let mut mask_ranges = Vec::new();
+        let mut color_ranges = Vec::new();
+        collect_dirty_glyph_ranges(&items, &[1], &mut mask_ranges, &mut color_ranges);
+
+        assert_eq!(mask_ranges.len(), 1);
+        assert_eq!(mask_ranges[0], 2..5);
+        assert_eq!(color_ranges.len(), 1);
+        assert_eq!(color_ranges[0], 0..1);
     }
 
     #[test]
