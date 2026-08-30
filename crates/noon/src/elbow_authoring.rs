@@ -1,10 +1,10 @@
 //! Shared Rust authoring semantics for Manim-compatible `Elbow` geometry.
 //!
 //! ManimCE defines `Elbow` as one open three-corner VMobject, scaled about the
-//! origin to the requested width and then rotated about the origin. Noon keeps
-//! that observable geometry as one immutable retained [`VectorPath`] and uses
-//! the ordinary object transform for rotation; no renderer-specific primitive
-//! or frontend path reconstruction is required.
+//! origin to the requested width and then rotates those points about the origin.
+//! Noon bakes that constructor rotation into the immutable retained [`VectorPath`]
+//! so ordinary snapshot bounds observe the same rotated points. Later authoring
+//! transforms still use the shared [`ObjectSnapshot`] transform.
 
 use crate::legacy::{IntoSnapshot, Path};
 use noon_core::{Color, ObjectSnapshot, Vec2, VectorPath};
@@ -55,12 +55,18 @@ impl Elbow {
             return Err(ElbowAuthoringError::NonFiniteAngle(angle));
         }
 
+        let (sin, cos) = angle.sin_cos();
+        let rotate = |point: Vec2| {
+            Vec2::new(
+                point.x * cos - point.y * sin,
+                point.x * sin + point.y * cos,
+            )
+        };
         let path = VectorPath::new()
-            .move_to(Vec2::new(0.0, width))
-            .line_to(Vec2::new(width, width))
-            .line_to(Vec2::new(width, 0.0));
-        let snapshot = Path::new(path).into_snapshot().rotate_by(angle);
-        Ok(Self(snapshot))
+            .move_to(rotate(Vec2::new(0.0, width)))
+            .line_to(rotate(Vec2::new(width, width)))
+            .line_to(rotate(Vec2::new(width, 0.0)));
+        Ok(Self(Path::new(path).into_snapshot()))
     }
 
     pub fn color(mut self, color: Color) -> Self {
@@ -142,6 +148,13 @@ mod tests {
         }
     }
 
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-5,
+            "{actual} != {expected}"
+        );
+    }
+
     #[test]
     fn default_elbow_matches_manim_open_corner_path_and_style() {
         let elbow = Elbow::new();
@@ -175,38 +188,40 @@ mod tests {
     }
 
     #[test]
-    fn elbow_width_and_angle_are_shared_retained_semantics() {
+    fn constructor_rotation_is_baked_into_path_for_exact_public_bounds() {
         let angle = 5.0 * std::f32::consts::PI / 4.0;
         let elbow = Elbow::with_options(2.0, angle).unwrap();
-        assert_eq!(
-            commands(&elbow),
-            &[
-                PathCommand::MoveTo {
-                    to: Vec2::new(0.0, 2.0),
-                },
-                PathCommand::LineTo {
-                    to: Vec2::new(2.0, 2.0),
-                },
-                PathCommand::LineTo {
-                    to: Vec2::new(2.0, 0.0),
-                },
-            ]
-        );
-        assert_eq!(elbow.snapshot().transform.rotation, angle);
+        let root_two = 2.0_f32.sqrt();
+
+        assert_eq!(elbow.snapshot().transform.rotation, 0.0);
+        assert_close(elbow.snapshot().center().x, 0.0);
+        assert_close(elbow.snapshot().center().y, -1.5 * root_two);
+        assert_close(elbow.snapshot().width(), 2.0 * root_two);
+        assert_close(elbow.snapshot().height(), root_two);
     }
 
     #[test]
     fn elbow_preserves_manim_zero_and_negative_width_behavior() {
-        let zero = Elbow::with_options(0.0, 0.0).unwrap();
+        let zero = Elbow::with_options(0.0, std::f32::consts::FRAC_PI_3).unwrap();
         assert!(commands(&zero).iter().all(|command| match command {
             PathCommand::MoveTo { to } | PathCommand::LineTo { to } => *to == Vec2::ZERO,
             _ => false,
         }));
 
-        let negative = Elbow::with_options(-0.5, 0.0).unwrap();
-        assert!(commands(&negative).contains(&PathCommand::LineTo {
-            to: Vec2::new(-0.5, -0.5),
-        }));
+        let negative = Elbow::with_options(-0.5, -std::f32::consts::FRAC_PI_6).unwrap();
+        assert_close(negative.snapshot().center().x, -0.46650636);
+        assert_close(negative.snapshot().width(), 0.4330127);
+    }
+
+    #[test]
+    fn later_rotation_remains_an_ordinary_retained_transform() {
+        let elbow = Elbow::with_options(0.2, std::f32::consts::FRAC_PI_4)
+            .unwrap()
+            .rotate(std::f32::consts::FRAC_PI_2);
+        assert_eq!(
+            elbow.snapshot().transform.rotation,
+            std::f32::consts::FRAC_PI_2
+        );
     }
 
     #[test]
