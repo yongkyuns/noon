@@ -14,6 +14,7 @@ mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
+mod manim_elbow_bridge;
 mod manim_geometry_bridge;
 mod manim_path_query_bridge;
 mod manim_sector_bridge;
@@ -44,6 +45,7 @@ pub use execution_visibility::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
+pub use manim_elbow_bridge::*;
 pub use manim_geometry_bridge::*;
 pub use manim_path_query_bridge::*;
 pub use manim_sector_bridge::*;
