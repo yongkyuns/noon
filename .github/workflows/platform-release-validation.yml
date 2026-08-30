@@ -1,0 +1,160 @@
+name: Platform and release validation
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/check-web-package.mjs"
+      - "scripts/browser-smoke.mjs"
+      - "web/**"
+      - ".github/workflows/platform-release-validation.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/check-web-package.mjs"
+      - "scripts/browser-smoke.mjs"
+      - "web/**"
+      - ".github/workflows/platform-release-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-platforms:
+    name: Native tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: rustup default stable
+
+      - name: Cache Cargo sources and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-native-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-native-
+
+      - name: Test workspace libraries and integration tests
+        run: cargo test --workspace --all-features --lib --tests
+
+  native-release:
+    name: Native release semantics
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: rustup default stable
+
+      - name: Cache Cargo sources and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-native-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            release-native-
+
+      - name: Test core deterministic layers in release mode
+        run: cargo test --release --all-features -p noon-core -p noon-geometry -p noon-runtime
+
+  optimized-web:
+    name: Optimized browser artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust with WASM target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: optimized-web-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            optimized-web-
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build production-optimized browser package
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+        run: bash scripts/build-web-demo.sh
+
+      - name: Record optimized artifact size
+        shell: bash
+        run: |
+          test -s web/pkg/noon_web_bg.wasm
+          bytes=$(wc -c < web/pkg/noon_web_bg.wasm)
+          echo "Optimized WASM bytes: ${bytes}"
+          echo "### Optimized WebAssembly artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "- noon_web_bg.wasm: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Chromium smoke dependency
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Smoke optimized artifact in browser
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/optimized-webgl
+        run: node scripts/browser-smoke.mjs
+
+      - name: Upload optimized smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimized-web-smoke
+          path: browser-smoke-artifacts/optimized-webgl
+          if-no-files-found: ignore
+          retention-days: 7
