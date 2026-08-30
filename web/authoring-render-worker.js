@@ -54,6 +54,12 @@ async function handleMainMessage(message) {
       case "init":
         await initialize(message);
         return;
+      case "prepare":
+        await prepare(message);
+        return;
+      case "start_engine":
+        startEngine(message);
+        return;
       case "attach_engine":
         attachEngine(message);
         return;
@@ -82,12 +88,28 @@ async function handleMainMessage(message) {
 }
 
 async function initialize(message) {
+  validateEnginePort(message.port, "authoring render init");
+  await prepareSurface(message, "authoring render init");
+  mode = validateMode(message.mode ?? MODE_LEGACY);
+  attachRenderPort(message.port);
+}
+
+async function prepare(message) {
+  await prepareSurface(message, "authoring render prepare");
+  respond(message.requestId, {
+    type: "prepared",
+    transportMode,
+    width,
+    height,
+  });
+}
+
+async function prepareSurface(message, operation) {
   if (renderPort !== null || canvas !== null) {
     throw new Error("authoring render worker is already initialized");
   }
-  validateEnginePort(message.port, "authoring render init");
   if (!(message.canvas instanceof OffscreenCanvas)) {
-    throw new Error("authoring render init requires an OffscreenCanvas");
+    throw new Error(`${operation} requires an OffscreenCanvas`);
   }
   validateTransportMode(message.transportMode);
 
@@ -95,8 +117,29 @@ async function initialize(message) {
   width = normalizedDimension(message.width ?? canvas.width);
   height = normalizedDimension(message.height ?? canvas.height);
   transportMode = message.transportMode;
-  mode = validateMode(message.mode ?? MODE_LEGACY);
   await init();
+}
+
+function startEngine(message) {
+  if (canvas === null || transportMode === null) {
+    throw new Error("authoring render worker cannot start an engine before prepare");
+  }
+  if (
+    renderPort !== null ||
+    renderer !== null ||
+    mode !== null ||
+    bootstrapPromise !== null ||
+    transitionRequestId !== null ||
+    transitionMode !== null
+  ) {
+    throw new Error("authoring render worker can start its initial engine only once");
+  }
+  validateEnginePort(message.port, "authoring render initial engine");
+  validateMatchingTransport(message.transportMode, "authoring render initial engine");
+
+  mode = validateMode(message.mode);
+  transitionRequestId = validateRequestId(message.requestId);
+  transitionResponseType = "engine_started";
   attachRenderPort(message.port);
 }
 
