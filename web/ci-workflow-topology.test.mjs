@@ -23,6 +23,7 @@ function classifyWorkflow(name) {
     ["playground-", "playground"],
     ["renderer-", "renderer"],
     ["authoring-", "authoring"],
+    ["retained-", "retained"],
     ["perf-", "performance"],
   ]) {
     if (name.startsWith(prefix)) return family;
