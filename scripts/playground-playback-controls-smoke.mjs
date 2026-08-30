@@ -279,13 +279,34 @@ try {
       .find((id) => id && id !== selected);
   });
   assert.ok(targetExampleId, "gallery must expose another example");
+  await page.evaluate(() => {
+    let releaseSwitch;
+    const switchGate = new Promise((resolve) => {
+      releaseSwitch = resolve;
+    });
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ ??= {};
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__.beforeReconcile = async () => {
+      document.documentElement.dataset.playbackSwitchGate = "reached";
+      await switchGate;
+    };
+    globalThis.__NOON_RELEASE_PLAYBACK_SWITCH__ = releaseSwitch;
+  });
   await page.locator(`.example-card[data-example-id="${targetExampleId}"]`).click();
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "true");
+  await page.waitForFunction(
+    () => document.documentElement.dataset.playbackSwitchGate === "reached",
+  );
   const busy = await playbackSnapshot(page);
   diagnostics.busy = busy;
+  assert.equal(busy.busy, "true");
   assert.equal(busy.playDisabled, true);
   assert.equal(busy.restartDisabled, true);
   assert.equal(busy.scrubberDisabled, true);
+  await page.evaluate(() => {
+    globalThis.__NOON_RELEASE_PLAYBACK_SWITCH__?.();
+    delete globalThis.__NOON_RELEASE_PLAYBACK_SWITCH__;
+    delete globalThis.__NOON_PLAYGROUND_TEST_HOOKS__?.beforeReconcile;
+    delete document.documentElement.dataset.playbackSwitchGate;
+  });
   await waitForAppliedScene(page, targetExampleId);
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
   const switched = await playbackSnapshot(page);

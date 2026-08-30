@@ -679,29 +679,49 @@ async function runScene() {
   const releaseBusy = beginBusy();
   const task = (async () => {
     try {
-      await ensureRuntimeReady();
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
-      await ensureExecutionReady();
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
+      const runtimeTask = (async () => {
+        await ensureRuntimeReady();
+        if (!isCurrentRun(runToken)) return "after-runtime-start";
+        await ensureExecutionReady();
+        if (!isCurrentRun(runToken)) return "after-restart";
+        return null;
+      })();
 
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
       const client = ensureAuthoringClient();
-      let authored;
-      try {
-        authored = await client.run(source, {
+      const authoringTask = client
+        .run(source, {
           playground: {
             example_id: example.id,
             selection_generation: runToken.selectionGeneration,
             run_generation: runToken.runGeneration,
           },
+        })
+        .catch((error) => {
+          if (client.terminated && authoringClient === client) {
+            authoringClient = null;
+          }
+          throw error;
         });
-      } catch (error) {
-        if (client.terminated && authoringClient === client) {
-          authoringClient = null;
-        }
-        throw error;
+
+      // Source authoring and the GPU/execution startup are independent until
+      // reconciliation. Keep both in flight on a cold Run, but wait for both
+      // to settle so a failure cannot leave an unobserved sibling task behind.
+      const [runtimeOutcome, authoringOutcome] = await Promise.allSettled([
+        runtimeTask,
+        authoringTask,
+      ]);
+      if (runtimeOutcome.status === "rejected") {
+        throw runtimeOutcome.reason;
       }
+      if (runtimeOutcome.value !== null) {
+        return recordStale(runToken, runtimeOutcome.value);
+      }
+      if (authoringOutcome.status === "rejected") {
+        throw authoringOutcome.reason;
+      }
+      const authored = authoringOutcome.value;
 
       await runPlaygroundTestHook("afterAuthoring", {
         exampleId: example.id,
