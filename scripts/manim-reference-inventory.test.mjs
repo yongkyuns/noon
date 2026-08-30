@@ -5,8 +5,11 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  PINNED_MANIM_REVISION,
+  PINNED_MANIM_VERSION,
   buildReferenceInventory,
   extractManimDirectives,
+  validatePinnedRevision,
 } from "./manim-reference-inventory.mjs";
 
 test("extracts directive options and source from Python docstrings", () => {
@@ -34,7 +37,7 @@ test("supports different directive indentation and multiple examples", () => {
   assert.equal(examples[1].source, "class Second(Scene):\n    pass");
 });
 
-test("builds a deterministic code-point-ordered inventory across documentation sources", async () => {
+test("builds a deterministic code-point-ordered inventory with pinned provenance", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "noon-manim-inventory-"));
   await mkdir(path.join(root, "manim", "z"), { recursive: true });
   await mkdir(path.join(root, "docs", "source"), { recursive: true });
@@ -55,8 +58,13 @@ test("builds a deterministic code-point-ordered inventory across documentation s
     ".. manim:: Ignored\n",
   );
 
-  const inventory = await buildReferenceInventory(root);
+  const inventory = await buildReferenceInventory(root, { revision: PINNED_MANIM_REVISION });
   assert.equal(inventory.schema_version, 1);
+  assert.deepEqual(inventory.upstream, {
+    repository: "ManimCommunity/manim",
+    version: "v0.21.0",
+    revision: PINNED_MANIM_REVISION,
+  });
   assert.deepEqual(inventory.scanned_roots, ["docs/source", "manim"]);
   assert.deepEqual(
     inventory.examples.map((example) => [example.source_path, example.name]),
@@ -65,5 +73,26 @@ test("builds a deterministic code-point-ordered inventory across documentation s
       ["docs/source/a.rst", "LowercaseSecond"],
       ["manim/z/later.py", "Later"],
     ],
+  );
+});
+
+test("rejects non-pinned Manim revisions", async () => {
+  assert.equal(PINNED_MANIM_VERSION, "v0.21.0");
+  assert.equal(validatePinnedRevision(PINNED_MANIM_REVISION), PINNED_MANIM_REVISION);
+  assert.throws(
+    () => validatePinnedRevision("main"),
+    /requires v0\.21\.0 commit .* got main/u,
+  );
+  assert.throws(
+    () => validatePinnedRevision("deadbeef"),
+    /requires v0\.21\.0 commit .* got deadbeef/u,
+  );
+
+  const root = await mkdtemp(path.join(tmpdir(), "noon-manim-wrong-revision-"));
+  await mkdir(path.join(root, "manim"), { recursive: true });
+  await mkdir(path.join(root, "docs", "source"), { recursive: true });
+  await assert.rejects(
+    buildReferenceInventory(root, { revision: "main" }),
+    /requires v0\.21\.0 commit .* got main/u,
   );
 });

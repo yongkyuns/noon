@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 
 const SOURCE_EXTENSIONS = new Set([".py", ".rst"]);
 const INVENTORY_ROOTS = ["docs/source", "manim"];
 const IGNORED_DIRECTORIES = new Set([".git", ".venv", "__pycache__", "node_modules"]);
+export const PINNED_MANIM_VERSION = "v0.21.0";
+export const PINNED_MANIM_REVISION = "861cd4849b17db1db3515b531ffe80b297848f93";
+const execFileAsync = promisify(execFile);
 
 function leadingWhitespace(line) {
   return line.match(/^\s*/u)?.[0].length ?? 0;
@@ -119,8 +124,36 @@ async function collectSourceFiles(repositoryRoot) {
   return files;
 }
 
-export async function buildReferenceInventory(repositoryRoot) {
+export function validatePinnedRevision(revision) {
+  if (revision !== PINNED_MANIM_REVISION) {
+    throw new Error(
+      `Manim reference inventory requires ${PINNED_MANIM_VERSION} commit ${PINNED_MANIM_REVISION}, got ${revision || "an unknown revision"}`,
+    );
+  }
+  return revision;
+}
+
+async function resolvePinnedRevision(repositoryRoot) {
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(
+      "git",
+      ["-C", repositoryRoot, "rev-parse", "HEAD"],
+      { encoding: "utf8" },
+    ));
+  } catch (error) {
+    throw new Error(
+      `Manim reference inventory requires a git checkout at ${PINNED_MANIM_VERSION} commit ${PINNED_MANIM_REVISION}`,
+      { cause: error },
+    );
+  }
+  return validatePinnedRevision(stdout.trim());
+}
+
+export async function buildReferenceInventory(repositoryRoot, { revision = null } = {}) {
   const absoluteRoot = path.resolve(repositoryRoot);
+  const pinnedRevision =
+    revision === null ? await resolvePinnedRevision(absoluteRoot) : validatePinnedRevision(revision);
   const examples = [];
   for (const file of await collectSourceFiles(absoluteRoot)) {
     const relativePath = path.relative(absoluteRoot, file).split(path.sep).join("/");
@@ -133,7 +166,16 @@ export async function buildReferenceInventory(repositoryRoot) {
       left.directive_line - right.directive_line ||
       compareCodePoints(left.name ?? "", right.name ?? ""),
   );
-  return { schema_version: 1, scanned_roots: INVENTORY_ROOTS, examples };
+  return {
+    schema_version: 1,
+    upstream: {
+      repository: "ManimCommunity/manim",
+      version: PINNED_MANIM_VERSION,
+      revision: pinnedRevision,
+    },
+    scanned_roots: INVENTORY_ROOTS,
+    examples,
+  };
 }
 
 async function main() {
