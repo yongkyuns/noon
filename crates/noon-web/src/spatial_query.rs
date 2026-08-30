@@ -87,6 +87,76 @@ mod tests {
     }
 
     #[test]
+    fn hit_test_json_stays_local_in_large_sparse_scene() {
+        const OBJECT_COUNT: usize = 4_096;
+        const MAX_LOCAL_CANDIDATES: u64 = 64;
+
+        let mut scene = SceneDefinition::new();
+        for object_index in 0..OBJECT_COUNT {
+            let object = scene.add(GeometryRef::rectangle(0.5, 0.5));
+            scene.object_mut(object).unwrap().transform = Transform2D {
+                translation: Vec2::new(object_index as f32 * 4.0, 0.0),
+                ..Transform2D::IDENTITY
+            };
+        }
+        let json = encode_scene(&scene).unwrap();
+        let player = ScenePlayer::from_scene_json(&json).unwrap();
+        let result: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let slots = result["slots"].as_array().unwrap();
+        let candidates = result["stats"]["candidates_tested"].as_u64().unwrap();
+
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0]["slot"], 0);
+        assert_eq!(slots[0]["generation"], 0);
+        assert_eq!(result["stats"]["results"], 1);
+        assert_eq!(result["stats"]["full_scan_fallbacks"], 0);
+        assert!(
+            candidates <= MAX_LOCAL_CANDIDATES,
+            "browser hit-test bridge examined {candidates} candidates for {OBJECT_COUNT} sparse objects"
+        );
+    }
+
+    #[test]
+    fn hit_test_json_tracks_incremental_transform_without_runtime_rebuild() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::rectangle(0.5, 0.5));
+        scene.object_mut(object).unwrap().transform = Transform2D {
+            translation: Vec2::new(8.0, 0.0),
+            ..Transform2D::IDENTITY
+        };
+
+        let initial_json = encode_scene(&scene).unwrap();
+        let mut player = ScenePlayer::from_scene_json(&initial_json).unwrap();
+        let initial: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        assert!(initial["slots"].as_array().unwrap().is_empty());
+
+        scene.object_mut(object).unwrap().transform = Transform2D::IDENTITY;
+        player
+            .reconcile_scene_json(&encode_scene(&scene).unwrap())
+            .unwrap();
+        let moved_in: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        assert_eq!(moved_in["slots"].as_array().unwrap().len(), 1);
+        assert_eq!(moved_in["slots"][0]["slot"], 0);
+        assert_eq!(moved_in["slots"][0]["generation"], 0);
+        assert_eq!(moved_in["stats"]["full_scan_fallbacks"], 0);
+        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
+        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
+
+        scene.object_mut(object).unwrap().transform = Transform2D {
+            translation: Vec2::new(8.0, 0.0),
+            ..Transform2D::IDENTITY
+        };
+        player
+            .reconcile_scene_json(&encode_scene(&scene).unwrap())
+            .unwrap();
+        let moved_out: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        assert!(moved_out["slots"].as_array().unwrap().is_empty());
+        assert_eq!(moved_out["stats"]["full_scan_fallbacks"], 0);
+        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
+        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
+    }
+
+    #[test]
     fn viewport_json_exposes_generation_safe_slots_without_scene_scan() {
         let player = query_player();
         let result: Value =
