@@ -21,8 +21,12 @@ pub enum ElbowAuthoringError {
 impl std::fmt::Display for ElbowAuthoringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonFiniteWidth(width) => write!(formatter, "elbow width must be finite, got {width}"),
-            Self::NonFiniteAngle(angle) => write!(formatter, "elbow angle must be finite, got {angle}"),
+            Self::NonFiniteWidth(width) => {
+                write!(formatter, "elbow width must be finite, got {width}")
+            }
+            Self::NonFiniteAngle(angle) => {
+                write!(formatter, "elbow angle must be finite, got {angle}")
+            }
         }
     }
 }
@@ -157,9 +161,15 @@ mod tests {
         );
         assert_eq!(elbow.snapshot().transform.rotation, 0.0);
         assert_eq!(elbow.snapshot().style.stroke, Some(WHITE));
-        assert_eq!(elbow.snapshot().style.fill.map(|color| color.alpha), Some(0.0));
+        assert_eq!(
+            elbow.snapshot().style.fill.map(|color| color.alpha),
+            Some(0.0)
+        );
         assert_eq!(elbow.snapshot().style.stroke_width, 0.04);
-        assert_eq!(elbow.snapshot().style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+        assert_eq!(
+            elbow.snapshot().style.stroke_width_mode,
+            StrokeWidthMode::ScreenSpace
+        );
         assert_eq!(elbow.snapshot().style.stroke_join, StrokeJoin::Miter);
         assert_eq!(elbow.snapshot().style.stroke_cap, StrokeCap::Butt);
     }
