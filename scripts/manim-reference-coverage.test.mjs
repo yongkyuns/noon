@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  directiveSourceFromFixture,
   normalizedSourceHash,
   reconcileReferenceCoverage,
 } from "./manim-reference-coverage.mjs";
 
-const SOURCE_A = "from manim import *\n\nclass DotExample(Scene):\n    pass\n";
-const SOURCE_B = "from manim import *\n\nclass OtherExample(Scene):\n    pass\n";
+const DIRECTIVE_A = "class DotExample(Scene):\n    pass";
+const DIRECTIVE_B = "class OtherExample(Scene):\n    pass";
+const FIXTURE_A = `from manim import *\n\n${DIRECTIVE_A}\n`;
+const FIXTURE_B = `from manim import *\n\n${DIRECTIVE_B}\n`;
 
 function inventory(examples) {
   return {
@@ -56,15 +59,24 @@ test("normalizes line endings and trailing whitespace before provenance hashing"
   assert.equal(normalizedSourceHash("a\r\nb\r\n"), normalizedSourceHash("a\nb"));
 });
 
+test("removes only the runnable Manim import prelude before directive matching", () => {
+  assert.equal(directiveSourceFromFixture(FIXTURE_A), DIRECTIVE_A);
+  assert.equal(directiveSourceFromFixture(DIRECTIVE_A), DIRECTIVE_A);
+  assert.equal(
+    directiveSourceFromFixture(`import math\n\n${DIRECTIVE_A}\n`),
+    `import math\n\n${DIRECTIVE_A}`,
+  );
+});
+
 test("reconciles exact-source reference entries by immutable source provenance", async () => {
   const report = await reconcileReferenceCoverage(
-    inventory([example("DotExample", SOURCE_A), example("OtherExample", SOURCE_B, 20)]),
+    inventory([example("DotExample", DIRECTIVE_A), example("OtherExample", DIRECTIVE_B, 20)]),
     manifest([
       exactEntry(),
       { id: "quickstart", status: "ready", upstream: "tutorials/quickstart.html" },
     ]),
     { schema_version: 1, minimum_reconciled_examples: 1 },
-    { readSource: sourceReader({ "dot.py": SOURCE_A }), repositoryRoot: "/repo" },
+    { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
   );
 
   assert.equal(report.inventory_examples, 2);
@@ -75,12 +87,12 @@ test("reconciles exact-source reference entries by immutable source provenance",
 });
 
 test("uses the manifest title to disambiguate identical directive source", async () => {
-  const duplicate = example("OtherName", SOURCE_A, 30);
+  const duplicate = example("OtherName", DIRECTIVE_A, 30);
   const report = await reconcileReferenceCoverage(
-    inventory([example("DotExample", SOURCE_A), duplicate]),
+    inventory([example("DotExample", DIRECTIVE_A), duplicate]),
     manifest([exactEntry()]),
     { schema_version: 1, minimum_reconciled_examples: 1 },
-    { readSource: sourceReader({ "dot.py": SOURCE_A }), repositoryRoot: "/repo" },
+    { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
   );
 
   assert.equal(report.reconciled[0].inventory.name, "DotExample");
@@ -89,10 +101,10 @@ test("uses the manifest title to disambiguate identical directive source", async
 test("fails when an exact-source fixture no longer identifies one pinned directive", async () => {
   await assert.rejects(
     reconcileReferenceCoverage(
-      inventory([example("OtherExample", SOURCE_B)]),
+      inventory([example("OtherExample", DIRECTIVE_B)]),
       manifest([exactEntry()]),
       { schema_version: 1, minimum_reconciled_examples: 0 },
-      { readSource: sourceReader({ "dot.py": SOURCE_A }), repositoryRoot: "/repo" },
+      { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
     ),
     /matched no extracted directive/u,
   );
@@ -101,10 +113,10 @@ test("fails when an exact-source fixture no longer identifies one pinned directi
 test("ratchets the number of reconciled reference examples", async () => {
   await assert.rejects(
     reconcileReferenceCoverage(
-      inventory([example("DotExample", SOURCE_A)]),
+      inventory([example("DotExample", DIRECTIVE_A)]),
       manifest([exactEntry()]),
       { schema_version: 1, minimum_reconciled_examples: 2 },
-      { readSource: sourceReader({ "dot.py": SOURCE_A }), repositoryRoot: "/repo" },
+      { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
     ),
     /reference coverage regression/u,
   );
@@ -112,7 +124,7 @@ test("ratchets the number of reconciled reference examples", async () => {
 
 test("keeps blocked/deferred reference classifications visible without inventing source provenance", async () => {
   const report = await reconcileReferenceCoverage(
-    inventory([example("DotExample", SOURCE_A)]),
+    inventory([example("DotExample", DIRECTIVE_A)]),
     manifest([
       {
         id: "blocked-reference",
