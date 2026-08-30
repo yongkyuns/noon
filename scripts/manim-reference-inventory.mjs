@@ -43,7 +43,7 @@ export function extractManimDirectives(text, sourcePath) {
   const examples = [];
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^(\s*)\.\.\s+manim::(?:\s+(.*?))?\s*$/u);
+    const match = lines[index].match(/^(\s*)\.\.\s+manim\s*::(?:\s+(.*?))?\s*$/u);
     if (!match) {
       continue;
     }
