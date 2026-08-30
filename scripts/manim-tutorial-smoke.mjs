@@ -150,6 +150,27 @@ function assertDurationContract(entry, result) {
   );
 }
 
+function authoredObjectCount(entry, result) {
+  const geometryCount = result.document.objects.length;
+  if (result.retained_document == null) return geometryCount;
+
+  assert.equal(
+    result.retained_document.channel,
+    "noon.authoring.retained",
+    `${entry.id}: retained objects require the canonical retained authoring channel`,
+  );
+  assert.equal(
+    result.retained_document.protocol_version,
+    2,
+    `${entry.id}: retained objects require protocol v2`,
+  );
+  assert.ok(
+    Array.isArray(result.retained_document.objects),
+    `${entry.id}: retained authoring document requires an object list`,
+  );
+  return geometryCount + result.retained_document.objects.length;
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -177,7 +198,7 @@ try {
       source,
     );
     assert.equal(result.kind, "scene_document", `${entry.id}: expected scene document`);
-    assert.ok(result.document.objects.length > 0, `${entry.id}: expected scene objects`);
+    assert.ok(authoredObjectCount(entry, result) > 0, `${entry.id}: expected scene objects`);
     assertDurationContract(entry, result);
     console.log(`[PASS] ${entry.id}`);
   }
