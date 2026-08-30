@@ -1,6 +1,8 @@
 /target
 Cargo.lock
 .DS_Store
+__pycache__/
+*.py[cod]
 /web/pkg
 /web/python/compat-bundle.json
 /web/python/compat-bundle.*.json
