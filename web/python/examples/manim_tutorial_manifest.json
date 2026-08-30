@@ -520,6 +520,38 @@
       "order": 260
     },
     {
+      "id": "manim-dashed-line-reference",
+      "title": "DashedLineExample",
+      "summary": "ManimCE v0.21 DashedLine reference example; tracked by exact pinned provenance and blocked until DashedLine parity lands.",
+      "status": "blocked",
+      "category": "geometry/line",
+      "features": ["DashedLine", "dash_length", "dashed_ratio", "Scene.add"],
+      "upstream": "reference/manim.mobject.geometry.line.DashedLine.html",
+      "dependency": "#77",
+      "reference_provenance": {
+        "source_path": "manim/mobject/geometry/line.py",
+        "directive_line": 302,
+        "name": "DashedLineExample",
+        "source_sha256": "313b8f0b5bf505f3cdaf3a20b870ba38c472501790fe56c550ccc6436d26a288"
+      }
+    },
+    {
+      "id": "manim-tangent-line-reference",
+      "title": "TangentLineExample",
+      "summary": "ManimCE v0.21 TangentLine reference example; tracked by exact pinned provenance and blocked until TangentLine parity lands.",
+      "status": "blocked",
+      "category": "geometry/line",
+      "features": ["TangentLine", "Circle", "alpha", "length", "Scene.add"],
+      "upstream": "reference/manim.mobject.geometry.line.TangentLine.html",
+      "dependency": "#77",
+      "reference_provenance": {
+        "source_path": "manim/mobject/geometry/line.py",
+        "directive_line": 435,
+        "name": "TangentLineExample",
+        "source_sha256": "a799c7449429bea841efc326f23b661e5d2913405f8c6078c37f0146e25fb130"
+      }
+    },
+    {
       "id": "gallery-basic-manim-ce-logo",
       "title": "ManimCELogo",
       "summary": "ManimCE v0.21 Basic Concepts gallery case; blocked until MathTex, Triangle, retained VGroup layout, and exact camera/background parity are complete.",
