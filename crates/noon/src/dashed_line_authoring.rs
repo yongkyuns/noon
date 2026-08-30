@@ -106,7 +106,10 @@ impl DashedLine {
         let requested = (length / f64::from(dash_length) * ratio)
             .ceil()
             .max(2.0);
-        if !requested.is_finite() || requested > usize::MAX as f64 {
+        // Keep acceptance identical on 64-bit native and wasm32. Every u32 value
+        // is also exactly representable as f64, so subsequent proportion math does
+        // not introduce a target-dependent integer conversion boundary.
+        if !requested.is_finite() || requested > f64::from(u32::MAX) {
             return Err(DashedLineAuthoringError::DashCountOverflow(requested));
         }
         let num_dashes = requested as usize;
