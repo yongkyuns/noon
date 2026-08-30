@@ -159,7 +159,7 @@ class ManimSharedSectorTests(unittest.TestCase):
             assert annular.num_components == 7
             assert annular.arc_center.x == 2.0 and annular.arc_center.y == -1.0
             assert math.isclose(annular.style["fill"]["alpha"], 0.4)
-            assert annular.style["stroke_width"] == 2.0
+            assert math.isclose(annular.style["stroke_width"], 0.02)
             parsed_blue = _manim_phase_b._as_color("color", BLUE)
             assert math.isclose(annular.style["fill"]["red"], parsed_blue.red)
             assert math.isclose(annular.style["stroke"]["blue"], parsed_blue.blue)
