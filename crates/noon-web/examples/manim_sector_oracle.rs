@@ -1,7 +1,6 @@
 use noon_core::ObjectSnapshot;
 use noon_web::{
-    manim_annular_sector_snapshot_json, manim_annulus_snapshot_json,
-    manim_sector_snapshot_json,
+    manim_annular_sector_snapshot_json, manim_annulus_snapshot_json, manim_sector_snapshot_json,
 };
 use serde_json::{json, Map, Value};
 
@@ -68,8 +67,7 @@ fn main() {
     observations.insert(
         "annulus_offset".to_owned(),
         observation(decode(
-            manim_annulus_snapshot_json(0.5, 1.75, 9, 0.8, -1.1)
-                .expect("offset annulus"),
+            manim_annulus_snapshot_json(0.5, 1.75, 9, 0.8, -1.1).expect("offset annulus"),
         )),
     );
 
