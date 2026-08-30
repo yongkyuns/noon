@@ -444,35 +444,28 @@ function ensureAuthoringClient() {
   return authoringClient;
 }
 
-function warmAuthoringClient() {
-  const client = ensureAuthoringClient();
-  status.dataset.authoringWarmup = "started";
-  void client.ready().then(
-    () => {
-      if (authoringClient === client) {
-        status.dataset.authoringWarmup = "ready";
-      }
-    },
-    () => {
-      if (authoringClient !== client) return;
-      if (client.terminated) {
-        authoringClient = null;
-      }
-      status.dataset.authoringWarmup = "failed";
-    },
-  );
-  return client;
-}
-
-async function ensureRuntimeReady() {
+async function ensureRuntimeReady({
+  sceneJson,
+  retainedDocumentJson,
+  startRetained,
+  callbacks,
+  authoringClient: client,
+  loopDurationSeconds,
+}) {
   if (runtimeStartPromise !== null) return runtimeStartPromise;
-  if (player !== null) return;
+  if (player !== null) return null;
 
   const task = (async () => {
-    setRuntimeStatus("Starting runtime on demand…", "running");
-    patchStatus.value = "Starting Python + GPU runtime…";
+    setRuntimeStatus("Starting execution runtime…", "running");
+    patchStatus.value = "Starting GPU execution runtime…";
     patchStatus.dataset.state = "running";
-    warmAuthoringClient();
+
+    if (startRetained && callbacks !== null && callbacks !== undefined) {
+      throw new Error(
+        "retained authoring with Python host callbacks is not supported yet; " +
+          "split the callback work from retained text instead of silently dropping either",
+      );
+    }
 
     const nextPlayer = new AuthoringExecutionClient(canvas, {
       onError(error) {
@@ -483,11 +476,24 @@ async function ensureRuntimeReady() {
         showRecoverableSceneError(error);
       },
     });
-    player = nextPlayer;
     try {
-      const ready = await nextPlayer.start('{"version":1,"objects":[],"tracks":[]}', {
-        loopDurationSeconds: 4.0,
-      });
+      const ready = startRetained
+        ? await nextPlayer.startRetained(sceneJson, retainedDocumentJson, {
+            loopDurationSeconds,
+          })
+        : await nextPlayer.start(sceneJson, { loopDurationSeconds });
+      let initialState;
+      if (!startRetained && callbacks !== null && callbacks !== undefined) {
+        initialState = await nextPlayer.reconcileScene(sceneJson, {
+          callbacks,
+          authoringClient: client,
+          loopDurationSeconds,
+        });
+      } else {
+        initialState = await nextPlayer.state();
+      }
+
+      player = nextPlayer;
       playerNeedsRestart = false;
       rendererBackend = ready.render.backend;
       status.dataset.rendererBackend = rendererBackend;
@@ -498,19 +504,24 @@ async function ensureRuntimeReady() {
         nextPlayer,
         document.querySelector(".preview-pane"),
         {
-          durationSeconds: playbackDurationSeconds,
+          durationSeconds: loopDurationSeconds,
           onError: showPlaybackError,
         },
       );
 
-      const initialState = await nextPlayer.state();
       patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
       playbackControls.sync({
         time: initialState.time,
         playing: initialState.playing,
-        durationSeconds: playbackDurationSeconds,
+        durationSeconds: loopDurationSeconds,
       });
       startMetricsPolling();
+      return {
+        ...initialState,
+        incremental: false,
+        rebuilt: true,
+        mode: nextPlayer.mode,
+      };
     } catch (error) {
       nextPlayer.terminate();
       if (player === nextPlayer) {
@@ -524,7 +535,7 @@ async function ensureRuntimeReady() {
 
   runtimeStartPromise = task;
   try {
-    await task;
+    return await task;
   } finally {
     if (runtimeStartPromise === task) {
       runtimeStartPromise = null;
@@ -679,14 +690,10 @@ async function runScene() {
   const releaseBusy = beginBusy();
   const task = (async () => {
     try {
-      await ensureRuntimeReady();
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
-      await ensureExecutionReady();
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
-
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
       const client = ensureAuthoringClient();
+      status.dataset.authoringWarmup = "started";
       let authored;
       try {
         authored = await client.run(source, {
@@ -696,7 +703,9 @@ async function runScene() {
             run_generation: runToken.runGeneration,
           },
         });
+        status.dataset.authoringWarmup = "ready";
       } catch (error) {
+        status.dataset.authoringWarmup = "failed";
         if (client.terminated && authoringClient === client) {
           authoringClient = null;
         }
@@ -717,6 +726,12 @@ async function runScene() {
         authored.callbacks === null
           ? sceneIdentities.stabilize(authored.document, authored.identities)
           : authored.document;
+      const sceneJson = JSON.stringify(runtimeDocument);
+      const retainedDocumentJson =
+        authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument);
+      const startRetained = (authored.retainedDocument?.objects?.length ?? 0) > 0;
+      const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
+
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
         selectionGeneration: runToken.selectionGeneration,
@@ -724,14 +739,28 @@ async function runScene() {
       });
       if (!isCurrentRun(runToken)) return recordStale(runToken, "before-reconcile");
 
-      const result = await player.reconcileScene(JSON.stringify(runtimeDocument), {
-        retainedDocumentJson:
-          authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument),
-        callbacks: authored.callbacks,
-        authoringClient: client,
-        loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
-      });
-      if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
+      let result;
+      if (player === null) {
+        result = await ensureRuntimeReady({
+          sceneJson,
+          retainedDocumentJson,
+          startRetained,
+          callbacks: authored.callbacks,
+          authoringClient: client,
+          loopDurationSeconds,
+        });
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");
+      } else {
+        await ensureExecutionReady();
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
+        result = await player.reconcileScene(sceneJson, {
+          retainedDocumentJson,
+          callbacks: authored.callbacks,
+          authoringClient: client,
+          loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
+        });
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
+      }
 
       if (authored.duration > 0) {
         playbackDurationSeconds = authored.duration;
