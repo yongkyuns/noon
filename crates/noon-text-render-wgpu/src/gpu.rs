@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::{mem::size_of, ops::Range};
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
@@ -360,6 +360,41 @@ impl TextGlyphGpuRenderer {
         prepared: &PreparedRetainedTextFrame<'_>,
         atlas: &GpuGlyphAtlas,
     ) -> TextGpuUploadStats {
+        self.upload_impl(device, queue, prepared, atlas, None, None)
+    }
+
+    /// Upload only changed instance ranges when the caller knows the GPU buffers
+    /// already contain the immediately preceding prepared generation. Reallocation
+    /// automatically falls back to a full-plane write because a new buffer has no
+    /// prior contents to preserve.
+    pub fn upload_ranges(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedTextFrame<'_>,
+        atlas: &GpuGlyphAtlas,
+        mask_ranges: &[Range<u32>],
+        color_ranges: &[Range<u32>],
+    ) -> TextGpuUploadStats {
+        self.upload_impl(
+            device,
+            queue,
+            prepared,
+            atlas,
+            Some(mask_ranges),
+            Some(color_ranges),
+        )
+    }
+
+    fn upload_impl(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedRetainedTextFrame<'_>,
+        atlas: &GpuGlyphAtlas,
+        mask_ranges: Option<&[Range<u32>]>,
+        color_ranges: Option<&[Range<u32>]>,
+    ) -> TextGpuUploadStats {
         let mask_bytes = std::mem::size_of_val(prepared.mask_quads);
         let color_bytes = std::mem::size_of_val(prepared.color_quads);
         let mask_reallocated = ensure_capacity(
@@ -377,17 +412,19 @@ impl TextGlyphGpuRenderer {
             "Noon text color glyph instances",
         );
 
-        let mut bytes_uploaded = 0;
-        if !prepared.mask_quads.is_empty() {
-            let bytes = bytemuck::cast_slice(prepared.mask_quads);
-            queue.write_buffer(&self.mask_buffer, 0, bytes);
-            bytes_uploaded += bytes.len();
-        }
-        if !prepared.color_quads.is_empty() {
-            let bytes = bytemuck::cast_slice(prepared.color_quads);
-            queue.write_buffer(&self.color_buffer, 0, bytes);
-            bytes_uploaded += bytes.len();
-        }
+        let bytes_uploaded = upload_plane_instances(
+            queue,
+            &self.mask_buffer,
+            prepared.mask_quads,
+            mask_ranges,
+            mask_reallocated,
+        ) + upload_plane_instances(
+            queue,
+            &self.color_buffer,
+            prepared.color_quads,
+            color_ranges,
+            color_reallocated,
+        );
         self.mask_instances = u32::try_from(prepared.mask_quads.len())
             .expect("mask glyph instance count exceeds u32 draw limits");
         self.color_instances = u32::try_from(prepared.color_quads.len())
@@ -526,6 +563,43 @@ impl TextGlyphGpuRenderer {
             (_, count) => Err(TextGpuDrawError::UnsupportedSampleCount(count)),
         }
     }
+}
+
+fn upload_plane_instances(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    instances: &[GlyphQuadInstance],
+    ranges: Option<&[Range<u32>]>,
+    reallocated: bool,
+) -> usize {
+    if instances.is_empty() {
+        return 0;
+    }
+    if reallocated || ranges.is_none() {
+        let bytes = bytemuck::cast_slice(instances);
+        queue.write_buffer(buffer, 0, bytes);
+        return bytes.len();
+    }
+
+    let mut bytes_uploaded = 0;
+    for range in ranges.expect("checked above") {
+        if range.is_empty() {
+            continue;
+        }
+        let start = range.start as usize;
+        let end = range.end as usize;
+        assert!(
+            end <= instances.len(),
+            "dirty glyph upload range exceeds prepared instances"
+        );
+        let bytes = bytemuck::cast_slice(&instances[start..end]);
+        let offset = start
+            .checked_mul(size_of::<GlyphQuadInstance>())
+            .expect("text glyph upload offset overflow") as u64;
+        queue.write_buffer(buffer, offset, bytes);
+        bytes_uploaded += bytes.len();
+    }
+    bytes_uploaded
 }
 
 fn refresh_plane_bind_groups(
@@ -702,6 +776,17 @@ mod tests {
             color_quads: &[],
             items,
             stats: Default::default(),
+        }
+    }
+
+    fn test_quad() -> GlyphQuadInstance {
+        GlyphQuadInstance {
+            origin: [0.0, 0.0],
+            axis_x: [1.0, 0.0],
+            axis_y: [0.0, 1.0],
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            color: [1.0; 4],
         }
     }
 
@@ -942,6 +1027,46 @@ mod tests {
                 .upload(&device, &queue, &prepared, &atlas)
                 .buffer_reallocations,
             0
+        );
+    }
+
+    #[test]
+    fn dirty_range_upload_writes_only_requested_instances() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let atlas = GpuGlyphAtlas::new(16).unwrap();
+        let quads: [GlyphQuadInstance; 4] = std::array::from_fn(|_| test_quad());
+        let prepared = prepared_mask_frame(&quads, &[]);
+        let mut renderer = TextGlyphGpuRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            TextCamera2D::DEFAULT,
+        );
+        renderer.upload(&device, &queue, &prepared, &atlas);
+
+        let stats = renderer.upload_ranges(&device, &queue, &prepared, &atlas, &[1..2], &[]);
+        assert_eq!(stats.buffer_reallocations, 0);
+        assert_eq!(stats.bytes_uploaded, size_of::<GlyphQuadInstance>());
+    }
+
+    #[test]
+    fn dirty_range_upload_falls_back_to_full_plane_after_reallocation() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let atlas = GpuGlyphAtlas::new(16).unwrap();
+        let quads: [GlyphQuadInstance; 4] = std::array::from_fn(|_| test_quad());
+        let prepared = prepared_mask_frame(&quads, &[]);
+        let mut renderer = TextGlyphGpuRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            TextCamera2D::DEFAULT,
+        );
+
+        let stats = renderer.upload_ranges(&device, &queue, &prepared, &atlas, &[1..2], &[]);
+        assert_eq!(stats.buffer_reallocations, 1);
+        assert_eq!(
+            stats.bytes_uploaded,
+            quads.len() * size_of::<GlyphQuadInstance>()
         );
     }
 
