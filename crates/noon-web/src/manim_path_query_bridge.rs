@@ -26,10 +26,7 @@ fn transform_point(snapshot: &ObjectSnapshot, point: Vec2) -> Vec2 {
 /// Vector paths use the shared `noon-geometry` ten-sample Bezier length measure.
 /// Analytic lines stay analytic and use exact linear interpolation. The returned point
 /// is transformed into world space from the snapshot's current retained transform.
-pub fn manim_point_from_proportion(
-    snapshot_json: &str,
-    alpha: f64,
-) -> Result<Vec2, String> {
+pub fn manim_point_from_proportion(snapshot_json: &str, alpha: f64) -> Result<Vec2, String> {
     let alpha = validate_alpha(alpha)?;
     let snapshot: ObjectSnapshot = serde_json::from_str(snapshot_json)
         .map_err(|error| format!("invalid path query snapshot: {error}"))?;
@@ -114,12 +111,10 @@ mod tests {
 
     #[test]
     fn query_preserves_analytic_line_and_current_transform() {
-        let snapshot = ObjectSnapshot::new(GeometryRef::line(
-            Vec2::new(-1.0, 0.0),
-            Vec2::new(3.0, 0.0),
-        ))
-        .scale_xy(Vec2::new(2.0, 3.0))
-        .shift(Vec2::new(1.0, -1.0));
+        let snapshot =
+            ObjectSnapshot::new(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(3.0, 0.0)))
+                .scale_xy(Vec2::new(2.0, 3.0))
+                .shift(Vec2::new(1.0, -1.0));
 
         assert_point(
             manim_point_from_proportion(&encode(&snapshot), 0.25).expect("line query"),
@@ -142,15 +137,9 @@ mod tests {
 
     #[test]
     fn query_handles_shared_arc_vector_path_endpoints() {
-        let snapshot = Arc::with_options(
-            2.0,
-            0.0,
-            std::f32::consts::FRAC_PI_2,
-            9,
-            Vec2::ZERO,
-        )
-        .expect("valid arc")
-        .into_snapshot();
+        let snapshot = Arc::with_options(2.0, 0.0, std::f32::consts::FRAC_PI_2, 9, Vec2::ZERO)
+            .expect("valid arc")
+            .into_snapshot();
         let json = encode(&snapshot);
 
         assert_point(
