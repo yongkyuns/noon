@@ -8,6 +8,7 @@ on:
       - "crates/noon-text-render-wgpu/**"
       - "crates/noon-web/**"
       - "scripts/authoring-render-mode-switch-smoke.mjs"
+      - "scripts/authoring-render-prepare-smoke.mjs"
       - "scripts/build-web-demo.sh"
       - "web/authoring-render-worker.js"
       - "web/execution-engine-worker.js"
@@ -22,6 +23,7 @@ on:
       - "crates/noon-text-render-wgpu/**"
       - "crates/noon-web/**"
       - "scripts/authoring-render-mode-switch-smoke.mjs"
+      - "scripts/authoring-render-prepare-smoke.mjs"
       - "scripts/build-web-demo.sh"
       - "web/authoring-render-worker.js"
       - "web/execution-engine-worker.js"
@@ -78,6 +80,7 @@ jobs:
         run: |
           node --check web/authoring-render-worker.js
           node --check scripts/authoring-render-mode-switch-smoke.mjs
+          node --check scripts/authoring-render-prepare-smoke.mjs
 
       - name: Build browser package
         env:
@@ -95,6 +98,9 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
+
+      - name: Prepare one retained render owner before engine selection
+        run: node scripts/authoring-render-prepare-smoke.mjs
 
       - name: Switch legacy retained legacy on one render owner
         run: node scripts/authoring-render-mode-switch-smoke.mjs
