@@ -1,10 +1,7 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
-function locationKey(example) {
-  return `${example.source_path}:${example.directive_line}`;
-}
 
 function assertObject(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -28,6 +25,22 @@ function validateExampleShape(example, name) {
   }
 }
 
+export function referenceInventoryFingerprint(examples) {
+  if (!Array.isArray(examples)) {
+    throw new Error("inventory.examples must be an array");
+  }
+  const projection = examples.map((example, index) => {
+    validateExampleShape(example, `inventory.examples[${index}]`);
+    return {
+      source_path: example.source_path,
+      directive_line: example.directive_line,
+      name: example.name,
+      source_sha256: example.source_sha256,
+    };
+  });
+  return createHash("sha256").update(JSON.stringify(projection), "utf8").digest("hex");
+}
+
 export function validateReferenceLedger(inventory, ledger) {
   assertObject(inventory, "inventory");
   assertObject(ledger, "ledger");
@@ -40,46 +53,33 @@ export function validateReferenceLedger(inventory, ledger) {
   if (JSON.stringify(ledger.upstream) !== JSON.stringify(inventory.upstream)) {
     throw new Error("ledger upstream provenance does not match extracted inventory");
   }
-  if (!Array.isArray(inventory.examples) || !Array.isArray(ledger.entries)) {
-    throw new Error("inventory.examples and ledger.entries must be arrays");
+  if (!Number.isInteger(ledger.example_count) || ledger.example_count < 0) {
+    throw new Error("ledger.example_count must be a non-negative integer");
+  }
+  if (typeof ledger.provenance_sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(ledger.provenance_sha256)) {
+    throw new Error("ledger.provenance_sha256 must be a lowercase SHA-256 digest");
+  }
+  if (!Array.isArray(inventory.examples)) {
+    throw new Error("inventory.examples must be an array");
+  }
+  if (inventory.examples.length !== ledger.example_count) {
+    throw new Error(
+      `reference example count drift: expected ${ledger.example_count}, extracted ${inventory.examples.length}`,
+    );
   }
 
-  const extracted = new Map();
-  for (const [index, example] of inventory.examples.entries()) {
-    validateExampleShape(example, `inventory.examples[${index}]`);
-    const key = locationKey(example);
-    if (extracted.has(key)) {
-      throw new Error(`duplicate extracted reference location ${key}`);
-    }
-    extracted.set(key, example);
-  }
-
-  const tracked = new Set();
-  for (const [index, entry] of ledger.entries.entries()) {
-    validateExampleShape(entry, `ledger.entries[${index}]`);
-    const key = locationKey(entry);
-    if (tracked.has(key)) {
-      throw new Error(`duplicate ledger reference location ${key}`);
-    }
-    tracked.add(key);
-    const example = extracted.get(key);
-    if (!example) {
-      throw new Error(`ledger contains reference absent from pinned inventory: ${key}`);
-    }
-    if (entry.name !== example.name || entry.source_sha256 !== example.source_sha256) {
-      throw new Error(`ledger provenance drift at ${key}`);
-    }
-  }
-
-  const missing = [...extracted.keys()].filter((key) => !tracked.has(key));
-  if (missing.length > 0) {
-    throw new Error(`ledger is missing ${missing.length} pinned reference example(s): ${missing.slice(0, 5).join(", ")}`);
+  const fingerprint = referenceInventoryFingerprint(inventory.examples);
+  if (fingerprint !== ledger.provenance_sha256) {
+    throw new Error(
+      `reference inventory provenance drift: expected ${ledger.provenance_sha256}, extracted ${fingerprint}`,
+    );
   }
 
   return {
     schema_version: 1,
     upstream: inventory.upstream,
-    tracked_examples: tracked.size,
+    tracked_examples: inventory.examples.length,
+    provenance_sha256: fingerprint,
   };
 }
 
