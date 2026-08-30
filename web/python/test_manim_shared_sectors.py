@@ -160,8 +160,9 @@ class ManimSharedSectorTests(unittest.TestCase):
             assert annular.arc_center.x == 2.0 and annular.arc_center.y == -1.0
             assert math.isclose(annular.style["fill"]["alpha"], 0.4)
             assert annular.style["stroke_width"] == 2.0
-            assert math.isclose(annular.style["fill"]["red"], BLUE.red)
-            assert math.isclose(annular.style["stroke"]["blue"], BLUE.blue)
+            parsed_blue = _manim_phase_b._as_color("color", BLUE)
+            assert math.isclose(annular.style["fill"]["red"], parsed_blue.red)
+            assert math.isclose(annular.style["stroke"]["blue"], parsed_blue.blue)
             assert circle_sector.inner_radius == 0.0
             assert circle_sector.outer_radius == 2.5
             assert ring.mark_paths_closed is True
