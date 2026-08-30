@@ -504,7 +504,7 @@ async function ensureRuntimeReady({
         nextPlayer,
         document.querySelector(".preview-pane"),
         {
-          durationSeconds: playbackDurationSeconds,
+          durationSeconds: loopDurationSeconds,
           onError: showPlaybackError,
         },
       );
@@ -513,7 +513,7 @@ async function ensureRuntimeReady({
       playbackControls.sync({
         time: initialState.time,
         playing: initialState.playing,
-        durationSeconds: playbackDurationSeconds,
+        durationSeconds: loopDurationSeconds,
       });
       startMetricsPolling();
       return {
@@ -731,9 +731,6 @@ async function runScene() {
         authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument);
       const startRetained = (authored.retainedDocument?.objects?.length ?? 0) > 0;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
-      if (authored.duration > 0) {
-        playbackDurationSeconds = authored.duration;
-      }
 
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
@@ -765,6 +762,9 @@ async function runScene() {
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
       }
 
+      if (authored.duration > 0) {
+        playbackDurationSeconds = authored.duration;
+      }
       playbackControls?.sync({
         time: result.time,
         playing: result.playing,
