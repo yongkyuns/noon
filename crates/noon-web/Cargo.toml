@@ -13,6 +13,7 @@ ciborium = "0.2"
 noon = { path = "../noon" }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
+noon-geometry = { path = "../noon-geometry" }
 noon-ir = { path = "../noon-ir" }
 noon-runtime = { path = "../noon-runtime" }
 serde = { version = "1", features = ["derive"] }
