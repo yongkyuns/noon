@@ -43,4 +43,5 @@ jobs:
           python scripts/manim-differential.py
           python scripts/manim-dot-ellipse-differential.py
           python scripts/manim-sector-differential.py
+          python scripts/manim-elbow-differential.py
           python scripts/manim-frame-sampling-differential.py
