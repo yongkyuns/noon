@@ -9,6 +9,7 @@ const CLASSIFIED_STATUSES = new Set([
   "deferred",
   "intentional-divergence",
 ]);
+const PROVENANCE_ONLY_STATUSES = new Set(["blocked", "deferred"]);
 const EXACT_SOURCE_REUSE = "source-equivalent-manim-v0.21";
 const MANIM_IMPORT_PRELUDE = "from manim import *";
 
@@ -50,6 +51,40 @@ function inventoryIdentity(example) {
   return `${example.source_path}:${example.directive_line}:${example.name ?? "<unnamed>"}`;
 }
 
+function validateProvenance(value, name) {
+  assertObject(value, name);
+  if (typeof value.source_path !== "string" || value.source_path.length === 0) {
+    throw new Error(`${name}.source_path must be a non-empty string`);
+  }
+  if (!Number.isInteger(value.directive_line) || value.directive_line < 1) {
+    throw new Error(`${name}.directive_line must be a positive integer`);
+  }
+  if (value.name !== null && typeof value.name !== "string") {
+    throw new Error(`${name}.name must be a string or null`);
+  }
+  if (typeof value.source_sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_sha256)) {
+    throw new Error(`${name}.source_sha256 must be a lowercase SHA-256 digest`);
+  }
+}
+
+function provenanceKey(value) {
+  return JSON.stringify([
+    value.source_path,
+    value.directive_line,
+    value.name,
+    value.source_sha256,
+  ]);
+}
+
+function inventoryProjection(example) {
+  return {
+    source_path: example.source_path,
+    directive_line: example.directive_line,
+    name: example.name,
+    source_sha256: example.source_sha256,
+  };
+}
+
 function validateInputs(inventory, manifest, lock) {
   assertObject(inventory, "inventory");
   assertObject(manifest, "manifest");
@@ -60,11 +95,19 @@ function validateInputs(inventory, manifest, lock) {
   if (!Array.isArray(manifest.entries)) {
     throw new Error("manifest.entries must be an array");
   }
-  if (lock.schema_version !== 1) {
+  if (lock.schema_version !== 2) {
     throw new Error(`unsupported reference coverage lock schema ${lock.schema_version}`);
   }
   if (!Number.isInteger(lock.minimum_reconciled_examples) || lock.minimum_reconciled_examples < 0) {
     throw new Error("coverage lock minimum_reconciled_examples must be a non-negative integer");
+  }
+  if (!Number.isInteger(lock.minimum_classified_examples) || lock.minimum_classified_examples < 0) {
+    throw new Error("coverage lock minimum_classified_examples must be a non-negative integer");
+  }
+  if (lock.minimum_classified_examples < lock.minimum_reconciled_examples) {
+    throw new Error(
+      "coverage lock minimum_classified_examples must be at least minimum_reconciled_examples",
+    );
   }
 }
 
@@ -77,19 +120,32 @@ export async function reconcileReferenceCoverage(
   validateInputs(inventory, manifest, lock);
 
   const byHash = new Map();
+  const byProvenance = new Map();
   for (const [index, example] of inventory.examples.entries()) {
-    if (typeof example.source_sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(example.source_sha256)) {
-      throw new Error(`inventory.examples[${index}].source_sha256 is invalid`);
-    }
+    validateProvenance(example, `inventory.examples[${index}]`);
     const matches = byHash.get(example.source_sha256) ?? [];
     matches.push({ index, example });
     byHash.set(example.source_sha256, matches);
+
+    const key = provenanceKey(example);
+    if (byProvenance.has(key)) {
+      throw new Error(`duplicate inventory provenance for ${inventoryIdentity(example)}`);
+    }
+    byProvenance.set(key, { index, example });
   }
 
   const referenceEntries = manifest.entries.filter(isReferenceEntry);
   const reconciled = [];
+  const provenanceClassified = [];
   const classifiedWithoutExactSource = [];
   const matchedInventoryIndices = new Set();
+
+  function claimInventory(index, example) {
+    if (matchedInventoryIndices.has(index)) {
+      throw new Error(`multiple manifest entries map to ${inventoryIdentity(example)}`);
+    }
+    matchedInventoryIndices.add(index);
+  }
 
   for (const entry of referenceEntries) {
     assertObject(entry, `manifest entry ${entry?.id ?? "<unknown>"}`);
@@ -99,14 +155,44 @@ export async function reconcileReferenceCoverage(
       );
     }
 
+    const hasProvenance = entry.reference_provenance !== undefined;
     if (entry.reuse !== EXACT_SOURCE_REUSE) {
-      classifiedWithoutExactSource.push({
+      if (!hasProvenance) {
+        classifiedWithoutExactSource.push({
+          id: entry.id,
+          title: entry.title ?? null,
+          status: entry.status,
+          upstream: entry.upstream,
+        });
+        continue;
+      }
+      if (!PROVENANCE_ONLY_STATUSES.has(entry.status)) {
+        throw new Error(
+          `provenance-only reference entry ${entry.id} must be blocked or deferred, got ${entry.status}`,
+        );
+      }
+      validateProvenance(entry.reference_provenance, `reference entry ${entry.id}.reference_provenance`);
+      const matched = byProvenance.get(provenanceKey(entry.reference_provenance));
+      if (matched === undefined) {
+        throw new Error(
+          `reference entry ${entry.id} provenance does not match one pinned directive`,
+        );
+      }
+      claimInventory(matched.index, matched.example);
+      provenanceClassified.push({
         id: entry.id,
         title: entry.title ?? null,
         status: entry.status,
         upstream: entry.upstream,
+        inventory: inventoryProjection(matched.example),
       });
       continue;
+    }
+
+    if (hasProvenance) {
+      throw new Error(
+        `exact-source reference entry ${entry.id} must not also set reference_provenance`,
+      );
     }
     if (typeof entry.upstream_source !== "string" || entry.upstream_source.length === 0) {
       throw new Error(`exact-source reference entry ${entry.id} is missing upstream_source`);
@@ -130,22 +216,14 @@ export async function reconcileReferenceCoverage(
     }
 
     const [{ index, example }] = matches;
-    if (matchedInventoryIndices.has(index)) {
-      throw new Error(`multiple manifest entries map to ${inventoryIdentity(example)}`);
-    }
-    matchedInventoryIndices.add(index);
+    claimInventory(index, example);
     reconciled.push({
       id: entry.id,
       title: entry.title ?? null,
       status: entry.status,
       upstream: entry.upstream,
       upstream_source: entry.upstream_source,
-      inventory: {
-        source_path: example.source_path,
-        directive_line: example.directive_line,
-        name: example.name,
-        source_sha256: example.source_sha256,
-      },
+      inventory: inventoryProjection(example),
     });
   }
 
@@ -154,15 +232,23 @@ export async function reconcileReferenceCoverage(
       `reference coverage regression: expected at least ${lock.minimum_reconciled_examples} reconciled examples, found ${reconciled.length}`,
     );
   }
+  if (matchedInventoryIndices.size < lock.minimum_classified_examples) {
+    throw new Error(
+      `reference classification regression: expected at least ${lock.minimum_classified_examples} classified examples, found ${matchedInventoryIndices.size}`,
+    );
+  }
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     upstream: inventory.upstream,
     inventory_examples: inventory.examples.length,
     manifest_reference_entries: referenceEntries.length,
     reconciled_examples: reconciled.length,
+    provenance_classified_examples: provenanceClassified.length,
+    classified_examples: matchedInventoryIndices.size,
     classified_without_exact_source: classifiedWithoutExactSource,
     unclassified_inventory_examples: inventory.examples.length - matchedInventoryIndices.size,
+    provenance_classified: provenanceClassified,
     reconciled,
   };
 }

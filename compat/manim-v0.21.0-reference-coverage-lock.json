@@ -1,4 +1,5 @@
 {
-  "schema_version": 1,
-  "minimum_reconciled_examples": 20
+  "schema_version": 2,
+  "minimum_reconciled_examples": 20,
+  "minimum_classified_examples": 20
 }

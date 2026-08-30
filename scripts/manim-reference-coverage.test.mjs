@@ -22,7 +22,7 @@ function inventory(examples) {
 
 function example(name, source, line = 10) {
   return {
-    source_path: `docs/source/reference/${name}.py`,
+    source_path: `manim/example/${name}.py`,
     directive_line: line,
     name,
     source_sha256: normalizedSourceHash(source),
@@ -33,6 +33,14 @@ function manifest(entries) {
   return { entries };
 }
 
+function coverageLock(minimumReconciled = 0, minimumClassified = minimumReconciled) {
+  return {
+    schema_version: 2,
+    minimum_reconciled_examples: minimumReconciled,
+    minimum_classified_examples: minimumClassified,
+  };
+}
+
 function exactEntry(overrides = {}) {
   return {
     id: "dot-example",
@@ -41,6 +49,26 @@ function exactEntry(overrides = {}) {
     upstream: "reference/manim.mobject.geometry.arc.Dot.html",
     upstream_source: "fixtures/dot.py",
     reuse: "source-equivalent-manim-v0.21",
+    ...overrides,
+  };
+}
+
+function provenanceFor(value) {
+  return {
+    source_path: value.source_path,
+    directive_line: value.directive_line,
+    name: value.name,
+    source_sha256: value.source_sha256,
+  };
+}
+
+function classifiedEntry(value, overrides = {}) {
+  return {
+    id: "blocked-reference",
+    title: value.name,
+    status: "blocked",
+    upstream: `reference/manim.example.${value.name}.html`,
+    reference_provenance: provenanceFor(value),
     ...overrides,
   };
 }
@@ -75,13 +103,15 @@ test("reconciles exact-source reference entries by immutable source provenance",
       exactEntry(),
       { id: "quickstart", status: "ready", upstream: "tutorials/quickstart.html" },
     ]),
-    { schema_version: 1, minimum_reconciled_examples: 1 },
+    coverageLock(1, 1),
     { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
   );
 
   assert.equal(report.inventory_examples, 2);
   assert.equal(report.manifest_reference_entries, 1);
   assert.equal(report.reconciled_examples, 1);
+  assert.equal(report.provenance_classified_examples, 0);
+  assert.equal(report.classified_examples, 1);
   assert.equal(report.unclassified_inventory_examples, 1);
   assert.equal(report.reconciled[0].inventory.name, "DotExample");
 });
@@ -91,7 +121,7 @@ test("uses the manifest title to disambiguate identical directive source", async
   const report = await reconcileReferenceCoverage(
     inventory([example("DotExample", DIRECTIVE_A), duplicate]),
     manifest([exactEntry()]),
-    { schema_version: 1, minimum_reconciled_examples: 1 },
+    coverageLock(1, 1),
     { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
   );
 
@@ -103,7 +133,7 @@ test("fails when an exact-source fixture no longer identifies one pinned directi
     reconcileReferenceCoverage(
       inventory([example("OtherExample", DIRECTIVE_B)]),
       manifest([exactEntry()]),
-      { schema_version: 1, minimum_reconciled_examples: 0 },
+      coverageLock(),
       { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
     ),
     /matched no extracted directive/u,
@@ -115,14 +145,14 @@ test("ratchets the number of reconciled reference examples", async () => {
     reconcileReferenceCoverage(
       inventory([example("DotExample", DIRECTIVE_A)]),
       manifest([exactEntry()]),
-      { schema_version: 1, minimum_reconciled_examples: 2 },
+      coverageLock(2, 2),
       { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
     ),
     /reference coverage regression/u,
   );
 });
 
-test("keeps blocked/deferred reference classifications visible without inventing source provenance", async () => {
+test("keeps unprovenanced blocked/deferred reference entries visible but unclassified", async () => {
   const report = await reconcileReferenceCoverage(
     inventory([example("DotExample", DIRECTIVE_A)]),
     manifest([
@@ -134,11 +164,13 @@ test("keeps blocked/deferred reference classifications visible without inventing
         dependency: "#123",
       },
     ]),
-    { schema_version: 1, minimum_reconciled_examples: 0 },
+    coverageLock(),
     { readSource: sourceReader({}), repositoryRoot: "/repo" },
   );
 
   assert.equal(report.reconciled_examples, 0);
+  assert.equal(report.provenance_classified_examples, 0);
+  assert.equal(report.classified_examples, 0);
   assert.deepEqual(report.classified_without_exact_source, [
     {
       id: "blocked-reference",
@@ -147,4 +179,96 @@ test("keeps blocked/deferred reference classifications visible without inventing
       upstream: "reference/manim.example.BlockedReference.html",
     },
   ]);
+});
+
+test("classifies blocked/deferred reference entries by immutable inventory provenance", async () => {
+  const blocked = example("DashedLineExample", DIRECTIVE_A);
+  const deferred = example("TangentLineExample", DIRECTIVE_B, 20);
+  const report = await reconcileReferenceCoverage(
+    inventory([blocked, deferred]),
+    manifest([
+      classifiedEntry(blocked),
+      classifiedEntry(deferred, {
+        id: "deferred-reference",
+        status: "deferred",
+      }),
+    ]),
+    coverageLock(0, 2),
+    { readSource: sourceReader({}), repositoryRoot: "/repo" },
+  );
+
+  assert.equal(report.reconciled_examples, 0);
+  assert.equal(report.provenance_classified_examples, 2);
+  assert.equal(report.classified_examples, 2);
+  assert.equal(report.unclassified_inventory_examples, 0);
+  assert.deepEqual(
+    report.provenance_classified.map((entry) => entry.inventory.name),
+    ["DashedLineExample", "TangentLineExample"],
+  );
+});
+
+test("rejects provenance-only ready entries so supported examples keep exact-source proof", async () => {
+  const pinned = example("DotExample", DIRECTIVE_A);
+  await assert.rejects(
+    reconcileReferenceCoverage(
+      inventory([pinned]),
+      manifest([classifiedEntry(pinned, { status: "ready" })]),
+      coverageLock(),
+      { readSource: sourceReader({}), repositoryRoot: "/repo" },
+    ),
+    /must be blocked or deferred/u,
+  );
+});
+
+test("rejects stale provenance-only classifications", async () => {
+  const pinned = example("DashedLineExample", DIRECTIVE_A);
+  const stale = provenanceFor(pinned);
+  stale.directive_line += 1;
+  await assert.rejects(
+    reconcileReferenceCoverage(
+      inventory([pinned]),
+      manifest([classifiedEntry(pinned, { reference_provenance: stale })]),
+      coverageLock(),
+      { readSource: sourceReader({}), repositoryRoot: "/repo" },
+    ),
+    /does not match one pinned directive/u,
+  );
+});
+
+test("rejects duplicate claims across exact-source and provenance-only entries", async () => {
+  const pinned = example("DotExample", DIRECTIVE_A);
+  await assert.rejects(
+    reconcileReferenceCoverage(
+      inventory([pinned]),
+      manifest([exactEntry(), classifiedEntry(pinned)]),
+      coverageLock(1, 1),
+      { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo" },
+    ),
+    /multiple manifest entries map/u,
+  );
+});
+
+test("ratchets total classified inventory independently from exact-source reconciliation", async () => {
+  const pinned = example("DashedLineExample", DIRECTIVE_A);
+  await assert.rejects(
+    reconcileReferenceCoverage(
+      inventory([pinned]),
+      manifest([classifiedEntry(pinned)]),
+      coverageLock(0, 2),
+      { readSource: sourceReader({}), repositoryRoot: "/repo" },
+    ),
+    /reference classification regression/u,
+  );
+});
+
+test("requires the classification ratchet to cover the exact-source ratchet", async () => {
+  await assert.rejects(
+    reconcileReferenceCoverage(
+      inventory([]),
+      manifest([]),
+      coverageLock(2, 1),
+      { readSource: sourceReader({}), repositoryRoot: "/repo" },
+    ),
+    /minimum_classified_examples must be at least minimum_reconciled_examples/u,
+  );
 });
