@@ -2,7 +2,10 @@ import initNoonWeb, {
   RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
+  manimAnnularSectorSnapshotJson,
+  manimAnnulusSnapshotJson,
   manimDotSnapshotJson,
+  manimSectorSnapshotJson,
   manimTriangleSnapshotJson,
   resolveAnimationOptions,
   resolveCompositionSchedule,
@@ -48,6 +51,12 @@ async function initializePyodide() {
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
     authoringStore.createMobject(manimTriangleSnapshotJson());
+  self.noonCreateAuthoringAnnularSectorHandle = (...args) =>
+    authoringStore.createMobject(manimAnnularSectorSnapshotJson(...args));
+  self.noonCreateAuthoringSectorHandle = (...args) =>
+    authoringStore.createMobject(manimSectorSnapshotJson(...args));
+  self.noonCreateAuthoringAnnulusHandle = (...args) =>
+    authoringStore.createMobject(manimAnnulusSnapshotJson(...args));
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
   self.noonCreateAuthoringSquareHandle = (sideLength) => authoringStore.createManimSquare(sideLength);
   self.noonCreateAuthoringRectangleHandle = (width, height) =>

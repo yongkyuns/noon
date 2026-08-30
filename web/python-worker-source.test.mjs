@@ -10,3 +10,12 @@ test("Python authoring worker keeps request validation helper", () => {
   assert.match(source, /function\s+isRecord\s*\(value\)\s*\{/);
   assert.match(source, /if\s*\(!isRecord\(request\)\s*\|\|\s*request\.channel\s*!==\s*AUTHORING_CHANNEL\)/);
 });
+
+test("Python authoring worker keeps shared sector constructors", () => {
+  assert.match(source, /manimAnnularSectorSnapshotJson/);
+  assert.match(source, /manimSectorSnapshotJson/);
+  assert.match(source, /manimAnnulusSnapshotJson/);
+  assert.match(source, /noonCreateAuthoringAnnularSectorHandle/);
+  assert.match(source, /noonCreateAuthoringSectorHandle/);
+  assert.match(source, /noonCreateAuthoringAnnulusHandle/);
+});
