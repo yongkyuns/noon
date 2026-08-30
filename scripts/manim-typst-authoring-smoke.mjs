@@ -55,6 +55,20 @@ class MultilineText(Scene):
         self.add(text)
 `;
 
+const nativeTextLayoutSource = `from noon import *
+
+
+class NativeTextLayout(Scene):
+    def construct(self):
+        box = Square(side_length=2)
+        label = Text("Native Noon", font_size=48)
+        if label.width <= 0 or label.height <= 0:
+            raise RuntimeError("native Text layout metrics must be positive")
+        label.width = 2
+        label.next_to(box, RIGHT, buff=0.25)
+        self.add(box, label)
+`;
+
 const helloTypstSource = `from noon import *
 
 
@@ -108,6 +122,7 @@ function assertNativeText(result, expected) {
   assert.equal(object.text.backend.kind, "native");
   assert.equal(object.text.backend.font_family, expected.fontFamily ?? "DejaVu Sans Mono");
   assert.equal(object.text.backend.line_spacing, expected.lineSpacing ?? -1);
+  return object;
 }
 
 function assertTypst(result, expected) {
@@ -236,6 +251,25 @@ try {
     order: 0,
   });
 
+  const nativeLayout = await page.evaluate(
+    (source) => window.noonRetainedTextSmoke.run(source),
+    nativeTextLayoutSource,
+  );
+  assert.equal(nativeLayout.document.objects.length, 1, "layout scene must retain only the Square as geometry");
+  assert.equal(nativeLayout.document.objects[0].id, 0);
+  const nativeLayoutText = assertNativeText(nativeLayout, {
+    source: "Native Noon",
+    fontSize: 48,
+    order: 1,
+  });
+  assert.ok(
+    Math.abs(nativeLayoutText.text.transform.translation.x - 2.25) < 1e-4,
+    "Text.next_to must use Rust-owned width/critical-point metrics",
+  );
+  assert.ok(Math.abs(nativeLayoutText.text.transform.translation.y) < 1e-5);
+  assert.ok(Math.abs(nativeLayoutText.text.transform.scale.x - nativeLayoutText.text.transform.scale.y) < 1e-6);
+  assert.ok(nativeLayoutText.text.transform.scale.x > 0);
+
   const helloTypst = await page.evaluate(
     (source) => window.noonRetainedTextSmoke.run(source),
     helloTypstSource,
@@ -280,7 +314,7 @@ try {
   await page.evaluate(() => window.noonRetainedTextSmoke.stop());
   assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
   console.log(
-    "Retained text authoring smoke passed: native Text and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Retained text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();

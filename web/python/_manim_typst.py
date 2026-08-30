@@ -145,6 +145,15 @@ def _as_color(value: object) -> _base.Color:
     raise TypeError("retained text color must be a Noon/Manim Color")
 
 
+def _native_layout_handle(handle: object):
+    required = ("centerX", "centerY", "width", "height", "criticalX", "criticalY")
+    if not all(hasattr(handle, name) for name in required):
+        raise NotImplementedError(
+            "native Text layout queries require the Rust/WASM retained authoring handle"
+        )
+    return handle
+
+
 class _RetainedTextMobject(_base.Mobject):
     """Python semantic identity for one retained resource-backed text object."""
 
@@ -367,6 +376,46 @@ class Text(_RetainedTextMobject):
     @property
     def line_spacing(self) -> float:
         return self._line_spacing
+
+    def get_center(self) -> _base.Vec2:
+        handle = _native_layout_handle(self._retained_handle)
+        return _base.Vec2(float(handle.centerX), float(handle.centerY))
+
+    @property
+    def width(self) -> float:
+        return float(_native_layout_handle(self._retained_handle).width)
+
+    @width.setter
+    def width(self, value: float) -> None:
+        target = float(value)
+        current = self.width
+        if not math.isfinite(target) or target <= 0.0:
+            raise ValueError("Text width must be finite and positive")
+        if current <= 0.0:
+            raise ValueError("cannot set width of zero-width Text")
+        self.scale(target / current)
+
+    @property
+    def height(self) -> float:
+        return float(_native_layout_handle(self._retained_handle).height)
+
+    @height.setter
+    def height(self, value: float) -> None:
+        target = float(value)
+        current = self.height
+        if not math.isfinite(target) or target <= 0.0:
+            raise ValueError("Text height must be finite and positive")
+        if current <= 0.0:
+            raise ValueError("cannot set height of zero-height Text")
+        self.scale(target / current)
+
+    def get_critical_point(self, direction: object) -> _base.Vec2:
+        axis = _compat._as_vec2(direction)
+        handle = _native_layout_handle(self._retained_handle)
+        return _base.Vec2(
+            float(handle.criticalX(float(axis.x), float(axis.y))),
+            float(handle.criticalY(float(axis.x), float(axis.y))),
+        )
 
     def _copy_constructor(self) -> Text:
         return type(self)(
