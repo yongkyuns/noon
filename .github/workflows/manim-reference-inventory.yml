@@ -5,20 +5,30 @@ on:
     paths:
       - '.github/workflows/manim-reference-inventory.yml'
       - 'compat/manim-v0.21.0-reference-inventory-lock.json'
+      - 'compat/manim-v0.21.0-reference-coverage-lock.json'
+      - 'parity/manim-v0.21/upstream-examples/**'
+      - 'web/python/examples/manim_tutorial_manifest.json'
       - 'scripts/manim-reference-inventory.mjs'
       - 'scripts/manim-reference-inventory.test.mjs'
       - 'scripts/manim-reference-ledger.mjs'
       - 'scripts/manim-reference-ledger.test.mjs'
+      - 'scripts/manim-reference-coverage.mjs'
+      - 'scripts/manim-reference-coverage.test.mjs'
   push:
     branches:
       - master
     paths:
       - '.github/workflows/manim-reference-inventory.yml'
       - 'compat/manim-v0.21.0-reference-inventory-lock.json'
+      - 'compat/manim-v0.21.0-reference-coverage-lock.json'
+      - 'parity/manim-v0.21/upstream-examples/**'
+      - 'web/python/examples/manim_tutorial_manifest.json'
       - 'scripts/manim-reference-inventory.mjs'
       - 'scripts/manim-reference-inventory.test.mjs'
       - 'scripts/manim-reference-ledger.mjs'
       - 'scripts/manim-reference-ledger.test.mjs'
+      - 'scripts/manim-reference-coverage.mjs'
+      - 'scripts/manim-reference-coverage.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -118,6 +128,28 @@ jobs:
           printf '\nReference inventory lock verified against the immutable extracted corpus.\n' \
             >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Reconcile canonical reference coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          node noon/scripts/manim-reference-coverage.mjs \
+            noon/artifacts/manim-v0.21.0-reference-inventory.json \
+            noon/web/python/examples/manim_tutorial_manifest.json \
+            noon/compat/manim-v0.21.0-reference-coverage-lock.json \
+            noon \
+            > noon/artifacts/manim-v0.21.0-reference-coverage.json
+          cat noon/artifacts/manim-v0.21.0-reference-coverage.json
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(
+            fs.readFileSync("noon/artifacts/manim-v0.21.0-reference-coverage.json", "utf8"),
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `\nReconciled ${report.reconciled_examples}/${report.inventory_examples} pinned reference directives with exact-source canonical manifest entries; ${report.unclassified_inventory_examples} remain to classify.\n`,
+          );
+          NODE
+
       - name: Upload reference inventory
         if: always()
         uses: actions/upload-artifact@v4
@@ -126,5 +158,6 @@ jobs:
           path: |
             noon/artifacts/manim-v0.21.0-reference-inventory.json
             noon/artifacts/manim-v0.21.0-reference-ledger-summary.json
+            noon/artifacts/manim-v0.21.0-reference-coverage.json
           if-no-files-found: error
           retention-days: 14

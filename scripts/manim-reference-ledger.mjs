@@ -62,16 +62,14 @@ export function validateReferenceLedger(inventory, ledger) {
   if (!Array.isArray(inventory.examples)) {
     throw new Error("inventory.examples must be an array");
   }
-  if (inventory.examples.length !== ledger.example_count) {
-    throw new Error(
-      `reference example count drift: expected ${ledger.example_count}, extracted ${inventory.examples.length}`,
-    );
-  }
 
   const fingerprint = referenceInventoryFingerprint(inventory.examples);
-  if (fingerprint !== ledger.provenance_sha256) {
+  if (
+    inventory.examples.length !== ledger.example_count ||
+    fingerprint !== ledger.provenance_sha256
+  ) {
     throw new Error(
-      `reference inventory provenance drift: expected ${ledger.provenance_sha256}, extracted ${fingerprint}`,
+      `reference inventory drift: expected count ${ledger.example_count} / ${ledger.provenance_sha256}, extracted count ${inventory.examples.length} / ${fingerprint}`,
     );
   }
 

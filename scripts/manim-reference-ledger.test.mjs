@@ -47,12 +47,16 @@ test("accepts an exact pinned reference inventory lock", () => {
   });
 });
 
-test("rejects added or removed pinned examples", () => {
+test("reports count and fingerprint together for added or removed examples", () => {
   const { inventory, ledger } = fixture();
   inventory.examples.pop();
+  const actualFingerprint = referenceInventoryFingerprint(inventory.examples);
   assert.throws(
     () => validateReferenceLedger(inventory, ledger),
-    /reference example count drift: expected 2, extracted 1/u,
+    new RegExp(
+      `reference inventory drift: expected count 2 / ${ledger.provenance_sha256}, extracted count 1 / ${actualFingerprint}`,
+      "u",
+    ),
   );
 });
 
@@ -66,7 +70,7 @@ test("rejects moved, renamed, or source-changed reference examples", () => {
     inventory.examples[0] = mutation(inventory.examples[0]);
     assert.throws(
       () => validateReferenceLedger(inventory, ledger),
-      /reference inventory provenance drift/u,
+      /reference inventory drift/u,
     );
   }
 });

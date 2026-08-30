@@ -27,6 +27,16 @@ test("extracts directive options and source from Python docstrings", () => {
   assert.match(examples[0].source_sha256, /^[0-9a-f]{64}$/u);
 });
 
+test("accepts the spaced manim directive spelling used by pinned ManimCE", () => {
+  const examples = extractManimDirectives(
+    `.. manim :: GrowFromPointExample\n\n    class GrowFromPointExample(Scene):\n        pass\n`,
+    "manim/animation/growing.py",
+  );
+  assert.equal(examples.length, 1);
+  assert.equal(examples[0].name, "GrowFromPointExample");
+  assert.equal(examples[0].source, "class GrowFromPointExample(Scene):\n    pass");
+});
+
 test("supports different directive indentation and multiple examples", () => {
   const input = `.. manim:: First\n    :save_last_frame:\n\n    class First(Scene):\n        pass\n\nText between directives.\n\n    .. manim:: Second\n      class Second(Scene):\n          pass\n`;
   const examples = extractManimDirectives(input, "docs/source/example.rst");
