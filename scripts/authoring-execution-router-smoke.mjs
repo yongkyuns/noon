@@ -60,7 +60,7 @@ const mixedSource = `from noon import *
 class MixedRouterScene(Scene):
     def construct(self):
         self.add(Circle(radius=0.4))
-        self.add(Typst("middle", font_size=56))
+        self.add(Text("middle", font_size=56))
         self.add(Square(side_length=0.8))
 `;
 
@@ -125,6 +125,7 @@ try {
     const initialCanvas = execution.canvas;
 
     const mixed = await authoring.run(mixedSource, {});
+    const mixedRetainedBackend = mixed.retainedDocument.objects[0].text.backend.kind;
     const inFlightLegacyMetrics = execution.metrics();
     const mixedTransition = execution.reconcileScene(JSON.stringify(mixed.document), {
       retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
@@ -234,6 +235,7 @@ try {
       retainedMode: AUTHORING_EXECUTION_RETAINED,
       initialReady,
       initialCanvasChanged: initialCanvas !== originalCanvas,
+      mixedRetainedBackend,
       legacyRaceModeBeforeMixed: preMixedRaceMetrics.executionMode,
       mixedMode: mixedResult.mode,
       mixedRebuilt: mixedResult.rebuilt,
@@ -298,6 +300,7 @@ try {
   assert.equal(result.initialCanvasChanged, false);
   assert.equal(result.initialReady.transportMode, "transferable");
   assert.equal(result.transportMode, "transferable");
+  assert.equal(result.mixedRetainedBackend, "native");
   assert.ok([result.initialMode, result.retainedMode].includes(result.legacyRaceModeBeforeMixed));
   assert.equal(result.mixedMode, result.retainedMode);
   assert.equal(result.mixedRebuilt, true);
@@ -391,7 +394,7 @@ try {
   assert.deepEqual(result.clientErrors, []);
   assert.deepEqual(browserErrors, []);
   console.log(
-    `✓ authoring execution router: persistent render ownership across retained/legacy on ${result.rendererBackend}`,
+    `✓ authoring execution router: native retained Text and persistent render ownership across retained/legacy on ${result.rendererBackend}`,
   );
 } finally {
   await browser?.close();

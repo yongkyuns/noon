@@ -49,17 +49,17 @@ function workerMessage(type, payload = {}) {
   };
 }
 
-function retainedDocument() {
+function retainedDocument(backend = { kind: "typst", math: false }) {
   return {
     channel: "noon.authoring.retained",
-    protocol_version: 1,
+    protocol_version: 2,
     objects: [
       {
         object: 2 ** 52,
         order: 1,
         text: {
-          source: "*Hello* from _Typst!_",
-          math: false,
+          source: backend.kind === "native" ? "Native Noon" : "*Hello* from _Typst!_",
+          backend,
           font_size: 96,
           transform: {
             translation: { x: 0, y: 0 },
@@ -153,18 +153,26 @@ test("older scene results without a retained sidecar remain compatible", () => {
   assert.equal("retainedDocument" in parsed, false);
 });
 
-test("validates retained Typst authoring documents and JS-safe identities", () => {
-  const retained = retainedDocument();
-  assert.equal(validateRetainedAuthoringDocument(retained), retained);
+test("validates retained native/Typst authoring documents and JS-safe identities", () => {
+  for (const retained of [
+    retainedDocument(),
+    retainedDocument({
+      kind: "native",
+      font_family: "DejaVu Sans Mono",
+      line_spacing: -1,
+    }),
+  ]) {
+    assert.equal(validateRetainedAuthoringDocument(retained), retained);
+  }
 
-  const unsafe = structuredClone(retained);
+  const unsafe = retainedDocument();
   unsafe.objects[0].object = Number.MAX_SAFE_INTEGER + 1;
   assert.throws(
     () => validateRetainedAuthoringDocument(unsafe),
     /invalid object ID/,
   );
 
-  const duplicateOrder = structuredClone(retained);
+  const duplicateOrder = retainedDocument();
   duplicateOrder.objects.push({
     ...structuredClone(duplicateOrder.objects[0]),
     object: 2 ** 52 + 1,
@@ -172,6 +180,12 @@ test("validates retained Typst authoring documents and JS-safe identities", () =
   assert.throws(
     () => validateRetainedAuthoringDocument(duplicateOrder),
     /duplicate painter orders/,
+  );
+
+  const invalidBackend = retainedDocument({ kind: "unknown" });
+  assert.throws(
+    () => validateRetainedAuthoringDocument(invalidBackend),
+    /Unsupported Python retained text backend/,
   );
 });
 

@@ -1,4 +1,5 @@
 import initNoonWeb, {
+  RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
   manimDotSnapshotJson,
@@ -54,6 +55,8 @@ async function initializePyodide() {
   self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
     authoringStore.createManimLine(startX, startY, endX, endY);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonCreateRetainedNativeTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
+    new RetainedNativeTextAuthoringHandle(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>
     new RetainedTypstAuthoringHandle(source, math, fontSize);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;

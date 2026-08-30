@@ -2,7 +2,7 @@ export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 5;
 export const NOON_IR_VERSION = 1;
 export const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
-export const RETAINED_AUTHORING_VERSION = 1;
+export const RETAINED_AUTHORING_VERSION = 2;
 
 export class PythonAuthoringClient {
   #worker;
@@ -319,26 +319,46 @@ export function validateRetainedAuthoringDocument(document) {
     }
     objectIds.add(object.object);
     orders.add(object.order);
-    validateRetainedTypstSpec(object.text);
+    validateRetainedTextSpec(object.text);
   }
   return document;
 }
 
-function validateRetainedTypstSpec(text) {
-  if (!isRecord(text) || typeof text.source !== "string" || text.source.length === 0) {
-    throw new Error("Python retained Typst source must be a non-empty string");
+function validateRetainedTextSpec(text) {
+  if (!isRecord(text) || typeof text.source !== "string") {
+    throw new Error("Python retained text source must be a string");
   }
-  if (typeof text.math !== "boolean") {
-    throw new Error("Python retained Typst math flag must be boolean");
+  if (!isRecord(text.backend) || typeof text.backend.kind !== "string") {
+    throw new Error("Python retained text backend is malformed");
+  }
+  if (text.backend.kind === "native") {
+    if (typeof text.backend.font_family !== "string" || text.backend.font_family.trim() === "") {
+      throw new Error("Python retained native text font family must be non-empty");
+    }
+    if (
+      !Number.isFinite(text.backend.line_spacing) ||
+      (text.backend.line_spacing !== -1 && text.backend.line_spacing <= -1)
+    ) {
+      throw new Error("Python retained native text line spacing must be -1 or greater than -1");
+    }
+  } else if (text.backend.kind === "typst") {
+    if (text.source.length === 0) {
+      throw new Error("Python retained Typst source must be a non-empty string");
+    }
+    if (typeof text.backend.math !== "boolean") {
+      throw new Error("Python retained Typst math flag must be boolean");
+    }
+  } else {
+    throw new Error(`Unsupported Python retained text backend ${text.backend.kind}`);
   }
   if (!Number.isFinite(text.font_size) || text.font_size <= 0) {
-    throw new Error("Python retained Typst font size must be finite and positive");
+    throw new Error("Python retained text font size must be finite and positive");
   }
   if (!Number.isFinite(text.opacity) || text.opacity < 0 || text.opacity > 1) {
-    throw new Error("Python retained Typst opacity must be between zero and one");
+    throw new Error("Python retained text opacity must be between zero and one");
   }
   if (!isRecord(text.transform) || !isRecord(text.transform.translation) || !isRecord(text.transform.scale)) {
-    throw new Error("Python retained Typst transform is malformed");
+    throw new Error("Python retained text transform is malformed");
   }
   for (const value of [
     text.transform.translation.x,
@@ -348,15 +368,15 @@ function validateRetainedTypstSpec(text) {
     text.transform.rotation,
   ]) {
     if (!Number.isFinite(value)) {
-      throw new Error("Python retained Typst transform must be finite");
+      throw new Error("Python retained text transform must be finite");
     }
   }
   if (!isRecord(text.color)) {
-    throw new Error("Python retained Typst color is malformed");
+    throw new Error("Python retained text color is malformed");
   }
   for (const value of [text.color.red, text.color.green, text.color.blue, text.color.alpha]) {
     if (!Number.isFinite(value)) {
-      throw new Error("Python retained Typst color must be finite");
+      throw new Error("Python retained text color must be finite");
     }
   }
 }

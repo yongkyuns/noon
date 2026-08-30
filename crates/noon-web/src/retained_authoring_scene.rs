@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 
-use noon::{MathTypst, RetainedScene, TextAuthoringError, Typst};
+use noon::{MathTypst, RetainedScene, Text as NativeText, TextAuthoringError, Typst};
 use noon_core::{ObjectId, SceneDefinition};
 
-use crate::{RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTypstAuthoringSpec};
+use crate::{
+    RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedTextAuthoringSpec,
+    RetainedTextBackendSpec,
+};
 
 /// One resource-aware scene assembled from the legacy geometry document and the
 /// retained text sidecar emitted by Python authoring.
@@ -154,33 +157,54 @@ fn insert_text_object(
 ) -> Result<(), MixedRetainedAuthoringError> {
     let order = object.order as usize;
     let id = object.object;
-    let spec = object.text;
-    if spec.math {
-        scene.insert_math_typst_at(order, id, math_typst_from_spec(spec))?;
-    } else {
-        scene.insert_typst_at(order, id, typst_from_spec(spec))?;
+    let RetainedTextAuthoringSpec {
+        source,
+        backend,
+        font_size,
+        transform,
+        color,
+        opacity,
+    } = object.text;
+
+    match backend {
+        RetainedTextBackendSpec::Native {
+            font_family,
+            line_spacing,
+        } => {
+            let text = NativeText::new(source)
+                .with_font(font_family)
+                .with_font_size(font_size)
+                .with_line_spacing(line_spacing)
+                .color(color)
+                .set_opacity(opacity)
+                .move_to(transform.translation)
+                .scale_xy(transform.scale)
+                .rotate(transform.rotation);
+            scene.insert_native_text_at(order, id, text)?;
+        }
+        RetainedTextBackendSpec::Typst { math } => {
+            if math {
+                let text = MathTypst::new(source)
+                    .with_font_size(font_size)
+                    .color(color)
+                    .set_opacity(opacity)
+                    .move_to(transform.translation)
+                    .scale_xy(transform.scale)
+                    .rotate(transform.rotation);
+                scene.insert_math_typst_at(order, id, text)?;
+            } else {
+                let text = Typst::new(source)
+                    .with_font_size(font_size)
+                    .color(color)
+                    .set_opacity(opacity)
+                    .move_to(transform.translation)
+                    .scale_xy(transform.scale)
+                    .rotate(transform.rotation);
+                scene.insert_typst_at(order, id, text)?;
+            }
+        }
     }
     Ok(())
-}
-
-fn typst_from_spec(spec: RetainedTypstAuthoringSpec) -> Typst {
-    Typst::new(spec.source)
-        .with_font_size(spec.font_size)
-        .color(spec.color)
-        .set_opacity(spec.opacity)
-        .move_to(spec.transform.translation)
-        .scale_xy(spec.transform.scale)
-        .rotate(spec.transform.rotation)
-}
-
-fn math_typst_from_spec(spec: RetainedTypstAuthoringSpec) -> MathTypst {
-    MathTypst::new(spec.source)
-        .with_font_size(spec.font_size)
-        .color(spec.color)
-        .set_opacity(spec.opacity)
-        .move_to(spec.transform.translation)
-        .scale_xy(spec.transform.scale)
-        .rotate(spec.transform.rotation)
 }
 
 #[cfg(test)]
@@ -193,18 +217,28 @@ mod tests {
         RetainedAuthoringDocument::new(objects).unwrap()
     }
 
-    fn typst_spec(source: &str, math: bool, font_size: f32) -> RetainedTypstAuthoringSpec {
-        RetainedTypstAuthoringSpec::new(source, math, font_size).unwrap()
+    fn typst_spec(source: &str, math: bool, font_size: f32) -> RetainedTextAuthoringSpec {
+        RetainedTextAuthoringSpec::new(source, math, font_size).unwrap()
+    }
+
+    fn native_spec(source: &str, font_size: f32) -> RetainedTextAuthoringSpec {
+        RetainedTextAuthoringSpec::native(
+            source,
+            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+            font_size,
+            -1.0,
+        )
+        .unwrap()
     }
 
     #[test]
-    fn text_only_authoring_decodes_into_one_retained_text_object() {
+    fn native_text_only_authoring_decodes_into_one_retained_plain_text_object() {
         let legacy = SceneDefinition::new();
         let text_id = ObjectId::new(1_u64 << 52);
         let retained = retained_document(vec![RetainedAuthoringTextObject {
             object: text_id,
             order: 0,
-            text: typst_spec("*Hello* from _Typst!_", false, 96.0),
+            text: native_spec("Native Noon", 48.0),
         }]);
 
         let mixed = MixedRetainedAuthoringScene::from_json(
@@ -215,14 +249,14 @@ mod tests {
         assert_eq!(mixed.scene().objects().len(), 1);
         assert_eq!(mixed.scene().objects()[0].id, text_id);
         let handle = mixed.scene().objects()[0].content.text().unwrap();
-        assert_eq!(
-            mixed.scene().texts().get(handle).unwrap().kind,
-            TextSourceKind::Typst
-        );
+        let resource = mixed.scene().texts().get(handle).unwrap();
+        assert_eq!(resource.kind, TextSourceKind::Plain);
+        assert_eq!(resource.source.as_ref(), "Native Noon");
+        assert!(!mixed.scene().fonts().is_empty());
     }
 
     #[test]
-    fn mixed_document_reconstructs_geometry_text_geometry_painter_order() {
+    fn mixed_document_reconstructs_geometry_native_text_geometry_painter_order() {
         let mut legacy = SceneDefinition::new();
         let circle = legacy.add(GeometryRef::circle(0.25));
         let square = legacy.add(GeometryRef::rectangle(0.5, 0.5));
@@ -230,7 +264,7 @@ mod tests {
         let retained = retained_document(vec![RetainedAuthoringTextObject {
             object: text_id,
             order: 1,
-            text: typst_spec("middle", false, 48.0),
+            text: native_spec("middle", 48.0),
         }]);
 
         let mixed = MixedRetainedAuthoringScene::from_parts(&legacy, retained).unwrap();
@@ -255,6 +289,11 @@ mod tests {
             mixed.scene().objects()[2].content,
             ObjectContentRef::Geometry(_)
         ));
+        let handle = mixed.scene().objects()[1].content.text().unwrap();
+        assert_eq!(
+            mixed.scene().texts().get(handle).unwrap().kind,
+            TextSourceKind::Plain
+        );
 
         let compiled = mixed.scene().compile().unwrap();
         assert_eq!(compiled.object_index(circle), Some(0));
@@ -312,7 +351,7 @@ mod tests {
         let retained = retained_document(vec![RetainedAuthoringTextObject {
             object: ObjectId::new(1_u64 << 52),
             order: 2,
-            text: typst_spec("outside", false, 48.0),
+            text: native_spec("outside", 48.0),
         }]);
 
         let error = MixedRetainedAuthoringScene::from_parts(&legacy, retained).unwrap_err();
@@ -332,7 +371,7 @@ mod tests {
         let retained = retained_document(vec![RetainedAuthoringTextObject {
             object: circle,
             order: 1,
-            text: typst_spec("collision", false, 48.0),
+            text: native_spec("collision", 48.0),
         }]);
 
         let error = MixedRetainedAuthoringScene::from_parts(&legacy, retained).unwrap_err();
