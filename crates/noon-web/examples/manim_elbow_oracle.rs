@@ -52,12 +52,7 @@ fn observation(snapshot: ObjectSnapshot) -> Value {
     })
 }
 
-fn insert(
-    observations: &mut Map<String, Value>,
-    name: &str,
-    width: f32,
-    angle: f32,
-) {
+fn insert(observations: &mut Map<String, Value>, name: &str, width: f32, angle: f32) {
     observations.insert(
         name.to_owned(),
         observation(
@@ -77,7 +72,12 @@ fn main() {
         2.0,
         5.0 * std::f32::consts::PI / 4.0,
     );
-    insert(&mut observations, "zero_width", 0.0, std::f32::consts::FRAC_PI_3);
+    insert(
+        &mut observations,
+        "zero_width",
+        0.0,
+        std::f32::consts::FRAC_PI_3,
+    );
     insert(
         &mut observations,
         "negative_width",
