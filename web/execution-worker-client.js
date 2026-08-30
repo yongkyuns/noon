@@ -24,6 +24,7 @@ export class ExecutionWorkerClient {
   #candidateEngineReject = null;
   #renderWorker = null;
   #renderPrepared = null;
+  #preparedStartReservation = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
   #session = 0;
@@ -180,7 +181,7 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity,
     },
   ) {
-    if (this.#engineWorker !== null) {
+    if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
     }
     const preparedRender = this.#renderWorker !== null;
@@ -209,13 +210,21 @@ export class ExecutionWorkerClient {
       if (slotCapacity !== this.#sharedSlotCapacity) {
         throw new Error("prepared shared slot capacity does not match execution startup");
       }
-      await this.#renderPrepared;
-      return this.#startPreparedMode(
-        mode,
-        sceneJson,
-        retainedDocumentJson,
-        loopDurationSeconds,
-      );
+      const reservation = {};
+      this.#preparedStartReservation = reservation;
+      try {
+        await this.#renderPrepared;
+        return await this.#startPreparedMode(
+          mode,
+          sceneJson,
+          retainedDocumentJson,
+          loopDurationSeconds,
+        );
+      } finally {
+        if (this.#preparedStartReservation === reservation) {
+          this.#preparedStartReservation = null;
+        }
+      }
     }
 
     if (typeof this.#canvas.transferControlToOffscreen !== "function") {
@@ -840,6 +849,7 @@ export class ExecutionWorkerClient {
     this.#engineWorker = null;
     this.#renderWorker = null;
     this.#renderPrepared = null;
+    this.#preparedStartReservation = null;
     this.#ready = null;
     const error = new Error("execution worker client terminated");
     for (const pending of this.#pending.values()) {

@@ -203,6 +203,51 @@ test("prepared render owner waits for preparation before starting the authored r
   client.terminate();
 });
 
+test("prepared render owner admits only one authored start while preparation is pending", async () => {
+  resetWorkers();
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+
+  const preparePromise = client.prepare({ transportMode: "transferable" });
+  const render = workerByName(0, "noon-render");
+  const retainedStart = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON);
+  let competingError = null;
+  const competingStart = client.start(SCENE_JSON).catch((error) => {
+    competingError = error;
+  });
+
+  acknowledgePreparation(render);
+  await preparePromise;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const engineWorkers = FakeWorker.instances.filter(({ name }) => name.includes("engine"));
+  assert.equal(
+    engineWorkers.length,
+    1,
+    "one prepared render owner must never attach two competing engines",
+  );
+  assert.equal(engineWorkers[0].name, "noon-mixed-retained-engine");
+  assert.match(competingError?.message ?? "", /already started/);
+  await competingStart;
+
+  const retainedEngine = engineWorkers[0];
+  const startRequest = requestMessage(render, "start_engine");
+  assert.equal(startRequest.mode, "retained");
+  retainedEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+  render.emitMessage(
+    renderMessage("engine_started", {
+      requestId: startRequest.requestId,
+      mode: "retained",
+      transportMode: "transferable",
+      backend: "WebGL2",
+    }),
+  );
+
+  const ready = await retainedStart;
+  assert.equal(ready.session, 1);
+  assert.equal(client.mode, "retained");
+  client.terminate();
+});
+
 test("failed prepared engine attachment replaces the transferred canvas and remains retryable", async () => {
   resetWorkers();
   const original = new FakeCanvas();
