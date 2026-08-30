@@ -365,8 +365,11 @@ enum Coverage {
 
 pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize) -> Option<Rect> {
     let object = frame.objects.get(object_index)?;
-    let local = geometry_local_bounds(frame.render_geometry(object_index))?;
-    let mut world = transform_rect(local, object.transform);
+    let geometry = frame.render_geometry(object_index);
+    let mut world = match geometry {
+        GeometryRef::Circle { radius } => circle_world_bounds(*radius, object.transform),
+        _ => transform_rect(geometry_local_bounds(geometry)?, object.transform),
+    };
     if object.style.stroke.is_some() && object.style.stroke_width.is_finite() {
         let scale = object
             .transform
@@ -381,6 +384,18 @@ pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize)
         world.max.y += expansion;
     }
     rect_is_finite(world).then_some(world)
+}
+
+fn circle_world_bounds(radius: f32, transform: noon_core::Transform2D) -> Rect {
+    let radius = radius.abs();
+    let scaled_x = radius * transform.scale.x;
+    let scaled_y = radius * transform.scale.y;
+    let (sin, cos) = transform.rotation.sin_cos();
+    let half = Vec2::new(
+        (scaled_x * cos).hypot(scaled_y * sin),
+        (scaled_x * sin).hypot(scaled_y * cos),
+    );
+    Rect::new(transform.translation - half, transform.translation + half)
 }
 
 fn geometry_local_bounds(geometry: &GeometryRef) -> Option<Rect> {
@@ -453,9 +468,76 @@ fn insert_sorted_unique(slots: &mut Vec<ExecutionSlotId>, slot: ExecutionSlotId)
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{ObjectId, Rect, Vec2};
+    use noon_core::{GeometryRef, ObjectId, Rect, Style, Transform2D, Vec2};
 
     use super::*;
+
+    fn single_object_frame(
+        geometry: GeometryRef,
+        transform: Transform2D,
+        style: Style,
+    ) -> FrameState {
+        FrameState {
+            time: 0.0,
+            objects: vec![crate::FrameObjectState {
+                id: ObjectId::new(0),
+                geometry,
+                transform,
+                style,
+                appearance: 1.0,
+            }],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+        }
+    }
+
+    #[test]
+    fn rotated_nonuniform_circle_uses_analytic_spatial_bounds() {
+        let transform = Transform2D {
+            translation: Vec2::new(3.0, -2.0),
+            rotation: std::f32::consts::FRAC_PI_4,
+            scale: Vec2::new(2.0, 1.0),
+        };
+        let frame = single_object_frame(GeometryRef::circle(1.0), transform, Style::default());
+        let bounds = frame_object_conservative_bounds(&frame, 0).expect("circle has bounds");
+        let half = 2.5_f32.sqrt();
+
+        assert!((bounds.min.x - (3.0 - half)).abs() < 1e-5);
+        assert!((bounds.max.x - (3.0 + half)).abs() < 1e-5);
+        assert!((bounds.min.y - (-2.0 - half)).abs() < 1e-5);
+        assert!((bounds.max.y - (-2.0 + half)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn circle_spatial_bounds_keep_stroke_conservative_under_reflection() {
+        let transform = Transform2D {
+            translation: Vec2::new(-4.0, 5.0),
+            rotation: 0.3,
+            scale: Vec2::new(-3.0, 0.5),
+        };
+        let style = Style {
+            stroke: Some(noon_core::Color::WHITE),
+            stroke_width: 0.4,
+            ..Style::default()
+        };
+        let frame = single_object_frame(GeometryRef::circle(1.5), transform, style);
+        let bounds = frame_object_conservative_bounds(&frame, 0).expect("circle has bounds");
+        let (sin, cos) = transform.rotation.sin_cos();
+        let scaled_x = 1.5 * transform.scale.x;
+        let scaled_y = 1.5 * transform.scale.y;
+        let half = Vec2::new(
+            (scaled_x * cos).hypot(scaled_y * sin),
+            (scaled_x * sin).hypot(scaled_y * cos),
+        );
+        let stroke_expansion = 0.4 * 3.0 * 0.5;
+
+        assert!((bounds.min.x - (-4.0 - half.x - stroke_expansion)).abs() < 1e-5);
+        assert!((bounds.max.x - (-4.0 + half.x + stroke_expansion)).abs() < 1e-5);
+        assert!((bounds.min.y - (5.0 - half.y - stroke_expansion)).abs() < 1e-5);
+        assert!((bounds.max.y - (5.0 + half.y + stroke_expansion)).abs() < 1e-5);
+    }
 
     #[test]
     fn point_query_in_hundred_thousand_objects_does_not_scan_scene() {
