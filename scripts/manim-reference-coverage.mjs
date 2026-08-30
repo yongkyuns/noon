@@ -10,6 +10,7 @@ const CLASSIFIED_STATUSES = new Set([
   "intentional-divergence",
 ]);
 const EXACT_SOURCE_REUSE = "source-equivalent-manim-v0.21";
+const MANIM_IMPORT_PRELUDE = "from manim import *";
 
 function assertObject(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -17,13 +18,28 @@ function assertObject(value, name) {
   }
 }
 
-export function normalizedSourceHash(source) {
+function normalizeSource(source) {
   if (typeof source !== "string") {
     throw new Error("source must be a string");
   }
-  return createHash("sha256")
-    .update(source.replace(/\r\n?/gu, "\n").trimEnd(), "utf8")
-    .digest("hex");
+  return source.replace(/\r\n?/gu, "\n").trimEnd();
+}
+
+export function normalizedSourceHash(source) {
+  return createHash("sha256").update(normalizeSource(source), "utf8").digest("hex");
+}
+
+export function directiveSourceFromFixture(source) {
+  const normalized = normalizeSource(source);
+  const lines = normalized.split("\n");
+  if (lines[0]?.trim() !== MANIM_IMPORT_PRELUDE) {
+    return normalized;
+  }
+  lines.shift();
+  while (lines[0]?.trim() === "") {
+    lines.shift();
+  }
+  return lines.join("\n").trimEnd();
 }
 
 function isReferenceEntry(entry) {
@@ -98,7 +114,7 @@ export async function reconcileReferenceCoverage(
 
     const fixturePath = path.resolve(repositoryRoot, entry.upstream_source);
     const fixtureSource = await readSource(fixturePath, "utf8");
-    const fixtureHash = normalizedSourceHash(fixtureSource);
+    const fixtureHash = normalizedSourceHash(directiveSourceFromFixture(fixtureSource));
     let matches = byHash.get(fixtureHash) ?? [];
     if (matches.length > 1 && typeof entry.title === "string") {
       const named = matches.filter(({ example }) => example.name === entry.title);
