@@ -646,7 +646,19 @@ impl GeometryRef {
                 transform.transform_point(*end),
             ]),
             Self::VectorPath(path) => path.transformed_conservative_bounds(transform),
-            Self::Circle { .. } | Self::Rectangle { .. } => {
+            Self::Circle { radius } => {
+                let (sin, cos) = transform.rotation.sin_cos();
+                let radius = radius.abs();
+                let half_extents = Vec2::new(
+                    radius * (transform.scale.x * cos).hypot(transform.scale.y * sin),
+                    radius * (transform.scale.x * sin).hypot(transform.scale.y * cos),
+                );
+                Some(Rect::new(
+                    transform.translation - half_extents,
+                    transform.translation + half_extents,
+                ))
+            }
+            Self::Rectangle { .. } => {
                 let bounds = self.local_bounds()?;
                 let corners = [
                     Vec2::new(bounds.min.x, bounds.min.y),
@@ -1087,6 +1099,38 @@ mod tests {
         assert!((bounds.width() - 1.0).abs() < 1e-5);
         assert!((bounds.height() - 4.0).abs() < 1e-5);
         assert!((bounds.center().x - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn circle_world_bounds_are_exact_for_rotated_nonuniform_scale() {
+        let snapshot = ObjectSnapshot::new(GeometryRef::circle(2.0))
+            .scale_xy(Vec2::new(3.0, 1.5))
+            .rotate_by(PI / 4.0)
+            .shift(Vec2::new(4.0, -3.0));
+        let bounds = snapshot.world_bounds().expect("circle has bounds");
+        let expected_extent = 2.0 * ((3.0_f32 / 2.0_f32.sqrt()).hypot(1.5 / 2.0_f32.sqrt()));
+
+        assert!((bounds.width() - expected_extent * 2.0).abs() < 1e-5);
+        assert!((bounds.height() - expected_extent * 2.0).abs() < 1e-5);
+        assert!((bounds.center().x - 4.0).abs() < 1e-5);
+        assert!((bounds.center().y + 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn circle_world_bounds_handle_reflected_scale() {
+        let snapshot = ObjectSnapshot::new(GeometryRef::circle(1.25))
+            .scale_xy(Vec2::new(-2.0, 0.5))
+            .rotate_by(PI / 6.0)
+            .shift(Vec2::new(-1.0, 2.0));
+        let bounds = snapshot.world_bounds().expect("circle has bounds");
+        let (sin, cos) = (PI / 6.0).sin_cos();
+        let expected_x = 1.25 * (-2.0_f32 * cos).hypot(0.5 * sin);
+        let expected_y = 1.25 * (-2.0_f32 * sin).hypot(0.5 * cos);
+
+        assert!((bounds.width() - expected_x * 2.0).abs() < 1e-5);
+        assert!((bounds.height() - expected_y * 2.0).abs() < 1e-5);
+        assert!((bounds.center().x + 1.0).abs() < 1e-5);
+        assert!((bounds.center().y - 2.0).abs() < 1e-5);
     }
 
     #[test]
