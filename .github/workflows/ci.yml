@@ -262,3 +262,42 @@ jobs:
           path: browser-smoke-artifacts
           if-no-files-found: ignore
           retention-days: 7
+
+  browser-rendering-parity:
+    name: Browser rendering parity
+    runs-on: ubuntu-latest
+    needs: browser-rendering
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install visual diff dependency
+        run: npm install --no-save --ignore-scripts pngjs@7.0.0
+
+      - name: Download WebGPU screenshots
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-smoke-screenshots-webgpu
+          path: browser-backend-parity
+
+      - name: Download WebGL screenshots
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-smoke-screenshots-webgl
+          path: browser-backend-parity
+
+      - name: Compare WebGPU and WebGL foreground coverage
+        run: |
+          node scripts/browser-backend-visual-parity.mjs \
+            browser-backend-parity/webgpu \
+            browser-backend-parity/webgl \
+            browser-backend-parity-report
+
+      - name: Upload backend visual parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-backend-visual-parity
+          path: browser-backend-parity-report
+          if-no-files-found: error
+          retention-days: 7
