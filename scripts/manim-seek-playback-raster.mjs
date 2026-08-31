@@ -31,9 +31,6 @@ function fixtureSourceFor(fixture) {
   return source;
 }
 
-function fixtureSourcePathFor(fixture) {
-  return path.join(repoRoot, fixture.source ?? reference.source);
-}
 const artifactRoot = path.resolve(
   repoRoot,
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
@@ -129,7 +126,10 @@ async function authorNoonDocuments() {
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
       assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
-      documents.set(fixture.id, result.document);
+      documents.set(fixture.id, {
+        document: result.document,
+        retained: (result.retainedDocument?.objects?.length ?? 0) > 0,
+      });
     }
     return documents;
   } finally {
@@ -253,6 +253,11 @@ async function verifyBackend(backend, documents) {
   try {
     const backendResult = { backend, fixtures: [] };
     for (const fixture of manifest.fixtures) {
+      const authored = documents.get(fixture.id);
+      assert.ok(authored, `${fixture.id}: missing authored Noon document`);
+      if (authored.retained) {
+        continue;
+      }
       let directPage = null;
       let incrementalPage = null;
       try {
@@ -265,7 +270,7 @@ async function verifyBackend(backend, documents) {
         directPage = await createRenderPage(browser, expectedBackend, true);
         incrementalPage = await createRenderPage(browser, expectedBackend, false);
 
-        const document = documents.get(fixture.id);
+        const document = authored.document;
         const sceneJson = JSON.stringify(document);
         const reportFixture = rasterReport.fixtures.find((entry) => entry.id === fixture.id);
         assert.ok(reportFixture, `${fixture.id}: missing pinned Manim raster report fixture`);
@@ -443,6 +448,9 @@ try {
         sourceSemanticReference: "semantic/manim-all-frames.json",
         maxPresentationAttempts: MAX_PRESENT_ATTEMPTS,
         independentCanvasPlayers: true,
+        retainedFixturesDelegated: [...documents.entries()]
+          .filter(([, authored]) => authored.retained)
+          .map(([id]) => id),
         results,
       },
       null,
