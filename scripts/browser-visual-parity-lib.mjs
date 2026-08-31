@@ -10,6 +10,19 @@ function assertImage(image, name) {
   }
 }
 
+function normalizedBackground(background) {
+  if (background === undefined || background === null) {
+    return null;
+  }
+  if (!Array.isArray(background) || background.length !== 4) {
+    throw new RangeError("background must be an RGBA array with four byte values");
+  }
+  if (!background.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    throw new RangeError("background RGBA values must be integers within [0, 255]");
+  }
+  return [...background];
+}
+
 function colorDistance(data, offset, background) {
   return (
     Math.abs(data[offset] - background[0]) +
@@ -19,17 +32,19 @@ function colorDistance(data, offset, background) {
   );
 }
 
-export function foregroundMask(image, backgroundDistance = 32) {
+export function foregroundMask(image, backgroundDistance = 32, background = null) {
   assertImage(image, "image");
   if (!Number.isFinite(backgroundDistance) || backgroundDistance < 0) {
     throw new RangeError("backgroundDistance must be a non-negative finite number");
   }
 
-  const background = [image.data[0], image.data[1], image.data[2], image.data[3]];
+  const explicitBackground = normalizedBackground(background);
+  const resolvedBackground =
+    explicitBackground ?? [image.data[0], image.data[1], image.data[2], image.data[3]];
   const mask = new Uint8Array(image.width * image.height);
   let count = 0;
   for (let pixel = 0; pixel < mask.length; pixel += 1) {
-    if (colorDistance(image.data, pixel * 4, background) >= backgroundDistance) {
+    if (colorDistance(image.data, pixel * 4, resolvedBackground) >= backgroundDistance) {
       mask[pixel] = 1;
       count += 1;
     }
@@ -110,7 +125,11 @@ function normalizedOptions(options = {}) {
   const neighborRadius = options.neighborRadius ?? 1;
   const maxMismatchFraction = options.maxMismatchFraction ?? 0.02;
   const maxBoundsDelta = options.maxBoundsDelta ?? 2;
+  const background = normalizedBackground(options.background);
 
+  if (!Number.isFinite(backgroundDistance) || backgroundDistance < 0) {
+    throw new RangeError("backgroundDistance must be a non-negative finite number");
+  }
   if (!Number.isInteger(neighborRadius) || neighborRadius < 0) {
     throw new RangeError("neighborRadius must be a non-negative integer");
   }
@@ -120,7 +139,7 @@ function normalizedOptions(options = {}) {
   if (!Number.isFinite(maxBoundsDelta) || maxBoundsDelta < 0) {
     throw new RangeError("maxBoundsDelta must be a non-negative finite number");
   }
-  return { backgroundDistance, neighborRadius, maxMismatchFraction, maxBoundsDelta };
+  return { backgroundDistance, neighborRadius, maxMismatchFraction, maxBoundsDelta, background };
 }
 
 export function compareForegroundCoverage(left, right, options = {}) {
@@ -133,8 +152,16 @@ export function compareForegroundCoverage(left, right, options = {}) {
   }
 
   const normalized = normalizedOptions(options);
-  const leftForeground = foregroundMask(left, normalized.backgroundDistance);
-  const rightForeground = foregroundMask(right, normalized.backgroundDistance);
+  const leftForeground = foregroundMask(
+    left,
+    normalized.backgroundDistance,
+    normalized.background,
+  );
+  const rightForeground = foregroundMask(
+    right,
+    normalized.backgroundDistance,
+    normalized.background,
+  );
   const leftUnmatched = unmatchedForegroundMask(
     leftForeground.mask,
     rightForeground.mask,
@@ -184,8 +211,16 @@ export function foregroundMismatchMask(left, right, options = {}) {
   }
 
   const normalized = normalizedOptions(options);
-  const leftForeground = foregroundMask(left, normalized.backgroundDistance);
-  const rightForeground = foregroundMask(right, normalized.backgroundDistance);
+  const leftForeground = foregroundMask(
+    left,
+    normalized.backgroundDistance,
+    normalized.background,
+  );
+  const rightForeground = foregroundMask(
+    right,
+    normalized.backgroundDistance,
+    normalized.background,
+  );
   const leftUnmatched = unmatchedForegroundMask(
     leftForeground.mask,
     rightForeground.mask,
