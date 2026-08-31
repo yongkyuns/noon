@@ -194,18 +194,12 @@ mod tests {
 
     #[test]
     fn unsmoothed_discontinuities_remain_separate_corner_subpaths() {
-        let plan = ParametricSamplePlan::new(
-            SampleRange::new(-2.0, 2.0, 1.0).unwrap(),
-            &[0.0],
-            0.1,
-        )
-        .unwrap();
-        let path = parametric_vector_path(
-            &plan,
-            |parameter| Vec2::new(parameter as f32, 0.0),
-            false,
-        )
-        .unwrap();
+        let plan =
+            ParametricSamplePlan::new(SampleRange::new(-2.0, 2.0, 1.0).unwrap(), &[0.0], 0.1)
+                .unwrap();
+        let path =
+            parametric_vector_path(&plan, |parameter| Vec2::new(parameter as f32, 0.0), false)
+                .unwrap();
 
         let move_count = path
             .commands()
@@ -228,9 +222,8 @@ mod tests {
             2.0,
         )
         .unwrap();
-        let plan = ParametricSamplePlan::without_discontinuities(
-            SampleRange::new(0.0, 1.0, 1.0).unwrap(),
-        );
+        let plan =
+            ParametricSamplePlan::without_discontinuities(SampleRange::new(0.0, 1.0, 1.0).unwrap());
         let error = axes_function_vector_path(axes, &plan, |_| f64::INFINITY, true).unwrap_err();
         match error {
             PlotGeometryError::NonFiniteFunctionValue { parameter, value } => {
@@ -243,9 +236,8 @@ mod tests {
 
     #[test]
     fn non_finite_parametric_point_fails_before_geometry_creation() {
-        let plan = ParametricSamplePlan::without_discontinuities(
-            SampleRange::new(0.0, 1.0, 1.0).unwrap(),
-        );
+        let plan =
+            ParametricSamplePlan::without_discontinuities(SampleRange::new(0.0, 1.0, 1.0).unwrap());
         let error = parametric_vector_path(&plan, |_| Vec2::new(f32::NAN, 0.0), false).unwrap_err();
         match error {
             PlotGeometryError::NonFinitePoint { parameter, point } => {
