@@ -5,6 +5,7 @@ import initNoonWeb, {
   manimAnnularSectorSnapshotJson,
   manimAnnulusSnapshotJson,
   manimDotSnapshotJson,
+  manimElbowSnapshotJson,
   manimRoundedRectangleSnapshotJson,
   manimSectorSnapshotJson,
   manimTriangleSnapshotJson,
@@ -53,6 +54,8 @@ async function initializePyodide() {
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
     authoringStore.createMobject(manimTriangleSnapshotJson());
+  self.noonCreateAuthoringElbowHandle = (...args) =>
+    authoringStore.createMobject(manimElbowSnapshotJson(...args));
   self.noonCreateAuthoringRoundedRectangleHandle = (...args) =>
     authoringStore.createMobject(manimRoundedRectangleSnapshotJson(...args));
   self.noonCreateAuthoringAnnularSectorHandle = (...args) =>
