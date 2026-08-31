@@ -15,8 +15,8 @@ pub struct TextAnimationGlyphRef {
 
 /// One rendered plain-text animation member in shaped painter order.
 ///
-/// Multiple glyphs may belong to the same source cluster. Whitespace/newlines
-/// naturally produce no member because the shaper emits no glyph for them.
+/// Multiple glyphs may belong to the same source cluster. Whitespace-only source
+/// clusters are excluded even when the shaper emits an advance glyph for them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextAnimationMember {
     pub source_span: TextSourceSpan,
@@ -28,6 +28,7 @@ pub enum TextAnimationMemberError {
     UnsupportedSourceKind(TextSourceKind),
     VectorContent,
     MissingRun(u32),
+    InvalidSourceSpan(TextSourceSpan),
     TooManyGlyphs,
 }
 
@@ -48,6 +49,11 @@ impl std::fmt::Display for TextAnimationMemberError {
                     "text render stream references missing glyph run {index}"
                 )
             }
+            Self::InvalidSourceSpan(span) => write!(
+                formatter,
+                "text animation glyph source span {}..{} is outside the UTF-8 source",
+                span.start, span.end
+            ),
             Self::TooManyGlyphs => formatter.write_str(
                 "text animation member glyph index exceeds the retained u32 identity range",
             ),
@@ -61,10 +67,10 @@ impl std::error::Error for TextAnimationMemberError {}
 ///
 /// Members are ordered by first appearance in the resource painter stream. Glyphs
 /// sharing the same UTF-8 source cluster span stay together even when the shaper emits
-/// multiple glyphs for that cluster. Source gaps such as spaces/newlines do not create
-/// fake members. This intentionally accepts only `Plain` resources; Typst/Tex family
-/// semantics must be defined by their own source model rather than inheriting plain-
-/// text assumptions.
+/// multiple glyphs for that cluster. Whitespace-only source clusters are excluded
+/// explicitly because shaping backends may retain an advance glyph for them. This
+/// intentionally accepts only `Plain` resources; Typst/Tex family semantics must be
+/// defined by their own source model rather than inheriting plain-text assumptions.
 ///
 /// The result is derived data. It must not be serialized into scene or authoring wire
 /// formats and must not create externally visible semantic object identities.
@@ -92,13 +98,16 @@ pub fn plain_text_animation_members(
             .get(run_index as usize)
             .ok_or(TextAnimationMemberError::MissingRun(run_index))?;
         for (glyph_index, glyph) in run.glyphs.iter().enumerate() {
+            let span = glyph.cluster.source_span;
+            if source_span_is_whitespace(resource, span)? {
+                continue;
+            }
             let glyph_index =
                 u32::try_from(glyph_index).map_err(|_| TextAnimationMemberError::TooManyGlyphs)?;
             let glyph_ref = TextAnimationGlyphRef {
                 run_index,
                 glyph_index,
             };
-            let span = glyph.cluster.source_span;
             if let Some(&member_index) = by_span.get(&span) {
                 members[member_index].glyphs.push(glyph_ref);
             } else {
@@ -113,6 +122,19 @@ pub fn plain_text_animation_members(
     }
 
     Ok(members)
+}
+
+fn source_span_is_whitespace(
+    resource: &TextResource,
+    span: TextSourceSpan,
+) -> Result<bool, TextAnimationMemberError> {
+    let start = span.start as usize;
+    let end = span.end as usize;
+    let source = resource
+        .source
+        .get(start..end)
+        .ok_or(TextAnimationMemberError::InvalidSourceSpan(span))?;
+    Ok(!source.is_empty() && source.chars().all(char::is_whitespace))
 }
 
 #[cfg(test)]
@@ -185,12 +207,13 @@ mod tests {
     }
 
     #[test]
-    fn whitespace_gaps_do_not_create_fake_animation_members() {
+    fn whitespace_advance_glyphs_do_not_create_fake_animation_members() {
         let text = resource(
             "A B",
             vec![run(vec![
                 glyph(TextSourceSpan::new(0, 1), 0, 0.0),
-                glyph(TextSourceSpan::new(2, 3), 1, 2.0),
+                glyph(TextSourceSpan::new(1, 2), 1, 1.0),
+                glyph(TextSourceSpan::new(2, 3), 2, 2.0),
             ])],
             vec![TextRenderItem::GlyphRun(0)],
         );
@@ -265,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn non_plain_and_vector_content_fail_closed() {
+    fn non_plain_vector_and_malformed_source_content_fail_closed() {
         let mut text = resource(
             "A",
             vec![run(vec![glyph(TextSourceSpan::new(0, 1), 0, 0.0)])],
@@ -284,6 +307,15 @@ mod tests {
         assert_eq!(
             plain_text_animation_members(&text),
             Err(TextAnimationMemberError::VectorContent)
+        );
+
+        text.render_items = Arc::from([TextRenderItem::GlyphRun(0)]);
+        text.runs = Arc::from([run(vec![glyph(TextSourceSpan::new(0, 2), 0, 0.0)])]);
+        assert_eq!(
+            plain_text_animation_members(&text),
+            Err(TextAnimationMemberError::InvalidSourceSpan(
+                TextSourceSpan::new(0, 2)
+            ))
         );
     }
 
