@@ -140,7 +140,9 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
             assert rect.height_value == 3.0
             assert rect.corner_radius == 0.25
             assert "vector_path" in rect.geometry
-            assert rect.style["stroke_width"] == 2.0
+            # Shared VMobject styling keeps the established Manim Cairo conversion:
+            # authored width 2.0 is 0.02 scene units in the retained snapshot.
+            assert rect.style["stroke_width"] == 0.02
             assert rect.style["stroke"]["red"] == BLUE.red
             assert rect.style["stroke"]["green"] == BLUE.green
             assert rect.style["stroke"]["blue"] == BLUE.blue
