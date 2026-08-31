@@ -109,6 +109,7 @@ function compareSemanticStates(referenceState, noonState) {
       index,
       manimType: referenceObject.type,
       noonObjectId: noonObject.id,
+      noonContent: noonObject.content ?? "geometry",
       centerDelta,
       maxCenterDelta: centerDelta === null ? null : maxAbs(centerDelta),
       boundsComparable,
@@ -220,6 +221,10 @@ try {
       assert.equal(authored.kind, "scene_document", `${fixture.id}: Noon semantic authoring result`);
       assert.equal(authored.duration, fixture.expected_duration, `${fixture.id}: Noon semantic duration`);
       const sceneJson = JSON.stringify(authored.document);
+      const retainedDocumentJson =
+        authored.retainedDocument === null || authored.retainedDocument === undefined
+          ? null
+          : JSON.stringify(authored.retainedDocument);
       const manimFixture = semanticByFixture.get(fixture.id);
       assert.ok(manimFixture, `${fixture.id}: missing Manim semantic fixture`);
       assert.equal(
@@ -238,8 +243,11 @@ try {
           `${fixture.id}: semantic/raster time mismatch at frame ${sample.frameIndex}`,
         );
         const noonState = await page.evaluate(
-          ({ json, time }) => window.noonManimCompat.semanticFrame(json, time),
-          { json: sceneJson, time: sample.time },
+          ({ json, retainedJson, time }) =>
+            retainedJson === null
+              ? window.noonManimCompat.semanticFrame(json, time)
+              : window.noonManimCompat.retainedSemanticFrame(json, retainedJson, time),
+          { json: sceneJson, retainedJson: retainedDocumentJson, time: sample.time },
         );
         const comparison = compareSemanticStates(referenceState, noonState);
         const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
@@ -264,6 +272,7 @@ try {
         );
         const summary = {
           path: relativePath.split(path.sep).join("/"),
+          engine: noonState.engine,
           pairing: comparison.pairing,
           objectCountDelta: comparison.objectCountDelta,
           maxCenterDelta: comparison.maxCenterDelta,
@@ -294,7 +303,7 @@ try {
     manimAllFrames: "semantic/manim-all-frames.json",
     index: "semantic/index.json",
     note:
-      "Semantic deltas are diagnostic. Existing Manim semantic differential tests and raster tolerances remain the blocking compatibility gates.",
+      "Semantic deltas are diagnostic. Retained Text uses the evaluated retained frame and immutable text-resource bounds; raster tolerances remain the blocking visual compatibility gate.",
   };
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(
