@@ -26,6 +26,11 @@ except ImportError:  # Native CPython tests keep the existing Python constructor
     _create_triangle_handle = None
 
 try:
+    from js import noonCreateAuthoringElbowHandle as _create_elbow_handle
+except ImportError:
+    _create_elbow_handle = None
+
+try:
     from js import noonCreateAuthoringRoundedRectangleHandle as _create_rounded_rectangle_handle
 except ImportError:
     _create_rounded_rectangle_handle = None
@@ -218,6 +223,26 @@ def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     _shared._apply_shared_constructor_kwargs(self, options)
     if color is not None:
         _set_shared_color(self, color)
+
+
+class Elbow(_compat.VMobject):
+    """Manim-compatible Elbow backed by shared Rust geometry."""
+
+    def __init__(self, width: float = 0.2, angle: float = 0.0, **kwargs: Any) -> None:
+        if _create_elbow_handle is None:
+            raise RuntimeError("Elbow requires the shared browser geometry bridge")
+
+        width_value = _shared._ir._finite_number("width", width)
+        angle_value = _shared._ir._finite_number("angle", angle)
+        options = dict(kwargs)
+        color = options.pop("color", None)
+        _shared._attach_shared_handle(
+            self,
+            _create_elbow_handle(width_value, angle_value),
+        )
+        _shared._apply_shared_constructor_kwargs(self, options)
+        if color is not None:
+            _set_shared_color(self, color)
 
 
 class RoundedRectangle(_compat.Rectangle):
@@ -472,6 +497,7 @@ def install() -> None:
         _geometry.Triangle.__init__ = _triangle_init
 
     public = {
+        "Elbow": Elbow,
         "RoundedRectangle": RoundedRectangle,
         "Underline": Underline,
         "AnnularSector": AnnularSector,
