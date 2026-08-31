@@ -28,6 +28,10 @@ pub use semantic_store::*;
 mod semantic_model;
 pub use semantic_model::*;
 
+#[path = "three_d_semantics.rs"]
+mod three_d_semantics;
+pub use three_d_semantics::*;
+
 #[path = "resource_arena.rs"]
 mod resource_arena;
 pub use resource_arena::*;
