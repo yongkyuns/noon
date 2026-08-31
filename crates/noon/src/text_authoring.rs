@@ -23,9 +23,10 @@ use swash::{FontRef, StringId};
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
 pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
-/// Native text is shaped at its requested point size, so only the point-to-scene
-/// conversion belongs in the object transform.
-pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 96.0;
+/// Manim divides the public Text size by 4.8 before passing it to Pango as points;
+/// Pango/Cairo maps 72 points to 96 device pixels and Manim then scales the SVG by
+/// 0.05. Shaping directly at the public size therefore needs a 1/72 scene transform.
+pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 72.0;
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
 /// Deterministic proportional sans-serif equivalent of Manim/Pango's empty-font default.
