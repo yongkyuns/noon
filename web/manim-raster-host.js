@@ -43,6 +43,24 @@ async function presentDelta(deltaJson) {
   return true;
 }
 
+function currentMetrics(presented = true) {
+  return {
+    error: null,
+    presented,
+    time: currentLogicalTime,
+    rendererTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    retained,
+    rendererBackend: renderer.rendererBackend(),
+    drawCalls: renderer.lastDrawCalls(),
+    instances: renderer.lastInstancesDrawn(),
+    uploadBytes: renderer.lastBytesUploaded(),
+    geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+    authoredDuration,
+    frameIndex: currentFrameIndex,
+  };
+}
+
 async function load(source, loopDurationSeconds) {
   await readyPromise;
   if (typeof source !== "string" || source.trim() === "") {
@@ -112,6 +130,25 @@ async function load(source, loopDurationSeconds) {
     rendererBackend: renderer.rendererBackend(),
     callbackSlots: result.callbacks?.slots.length ?? 0,
   };
+}
+
+async function renderAt(time) {
+  if (renderer === null || engine === null) {
+    throw new Error("host raster scene has not been loaded");
+  }
+  if (!retained) {
+    throw new Error("host raster direct seek is reserved for retained execution");
+  }
+  const target = Number(time);
+  if (!Number.isFinite(target) || target < 0) {
+    throw new RangeError("host raster direct-seek time must be finite and non-negative");
+  }
+  const delta = engine.seekDeltaJson(target);
+  const presented = delta === null || delta === undefined ? true : await presentDelta(delta);
+  currentLogicalTime = target;
+  currentFrameIndex = -1;
+  await waitForPaint();
+  return currentMetrics(presented);
 }
 
 async function advanceOneFrame(frameIndex, time) {
@@ -184,30 +221,12 @@ async function renderThrough(frameIndex, frameTimes) {
     await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
-
-  return {
-    error: null,
-    presented: true,
-    // Logical scene time advances every reference frame even when the execution
-    // transport correctly emits no visual delta (for example a zero-dt updater
-    // activation boundary). Keep the renderer's last-delta time separately for
-    // diagnostics instead of treating it as the authoritative playhead.
-    time: currentLogicalTime,
-    rendererTime: renderer.time(),
-    objectCount: renderer.objectCount(),
-    retained,
-    rendererBackend: renderer.rendererBackend(),
-    drawCalls: renderer.lastDrawCalls(),
-    instances: renderer.lastInstancesDrawn(),
-    uploadBytes: renderer.lastBytesUploaded(),
-    geometryCacheMisses: renderer.lastGeometryCacheMisses(),
-    authoredDuration,
-    frameIndex: currentFrameIndex,
-  };
+  return currentMetrics(true);
 }
 
 window.noonHostRaster = {
   ready: () => readyPromise,
   load,
+  renderAt,
   renderThrough,
 };
