@@ -16,9 +16,32 @@ fn decode_target(snapshot_json: &str) -> Result<ObjectSnapshot, String> {
         .map_err(|error| format!("invalid shape matcher target snapshot: {error}"))
 }
 
+fn decode_targets<'a>(
+    snapshot_jsons: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<ObjectSnapshot>, String> {
+    snapshot_jsons.into_iter().map(decode_target).collect()
+}
+
 fn encode_snapshot(snapshot: ObjectSnapshot) -> Result<String, String> {
     serde_json::to_string(&snapshot)
         .map_err(|error| format!("unable to serialize shape matcher snapshot: {error}"))
+}
+
+pub fn manim_surrounding_rectangle_snapshots_json(
+    target_snapshot_jsons: &[String],
+    buff_x: f64,
+    buff_y: f64,
+    corner_radius: f64,
+) -> Result<String, String> {
+    let targets = decode_targets(target_snapshot_jsons.iter().map(String::as_str))?;
+    let matcher = SurroundingRectangle::around(
+        targets.iter(),
+        Vec2::new(finite_f32("buff.x", buff_x)?, finite_f32("buff.y", buff_y)?),
+        finite_f32("corner_radius", corner_radius)?,
+        SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+    )
+    .map_err(|error| error.to_string())?;
+    encode_snapshot(matcher.into_snapshot())
 }
 
 pub fn manim_surrounding_rectangle_snapshot_json(
@@ -27,12 +50,29 @@ pub fn manim_surrounding_rectangle_snapshot_json(
     buff_y: f64,
     corner_radius: f64,
 ) -> Result<String, String> {
-    let target = decode_target(target_snapshot_json)?;
-    let matcher = SurroundingRectangle::around(
-        [&target],
+    let target_snapshot_jsons = [target_snapshot_json.to_owned()];
+    manim_surrounding_rectangle_snapshots_json(
+        &target_snapshot_jsons,
+        buff_x,
+        buff_y,
+        corner_radius,
+    )
+}
+
+pub fn manim_background_rectangle_snapshots_json(
+    target_snapshot_jsons: &[String],
+    buff_x: f64,
+    buff_y: f64,
+    corner_radius: f64,
+    fill_opacity: f64,
+) -> Result<String, String> {
+    let targets = decode_targets(target_snapshot_jsons.iter().map(String::as_str))?;
+    let matcher = BackgroundRectangle::around(
+        targets.iter(),
         Vec2::new(finite_f32("buff.x", buff_x)?, finite_f32("buff.y", buff_y)?),
         finite_f32("corner_radius", corner_radius)?,
-        SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+        BLACK,
+        finite_f32("fill_opacity", fill_opacity)?,
     )
     .map_err(|error| error.to_string())?;
     encode_snapshot(matcher.into_snapshot())
@@ -45,16 +85,14 @@ pub fn manim_background_rectangle_snapshot_json(
     corner_radius: f64,
     fill_opacity: f64,
 ) -> Result<String, String> {
-    let target = decode_target(target_snapshot_json)?;
-    let matcher = BackgroundRectangle::around(
-        [&target],
-        Vec2::new(finite_f32("buff.x", buff_x)?, finite_f32("buff.y", buff_y)?),
-        finite_f32("corner_radius", corner_radius)?,
-        BLACK,
-        finite_f32("fill_opacity", fill_opacity)?,
+    let target_snapshot_jsons = [target_snapshot_json.to_owned()];
+    manim_background_rectangle_snapshots_json(
+        &target_snapshot_jsons,
+        buff_x,
+        buff_y,
+        corner_radius,
+        fill_opacity,
     )
-    .map_err(|error| error.to_string())?;
-    encode_snapshot(matcher.into_snapshot())
 }
 
 pub fn manim_cross_snapshot_json(
@@ -88,8 +126,9 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use super::{
-        manim_background_rectangle_snapshot_json, manim_cross_snapshot_json,
-        manim_surrounding_rectangle_snapshot_json, manim_underline_snapshot_json,
+        manim_background_rectangle_snapshot_json, manim_background_rectangle_snapshots_json,
+        manim_cross_snapshot_json, manim_surrounding_rectangle_snapshot_json,
+        manim_surrounding_rectangle_snapshots_json, manim_underline_snapshot_json,
     };
 
     fn js_error(error: String) -> JsValue {
@@ -112,6 +151,22 @@ mod wasm {
         .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = manimSurroundingRectangleSnapshotsJson)]
+    pub fn manim_surrounding_rectangle_snapshots(
+        target_snapshot_jsons: Vec<String>,
+        buff_x: f64,
+        buff_y: f64,
+        corner_radius: f64,
+    ) -> Result<String, JsValue> {
+        manim_surrounding_rectangle_snapshots_json(
+            &target_snapshot_jsons,
+            buff_x,
+            buff_y,
+            corner_radius,
+        )
+        .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = manimBackgroundRectangleSnapshotJson)]
     pub fn manim_background_rectangle_snapshot(
         target_snapshot_json: &str,
@@ -122,6 +177,24 @@ mod wasm {
     ) -> Result<String, JsValue> {
         manim_background_rectangle_snapshot_json(
             target_snapshot_json,
+            buff_x,
+            buff_y,
+            corner_radius,
+            fill_opacity,
+        )
+        .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = manimBackgroundRectangleSnapshotsJson)]
+    pub fn manim_background_rectangle_snapshots(
+        target_snapshot_jsons: Vec<String>,
+        buff_x: f64,
+        buff_y: f64,
+        corner_radius: f64,
+        fill_opacity: f64,
+    ) -> Result<String, JsValue> {
+        manim_background_rectangle_snapshots_json(
+            &target_snapshot_jsons,
             buff_x,
             buff_y,
             corner_radius,
@@ -162,13 +235,17 @@ mod tests {
 
     use super::*;
 
-    fn target_json() -> String {
+    fn rectangle_json(width: f32, height: f32, center: Vec2) -> String {
         serde_json::to_string(
-            &Rectangle::new(4.0, 2.0)
-                .shift(Vec2::new(1.0, -2.0))
+            &Rectangle::new(width, height)
+                .shift(center)
                 .into_snapshot(),
         )
         .expect("valid target snapshot")
+    }
+
+    fn target_json() -> String {
+        rectangle_json(4.0, 2.0, Vec2::new(1.0, -2.0))
     }
 
     fn decode(value: &str) -> ObjectSnapshot {
@@ -192,6 +269,22 @@ mod tests {
     }
 
     #[test]
+    fn surrounding_rectangle_bridge_preserves_variadic_union_semantics() {
+        let targets = vec![
+            rectangle_json(2.0, 2.0, Vec2::new(-2.0, 0.0)),
+            rectangle_json(4.0, 1.0, Vec2::new(3.0, 2.0)),
+        ];
+        let snapshot = decode(
+            &manim_surrounding_rectangle_snapshots_json(&targets, 0.25, 0.5, 0.0)
+                .expect("valid variadic matcher"),
+        );
+
+        assert_eq!(snapshot.center(), Vec2::new(1.0, 0.75));
+        assert!((snapshot.width() - 8.5).abs() <= 1e-5);
+        assert!((snapshot.height() - 4.5).abs() <= 1e-5);
+    }
+
+    #[test]
     fn background_rectangle_bridge_preserves_shared_default_style() {
         let snapshot = decode(
             &manim_background_rectangle_snapshot_json(
@@ -210,6 +303,28 @@ mod tests {
         );
         assert!((fill.alpha - BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY).abs() <= 1e-5);
         assert_eq!(snapshot.style.stroke_width, 0.0);
+    }
+
+    #[test]
+    fn background_rectangle_bridge_preserves_variadic_union_semantics() {
+        let targets = vec![
+            rectangle_json(1.0, 2.0, Vec2::new(-1.0, -1.0)),
+            rectangle_json(3.0, 1.0, Vec2::new(2.0, 2.0)),
+        ];
+        let snapshot = decode(
+            &manim_background_rectangle_snapshots_json(
+                &targets,
+                0.0,
+                0.0,
+                0.0,
+                f64::from(BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY),
+            )
+            .expect("valid variadic background"),
+        );
+
+        assert_eq!(snapshot.center(), Vec2::new(1.0, 0.25));
+        assert!((snapshot.width() - 5.0).abs() <= 1e-5);
+        assert!((snapshot.height() - 4.5).abs() <= 1e-5);
     }
 
     #[test]
@@ -255,10 +370,19 @@ mod tests {
     }
 
     #[test]
+    fn variadic_matcher_bridge_rejects_empty_or_malformed_target_sets() {
+        assert!(manim_surrounding_rectangle_snapshots_json(&[], 0.1, 0.1, 0.0).is_err());
+        let targets = vec![target_json(), "not json".to_owned()];
+        assert!(
+            manim_background_rectangle_snapshots_json(&targets, 0.0, 0.0, 0.0, 0.75).is_err()
+        );
+    }
+
+    #[test]
     fn matcher_bridge_rejects_malformed_and_non_finite_inputs() {
         assert!(manim_underline_snapshot_json("not json", 0.1).is_err());
         assert!(
-            manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0,).is_err()
+            manim_surrounding_rectangle_snapshot_json(&target_json(), f64::NAN, 0.1, 0.0).is_err()
         );
         assert!(manim_cross_snapshot_json(None, f64::INFINITY, 1.0).is_err());
     }
