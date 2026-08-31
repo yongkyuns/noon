@@ -1,0 +1,84 @@
+name: Retained family layout stage
+
+on:
+  push:
+    branches:
+      - arch/retained-family-layout-bridge-stage
+    paths:
+      - "scripts/retained-family-layout-stage.py"
+      - "scripts/retained-text-family-layout-smoke.mjs"
+      - ".github/workflows/retained-family-layout-stage.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Apply exact retained-family bridge patch
+        run: python3 scripts/retained-family-layout-stage.py
+
+      - name: Hide staging-only files from repository topology checks
+        run: |
+          rm .github/workflows/retained-family-layout-stage.yml
+          rm scripts/retained-family-layout-stage.py
+
+      - name: Format and test Rust bridge
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          cargo test -p noon-web
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build and validate browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Install Chromium smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Test retained native Text family layout
+        run: node scripts/retained-text-family-layout-smoke.mjs
+
+      - name: Re-run retained family and lifecycle regressions
+        run: |
+          node scripts/retained-text-family-identity-smoke.mjs
+          node scripts/retained-text-family-fade-smoke.mjs
+          node scripts/retained-text-animation-smoke.mjs
+          node scripts/retained-text-scene-lifecycle-smoke.mjs
+
+      - name: Materialize validated production blobs
+        run: |
+          git config user.name "noon-validation-bot"
+          git config user.email "noon-validation-bot@users.noreply.github.com"
+          git add \
+            crates/noon-web/src/authoring_mobject.rs \
+            crates/noon-web/src/retained_authoring.rs \
+            web/python/_manim_semantic_handles.py \
+            web/python/_manim_typst.py
+          if ! git diff --cached --quiet; then
+            git commit -m "Validate retained native Text family layout bridge"
+            git push origin HEAD:arch/retained-family-layout-bridge-stage
+          fi
