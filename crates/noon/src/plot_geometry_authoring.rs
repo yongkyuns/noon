@@ -213,10 +213,10 @@ mod tests {
             .filter(|command| matches!(command, PathCommand::MoveTo { .. }))
             .count();
         assert_eq!(move_count, 2);
-        assert!(path
-            .commands()
-            .iter()
-            .all(|command| matches!(command, PathCommand::MoveTo { .. } | PathCommand::LineTo { .. })));
+        assert!(path.commands().iter().all(|command| matches!(
+            command,
+            PathCommand::MoveTo { .. } | PathCommand::LineTo { .. }
+        )));
     }
 
     #[test]
@@ -232,13 +232,13 @@ mod tests {
             SampleRange::new(0.0, 1.0, 1.0).unwrap(),
         );
         let error = axes_function_vector_path(axes, &plan, |_| f64::INFINITY, true).unwrap_err();
-        assert!(matches!(
-            error,
-            PlotGeometryError::NonFiniteFunctionValue {
-                parameter: 0.0,
-                value: f64::INFINITY
+        match error {
+            PlotGeometryError::NonFiniteFunctionValue { parameter, value } => {
+                assert_eq!(parameter, 0.0);
+                assert!(value.is_infinite() && value.is_sign_positive());
             }
-        ));
+            other => panic!("expected non-finite function value error, got {other:?}"),
+        }
     }
 
     #[test]
