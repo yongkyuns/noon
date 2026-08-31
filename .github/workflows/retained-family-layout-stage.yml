@@ -7,6 +7,7 @@ on:
     paths:
       - "scripts/retained-family-layout-stage.py"
       - "scripts/retained-family-placement-stage.py"
+      - "scripts/retained-family-layout-smoke-fix-stage.py"
       - "scripts/retained-text-family-layout-smoke.mjs"
       - ".github/workflows/retained-family-layout-stage.yml"
 
@@ -35,12 +36,14 @@ jobs:
         run: |
           python3 scripts/retained-family-layout-stage.py
           python3 scripts/retained-family-placement-stage.py
+          python3 scripts/retained-family-layout-smoke-fix-stage.py
 
       - name: Hide staging-only files from repository topology checks
         run: |
           rm .github/workflows/retained-family-layout-stage.yml
           rm scripts/retained-family-layout-stage.py
           rm scripts/retained-family-placement-stage.py
+          rm scripts/retained-family-layout-smoke-fix-stage.py
 
       - name: Format and test Rust bridge
         run: |
