@@ -21,8 +21,8 @@ jobs:
 
       - name: Apply candidate patch
         run: |
-          git apply --check scripts/retained-family-fades.patch
-          git apply scripts/retained-family-fades.patch
+          git apply --recount --check scripts/retained-family-fades.patch
+          git apply --recount scripts/retained-family-fades.patch
           rm scripts/retained-family-fades.patch
           rm .github/workflows/validate-retained-family-fades.yml
 
