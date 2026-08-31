@@ -33,6 +33,7 @@ node --check scripts/manim-typst-authoring-smoke.mjs
 node --check scripts/manim-reference-inventory.mjs
 node --check scripts/manim-reference-ledger.mjs
 node --check scripts/manim-reference-coverage.mjs
+node --check scripts/manim-reference-classification-lock.mjs
 node --check scripts/perf-profile.mjs
 node --check scripts/authoring-perf.mjs
 node --check scripts/perf-device-run.mjs
@@ -53,6 +54,7 @@ node --test scripts/browser-visual-parity-lib.test.mjs
 node --test scripts/manim-reference-inventory.test.mjs
 node --test scripts/manim-reference-ledger.test.mjs
 node --test scripts/manim-reference-coverage.test.mjs
+node --test scripts/manim-reference-classification-lock.test.mjs
 
 for test_file in web/*.test.mjs; do
   node --test "$test_file"
