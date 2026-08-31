@@ -29,8 +29,8 @@ pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
 pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 72.0;
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
-/// Deterministic proportional sans-serif equivalent of Manim/Pango's empty-font default.
-pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans";
+/// Deterministic bundled equivalent of Manim/Pango's empty-font default on the raster oracle.
+pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Serif";
 
 /// Stable handle to one semantic object in a [`RetainedScene`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -369,7 +369,7 @@ fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringErro
     if family.eq_ignore_ascii_case(DEFAULT_NATIVE_TEXT_FONT_FAMILY) {
         return NativeFontFace::new(
             Arc::<str>::from(DEFAULT_NATIVE_TEXT_FONT_FAMILY),
-            Arc::<[u8]>::from(dejavu::sans::regular()),
+            Arc::<[u8]>::from(dejavu::serif::regular()),
             0,
         )
         .map_err(TextAuthoringError::NativeText);
@@ -716,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn native_text_default_uses_proportional_manim_sans_face() {
+    fn native_text_default_uses_manim_pango_default_face() {
         let text = Text::new("Hello World!");
         assert_eq!(text.font_family(), DEFAULT_NATIVE_TEXT_FONT_FAMILY);
 
