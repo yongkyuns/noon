@@ -374,6 +374,8 @@ class Text(_RetainedTextMobject):
         self._font = str(font)
         self._line_spacing = float(line_spacing)
         self._initialize_retained(str(text), float(font_size), handle, color, opacity)
+        if self._semantic_family_member_handle is not None:
+            self._semantic_family_member_handle.bindRetainedNativeText(self._retained_handle)
 
     @property
     def text(self) -> str:

@@ -19,6 +19,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
+      - "scripts/retained-text-family-layout-smoke.mjs"
       - "scripts/retained-text-family-fade-smoke.mjs"
       - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
@@ -43,6 +44,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
+      - "scripts/retained-text-family-layout-smoke.mjs"
       - "scripts/retained-text-family-fade-smoke.mjs"
       - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
@@ -115,6 +117,9 @@ jobs:
 
       - name: Test retained Text family identity
         run: node scripts/retained-text-family-identity-smoke.mjs
+
+      - name: Test retained Text family layout
+        run: node scripts/retained-text-family-layout-smoke.mjs
 
       - name: Test retained Text family fades
         run: node scripts/retained-text-family-fade-smoke.mjs
