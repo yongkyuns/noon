@@ -20,12 +20,14 @@ function wheelLinePixels(canvas) {
   throw new TypeError("canvas must have a positive CSS line-height or font-size");
 }
 
-function wheelDeltaCssPixels(canvas, event, linePixels) {
+function wheelDeltaCssPixels(canvas, event, resolveLinePixels) {
   switch (event.deltaMode) {
     case 0:
       return { x: event.deltaX, y: event.deltaY };
-    case 1:
+    case 1: {
+      const linePixels = resolveLinePixels();
       return { x: event.deltaX * linePixels, y: event.deltaY * linePixels };
+    }
     case 2: {
       const rect = canvas.getBoundingClientRect();
       return { x: event.deltaX * rect.width, y: event.deltaY * rect.height };
@@ -63,10 +65,14 @@ export function attachNativeInputs(
   };
   const keyDown = (event) => player.dispatchKey(event.code, true);
   const keyUp = (event) => player.dispatchKey(event.code, false);
-  const linePixels = wheelLinePixels(canvas);
+  let cachedLinePixels = null;
+  const resolveLinePixels = () => {
+    cachedLinePixels ??= wheelLinePixels(canvas);
+    return cachedLinePixels;
+  };
   const wheel = (event) => {
     if (preventWheelDefault) event.preventDefault();
-    const delta = wheelDeltaCssPixels(canvas, event, linePixels);
+    const delta = wheelDeltaCssPixels(canvas, event, resolveLinePixels);
     player.dispatchWheel(delta.x, delta.y);
   };
 
