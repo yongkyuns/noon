@@ -14,6 +14,8 @@ on:
       - 'scripts/manim-reference-ledger.test.mjs'
       - 'scripts/manim-reference-coverage.mjs'
       - 'scripts/manim-reference-coverage.test.mjs'
+      - 'scripts/manim-reference-classification-lock.mjs'
+      - 'scripts/manim-reference-classification-lock.test.mjs'
   push:
     branches:
       - master
@@ -29,6 +31,8 @@ on:
       - 'scripts/manim-reference-ledger.test.mjs'
       - 'scripts/manim-reference-coverage.mjs'
       - 'scripts/manim-reference-coverage.test.mjs'
+      - 'scripts/manim-reference-classification-lock.mjs'
+      - 'scripts/manim-reference-classification-lock.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -128,6 +132,18 @@ jobs:
           printf '\nReference inventory lock verified against the immutable extracted corpus.\n' \
             >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify classified reference identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          node noon/scripts/manim-reference-classification-lock.mjs \
+            noon/web/python/examples/manim_tutorial_manifest.json \
+            noon/compat/manim-v0.21.0-reference-coverage-lock.json \
+            > noon/artifacts/manim-v0.21.0-reference-classification-lock.json
+          cat noon/artifacts/manim-v0.21.0-reference-classification-lock.json
+          printf '\nReference classification identities verified against the checked-in ratchet.\n' \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Reconcile canonical reference coverage
         shell: bash
         run: |
@@ -158,6 +174,7 @@ jobs:
           path: |
             noon/artifacts/manim-v0.21.0-reference-inventory.json
             noon/artifacts/manim-v0.21.0-reference-ledger-summary.json
+            noon/artifacts/manim-v0.21.0-reference-classification-lock.json
             noon/artifacts/manim-v0.21.0-reference-coverage.json
           if-no-files-found: error
           retention-days: 14
