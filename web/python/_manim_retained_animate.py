@@ -20,6 +20,7 @@ import _manim_typst as _typst
 _INSTALLED = False
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
+_ORIGINAL_BUILDER_GETATTR = _animate._AlignedAnimationBuilder.__getattr__
 
 
 def _retained_copy_for_animate_target(
@@ -37,72 +38,126 @@ def _ensure_animation_state(scene: _compat.Scene) -> None:
         scene._retained_animation_state = {}
 
 
-def _normal_builder_scale_factor(
-    animation: _animate._AlignedAnimationBuilder,
-    source: _typst._RetainedTextMobject,
-) -> float:
-    """Extract one uniform relative scale from a normal ``mobject.animate`` builder.
+def _vec2(value: object, label: str) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ValueError(f"retained text authoring spec is missing {label} state")
+    x = float(value["x"])
+    y = float(value["y"])
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise ValueError(f"retained text {label} state must be finite")
+    return {"x": x, "y": y}
 
-    The generic Manim builder mutates a detached target copy. Retained playback owns
-    the semantic current state separately, so the only frontend value we need is the
-    source-to-target scale ratio. Applying that ratio to the retained state makes
-    sequential calls such as ``scale(2)`` then ``scale(0.5)`` compose correctly without
-    mutating the source object or reconstructing a legacy geometry snapshot.
-    """
 
-    target = animation.target
-    if type(target) is not type(source):
-        raise NotImplementedError(
-            "retained Text .animate currently requires a target of the same retained text type"
-        )
-
-    source_spec = source._spec()
-    target_spec = target._spec()
-    source_transform = source_spec.get("transform")
-    target_transform = target_spec.get("transform")
-    if not isinstance(source_transform, dict) or not isinstance(target_transform, dict):
+def _transform(spec: dict[str, Any]) -> dict[str, Any]:
+    transform = spec.get("transform")
+    if not isinstance(transform, dict):
         raise ValueError("retained text authoring spec is missing transform state")
+    return transform
 
-    source_scale = source_transform.get("scale")
-    target_scale = target_transform.get("scale")
-    if not isinstance(source_scale, dict) or not isinstance(target_scale, dict):
-        raise ValueError("retained text authoring spec is missing scale state")
 
-    source_without_scale = copy.deepcopy(source_spec)
-    target_without_scale = copy.deepcopy(target_spec)
-    source_without_scale["transform"]["scale"] = None
-    target_without_scale["transform"]["scale"] = None
-    if source_without_scale != target_without_scale:
+def _assert_only_transform_field_changed(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    field: str,
+) -> None:
+    before_normalized = copy.deepcopy(before)
+    after_normalized = copy.deepcopy(after)
+    before_normalized["transform"][field] = None
+    after_normalized["transform"][field] = None
+    if before_normalized != after_normalized:
         raise NotImplementedError(
-            "retained Text .animate currently supports uniform scale only; "
-            "position, rotation, color, and opacity animation remain separate slices"
+            f"retained Text .animate.{field} changed unsupported retained state"
         )
 
-    source_x = float(source_scale["x"])
-    source_y = float(source_scale["y"])
-    target_x = float(target_scale["x"])
-    target_y = float(target_scale["y"])
-    if not all(math.isfinite(value) for value in (source_x, source_y, target_x, target_y)):
-        raise ValueError("retained text scale state must be finite")
-    if math.isclose(source_x, 0.0, abs_tol=1e-15) or math.isclose(
-        source_y, 0.0, abs_tol=1e-15
+
+def _scale_factor_between(before: dict[str, Any], after: dict[str, Any]) -> float:
+    before_scale = _vec2(_transform(before).get("scale"), "scale")
+    after_scale = _vec2(_transform(after).get("scale"), "scale")
+    if math.isclose(before_scale["x"], 0.0, abs_tol=1e-15) or math.isclose(
+        before_scale["y"], 0.0, abs_tol=1e-15
     ):
         raise ValueError("retained Text .animate cannot derive scale from a zero-scale source")
 
-    factor_x = target_x / source_x
-    factor_y = target_y / source_y
+    factor_x = after_scale["x"] / before_scale["x"]
+    factor_y = after_scale["y"] / before_scale["y"]
     if not math.isclose(factor_x, factor_y, rel_tol=1e-12, abs_tol=1e-12):
-        raise NotImplementedError(
-            "retained Text .animate currently supports uniform scale only"
-        )
+        raise NotImplementedError("retained Text .animate supports uniform scale only")
     factor = (factor_x + factor_y) / 2.0
     if not math.isfinite(factor) or factor <= 0.0:
         raise ValueError("retained Text .animate scale factor must be finite and positive")
     return factor
 
 
-def _retained_scale_factor(animation: object) -> float | None:
-    """Return a retained relative scale factor, or ``None`` for another animation."""
+def _semantic_operation(
+    name: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize one retained builder method into replayable semantic intent."""
+
+    if name == "scale":
+        _assert_only_transform_field_changed(before, after, "scale")
+        return {"kind": "scale_relative", "factor": _scale_factor_between(before, after)}
+
+    if name == "shift":
+        _assert_only_transform_field_changed(before, after, "translation")
+        before_position = _vec2(_transform(before).get("translation"), "translation")
+        after_position = _vec2(_transform(after).get("translation"), "translation")
+        return {
+            "kind": "shift_relative",
+            "delta": {
+                "x": after_position["x"] - before_position["x"],
+                "y": after_position["y"] - before_position["y"],
+            },
+        }
+
+    if name in {"move_to", "center"}:
+        _assert_only_transform_field_changed(before, after, "translation")
+        return {
+            "kind": "move_to",
+            "position": _vec2(_transform(after).get("translation"), "translation"),
+        }
+
+    if name == "set_x":
+        _assert_only_transform_field_changed(before, after, "translation")
+        position = _vec2(_transform(after).get("translation"), "translation")
+        return {"kind": "set_x", "x": position["x"]}
+
+    if name == "set_y":
+        _assert_only_transform_field_changed(before, after, "translation")
+        position = _vec2(_transform(after).get("translation"), "translation")
+        return {"kind": "set_y", "y": position["y"]}
+
+    raise NotImplementedError(
+        f"retained Text .animate.{name} is not supported yet; "
+        "position and uniform scale animations are supported"
+    )
+
+
+def _retained_builder_getattr(
+    self: _animate._AlignedAnimationBuilder,
+    name: str,
+):
+    """Record retained method intent while preserving the generic Manim builder."""
+
+    invoke = _ORIGINAL_BUILDER_GETATTR(self, name)
+    source = getattr(self, "source", None)
+    if not isinstance(source, _typst._RetainedTextMobject):
+        return invoke
+
+    def retained_invoke(*args: Any, **kwargs: Any):
+        before = self.target._spec()
+        result = invoke(*args, **kwargs)
+        after = self.target._spec()
+        operations = vars(self).setdefault("_retained_method_operations", [])
+        operations.append(_semantic_operation(name, before, after))
+        return result
+
+    return retained_invoke
+
+
+def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
+    """Return replayable retained animation intent, or ``None`` for legacy animation."""
 
     if not isinstance(animation, _animate._AlignedAnimationBuilder):
         return None
@@ -110,18 +165,23 @@ def _retained_scale_factor(animation: object) -> float | None:
     if not isinstance(source, _typst._RetainedTextMobject):
         return None
 
-    # ScaleInPlace/ShrinkToCenter use a deferred builder because Manim creates their
-    # target at play-begin time. Keep that zero-scale-capable path independent of the
-    # normal .animate target copy, whose retained ``scale`` mutator intentionally
-    # accepts positive factors only.
     deferred_factor = vars(animation).get("scale_factor")
     if deferred_factor is not None:
         factor = float(deferred_factor)
         if not math.isfinite(factor):
             raise ValueError("retained text scale factor must be finite")
-        return factor
+        return [{"kind": "scale_relative", "factor": factor}]
 
-    return _normal_builder_scale_factor(animation, source)
+    target = animation.target
+    if type(target) is not type(source):
+        raise NotImplementedError(
+            "retained Text .animate currently requires a target of the same retained text type"
+        )
+
+    operations = vars(animation).get("_retained_method_operations", [])
+    if not isinstance(operations, list):
+        raise TypeError("retained animation method log must be a list")
+    return copy.deepcopy(operations)
 
 
 def _bind_retained(scene: _compat.Scene, source: _typst._RetainedTextMobject) -> None:
@@ -133,15 +193,48 @@ def _bind_retained(scene: _compat.Scene, source: _typst._RetainedTextMobject) ->
         scene._register_top_level(source)
 
 
-def _initial_scale(source: _typst._RetainedTextMobject) -> dict[str, float]:
-    scale = source._spec()["transform"]["scale"]
-    return {"x": float(scale["x"]), "y": float(scale["y"])}
+def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, Any]:
+    transform = _transform(source._spec())
+    return {
+        "position": _vec2(transform.get("translation"), "translation"),
+        "scale": _vec2(transform.get("scale"), "scale"),
+    }
 
 
-def _schedule_retained_scale(
+def _append_vec2_track(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    property_name: str,
+    current: dict[str, float],
+    target: dict[str, float],
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    scene._retained_animation_tracks.append(
+        {
+            "object": object_id,
+            "property": property_name,
+            "values": {
+                "vec2": {
+                    "from": {"x": float(current["x"]), "y": float(current["y"])},
+                    "to": {"x": float(target["x"]), "y": float(target["y"])},
+                }
+            },
+            "timing": {
+                "start_time": float(start_time),
+                "duration": float(duration),
+                "easing": str(easing),
+            },
+        }
+    )
+
+
+def _schedule_retained_plan(
     scene: _compat.Scene,
     animation: object,
-    factor: float,
+    operations: list[dict[str, Any]],
     *,
     start_time: float,
     duration: float,
@@ -153,31 +246,76 @@ def _schedule_retained_scale(
 
     object_id = int(source.id)
     state = scene._retained_animation_state.setdefault(
-        object_id, {"scale": _initial_scale(source)}
+        object_id, _initial_animation_state(source)
     )
-    current = state["scale"]
-    target = {
-        "x": float(current["x"]) * factor,
-        "y": float(current["y"]) * factor,
-    }
-    scene._retained_animation_tracks.append(
-        {
-            "object": object_id,
-            "property": "scale",
-            "values": {
-                "vec2": {
-                    "from": {"x": float(current["x"]), "y": float(current["y"])},
-                    "to": target,
-                }
-            },
-            "timing": {
-                "start_time": float(start_time),
-                "duration": float(duration),
-                "easing": str(easing),
-            },
-        }
-    )
-    state["scale"] = copy.deepcopy(target)
+    current_position = copy.deepcopy(state["position"])
+    current_scale = copy.deepcopy(state["scale"])
+    target_position = copy.deepcopy(current_position)
+    target_scale = copy.deepcopy(current_scale)
+    touched: list[str] = []
+
+    for operation in operations:
+        kind = operation["kind"]
+        if kind == "scale_relative":
+            if "scale" not in touched:
+                touched.append("scale")
+            factor = float(operation["factor"])
+            target_scale = {
+                "x": float(target_scale["x"]) * factor,
+                "y": float(target_scale["y"]) * factor,
+            }
+            continue
+        if kind == "shift_relative":
+            if "position" not in touched:
+                touched.append("position")
+            delta = operation["delta"]
+            target_position = {
+                "x": float(target_position["x"]) + float(delta["x"]),
+                "y": float(target_position["y"]) + float(delta["y"]),
+            }
+            continue
+        if kind == "move_to":
+            if "position" not in touched:
+                touched.append("position")
+            target_position = copy.deepcopy(operation["position"])
+            continue
+        if kind == "set_x":
+            if "position" not in touched:
+                touched.append("position")
+            target_position["x"] = float(operation["x"])
+            continue
+        if kind == "set_y":
+            if "position" not in touched:
+                touched.append("position")
+            target_position["y"] = float(operation["y"])
+            continue
+        raise ValueError(f"unknown retained animation operation {kind!r}")
+
+    for property_name in touched:
+        if property_name == "scale":
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="scale",
+                current=current_scale,
+                target=target_scale,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+            state["scale"] = copy.deepcopy(target_scale)
+        elif property_name == "position":
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="position",
+                current=current_position,
+                target=target_position,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+            state["position"] = copy.deepcopy(target_position)
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:
@@ -199,8 +337,8 @@ def _retained_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
-    retained_factors = [_retained_scale_factor(animation) for animation in animations]
-    if not any(factor is not None for factor in retained_factors):
+    retained_plans = [_retained_animation_plan(animation) for animation in animations]
+    if not any(plan is not None for plan in retained_plans):
         return _ORIGINAL_SCENE_PLAY(
             self,
             *animations,
@@ -215,9 +353,9 @@ def _retained_scene_play(
 
     if not animations:
         raise ValueError("play requires at least one animation")
-    if any(factor is None for factor in retained_factors):
+    if any(plan is None for plan in retained_plans):
         raise NotImplementedError(
-            "mixing retained Text scale animations with legacy animations in one Scene.play "
+            "mixing retained Text animations with legacy animations in one Scene.play "
             "is not supported yet"
         )
     if duration is not None and run_time is not None:
@@ -257,8 +395,8 @@ def _retained_scene_play(
 
     max_end = base_start
     try:
-        for animation, factor in zip(animations, retained_factors):
-            assert factor is not None
+        for animation, plan in zip(animations, retained_plans):
+            assert plan is not None
             resolved = _options.resolve(
                 builder_args=_options.builder_args(animation),
                 default_lag_ratio=0.0,
@@ -267,10 +405,10 @@ def _retained_scene_play(
                 play_rate_func=rate_func,
                 play_lag_ratio=lag_ratio,
             )
-            _schedule_retained_scale(
+            _schedule_retained_plan(
                 self,
                 animation,
-                factor,
+                plan,
                 start_time=base_start,
                 duration=resolved.run_time,
                 easing=resolved.rate_func,
@@ -301,9 +439,7 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
-    # The generic semantic-handle target cloner is geometry-backed. Retained Text/Typst
-    # instead owns source-level resource state, so its normal `.animate` target must clone
-    # through the retained handle before any target-state mutator is applied.
     _typst._RetainedTextMobject._copy_for_animate_target = _retained_copy_for_animate_target
+    _animate._AlignedAnimationBuilder.__getattr__ = _retained_builder_getattr
     _compat.Scene.play = _retained_scene_play
     _compat.Scene.retained_document = _retained_document
