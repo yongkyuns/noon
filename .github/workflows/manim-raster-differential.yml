@@ -52,6 +52,22 @@ jobs:
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
 
+      - name: Report Manim default text oracle
+        run: |
+          fc-match sans-serif
+          python - <<'PY'
+          from manim import Text
+
+          text = Text("Hello World!")
+          center = text.get_center()
+          print(
+              "Manim Text('Hello World!'): "
+              f"font={text.font!r} font_size={text.font_size} "
+              f"width={text.width:.9f} height={text.height:.9f} "
+              f"center=({center[0]:.9f},{center[1]:.9f})"
+          )
+          PY
+
       - name: Use stable Rust
         run: |
           rustup default stable
