@@ -119,6 +119,10 @@ _manim_typst.install()
 # avoids Python call-expression binding races for Scene.play(ShrinkToCenter(Text(...))).
 import _manim_retained_animate
 _manim_retained_animate.install()
+# Reconcile direct retained mutations with the same canonical Rust authoring
+# state before later Scene.play adapters capture the retained scheduler.
+import _manim_retained_state
+_manim_retained_state.install()
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill
