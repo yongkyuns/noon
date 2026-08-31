@@ -22,6 +22,14 @@ _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
 
 
+def _retained_copy_for_animate_target(
+    self: _typst._RetainedTextMobject,
+) -> _typst._RetainedTextMobject:
+    """Clone a retained animation target without entering geometry-only cloning."""
+
+    return self.copy()
+
+
 def _ensure_animation_state(scene: _compat.Scene) -> None:
     _typst._ensure_scene_state(scene)
     if not hasattr(scene, "_retained_animation_tracks"):
@@ -29,20 +37,91 @@ def _ensure_animation_state(scene: _compat.Scene) -> None:
         scene._retained_animation_state = {}
 
 
+def _normal_builder_scale_factor(
+    animation: _animate._AlignedAnimationBuilder,
+    source: _typst._RetainedTextMobject,
+) -> float:
+    """Extract one uniform relative scale from a normal ``mobject.animate`` builder.
+
+    The generic Manim builder mutates a detached target copy. Retained playback owns
+    the semantic current state separately, so the only frontend value we need is the
+    source-to-target scale ratio. Applying that ratio to the retained state makes
+    sequential calls such as ``scale(2)`` then ``scale(0.5)`` compose correctly without
+    mutating the source object or reconstructing a legacy geometry snapshot.
+    """
+
+    target = animation.target
+    if type(target) is not type(source):
+        raise NotImplementedError(
+            "retained Text .animate currently requires a target of the same retained text type"
+        )
+
+    source_spec = source._spec()
+    target_spec = target._spec()
+    source_transform = source_spec.get("transform")
+    target_transform = target_spec.get("transform")
+    if not isinstance(source_transform, dict) or not isinstance(target_transform, dict):
+        raise ValueError("retained text authoring spec is missing transform state")
+
+    source_scale = source_transform.get("scale")
+    target_scale = target_transform.get("scale")
+    if not isinstance(source_scale, dict) or not isinstance(target_scale, dict):
+        raise ValueError("retained text authoring spec is missing scale state")
+
+    source_without_scale = copy.deepcopy(source_spec)
+    target_without_scale = copy.deepcopy(target_spec)
+    source_without_scale["transform"]["scale"] = None
+    target_without_scale["transform"]["scale"] = None
+    if source_without_scale != target_without_scale:
+        raise NotImplementedError(
+            "retained Text .animate currently supports uniform scale only; "
+            "position, rotation, color, and opacity animation remain separate slices"
+        )
+
+    source_x = float(source_scale["x"])
+    source_y = float(source_scale["y"])
+    target_x = float(target_scale["x"])
+    target_y = float(target_scale["y"])
+    if not all(math.isfinite(value) for value in (source_x, source_y, target_x, target_y)):
+        raise ValueError("retained text scale state must be finite")
+    if math.isclose(source_x, 0.0, abs_tol=1e-15) or math.isclose(
+        source_y, 0.0, abs_tol=1e-15
+    ):
+        raise ValueError("retained Text .animate cannot derive scale from a zero-scale source")
+
+    factor_x = target_x / source_x
+    factor_y = target_y / source_y
+    if not math.isclose(factor_x, factor_y, rel_tol=1e-12, abs_tol=1e-12):
+        raise NotImplementedError(
+            "retained Text .animate currently supports uniform scale only"
+        )
+    factor = (factor_x + factor_y) / 2.0
+    if not math.isfinite(factor) or factor <= 0.0:
+        raise ValueError("retained Text .animate scale factor must be finite and positive")
+    return factor
+
+
 def _retained_scale_factor(animation: object) -> float | None:
-    """Return a deferred retained scale factor, or ``None`` for another animation."""
+    """Return a retained relative scale factor, or ``None`` for another animation."""
 
     if not isinstance(animation, _animate._AlignedAnimationBuilder):
         return None
     source = getattr(animation, "source", None)
     if not isinstance(source, _typst._RetainedTextMobject):
         return None
-    if not hasattr(animation, "scale_factor"):
-        return None
-    factor = float(animation.scale_factor)
-    if not math.isfinite(factor):
-        raise ValueError("retained text scale factor must be finite")
-    return factor
+
+    # ScaleInPlace/ShrinkToCenter use a deferred builder because Manim creates their
+    # target at play-begin time. Keep that zero-scale-capable path independent of the
+    # normal .animate target copy, whose retained ``scale`` mutator intentionally
+    # accepts positive factors only.
+    deferred_factor = vars(animation).get("scale_factor")
+    if deferred_factor is not None:
+        factor = float(deferred_factor)
+        if not math.isfinite(factor):
+            raise ValueError("retained text scale factor must be finite")
+        return factor
+
+    return _normal_builder_scale_factor(animation, source)
 
 
 def _bind_retained(scene: _compat.Scene, source: _typst._RetainedTextMobject) -> None:
@@ -222,5 +301,9 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
+    # The generic semantic-handle target cloner is geometry-backed. Retained Text/Typst
+    # instead owns source-level resource state, so its normal `.animate` target must clone
+    # through the retained handle before any target-state mutator is applied.
+    _typst._RetainedTextMobject._copy_for_animate_target = _retained_copy_for_animate_target
     _compat.Scene.play = _retained_scene_play
     _compat.Scene.retained_document = _retained_document

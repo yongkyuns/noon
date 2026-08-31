@@ -1,0 +1,100 @@
+name: Retained text animation
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon-web/src/retained_authoring_player.rs"
+      - "crates/noon-web/src/retained_authoring_scene.rs"
+      - "crates/noon-web/src/retained_authoring_tracks.rs"
+      - "crates/noon-web/src/retained_authoring_wire_scene.rs"
+      - "web/python-worker.source.js"
+      - "web/python-compat-modules.js"
+      - "web/python/_manim_animate.py"
+      - "web/python/_manim_animation_options.py"
+      - "web/python/_manim_retained_animate.py"
+      - "web/python/_manim_typst.py"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/retained-text-animation-smoke.mjs"
+      - ".github/workflows/retained-text-animation.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "crates/noon-web/src/retained_authoring_player.rs"
+      - "crates/noon-web/src/retained_authoring_scene.rs"
+      - "crates/noon-web/src/retained_authoring_tracks.rs"
+      - "crates/noon-web/src/retained_authoring_wire_scene.rs"
+      - "web/python-worker.source.js"
+      - "web/python-compat-modules.js"
+      - "web/python/_manim_animate.py"
+      - "web/python/_manim_animation_options.py"
+      - "web/python/_manim_retained_animate.py"
+      - "web/python/_manim_typst.py"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/retained-text-animation-smoke.mjs"
+      - ".github/workflows/retained-text-animation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retained-text-animation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-authoring:
+    name: Python retained Text animation
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Test retained Text animation authoring
+        run: node scripts/retained-text-animation-smoke.mjs
