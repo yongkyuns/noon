@@ -1,0 +1,54 @@
+name: Ephemeral instant IR contract patch
+
+on:
+  push:
+    branches:
+      - bot/instant-ir-patch
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update shared-validation regression
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/noon-ir/src/mixed.rs")
+          text = path.read_text()
+          old = '''        track.timing.duration = 0.0;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one duration assertion source, got {text.count(old)}")
+          text = text.replace(old, '''        track.timing.duration = -1.0;
+''', 1)
+          old = '''                error: TimelineError::InvalidDuration(0.0),
+'''
+          if text.count(old) != 2:
+              raise SystemExit(f"expected two error assertions, got {text.count(old)}")
+          text = text.replace(old, '''                error: TimelineError::InvalidDuration(-1.0),
+''')
+          path.write_text(text)
+
+      - name: Validate IR contract
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy -p noon-ir --all-targets --all-features -- -D warnings
+          cargo test -p noon-ir --all-features
+
+      - name: Commit patched regression
+        run: |
+          git config user.name "Noon CI patch"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/noon-ir/src/mixed.rs
+          git diff --cached --check
+          git commit -m "Update instant assignment IR validation"
+          git push origin HEAD:bot/instant-ir-patch
