@@ -252,6 +252,82 @@ def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
     return copy.deepcopy(operations)
 
 
+def _retained_family_fade_expansion(
+    animation: object,
+) -> tuple[_compat.Group, list[_typst._RetainedTextMobject], list[object]] | None:
+    """Expand one default retained family fade through the shared leaf traversal."""
+
+    if not isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _compat.Group):
+        return None
+
+    leaves = _compat._leaf_mobjects(target)
+    retained = [
+        member for member in leaves if isinstance(member, _typst._RetainedTextMobject)
+    ]
+    if not retained:
+        return None
+    if len(retained) != len(leaves):
+        raise NotImplementedError(
+            "mixing retained Text and legacy Mobjects in one Group/VGroup fade is not supported"
+        )
+
+    shift = _compat._as_vec2(animation._fade_shift_vector)
+    scale_factor = float(animation._fade_scale_factor)
+    if not math.isfinite(scale_factor):
+        raise ValueError("retained text family fade scale must be finite")
+    default_endpoint = (
+        math.isclose(float(shift.x), 0.0, abs_tol=1e-15)
+        and math.isclose(float(shift.y), 0.0, abs_tol=1e-15)
+        and math.isclose(scale_factor, 1.0, rel_tol=0.0, abs_tol=1e-15)
+        and not bool(animation._fade_point_target)
+    )
+    if not default_endpoint:
+        raise NotImplementedError(
+            "retained Text Group/VGroup fades with shift, scale, or target_position "
+            "require shared retained family layout semantics"
+        )
+
+    animation_args = _options.builder_args(animation)
+    family_lag_ratio = float(animation_args.get("lag_ratio", 0.0))
+    if not math.isfinite(family_lag_ratio):
+        raise ValueError("retained text family fade lag_ratio must be finite")
+    if not math.isclose(family_lag_ratio, 0.0, rel_tol=0.0, abs_tol=1e-15):
+        raise NotImplementedError(
+            "retained Text Group/VGroup fade lag_ratio requires shared retained family scheduling"
+        )
+
+    children: list[object] = []
+    for index, member in enumerate(retained):
+        child = type(animation)(
+            member,
+            None if animation.key is None else f"{animation.key}.{index}",
+        )
+        object.__setattr__(child, "anim_args", copy.deepcopy(animation_args))
+        children.append(child)
+    return target, retained, children
+
+
+def _normalize_retained_family_top_level(
+    scene: _compat.Scene,
+    families: list[tuple[_compat.Group, list[_typst._RetainedTextMobject]]],
+    top_level_before: list[object],
+) -> None:
+    """Keep Manim family wrappers top-level while retained leaves own runtime state."""
+
+    previous = {id(value) for value in top_level_before}
+    family_leaves = {id(member) for _, leaves in families for member in leaves}
+    scene._compat_top_level = [
+        value
+        for value in scene._compat_top_level
+        if id(value) not in family_leaves or id(value) in previous
+    ]
+    for family, _ in families:
+        scene._register_top_level(family)
+
+
 def _bind_retained(
     scene: _compat.Scene,
     source: _typst._RetainedTextMobject,
@@ -996,6 +1072,12 @@ def _schedule_retained_plan(
 
 
 def _retained_scene_is_present(self: _compat.Scene, value: object) -> bool:
+    if isinstance(value, _compat.Group):
+        leaves = _compat._leaf_mobjects(value)
+        if leaves and all(
+            isinstance(member, _typst._RetainedTextMobject) for member in leaves
+        ):
+            return any(_retained_scene_is_present(self, member) for member in leaves)
     if not isinstance(value, _typst._RetainedTextMobject):
         return _ORIGINAL_SCENE_IS_PRESENT(self, value)
     if value._scene is not self or value._retained_object_id is None:
@@ -1023,6 +1105,29 @@ def _retained_scene_play(
     lag_ratio: float | None = None,
     **kwargs: Any,
 ) -> _compat.Scene:
+    expanded: list[object] = []
+    retained_families: list[
+        tuple[_compat.Group, list[_typst._RetainedTextMobject]]
+    ] = []
+    for animation in animations:
+        family = _retained_family_fade_expansion(animation)
+        if family is None:
+            expanded.append(animation)
+            continue
+        target, leaves, children = family
+        retained_families.append((target, leaves))
+        expanded.extend(children)
+    animations = tuple(expanded)
+
+    if retained_families and lag_ratio is not None:
+        play_family_lag_ratio = float(lag_ratio)
+        if not math.isfinite(play_family_lag_ratio):
+            raise ValueError("retained text family fade lag_ratio must be finite")
+        if not math.isclose(play_family_lag_ratio, 0.0, rel_tol=0.0, abs_tol=1e-15):
+            raise NotImplementedError(
+                "retained Text Group/VGroup Scene.play lag_ratio requires shared retained family scheduling"
+            )
+
     retained_plans = [_retained_animation_plan(animation) for animation in animations]
     if not any(plan is not None for plan in retained_plans):
         return _ORIGINAL_SCENE_PLAY(
@@ -1106,6 +1211,7 @@ def _retained_scene_play(
             )
             max_end = max(max_end, base_start + resolved.run_time)
 
+        _normalize_retained_family_top_level(self, retained_families, top_level_before)
         self._cursor = max(cursor_before, max_end)
         return self
     except Exception:
