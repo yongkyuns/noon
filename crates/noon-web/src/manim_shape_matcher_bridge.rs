@@ -236,12 +236,8 @@ mod tests {
     use super::*;
 
     fn rectangle_json(width: f32, height: f32, center: Vec2) -> String {
-        serde_json::to_string(
-            &Rectangle::new(width, height)
-                .shift(center)
-                .into_snapshot(),
-        )
-        .expect("valid target snapshot")
+        serde_json::to_string(&Rectangle::new(width, height).shift(center).into_snapshot())
+            .expect("valid target snapshot")
     }
 
     fn target_json() -> String {
@@ -373,9 +369,7 @@ mod tests {
     fn variadic_matcher_bridge_rejects_empty_or_malformed_target_sets() {
         assert!(manim_surrounding_rectangle_snapshots_json(&[], 0.1, 0.1, 0.0).is_err());
         let targets = vec![target_json(), "not json".to_owned()];
-        assert!(
-            manim_background_rectangle_snapshots_json(&targets, 0.0, 0.0, 0.0, 0.75).is_err()
-        );
+        assert!(manim_background_rectangle_snapshots_json(&targets, 0.0, 0.0, 0.0, 0.75).is_err());
     }
 
     #[test]
