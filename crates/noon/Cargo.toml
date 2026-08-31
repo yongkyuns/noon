@@ -6,6 +6,7 @@ license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
 [dependencies]
+dejavu = "=2.37.0"
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
 noon-text-native = { path = "../noon-text-native" }
