@@ -1,6 +1,4 @@
-use noon::{
-    IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
-};
+use noon::{IntoSnapshot, Rectangle, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY};
 use noon_core::{ObjectSnapshot, Vec2, BLACK};
 use noon_web::{
     manim_background_rectangle_snapshots_json, manim_surrounding_rectangle_snapshot_json,
@@ -55,7 +53,10 @@ fn public_variadic_background_rectangle_bridge_preserves_union_style() {
     assert!((snapshot.width() - 5.0).abs() <= 1e-5);
     assert!((snapshot.height() - 4.5).abs() <= 1e-5);
     let fill = snapshot.style.fill.expect("background fill");
-    assert_eq!((fill.red, fill.green, fill.blue), (BLACK.red, BLACK.green, BLACK.blue));
+    assert_eq!(
+        (fill.red, fill.green, fill.blue),
+        (BLACK.red, BLACK.green, BLACK.blue)
+    );
     assert!((fill.alpha - BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY).abs() <= 1e-5);
     assert_eq!(snapshot.style.stroke_width, 0.0);
 }
