@@ -19,3 +19,6 @@ pub use timeline_scheduler::*;
 #[path = "retained.rs"]
 mod retained_runtime;
 pub use retained_runtime::*;
+
+mod retained_text_family;
+pub use retained_text_family::*;
