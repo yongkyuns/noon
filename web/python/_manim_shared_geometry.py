@@ -26,6 +26,11 @@ except ImportError:  # Native CPython tests keep the existing Python constructor
     _create_triangle_handle = None
 
 try:
+    from js import noonCreateAuthoringRoundedRectangleHandle as _create_rounded_rectangle_handle
+except ImportError:
+    _create_rounded_rectangle_handle = None
+
+try:
     from js import noonCreateAuthoringAnnularSectorHandle as _create_annular_sector_handle
 except ImportError:
     _create_annular_sector_handle = None
@@ -208,6 +213,34 @@ def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     _shared._apply_shared_constructor_kwargs(self, options)
     if color is not None:
         _set_shared_color(self, color)
+
+
+class RoundedRectangle(_compat.Rectangle):
+    """Scalar-radius Manim RoundedRectangle backed by shared Rust geometry."""
+
+    def __init__(self, corner_radius: float = 0.5, **kwargs: Any) -> None:
+        if _create_rounded_rectangle_handle is None:
+            raise RuntimeError("RoundedRectangle requires the shared browser geometry bridge")
+        if isinstance(corner_radius, (list, tuple)):
+            raise NotImplementedError(
+                "per-corner RoundedRectangle radii are not exposed by the browser bridge yet"
+            )
+
+        options = dict(kwargs)
+        width = _shared._ir._positive_number("width", options.pop("width", 4.0))
+        height = _shared._ir._positive_number("height", options.pop("height", 2.0))
+        radius = _shared._ir._finite_number("corner_radius", corner_radius)
+        color = options.pop("color", None)
+        _shared._attach_shared_handle(
+            self,
+            _create_rounded_rectangle_handle(width, height, radius),
+        )
+        self.width_value = width
+        self.height_value = height
+        self.corner_radius = radius
+        _shared._apply_shared_constructor_kwargs(self, options)
+        if color is not None:
+            _set_shared_color(self, color)
 
 
 def _sector_component_count(value: object) -> int:
@@ -402,6 +435,7 @@ def install() -> None:
         _geometry.Triangle.__init__ = _triangle_init
 
     public = {
+        "RoundedRectangle": RoundedRectangle,
         "AnnularSector": AnnularSector,
         "Sector": Sector,
         "Annulus": Annulus,
