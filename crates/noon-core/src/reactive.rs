@@ -28,10 +28,6 @@ pub use semantic_store::*;
 mod semantic_model;
 pub use semantic_model::*;
 
-#[path = "semantic_numeric.rs"]
-mod semantic_numeric;
-pub use semantic_numeric::*;
-
 #[path = "resource_arena.rs"]
 mod resource_arena;
 pub use resource_arena::*;
