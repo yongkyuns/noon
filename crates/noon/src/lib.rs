@@ -14,6 +14,7 @@ mod elbow_authoring;
 mod geometry_authoring;
 mod legacy;
 mod line_matcher_authoring;
+mod plot_geometry_authoring;
 mod plot_sampling_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
@@ -30,6 +31,7 @@ pub use elbow_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
+pub use plot_geometry_authoring::*;
 pub use plot_sampling_authoring::*;
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
@@ -42,13 +44,14 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
-        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, Axes2DState,
-        BackgroundRectangle, CoordinateSystemError, Cross, Dot, Elbow, ElbowAuthoringError,
-        Ellipse, GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene,
-        NumberLineState, NumberRange, ParametricSamplePlan, PlotRangeRequest, PlotSamplingError,
-        Polygon, Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene,
-        RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
+        axes_function_vector_path, parametric_vector_path, AnnularSector, Annulus, Arc,
+        ArcAuthoringError, ArcBetweenPoints, Axes2DState, BackgroundRectangle,
+        CoordinateSystemError, Cross, Dot, Elbow, ElbowAuthoringError, Ellipse,
+        GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene,
+        NumberLineState, NumberRange, ParametricSamplePlan, PlotGeometryError, PlotRangeRequest,
+        PlotSamplingError, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
+        RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
         ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError, Triangle,
         Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
         DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS,
