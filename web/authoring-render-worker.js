@@ -122,7 +122,7 @@ async function prepareSurface(message, operation) {
 
 function startEngine(message) {
   if (canvas === null || transportMode === null) {
-    throw new Error("authoring render worker cannot start an engine before prepare");
+    throw new Error("ExecutionWorkerClient render owner is not prepared");
   }
   if (
     renderPort !== null ||
@@ -216,14 +216,20 @@ function beginRendererTransition(message, nextMode, responseType) {
 }
 
 function resize(message) {
-  width = normalizedDimension(message.width);
-  height = normalizedDimension(message.height);
+  const nextWidth = normalizedDimension(message.width);
+  const nextHeight = normalizedDimension(message.height);
+  const dimensionsChanged = nextWidth !== width || nextHeight !== height;
+  width = nextWidth;
+  height = nextHeight;
   if (renderer === null) {
     return;
   }
   renderer.resize(width, height);
   if (!drainGpuDiagnostics()) return;
-  if (mode === MODE_RETAINED) {
+  // Retained resize queues a frame only when the surface dimensions actually
+  // change. Treating a redundant resize as pending wedges transport backpressure:
+  // renderer.render() correctly returns false while needsPresent stays true.
+  if (mode === MODE_RETAINED && dimensionsChanged) {
     needsPresent = true;
     tryPresent();
   }
