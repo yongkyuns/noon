@@ -1405,6 +1405,9 @@ def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     if isinstance(value, _compat.Group):
         return "family", getattr(value, "_semantic_family_handle", None)
     if isinstance(value, _base.Mobject):
+        retained_identity = getattr(value, "_semantic_family_member_handle", None)
+        if retained_identity is not None:
+            return "member", retained_identity
         # Family identity survives scene binding even though ordinary detached-state
         # mutations stop using this handle after binding.
         return "mobject", getattr(value, "_semantic_handle", None)
@@ -1417,6 +1420,8 @@ def _family_add_handle(family_handle: object, value: object) -> bool:
         raise RuntimeError("family member has no shared semantic identity")
     if kind == "family":
         return bool(family_handle.addFamily(handle))
+    if kind == "member":
+        return bool(family_handle.addMember(handle))
     return bool(family_handle.addMobject(handle))
 
 
@@ -1426,6 +1431,8 @@ def _family_remove_handle(family_handle: object, value: object) -> bool:
         raise RuntimeError("family member has no shared semantic identity")
     if kind == "family":
         return bool(family_handle.removeFamily(handle))
+    if kind == "member":
+        return bool(family_handle.removeMember(handle))
     return bool(family_handle.removeMobject(handle))
 
 
@@ -1466,6 +1473,8 @@ def _family_target_accept(editor: object, source: object, target: object) -> Non
         raise RuntimeError("Group target wrapper mirror diverged from shared family membership")
     if source_kind == "family":
         editor.acceptFamily(source_handle, target_handle)
+    elif source_kind == "member":
+        editor.acceptMember(source_handle, target_handle)
     elif source_kind == "mobject":
         editor.acceptMobject(source_handle, target_handle)
     else:

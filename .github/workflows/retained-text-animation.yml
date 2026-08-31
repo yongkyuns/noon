@@ -3,6 +3,7 @@ name: Retained text animation
 on:
   pull_request:
     paths:
+      - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/retained_authoring_player.rs"
       - "crates/noon-web/src/retained_authoring_scene.rs"
       - "crates/noon-web/src/retained_authoring_tracks.rs"
@@ -12,15 +13,18 @@ on:
       - "web/python/_manim_animate.py"
       - "web/python/_manim_animation_options.py"
       - "web/python/_manim_retained_animate.py"
+      - "web/python/_manim_semantic_handles.py"
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   push:
     branches:
       - master
     paths:
+      - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/retained_authoring_player.rs"
       - "crates/noon-web/src/retained_authoring_scene.rs"
       - "crates/noon-web/src/retained_authoring_tracks.rs"
@@ -30,9 +34,11 @@ on:
       - "web/python/_manim_animate.py"
       - "web/python/_manim_animation_options.py"
       - "web/python/_manim_retained_animate.py"
+      - "web/python/_manim_semantic_handles.py"
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   workflow_dispatch:
@@ -100,6 +106,9 @@ jobs:
 
       - name: Test retained Text animation authoring
         run: node scripts/retained-text-animation-smoke.mjs
+
+      - name: Test retained Text family identity
+        run: node scripts/retained-text-family-identity-smoke.mjs
 
       - name: Test retained Text Scene lifecycle
         run: node scripts/retained-text-scene-lifecycle-smoke.mjs
