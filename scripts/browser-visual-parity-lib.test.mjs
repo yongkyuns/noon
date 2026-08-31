@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
+import {
+  compareForegroundCoverage,
+  foregroundMask,
+} from "./browser-visual-parity-lib.mjs";
 
 function image(width, height, foreground, colors = {}) {
   const background = colors.background ?? [20, 20, 20, 255];
@@ -64,6 +67,47 @@ test("color-transfer differences do not masquerade as geometry differences", () 
 
   assert.equal(result.pass, true);
   assert.equal(result.mismatchFraction, 0);
+});
+
+test("explicit background preserves foreground that reaches the top-left canvas edge", () => {
+  const background = [20, 20, 20, 255];
+  const clipped = image(5, 4, [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+  ], { background });
+
+  const inferred = foregroundMask(clipped);
+  assert.equal(
+    inferred.count,
+    17,
+    "corner inference treats the clipped foreground color as the background",
+  );
+
+  const explicit = foregroundMask(clipped, 32, background);
+  assert.equal(explicit.count, 3);
+  assert.deepEqual([...explicit.mask.slice(0, 7)], [1, 1, 0, 0, 0, 1, 0]);
+
+  const result = compareForegroundCoverage(clipped, clipped, {
+    background,
+    maxMismatchFraction: 0,
+    maxBoundsDelta: 0,
+  });
+  assert.equal(result.pass, true);
+  assert.equal(result.leftForegroundPixels, 3);
+  assert.deepEqual(result.leftBounds, { minX: 0, minY: 0, maxX: 1, maxY: 1 });
+});
+
+test("explicit backgrounds reject malformed RGBA contracts", () => {
+  const sample = image(4, 4, [[1, 1]]);
+  assert.throws(
+    () => compareForegroundCoverage(sample, sample, { background: [0, 0, 0] }),
+    /RGBA array with four byte values/,
+  );
+  assert.throws(
+    () => compareForegroundCoverage(sample, sample, { background: [0, 0, 0, 300] }),
+    /integers within \[0, 255\]/,
+  );
 });
 
 test("missing visible geometry fails the parity gate", () => {
