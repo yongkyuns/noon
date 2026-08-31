@@ -2,7 +2,7 @@ use noon::{
     Axes2DState, AxisTickError, CoordinateSystemError, NumberLineGeometryPlan,
     NumberLineTickOptions, NumberRange,
 };
-use noon_core::{Color, ObjectSnapshot, WHITE};
+use noon_core::{Color, ObjectSnapshot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -227,13 +227,15 @@ fn resolve_axis_options(
 
     // Manim's Axes constructor overwrites this after config merging for linear
     // scaling. User-provided `exclude_origin_tick` therefore does not win here.
-    let _ = request.exclude_origin_tick;
     options.exclude_origin_tick = true;
     Ok(options)
 }
 
 fn rgba(value: [f64; 4]) -> Result<Color, ManimAxesBridgeError> {
-    if value.iter().any(|component| !component.is_finite() || !(0.0..=1.0).contains(component)) {
+    if value
+        .iter()
+        .any(|component| !component.is_finite() || !(0.0..=1.0).contains(component))
+    {
         return Err(ManimAxesBridgeError::InvalidColor(value));
     }
     Ok(Color::rgba(
@@ -268,7 +270,9 @@ impl std::fmt::Display for ManimAxesBridgeError {
             ),
             Self::Coordinates(error) => error.fmt(formatter),
             Self::Geometry(error) => error.fmt(formatter),
-            Self::Serialization(error) => write!(formatter, "unable to serialize Axes state: {error}"),
+            Self::Serialization(error) => {
+                write!(formatter, "unable to serialize Axes state: {error}")
+            }
         }
     }
 }
@@ -357,7 +361,10 @@ mod tests {
             .find(|tick| tick["value"] == 2.0)
             .unwrap();
         assert_eq!(elongated["size"], 0.2);
-        assert_eq!(geometry["x_axis"]["line"]["style"]["stroke_width"], 0.02);
+        assert_eq!(
+            geometry["x_axis"]["line"]["style"]["stroke_width"],
+            0.02
+        );
     }
 
     #[test]
@@ -390,8 +397,8 @@ mod tests {
     #[test]
     fn coordinate_queries_round_trip_through_same_axes_state() {
         let plan = AxesAuthoringPlan::from_json(&request("")).unwrap();
-        let point: [f64; 2] = serde_json::from_str(&plan.coords_to_point_json(2.0, 1.0).unwrap())
-            .unwrap();
+        let point: [f64; 2] =
+            serde_json::from_str(&plan.coords_to_point_json(2.0, 1.0).unwrap()).unwrap();
         let coords: [f64; 2] = serde_json::from_str(
             &plan
                 .point_to_coords_json(point[0] as f32, point[1] as f32)
@@ -404,7 +411,8 @@ mod tests {
 
     #[test]
     fn tips_are_rejected_instead_of_silently_omitted() {
-        let request = r#"{"x_range":[-1,1,1],"y_range":[-1,1,1],"x_length":2,"y_length":2}"#;
+        let request =
+            r#"{"x_range":[-1,1,1],"y_range":[-1,1,1],"x_length":2,"y_length":2}"#;
         assert!(matches!(
             AxesAuthoringPlan::from_json(request),
             Err(ManimAxesBridgeError::UnsupportedTips("x"))
