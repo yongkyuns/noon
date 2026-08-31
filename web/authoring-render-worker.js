@@ -122,7 +122,7 @@ async function prepareSurface(message, operation) {
 
 function startEngine(message) {
   if (canvas === null || transportMode === null) {
-    throw new Error("ExecutionWorkerClient render owner is not prepared");
+    throw new Error("authoring render worker cannot start an engine before prepare");
   }
   if (
     renderPort !== null ||
