@@ -9,6 +9,7 @@
 mod analytic_geometry_authoring;
 mod arc_authoring;
 mod camera_authoring;
+mod coordinate_system_authoring;
 mod elbow_authoring;
 mod geometry_authoring;
 mod legacy;
@@ -23,6 +24,7 @@ mod text_authoring;
 pub use analytic_geometry_authoring::*;
 pub use arc_authoring::*;
 pub use camera_authoring::*;
+pub use coordinate_system_authoring::*;
 pub use elbow_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
@@ -38,12 +40,12 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
-        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
-        Cross, Dot, Elbow, ElbowAuthoringError, Ellipse, GeometryAuthoringError,
-        LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
+        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, Axes2DState,
+        BackgroundRectangle, CoordinateSystemError, Cross, Dot, Elbow, ElbowAuthoringError,
+        Ellipse, GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene,
+        NumberLineState, NumberRange, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
+        RoundedRectangle, RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
         SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
         VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
         DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
