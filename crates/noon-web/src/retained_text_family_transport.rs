@@ -1,89 +1,62 @@
 use noon_core::{ObjectContentRef, TextFamilyAnimationError, TextFamilyAnimationState};
-use noon_runtime::RetainedFrameState;
 use serde::{Deserialize, Serialize};
 
-/// Object-aligned renderer transport state for retained Text family animations.
+/// Per-object transport state for retained Text family animations.
 ///
-/// The vector deliberately contains no glyph IDs. Renderers derive family members
-/// from each immutable `TextResource`, preserving one semantic retained Text object.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// This state is embedded in the existing retained object delta. Snapshots therefore
+/// carry one optional value per object, while incrementals remain sparse and carry
+/// family state only for objects that are already dirty. No glyph IDs cross the wire;
+/// renderers derive members from the immutable `TextResource`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTextFamilyTransportState {
-    pub objects: Vec<Option<TextFamilyAnimationState>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<TextFamilyAnimationState>,
 }
 
 impl RetainedTextFamilyTransportState {
-    pub fn empty(object_count: usize) -> Self {
-        Self {
-            objects: vec![None; object_count],
-        }
+    pub const fn empty() -> Self {
+        Self { animation: None }
     }
 
     pub fn new(
-        frame: &RetainedFrameState,
-        objects: Vec<Option<TextFamilyAnimationState>>,
+        content: &ObjectContentRef,
+        animation: Option<TextFamilyAnimationState>,
     ) -> Result<Self, RetainedTextFamilyTransportError> {
-        let state = Self { objects };
-        state.validate(frame)?;
+        let state = Self { animation };
+        state.validate(content)?;
         Ok(state)
     }
 
-    /// Validate transport state after any serialization boundary.
+    /// Revalidate the optional animation after any serialization boundary.
     pub fn validate(
-        &self,
-        frame: &RetainedFrameState,
+        self,
+        content: &ObjectContentRef,
     ) -> Result<(), RetainedTextFamilyTransportError> {
-        if self.objects.len() != frame.objects.len() {
-            return Err(RetainedTextFamilyTransportError::FrameShapeMismatch {
-                expected: frame.objects.len(),
-                actual: self.objects.len(),
-            });
+        let Some(animation) = self.animation else {
+            return Ok(());
+        };
+        if !matches!(content, ObjectContentRef::Text(_)) {
+            return Err(RetainedTextFamilyTransportError::NonTextObject);
         }
-
-        for (index, state) in self.objects.iter().copied().enumerate() {
-            let Some(state) = state else {
-                continue;
-            };
-            if !matches!(frame.objects[index].content, ObjectContentRef::Text(_)) {
-                return Err(RetainedTextFamilyTransportError::NonTextObject(index));
-            }
-            state
-                .validate()
-                .map_err(|error| RetainedTextFamilyTransportError::InvalidState { index, error })?;
-        }
-        Ok(())
-    }
-
-    pub fn state(&self, object_index: usize) -> Option<TextFamilyAnimationState> {
-        self.objects.get(object_index).copied().flatten()
+        animation
+            .validate()
+            .map_err(RetainedTextFamilyTransportError::InvalidState)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedTextFamilyTransportError {
-    FrameShapeMismatch {
-        expected: usize,
-        actual: usize,
-    },
-    NonTextObject(usize),
-    InvalidState {
-        index: usize,
-        error: TextFamilyAnimationError,
-    },
+    NonTextObject,
+    InvalidState(TextFamilyAnimationError),
 }
 
 impl std::fmt::Display for RetainedTextFamilyTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FrameShapeMismatch { expected, actual } => write!(
-                formatter,
-                "retained Text family transport state has {actual} slots; expected {expected}"
-            ),
-            Self::NonTextObject(index) => write!(
-                formatter,
-                "retained Text family transport state targets non-text object index {index}"
-            ),
-            Self::InvalidState { index, error } => {
-                write!(formatter, "invalid retained Text family state at object index {index}: {error}")
+            Self::NonTextObject => formatter
+                .write_str("retained Text family transport state targets non-text content"),
+            Self::InvalidState(error) => {
+                write!(formatter, "invalid retained Text family transport state: {error}")
             }
         }
     }
@@ -93,12 +66,10 @@ impl std::error::Error for RetainedTextFamilyTransportError {}
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::RetainedCompiledScene;
     use noon_core::{
         GeometryRef, ObjectId, RateFunction, RetainedObjectDefinition, TextFamilyAnimationMode,
         TextResourceHandle, TextResourceId,
     };
-    use noon_runtime::RetainedSceneInstance;
 
     use super::*;
 
@@ -109,16 +80,12 @@ mod tests {
         }
     }
 
-    fn frame() -> RetainedFrameState {
-        let compiled = RetainedCompiledScene::compile(
-            &[
-                RetainedObjectDefinition::geometry(ObjectId::new(1), GeometryRef::circle(1.0)),
-                RetainedObjectDefinition::text(ObjectId::new(2), text_handle()),
-            ],
-            &[],
-        )
-        .unwrap();
-        RetainedSceneInstance::new(compiled).frame().clone()
+    fn geometry_content() -> ObjectContentRef {
+        RetainedObjectDefinition::geometry(ObjectId::new(1), GeometryRef::circle(1.0)).content
+    }
+
+    fn text_content() -> ObjectContentRef {
+        RetainedObjectDefinition::text(ObjectId::new(2), text_handle()).content
     }
 
     fn state() -> TextFamilyAnimationState {
@@ -133,59 +100,43 @@ mod tests {
     }
 
     #[test]
-    fn text_only_object_aligned_state_round_trips() {
-        let frame = frame();
-        let transport =
-            RetainedTextFamilyTransportState::new(&frame, vec![None, Some(state())]).unwrap();
-        assert_eq!(transport.state(0), None);
-        assert_eq!(transport.state(1), Some(state()));
+    fn text_state_round_trips_without_glyph_identity() {
+        let content = text_content();
+        let transport = RetainedTextFamilyTransportState::new(&content, Some(state())).unwrap();
+        assert_eq!(transport.animation, Some(state()));
 
         let json = serde_json::to_string(&transport).unwrap();
+        assert!(!json.contains("glyph"));
         let decoded: RetainedTextFamilyTransportState = serde_json::from_str(&json).unwrap();
-        decoded.validate(&frame).unwrap();
+        decoded.validate(&content).unwrap();
         assert_eq!(decoded, transport);
     }
 
     #[test]
-    fn frame_shape_mismatch_fails_closed() {
-        let frame = frame();
-        assert_eq!(
-            RetainedTextFamilyTransportState::new(&frame, vec![None]).unwrap_err(),
-            RetainedTextFamilyTransportError::FrameShapeMismatch {
-                expected: 2,
-                actual: 1,
-            }
-        );
+    fn empty_state_is_valid_for_any_object_and_serializes_compactly() {
+        let transport = RetainedTextFamilyTransportState::empty();
+        transport.validate(&geometry_content()).unwrap();
+        transport.validate(&text_content()).unwrap();
+        assert_eq!(serde_json::to_string(&transport).unwrap(), "{}");
     }
 
     #[test]
     fn family_state_on_geometry_is_rejected() {
-        let frame = frame();
         assert_eq!(
-            RetainedTextFamilyTransportState::new(&frame, vec![Some(state()), None]).unwrap_err(),
-            RetainedTextFamilyTransportError::NonTextObject(0)
+            RetainedTextFamilyTransportState::new(&geometry_content(), Some(state())).unwrap_err(),
+            RetainedTextFamilyTransportError::NonTextObject
         );
     }
 
     #[test]
     fn malformed_serialized_state_is_revalidated() {
-        let frame = frame();
         let mut invalid = state();
         invalid.overall_progress = 1.5;
-        assert!(matches!(
-            RetainedTextFamilyTransportState::new(&frame, vec![None, Some(invalid)]),
-            Err(RetainedTextFamilyTransportError::InvalidState {
-                index: 1,
-                error: TextFamilyAnimationError::InvalidOverallProgress(1.5),
-            })
-        ));
-    }
-
-    #[test]
-    fn empty_state_matches_frame_shape() {
-        let frame = frame();
-        let transport = RetainedTextFamilyTransportState::empty(frame.objects.len());
-        transport.validate(&frame).unwrap();
-        assert_eq!(transport.objects, vec![None, None]);
+        assert_eq!(
+            RetainedTextFamilyTransportState::new(&text_content(), Some(invalid)).unwrap_err(),
+            RetainedTextFamilyTransportError::InvalidState(
+                TextFamilyAnimationError::InvalidOverallProgress(1.5)
+            )
+        );
     }
 }
