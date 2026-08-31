@@ -23,18 +23,16 @@ jobs:
 
           path = Path("crates/noon-ir/src/mixed.rs")
           text = path.read_text()
-          old = '''        track.timing.duration = 0.0;
-'''
+          old = "        track.timing.duration = 0.0;\n"
+          new = "        track.timing.duration = -1.0;\n"
           if text.count(old) != 1:
               raise SystemExit(f"expected one duration assertion source, got {text.count(old)}")
-          text = text.replace(old, '''        track.timing.duration = -1.0;
-''', 1)
-          old = '''                error: TimelineError::InvalidDuration(0.0),
-'''
+          text = text.replace(old, new, 1)
+          old = "                error: TimelineError::InvalidDuration(0.0),\n"
+          new = "                error: TimelineError::InvalidDuration(-1.0),\n"
           if text.count(old) != 2:
               raise SystemExit(f"expected two error assertions, got {text.count(old)}")
-          text = text.replace(old, '''                error: TimelineError::InvalidDuration(-1.0),
-''')
+          text = text.replace(old, new)
           path.write_text(text)
 
       - name: Validate IR contract
