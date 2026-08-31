@@ -83,6 +83,9 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
                     "opacity": 1.0,
                 }
 
+            def generic_handle(snapshot_json):
+                return FakeHandle(json.loads(snapshot_json))
+
             def rounded_rectangle(width, height, corner_radius):
                 calls.append((
                     "rounded_rectangle",
@@ -103,6 +106,7 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
                     "style": style(),
                 })
 
+            fake_js.noonCreateAuthoringMobjectHandle = generic_handle
             fake_js.noonCreateAuthoringRoundedRectangleHandle = rounded_rectangle
             sys.modules["js"] = fake_js
 
