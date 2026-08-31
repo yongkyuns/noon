@@ -12,12 +12,8 @@ fn endpoints(snapshot: &noon_core::ObjectSnapshot) -> (Vec2, Vec2) {
 
 #[test]
 fn default_ticks_are_independent_retained_lines() {
-    let state = NumberLineState::centered(
-        NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
-        4.0,
-        0.0,
-    )
-    .unwrap();
+    let state =
+        NumberLineState::centered(NumberRange::new(-2.0, 2.0, 1.0).unwrap(), 4.0, 0.0).unwrap();
     let plan = NumberLineGeometryPlan::new(state, &NumberLineTickOptions::default()).unwrap();
     assert_eq!(plan.ticks().len(), 5);
     let origin = &plan.ticks()[2];
@@ -90,12 +86,8 @@ fn vertical_axis_ticks_rotate_with_axis_geometry() {
 
 #[test]
 fn disabling_ticks_keeps_axis_line_without_hidden_tick_geometry() {
-    let state = NumberLineState::centered(
-        NumberRange::new(0.0, 2.0, 1.0).unwrap(),
-        2.0,
-        0.0,
-    )
-    .unwrap();
+    let state =
+        NumberLineState::centered(NumberRange::new(0.0, 2.0, 1.0).unwrap(), 2.0, 0.0).unwrap();
     let options = NumberLineTickOptions {
         include_ticks: false,
         ..NumberLineTickOptions::default()
