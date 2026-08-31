@@ -35,13 +35,18 @@ impl std::fmt::Display for TextAnimationMemberError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsupportedSourceKind(kind) => {
-                write!(formatter, "text animation members require plain Text, got {kind:?}")
+                write!(
+                    formatter,
+                    "text animation members require plain Text, got {kind:?}"
+                )
             }
-            Self::VectorContent => formatter.write_str(
-                "plain Text animation members cannot contain backend vector items",
-            ),
+            Self::VectorContent => formatter
+                .write_str("plain Text animation members cannot contain backend vector items"),
             Self::MissingRun(index) => {
-                write!(formatter, "text render stream references missing glyph run {index}")
+                write!(
+                    formatter,
+                    "text render stream references missing glyph run {index}"
+                )
             }
             Self::TooManyGlyphs => formatter.write_str(
                 "text animation member glyph index exceeds the retained u32 identity range",
@@ -67,7 +72,9 @@ pub fn plain_text_animation_members(
     resource: &TextResource,
 ) -> Result<Vec<TextAnimationMember>, TextAnimationMemberError> {
     if resource.kind != TextSourceKind::Plain {
-        return Err(TextAnimationMemberError::UnsupportedSourceKind(resource.kind));
+        return Err(TextAnimationMemberError::UnsupportedSourceKind(
+            resource.kind,
+        ));
     }
     if !resource.vector_items.is_empty() {
         return Err(TextAnimationMemberError::VectorContent);
@@ -115,8 +122,8 @@ mod tests {
     use super::*;
     use crate::{
         FontFaceIdentity, GlyphRun, PositionedGlyph, Rect, TextAffineTransform,
-        TextClusterIdentity, TextDirection, TextLayoutBackend, TextLayoutBackendKind,
-        TextLayoutArtifact, Vec2,
+        TextClusterIdentity, TextDirection, TextLayoutArtifact, TextLayoutBackend,
+        TextLayoutBackendKind, Vec2,
     };
 
     fn glyph(span: TextSourceSpan, ordinal: u32, x: f32) -> PositionedGlyph {
@@ -151,7 +158,11 @@ mod tests {
         }
     }
 
-    fn resource(source: &str, runs: Vec<GlyphRun>, render_items: Vec<TextRenderItem>) -> TextResource {
+    fn resource(
+        source: &str,
+        runs: Vec<GlyphRun>,
+        render_items: Vec<TextRenderItem>,
+    ) -> TextResource {
         TextResource {
             source: Arc::from(source),
             kind: TextSourceKind::Plain,
