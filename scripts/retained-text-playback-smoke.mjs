@@ -111,10 +111,14 @@ async function seekAndWait(page, time, previousPresentedFrames) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const state = await execution.state();
+      const diagnosticJson = (value) =>
+        JSON.stringify(value, (_key, nested) =>
+          typeof nested === "bigint" ? `${nested}n` : nested,
+        );
       throw new Error(
         `retained renderer did not present seek to ${time}s; ` +
           `previousPresentedFrames=${previousPresentedFrames}; ` +
-          `state=${JSON.stringify(state)}; metrics=${JSON.stringify(lastReport)}`,
+          `state=${diagnosticJson(state)}; metrics=${diagnosticJson(lastReport)}`,
       );
     },
     { time, previousPresentedFrames },
