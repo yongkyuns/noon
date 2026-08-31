@@ -67,6 +67,34 @@ class RetainedAnimate(Scene):
         assert unsupported not in self.mobjects
 `;
 
+const retainedFadeSource = `
+from noon import *
+
+class RetainedFade(Scene):
+    def construct(self):
+        label = Text("Fade", font_size=48).shift(LEFT)
+
+        self.wait(0.5)
+        assert label not in self.mobjects
+
+        self.play(
+            FadeIn(label, shift=DOWN, scale=0.5),
+            run_time=1.0,
+            rate_func=linear,
+        )
+        assert label in self.mobjects
+
+        self.play(
+            FadeOut(label, shift=2 * RIGHT, scale=1.5),
+            run_time=1.0,
+        )
+        assert label not in self.mobjects
+
+        self.wait(0.5)
+        self.play(label.animate.shift(UP), run_time=1.0)
+        assert label in self.mobjects
+`;
+
 function assertNear(actual, expected, message) {
   assert.ok(
     Math.abs(actual - expected) <= retainedScalarTolerance,
@@ -189,14 +217,143 @@ try {
 
   assert.equal(result.duration, 4);
 
+  const fadeResult = await page.evaluate(
+    (source) => window.noonManimCompat.run(source),
+    retainedFadeSource,
+  );
+  assert.equal(fadeResult.kind, "scene_document");
+  assert.equal(
+    fadeResult.document.objects.length,
+    0,
+    "retained Text fades must not create legacy placeholder geometry",
+  );
+  assert.ok(fadeResult.retainedDocument, "retained fade must emit a retained authoring document");
+  assert.equal(fadeResult.retainedDocument.objects.length, 1);
+  assert.equal(fadeResult.retainedDocument.objects[0].text.source, "Fade");
+  assert.deepEqual(fadeResult.retainedDocument.objects[0].text.transform.translation, {
+    x: -1,
+    y: 0,
+  });
+  assert.deepEqual(fadeResult.retainedDocument.objects[0].text.transform.scale, {
+    x: 1,
+    y: 1,
+  });
+
+  const fadeTracks = fadeResult.retainedDocument.tracks ?? [];
+  const fadePresence = fadeTracks.filter((track) => track.property === "presence");
+  const fadeAppearance = fadeTracks.filter((track) => track.property === "appearance");
+  const fadePosition = fadeTracks.filter((track) => track.property === "position");
+  const fadeScale = fadeTracks.filter((track) => track.property === "scale");
+
+  assert.deepEqual(
+    fadePresence.map((track) => ({
+      values: track.values.bool,
+      start: track.timing.start_time,
+      duration: track.timing.duration,
+      easing: track.timing.easing,
+    })),
+    [
+      {
+        values: { from: false, to: true },
+        start: 0.5,
+        duration: 0,
+        easing: "linear",
+      },
+      {
+        values: { from: true, to: false },
+        start: 2.5,
+        duration: 0,
+        easing: "linear",
+      },
+      {
+        values: { from: false, to: true },
+        start: 3,
+        duration: 0,
+        easing: "linear",
+      },
+    ],
+    "retained fades and later animate must use explicit lifecycle presence transitions",
+  );
+
+  assert.equal(fadeAppearance.length, 3);
+  assertNear(fadeAppearance[0].values.scalar.from, 0, "FadeIn appearance source");
+  assertNear(fadeAppearance[0].values.scalar.to, 1, "FadeIn appearance target");
+  assert.equal(fadeAppearance[0].timing.start_time, 0.5);
+  assert.equal(fadeAppearance[0].timing.duration, 1);
+  assert.equal(fadeAppearance[0].timing.easing, "linear");
+
+  assertNear(fadeAppearance[1].values.scalar.from, 1, "FadeOut appearance source");
+  assertNear(fadeAppearance[1].values.scalar.to, 0, "FadeOut appearance target");
+  assert.equal(fadeAppearance[1].timing.start_time, 1.5);
+  assert.equal(fadeAppearance[1].timing.duration, 1);
+  assert.equal(fadeAppearance[1].timing.easing, "smooth");
+
+  assertNear(fadeAppearance[2].values.scalar.from, 1, "reintroduced appearance source");
+  assertNear(fadeAppearance[2].values.scalar.to, 1, "reintroduced appearance target");
+  assert.equal(fadeAppearance[2].timing.start_time, 3);
+  assert.equal(fadeAppearance[2].timing.duration, 1);
+  assert.equal(fadeAppearance[2].timing.easing, "linear");
+
+  assert.deepEqual(fadePosition[0].values.vec2, {
+    from: { x: -1, y: 1 },
+    to: { x: -1, y: 0 },
+  });
+  assert.equal(fadePosition[0].timing.start_time, 0.5);
+  assert.equal(fadePosition[0].timing.duration, 1);
+  assert.equal(fadePosition[0].timing.easing, "linear");
+
+  assert.deepEqual(fadePosition[1].values.vec2, {
+    from: { x: -1, y: 0 },
+    to: { x: 1, y: 0 },
+  });
+  assert.equal(fadePosition[1].timing.start_time, 1.5);
+  assert.equal(fadePosition[1].timing.duration, 1);
+  assert.equal(fadePosition[1].timing.easing, "smooth");
+
+  assert.deepEqual(fadePosition[2].values.vec2, {
+    from: { x: -1, y: 0 },
+    to: { x: -1, y: 1 },
+  });
+  assert.equal(fadePosition[2].timing.start_time, 3);
+  assert.equal(fadePosition[2].timing.duration, 1);
+  assert.equal(fadePosition[2].timing.easing, "smooth");
+
+  assert.deepEqual(fadeScale[0].values.vec2, {
+    from: { x: 0.5, y: 0.5 },
+    to: { x: 1, y: 1 },
+  });
+  assert.equal(fadeScale[0].timing.start_time, 0.5);
+  assert.equal(fadeScale[0].timing.duration, 1);
+  assert.equal(fadeScale[0].timing.easing, "linear");
+
+  assert.deepEqual(fadeScale[1].values.vec2, {
+    from: { x: 1, y: 1 },
+    to: { x: 1.5, y: 1.5 },
+  });
+  assert.equal(fadeScale[1].timing.start_time, 1.5);
+  assert.equal(fadeScale[1].timing.duration, 1);
+  assert.equal(fadeScale[1].timing.easing, "smooth");
+
+  assert.deepEqual(fadeScale[2].values.vec2, {
+    from: { x: 1, y: 1 },
+    to: { x: 1, y: 1 },
+  });
+  assert.equal(fadeScale[2].timing.start_time, 3);
+  assert.equal(fadeScale[2].timing.duration, 1);
+  assert.equal(fadeScale[2].timing.easing, "linear");
+
+  assert.equal(fadeResult.duration, 4);
+
   const wire = JSON.stringify(result.retainedDocument);
+  const fadeWire = JSON.stringify(fadeResult.retainedDocument);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
     assert.ok(!wire.includes(forbidden), `retained animation wire must not contain ${forbidden}`);
+    assert.ok(!fadeWire.includes(forbidden), `retained fade wire must not contain ${forbidden}`);
   }
   assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text animation smoke passed: scale, position, rotation, and opacity builder methods lower to source-level retained tracks; relative operations compose against scheduler-owned state; absolute move_to/opacity targets remain absolute; timing options are preserved; and unsupported retained properties fail without legacy geometry.",
+    "Retained Text animation smoke passed: scale, position, rotation, opacity, and FadeIn/FadeOut lower to source-level retained tracks; lifecycle transitions use retained presence/appearance channels; fade shift/scale endpoints stay transient; reintroduction restores canonical state; and unsupported retained properties fail without legacy geometry.",
   );
 } finally {
   await browser?.close();

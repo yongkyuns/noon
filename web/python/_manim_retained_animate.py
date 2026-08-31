@@ -14,11 +14,13 @@ from typing import Any
 import _manim_animate as _animate
 import _manim_animation_options as _options
 import _manim_compat as _compat
+import _manim_lifecycle as _lifecycle
 import _manim_typst as _typst
 
 
 _INSTALLED = False
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
+_ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
 _ORIGINAL_BUILDER_GETATTR = _animate._AlignedAnimationBuilder.__getattr__
 
@@ -196,14 +198,38 @@ def _retained_builder_getattr(
     return retained_invoke
 
 
+def _retained_animation_source(
+    animation: object,
+) -> _typst._RetainedTextMobject | None:
+    if isinstance(animation, _animate._AlignedAnimationBuilder):
+        source = getattr(animation, "source", None)
+    elif isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
+        source = getattr(animation, "target", None)
+    else:
+        return None
+    return source if isinstance(source, _typst._RetainedTextMobject) else None
+
+
 def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
     """Return replayable retained animation intent, or ``None`` for legacy animation."""
 
-    if not isinstance(animation, _animate._AlignedAnimationBuilder):
+    source = _retained_animation_source(animation)
+    if source is None:
         return None
-    source = getattr(animation, "source", None)
-    if not isinstance(source, _typst._RetainedTextMobject):
-        return None
+
+    if isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
+        shift = _compat._as_vec2(animation._fade_shift_vector)
+        scale_factor = float(animation._fade_scale_factor)
+        if not math.isfinite(scale_factor):
+            raise ValueError("retained text fade scale must be finite")
+        return [
+            {
+                "kind": "fade_in" if isinstance(animation, _animate.FadeIn) else "fade_out",
+                "shift": {"x": float(shift.x), "y": float(shift.y)},
+                "scale_factor": scale_factor,
+                "point_target": bool(animation._fade_point_target),
+            }
+        ]
 
     deferred_factor = vars(animation).get("scale_factor")
     if deferred_factor is not None:
@@ -224,7 +250,10 @@ def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
     return copy.deepcopy(operations)
 
 
-def _bind_retained(scene: _compat.Scene, source: _typst._RetainedTextMobject) -> None:
+def _bind_retained(
+    scene: _compat.Scene,
+    source: _typst._RetainedTextMobject,
+) -> None:
     if source._scene is None:
         _typst._add_retained(scene, source, None)
     elif source._scene is not scene:
@@ -237,11 +266,71 @@ def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, A
     spec = source._spec()
     transform = _transform(spec)
     return {
+        "appearance": 1.0,
         "opacity": _unit_scalar(spec.get("opacity"), "opacity"),
         "position": _vec2(transform.get("translation"), "translation"),
+        "presence": True,
         "rotation": _finite_scalar(transform.get("rotation"), "rotation"),
         "scale": _vec2(transform.get("scale"), "scale"),
+        "runtime_position": _vec2(transform.get("translation"), "translation"),
+        "runtime_scale": _vec2(transform.get("scale"), "scale"),
     }
+
+
+def _retained_presence_tracks(
+    scene: _compat.Scene,
+    object_id: int,
+) -> list[dict[str, Any]]:
+    return [
+        track
+        for track in getattr(scene, "_retained_animation_tracks", [])
+        if int(track["object"]) == object_id and track["property"] == "presence"
+    ]
+
+
+def _resolve_retained_lifecycle(
+    scene: _compat.Scene,
+    source: _typst._RetainedTextMobject,
+    intent: str,
+    time: float,
+    label: str,
+) -> _lifecycle.LifecyclePlan:
+    _ensure_animation_state(scene)
+    if source._scene is None:
+        return _lifecycle._resolve(
+            intent,
+            binding="detached",
+            has_presence_timeline=False,
+            present=True,
+            has_future_event=False,
+            at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
+            label=label,
+        )
+    if source._scene is not scene:
+        return _lifecycle._resolve(
+            intent,
+            binding="other_scene",
+            has_presence_timeline=False,
+            present=True,
+            has_future_event=False,
+            at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
+            label=label,
+        )
+
+    object_id = int(source.id)
+    tracks = _retained_presence_tracks(scene, object_id)
+    state = scene._retained_animation_state.get(object_id)
+    present = True if state is None else bool(state["presence"])
+    has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
+    return _lifecycle._resolve(
+        intent,
+        binding="this_scene",
+        has_presence_timeline=bool(tracks),
+        present=present,
+        has_future_event=has_future,
+        at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
+        label=label,
+    )
 
 
 def _append_vec2_track(
@@ -299,6 +388,209 @@ def _append_scalar_track(
     )
 
 
+def _append_presence_track(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    current: bool,
+    target: bool,
+    start_time: float,
+) -> None:
+    existing = _retained_presence_tracks(scene, object_id)
+    previous = existing[-1] if existing else None
+    result = _lifecycle._validate_shared_presence_transition(
+        previous is not None,
+        0.0 if previous is None else float(previous["timing"]["start_time"]),
+        False if previous is None else bool(previous["values"]["bool"]["to"]),
+        float(start_time),
+        bool(current),
+    )
+    if not bool(result.ok):
+        raise ValueError(str(result.message))
+
+    scene._retained_animation_tracks.append(
+        {
+            "object": object_id,
+            "property": "presence",
+            "values": {"bool": {"from": bool(current), "to": bool(target)}},
+            "timing": {
+                "start_time": float(start_time),
+                "duration": 0.0,
+                "easing": "linear",
+            },
+        }
+    )
+
+
+def _offset_vec2(
+    value: dict[str, float],
+    delta: dict[str, float],
+    factor: float = 1.0,
+) -> dict[str, float]:
+    return {
+        "x": float(value["x"]) + float(delta["x"]) * factor,
+        "y": float(value["y"]) + float(delta["y"]) * factor,
+    }
+
+
+def _scale_vec2(value: dict[str, float], factor: float) -> dict[str, float]:
+    return {
+        "x": float(value["x"]) * factor,
+        "y": float(value["y"]) * factor,
+    }
+
+
+def _schedule_retained_fade(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    state: dict[str, Any],
+    operation: dict[str, Any],
+    lifecycle: _lifecycle.LifecyclePlan,
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    """Lower one fade without changing the retained object's canonical presentation."""
+
+    fade_in = operation["kind"] == "fade_in"
+    shift = _vec2(operation["shift"], "fade shift")
+    scale_factor = _finite_scalar(operation["scale_factor"], "fade scale")
+    point_target = bool(operation["point_target"])
+    canonical_position = copy.deepcopy(state["position"])
+    canonical_scale = copy.deepcopy(state["scale"])
+
+    if lifecycle.show_at_start:
+        state["presence"] = False
+        _append_presence_track(
+            scene,
+            object_id=object_id,
+            current=False,
+            target=True,
+            start_time=start_time,
+        )
+        state["presence"] = True
+
+    shift_is_zero = math.isclose(shift["x"], 0.0, abs_tol=1e-15) and math.isclose(
+        shift["y"], 0.0, abs_tol=1e-15
+    )
+    scale_is_identity = math.isclose(scale_factor, 1.0, rel_tol=0.0, abs_tol=1e-15)
+
+    if fade_in:
+        # Manim's faded starting copy moves opposite ``shift`` unless
+        # target_position supplied the point explicitly.
+        direction = 1.0 if point_target else -1.0
+        faded_position = (
+            canonical_position
+            if shift_is_zero
+            else _offset_vec2(canonical_position, shift, direction)
+        )
+        faded_scale = (
+            canonical_scale
+            if scale_is_identity
+            else _scale_vec2(canonical_scale, scale_factor)
+        )
+
+        if (
+            faded_position != canonical_position
+            or state["runtime_position"] != canonical_position
+        ):
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="position",
+                current=faded_position,
+                target=canonical_position,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+        if faded_scale != canonical_scale or state["runtime_scale"] != canonical_scale:
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="scale",
+                current=faded_scale,
+                target=canonical_scale,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+        _append_scalar_track(
+            scene,
+            object_id=object_id,
+            property_name="appearance",
+            current=0.0,
+            target=1.0,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        state["appearance"] = 1.0
+        state["presence"] = True
+        state["runtime_position"] = copy.deepcopy(canonical_position)
+        state["runtime_scale"] = copy.deepcopy(canonical_scale)
+        return
+
+    faded_position = (
+        canonical_position
+        if shift_is_zero
+        else _offset_vec2(canonical_position, shift)
+    )
+    faded_scale = (
+        canonical_scale
+        if scale_is_identity
+        else _scale_vec2(canonical_scale, scale_factor)
+    )
+    if (
+        faded_position != canonical_position
+        or state["runtime_position"] != canonical_position
+    ):
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="position",
+            current=canonical_position,
+            target=faded_position,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+    if faded_scale != canonical_scale or state["runtime_scale"] != canonical_scale:
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="scale",
+            current=canonical_scale,
+            target=faded_scale,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+    _append_scalar_track(
+        scene,
+        object_id=object_id,
+        property_name="appearance",
+        current=float(state["appearance"]),
+        target=0.0,
+        start_time=start_time,
+        duration=duration,
+        easing=easing,
+    )
+    if lifecycle.hide_at_end:
+        _append_presence_track(
+            scene,
+            object_id=object_id,
+            current=True,
+            target=False,
+            start_time=start_time + duration,
+        )
+        state["presence"] = False
+    state["appearance"] = 0.0
+    state["runtime_position"] = copy.deepcopy(faded_position)
+    state["runtime_scale"] = copy.deepcopy(faded_scale)
+
+
 def _schedule_retained_plan(
     scene: _compat.Scene,
     animation: object,
@@ -308,14 +600,93 @@ def _schedule_retained_plan(
     duration: float,
     easing: str,
 ) -> None:
-    source = animation.source
-    _bind_retained(scene, source)
-    _ensure_animation_state(scene)
+    source = _retained_animation_source(animation)
+    if source is None:
+        raise TypeError("retained animation lost its retained Text source")
 
+    fade_kind = (
+        operations[0]["kind"]
+        if len(operations) == 1 and operations[0]["kind"] in {"fade_in", "fade_out"}
+        else None
+    )
+
+    if fade_kind == "fade_in":
+        lifecycle = _resolve_retained_lifecycle(
+            scene, source, "introduce", start_time, "fade target"
+        )
+        _bind_retained(scene, source)
+    elif fade_kind == "fade_out":
+        add_plan = _resolve_retained_lifecycle(
+            scene, source, "add", start_time, "animated fade target"
+        )
+        _bind_retained(scene, source)
+    else:
+        add_plan = _resolve_retained_lifecycle(
+            scene, source, "add", start_time, "animated Mobject"
+        )
+        _bind_retained(scene, source)
+
+    _ensure_animation_state(scene)
     object_id = int(source.id)
     state = scene._retained_animation_state.setdefault(
         object_id, _initial_animation_state(source)
     )
+
+    if fade_kind == "fade_out":
+        if add_plan.show_now:
+            state["presence"] = False
+            _append_presence_track(
+                scene,
+                object_id=object_id,
+                current=False,
+                target=True,
+                start_time=start_time,
+            )
+            state["presence"] = True
+            # FadeOut follows Manim's normal Scene.play implicit-add behavior:
+            # an absent object is restored to its canonical visible state before
+            # the transient faded endpoint is evaluated.
+            state["appearance"] = 1.0
+        lifecycle = _resolve_retained_lifecycle(
+            scene, source, "remove_after_animation", start_time, "fade target"
+        )
+        _schedule_retained_fade(
+            scene,
+            object_id=object_id,
+            state=state,
+            operation=operations[0],
+            lifecycle=lifecycle,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        return
+
+    if fade_kind == "fade_in":
+        _schedule_retained_fade(
+            scene,
+            object_id=object_id,
+            state=state,
+            operation=operations[0],
+            lifecycle=lifecycle,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        return
+
+    reintroducing = bool(add_plan.show_now)
+    if reintroducing:
+        state["presence"] = False
+        _append_presence_track(
+            scene,
+            object_id=object_id,
+            current=False,
+            target=True,
+            start_time=start_time,
+        )
+        state["presence"] = True
+
     current_opacity = float(state["opacity"])
     current_position = copy.deepcopy(state["position"])
     current_rotation = float(state["rotation"])
@@ -332,19 +703,12 @@ def _schedule_retained_plan(
             if "scale" not in touched:
                 touched.append("scale")
             factor = float(operation["factor"])
-            target_scale = {
-                "x": float(target_scale["x"]) * factor,
-                "y": float(target_scale["y"]) * factor,
-            }
+            target_scale = _scale_vec2(target_scale, factor)
             continue
         if kind == "shift_relative":
             if "position" not in touched:
                 touched.append("position")
-            delta = operation["delta"]
-            target_position = {
-                "x": float(target_position["x"]) + float(delta["x"]),
-                "y": float(target_position["y"]) + float(delta["y"]),
-            }
+            target_position = _offset_vec2(target_position, operation["delta"])
             continue
         if kind == "move_to":
             if "position" not in touched:
@@ -373,6 +737,44 @@ def _schedule_retained_plan(
             continue
         raise ValueError(f"unknown retained animation operation {kind!r}")
 
+    if reintroducing:
+        if not math.isclose(float(state["appearance"]), 1.0, abs_tol=1e-15):
+            _append_scalar_track(
+                scene,
+                object_id=object_id,
+                property_name="appearance",
+                current=1.0,
+                target=1.0,
+                start_time=start_time,
+                duration=duration,
+                easing="linear",
+            )
+        if state["runtime_position"] != current_position and "position" not in touched:
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="position",
+                current=current_position,
+                target=current_position,
+                start_time=start_time,
+                duration=duration,
+                easing="linear",
+            )
+        if state["runtime_scale"] != current_scale and "scale" not in touched:
+            _append_vec2_track(
+                scene,
+                object_id=object_id,
+                property_name="scale",
+                current=current_scale,
+                target=current_scale,
+                start_time=start_time,
+                duration=duration,
+                easing="linear",
+            )
+        state["appearance"] = 1.0
+        state["runtime_position"] = copy.deepcopy(current_position)
+        state["runtime_scale"] = copy.deepcopy(current_scale)
+
     for property_name in touched:
         if property_name == "scale":
             _append_vec2_track(
@@ -386,6 +788,7 @@ def _schedule_retained_plan(
                 easing=easing,
             )
             state["scale"] = copy.deepcopy(target_scale)
+            state["runtime_scale"] = copy.deepcopy(target_scale)
         elif property_name == "position":
             _append_vec2_track(
                 scene,
@@ -398,6 +801,7 @@ def _schedule_retained_plan(
                 easing=easing,
             )
             state["position"] = copy.deepcopy(target_position)
+            state["runtime_position"] = copy.deepcopy(target_position)
         elif property_name == "rotation":
             _append_scalar_track(
                 scene,
@@ -422,6 +826,15 @@ def _schedule_retained_plan(
                 easing=easing,
             )
             state["opacity"] = target_opacity
+
+
+def _retained_scene_is_present(self: _compat.Scene, value: object) -> bool:
+    if not isinstance(value, _typst._RetainedTextMobject):
+        return _ORIGINAL_SCENE_IS_PRESENT(self, value)
+    if value._scene is not self or value._retained_object_id is None:
+        return False
+    state = getattr(self, "_retained_animation_state", {}).get(int(value._retained_object_id))
+    return True if state is None else bool(state["presence"])
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:
@@ -489,14 +902,19 @@ def _retained_scene_play(
     next_order_before = self._retained_next_painter_order
     tracks_before = copy.deepcopy(self._retained_animation_tracks)
     state_before = copy.deepcopy(self._retained_animation_state)
-    wrapper_states = {
-        id(animation.source): (
-            animation.source,
-            animation.source._scene,
-            animation.source._retained_object_id,
-            animation.source._retained_order,
-        )
+    retained_sources = [
+        source
         for animation in animations
+        if (source := _retained_animation_source(animation)) is not None
+    ]
+    wrapper_states = {
+        id(source): (
+            source,
+            source._scene,
+            source._retained_object_id,
+            source._retained_order,
+        )
+        for source in retained_sources
     }
 
     max_end = base_start
@@ -547,5 +965,6 @@ def install() -> None:
     _INSTALLED = True
     _typst._RetainedTextMobject._copy_for_animate_target = _retained_copy_for_animate_target
     _animate._AlignedAnimationBuilder.__getattr__ = _retained_builder_getattr
+    _compat.Scene._is_present = _retained_scene_is_present
     _compat.Scene.play = _retained_scene_play
     _compat.Scene.retained_document = _retained_document
