@@ -134,7 +134,12 @@ def validate_inventory(document: Any) -> list[str]:
         if classification == "shared-rust" and owner_language != "rust":
             errors.append(f"{label} shared-rust entries must be Rust-owned")
         if (
-            classification in {"python-adapter-only", "host-language-required"}
+            classification
+            in {
+                "python-adapter-only",
+                "python-semantic-duplicate",
+                "host-language-required",
+            }
             and owner_language != "python"
         ):
             errors.append(f"{label} {classification} entries must be Python-owned")
@@ -157,7 +162,15 @@ def validate_inventory(document: Any) -> list[str]:
                     f"{label} unexplained python-semantic-duplicate; "
                     f"missing {', '.join(missing)}"
                 )
-            _location(operation.get("shared_owner"), f"{label}.shared_owner", errors)
+            shared_owner = operation.get("shared_owner")
+            _location(shared_owner, f"{label}.shared_owner", errors)
+            shared_owner_language = (
+                shared_owner.get("language") if isinstance(shared_owner, dict) else None
+            )
+            if shared_owner_language != "rust":
+                errors.append(
+                    f"{label} python-semantic-duplicate shared_owner must be Rust-owned"
+                )
             if operation.get("migration_issue") != "#61":
                 errors.append(f"{label}.migration_issue must be #61")
         if (

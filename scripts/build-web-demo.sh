@@ -7,6 +7,12 @@ cd "$noon_root"
 
 node scripts/build-python-worker.mjs
 
+# The #61 ownership inventory is an architecture ratchet, not passive documentation.
+# Validate both the checked-in inventory and the validator's ownership-class invariants
+# in the required web build so contradictory or growing Python semantic debt cannot land.
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/semantic_ownership_check.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_semantic_ownership_check.py
+
 # Keep top-level browser modules and tests self-registering with the required web build.
 # This prevents a new JavaScript file or regression test from silently escaping syntax
 # validation / execution because this script's hand-maintained inventory was not updated.
