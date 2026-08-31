@@ -73,6 +73,8 @@ async function initializePyodide() {
   self.noonCreateAuthoringLineHandle = (startX, startY, endX, endY) =>
     authoringStore.createManimLine(startX, startY, endX, endY);
   self.noonCreateAuthoringFamilyHandle = () => authoringStore.createFamily();
+  self.noonCreateAuthoringFamilyMemberHandle = () =>
+    authoringStore.createFamilyMember();
   self.noonCreateRetainedNativeTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     new RetainedNativeTextAuthoringHandle(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateRetainedTypstHandle = (source, math, fontSize) =>

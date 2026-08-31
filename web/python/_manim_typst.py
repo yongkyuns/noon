@@ -22,6 +22,11 @@ except ImportError:  # Native CPython tests use the source-level fallbacks below
     _create_native_text_handle = None
     _create_typst_handle = None
 
+try:
+    from js import noonCreateAuthoringFamilyMemberHandle as _create_family_member_handle
+except ImportError:  # Shared semantic handles are browser-only.
+    _create_family_member_handle = None
+
 
 # Reserve the upper half of JavaScript's exact-integer range for retained text IDs.
 # Legacy geometry IDs start at zero and no practical scene can approach 2^52 objects.
@@ -178,6 +183,11 @@ class _RetainedTextMobject(_base.Mobject):
         self._source = source
         self._font_size = float(font_size)
         self._retained_handle = handle
+        self._semantic_family_member_handle = (
+            None
+            if _create_family_member_handle is None
+            else _create_family_member_handle()
+        )
         self.set_color(_as_color(color))
         self.set_opacity(opacity)
 
