@@ -7,6 +7,34 @@ function normalizedPointer(canvas, event) {
   };
 }
 
+function wheelLinePixels(canvas) {
+  const view = canvas.ownerDocument?.defaultView;
+  if (typeof view?.getComputedStyle !== "function") {
+    throw new TypeError("canvas must provide computed style for line-mode wheel input");
+  }
+  const style = view.getComputedStyle(canvas);
+  const lineHeight = Number.parseFloat(style.lineHeight);
+  if (Number.isFinite(lineHeight) && lineHeight > 0) return lineHeight;
+  const fontSize = Number.parseFloat(style.fontSize);
+  if (Number.isFinite(fontSize) && fontSize > 0) return fontSize;
+  throw new TypeError("canvas must have a positive CSS line-height or font-size");
+}
+
+function wheelDeltaCssPixels(canvas, event, linePixels) {
+  switch (event.deltaMode) {
+    case 0:
+      return { x: event.deltaX, y: event.deltaY };
+    case 1:
+      return { x: event.deltaX * linePixels, y: event.deltaY * linePixels };
+    case 2: {
+      const rect = canvas.getBoundingClientRect();
+      return { x: event.deltaX * rect.width, y: event.deltaY * rect.height };
+    }
+    default:
+      throw new RangeError(`unsupported WheelEvent.deltaMode ${event.deltaMode}`);
+  }
+}
+
 /**
  * Attach browser pointer/keyboard/wheel input to a ReactiveCanvasPlayer.
  *
@@ -35,9 +63,11 @@ export function attachNativeInputs(
   };
   const keyDown = (event) => player.dispatchKey(event.code, true);
   const keyUp = (event) => player.dispatchKey(event.code, false);
+  const linePixels = wheelLinePixels(canvas);
   const wheel = (event) => {
     if (preventWheelDefault) event.preventDefault();
-    player.dispatchWheel(event.deltaX, event.deltaY);
+    const delta = wheelDeltaCssPixels(canvas, event, linePixels);
+    player.dispatchWheel(delta.x, delta.y);
   };
 
   canvas.addEventListener("pointermove", pointerMove);
