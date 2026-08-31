@@ -48,6 +48,53 @@ where
     })
 }
 
+/// Finish an `Axes.plot` after a host frontend evaluates the user callback.
+///
+/// Rust remains authoritative for parameter generation, sample cardinality,
+/// coordinate mapping, finite-value validation, smoothing, and final geometry.
+/// The host only supplies one scalar result for each parameter previously exposed
+/// by [`ParametricSamplePlan::parameter_subpaths`].
+pub fn axes_sampled_values_vector_path(
+    axes: Axes2DState,
+    plan: &ParametricSamplePlan,
+    value_subpaths: &[Vec<f64>],
+    use_smoothing: bool,
+) -> Result<VectorPath, PlotGeometryError> {
+    let parameter_subpaths = plan.parameter_subpaths()?;
+    if value_subpaths.len() != parameter_subpaths.len() {
+        return Err(PlotGeometryError::SampleSubpathCountMismatch {
+            expected: parameter_subpaths.len(),
+            actual: value_subpaths.len(),
+        });
+    }
+
+    let mut point_subpaths = Vec::with_capacity(parameter_subpaths.len());
+    for (subpath, (parameters, values)) in parameter_subpaths
+        .iter()
+        .zip(value_subpaths)
+        .enumerate()
+    {
+        if values.len() != parameters.len() {
+            return Err(PlotGeometryError::SampleValueCountMismatch {
+                subpath,
+                expected: parameters.len(),
+                actual: values.len(),
+            });
+        }
+
+        let mut points = Vec::with_capacity(parameters.len());
+        for (&parameter, &value) in parameters.iter().zip(values) {
+            if !value.is_finite() {
+                return Err(PlotGeometryError::NonFiniteFunctionValue { parameter, value });
+            }
+            points.push(axes.coords_to_point(parameter, value)?);
+        }
+        point_subpaths.push(points);
+    }
+
+    finish_point_subpaths(&point_subpaths, use_smoothing)
+}
+
 fn build_sampled_path<F>(
     plan: &ParametricSamplePlan,
     use_smoothing: bool,
@@ -65,11 +112,17 @@ where
         }
         point_subpaths.push(points);
     }
+    finish_point_subpaths(&point_subpaths, use_smoothing)
+}
 
+fn finish_point_subpaths(
+    point_subpaths: &[Vec<Vec2>],
+    use_smoothing: bool,
+) -> Result<VectorPath, PlotGeometryError> {
     if use_smoothing {
-        Ok(smooth_cubic_path_from_subpaths(&point_subpaths)?)
+        Ok(smooth_cubic_path_from_subpaths(point_subpaths)?)
     } else {
-        Ok(corner_path_from_subpaths(&point_subpaths))
+        Ok(corner_path_from_subpaths(point_subpaths))
     }
 }
 
@@ -96,6 +149,15 @@ pub enum PlotGeometryError {
     Sampling(PlotSamplingError),
     Coordinates(CoordinateSystemError),
     Smoothing(PathSmoothingError),
+    SampleSubpathCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    SampleValueCountMismatch {
+        subpath: usize,
+        expected: usize,
+        actual: usize,
+    },
     NonFiniteFunctionValue { parameter: f64, value: f64 },
     NonFinitePoint { parameter: f64, point: Vec2 },
 }
@@ -106,6 +168,18 @@ impl std::fmt::Display for PlotGeometryError {
             Self::Sampling(error) => error.fmt(formatter),
             Self::Coordinates(error) => error.fmt(formatter),
             Self::Smoothing(error) => error.fmt(formatter),
+            Self::SampleSubpathCountMismatch { expected, actual } => write!(
+                formatter,
+                "plot callback result has {actual} subpaths; expected {expected}"
+            ),
+            Self::SampleValueCountMismatch {
+                subpath,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "plot callback result subpath {subpath} has {actual} values; expected {expected}"
+            ),
             Self::NonFiniteFunctionValue { parameter, value } => write!(
                 formatter,
                 "plot function must return a finite value at {parameter}: {value}"
@@ -152,15 +226,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn axes_function_maps_each_parameter_once_before_smoothing() {
-        let axes = Axes2DState::new(
+    fn test_axes() -> Axes2DState {
+        Axes2DState::new(
             NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
             NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
             4.0,
             4.0,
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn axes_function_maps_each_parameter_once_before_smoothing() {
+        let axes = test_axes();
         let plan = ParametricSamplePlan::without_discontinuities(
             SampleRange::new(-1.0, 1.0, 1.0).unwrap(),
         );
@@ -190,6 +268,48 @@ mod tests {
             PathCommand::CubicTo { to, .. } => assert_point(to, Vec2::new(1.0, 1.0)),
             ref other => panic!("expected CubicTo, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn host_evaluated_samples_use_the_same_axes_mapping_and_smoothing() {
+        let axes = test_axes();
+        let plan = ParametricSamplePlan::without_discontinuities(
+            SampleRange::new(-1.0, 1.0, 1.0).unwrap(),
+        );
+        let path = axes_sampled_values_vector_path(
+            axes,
+            &plan,
+            &[vec![1.0, 0.0, 1.0]],
+            true,
+        )
+        .unwrap();
+        assert_eq!(path.commands().len(), 3);
+        assert!(matches!(path.commands()[0], PathCommand::MoveTo { .. }));
+        assert!(matches!(path.commands()[1], PathCommand::CubicTo { .. }));
+        assert!(matches!(path.commands()[2], PathCommand::CubicTo { .. }));
+    }
+
+    #[test]
+    fn host_evaluated_sample_shape_must_match_the_rust_plan() {
+        let axes = test_axes();
+        let plan = ParametricSamplePlan::without_discontinuities(
+            SampleRange::new(-1.0, 1.0, 1.0).unwrap(),
+        );
+        assert_eq!(
+            axes_sampled_values_vector_path(axes, &plan, &[], false).unwrap_err(),
+            PlotGeometryError::SampleSubpathCountMismatch {
+                expected: 1,
+                actual: 0,
+            }
+        );
+        assert_eq!(
+            axes_sampled_values_vector_path(axes, &plan, &[vec![1.0]], false).unwrap_err(),
+            PlotGeometryError::SampleValueCountMismatch {
+                subpath: 0,
+                expected: 3,
+                actual: 1,
+            }
+        );
     }
 
     #[test]
