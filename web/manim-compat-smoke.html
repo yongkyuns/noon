@@ -7,7 +7,7 @@
   </head>
   <body>
     <script type="module">
-      import init, { semanticFrameJson } from "./pkg/noon_web.js";
+      import init, { retainedSemanticFrameJson, semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
 
       const client = new PythonAuthoringClient();
@@ -16,6 +16,8 @@
         ready: () => Promise.all([client.ready(), wasmReady]),
         run: (source) => client.run(source),
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
+        retainedSemanticFrame: (sceneJson, retainedDocumentJson, time) =>
+          JSON.parse(retainedSemanticFrameJson(sceneJson, retainedDocumentJson, time)),
       };
     </script>
   </body>
