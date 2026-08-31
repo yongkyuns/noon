@@ -1,8 +1,8 @@
 use noon_core::{Color, ObjectSnapshot, Rect};
-use noon_runtime::FrameState;
+use noon_runtime::{FrameState, RetainedFrameState};
 use serde_json::{json, Value};
 
-use crate::{PlayerError, ScenePlayer};
+use crate::{PlayerError, RetainedAuthoringPlayer, RetainedAuthoringPlayerError, ScenePlayer};
 
 fn paint_json(color: Option<Color>, opacity: f32) -> Value {
     match color {
@@ -79,10 +79,100 @@ pub fn semantic_frame_value(frame: &FrameState) -> Value {
     })
 }
 
+fn transform_rect(bounds: Rect, transform: noon_core::Transform2D) -> Rect {
+    let corners = [
+        bounds.min,
+        noon_core::Vec2::new(bounds.max.x, bounds.min.y),
+        bounds.max,
+        noon_core::Vec2::new(bounds.min.x, bounds.max.y),
+    ];
+    Rect::from_points(
+        corners
+            .into_iter()
+            .map(|point| transform.transform_point(point)),
+    )
+    .expect("rectangle has four corners")
+}
+
+fn retained_object_bounds(
+    player: &RetainedAuthoringPlayer,
+    frame: &RetainedFrameState,
+    index: usize,
+) -> Option<Rect> {
+    let object = frame.objects.get(index)?;
+    if let Some(geometry) = frame.render_geometry(index) {
+        return ObjectSnapshot {
+            geometry: geometry.clone(),
+            transform: object.transform,
+            style: object.style,
+        }
+        .world_bounds();
+    }
+    let text = frame.text(index)?;
+    let resource = player.texts().get(text)?;
+    Some(transform_rect(resource.bounds, object.transform))
+}
+
+pub fn retained_semantic_frame_value(player: &RetainedAuthoringPlayer) -> Value {
+    let frame = player.frame();
+    let objects = frame
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(index, object)| {
+            let bounds = retained_object_bounds(player, frame, index);
+            let center = bounds
+                .map(Rect::center)
+                .unwrap_or(object.transform.translation);
+            let effective_opacity = object.style.opacity * object.appearance;
+            json!({
+                "id": object.id.get(),
+                "present": frame.is_present(index),
+                "center": [center.x, center.y],
+                "bounds": bounds_json(bounds),
+                "content": if object.text().is_some() { "text" } else { "geometry" },
+                "transform": object.transform,
+                "fill": paint_json(object.style.fill, effective_opacity),
+                "stroke": paint_json(object.style.stroke, effective_opacity),
+                "stroke_width": object.style.stroke_width,
+                "stroke_width_mode": object.style.stroke_width_mode,
+                "stroke_join": object.style.stroke_join,
+                "stroke_cap": object.style.stroke_cap,
+                "style_opacity": object.style.opacity,
+                "appearance": object.appearance,
+                "reveal": frame.reveal(index),
+                "morph": frame.morph(index),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "engine": "noon-retained",
+        "time": frame.time,
+        "present_object_count": frame
+            .presences
+            .iter()
+            .copied()
+            .filter(|present| *present)
+            .count(),
+        "objects": objects,
+    })
+}
+
 pub fn semantic_frame_json(scene_json: &str, time: f64) -> Result<String, PlayerError> {
     let mut player = ScenePlayer::from_scene_json(scene_json)?;
     player.seek(time)?;
     Ok(semantic_frame_value(player.frame()).to_string())
+}
+
+pub fn retained_semantic_frame_json(
+    scene_json: &str,
+    retained_document_json: &str,
+    time: f64,
+) -> Result<String, RetainedAuthoringPlayerError> {
+    let mut player = RetainedAuthoringPlayer::from_json(scene_json, retained_document_json, 0)?;
+    player.evaluate_delta(time)?;
+    Ok(retained_semantic_frame_value(&player).to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -92,6 +182,16 @@ mod wasm {
     #[wasm_bindgen(js_name = semanticFrameJson)]
     pub fn wasm_semantic_frame_json(scene_json: &str, time: f64) -> Result<String, JsValue> {
         super::semantic_frame_json(scene_json, time)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = retainedSemanticFrameJson)]
+    pub fn wasm_retained_semantic_frame_json(
+        scene_json: &str,
+        retained_document_json: &str,
+        time: f64,
+    ) -> Result<String, JsValue> {
+        super::retained_semantic_frame_json(scene_json, retained_document_json, time)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
