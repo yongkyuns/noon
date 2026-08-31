@@ -32,6 +32,7 @@ mod retained_execution_resources;
 mod retained_execution_transport;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
+mod retained_text_family_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
 mod spatial_query;
@@ -67,6 +68,7 @@ pub use retained_execution_resources::*;
 pub use retained_execution_transport::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
+pub use retained_text_family_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
 pub use semantic_snapshot::*;
