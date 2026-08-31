@@ -55,6 +55,13 @@ def _finite_scalar(value: object, label: str) -> float:
     return result
 
 
+def _unit_scalar(value: object, label: str) -> float:
+    result = _finite_scalar(value, label)
+    if result < 0.0 or result > 1.0:
+        raise ValueError(f"retained text {label} state must be between zero and one")
+    return result
+
+
 def _transform(spec: dict[str, Any]) -> dict[str, Any]:
     transform = spec.get("transform")
     if not isinstance(transform, dict):
@@ -74,6 +81,22 @@ def _assert_only_transform_field_changed(
     if before_normalized != after_normalized:
         raise NotImplementedError(
             f"retained Text .animate.{field} changed unsupported retained state"
+        )
+
+
+def _assert_only_spec_field_changed(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    field: str,
+    method: str,
+) -> None:
+    before_normalized = copy.deepcopy(before)
+    after_normalized = copy.deepcopy(after)
+    before_normalized[field] = None
+    after_normalized[field] = None
+    if before_normalized != after_normalized:
+        raise NotImplementedError(
+            f"retained Text .animate.{method} changed unsupported retained state"
         )
 
 
@@ -141,9 +164,13 @@ def _semantic_operation(
         after_rotation = _finite_scalar(_transform(after).get("rotation"), "rotation")
         return {"kind": "rotate_relative", "angle": after_rotation - before_rotation}
 
+    if name == "set_opacity":
+        _assert_only_spec_field_changed(before, after, "opacity", name)
+        return {"kind": "opacity_to", "opacity": _unit_scalar(after.get("opacity"), "opacity")}
+
     raise NotImplementedError(
         f"retained Text .animate.{name} is not supported yet; "
-        "position, rotation, and uniform scale animations are supported"
+        "position, rotation, opacity, and uniform scale animations are supported"
     )
 
 
@@ -207,8 +234,10 @@ def _bind_retained(scene: _compat.Scene, source: _typst._RetainedTextMobject) ->
 
 
 def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, Any]:
-    transform = _transform(source._spec())
+    spec = source._spec()
+    transform = _transform(spec)
     return {
+        "opacity": _unit_scalar(spec.get("opacity"), "opacity"),
         "position": _vec2(transform.get("translation"), "translation"),
         "rotation": _finite_scalar(transform.get("rotation"), "rotation"),
         "scale": _vec2(transform.get("scale"), "scale"),
@@ -287,9 +316,11 @@ def _schedule_retained_plan(
     state = scene._retained_animation_state.setdefault(
         object_id, _initial_animation_state(source)
     )
+    current_opacity = float(state["opacity"])
     current_position = copy.deepcopy(state["position"])
     current_rotation = float(state["rotation"])
     current_scale = copy.deepcopy(state["scale"])
+    target_opacity = current_opacity
     target_position = copy.deepcopy(current_position)
     target_rotation = current_rotation
     target_scale = copy.deepcopy(current_scale)
@@ -335,6 +366,11 @@ def _schedule_retained_plan(
                 touched.append("rotation")
             target_rotation += float(operation["angle"])
             continue
+        if kind == "opacity_to":
+            if "opacity" not in touched:
+                touched.append("opacity")
+            target_opacity = _unit_scalar(operation["opacity"], "opacity")
+            continue
         raise ValueError(f"unknown retained animation operation {kind!r}")
 
     for property_name in touched:
@@ -374,6 +410,18 @@ def _schedule_retained_plan(
                 easing=easing,
             )
             state["rotation"] = target_rotation
+        elif property_name == "opacity":
+            _append_scalar_track(
+                scene,
+                object_id=object_id,
+                property_name="opacity",
+                current=current_opacity,
+                target=target_opacity,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+            state["opacity"] = target_opacity
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:

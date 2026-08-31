@@ -44,19 +44,26 @@ class RetainedAnimate(Scene):
         label = Text("Animate", font_size=48)
 
         self.play(
-            label.animate(run_time=2.0, rate_func=linear).scale(2.0).shift(RIGHT).rotate(PI / 2)
+            label.animate(run_time=2.0, rate_func=linear)
+                .scale(2.0)
+                .shift(RIGHT)
+                .rotate(PI / 2)
+                .set_opacity(0.25)
         )
-        self.play(label.animate.scale(0.5).shift(UP).rotate(-PI / 4), run_time=1.0)
+        self.play(
+            label.animate.scale(0.5).shift(UP).rotate(-PI / 4).set_opacity(0.75),
+            run_time=1.0,
+        )
         self.play(label.animate.move_to(2 * LEFT), run_time=1.0)
 
         assert label in self.mobjects
 
         unsupported = Text("Unsupported", font_size=36)
         try:
-            self.play(unsupported.animate.set_opacity(0.5), run_time=0.25)
-            raise AssertionError("unsupported retained animate.set_opacity must fail")
+            self.play(unsupported.animate.set_color(RED), run_time=0.25)
+            raise AssertionError("unsupported retained animate.set_color must fail")
         except NotImplementedError as error:
-            assert "animate.set_opacity" in str(error)
+            assert "animate.set_color" in str(error)
         assert unsupported not in self.mobjects
 `;
 
@@ -105,6 +112,7 @@ try {
   const scaleTracks = tracks.filter((track) => track.property === "scale");
   const positionTracks = tracks.filter((track) => track.property === "position");
   const rotationTracks = tracks.filter((track) => track.property === "rotation");
+  const opacityTracks = tracks.filter((track) => track.property === "opacity");
   assert.equal(scaleTracks.length, 2, "two scale calls must emit two retained scale tracks");
   assert.equal(
     positionTracks.length,
@@ -112,6 +120,7 @@ try {
     "two relative shifts and one absolute move_to must emit three retained position tracks",
   );
   assert.equal(rotationTracks.length, 2, "two rotate calls must emit two retained rotation tracks");
+  assert.equal(opacityTracks.length, 2, "two opacity calls must emit two retained opacity tracks");
 
   assert.deepEqual(scaleTracks[0].values.vec2, {
     from: { x: 1, y: 1 },
@@ -165,6 +174,19 @@ try {
   assert.equal(rotationTracks[1].timing.start_time, 2);
   assert.equal(rotationTracks[1].timing.duration, 1);
   assert.equal(rotationTracks[1].timing.easing, "smooth");
+
+  assertNear(opacityTracks[0].values.scalar.from, 1, "first opacity source");
+  assertNear(opacityTracks[0].values.scalar.to, 0.25, "first opacity target");
+  assert.equal(opacityTracks[0].timing.start_time, 0);
+  assert.equal(opacityTracks[0].timing.duration, 2);
+  assert.equal(opacityTracks[0].timing.easing, "linear");
+
+  assertNear(opacityTracks[1].values.scalar.from, 0.25, "second opacity source");
+  assertNear(opacityTracks[1].values.scalar.to, 0.75, "second opacity target");
+  assert.equal(opacityTracks[1].timing.start_time, 2);
+  assert.equal(opacityTracks[1].timing.duration, 1);
+  assert.equal(opacityTracks[1].timing.easing, "smooth");
+
   assert.equal(result.duration, 4);
 
   const wire = JSON.stringify(result.retainedDocument);
@@ -174,7 +196,7 @@ try {
   assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text animation smoke passed: scale, position, and rotation builder methods lower to source-level retained tracks; relative operations compose against scheduler-owned state; absolute move_to remains absolute; timing options are preserved; and unsupported retained properties fail without legacy geometry.",
+    "Retained Text animation smoke passed: scale, position, rotation, and opacity builder methods lower to source-level retained tracks; relative operations compose against scheduler-owned state; absolute move_to/opacity targets remain absolute; timing options are preserved; and unsupported retained properties fail without legacy geometry.",
   );
 } finally {
   await browser?.close();
