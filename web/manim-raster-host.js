@@ -2,6 +2,8 @@ import initNoonWeb, {
   EngineScenePlayer,
   ExecutionCanvasRenderer,
   HostScenePlayer,
+  MixedRetainedEngineScenePlayer,
+  RetainedExecutionCanvasRenderer,
 } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 
@@ -18,6 +20,7 @@ let currentFrameIndex = -1;
 let currentLogicalTime = 0;
 let activeFrameTimes = null;
 let authoredDuration = null;
+let retained = false;
 
 function waitForPaint() {
   return new Promise((resolve) => {
@@ -59,32 +62,53 @@ async function load(source, loopDurationSeconds) {
   }
 
   const sceneJson = JSON.stringify(result.document);
-  engine = new EngineScenePlayer(sceneJson, loopDuration, 1);
-  if (result.callbacks !== null) {
-    host = new HostScenePlayer(sceneJson, JSON.stringify(result.callbacks.slots));
-    callbackSessionId = result.callbacks.session_id;
+  const retainedObjectCount = result.retainedDocument?.objects?.length ?? 0;
+  retained = retainedObjectCount > 0;
+  if (retained && result.callbacks !== null) {
+    throw new Error("host raster retained scenes do not support Python callbacks yet");
   }
+
+  if (retained) {
+    const retainedDocumentJson = JSON.stringify(result.retainedDocument);
+    engine = new MixedRetainedEngineScenePlayer(
+      sceneJson,
+      retainedDocumentJson,
+      loopDuration,
+      1,
+    );
+    const resources = Uint8Array.from(engine.resourceBundleBytes());
+    renderer = await RetainedExecutionCanvasRenderer.create(offscreen, resources);
+    renderer.resize(canvas.width, canvas.height);
+    await presentDelta(engine.initialDeltaJson());
+  } else {
+    engine = new EngineScenePlayer(sceneJson, loopDuration, 1);
+    if (result.callbacks !== null) {
+      host = new HostScenePlayer(sceneJson, JSON.stringify(result.callbacks.slots));
+      callbackSessionId = result.callbacks.session_id;
+    }
+
+    // The initial execution delta already carries either the scene's semantic camera
+    // state or the shared default camera. Do not overwrite it with a harness-local
+    // fixed camera; moving-camera fixtures must exercise the production camera role.
+    const initialDelta = engine.initialDeltaJson();
+    renderer = await ExecutionCanvasRenderer.create(offscreen, initialDelta);
+    renderer.resize(canvas.width, canvas.height);
+    let presented = false;
+    for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
+      presented = renderer.render();
+    }
+    if (!presented) {
+      throw new Error("host raster renderer could not present its initial snapshot");
+    }
+    await waitForPaint();
+  }
+
   authoredDuration = Number(result.duration);
-
-  // The initial execution delta already carries either the scene's semantic camera
-  // state or the shared default camera. Do not overwrite it with a harness-local
-  // fixed camera; moving-camera fixtures must exercise the production camera role.
-  const initialDelta = engine.initialDeltaJson();
-  renderer = await ExecutionCanvasRenderer.create(offscreen, initialDelta);
-  renderer.resize(canvas.width, canvas.height);
-  let presented = false;
-  for (let attempt = 0; attempt < 4 && !presented; attempt += 1) {
-    presented = renderer.render();
-  }
-  if (!presented) {
-    throw new Error("host raster renderer could not present its initial snapshot");
-  }
-  await waitForPaint();
-
   return {
     kind: result.kind,
     duration: authoredDuration,
-    objectCount: result.document.objects.length,
+    objectCount: result.document.objects.length + retainedObjectCount,
+    retained,
     rendererBackend: renderer.rendererBackend(),
     callbackSlots: result.callbacks?.slots.length ?? 0,
   };
@@ -171,6 +195,7 @@ async function renderThrough(frameIndex, frameTimes) {
     time: currentLogicalTime,
     rendererTime: renderer.time(),
     objectCount: renderer.objectCount(),
+    retained,
     rendererBackend: renderer.rendererBackend(),
     drawCalls: renderer.lastDrawCalls(),
     instances: renderer.lastInstancesDrawn(),
