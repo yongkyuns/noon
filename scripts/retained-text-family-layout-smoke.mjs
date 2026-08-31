@@ -105,6 +105,25 @@ class RetainedFamilyLayout(Scene):
         close(square.get_center().y, square_before.y - 0.6, "mixed family square shift")
         close(mixed_text.get_center().y, mixed_text_before.y - 0.6, "mixed family text shift")
 
+        placement_target = Text("Target", font_size=34).shift(RIGHT * 2.5 + UP * 0.8)
+        placement_a = Text("P", font_size=30)
+        placement_b = Text("QQ", font_size=30).shift(RIGHT * 0.8)
+        placement = VGroup(placement_a, placement_b)
+        placement.move_to(placement_target)
+        close(placement.get_center().x, placement_target.get_center().x, "move_to retained target x")
+        close(placement.get_center().y, placement_target.get_center().y, "move_to retained target y")
+        placement.next_to(placement_target, RIGHT, buff=0.25)
+        placement_left = placement.get_center().x - placement.width * 0.5
+        gap = placement_left - placement_target.get_critical_point(RIGHT).x
+        close(gap, 0.25, "next_to retained target gap")
+        placement.align_to(placement_target, UP)
+        placement_top = placement.get_center().y + placement.height * 0.5
+        close(
+            placement_top,
+            placement_target.get_critical_point(UP).y,
+            "align_to retained target top",
+        )
+
         typst_family = VGroup(Typst("*Typst*", font_size=36))
         try:
             _ = typst_family.width

@@ -1080,6 +1080,29 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
 
 
 
+def _retained_family_layout_handles(value: object):
+    identity = getattr(value, "_semantic_family_member_handle", None)
+    retained = getattr(value, "_retained_handle", None)
+    if identity is None or retained is None:
+        return None
+    if not _has_shared_layout_queries(retained):
+        raise NotImplementedError(
+            "Typst/MathTypst family layout requires Rust-owned retained layout bounds"
+        )
+    return identity, retained
+
+
+def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
+    resolver = _mutation_handle_for if mutation else _handle_for
+    handle = resolver(value)
+    if handle is not None:
+        return "mobject", handle
+    retained = _retained_family_layout_handles(value)
+    if retained is not None:
+        return "retained_native_text", retained
+    return None
+
+
 def _shared_family_layout_session(value: object, *, mutation: bool = False):
     if not isinstance(value, _compat.Group):
         return None
@@ -1087,25 +1110,37 @@ def _shared_family_layout_session(value: object, *, mutation: bool = False):
     if family_handle is None or not hasattr(family_handle, "layoutSession"):
         return None
     leaves = _compat._leaf_mobjects(value)
-    resolver = _mutation_handle_for if mutation else _handle_for
-    leaf_handles = [resolver(member) for member in leaves]
-    if not all(handle is not None for handle in leaf_handles):
+    leaf_adapters = [
+        _family_layout_leaf_adapter(member, mutation=mutation) for member in leaves
+    ]
+    if not all(adapter is not None for adapter in leaf_adapters):
         return None
     session = family_handle.layoutSession()
-    for handle in leaf_handles:
-        session.includeMobject(handle)
-    return session, leaves, leaf_handles
+    for adapter in leaf_adapters:
+        assert adapter is not None
+        kind, payload = adapter
+        if kind == "mobject":
+            session.includeMobject(payload)
+        else:
+            identity, retained = payload
+            session.includeRetainedNativeText(identity, retained)
+    return session, leaves, leaf_adapters
 
 
 def _apply_family_translation(
     self: _compat.Group,
     translation: object,
     leaves: list[_base.Mobject],
-    leaf_handles: list[object],
+    leaf_adapters: list[object],
 ) -> _compat.Group:
-    for member, handle in zip(leaves, leaf_handles):
-        translation.applyMobject(handle)
-        _sync_bound_transform(member, handle)
+    for member, adapter in zip(leaves, leaf_adapters):
+        kind, payload = adapter
+        if kind == "mobject":
+            translation.applyMobject(payload)
+            _sync_bound_transform(member, payload)
+        else:
+            identity, retained = payload
+            translation.applyRetainedNativeText(identity, retained)
     translation.finish()
     return self
 
@@ -1144,11 +1179,20 @@ def _group_move_to(
                 target_session, edge.x, edge.y, mask.x, mask.y
             )
     elif _alignment_is_mobject(point_or_mobject):
-        target_handle = _handle_for(point_or_mobject)
-        if target_handle is not None and hasattr(session, "moveToMobject"):
-            translation = session.moveToMobject(
-                target_handle, edge.x, edge.y, mask.x, mask.y
-            )
+        target_adapter = _family_layout_leaf_adapter(point_or_mobject)
+        if target_adapter is not None:
+            kind, payload = target_adapter
+            if kind == "mobject" and hasattr(session, "moveToMobject"):
+                translation = session.moveToMobject(
+                    payload, edge.x, edge.y, mask.x, mask.y
+                )
+            elif kind == "retained_native_text" and hasattr(
+                session, "moveToRetainedNativeText"
+            ):
+                identity, retained = payload
+                translation = session.moveToRetainedNativeText(
+                    identity, retained, edge.x, edge.y, mask.x, mask.y
+                )
     elif hasattr(session, "moveToPoint"):
         point = _base._as_vec2(point_or_mobject)
         translation = session.moveToPoint(
@@ -1217,18 +1261,35 @@ def _group_next_to(
                 mask.y,
             )
     elif _alignment_is_mobject(mobject_or_point):
-        target_handle = _handle_for(mobject_or_point)
-        if target_handle is not None and hasattr(session, "nextToMobject"):
-            translation = session.nextToMobject(
-                target_handle,
-                vector.x,
-                vector.y,
-                float(buff),
-                edge.x,
-                edge.y,
-                mask.x,
-                mask.y,
-            )
+        target_adapter = _family_layout_leaf_adapter(mobject_or_point)
+        if target_adapter is not None:
+            kind, payload = target_adapter
+            if kind == "mobject" and hasattr(session, "nextToMobject"):
+                translation = session.nextToMobject(
+                    payload,
+                    vector.x,
+                    vector.y,
+                    float(buff),
+                    edge.x,
+                    edge.y,
+                    mask.x,
+                    mask.y,
+                )
+            elif kind == "retained_native_text" and hasattr(
+                session, "nextToRetainedNativeText"
+            ):
+                identity, retained = payload
+                translation = session.nextToRetainedNativeText(
+                    identity,
+                    retained,
+                    vector.x,
+                    vector.y,
+                    float(buff),
+                    edge.x,
+                    edge.y,
+                    mask.x,
+                    mask.y,
+                )
     elif hasattr(session, "nextToPoint"):
         point = _base._as_vec2(mobject_or_point)
         translation = session.nextToPoint(
@@ -1274,9 +1335,18 @@ def _group_align_to(
         if target_shared is not None and hasattr(session, "alignToFamily"):
             translation = session.alignToFamily(target_shared[0], axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
-        target_handle = _handle_for(mobject_or_point)
-        if target_handle is not None and hasattr(session, "alignToMobject"):
-            translation = session.alignToMobject(target_handle, axis.x, axis.y)
+        target_adapter = _family_layout_leaf_adapter(mobject_or_point)
+        if target_adapter is not None:
+            kind, payload = target_adapter
+            if kind == "mobject" and hasattr(session, "alignToMobject"):
+                translation = session.alignToMobject(payload, axis.x, axis.y)
+            elif kind == "retained_native_text" and hasattr(
+                session, "alignToRetainedNativeText"
+            ):
+                identity, retained = payload
+                translation = session.alignToRetainedNativeText(
+                    identity, retained, axis.x, axis.y
+                )
     elif hasattr(session, "alignToPoint"):
         point = _base._as_vec2(mobject_or_point)
         translation = session.alignToPoint(point.x, point.y, axis.x, axis.y)
@@ -1325,25 +1395,24 @@ def _group_arrange(
             arrangement.includeFamily(shared[0])
             prepared.append((member, shared[1], shared[2]))
         elif isinstance(member, _base.Mobject):
-            handle = _mutation_handle_for(member)
-            if handle is None or not hasattr(arrangement, "includeMobject"):
+            adapter = _family_layout_leaf_adapter(member, mutation=True)
+            if adapter is None:
                 return _ORIGINAL_GROUP_ARRANGE(
                     self, direction=direction, buff=buff, center=center
                 )
-            arrangement.includeMobject(handle)
-            prepared.append((member, [member], [handle]))
+            kind, payload = adapter
+            if kind == "mobject":
+                arrangement.includeMobject(payload)
+            else:
+                identity, retained = payload
+                arrangement.includeRetainedNativeText(identity, retained)
+            prepared.append((member, [member], [adapter]))
         else:
             return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center)
 
-    for member, leaves, leaf_handles in prepared:
+    for member, leaves, leaf_adapters in prepared:
         translation = arrangement.nextTranslation()
-        if isinstance(member, _compat.Group):
-            _apply_family_translation(member, translation, leaves, leaf_handles)
-        else:
-            handle = leaf_handles[0]
-            translation.applyMobject(handle)
-            _sync_bound_transform(member, handle)
-            translation.finish()
+        _apply_family_translation(member, translation, leaves, leaf_adapters)
     arrangement.finish()
     return self
 
@@ -1355,16 +1424,9 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     # family graph independently derives the expected recursive leaf sequence and
     # rejects any wrapper divergence. Rust owns the actual aggregate bounds math.
     if isinstance(value, _compat.Group):
-        family_handle = getattr(value, "_semantic_family_handle", None)
-        leaf_handles = [_handle_for(member) for member in leaves]
-        if (
-            family_handle is not None
-            and hasattr(family_handle, "layoutSession")
-            and all(handle is not None for handle in leaf_handles)
-        ):
-            session = family_handle.layoutSession()
-            for handle in leaf_handles:
-                session.includeMobject(handle)
+        shared = _shared_family_layout_session(value)
+        if shared is not None:
+            session = shared[0]
             return (
                 _base.Vec2(
                     float(session.criticalX(-1.0, 0.0)),
@@ -1381,11 +1443,25 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     # not execute this aggregation path.
     present: list[tuple[_base.Vec2, _base.Vec2]] = []
     for member in leaves:
-        bounds = (
-            _layout_bounds(member)
-            if _handle_for(member) is not None
-            else _base._bounds(member._current_raw())
-        )
+        handle = _handle_for(member)
+        if handle is not None:
+            bounds = _layout_bounds(member)
+        else:
+            retained = _retained_family_layout_handles(member)
+            if retained is not None:
+                retained_handle = retained[1]
+                bounds = (
+                    _base.Vec2(
+                        float(retained_handle.criticalX(-1.0, 0.0)),
+                        float(retained_handle.criticalY(0.0, -1.0)),
+                    ),
+                    _base.Vec2(
+                        float(retained_handle.criticalX(1.0, 0.0)),
+                        float(retained_handle.criticalY(0.0, 1.0)),
+                    ),
+                )
+            else:
+                bounds = _base._bounds(member._current_raw())
         if bounds is not None:
             present.append(bounds)
     if not present:

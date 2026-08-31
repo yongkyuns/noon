@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::Rect;
+#[cfg(target_arch = "wasm32")]
+use noon_core::{Bounds2D64, SemanticNodeId};
 use noon_core::{Color, ObjectId, Transform2D, Vec2, WHITE};
 use serde::{Deserialize, Serialize};
 
@@ -408,11 +410,63 @@ mod wasm {
     pub struct WasmRetainedNativeTextAuthoringHandle {
         inner: RetainedTextAuthoringSpec,
         intrinsic_bounds: Rect,
+        family_identity: Option<SemanticNodeId>,
     }
 
     impl WasmRetainedNativeTextAuthoringHandle {
         fn bounds(&self) -> Rect {
             transformed_bounds(self.intrinsic_bounds, self.inner.transform)
+        }
+
+        pub(crate) fn bind_family_identity(
+            &mut self,
+            identity: SemanticNodeId,
+        ) -> Result<(), String> {
+            if let Some(existing) = self.family_identity {
+                if existing != identity {
+                    return Err(
+                        "retained native Text is already bound to another family identity"
+                            .to_owned(),
+                    );
+                }
+                return Ok(());
+            }
+            self.family_identity = Some(identity);
+            Ok(())
+        }
+
+        pub(crate) fn family_identity(&self) -> Option<SemanticNodeId> {
+            self.family_identity
+        }
+
+        pub(crate) fn family_layout_bounds(&self) -> Bounds2D64 {
+            let bounds = self.bounds();
+            Bounds2D64 {
+                min_x: f64::from(bounds.min.x),
+                min_y: f64::from(bounds.min.y),
+                max_x: f64::from(bounds.max.x),
+                max_y: f64::from(bounds.max.y),
+            }
+        }
+
+        pub(crate) fn apply_family_translation(
+            &mut self,
+            delta_x: f64,
+            delta_y: f64,
+        ) -> Result<(), String> {
+            let current = self.inner.transform.translation;
+            let next_x = f64::from(current.x) + delta_x;
+            let next_y = f64::from(current.y) + delta_y;
+            if !next_x.is_finite()
+                || !next_y.is_finite()
+                || next_x.abs() > f64::from(f32::MAX)
+                || next_y.abs() > f64::from(f32::MAX)
+            {
+                return Err(
+                    "retained native Text family translation must remain f32-compatible".to_owned(),
+                );
+            }
+            self.inner.move_to(Vec2::new(next_x as f32, next_y as f32))
         }
     }
 
@@ -432,6 +486,7 @@ mod wasm {
             Ok(Self {
                 inner,
                 intrinsic_bounds,
+                family_identity: None,
             })
         }
 
