@@ -9,6 +9,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_phase_b.py", runtimePath: "/tmp/_manim_phase_b.py", label: "Noon Manim Phase B layer" },
   { sourcePath: "python/_manim_geometry.py", runtimePath: "/tmp/_manim_geometry.py", label: "Noon Manim geometry layer" },
   { sourcePath: "python/_manim_shared_geometry.py", runtimePath: "/tmp/_manim_shared_geometry.py", label: "Noon shared Rust geometry adapter" },
+  { sourcePath: "python/_manim_axes.py", runtimePath: "/tmp/_manim_axes.py", label: "Noon shared Axes compatibility layer" },
   { sourcePath: "python/_manim_animation_options.py", runtimePath: "/tmp/_manim_animation_options.py", label: "Noon Manim animation options" },
   { sourcePath: "python/_manim_animate.py", runtimePath: "/tmp/_manim_animate.py", label: "Noon Manim animate layer" },
   { sourcePath: "python/_manim_rotate.py", runtimePath: "/tmp/_manim_rotate.py", label: "Noon Manim Rotate layer" },

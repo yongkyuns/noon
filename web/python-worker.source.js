@@ -2,6 +2,7 @@ import initNoonWeb, {
   RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
+  WasmAxesAuthoringPlan,
   manimAnnularSectorSnapshotJson,
   manimAnnulusSnapshotJson,
   manimDotSnapshotJson,
@@ -48,6 +49,8 @@ async function initializePyodide() {
   ]);
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const authoringStore = new WasmAuthoringStore();
+  self.noonCreateAxesAuthoringPlan = (requestJson) =>
+    new WasmAxesAuthoringPlan(requestJson);
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -104,6 +107,8 @@ import _manim_semantic_handles
 _manim_semantic_handles.install()
 import _manim_shared_geometry
 _manim_shared_geometry.install()
+import _manim_axes
+_manim_axes.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()

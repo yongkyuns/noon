@@ -113,6 +113,7 @@ pub struct AxesAuthoringPlan {
     axes: Axes2DState,
     x_range: NumberRange,
     children: Vec<ObjectSnapshot>,
+    x_child_count: usize,
 }
 
 impl AxesAuthoringPlan {
@@ -139,17 +140,23 @@ impl AxesAuthoringPlan {
 
         let x_geometry = NumberLineGeometryPlan::new(axes.x_axis(), &x_visuals.ticks)?;
         let y_geometry = NumberLineGeometryPlan::new(axes.y_axis(), &y_visuals.ticks)?;
+        let x_child_count = 1 + x_geometry.ticks().len();
         let children = flatten_axis_children(&x_geometry, &y_geometry);
 
         Ok(Self {
             axes,
             x_range,
             children,
+            x_child_count,
         })
     }
 
     pub fn children(&self) -> &[ObjectSnapshot] {
         &self.children
+    }
+
+    pub const fn x_child_count(&self) -> usize {
+        self.x_child_count
     }
 
     pub fn children_json(&self) -> Result<String, ManimAxesBridgeError> {
@@ -345,6 +352,11 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(getter, js_name = xChildCount)]
+        pub fn x_child_count(&self) -> usize {
+            self.0.x_child_count()
+        }
+
         #[wasm_bindgen(js_name = childrenJson)]
         pub fn children_json(&self) -> Result<String, JsValue> {
             self.0.children_json().map_err(js_error)
@@ -399,6 +411,7 @@ mod tests {
         );
         let plan = AxesAuthoringPlan::from_json(&request).unwrap();
         assert_eq!(plan.children().len(), 24);
+        assert_eq!(plan.x_child_count(), 21);
         assert!(plan
             .children()
             .iter()
