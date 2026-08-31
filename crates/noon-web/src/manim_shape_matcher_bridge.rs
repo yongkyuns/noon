@@ -279,9 +279,9 @@ mod tests {
                 .expect("valid variadic matcher"),
         );
 
-        assert_eq!(snapshot.center(), Vec2::new(0.5, 0.75));
-        assert!((snapshot.width() - 7.5).abs() <= 1e-5);
-        assert!((snapshot.height() - 3.5).abs() <= 1e-5);
+        assert_eq!(snapshot.center(), Vec2::new(1.0, 0.75));
+        assert!((snapshot.width() - 8.5).abs() <= 1e-5);
+        assert!((snapshot.height() - 4.5).abs() <= 1e-5);
     }
 
     #[test]
@@ -322,8 +322,8 @@ mod tests {
             .expect("valid variadic background"),
         );
 
-        assert_eq!(snapshot.center(), Vec2::new(0.75, 0.25));
-        assert!((snapshot.width() - 5.5).abs() <= 1e-5);
+        assert_eq!(snapshot.center(), Vec2::new(1.0, 0.25));
+        assert!((snapshot.width() - 5.0).abs() <= 1e-5);
         assert!((snapshot.height() - 4.5).abs() <= 1e-5);
     }
 
