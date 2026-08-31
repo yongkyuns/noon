@@ -18,6 +18,8 @@ on:
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-creation-smoke.mjs"
+      - "scripts/retained-text-creation-playback-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
@@ -41,6 +43,8 @@ on:
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-creation-smoke.mjs"
+      - "scripts/retained-text-creation-playback-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
       - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
@@ -111,11 +115,17 @@ jobs:
       - name: Test retained Text animation authoring
         run: node scripts/retained-text-animation-smoke.mjs
 
+      - name: Test retained Text creation authoring
+        run: node scripts/retained-text-creation-smoke.mjs
+
       - name: Test retained Text family identity
         run: node scripts/retained-text-family-identity-smoke.mjs
 
       - name: Test retained Text animation playback
         run: node scripts/retained-text-playback-smoke.mjs
+
+      - name: Test retained Text creation playback
+        run: node scripts/retained-text-creation-playback-smoke.mjs
 
       - name: Test retained Text Scene lifecycle
         run: node scripts/retained-text-scene-lifecycle-smoke.mjs
