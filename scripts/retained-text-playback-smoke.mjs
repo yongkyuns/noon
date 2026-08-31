@@ -100,15 +100,22 @@ async function seekAndWait(page, time, previousPresentedFrames) {
     async ({ time, previousPresentedFrames }) => {
       const execution = globalThis.__noonRetainedShrinkExecution;
       const seek = await execution.seek(time);
+      let lastReport = null;
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const report = await execution.metrics();
+        lastReport = report;
         if (report.metrics.presentedFrames > previousPresentedFrames) {
           const state = await execution.state();
           return { seek, state, report };
         }
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      throw new Error(`retained renderer did not present seek to ${time}s`);
+      const state = await execution.state();
+      throw new Error(
+        `retained renderer did not present seek to ${time}s; ` +
+          `previousPresentedFrames=${previousPresentedFrames}; ` +
+          `state=${JSON.stringify(state)}; metrics=${JSON.stringify(lastReport)}`,
+      );
     },
     { time, previousPresentedFrames },
   );
