@@ -248,6 +248,10 @@ impl TrackTiming {
     pub const fn instant(start_time: f64) -> Self {
         Self::new(start_time, 0.0, RateFunction::Linear)
     }
+
+    pub const fn is_instant(self) -> bool {
+        self.duration == 0.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -359,7 +363,7 @@ pub(crate) fn validate_track_timing(
                 duration: timing.duration,
             });
         }
-    } else if timing.duration <= 0.0 {
+    } else if timing.duration < 0.0 {
         return Err(TimelineError::InvalidDuration(timing.duration));
     }
     Ok(())
@@ -379,7 +383,7 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
-    if track.property.is_instant() && !track.time_map.is_identity() {
+    if track.timing.is_instant() && !track.time_map.is_identity() {
         return Err(TimelineError::InstantTrackCannotUseTimeMap(track.property));
     }
     track
@@ -668,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn presence_rejects_nonzero_duration_and_other_tracks_reject_zero_duration() {
+    fn presence_requires_zero_duration_and_other_tracks_allow_instant_assignments() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
         assert!(matches!(
@@ -686,16 +690,16 @@ mod tests {
                 ..
             })
         ));
-        assert!(matches!(
-            scene.animate_scalar(
+        let track = scene
+            .animate_scalar(
                 object,
                 Property::Opacity,
                 1.0,
                 0.0,
                 TrackTiming::instant(1.0),
-            ),
-            Err(TimelineError::InvalidDuration(0.0))
-        ));
+            )
+            .expect("ordinary properties may be assigned at an exact timestamp");
+        assert_eq!(track, TrackId::new(0));
     }
 
     #[test]
@@ -781,7 +785,7 @@ mod tests {
     fn invalid_timing_is_rejected() {
         let mut scene = SceneDefinition::new();
         let object = scene.add(GeometryRef::circle(1.0));
-        for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        for duration in [-1.0, f64::NAN, f64::INFINITY] {
             let error = scene
                 .animate_position(
                     object,

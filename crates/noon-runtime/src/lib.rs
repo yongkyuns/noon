@@ -1295,15 +1295,19 @@ fn interpolate_color(from: Color, to: Color, progress: f32) -> Color {
 }
 
 fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
-    debug_assert!(!track.property.is_instant());
+    if track.timing.is_instant() {
+        return 1.0;
+    }
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
     track.timing.easing.evaluate(raw)
 }
 
 fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
-    debug_assert!(!track.property.is_instant());
     if time < track.timing.start_time {
         return None;
+    }
+    if track.timing.is_instant() {
+        return Some(1.0);
     }
     let end = track.timing.start_time + track.timing.duration;
     // Scene state is defined after animation finish/cleanup at the exact endpoint.
