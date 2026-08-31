@@ -48,6 +48,13 @@ def _vec2(value: object, label: str) -> dict[str, float]:
     return {"x": x, "y": y}
 
 
+def _finite_scalar(value: object, label: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"retained text {label} state must be finite")
+    return result
+
+
 def _transform(spec: dict[str, Any]) -> dict[str, Any]:
     transform = spec.get("transform")
     if not isinstance(transform, dict):
@@ -128,9 +135,15 @@ def _semantic_operation(
         position = _vec2(_transform(after).get("translation"), "translation")
         return {"kind": "set_y", "y": position["y"]}
 
+    if name == "rotate":
+        _assert_only_transform_field_changed(before, after, "rotation")
+        before_rotation = _finite_scalar(_transform(before).get("rotation"), "rotation")
+        after_rotation = _finite_scalar(_transform(after).get("rotation"), "rotation")
+        return {"kind": "rotate_relative", "angle": after_rotation - before_rotation}
+
     raise NotImplementedError(
         f"retained Text .animate.{name} is not supported yet; "
-        "position and uniform scale animations are supported"
+        "position, rotation, and uniform scale animations are supported"
     )
 
 
@@ -197,6 +210,7 @@ def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, A
     transform = _transform(source._spec())
     return {
         "position": _vec2(transform.get("translation"), "translation"),
+        "rotation": _finite_scalar(transform.get("rotation"), "rotation"),
         "scale": _vec2(transform.get("scale"), "scale"),
     }
 
@@ -231,6 +245,31 @@ def _append_vec2_track(
     )
 
 
+def _append_scalar_track(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    property_name: str,
+    current: float,
+    target: float,
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    scene._retained_animation_tracks.append(
+        {
+            "object": object_id,
+            "property": property_name,
+            "values": {"scalar": {"from": float(current), "to": float(target)}},
+            "timing": {
+                "start_time": float(start_time),
+                "duration": float(duration),
+                "easing": str(easing),
+            },
+        }
+    )
+
+
 def _schedule_retained_plan(
     scene: _compat.Scene,
     animation: object,
@@ -249,8 +288,10 @@ def _schedule_retained_plan(
         object_id, _initial_animation_state(source)
     )
     current_position = copy.deepcopy(state["position"])
+    current_rotation = float(state["rotation"])
     current_scale = copy.deepcopy(state["scale"])
     target_position = copy.deepcopy(current_position)
+    target_rotation = current_rotation
     target_scale = copy.deepcopy(current_scale)
     touched: list[str] = []
 
@@ -289,6 +330,11 @@ def _schedule_retained_plan(
                 touched.append("position")
             target_position["y"] = float(operation["y"])
             continue
+        if kind == "rotate_relative":
+            if "rotation" not in touched:
+                touched.append("rotation")
+            target_rotation += float(operation["angle"])
+            continue
         raise ValueError(f"unknown retained animation operation {kind!r}")
 
     for property_name in touched:
@@ -316,6 +362,18 @@ def _schedule_retained_plan(
                 easing=easing,
             )
             state["position"] = copy.deepcopy(target_position)
+        elif property_name == "rotation":
+            _append_scalar_track(
+                scene,
+                object_id=object_id,
+                property_name="rotation",
+                current=current_rotation,
+                target=target_rotation,
+                start_time=start_time,
+                duration=duration,
+                easing=easing,
+            )
+            state["rotation"] = target_rotation
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:

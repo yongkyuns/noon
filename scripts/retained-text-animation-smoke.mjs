@@ -10,6 +10,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const port = 4191;
 const baseUrl = `http://127.0.0.1:${port}`;
+const retainedScalarTolerance = 1e-6;
 
 let serverOutput = "";
 const server = spawn(
@@ -43,21 +44,28 @@ class RetainedAnimate(Scene):
         label = Text("Animate", font_size=48)
 
         self.play(
-            label.animate(run_time=2.0, rate_func=linear).scale(2.0).shift(RIGHT)
+            label.animate(run_time=2.0, rate_func=linear).scale(2.0).shift(RIGHT).rotate(PI / 2)
         )
-        self.play(label.animate.scale(0.5).shift(UP), run_time=1.0)
+        self.play(label.animate.scale(0.5).shift(UP).rotate(-PI / 4), run_time=1.0)
         self.play(label.animate.move_to(2 * LEFT), run_time=1.0)
 
         assert label in self.mobjects
 
         unsupported = Text("Unsupported", font_size=36)
         try:
-            self.play(unsupported.animate.rotate(0.25), run_time=0.25)
-            raise AssertionError("unsupported retained animate.rotate must fail")
+            self.play(unsupported.animate.set_opacity(0.5), run_time=0.25)
+            raise AssertionError("unsupported retained animate.set_opacity must fail")
         except NotImplementedError as error:
-            assert "animate.rotate" in str(error)
+            assert "animate.set_opacity" in str(error)
         assert unsupported not in self.mobjects
 `;
+
+function assertNear(actual, expected, message) {
+  assert.ok(
+    Math.abs(actual - expected) <= retainedScalarTolerance,
+    `${message}: expected ${expected}, got ${actual}`,
+  );
+}
 
 let browser = null;
 try {
@@ -96,12 +104,14 @@ try {
   const tracks = result.retainedDocument.tracks ?? [];
   const scaleTracks = tracks.filter((track) => track.property === "scale");
   const positionTracks = tracks.filter((track) => track.property === "position");
+  const rotationTracks = tracks.filter((track) => track.property === "rotation");
   assert.equal(scaleTracks.length, 2, "two scale calls must emit two retained scale tracks");
   assert.equal(
     positionTracks.length,
     3,
     "two relative shifts and one absolute move_to must emit three retained position tracks",
   );
+  assert.equal(rotationTracks.length, 2, "two rotate calls must emit two retained rotation tracks");
 
   assert.deepEqual(scaleTracks[0].values.vec2, {
     from: { x: 1, y: 1 },
@@ -142,6 +152,19 @@ try {
   assert.equal(positionTracks[2].timing.start_time, 3);
   assert.equal(positionTracks[2].timing.duration, 1);
   assert.equal(positionTracks[2].timing.easing, "smooth");
+
+  // Retained transform scalars are Rust f32 values serialized through the WASM handle.
+  assertNear(rotationTracks[0].values.scalar.from, 0, "first rotation source");
+  assertNear(rotationTracks[0].values.scalar.to, Math.PI / 2, "first rotation target");
+  assert.equal(rotationTracks[0].timing.start_time, 0);
+  assert.equal(rotationTracks[0].timing.duration, 2);
+  assert.equal(rotationTracks[0].timing.easing, "linear");
+
+  assertNear(rotationTracks[1].values.scalar.from, Math.PI / 2, "second rotation source");
+  assertNear(rotationTracks[1].values.scalar.to, Math.PI / 4, "second rotation target");
+  assert.equal(rotationTracks[1].timing.start_time, 2);
+  assert.equal(rotationTracks[1].timing.duration, 1);
+  assert.equal(rotationTracks[1].timing.easing, "smooth");
   assert.equal(result.duration, 4);
 
   const wire = JSON.stringify(result.retainedDocument);
@@ -151,7 +174,7 @@ try {
   assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text animation smoke passed: scale and position builder methods lower to source-level retained tracks, relative shift composes against scheduler-owned state, absolute move_to remains absolute, timing options are preserved, and unsupported retained properties fail without legacy geometry.",
+    "Retained Text animation smoke passed: scale, position, and rotation builder methods lower to source-level retained tracks; relative operations compose against scheduler-owned state; absolute move_to remains absolute; timing options are preserved; and unsupported retained properties fail without legacy geometry.",
   );
 } finally {
   await browser?.close();
