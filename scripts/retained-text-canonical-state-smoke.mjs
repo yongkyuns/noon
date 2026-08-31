@@ -64,6 +64,11 @@ class RetainedCanonicalState(Scene):
         label.rotate(PI / 4)
         label.set_opacity(0.4)
         self.wait(0.25)
+
+        reads_after_mutation = label._retained_state_spec_reads
+        self.wait(0.1)
+        self.wait(0.1)
+        assert label._retained_state_spec_reads == reads_after_mutation
 `;
 
 let browser = null;
@@ -143,7 +148,7 @@ try {
   assert.equal(opacity[0].timing.start_time, 1);
   assert.equal(opacity[0].timing.duration, 0);
 
-  assert.equal(result.duration, 1.25);
+  assertNear(result.duration, 1.45, "scene duration");
   assert.deepEqual(errors, []);
   console.log("retained Text canonical authoring state smoke passed");
 } finally {
