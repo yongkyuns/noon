@@ -6,6 +6,10 @@ pub use authoring::*;
 mod composition;
 pub use composition::*;
 
+#[path = "family_timing.rs"]
+mod family_timing;
+pub use family_timing::*;
+
 #[path = "host_callbacks.rs"]
 mod host_callbacks;
 pub use host_callbacks::*;
