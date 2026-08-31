@@ -1,0 +1,104 @@
+name: Ephemeral instant-assignment patch
+
+on:
+  push:
+    branches:
+      - bot/instant-assignment-patch
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact core timeline patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, got {count}: {old!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          timeline = "crates/noon-core/src/timeline.rs"
+          replace_once(
+              timeline,
+              "    pub const fn instant(start_time: f64) -> Self {\n        Self::new(start_time, 0.0, RateFunction::Linear)\n    }\n",
+              "    pub const fn instant(start_time: f64) -> Self {\n        Self::new(start_time, 0.0, RateFunction::Linear)\n    }\n\n    pub const fn is_instant(self) -> bool {\n        self.duration == 0.0\n    }\n",
+          )
+          replace_once(
+              timeline,
+              "    } else if timing.duration <= 0.0 {\n        return Err(TimelineError::InvalidDuration(timing.duration));\n    }\n",
+              "    } else if timing.duration < 0.0 {\n        return Err(TimelineError::InvalidDuration(timing.duration));\n    }\n",
+          )
+          replace_once(
+              timeline,
+              "    if track.property.is_instant() && !track.time_map.is_identity() {\n",
+              "    if track.timing.is_instant() && !track.time_map.is_identity() {\n",
+          )
+          replace_once(
+              timeline,
+              "    fn presence_rejects_nonzero_duration_and_other_tracks_reject_zero_duration() {\n",
+              "    fn presence_requires_zero_duration_and_other_tracks_allow_instant_assignments() {\n",
+          )
+          replace_once(
+              timeline,
+              "        assert!(matches!(\n            scene.animate_scalar(\n                object,\n                Property::Opacity,\n                1.0,\n                0.0,\n                TrackTiming::instant(1.0),\n            ),\n            Err(TimelineError::InvalidDuration(0.0))\n        ));\n",
+              "        let track = scene\n            .animate_scalar(\n                object,\n                Property::Opacity,\n                1.0,\n                0.0,\n                TrackTiming::instant(1.0),\n            )\n            .expect(\"ordinary properties may be assigned at an exact timestamp\");\n        assert_eq!(track, TrackId::new(0));\n",
+          )
+          replace_once(
+              timeline,
+              "        for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {\n",
+              "        for duration in [-1.0, f64::NAN, f64::INFINITY] {\n",
+          )
+
+          scheduler = "crates/noon-runtime/src/reactive/timeline_scheduler.rs"
+          replace_once(scheduler, "use noon_core::{Property, TrackId};\n", "use noon_core::TrackId;\n")
+          replace_once(
+              scheduler,
+              "            if track.property == Property::Presence {\n",
+              "            if track.timing.is_instant() {\n",
+          )
+          replace_once(
+              scheduler,
+              "                track.property != Property::Presence\n                    && track.timing.start_time <= self.time\n                    && self.time < track.timing.start_time + track.timing.duration\n",
+              "                !track.timing.is_instant()\n                    && track.timing.start_time <= self.time\n                    && self.time < track.timing.start_time + track.timing.duration\n",
+          )
+
+          runtime = "crates/noon-runtime/src/lib.rs"
+          replace_once(
+              runtime,
+              "fn track_progress(track: &CompiledTrack, time: f64) -> f32 {\n    debug_assert!(!track.property.is_instant());\n    let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;\n    track.timing.easing.evaluate(raw)\n}\n",
+              "fn track_progress(track: &CompiledTrack, time: f64) -> f32 {\n    if track.timing.is_instant() {\n        return 1.0;\n    }\n    let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;\n    track.timing.easing.evaluate(raw)\n}\n",
+          )
+          replace_once(
+              runtime,
+              "fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {\n    debug_assert!(!track.property.is_instant());\n    if time < track.timing.start_time {\n        return None;\n    }\n    let end = track.timing.start_time + track.timing.duration;\n",
+              "fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {\n    if time < track.timing.start_time {\n        return None;\n    }\n    if track.timing.is_instant() {\n        return Some(1.0);\n    }\n    let end = track.timing.start_time + track.timing.duration;\n",
+          )
+
+      - name: Validate focused Rust slice
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy -p noon-core -p noon-runtime --all-targets --all-features -- -D warnings
+          cargo test -p noon-core --all-features
+          cargo test -p noon-runtime --all-features
+
+      - name: Commit patched source
+        run: |
+          git config user.name "Noon CI patch"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/noon-core/src/timeline.rs crates/noon-runtime/src/lib.rs crates/noon-runtime/src/reactive/timeline_scheduler.rs
+          git diff --cached --check
+          git commit -m "Support instant property assignments"
+          git push origin HEAD:bot/instant-assignment-patch
