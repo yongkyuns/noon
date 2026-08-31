@@ -31,6 +31,11 @@ except ImportError:
     _create_rounded_rectangle_handle = None
 
 try:
+    from js import noonCreateAuthoringUnderlineHandle as _create_underline_handle
+except ImportError:
+    _create_underline_handle = None
+
+try:
     from js import noonCreateAuthoringAnnularSectorHandle as _create_annular_sector_handle
 except ImportError:
     _create_annular_sector_handle = None
@@ -243,6 +248,38 @@ class RoundedRectangle(_compat.Rectangle):
             _set_shared_color(self, color)
 
 
+class Underline(_compat.Line):
+    """Manim Underline backed by the shared Rust line-matcher semantics."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject,
+        buff: float = _base.SMALL_BUFF,
+        **kwargs: Any,
+    ) -> None:
+        if _create_underline_handle is None:
+            raise RuntimeError("Underline requires the shared browser shape-matcher bridge")
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Underline target must be a Mobject")
+        target_handle = _shared._handle_for(mobject)
+        if target_handle is None or not hasattr(target_handle, "snapshotJson"):
+            raise NotImplementedError(
+                "Underline currently requires a target with shared semantic geometry"
+            )
+
+        buff_value = _shared._ir._finite_number("buff", buff)
+        options = dict(kwargs)
+        color = options.pop("color", None)
+        _shared._attach_shared_handle(
+            self,
+            _create_underline_handle(target_handle, buff_value),
+        )
+        self.buff = buff_value
+        _shared._apply_shared_constructor_kwargs(self, options)
+        if color is not None:
+            _set_shared_color(self, color)
+
+
 def _sector_component_count(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("num_components must be an integer")
@@ -436,6 +473,7 @@ def install() -> None:
 
     public = {
         "RoundedRectangle": RoundedRectangle,
+        "Underline": Underline,
         "AnnularSector": AnnularSector,
         "Sector": Sector,
         "Annulus": Annulus,
