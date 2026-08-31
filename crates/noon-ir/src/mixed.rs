@@ -602,7 +602,7 @@ mod tests {
         let scene = scene_with_position_track();
         let object = scene.objects()[0].id;
         let mut track = scene.tracks()[0].clone();
-        track.timing.duration = 0.0;
+        track.timing.duration = -1.0;
         let spec = SceneSpec {
             version: SCENE_SPEC_VERSION,
             objects: vec![ObjectSpec::geometry(object, GeometryRef::circle(1.0))],
@@ -614,7 +614,7 @@ mod tests {
             spec.validate(),
             Err(SceneSpecError::InvalidTrack {
                 track: id,
-                error: TimelineError::InvalidDuration(0.0),
+                error: TimelineError::InvalidDuration(-1.0),
             }) if id == track.id
         ));
 
@@ -623,7 +623,7 @@ mod tests {
             SceneSpec::from_json(&json),
             Err(SceneSpecError::InvalidTrack {
                 track: id,
-                error: TimelineError::InvalidDuration(0.0),
+                error: TimelineError::InvalidDuration(-1.0),
             }) if id == track.id
         ));
     }

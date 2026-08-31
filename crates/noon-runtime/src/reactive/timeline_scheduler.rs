@@ -5,7 +5,7 @@ use std::{
 };
 
 use noon_compile::{CompiledChannelKey, CompiledScene, CompiledTrack};
-use noon_core::{Property, TrackId};
+use noon_core::TrackId;
 
 use crate::SceneInstance;
 
@@ -191,7 +191,7 @@ impl TimelineEventScheduler {
 
         let mut inserted = 0;
         for track in tracks {
-            if track.property == Property::Presence {
+            if track.timing.is_instant() {
                 inserted +=
                     self.insert_event(group, track.id, track.timing.start_time, EventKind::Instant);
             } else {
@@ -332,7 +332,7 @@ impl TimelineEventScheduler {
         let count = tracks
             .iter()
             .filter(|track| {
-                track.property != Property::Presence
+                !track.timing.is_instant()
                     && track.timing.start_time <= self.time
                     && self.time < track.timing.start_time + track.timing.duration
             })
