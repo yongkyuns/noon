@@ -54,7 +54,9 @@ impl NativeInputBatch {
 pub enum NativeInputSample {
     Pointer {
         pointer_id: i32,
+        /// Canvas-local CSS-pixel position.
         x: f64,
+        /// Canvas-local CSS-pixel position.
         y: f64,
         buttons: u16,
     },
@@ -97,7 +99,9 @@ impl NativeInputSample {
                     *device_pixel_ratio,
                 )
             }
-            Self::ControlScalar { value, .. } => finite("sampled.control_scalar.value", index, *value),
+            Self::ControlScalar { value, .. } => {
+                finite("sampled.control_scalar.value", index, *value)
+            }
         }
     }
 }
@@ -111,7 +115,9 @@ pub enum NativeInputEvent {
         pointer_id: i32,
         button: u16,
         phase: PointerButtonPhase,
+        /// Canvas-local CSS-pixel position at the event boundary.
         x: f64,
+        /// Canvas-local CSS-pixel position at the event boundary.
         y: f64,
     },
     Key {
@@ -123,6 +129,7 @@ pub enum NativeInputEvent {
     Wheel {
         delta_x: f64,
         delta_y: f64,
+        delta_mode: WheelDeltaMode,
     },
 }
 
@@ -134,7 +141,9 @@ impl NativeInputEvent {
                 finite("events.pointer_button.y", index, *y)
             }
             Self::Key { code, .. } => nonempty_code("events.key.code", index, code),
-            Self::Wheel { delta_x, delta_y } => {
+            Self::Wheel {
+                delta_x, delta_y, ..
+            } => {
                 finite("events.wheel.delta_x", index, *delta_x)?;
                 finite("events.wheel.delta_y", index, *delta_y)
             }
@@ -157,6 +166,16 @@ pub enum KeyPhase {
     Up,
 }
 
+/// Units of browser wheel deltas, matching `WheelEvent.deltaMode` without exposing
+/// browser-specific integer constants to downstream runtimes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WheelDeltaMode {
+    Pixel,
+    Line,
+    Page,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeInputContractError {
     UnsupportedVersion { found: u16, supported: u16 },
@@ -174,7 +193,10 @@ impl fmt::Display for NativeInputContractError {
                 "unsupported native input protocol version {found}; supported version is {supported}"
             ),
             Self::NonFinite { field, index } => {
-                write!(formatter, "native input {field} at index {index} must be finite")
+                write!(
+                    formatter,
+                    "native input {field} at index {index} must be finite"
+                )
             }
             Self::Negative { field, index } => write!(
                 formatter,
@@ -245,7 +267,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_preserves_sampled_state_and_discrete_event_order() {
+    fn round_trip_preserves_sampled_state_discrete_order_and_wheel_units() {
         let batch = NativeInputBatch {
             version: NATIVE_INPUT_PROTOCOL_VERSION,
             sequence: 42,
@@ -286,6 +308,7 @@ mod tests {
                 NativeInputEvent::Wheel {
                     delta_x: 1.5,
                     delta_y: -2.0,
+                    delta_mode: WheelDeltaMode::Line,
                 },
             ],
         };
@@ -296,6 +319,7 @@ mod tests {
         assert_eq!(restored, batch);
         assert!(json.contains("\"kind\":\"pointer\""));
         assert!(json.contains("\"kind\":\"pointer_button\""));
+        assert!(json.contains("\"delta_mode\":\"line\""));
     }
 
     #[test]
@@ -371,6 +395,7 @@ mod tests {
         batch.events.push(NativeInputEvent::Wheel {
             delta_x: 0.0,
             delta_y: f64::INFINITY,
+            delta_mode: WheelDeltaMode::Pixel,
         });
         assert!(matches!(
             batch.validate().unwrap_err(),
