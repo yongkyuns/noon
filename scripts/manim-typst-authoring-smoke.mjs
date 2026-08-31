@@ -120,7 +120,7 @@ function retainedObject(result, { source, fontSize, order }) {
 function assertNativeText(result, expected) {
   const object = retainedObject(result, expected);
   assert.equal(object.text.backend.kind, "native");
-  assert.equal(object.text.backend.font_family, expected.fontFamily ?? "DejaVu Sans Mono");
+  assert.equal(object.text.backend.font_family, expected.fontFamily ?? "DejaVu Sans");
   assert.equal(object.text.backend.line_spacing, expected.lineSpacing ?? -1);
   return object;
 }
