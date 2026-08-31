@@ -130,6 +130,10 @@ try {
     presence.map((track) => ({ values: track.values.bool, timing: track.timing })),
     [
       {
+        values: { from: false, to: true },
+        timing: { start_time: 0, duration: 0, easing: "linear" },
+      },
+      {
         values: { from: true, to: false },
         timing: { start_time: 2, duration: 0, easing: "linear" },
       },
@@ -138,7 +142,7 @@ try {
         timing: { start_time: 2, duration: 0, easing: "linear" },
       },
     ],
-    "Uncreate removes at the exact end and Scene.add reintroduces the canonical Text",
+    "Create introduces at its start; Uncreate removes at the exact end; Scene.add reintroduces canonical Text",
   );
 
   const forwardResult = await page.evaluate(
