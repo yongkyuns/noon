@@ -488,30 +488,6 @@ def _unique_retained_mobjects(
     return retained
 
 
-def _assert_direct_readd_runtime_is_canonical(
-    scene: _compat.Scene,
-    source: _typst._RetainedTextMobject,
-    plan: _lifecycle.LifecyclePlan,
-) -> None:
-    if not plan.show_now or source._scene is not scene or source._retained_object_id is None:
-        return
-    state = scene._retained_animation_state.get(int(source.id))
-    if state is None:
-        return
-    canonical_position = state["position"]
-    canonical_scale = state["scale"]
-    if (
-        not math.isclose(float(state["appearance"]), 1.0, abs_tol=1e-15)
-        or state["runtime_position"] != canonical_position
-        or state["runtime_scale"] != canonical_scale
-    ):
-        raise NotImplementedError(
-            "retained Text Scene.add cannot yet restore a transient FadeOut endpoint; "
-            "reintroduce it with FadeIn or .animate until instant retained state resets "
-            "are represented by the shared core timeline"
-        )
-
-
 def _retained_scene_add(
     self: _compat.Scene,
     *mobjects: object,
@@ -534,9 +510,6 @@ def _retained_scene_add(
         )
         for value in retained
     ]
-    for value, plan in plans:
-        _assert_direct_readd_runtime_is_canonical(self, value, plan)
-
     result = _ORIGINAL_SCENE_ADD(self, *mobjects, key=key)
     _ensure_animation_state(self)
     for value, plan in plans:
@@ -762,18 +735,55 @@ def _schedule_retained_fade(
         duration=duration,
         easing=easing,
     )
+    end_time = start_time + duration
     if lifecycle.hide_at_end:
         _append_presence_track(
             scene,
             object_id=object_id,
             current=True,
             target=False,
-            start_time=start_time + duration,
+            start_time=end_time,
         )
         state["presence"] = False
-    state["appearance"] = 0.0
-    state["runtime_position"] = copy.deepcopy(faded_position)
-    state["runtime_scale"] = copy.deepcopy(faded_scale)
+
+    # Manim FadeOut cleanup removes the object, then restores interpolation alpha 0.
+    # Keep that restoration in the ordinary property channels so direct seek and
+    # later Scene.add observe canonical state without Python-only repair state.
+    _append_scalar_track(
+        scene,
+        object_id=object_id,
+        property_name="appearance",
+        current=0.0,
+        target=1.0,
+        start_time=end_time,
+        duration=0.0,
+        easing="linear",
+    )
+    if faded_position != canonical_position:
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="position",
+            current=faded_position,
+            target=canonical_position,
+            start_time=end_time,
+            duration=0.0,
+            easing="linear",
+        )
+    if faded_scale != canonical_scale:
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="scale",
+            current=faded_scale,
+            target=canonical_scale,
+            start_time=end_time,
+            duration=0.0,
+            easing="linear",
+        )
+    state["appearance"] = 1.0
+    state["runtime_position"] = copy.deepcopy(canonical_position)
+    state["runtime_scale"] = copy.deepcopy(canonical_scale)
 
 
 def _schedule_retained_plan(

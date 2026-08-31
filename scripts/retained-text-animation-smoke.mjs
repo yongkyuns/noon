@@ -91,6 +91,8 @@ class RetainedFade(Scene):
         assert label not in self.mobjects
 
         self.wait(0.5)
+        self.add(label)
+        assert label in self.mobjects
         self.play(label.animate.shift(UP), run_time=1.0)
         assert label in self.mobjects
 `;
@@ -288,10 +290,10 @@ try {
   assert.equal(fadeAppearance[1].timing.duration, 1);
   assert.equal(fadeAppearance[1].timing.easing, "smooth");
 
-  assertNear(fadeAppearance[2].values.scalar.from, 1, "reintroduced appearance source");
-  assertNear(fadeAppearance[2].values.scalar.to, 1, "reintroduced appearance target");
-  assert.equal(fadeAppearance[2].timing.start_time, 3);
-  assert.equal(fadeAppearance[2].timing.duration, 1);
+  assertNear(fadeAppearance[2].values.scalar.from, 0, "FadeOut cleanup appearance source");
+  assertNear(fadeAppearance[2].values.scalar.to, 1, "FadeOut cleanup appearance target");
+  assert.equal(fadeAppearance[2].timing.start_time, 2.5);
+  assert.equal(fadeAppearance[2].timing.duration, 0);
   assert.equal(fadeAppearance[2].timing.easing, "linear");
 
   assert.deepEqual(fadePosition[0].values.vec2, {
@@ -310,13 +312,22 @@ try {
   assert.equal(fadePosition[1].timing.duration, 1);
   assert.equal(fadePosition[1].timing.easing, "smooth");
 
+  assert.equal(fadePosition.length, 4);
   assert.deepEqual(fadePosition[2].values.vec2, {
+    from: { x: 1, y: 0 },
+    to: { x: -1, y: 0 },
+  });
+  assert.equal(fadePosition[2].timing.start_time, 2.5);
+  assert.equal(fadePosition[2].timing.duration, 0);
+  assert.equal(fadePosition[2].timing.easing, "linear");
+
+  assert.deepEqual(fadePosition[3].values.vec2, {
     from: { x: -1, y: 0 },
     to: { x: -1, y: 1 },
   });
-  assert.equal(fadePosition[2].timing.start_time, 3);
-  assert.equal(fadePosition[2].timing.duration, 1);
-  assert.equal(fadePosition[2].timing.easing, "smooth");
+  assert.equal(fadePosition[3].timing.start_time, 3);
+  assert.equal(fadePosition[3].timing.duration, 1);
+  assert.equal(fadePosition[3].timing.easing, "smooth");
 
   assert.deepEqual(fadeScale[0].values.vec2, {
     from: { x: 0.5, y: 0.5 },
@@ -335,11 +346,11 @@ try {
   assert.equal(fadeScale[1].timing.easing, "smooth");
 
   assert.deepEqual(fadeScale[2].values.vec2, {
-    from: { x: 1, y: 1 },
+    from: { x: 1.5, y: 1.5 },
     to: { x: 1, y: 1 },
   });
-  assert.equal(fadeScale[2].timing.start_time, 3);
-  assert.equal(fadeScale[2].timing.duration, 1);
+  assert.equal(fadeScale[2].timing.start_time, 2.5);
+  assert.equal(fadeScale[2].timing.duration, 0);
   assert.equal(fadeScale[2].timing.easing, "linear");
 
   assert.equal(fadeResult.duration, 4);
@@ -353,7 +364,7 @@ try {
   assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text animation smoke passed: scale, position, rotation, opacity, and FadeIn/FadeOut lower to source-level retained tracks; lifecycle transitions use retained presence/appearance channels; fade shift/scale endpoints stay transient; reintroduction restores canonical state; and unsupported retained properties fail without legacy geometry.",
+    "Retained Text animation smoke passed: scale, position, rotation, opacity, and FadeIn/FadeOut lower to source-level retained tracks; FadeOut cleanup restores canonical appearance/position/scale at the removal timestamp; direct Scene.add reintroduces canonical state with Presence only; and unsupported retained properties fail without legacy geometry.",
   );
 } finally {
   await browser?.close();
