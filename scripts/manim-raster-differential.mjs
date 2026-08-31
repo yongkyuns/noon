@@ -226,11 +226,15 @@ async function authorNoonScenes() {
         noonSourceFor(fixture),
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
-      assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
+      const retainedObjectCount = result.retainedDocument?.objects?.length ?? 0;
+      const objectCount = result.document.objects.length + retainedObjectCount;
+      assert.ok(objectCount > 0, `${fixture.id}: Noon scene has no objects`);
       assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
       scenes.set(fixture.id, {
         document: result.document,
         duration: Number(result.duration),
+        objectCount,
+        hasRetained: retainedObjectCount > 0,
         hasCallbacks: result.callbacks !== null,
         hasSemanticCamera: Number.isInteger(result.document.camera_object),
       });
@@ -302,7 +306,7 @@ async function captureDeterministicFixture(
     (json) => window.noonSmoke.loadScene(json),
     JSON.stringify(authored.document),
   );
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: loaded object count`);
+  assert.equal(loaded.objectCount, authored.objectCount, `${fixture.id}: loaded object count`);
   const captures = [];
   for (const sample of referenceResult.samples) {
     const metrics = await page.evaluate(
@@ -318,7 +322,7 @@ async function captureDeterministicFixture(
   }
   return {
     duration: authored.duration,
-    objectCount: authored.document.objects.length,
+    objectCount: authored.objectCount,
     captures,
   };
 }
@@ -340,7 +344,8 @@ async function captureHostFixture(
     },
   );
   assert.equal(loaded.duration, fixture.expected_duration, `${fixture.id}: host authored duration`);
-  assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: host object count`);
+  assert.equal(loaded.objectCount, authored.objectCount, `${fixture.id}: host object count`);
+  assert.equal(loaded.retained, authored.hasRetained, `${fixture.id}: host retained mode`);
   if (authored.hasCallbacks) {
     assert.ok(loaded.callbackSlots > 0, `${fixture.id}: host callback slots`);
   } else {
@@ -361,6 +366,7 @@ async function captureHostFixture(
       Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
       `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`,
     );
+    assert.equal(metrics.retained, authored.hasRetained, `${fixture.id}: host frame retained mode`);
     // Match the deterministic capture path: rendering/present submits GPU work,
     // while the browser compositor owns when that surface becomes screenshot-visible.
     // Waiting one paint prevents callback-heavy scenes from being captured mid-present.
@@ -371,7 +377,7 @@ async function captureHostFixture(
   }
   return {
     duration: authored.duration,
-    objectCount: authored.document.objects.length,
+    objectCount: authored.objectCount,
     captures,
   };
 }
@@ -393,7 +399,7 @@ async function captureNoonBackend(backend, authoredScenes, references) {
         const fixtureDir = path.join(artifactRoot, backend, fixture.id);
         await mkdir(fixtureDir, { recursive: true });
 
-        if (authored.hasCallbacks || authored.hasSemanticCamera) {
+        if (authored.hasRetained || authored.hasCallbacks || authored.hasSemanticCamera) {
           page = await createHostCapturePage(browser);
           output.set(
             fixture.id,
