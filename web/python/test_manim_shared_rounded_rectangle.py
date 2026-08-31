@@ -28,22 +28,49 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
             class FakeHandle:
                 def __init__(self, snapshot):
                     self.snapshot = snapshot
+                    # Mirror the real FrontendMobjectHandle wire projection so
+                    # semantic style mutation stays on the same no-JSON fast path.
+                    self.wireTranslationX = 0.0
+                    self.wireTranslationY = 0.0
+                    self.wireScaleX = 1.0
+                    self.wireScaleY = 1.0
+                    self.wireRotation = 0.0
+                    self.wireHasFill = True
+                    self.wireFillRed = 1.0
+                    self.wireFillGreen = 1.0
+                    self.wireFillBlue = 1.0
+                    self.wireFillAlpha = 0.0
+                    self.wireHasStroke = True
+                    self.wireStrokeRed = 1.0
+                    self.wireStrokeGreen = 1.0
+                    self.wireStrokeBlue = 1.0
+                    self.wireStrokeAlpha = 1.0
+                    self.wireStrokeWidth = 0.04
+                    self.wireObjectOpacity = 1.0
                 def snapshotJson(self):
                     return json.dumps(self.snapshot)
                 def setStrokeWidth(self, value):
                     self.snapshot["style"]["stroke_width"] = float(value)
+                    self.wireStrokeWidth = float(value)
                 def setFillOpacity(self, value):
                     self.snapshot["style"]["fill"]["alpha"] = float(value)
+                    self.wireFillAlpha = float(value)
                 def setFillColor(self, r, g, b, a):
                     alpha = self.snapshot["style"]["fill"]["alpha"]
                     self.snapshot["style"]["fill"] = {
                         "red": float(r), "green": float(g), "blue": float(b), "alpha": alpha
                     }
+                    self.wireFillRed = float(r)
+                    self.wireFillGreen = float(g)
+                    self.wireFillBlue = float(b)
                 def setStrokeColor(self, r, g, b, a):
                     alpha = self.snapshot["style"]["stroke"]["alpha"]
                     self.snapshot["style"]["stroke"] = {
                         "red": float(r), "green": float(g), "blue": float(b), "alpha": alpha
                     }
+                    self.wireStrokeRed = float(r)
+                    self.wireStrokeGreen = float(g)
+                    self.wireStrokeBlue = float(b)
 
             def style():
                 return {
