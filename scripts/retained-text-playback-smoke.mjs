@@ -141,6 +141,8 @@ try {
     const { AuthoringExecutionClient, AUTHORING_EXECUTION_RETAINED } = await import(
       "./authoring-execution-client.js"
     );
+    const wasm = await import("./pkg/noon_web.js");
+    await wasm.default();
     const authoring = new PythonAuthoringClient();
     const execution = new AuthoringExecutionClient(document.querySelector("#scene"));
     const authored = await authoring.run(source, {});
@@ -153,9 +155,22 @@ try {
     if (scales.length !== 1) {
       throw new Error(`ShrinkToCenter must author one scale track, got ${scales.length}`);
     }
+    const sceneJson = JSON.stringify(authored.document);
+    const retainedDocumentJson = JSON.stringify(authored.retainedDocument);
+    const semanticCenter = (time) => {
+      const snapshot = JSON.parse(
+        wasm.retainedSemanticFrameJson(sceneJson, retainedDocumentJson, time),
+      );
+      if (snapshot.objects.length !== 1 || snapshot.objects[0].content !== "text") {
+        throw new Error("ShrinkToCenter semantic snapshot must contain one retained Text object");
+      }
+      return snapshot.objects[0].center;
+    };
+    const earlySemanticCenter = semanticCenter(0.25);
+    const lateSemanticCenter = semanticCenter(0.65);
     const ready = await execution.startRetained(
-      JSON.stringify(authored.document),
-      JSON.stringify(authored.retainedDocument),
+      sceneJson,
+      retainedDocumentJson,
       { loopDurationSeconds: authored.duration, transportMode: "transferable" },
     );
     await execution.pause();
@@ -170,6 +185,8 @@ try {
       expectedMode: AUTHORING_EXECUTION_RETAINED,
       ready,
       presentedFrames: metrics.metrics.presentedFrames,
+      earlySemanticCenter,
+      lateSemanticCenter,
     };
 
     function assertFiniteDuration(duration) {
@@ -186,6 +203,12 @@ try {
     from: { x: 1, y: 1 },
     to: { x: 0, y: 0 },
   });
+  assert.ok(
+    Math.abs(started.lateSemanticCenter[0] - started.earlySemanticCenter[0]) <= 1e-6 &&
+      Math.abs(started.lateSemanticCenter[1] - started.earlySemanticCenter[1]) <= 1e-6,
+    `ShrinkToCenter must preserve retained semantic center: early=${started.earlySemanticCenter} ` +
+      `late=${started.lateSemanticCenter}`,
+  );
 
   const early = await seekAndWait(page, 0.25, started.presentedFrames);
   assert.equal(early.seek.time, 0.25);
@@ -213,12 +236,6 @@ try {
     lateBounds.foregroundPixels < earlyBounds.foregroundPixels * 0.65,
     `ShrinkToCenter must reduce foreground mass: early=${earlyBounds.foregroundPixels} late=${lateBounds.foregroundPixels}`,
   );
-  assert.ok(
-    Math.abs(lateBounds.centerX - earlyBounds.centerX) <= 3 &&
-      Math.abs(lateBounds.centerY - earlyBounds.centerY) <= 3,
-    `ShrinkToCenter must preserve visual center: early=(${earlyBounds.centerX},${earlyBounds.centerY}) ` +
-      `late=(${lateBounds.centerX},${lateBounds.centerY})`,
-  );
   assert.deepEqual(errors, [], `browser errors during retained ShrinkToCenter playback:\n${errors.join("\n")}`);
 
   await page.evaluate(() => {
@@ -230,7 +247,7 @@ try {
 
   console.log(
     `Retained ShrinkToCenter playback passed: ${earlyBounds.width}x${earlyBounds.height} at 0.25s -> ` +
-      `${lateBounds.width}x${lateBounds.height} at 0.65s, centered and rendered through retained execution.`,
+      `${lateBounds.width}x${lateBounds.height} at 0.65s; semantic center is stable and visual parity is owned by the pinned Manim Cairo gate.`,
   );
 } finally {
   await browser?.close();
