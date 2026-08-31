@@ -28,7 +28,8 @@ pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
 pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 96.0;
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
-pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans Mono";
+/// Deterministic proportional sans-serif equivalent of Manim/Pango's empty-font default.
+pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans";
 
 /// Stable handle to one semantic object in a [`RetainedScene`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -364,6 +365,15 @@ impl Text {
 }
 
 fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
+    if family.eq_ignore_ascii_case(DEFAULT_NATIVE_TEXT_FONT_FAMILY) {
+        return NativeFontFace::new(
+            Arc::<str>::from(DEFAULT_NATIVE_TEXT_FONT_FAMILY),
+            Arc::<[u8]>::from(dejavu::sans::regular()),
+            0,
+        )
+        .map_err(TextAuthoringError::NativeText);
+    }
+
     for data in typst_assets::fonts() {
         let Some(font) = FontRef::from_index(data, 0) else {
             continue;
@@ -702,6 +712,35 @@ mod tests {
         assert_eq!(resource.source.as_ref(), "Native Noon");
         assert!(!scene.fonts().is_empty());
         assert!(scene.objects()[0].content.geometry().is_none());
+    }
+
+    #[test]
+    fn native_text_default_uses_proportional_manim_sans_face() {
+        let text = Text::new("Hello World!");
+        assert_eq!(text.font_family(), DEFAULT_NATIVE_TEXT_FONT_FAMILY);
+
+        let mut scene = RetainedScene::new();
+        scene.add_text(text).unwrap();
+        let handle = scene.objects()[0].content.text().unwrap();
+        let resource = scene.texts().get(handle).unwrap();
+        assert!(!resource.runs.is_empty());
+        assert!(resource.runs.iter().all(|run| {
+            run.font.family.as_ref() == DEFAULT_NATIVE_TEXT_FONT_FAMILY
+        }));
+    }
+
+    #[test]
+    fn explicit_native_monospace_font_remains_available() {
+        let mut scene = RetainedScene::new();
+        scene
+            .add_text(Text::new("mono").with_font("DejaVu Sans Mono"))
+            .unwrap();
+        let handle = scene.objects()[0].content.text().unwrap();
+        let resource = scene.texts().get(handle).unwrap();
+        assert!(resource
+            .runs
+            .iter()
+            .all(|run| run.font.family.as_ref() == "DejaVu Sans Mono"));
     }
 
     #[test]
