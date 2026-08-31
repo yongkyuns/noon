@@ -296,6 +296,13 @@
       "expected_duration": 1.0
     },
     {
+      "id": "shrink-to-center-text",
+      "scene": "ShrinkToCenterExample",
+      "source": "parity/manim-v0.21/upstream-examples/shrink_to_center_example.py",
+      "expected_duration": 1.0,
+      "fidelity_note": "Exact pinned upstream Manim Text example; Noon adapts only the import and executes the retained native-Text path."
+    },
+    {
       "id": "moving-around",
       "scene": "MovingAround",
       "expected_duration": 4.0
