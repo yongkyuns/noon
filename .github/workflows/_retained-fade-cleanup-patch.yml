@@ -21,7 +21,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply exact retained FadeOut cleanup patch
-        run: python3 scripts/_retained_fade_cleanup_patch.py
+        run: |
+          python3 scripts/_retained_fade_cleanup_patch.py
+          rm .github/workflows/_retained-fade-cleanup-patch.yml
+          rm scripts/_retained_fade_cleanup_patch.py
 
       - name: Use stable Rust
         run: |
