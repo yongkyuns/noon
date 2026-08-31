@@ -1,0 +1,69 @@
+name: Validate retained family fades
+
+on:
+  push:
+    branches:
+      - validate/retained-family-fades
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply candidate patch
+        run: |
+          git apply --check scripts/retained-family-fades.patch
+          git apply scripts/retained-family-fades.patch
+          rm scripts/retained-family-fades.patch
+          rm .github/workflows/validate-retained-family-fades.yml
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build and validate web package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Run existing retained animation smoke
+        run: node scripts/retained-text-animation-smoke.mjs
+
+      - name: Run retained family fade smoke
+        run: node scripts/retained-text-family-fade-smoke.mjs
+
+      - name: Run retained Scene lifecycle smoke
+        run: node scripts/retained-text-scene-lifecycle-smoke.mjs
+
+      - name: Export validated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: retained-family-fade-files
+          if-no-files-found: error
+          path: |
+            crates/noon-web/src/authoring_mobject.rs
+            web/python-worker.source.js
+            web/python/_manim_typst.py
+            web/python/_manim_semantic_handles.py
+            web/python/_manim_retained_animate.py
+            scripts/retained-text-family-fade-smoke.mjs
+            .github/workflows/retained-text-animation.yml
