@@ -1,12 +1,10 @@
-use std::collections::BTreeMap;
-
 use crate::{TextRenderItem, TextResource, TextSourceKind, TextSourceSpan};
 
 /// Stable reference to one shaped glyph inside an immutable [`TextResource`].
 ///
 /// This is internal retained-content identity, not a semantic scene object. A public
-/// `Text` remains one object while animation/render code can address the glyphs that
-/// form one rendered source cluster.
+/// `Text` remains one object while animation/render code can address the rendered
+/// glyph members that Manim exposes through its SVG submobject family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextAnimationGlyphRef {
     pub run_index: u32,
@@ -15,12 +13,14 @@ pub struct TextAnimationGlyphRef {
 
 /// One rendered plain-text animation member in shaped painter order.
 ///
-/// Multiple glyphs may belong to the same source cluster. Whitespace-only source
-/// clusters are excluded even when the shaper emits an advance glyph for them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// ManimCE v0.21 Cairo animates `Text` through `family_members_with_points()`. Default
+/// `Text` builds that family from rendered SVG glyph submobjects; whitespace/newlines
+/// are stripped, ligatures naturally collapse to one rendered glyph, and a shaped
+/// source cluster that emits multiple visible glyphs remains multiple family members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextAnimationMember {
     pub source_span: TextSourceSpan,
-    pub glyphs: Vec<TextAnimationGlyphRef>,
+    pub glyph: TextAnimationGlyphRef,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,17 +63,17 @@ impl std::fmt::Display for TextAnimationMemberError {
 
 impl std::error::Error for TextAnimationMemberError {}
 
-/// Derive Manim-like rendered-character family identity from normalized native text.
+/// Derive the rendered-glyph family that ManimCE v0.21 animates for default `Text`.
 ///
-/// Members are ordered by first appearance in the resource painter stream. Glyphs
-/// sharing the same UTF-8 source cluster span stay together even when the shaper emits
-/// multiple glyphs for that cluster. Whitespace-only source clusters are excluded
-/// explicitly because shaping backends may retain an advance glyph for them. This
-/// intentionally accepts only `Plain` resources; Typst/Tex family semantics must be
-/// defined by their own source model rather than inheriting plain-text assumptions.
+/// Members follow first painter-stream appearance. Each non-whitespace shaped glyph is
+/// one member, including multiple glyphs that share one source cluster span. A ligature
+/// produced as one shaped glyph therefore remains one member. Whitespace-only source
+/// spans are excluded explicitly because shaping backends may retain advance glyphs for
+/// them even though Manim strips whitespace from the SVG submobject family.
 ///
-/// The result is derived data. It must not be serialized into scene or authoring wire
-/// formats and must not create externally visible semantic object identities.
+/// This intentionally accepts only `Plain` resources; Typst/Tex family semantics must
+/// be defined by their own source model. The result is derived data and must not create
+/// externally visible semantic object identities or authoring-wire glyph IDs.
 pub fn plain_text_animation_members(
     resource: &TextResource,
 ) -> Result<Vec<TextAnimationMember>, TextAnimationMemberError> {
@@ -87,8 +87,6 @@ pub fn plain_text_animation_members(
     }
 
     let mut members = Vec::<TextAnimationMember>::new();
-    let mut by_span = BTreeMap::<TextSourceSpan, usize>::new();
-
     for item in resource.render_items.iter() {
         let TextRenderItem::GlyphRun(run_index) = *item else {
             return Err(TextAnimationMemberError::VectorContent);
@@ -104,20 +102,13 @@ pub fn plain_text_animation_members(
             }
             let glyph_index =
                 u32::try_from(glyph_index).map_err(|_| TextAnimationMemberError::TooManyGlyphs)?;
-            let glyph_ref = TextAnimationGlyphRef {
-                run_index,
-                glyph_index,
-            };
-            if let Some(&member_index) = by_span.get(&span) {
-                members[member_index].glyphs.push(glyph_ref);
-            } else {
-                let member_index = members.len();
-                by_span.insert(span, member_index);
-                members.push(TextAnimationMember {
-                    source_span: span,
-                    glyphs: vec![glyph_ref],
-                });
-            }
+            members.push(TextAnimationMember {
+                source_span: span,
+                glyph: TextAnimationGlyphRef {
+                    run_index,
+                    glyph_index,
+                },
+            });
         }
     }
 
@@ -220,35 +211,38 @@ mod tests {
         let members = plain_text_animation_members(&text).unwrap();
         assert_eq!(members.len(), 2);
         assert_eq!(members[0].source_span, TextSourceSpan::new(0, 1));
+        assert_eq!(members[0].glyph.glyph_index, 0);
         assert_eq!(members[1].source_span, TextSourceSpan::new(2, 3));
+        assert_eq!(members[1].glyph.glyph_index, 2);
     }
 
     #[test]
-    fn multiple_glyphs_in_one_source_cluster_remain_one_animation_member() {
+    fn multiple_glyphs_in_one_source_cluster_remain_distinct_animation_members() {
+        let span = TextSourceSpan::new(0, 2);
         let text = resource(
             "fi",
-            vec![run(vec![
-                glyph(TextSourceSpan::new(0, 2), 0, 0.0),
-                glyph(TextSourceSpan::new(0, 2), 1, 0.5),
-            ])],
+            vec![run(vec![glyph(span, 0, 0.0), glyph(span, 0, 0.5)])],
+            vec![TextRenderItem::GlyphRun(0)],
+        );
+        let members = plain_text_animation_members(&text).unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].source_span, span);
+        assert_eq!(members[1].source_span, span);
+        assert_eq!(members[0].glyph.glyph_index, 0);
+        assert_eq!(members[1].glyph.glyph_index, 1);
+    }
+
+    #[test]
+    fn one_ligature_glyph_spanning_multiple_source_characters_is_one_member() {
+        let span = TextSourceSpan::new(0, 2);
+        let text = resource(
+            "fi",
+            vec![run(vec![glyph(span, 0, 0.0)])],
             vec![TextRenderItem::GlyphRun(0)],
         );
         let members = plain_text_animation_members(&text).unwrap();
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].source_span, TextSourceSpan::new(0, 2));
-        assert_eq!(
-            members[0].glyphs,
-            vec![
-                TextAnimationGlyphRef {
-                    run_index: 0,
-                    glyph_index: 0,
-                },
-                TextAnimationGlyphRef {
-                    run_index: 0,
-                    glyph_index: 1,
-                },
-            ]
-        );
+        assert_eq!(members[0].source_span, span);
     }
 
     #[test]
@@ -272,19 +266,20 @@ mod tests {
     }
 
     #[test]
-    fn repeated_source_span_is_aggregated_without_duplicate_family_identity() {
+    fn repeated_source_span_across_runs_remains_distinct_rendered_members() {
         let span = TextSourceSpan::new(0, 2);
         let text = resource(
             "fi",
             vec![
                 run(vec![glyph(span, 0, 0.0)]),
-                run(vec![glyph(span, 1, 1.0)]),
+                run(vec![glyph(span, 0, 1.0)]),
             ],
             vec![TextRenderItem::GlyphRun(0), TextRenderItem::GlyphRun(1)],
         );
         let members = plain_text_animation_members(&text).unwrap();
-        assert_eq!(members.len(), 1);
-        assert_eq!(members[0].glyphs.len(), 2);
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].glyph.run_index, 0);
+        assert_eq!(members[1].glyph.run_index, 1);
     }
 
     #[test]
