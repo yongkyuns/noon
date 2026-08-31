@@ -10,19 +10,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTextFamilyTransportState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub animation: Option<TextFamilyAnimationState>,
+    pub text_family_animation: Option<TextFamilyAnimationState>,
 }
 
 impl RetainedTextFamilyTransportState {
     pub const fn empty() -> Self {
-        Self { animation: None }
+        Self {
+            text_family_animation: None,
+        }
     }
 
     pub fn new(
         content: &ObjectContentRef,
-        animation: Option<TextFamilyAnimationState>,
+        text_family_animation: Option<TextFamilyAnimationState>,
     ) -> Result<Self, RetainedTextFamilyTransportError> {
-        let state = Self { animation };
+        let state = Self {
+            text_family_animation,
+        };
         state.validate(content)?;
         Ok(state)
     }
@@ -32,7 +36,7 @@ impl RetainedTextFamilyTransportState {
         self,
         content: &ObjectContentRef,
     ) -> Result<(), RetainedTextFamilyTransportError> {
-        let Some(animation) = self.animation else {
+        let Some(animation) = self.text_family_animation else {
             return Ok(());
         };
         if !matches!(content, ObjectContentRef::Text(_)) {
@@ -103,9 +107,10 @@ mod tests {
     fn text_state_round_trips_without_glyph_identity() {
         let content = text_content();
         let transport = RetainedTextFamilyTransportState::new(&content, Some(state())).unwrap();
-        assert_eq!(transport.animation, Some(state()));
+        assert_eq!(transport.text_family_animation, Some(state()));
 
         let json = serde_json::to_string(&transport).unwrap();
+        assert!(json.contains("text_family_animation"));
         assert!(!json.contains("glyph"));
         let decoded: RetainedTextFamilyTransportState = serde_json::from_str(&json).unwrap();
         decoded.validate(&content).unwrap();
