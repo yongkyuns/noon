@@ -205,7 +205,10 @@ def _retained_animation_source(
 ) -> _typst._RetainedTextMobject | None:
     if isinstance(animation, _animate._AlignedAnimationBuilder):
         source = getattr(animation, "source", None)
-    elif isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
+    elif isinstance(
+        animation,
+        (_animate.Create, _animate.Uncreate, _animate.FadeIn, _animate.FadeOut),
+    ):
         source = getattr(animation, "target", None)
     else:
         return None
@@ -218,6 +221,18 @@ def _retained_animation_plan(animation: object) -> list[dict[str, Any]] | None:
     source = _retained_animation_source(animation)
     if source is None:
         return None
+
+    if isinstance(animation, _animate.Uncreate):
+        return [
+            {
+                "kind": "uncreate",
+                "reverse_rate_function": bool(animation.reverse_rate_function),
+                "remover": bool(animation.remover),
+            }
+        ]
+
+    if isinstance(animation, _animate.Create):
+        return [{"kind": "create"}]
 
     if isinstance(animation, (_animate.FadeIn, _animate.FadeOut)):
         shift = _compat._as_vec2(animation._fade_shift_vector)
@@ -272,6 +287,7 @@ def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, A
         "opacity": _unit_scalar(spec.get("opacity"), "opacity"),
         "position": _vec2(transform.get("translation"), "translation"),
         "presence": True,
+        "reveal": 1.0,
         "rotation": _finite_scalar(transform.get("rotation"), "rotation"),
         "scale": _vec2(transform.get("scale"), "scale"),
         "runtime_position": _vec2(transform.get("translation"), "translation"),
@@ -279,15 +295,23 @@ def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, A
     }
 
 
-def _retained_presence_tracks(
+def _retained_property_tracks(
     scene: _compat.Scene,
     object_id: int,
+    property_name: str,
 ) -> list[dict[str, Any]]:
     return [
         track
         for track in getattr(scene, "_retained_animation_tracks", [])
-        if int(track["object"]) == object_id and track["property"] == "presence"
+        if int(track["object"]) == object_id and track["property"] == property_name
     ]
+
+
+def _retained_presence_tracks(
+    scene: _compat.Scene,
+    object_id: int,
+) -> list[dict[str, Any]]:
+    return _retained_property_tracks(scene, object_id, "presence")
 
 
 def _resolve_retained_lifecycle(
@@ -598,6 +622,115 @@ def _scale_vec2(value: dict[str, float], factor: float) -> dict[str, float]:
     }
 
 
+def _ensure_reveal_interval_available(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    start_time: float,
+    duration: float,
+) -> None:
+    end_time = start_time + duration
+    for track in _retained_property_tracks(scene, object_id, "reveal"):
+        track_start = float(track["timing"]["start_time"])
+        track_end = track_start + float(track["timing"]["duration"])
+        if track_start < end_time and start_time < track_end:
+            raise ValueError("Create/Uncreate reveal animations for one retained object must not overlap")
+
+
+def _schedule_retained_creation(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    state: dict[str, Any],
+    operation: dict[str, Any],
+    lifecycle: _lifecycle.LifecyclePlan,
+    start_time: float,
+    duration: float,
+    easing: str,
+) -> None:
+    """Lower Create/Uncreate to the shared retained reveal and presence channels."""
+
+    _ensure_reveal_interval_available(
+        scene,
+        object_id=object_id,
+        start_time=start_time,
+        duration=duration,
+    )
+    kind = operation["kind"]
+    end_time = start_time + duration
+
+    if kind == "create":
+        if lifecycle.show_at_start:
+            state["presence"] = False
+            _append_presence_track(
+                scene,
+                object_id=object_id,
+                current=False,
+                target=True,
+                start_time=start_time,
+            )
+        _append_scalar_track(
+            scene,
+            object_id=object_id,
+            property_name="reveal",
+            current=0.0,
+            target=1.0,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        state["presence"] = True
+        state["reveal"] = 1.0
+        return
+
+    if kind != "uncreate":
+        raise ValueError(f"unknown retained creation operation {kind!r}")
+
+    track_easing, reverse_track = _animate._uncreate_track_settings(
+        easing,
+        bool(operation["reverse_rate_function"]),
+    )
+    from_reveal = 1.0 if reverse_track else 0.0
+    to_reveal = 0.0 if reverse_track else 1.0
+    _append_scalar_track(
+        scene,
+        object_id=object_id,
+        property_name="reveal",
+        current=from_reveal,
+        target=to_reveal,
+        start_time=start_time,
+        duration=duration,
+        easing=track_easing,
+    )
+    state["reveal"] = to_reveal
+
+    if bool(operation["remover"]) and lifecycle.hide_at_end:
+        _append_presence_track(
+            scene,
+            object_id=object_id,
+            current=True,
+            target=False,
+            start_time=end_time,
+        )
+        state["presence"] = False
+
+        # Manim removes the animated mobject but leaves its canonical geometry
+        # reusable. Restore reveal while absent so a later Scene.add or Create uses
+        # the original retained Text instead of inheriting Uncreate's partial frame.
+        if not math.isclose(to_reveal, 1.0, abs_tol=1e-15):
+            _append_scalar_track(
+                scene,
+                object_id=object_id,
+                property_name="reveal",
+                current=to_reveal,
+                target=1.0,
+                start_time=end_time,
+                duration=0.0,
+                easing="linear",
+            )
+            state["reveal"] = 1.0
+
+
 def _schedule_retained_fade(
     scene: _compat.Scene,
     *,
@@ -799,13 +932,21 @@ def _schedule_retained_plan(
     if source is None:
         raise TypeError("retained animation lost its retained Text source")
 
-    fade_kind = (
-        operations[0]["kind"]
-        if len(operations) == 1 and operations[0]["kind"] in {"fade_in", "fade_out"}
-        else None
-    )
+    operation_kind = operations[0]["kind"] if len(operations) == 1 else None
+    fade_kind = operation_kind if operation_kind in {"fade_in", "fade_out"} else None
+    creation_kind = operation_kind if operation_kind in {"create", "uncreate"} else None
 
-    if fade_kind == "fade_in":
+    if creation_kind == "create":
+        lifecycle = _resolve_retained_lifecycle(
+            scene, source, "introduce", start_time, "Create target"
+        )
+        _bind_retained(scene, source)
+    elif creation_kind == "uncreate":
+        add_plan = _resolve_retained_lifecycle(
+            scene, source, "add", start_time, "animated Uncreate target"
+        )
+        _bind_retained(scene, source)
+    elif fade_kind == "fade_in":
         lifecycle = _resolve_retained_lifecycle(
             scene, source, "introduce", start_time, "fade target"
         )
@@ -826,6 +967,50 @@ def _schedule_retained_plan(
     state = scene._retained_animation_state.setdefault(
         object_id, _initial_animation_state(source)
     )
+
+    if creation_kind == "uncreate":
+        if add_plan.show_now:
+            state["presence"] = False
+            _append_presence_track(
+                scene,
+                object_id=object_id,
+                current=False,
+                target=True,
+                start_time=start_time,
+            )
+            state["presence"] = True
+            state["reveal"] = 1.0
+        lifecycle = (
+            _resolve_retained_lifecycle(
+                scene, source, "remove_after_animation", start_time, "Uncreate target"
+            )
+            if bool(operations[0]["remover"])
+            else add_plan
+        )
+        _schedule_retained_creation(
+            scene,
+            object_id=object_id,
+            state=state,
+            operation=operations[0],
+            lifecycle=lifecycle,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        return
+
+    if creation_kind == "create":
+        _schedule_retained_creation(
+            scene,
+            object_id=object_id,
+            state=state,
+            operation=operations[0],
+            lifecycle=lifecycle,
+            start_time=start_time,
+            duration=duration,
+            easing=easing,
+        )
+        return
 
     if fade_kind == "fade_out":
         if add_plan.show_now:
