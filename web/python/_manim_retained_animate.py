@@ -19,6 +19,8 @@ import _manim_typst as _typst
 
 
 _INSTALLED = False
+_ORIGINAL_SCENE_ADD = _compat.Scene.add
+_ORIGINAL_SCENE_REMOVE = _compat.Scene.remove
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 _ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
@@ -422,6 +424,189 @@ def _append_presence_track(
     )
 
 
+def _restore_reintroduced_runtime_state(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    state: dict[str, Any],
+    start_time: float,
+    duration: float,
+    touched: tuple[str, ...] | list[str] = (),
+) -> None:
+    """Restore transient fade endpoints while a reintroduction animation runs."""
+
+    current_position = copy.deepcopy(state["position"])
+    current_scale = copy.deepcopy(state["scale"])
+    if not math.isclose(float(state["appearance"]), 1.0, abs_tol=1e-15):
+        _append_scalar_track(
+            scene,
+            object_id=object_id,
+            property_name="appearance",
+            current=1.0,
+            target=1.0,
+            start_time=start_time,
+            duration=duration,
+            easing="linear",
+        )
+    if state["runtime_position"] != current_position and "position" not in touched:
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="position",
+            current=current_position,
+            target=current_position,
+            start_time=start_time,
+            duration=duration,
+            easing="linear",
+        )
+    if state["runtime_scale"] != current_scale and "scale" not in touched:
+        _append_vec2_track(
+            scene,
+            object_id=object_id,
+            property_name="scale",
+            current=current_scale,
+            target=current_scale,
+            start_time=start_time,
+            duration=duration,
+            easing="linear",
+        )
+    state["appearance"] = 1.0
+    state["runtime_position"] = copy.deepcopy(current_position)
+    state["runtime_scale"] = copy.deepcopy(current_scale)
+
+
+def _unique_retained_mobjects(
+    mobjects: tuple[object, ...],
+) -> list[_typst._RetainedTextMobject]:
+    retained: list[_typst._RetainedTextMobject] = []
+    identities: set[int] = set()
+    for value in mobjects:
+        if not isinstance(value, _typst._RetainedTextMobject) or id(value) in identities:
+            continue
+        identities.add(id(value))
+        retained.append(value)
+    return retained
+
+
+def _assert_direct_readd_runtime_is_canonical(
+    scene: _compat.Scene,
+    source: _typst._RetainedTextMobject,
+    plan: _lifecycle.LifecyclePlan,
+) -> None:
+    if not plan.show_now or source._scene is not scene or source._retained_object_id is None:
+        return
+    state = scene._retained_animation_state.get(int(source.id))
+    if state is None:
+        return
+    canonical_position = state["position"]
+    canonical_scale = state["scale"]
+    if (
+        not math.isclose(float(state["appearance"]), 1.0, abs_tol=1e-15)
+        or state["runtime_position"] != canonical_position
+        or state["runtime_scale"] != canonical_scale
+    ):
+        raise NotImplementedError(
+            "retained Text Scene.add cannot yet restore a transient FadeOut endpoint; "
+            "reintroduce it with FadeIn or .animate until instant retained state resets "
+            "are represented by the shared core timeline"
+        )
+
+
+def _retained_scene_add(
+    self: _compat.Scene,
+    *mobjects: object,
+    key: str | None = None,
+):
+    retained = _unique_retained_mobjects(mobjects)
+    if not retained:
+        return _ORIGINAL_SCENE_ADD(self, *mobjects, key=key)
+
+    plans = [
+        (
+            value,
+            _resolve_retained_lifecycle(
+                self,
+                value,
+                "add",
+                self._cursor,
+                "Scene.add target",
+            ),
+        )
+        for value in retained
+    ]
+    for value, plan in plans:
+        _assert_direct_readd_runtime_is_canonical(self, value, plan)
+
+    result = _ORIGINAL_SCENE_ADD(self, *mobjects, key=key)
+    _ensure_animation_state(self)
+    for value, plan in plans:
+        object_id = int(value.id)
+        state = self._retained_animation_state.setdefault(
+            object_id, _initial_animation_state(value)
+        )
+        if plan.show_now:
+            state["presence"] = False
+            _append_presence_track(
+                self,
+                object_id=object_id,
+                current=False,
+                target=True,
+                start_time=self._cursor,
+            )
+            state["presence"] = True
+        else:
+            state["presence"] = True
+    return result
+
+
+def _retained_scene_remove(self: _compat.Scene, *mobjects: object) -> _compat.Scene:
+    retained = _unique_retained_mobjects(mobjects)
+    if not retained:
+        return _ORIGINAL_SCENE_REMOVE(self, *mobjects)
+
+    plans = [
+        (
+            value,
+            _resolve_retained_lifecycle(
+                self,
+                value,
+                "remove",
+                self._cursor,
+                "Scene.remove target",
+            ),
+        )
+        for value in retained
+    ]
+    _ensure_animation_state(self)
+    for value, plan in plans:
+        if value._scene is not self or value._retained_object_id is None:
+            continue
+        object_id = int(value.id)
+        state = self._retained_animation_state.setdefault(
+            object_id, _initial_animation_state(value)
+        )
+        if plan.hide_now:
+            _append_presence_track(
+                self,
+                object_id=object_id,
+                current=True,
+                target=False,
+                start_time=self._cursor,
+            )
+            state["presence"] = False
+
+    legacy = tuple(
+        value for value in mobjects if not isinstance(value, _typst._RetainedTextMobject)
+    )
+    if legacy:
+        _ORIGINAL_SCENE_REMOVE(self, *legacy)
+    retained_identities = {id(value) for value in retained}
+    self._compat_top_level = [
+        value for value in self._compat_top_level if id(value) not in retained_identities
+    ]
+    return self
+
+
 def _offset_vec2(
     value: dict[str, float],
     delta: dict[str, float],
@@ -738,42 +923,14 @@ def _schedule_retained_plan(
         raise ValueError(f"unknown retained animation operation {kind!r}")
 
     if reintroducing:
-        if not math.isclose(float(state["appearance"]), 1.0, abs_tol=1e-15):
-            _append_scalar_track(
-                scene,
-                object_id=object_id,
-                property_name="appearance",
-                current=1.0,
-                target=1.0,
-                start_time=start_time,
-                duration=duration,
-                easing="linear",
-            )
-        if state["runtime_position"] != current_position and "position" not in touched:
-            _append_vec2_track(
-                scene,
-                object_id=object_id,
-                property_name="position",
-                current=current_position,
-                target=current_position,
-                start_time=start_time,
-                duration=duration,
-                easing="linear",
-            )
-        if state["runtime_scale"] != current_scale and "scale" not in touched:
-            _append_vec2_track(
-                scene,
-                object_id=object_id,
-                property_name="scale",
-                current=current_scale,
-                target=current_scale,
-                start_time=start_time,
-                duration=duration,
-                easing="linear",
-            )
-        state["appearance"] = 1.0
-        state["runtime_position"] = copy.deepcopy(current_position)
-        state["runtime_scale"] = copy.deepcopy(current_scale)
+        _restore_reintroduced_runtime_state(
+            scene,
+            object_id=object_id,
+            state=state,
+            start_time=start_time,
+            duration=duration,
+            touched=touched,
+        )
 
     for property_name in touched:
         if property_name == "scale":
@@ -965,6 +1122,8 @@ def install() -> None:
     _INSTALLED = True
     _typst._RetainedTextMobject._copy_for_animate_target = _retained_copy_for_animate_target
     _animate._AlignedAnimationBuilder.__getattr__ = _retained_builder_getattr
+    _compat.Scene.add = _retained_scene_add
+    _compat.Scene.remove = _retained_scene_remove
     _compat.Scene._is_present = _retained_scene_is_present
     _compat.Scene.play = _retained_scene_play
     _compat.Scene.retained_document = _retained_document
