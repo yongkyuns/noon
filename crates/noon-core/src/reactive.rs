@@ -44,6 +44,10 @@ pub use font_resources::*;
 mod text_resources;
 pub use text_resources::*;
 
+#[path = "text_animation_members.rs"]
+mod text_animation_members;
+pub use text_animation_members::*;
+
 #[path = "resource_mutation.rs"]
 mod resource_mutation;
 pub use resource_mutation::*;
