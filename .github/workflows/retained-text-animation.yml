@@ -15,6 +15,7 @@ on:
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   push:
     branches:
@@ -32,6 +33,7 @@ on:
       - "web/python/_manim_typst.py"
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   workflow_dispatch:
 
@@ -98,3 +100,6 @@ jobs:
 
       - name: Test retained Text animation authoring
         run: node scripts/retained-text-animation-smoke.mjs
+
+      - name: Test retained Text Scene lifecycle
+        run: node scripts/retained-text-scene-lifecycle-smoke.mjs
