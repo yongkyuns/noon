@@ -8,6 +8,7 @@ on:
       - "crates/noon-web/src/retained_authoring_scene.rs"
       - "crates/noon-web/src/retained_authoring_tracks.rs"
       - "crates/noon-web/src/retained_authoring_wire_scene.rs"
+      - "web/authoring-render-worker.js"
       - "web/python-worker.source.js"
       - "web/python-compat-modules.js"
       - "web/python/_manim_animate.py"
@@ -18,6 +19,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
+      - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   push:
@@ -29,6 +31,7 @@ on:
       - "crates/noon-web/src/retained_authoring_scene.rs"
       - "crates/noon-web/src/retained_authoring_tracks.rs"
       - "crates/noon-web/src/retained_authoring_wire_scene.rs"
+      - "web/authoring-render-worker.js"
       - "web/python-worker.source.js"
       - "web/python-compat-modules.js"
       - "web/python/_manim_animate.py"
@@ -39,6 +42,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
       - "scripts/retained-text-family-identity-smoke.mjs"
+      - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
   workflow_dispatch:
@@ -109,6 +113,9 @@ jobs:
 
       - name: Test retained Text family identity
         run: node scripts/retained-text-family-identity-smoke.mjs
+
+      - name: Test retained Text animation playback
+        run: node scripts/retained-text-playback-smoke.mjs
 
       - name: Test retained Text Scene lifecycle
         run: node scripts/retained-text-scene-lifecycle-smoke.mjs
