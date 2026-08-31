@@ -35,26 +35,27 @@ async function waitForServer() {
   throw new Error(`retained text animation smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
-const retainedAnimateScaleSource = `
+const retainedAnimateSource = `
 from noon import *
 
-class RetainedAnimateScale(Scene):
+class RetainedAnimate(Scene):
     def construct(self):
         label = Text("Animate", font_size=48)
 
         self.play(
-            label.animate(run_time=2.0, rate_func=linear).scale(2.0)
+            label.animate(run_time=2.0, rate_func=linear).scale(2.0).shift(RIGHT)
         )
-        self.play(label.animate.scale(0.5), run_time=1.0)
+        self.play(label.animate.scale(0.5).shift(UP), run_time=1.0)
+        self.play(label.animate.move_to(2 * LEFT), run_time=1.0)
 
         assert label in self.mobjects
 
         unsupported = Text("Unsupported", font_size=36)
         try:
-            self.play(unsupported.animate.shift(RIGHT), run_time=0.25)
-            raise AssertionError("unsupported retained animate.shift must fail")
+            self.play(unsupported.animate.rotate(0.25), run_time=0.25)
+            raise AssertionError("unsupported retained animate.rotate must fail")
         except NotImplementedError as error:
-            assert "uniform scale only" in str(error)
+            assert "animate.rotate" in str(error)
         assert unsupported not in self.mobjects
 `;
 
@@ -79,39 +80,69 @@ try {
 
   const result = await page.evaluate(
     (source) => window.noonManimCompat.run(source),
-    retainedAnimateScaleSource,
+    retainedAnimateSource,
   );
 
   assert.equal(result.kind, "scene_document");
   assert.equal(
     result.document.objects.length,
     0,
-    "retained Text.animate.scale must not create legacy placeholder geometry",
+    "retained Text.animate must not create legacy placeholder geometry",
   );
   assert.ok(result.retainedDocument, "retained animation must emit a retained authoring document");
   assert.equal(result.retainedDocument.objects.length, 1);
   assert.equal(result.retainedDocument.objects[0].text.source, "Animate");
 
   const tracks = result.retainedDocument.tracks ?? [];
-  assert.equal(tracks.length, 2, "two sequential animate.scale calls must emit two retained tracks");
-  assert.ok(tracks.every((track) => track.property === "scale"));
+  const scaleTracks = tracks.filter((track) => track.property === "scale");
+  const positionTracks = tracks.filter((track) => track.property === "position");
+  assert.equal(scaleTracks.length, 2, "two scale calls must emit two retained scale tracks");
+  assert.equal(
+    positionTracks.length,
+    3,
+    "two relative shifts and one absolute move_to must emit three retained position tracks",
+  );
 
-  assert.deepEqual(tracks[0].values.vec2, {
+  assert.deepEqual(scaleTracks[0].values.vec2, {
     from: { x: 1, y: 1 },
     to: { x: 2, y: 2 },
   });
-  assert.equal(tracks[0].timing.start_time, 0);
-  assert.equal(tracks[0].timing.duration, 2);
-  assert.equal(tracks[0].timing.easing, "linear");
+  assert.equal(scaleTracks[0].timing.start_time, 0);
+  assert.equal(scaleTracks[0].timing.duration, 2);
+  assert.equal(scaleTracks[0].timing.easing, "linear");
 
-  assert.deepEqual(tracks[1].values.vec2, {
+  assert.deepEqual(scaleTracks[1].values.vec2, {
     from: { x: 2, y: 2 },
     to: { x: 1, y: 1 },
   });
-  assert.equal(tracks[1].timing.start_time, 2);
-  assert.equal(tracks[1].timing.duration, 1);
-  assert.equal(tracks[1].timing.easing, "smooth");
-  assert.equal(result.duration, 3);
+  assert.equal(scaleTracks[1].timing.start_time, 2);
+  assert.equal(scaleTracks[1].timing.duration, 1);
+  assert.equal(scaleTracks[1].timing.easing, "smooth");
+
+  assert.deepEqual(positionTracks[0].values.vec2, {
+    from: { x: 0, y: 0 },
+    to: { x: 1, y: 0 },
+  });
+  assert.equal(positionTracks[0].timing.start_time, 0);
+  assert.equal(positionTracks[0].timing.duration, 2);
+  assert.equal(positionTracks[0].timing.easing, "linear");
+
+  assert.deepEqual(positionTracks[1].values.vec2, {
+    from: { x: 1, y: 0 },
+    to: { x: 1, y: 1 },
+  });
+  assert.equal(positionTracks[1].timing.start_time, 2);
+  assert.equal(positionTracks[1].timing.duration, 1);
+  assert.equal(positionTracks[1].timing.easing, "smooth");
+
+  assert.deepEqual(positionTracks[2].values.vec2, {
+    from: { x: 1, y: 1 },
+    to: { x: -2, y: 0 },
+  });
+  assert.equal(positionTracks[2].timing.start_time, 3);
+  assert.equal(positionTracks[2].timing.duration, 1);
+  assert.equal(positionTracks[2].timing.easing, "smooth");
+  assert.equal(result.duration, 4);
 
   const wire = JSON.stringify(result.retainedDocument);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
@@ -120,7 +151,7 @@ try {
   assert.deepEqual(errors, [], `browser errors while testing retained Text animation:\n${errors.join("\n")}`);
 
   console.log(
-    "Retained Text animation smoke passed: native Text.animate.scale lowers to source-level retained scale tracks, composes sequential relative scales, preserves timing options, and rejects unsupported retained target-state properties without legacy geometry.",
+    "Retained Text animation smoke passed: scale and position builder methods lower to source-level retained tracks, relative shift composes against scheduler-owned state, absolute move_to remains absolute, timing options are preserved, and unsupported retained properties fail without legacy geometry.",
   );
 } finally {
   await browser?.close();
