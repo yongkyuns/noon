@@ -724,9 +724,10 @@ mod tests {
         let handle = scene.objects()[0].content.text().unwrap();
         let resource = scene.texts().get(handle).unwrap();
         assert!(!resource.runs.is_empty());
-        assert!(resource.runs.iter().all(|run| {
-            run.font.family.as_ref() == DEFAULT_NATIVE_TEXT_FONT_FAMILY
-        }));
+        assert!(resource
+            .runs
+            .iter()
+            .all(|run| { run.font.family.as_ref() == DEFAULT_NATIVE_TEXT_FONT_FAMILY }));
     }
 
     #[test]
