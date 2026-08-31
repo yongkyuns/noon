@@ -1,5 +1,30 @@
 {
   "schema_version": 2,
   "minimum_reconciled_examples": 21,
-  "minimum_classified_examples": 23
+  "minimum_classified_examples": 23,
+  "required_classified_entry_ids": [
+    "manim-dot-example",
+    "manim-ellipse-example",
+    "manim-show-uncreate",
+    "parity-draw-border-then-fill-styled-square",
+    "manim-show-increasing-subsets",
+    "manim-add-with-run-time",
+    "manim-succession-example",
+    "manim-grow-from-point",
+    "manim-grow-from-center",
+    "manim-grow-from-edge",
+    "manim-spin-in-from-nothing",
+    "manim-rotating-demo",
+    "manim-using-focus-on",
+    "manim-using-indicate",
+    "manim-lagged-start-map",
+    "manim-move-to-target",
+    "manim-moving-camera-center",
+    "manim-example1-text",
+    "manim-typst-text-reference",
+    "manim-math-typst-reference",
+    "manim-shrink-to-center-text",
+    "manim-dashed-line-reference",
+    "manim-tangent-line-reference"
+  ]
 }
