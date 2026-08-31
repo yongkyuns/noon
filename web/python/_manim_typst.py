@@ -27,7 +27,9 @@ except ImportError:  # Native CPython tests use the source-level fallbacks below
 # Legacy geometry IDs start at zero and no practical scene can approach 2^52 objects.
 _RETAINED_OBJECT_ID_BASE = 1 << 52
 _RETAINED_PROTOCOL_VERSION = 2
-_DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
+# Manim's Text(font="") resolves through Pango's proportional sans-serif default.
+# Use the deterministic bundled equivalent rather than a monospace substitute.
+_DEFAULT_NATIVE_FONT = "DejaVu Sans"
 _INSTALLED = False
 _ORIGINAL_SCENE_ADD = _compat.Scene.add
 _ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
