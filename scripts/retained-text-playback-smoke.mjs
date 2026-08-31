@@ -87,6 +87,8 @@ function visibleBounds(buffer) {
   assert.ok(bounds, "rendered retained Text frame must contain visible foreground");
   return {
     ...bounds,
+    imageWidth: image.width,
+    imageHeight: image.height,
     width: bounds.maxX - bounds.minX + 1,
     height: bounds.maxY - bounds.minY + 1,
     centerX: (bounds.minX + bounds.maxX) / 2,
@@ -153,11 +155,13 @@ try {
     if ((authored.retainedDocument?.objects?.length ?? 0) !== 1) {
       throw new Error("ShrinkToCenter must author exactly one retained Text object");
     }
+    const retainedObject = authored.retainedDocument.objects[0];
     const tracks = authored.retainedDocument?.tracks ?? [];
     const scales = tracks.filter((track) => track.property === "scale");
     if (scales.length !== 1) {
       throw new Error(`ShrinkToCenter must author one scale track, got ${scales.length}`);
     }
+    const positions = tracks.filter((track) => track.property === "position");
     const ready = await execution.startRetained(
       JSON.stringify(authored.document),
       JSON.stringify(authored.retainedDocument),
@@ -170,6 +174,8 @@ try {
     return {
       duration: authored.duration,
       track: scales[0],
+      baseTranslation: retainedObject.text.transform.translation,
+      positionTrackCount: positions.length,
       mode: execution.mode,
       expectedMode: AUTHORING_EXECUTION_RETAINED,
       ready,
@@ -179,6 +185,8 @@ try {
 
   assert.equal(started.duration, 1);
   assert.equal(started.mode, started.expectedMode);
+  assert.deepEqual(started.baseTranslation, { x: 0, y: 0 });
+  assert.equal(started.positionTrackCount, 0, "ShrinkToCenter must keep the semantic center fixed");
   assert.deepEqual(started.track.values.vec2, {
     from: { x: 1, y: 1 },
     to: { x: 0, y: 0 },
@@ -208,16 +216,26 @@ try {
     lateBounds.foregroundPixels < earlyBounds.foregroundPixels * 0.65,
     `ShrinkToCenter must reduce foreground mass: early=${earlyBounds.foregroundPixels} late=${lateBounds.foregroundPixels}`,
   );
-  // Foreground-mask bounds can move by a few pixels as glyph stems cross the
-  // threshold at different scales. This still rejects meaningful translation
-  // while avoiding false failures caused purely by rasterization/antialiasing.
-  const centerTolerancePx = 5;
+  assert.equal(lateBounds.imageWidth, earlyBounds.imageWidth);
+  assert.equal(lateBounds.imageHeight, earlyBounds.imageHeight);
+
+  // Text ink is not symmetric around its semantic origin. Under a uniform scale about
+  // the fixed scene origin, the ink-bounds center therefore contracts toward that
+  // origin instead of remaining numerically fixed. Compare against that transformed
+  // center and reserve only two pixels for raster edge quantization.
+  const anchorX = earlyBounds.imageWidth / 2;
+  const anchorY = earlyBounds.imageHeight / 2;
+  const widthRatio = lateBounds.width / earlyBounds.width;
+  const heightRatio = lateBounds.height / earlyBounds.height;
+  const expectedLateCenterX = anchorX + (earlyBounds.centerX - anchorX) * widthRatio;
+  const expectedLateCenterY = anchorY + (earlyBounds.centerY - anchorY) * heightRatio;
   assert.ok(
-    Math.abs(lateBounds.centerX - earlyBounds.centerX) <= centerTolerancePx &&
-      Math.abs(lateBounds.centerY - earlyBounds.centerY) <= centerTolerancePx,
-    `ShrinkToCenter must remain visually centered within ${centerTolerancePx}px: ` +
-      `early=(${earlyBounds.centerX},${earlyBounds.centerY}) ` +
-      `late=(${lateBounds.centerX},${lateBounds.centerY})`,
+    Math.abs(lateBounds.centerX - expectedLateCenterX) <= 2 &&
+      Math.abs(lateBounds.centerY - expectedLateCenterY) <= 2,
+    `ShrinkToCenter must scale ink bounds about the fixed scene center: ` +
+      `anchor=(${anchorX},${anchorY}) early=(${earlyBounds.centerX},${earlyBounds.centerY}) ` +
+      `late=(${lateBounds.centerX},${lateBounds.centerY}) ` +
+      `expectedLate=(${expectedLateCenterX},${expectedLateCenterY})`,
   );
   assert.deepEqual(errors, [], `browser errors during retained ShrinkToCenter playback:\n${errors.join("\n")}`);
 
