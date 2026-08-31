@@ -8,6 +8,7 @@
 
 mod analytic_geometry_authoring;
 mod arc_authoring;
+mod axis_tick_authoring;
 mod camera_authoring;
 mod coordinate_system_authoring;
 mod elbow_authoring;
@@ -25,6 +26,7 @@ mod text_authoring;
 
 pub use analytic_geometry_authoring::*;
 pub use arc_authoring::*;
+pub use axis_tick_authoring::*;
 pub use camera_authoring::*;
 pub use coordinate_system_authoring::*;
 pub use elbow_authoring::*;
@@ -44,20 +46,22 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
-        axes_function_vector_path, parametric_vector_path, AnnularSector, Annulus, Arc,
-        ArcAuthoringError, ArcBetweenPoints, Axes2DState, BackgroundRectangle,
-        CoordinateSystemError, Cross, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene,
-        NumberLineState, NumberRange, ParametricSamplePlan, PlotGeometryError, PlotRangeRequest,
-        PlotSamplingError, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
-        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
-        RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
-        ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError, Triangle,
-        Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
-        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS,
-        DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-        DEFAULT_NATIVE_TEXT_FONT_SIZE, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
-        DEFAULT_UNDERLINE_BUFF, MANIM_DEFAULT_DISCONTINUITY_DT, MANIM_DEFAULT_PARAMETRIC_STEP,
+        axes_function_vector_path, axes_sampled_values_vector_path, parametric_vector_path,
+        AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, Axes2DState,
+        AxisTickError, BackgroundRectangle, CoordinateSystemError, Cross, Dot, Elbow,
+        ElbowAuthoringError, Ellipse, GeometryAuthoringError, LineMatcherAuthoringError, MathTypst,
+        MovingCameraScene, NumberLineGeometryPlan, NumberLineState, NumberLineTick,
+        NumberLineTickOptions, NumberRange, ParametricSamplePlan, PlotGeometryError,
+        PlotRangeRequest, PlotSamplingError, Polygon, Polygram, PolygramAuthoringError,
+        ReactiveScene, ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject,
+        RetainedScene, RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan,
+        Sector, ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError,
+        Triangle, Typst, Underline, ValueTracker, VectorSignal,
+        BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
+        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
+        DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
+        DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
+        MANIM_DEFAULT_DISCONTINUITY_DT, MANIM_DEFAULT_PARAMETRIC_STEP,
         MANIM_SAMPLED_GRAPH_POINTS_PER_TICK, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{

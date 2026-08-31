@@ -12,6 +12,12 @@ struct AxesPlotPlanRequest {
     y_range: [f64; 3],
     x_length: f32,
     y_length: f32,
+    #[serde(flatten)]
+    curve: AxesPlotCurveRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct AxesPlotCurveRequest {
     #[serde(default)]
     plot_range: Option<Vec<f64>>,
     #[serde(default)]
@@ -48,13 +54,27 @@ impl AxesPlotAuthoringPlan {
     pub fn from_json(request_json: &str) -> Result<Self, ManimPlotBridgeError> {
         let request: AxesPlotPlanRequest = serde_json::from_str(request_json)
             .map_err(|error| ManimPlotBridgeError::InvalidRequest(error.to_string()))?;
-        Self::new(request)
-    }
-
-    fn new(request: AxesPlotPlanRequest) -> Result<Self, ManimPlotBridgeError> {
         let x_range = NumberRange::new(request.x_range[0], request.x_range[1], request.x_range[2])?;
         let y_range = NumberRange::new(request.y_range[0], request.y_range[1], request.y_range[2])?;
         let axes = Axes2DState::new(x_range, y_range, request.x_length, request.y_length)?;
+        Self::from_axes_curve(axes, x_range, request.curve)
+    }
+
+    pub(crate) fn from_axes_json(
+        axes: Axes2DState,
+        x_range: NumberRange,
+        request_json: &str,
+    ) -> Result<Self, ManimPlotBridgeError> {
+        let request: AxesPlotCurveRequest = serde_json::from_str(request_json)
+            .map_err(|error| ManimPlotBridgeError::InvalidRequest(error.to_string()))?;
+        Self::from_axes_curve(axes, x_range, request)
+    }
+
+    fn from_axes_curve(
+        axes: Axes2DState,
+        x_range: NumberRange,
+        request: AxesPlotCurveRequest,
+    ) -> Result<Self, ManimPlotBridgeError> {
         let range_request = match request.plot_range.as_deref() {
             None => PlotRangeRequest::AxisDefault,
             Some([min, max]) => PlotRangeRequest::Bounds {
@@ -256,5 +276,22 @@ mod tests {
                 actual: 1,
             })
         ));
+    }
+
+    #[test]
+    fn existing_axes_state_can_seed_the_same_plot_plan() {
+        let x_range = NumberRange::new(-2.0, 2.0, 1.0).unwrap();
+        let y_range = NumberRange::new(-1.0, 1.0, 1.0).unwrap();
+        let axes = Axes2DState::new(x_range, y_range, 4.0, 2.0).unwrap();
+        let plan = AxesPlotAuthoringPlan::from_axes_json(
+            axes,
+            x_range,
+            r#"{"plot_range":[-1.0,1.0,1.0],"use_smoothing":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.parameter_subpaths().unwrap(),
+            vec![vec![-1.0, 0.0, 1.0]]
+        );
     }
 }
