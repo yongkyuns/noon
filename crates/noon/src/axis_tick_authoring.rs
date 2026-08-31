@@ -182,9 +182,7 @@ impl std::fmt::Display for AxisTickError {
         match self {
             Self::Coordinates(error) => error.fmt(f),
             Self::InvalidTickSize(value) => write!(f, "invalid tick size: {value}"),
-            Self::InvalidLongerTickMultiple => {
-                f.write_str("longer tick multiple must be positive")
-            }
+            Self::InvalidLongerTickMultiple => f.write_str("longer tick multiple must be positive"),
             Self::InvalidStrokeWidth(value) => write!(f, "invalid stroke width: {value}"),
             Self::NonFiniteElongatedValue => f.write_str("elongated tick values must be finite"),
             Self::Overflow(value) => {
