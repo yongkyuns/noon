@@ -313,8 +313,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        RetainedAuthoringDocument, RetainedAuthoringEnginePlayer, RetainedAuthoringTextObject,
-        RetainedFamilyExecutionObjectState, RetainedFamilyPlanTransport, RetainedTextAuthoringSpec,
+        canonical_retained_scene_spec_json, CanonicalRetainedEnginePlayer,
+        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedFamilyExecutionObjectState,
+        RetainedFamilyPlanTransport, RetainedTextAuthoringSpec,
     };
 
     fn native_text(source: &str, font_size: f32) -> RetainedTextAuthoringSpec {
@@ -327,7 +328,7 @@ mod tests {
         .unwrap()
     }
 
-    fn engine() -> RetainedAuthoringEnginePlayer {
+    fn engine() -> CanonicalRetainedEnginePlayer {
         let legacy = SceneDefinition::new();
         let document = RetainedAuthoringDocument::new(vec![
             RetainedAuthoringTextObject {
@@ -342,13 +343,11 @@ mod tests {
             },
         ])
         .unwrap();
-        RetainedAuthoringEnginePlayer::new(
-            &noon_ir::encode_scene(&legacy).unwrap(),
-            &document.to_json().unwrap(),
-            4.0,
-            17,
-        )
-        .unwrap()
+        let legacy_json = noon_ir::encode_scene(&legacy).unwrap();
+        let document_json = document.to_json().unwrap();
+        let scene_spec_json =
+            canonical_retained_scene_spec_json(&legacy_json, &document_json).unwrap();
+        CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 17).unwrap()
     }
 
     fn family_state(progress: f64) -> FamilyAnimationState {

@@ -15,6 +15,14 @@ const retainedEngine = await readFile(
   "utf8",
 );
 const renderEntry = await readFile(new URL("./execution-render-worker.js", import.meta.url), "utf8");
+const retainedAuthoringPlayer = await readFile(
+  new URL("../crates/noon-web/src/retained_authoring_player.rs", import.meta.url),
+  "utf8",
+);
+const canonicalRetainedEnginePlayer = await readFile(
+  new URL("../crates/noon-web/src/canonical_retained_engine_player.rs", import.meta.url),
+  "utf8",
+);
 
 await assert.rejects(
   access(new URL("./retained-execution-worker-client.js", import.meta.url)),
@@ -78,6 +86,16 @@ assert.match(
   retainedEngine,
   /retained execution init accepts only canonical sceneSpecJson/,
   "retained engine must reject legacy split wire fields",
+);
+assert.doesNotMatch(
+  retainedAuthoringPlayer,
+  /RetainedAuthoringEnginePlayer|MixedRetainedEngineScenePlayer|WasmMixedRetainedEngineScenePlayer/,
+  "noon-web must not re-export a split retained engine facade",
+);
+assert.match(
+  canonicalRetainedEnginePlayer,
+  /js_name = CanonicalRetainedEngineScenePlayer/,
+  "canonical SceneSpec must remain the sole retained WASM engine constructor",
 );
 assert.match(
   renderEntry,

@@ -254,27 +254,23 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectId, SceneDefinition};
+    use noon_core::{GeometryRef, ObjectId, RateFunction, SceneDefinition, TrackTiming, Vec2};
     use serde_json::json;
 
     use crate::{
-        canonical_retained_scene_spec_json, RetainedAuthoringDocument,
-        RetainedAuthoringEnginePlayer, RetainedAuthoringTextObject, RetainedExecutionDeltaEnvelope,
-        RetainedTextAuthoringSpec,
+        canonical_retained_scene_spec_json, RetainedAuthoringDocument, RetainedAuthoringTextObject,
+        RetainedExecutionDeltaEnvelope, RetainedTextAuthoringSpec,
     };
 
     use super::*;
 
-    #[test]
-    fn canonical_engine_matches_compatibility_snapshot_and_resources() {
-        let mut legacy = SceneDefinition::new();
-        let circle = legacy.add(GeometryRef::circle(0.25));
+    fn canonical_scene_spec_json(legacy: &SceneDefinition, source: &str) -> (String, ObjectId) {
         let text_id = ObjectId::new(1_u64 << 52);
         let retained = RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
             object: text_id,
-            order: 1,
+            order: legacy.objects().len() as u32,
             text: RetainedTextAuthoringSpec::native(
-                "Canonical engine",
+                source,
                 noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
                 48.0,
                 -1.0,
@@ -282,28 +278,80 @@ mod tests {
             .unwrap(),
         }])
         .unwrap();
-        let legacy_json = noon_ir::encode_scene(&legacy).unwrap();
+        let legacy_json = noon_ir::encode_scene(legacy).unwrap();
         let retained_json = retained.to_json().unwrap();
-        let scene_spec_json =
-            canonical_retained_scene_spec_json(&legacy_json, &retained_json).unwrap();
+        (
+            canonical_retained_scene_spec_json(&legacy_json, &retained_json).unwrap(),
+            text_id,
+        )
+    }
 
-        let mut canonical =
+    #[test]
+    fn canonical_engine_emits_mixed_snapshot_and_resources() {
+        let mut legacy = SceneDefinition::new();
+        let circle = legacy.add(GeometryRef::circle(0.25));
+        let (scene_spec_json, text_id) = canonical_scene_spec_json(&legacy, "Canonical engine");
+
+        let mut engine =
             CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 2.0, 41).unwrap();
-        let mut compatibility =
-            RetainedAuthoringEnginePlayer::new(&legacy_json, &retained_json, 2.0, 41).unwrap();
-        let canonical_initial: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&canonical.initial_delta_json().unwrap()).unwrap();
-        let compatibility_initial: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&compatibility.initial_delta_json().unwrap()).unwrap();
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
 
-        assert_eq!(canonical_initial, compatibility_initial);
-        assert_eq!(canonical_initial.objects[0].object, circle);
-        assert_eq!(canonical_initial.objects[1].object, text_id);
-        assert_eq!(
-            canonical.resource_bundle_bytes(),
-            compatibility.resource_bundle_bytes()
-        );
-        assert_eq!(canonical.scene_spec_json(), scene_spec_json);
+        assert!(initial.snapshot);
+        assert_eq!(initial.objects.len(), 2);
+        assert_eq!(initial.objects[0].object, circle);
+        assert_eq!(initial.objects[1].object, text_id);
+        assert!(!engine.resource_bundle_bytes().is_empty());
+        assert_eq!(engine.scene_spec_json(), scene_spec_json);
+    }
+
+    #[test]
+    fn canonical_engine_playback_controls_keep_resources_and_session_stable() {
+        let mut legacy = SceneDefinition::new();
+        let circle = legacy.add(GeometryRef::circle(0.25));
+        legacy
+            .animate_position(
+                circle,
+                Vec2::ZERO,
+                Vec2::new(2.0, 0.0),
+                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            )
+            .unwrap();
+        let (scene_spec_json, _) = canonical_scene_spec_json(&legacy, "controls");
+        let mut engine =
+            CanonicalRetainedEnginePlayer::from_json(&scene_spec_json, 4.0, 37).unwrap();
+        let bundle = engine.resource_bundle_bytes().to_vec();
+
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        engine.tick_delta_json(100.0).unwrap();
+        engine.tick_delta_json(1_100.0).unwrap();
+        assert_eq!(engine.time(), 1.0);
+
+        engine.pause();
+        assert!(!engine.is_playing());
+        assert!(engine.tick_delta_json(5_100.0).unwrap().is_none());
+        assert_eq!(engine.time(), 1.0);
+
+        let rewind: RetainedExecutionDeltaEnvelope = serde_json::from_str(
+            &engine
+                .seek_delta_json(0.25)
+                .unwrap()
+                .expect("rewind snapshot"),
+        )
+        .unwrap();
+        assert!(rewind.snapshot);
+        assert_eq!(rewind.session, initial.session);
+        assert_eq!(rewind.time, 0.25);
+        assert_eq!(engine.resource_bundle_bytes(), bundle);
+        assert!(engine.tick_delta_json(8_100.0).unwrap().is_none());
+        assert_eq!(engine.time(), 0.25);
+
+        engine.resume();
+        assert!(engine.is_playing());
+        assert!(engine.tick_delta_json(8_100.0).unwrap().is_none());
+        engine.tick_delta_json(8_600.0).unwrap();
+        assert_eq!(engine.time(), 0.75);
     }
 
     #[test]
