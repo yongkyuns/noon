@@ -199,6 +199,18 @@ class RetainedAxesPlot(Scene):
         assert_point_close(horizontal.start, axes.c2p(0.0, 0.75))
         assert_point_close(horizontal.end, graph_point)
 
+        point_lines = axes.get_lines_to_point(
+            graph_point,
+            line_func=Line,
+            color=GREY,
+        )
+        assert isinstance(point_lines, VGroup)
+        assert len(point_lines) == 2
+        assert_point_close(point_lines[0].start, axes.c2p(0.0, 0.75))
+        assert_point_close(point_lines[0].end, graph_point)
+        assert_point_close(point_lines[1].start, axes.c2p(0.75, 0.0))
+        assert_point_close(point_lines[1].end, graph_point)
+
         x_values = [0.0, 1.0, 1.0, 2.0]
         y_values = [0.5, 1.0, -0.5, 0.0]
         line_graph = axes.plot_line_graph(
@@ -264,6 +276,73 @@ class RetainedAxesPlot(Scene):
         assert isinstance(cos_graph, ParametricFunction)
         cos_point = axes.input_to_graph_point(0.25, cos_graph)
         assert_point_close(cos_point, axes.c2p(0.25, math.cos(0.25)))
+
+        calculus_graph = axes.plot(
+            lambda x: x * x,
+            x_range=[-2.0, 2.0, 1.0],
+            use_smoothing=False,
+            color=PURPLE,
+        )
+        custom_dx = 0.25
+        expected_angle = math.atan2((2.0 + custom_dx) ** 2 - 4.0, custom_dx)
+        assert_close(
+            axes.angle_of_tangent(2.0, calculus_graph, dx=custom_dx),
+            expected_angle,
+        )
+        assert_close(axes.slope_of_tangent(2.0, calculus_graph, dx=custom_dx), 4.25)
+
+        derivative_graph = axes.plot_derivative_graph(
+            calculus_graph,
+            x_range=[-1.0, 1.0, 1.0],
+            use_smoothing=False,
+            color=GREEN,
+        )
+        derivative_x = [-1.0, 0.0, 1.0]
+        derivative_y = [derivative_graph.underlying_function(x) for x in derivative_x]
+        assert_line_graph_matches_axes(axes, derivative_graph, derivative_x, derivative_y)
+        expected_derivative = ((0.5 + 1.0e-8) ** 2 - 0.25) / 1.0e-8
+        assert_close(derivative_graph.underlying_function(0.5), expected_derivative)
+
+        antiderivative_graph = axes.plot_antiderivative_graph(
+            calculus_graph,
+            y_intercept=2.0,
+            samples=5,
+            x_range=[-1.0, 1.0, 1.0],
+            use_smoothing=False,
+            color=BLUE,
+        )
+        antiderivative_x = [-1.0, 0.0, 1.0]
+        antiderivative_y = [1.65625, 2.0, 2.34375]
+        for x, expected in zip(antiderivative_x, antiderivative_y):
+            assert_close(antiderivative_graph.underlying_function(x), expected)
+        assert_line_graph_matches_axes(
+            axes, antiderivative_graph, antiderivative_x, antiderivative_y
+        )
+
+        vertical_graph_lines = axes.get_vertical_lines_to_graph(
+            calculus_graph,
+            x_range=[-1.0, 1.0],
+            num_lines=3,
+            line_func=Line,
+            color=TEAL,
+            stroke_width=1.5,
+        )
+        assert isinstance(vertical_graph_lines, VGroup)
+        assert len(vertical_graph_lines) == 3
+        for line, x in zip(vertical_graph_lines, [-1.0, 0.0, 1.0]):
+            assert_point_close(line.start, axes.c2p(x, 0.0))
+            assert_point_close(line.end, axes.c2p(x, x * x))
+
+        try:
+            axes.plot(lambda x: x, use_vectorized=True)
+            raise AssertionError("vectorized scalar plot callbacks must fail explicitly")
+        except NotImplementedError:
+            pass
+        try:
+            axes.plot_antiderivative_graph(calculus_graph, use_vectorized=True)
+            raise AssertionError("vectorized antiderivative callbacks must fail explicitly")
+        except NotImplementedError:
+            pass
 
         parametric_calls = []
 
@@ -512,6 +591,10 @@ class RetainedAxesPlot(Scene):
             axes,
             sin_graph,
             cos_graph,
+            calculus_graph,
+            derivative_graph,
+            antiderivative_graph,
+            vertical_graph_lines,
             parametric,
             direct_parametric,
             function_graph,
@@ -550,7 +633,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 65);
+  assert.equal(result.document.objects.length, 71);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -558,13 +641,13 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "line").length,
-    42,
-    "Axes, NumberPlane, and projection helpers must flatten to ordinary retained line geometry",
+    45,
+    "Axes, NumberPlane, projection, and graph-line helpers must flatten to ordinary retained line geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
-    9,
-    "Axes/direct scalar and parametric plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
+    12,
+    "Axes/direct/calculus plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "circle").length,
@@ -578,7 +661,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes/NumberPlane smoke passed: transformed coordinates, retained grid families, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
+    "Retained Axes/NumberPlane smoke passed: transformed coordinates, graph queries/line families, calculus graphs, retained grid families, direct/Axes parametric functions, FunctionGraph, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
