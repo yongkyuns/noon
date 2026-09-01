@@ -58,6 +58,8 @@ async function initializePyodide() {
     authoringStore.createAxesPlotPlan(requestJson);
   self.noonCreateParametricFunctionPlan = (requestJson) =>
     authoringStore.createParametricFunctionPlan(requestJson);
+  self.noonCreateNumberPlaneGridPlan = (requestJson) =>
+    authoringStore.createNumberPlaneGridPlan(requestJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
@@ -116,6 +118,8 @@ import _manim_shared_geometry
 _manim_shared_geometry.install()
 import _manim_axes
 _manim_axes.install()
+import _manim_number_plane
+_manim_number_plane.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()
