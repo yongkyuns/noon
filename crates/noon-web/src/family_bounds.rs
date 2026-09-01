@@ -239,7 +239,10 @@ mod tests {
         let plan = FrontendFamilyBoundsPlan::begin(&store, family).expect("empty family plan");
         assert_eq!(plan.leaf_count(), 0);
         assert_eq!(plan.finish().expect("empty family is complete"), None);
-        assert_eq!(plan.finish_world_bounds().expect("empty lowered bounds"), None);
+        assert_eq!(
+            plan.finish_world_bounds().expect("empty lowered bounds"),
+            None
+        );
     }
 
     #[test]
