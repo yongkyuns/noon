@@ -39,6 +39,7 @@ struct AreaQueryRequest {
     x_range: Option<[f64; 2]>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct AreaFinishInput<'a> {
     graph_snapshot_json: &'a str,
@@ -221,6 +222,7 @@ impl AxesQueryPlan {
     }
 
     /// Finish one ManimCE v0.21 `Axes.get_area` retained polygon snapshot.
+    #[cfg(any(target_arch = "wasm32", test))]
     fn area_snapshot_json(
         &self,
         request_json: &str,
