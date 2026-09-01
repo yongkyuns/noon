@@ -1,4 +1,4 @@
-use noon_core::{PathCommand, Vec2, VectorPath};
+use noon_core::{PathCommand, SemanticVec3, Vec2, VectorPath};
 
 const MANIM_LENGTH_SAMPLE_POINTS: usize = 10;
 
@@ -43,6 +43,13 @@ impl std::error::Error for PathProportionError {}
 fn validate_proportion(alpha: f32) -> Result<(), PathProportionError> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
         return Err(PathProportionError::InvalidProportion(alpha));
+    }
+    Ok(())
+}
+
+fn validate_proportion_f64(alpha: f64) -> Result<(), PathProportionError> {
+    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+        return Err(PathProportionError::InvalidProportion(alpha as f32));
     }
     Ok(())
 }
@@ -149,6 +156,72 @@ impl PathProportionPlan {
             .expect("path proportion plans are never empty")
             .to)
     }
+
+    /// Return a high-precision authoring point without quantizing `alpha` or
+    /// Bezier interpolation to the renderer's f32 coordinate type.
+    ///
+    /// The curve-selection measure is deliberately the same immutable sampled
+    /// measure prepared by [`Self::new`]. Only the proportion arithmetic and
+    /// point evaluation are lifted to f64, so there is one canonical Manim path
+    /// measure and precision-sensitive consumers do not need a second geometry
+    /// implementation.
+    pub fn point_f64(&self, alpha: f64) -> Result<SemanticVec3, PathProportionError> {
+        validate_proportion_f64(alpha)?;
+
+        if alpha == 1.0 {
+            return Ok(SemanticVec3::from_vec2(
+                self.curves
+                    .last()
+                    .expect("path proportion plans are never empty")
+                    .to,
+            ));
+        }
+
+        let total_length = f64::from(self.total_length);
+        let target_length = alpha * total_length;
+        if target_length.is_finite() {
+            let curve_index = self
+                .cumulative_lengths
+                .partition_point(|&end_length| f64::from(end_length) < target_length);
+            if curve_index < self.curves.len() {
+                let current_length = curve_index
+                    .checked_sub(1)
+                    .map_or(0.0, |index| f64::from(self.cumulative_lengths[index]));
+                let length = f64::from(self.lengths[curve_index]);
+                let residue = if length > 0.0 {
+                    ((target_length - current_length) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                return Ok(curve_point_f64(self.curves[curve_index], residue));
+            }
+        } else {
+            let mut current_length = 0.0_f64;
+            for (curve, length) in self
+                .curves
+                .iter()
+                .copied()
+                .zip(self.lengths.iter().copied().map(f64::from))
+            {
+                if current_length + length >= target_length {
+                    let residue = if length > 0.0 {
+                        ((target_length - current_length) / length).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    return Ok(curve_point_f64(curve, residue));
+                }
+                current_length += length;
+            }
+        }
+
+        Ok(SemanticVec3::from_vec2(
+            self.curves
+                .last()
+                .expect("path proportion plans are never empty")
+                .to,
+        ))
+    }
 }
 
 /// Return the point at `alpha` using ManimCE v0.21's `VMobject.point_from_proportion` measure.
@@ -164,6 +237,21 @@ impl PathProportionPlan {
 pub fn point_from_proportion(path: &VectorPath, alpha: f32) -> Result<Vec2, PathProportionError> {
     validate_proportion(alpha)?;
     PathProportionPlan::new(path)?.point(alpha)
+}
+
+/// High-precision authoring variant of [`point_from_proportion`].
+///
+/// This preserves f64 proportions and Bezier interpolation while reusing the
+/// exact same prepared Manim sampled-length measure. It is intended for
+/// precision-sensitive authoring operations such as finite-difference tangents;
+/// retained renderer geometry can be lowered to f32 after those semantic
+/// decisions are complete.
+pub fn point_from_proportion_f64(
+    path: &VectorPath,
+    alpha: f64,
+) -> Result<SemanticVec3, PathProportionError> {
+    validate_proportion_f64(alpha)?;
+    PathProportionPlan::new(path)?.point_f64(alpha)
 }
 
 /// Return the portion of a vector path whose global Bezier parameter lies in `[a, b]`.
@@ -334,6 +422,30 @@ fn curve_point(curve: Curve, t: f32) -> Vec2 {
     }
 }
 
+fn curve_point_f64(curve: Curve, t: f64) -> SemanticVec3 {
+    let from = SemanticVec3::from_vec2(curve.from);
+    let to = SemanticVec3::from_vec2(curve.to);
+    match curve.kind {
+        CurveKind::Line | CurveKind::Close => lerp_f64(from, to, t),
+        CurveKind::Quadratic { control } => {
+            let control = SemanticVec3::from_vec2(control);
+            let p01 = lerp_f64(from, control, t);
+            let p12 = lerp_f64(control, to, t);
+            lerp_f64(p01, p12, t)
+        }
+        CurveKind::Cubic { control1, control2 } => {
+            let control1 = SemanticVec3::from_vec2(control1);
+            let control2 = SemanticVec3::from_vec2(control2);
+            let p01 = lerp_f64(from, control1, t);
+            let p12 = lerp_f64(control1, control2, t);
+            let p23 = lerp_f64(control2, to, t);
+            let p012 = lerp_f64(p01, p12, t);
+            let p123 = lerp_f64(p12, p23, t);
+            lerp_f64(p012, p123, t)
+        }
+    }
+}
+
 fn partial_curve(curve: Curve, a: f32, b: f32) -> Curve {
     match curve.kind {
         CurveKind::Line | CurveKind::Close => Curve {
@@ -405,6 +517,14 @@ fn lerp(a: Vec2, b: Vec2, t: f32) -> Vec2 {
     a + (b - a) * t
 }
 
+fn lerp_f64(a: SemanticVec3, b: SemanticVec3, t: f64) -> SemanticVec3 {
+    SemanticVec3::new(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +537,15 @@ mod tests {
         assert!(
             (actual.y - expected.y).abs() < 1e-5,
             "y: {actual:?} != {expected:?}"
+        );
+    }
+
+    fn assert_semantic(actual: SemanticVec3, expected: SemanticVec3, tolerance: f64) {
+        assert!(
+            (actual.x - expected.x).abs() <= tolerance
+                && (actual.y - expected.y).abs() <= tolerance
+                && (actual.z - expected.z).abs() <= tolerance,
+            "{actual:?} != {expected:?}"
         );
     }
 
@@ -460,6 +589,25 @@ mod tests {
         assert_vec2(plan.point(0.25).unwrap(), Vec2::new(1.0, 0.0));
         assert_vec2(plan.point(0.5).unwrap(), Vec2::new(2.0, 0.0));
         assert_vec2(plan.point(0.875).unwrap(), Vec2::new(3.0, 0.5));
+    }
+
+    #[test]
+    fn precise_plan_reuses_measure_without_quantizing_alpha() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .quadratic_to(Vec2::new(1.0, 2.0), Vec2::new(2.0, 0.0));
+        let plan = PathProportionPlan::new(&path).unwrap();
+        let lower_alpha = 0.4 - 1.0e-9;
+        let upper_alpha = 0.4 + 1.0e-9;
+
+        assert_eq!(lower_alpha as f32, upper_alpha as f32);
+        let lower = plan.point_f64(lower_alpha).unwrap();
+        let upper = plan.point_f64(upper_alpha).unwrap();
+        assert!((upper.x - lower.x).hypot(upper.y - lower.y) > 1.0e-9);
+
+        let ordinary = plan.point(0.4).unwrap();
+        let precise = plan.point_f64(0.4).unwrap();
+        assert_semantic(precise, SemanticVec3::from_vec2(ordinary), 2.0e-7);
     }
 
     #[test]
@@ -534,6 +682,10 @@ mod tests {
         );
         assert!(matches!(
             plan.point(f32::NAN),
+            Err(PathProportionError::InvalidProportion(alpha)) if alpha.is_nan()
+        ));
+        assert!(matches!(
+            plan.point_f64(f64::NAN),
             Err(PathProportionError::InvalidProportion(alpha)) if alpha.is_nan()
         ));
     }
