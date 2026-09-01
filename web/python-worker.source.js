@@ -120,6 +120,8 @@ import _manim_shared_geometry
 _manim_shared_geometry.install()
 import _manim_axes
 _manim_axes.install()
+import _manim_axes_derived
+_manim_axes_derived.install()
 import _manim_number_plane
 _manim_number_plane.install()
 import _manim_polar_plane
