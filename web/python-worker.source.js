@@ -56,6 +56,8 @@ async function initializePyodide() {
     authoringStore.createAxesQueryPlan(requestJson);
   self.noonCreateAxesPlotPlan = (requestJson) =>
     authoringStore.createAxesPlotPlan(requestJson);
+  self.noonCreateParametricFunctionPlan = (requestJson) =>
+    authoringStore.createParametricFunctionPlan(requestJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
