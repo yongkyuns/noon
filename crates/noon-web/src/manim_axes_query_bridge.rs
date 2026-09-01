@@ -1,12 +1,11 @@
 use noon::{
-    transformed_axes_line_graph_vector_path, Axes2DState, CoordinateSystemError, IntoSnapshot,
-    LineGraphAuthoringError, NumberRange, Path, TransformedAxes2DState,
+    transformed_axes_line_graph_vector_path, transformed_graph_point_for_x, AreaAuthoringError,
+    AreaSamplePlan, Axes2DState, CoordinateSystemError, GraphParameterRange, GraphQueryError,
+    IntoSnapshot, LineGraphAuthoringError, NumberRange, Path, RiemannAuthoringError,
+    RiemannSamplePlan, RiemannSampleType, TransformedAxes2DState,
 };
 use noon_core::{GeometryRef, ObjectSnapshot, Vec2};
-use noon_geometry::{point_from_geometry_proportion, GeometryProportionError};
-use serde::Deserialize;
-
-const MANIM_GRAPH_X_SEARCH_TOLERANCE: f64 = 1.0e-4;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +14,42 @@ struct AxesQueryRequest {
     y_range: [f64; 3],
     x_length: f32,
     y_length: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct RiemannQueryRequest {
+    graph_range: [f64; 2],
+    #[serde(default)]
+    bounded_graph_range: Option<[f64; 2]>,
+    #[serde(default)]
+    x_range: Option<[f64; 2]>,
+    dx: f64,
+    input_sample_type: String,
+    width_scale_factor: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct AreaQueryRequest {
+    graph_range: [f64; 2],
+    #[serde(default)]
+    bounded_graph_range: Option<[f64; 2]>,
+    #[serde(default)]
+    x_range: Option<[f64; 2]>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+struct RiemannSampleValues {
+    graph: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bounded_graph: Option<Vec<f64>>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+struct RiemannRectangleResult {
+    snapshot: ObjectSnapshot,
+    negative_signed_area: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -78,9 +113,8 @@ impl AxesQueryPlan {
     /// ManimCE v0.21 generic `input_to_graph_point` fallback for retained path-like graphs.
     ///
     /// The authored-function fast path remains frontend-visible because it calls the user's
-    /// callback directly. For generic VMobjects, however, path proportion, current graph
-    /// transform, current Axes transforms, and Manim's binary-search semantics all remain
-    /// inside Rust so the host does not repeatedly cross the WASM boundary.
+    /// callback directly. Generic path proportion, graph/Axes transforms, and Manim's binary
+    /// search are delegated to the reusable shared `noon` semantic owner.
     pub fn graph_point_for_x_json(
         &self,
         x: f64,
@@ -88,26 +122,136 @@ impl AxesQueryPlan {
         x_axis_snapshot_json: &str,
         y_axis_snapshot_json: &str,
     ) -> Result<String, ManimAxesQueryError> {
-        if !x.is_finite() {
-            return Err(ManimAxesQueryError::NonFiniteGraphX(x));
-        }
-        let graph: ObjectSnapshot = serde_json::from_str(graph_snapshot_json)
-            .map_err(|error| ManimAxesQueryError::InvalidGraphSnapshot(error.to_string()))?;
+        let graph = parse_graph_snapshot(graph_snapshot_json)?;
         let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
-        let alpha = binary_search_graph_x(&transformed, &graph, x)?;
-        if let Some(alpha) = alpha {
-            return serialize_pair(graph_point_from_proportion(&graph, alpha)?);
+        serialize_pair(transformed_graph_point_for_x(transformed, &graph, x)?)
+    }
+
+    /// Phase one of ManimCE v0.21 `Axes.get_riemann_rectangles`.
+    ///
+    /// Rust resolves the half-open partition and returns only the x values at which the
+    /// Python authored callbacks must be evaluated. No geometry or coordinate loop is
+    /// owned by Python.
+    pub fn riemann_sample_values_json(
+        &self,
+        request_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        let request = parse_riemann_request(request_json)?;
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let plan = riemann_plan(transformed, &request)?;
+        serde_json::to_string(&RiemannSampleValues {
+            graph: plan.graph_sample_x_values(),
+            bounded_graph: request
+                .bounded_graph_range
+                .map(|_| plan.baseline_x_values()),
+        })
+        .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
+    }
+
+    /// Phase two of ManimCE v0.21 `Axes.get_riemann_rectangles`.
+    ///
+    /// The frontend returns authored callback scalar values. Rust rebuilds the exact
+    /// deterministic plan, validates cardinality, and emits ordinary retained rectangles
+    /// plus signed-area metadata used only for Manim-facing color adaptation.
+    pub fn riemann_rectangles_json(
+        &self,
+        request_json: &str,
+        graph_y_values_json: &str,
+        bounded_graph_y_values_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        let request = parse_riemann_request(request_json)?;
+        let graph_y_values: Vec<f64> = serde_json::from_str(graph_y_values_json)
+            .map_err(|error| ManimAxesQueryError::InvalidRiemannValues(error.to_string()))?;
+        let bounded_graph_y_values: Option<Vec<f64>> =
+            parse_optional_json(bounded_graph_y_values_json).map_err(|error| {
+                ManimAxesQueryError::InvalidRiemannValues(error.to_string())
+            })?;
+        if request.bounded_graph_range.is_some() != bounded_graph_y_values.is_some() {
+            return Err(ManimAxesQueryError::InvalidRiemannRequest(
+                "bounded graph range/value presence must match".to_owned(),
+            ));
         }
 
-        let start = graph_point_from_proportion(&graph, 0.0)?;
-        let end = graph_point_from_proportion(&graph, 1.0)?;
-        let start_x = transformed.point_to_coords(start)?.0;
-        let end_x = transformed.point_to_coords(end)?.0;
-        Err(ManimAxesQueryError::GraphXOutOfRange {
-            x,
-            start: start_x,
-            end: end_x,
-        })
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let plan = riemann_plan(transformed, &request)?;
+        let rectangles = plan.finish(&graph_y_values, bounded_graph_y_values.as_deref())?;
+        let result: Vec<_> = rectangles
+            .into_iter()
+            .map(|rectangle| RiemannRectangleResult {
+                negative_signed_area: rectangle.is_negative_signed_area(),
+                snapshot: rectangle.into_snapshot(),
+            })
+            .collect();
+        serde_json::to_string(&result)
+            .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
+    }
+
+    /// Resolve the clipped endpoint x values for ManimCE v0.21 `Axes.get_area`.
+    pub fn area_endpoint_x_values_json(
+        &self,
+        request_json: &str,
+        graph_snapshot_json: &str,
+        bounded_graph_snapshot_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        let request = parse_area_request(request_json)?;
+        let graph = parse_graph_snapshot(graph_snapshot_json)?;
+        let bounded_graph = parse_optional_graph_snapshot(bounded_graph_snapshot_json)?;
+        validate_bounded_presence(
+            request.bounded_graph_range.is_some(),
+            bounded_graph.is_some(),
+            "area",
+        )?;
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let plan = area_plan(transformed, &request, &graph, bounded_graph.as_ref())?;
+        serde_json::to_string(&plan.graph_endpoint_x_values())
+            .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
+    }
+
+    /// Finish one ManimCE v0.21 `Axes.get_area` retained polygon snapshot.
+    pub fn area_snapshot_json(
+        &self,
+        request_json: &str,
+        graph_snapshot_json: &str,
+        bounded_graph_snapshot_json: &str,
+        graph_endpoint_y_values_json: &str,
+        bounded_graph_endpoint_y_values_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        let request = parse_area_request(request_json)?;
+        let graph = parse_graph_snapshot(graph_snapshot_json)?;
+        let bounded_graph = parse_optional_graph_snapshot(bounded_graph_snapshot_json)?;
+        validate_bounded_presence(
+            request.bounded_graph_range.is_some(),
+            bounded_graph.is_some(),
+            "area",
+        )?;
+        let graph_endpoint_y_values: [f64; 2] =
+            serde_json::from_str(graph_endpoint_y_values_json)
+                .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
+        let bounded_graph_endpoint_y_values: Option<[f64; 2]> =
+            parse_optional_json(bounded_graph_endpoint_y_values_json)
+                .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
+        validate_bounded_presence(
+            bounded_graph.is_some(),
+            bounded_graph_endpoint_y_values.is_some(),
+            "area endpoint values",
+        )?;
+
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let plan = area_plan(transformed, &request, &graph, bounded_graph.as_ref())?;
+        let snapshot = plan.finish(
+            graph_endpoint_y_values,
+            bounded_graph_endpoint_y_values,
+        )?;
+        serde_json::to_string(&snapshot)
+            .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
     }
 
     fn transformed_axes(
@@ -125,58 +269,123 @@ impl AxesQueryPlan {
     }
 }
 
-fn graph_point_from_proportion(
-    graph: &ObjectSnapshot,
-    alpha: f64,
-) -> Result<Vec2, ManimAxesQueryError> {
-    let local = point_from_geometry_proportion(&graph.geometry, alpha as f32)?;
-    Ok(graph.transform.transform_point(local))
-}
-
-fn graph_x_at_proportion(
-    axes: &TransformedAxes2DState,
-    graph: &ObjectSnapshot,
-    alpha: f64,
-) -> Result<f64, ManimAxesQueryError> {
-    Ok(axes
-        .point_to_coords(graph_point_from_proportion(graph, alpha)?)?
-        .0)
-}
-
-/// Exact control flow of ManimCE v0.21 `binary_search` for graph-x lookup.
-fn binary_search_graph_x(
-    axes: &TransformedAxes2DState,
-    graph: &ObjectSnapshot,
-    target: f64,
-) -> Result<Option<f64>, ManimAxesQueryError> {
-    let mut left: f64 = 0.0;
-    let mut right: f64 = 1.0;
-    let mut middle: f64 = 0.5;
-    while (right - left).abs() > MANIM_GRAPH_X_SEARCH_TOLERANCE {
-        middle = (left + right) * 0.5;
-        let left_x = graph_x_at_proportion(axes, graph, left)?;
-        let middle_x = graph_x_at_proportion(axes, graph, middle)?;
-        let right_x = graph_x_at_proportion(axes, graph, right)?;
-        if left_x == target {
-            return Ok(Some(left));
-        }
-        if right_x == target {
-            return Ok(Some(right));
-        }
-
-        if left_x <= target && target <= right_x {
-            if middle_x > target {
-                right = middle;
-            } else {
-                left = middle;
-            }
-        } else if left_x > target && target > right_x {
-            std::mem::swap(&mut left, &mut right);
-        } else {
-            return Ok(None);
-        }
+fn parse_riemann_request(request_json: &str) -> Result<RiemannQueryRequest, ManimAxesQueryError> {
+    let request: RiemannQueryRequest = serde_json::from_str(request_json)
+        .map_err(|error| ManimAxesQueryError::InvalidRiemannRequest(error.to_string()))?;
+    validate_range(request.graph_range, "graph")?;
+    if let Some(range) = request.bounded_graph_range {
+        validate_range(range, "bounded graph")?;
     }
-    Ok(Some(middle))
+    if let Some(range) = request.x_range {
+        validate_range(range, "x_range")?;
+    }
+    Ok(request)
+}
+
+fn parse_area_request(request_json: &str) -> Result<AreaQueryRequest, ManimAxesQueryError> {
+    let request: AreaQueryRequest = serde_json::from_str(request_json)
+        .map_err(|error| ManimAxesQueryError::InvalidAreaRequest(error.to_string()))?;
+    validate_range(request.graph_range, "graph")?;
+    if let Some(range) = request.bounded_graph_range {
+        validate_range(range, "bounded graph")?;
+    }
+    if let Some(range) = request.x_range {
+        validate_range(range, "x_range")?;
+    }
+    Ok(request)
+}
+
+fn validate_range(range: [f64; 2], name: &str) -> Result<(), ManimAxesQueryError> {
+    if range.into_iter().all(f64::is_finite) {
+        Ok(())
+    } else {
+        Err(ManimAxesQueryError::InvalidCalculusRange(name.to_owned()))
+    }
+}
+
+fn riemann_plan(
+    axes: TransformedAxes2DState,
+    request: &RiemannQueryRequest,
+) -> Result<RiemannSamplePlan, ManimAxesQueryError> {
+    let [x_min, x_max] = request.x_range.unwrap_or_else(|| {
+        request.bounded_graph_range.map_or(request.graph_range, |bounded| {
+            [
+                request.graph_range[0].max(bounded[0]),
+                request.graph_range[1].min(bounded[1]),
+            ]
+        })
+    });
+    Ok(RiemannSamplePlan::new(
+        axes,
+        x_min,
+        x_max,
+        request.dx,
+        RiemannSampleType::try_from(request.input_sample_type.as_str())?,
+        request.width_scale_factor,
+    )?)
+}
+
+fn area_plan(
+    axes: TransformedAxes2DState,
+    request: &AreaQueryRequest,
+    graph: &ObjectSnapshot,
+    bounded_graph: Option<&ObjectSnapshot>,
+) -> Result<AreaSamplePlan, ManimAxesQueryError> {
+    let graph_range = GraphParameterRange::new(request.graph_range[0], request.graph_range[1])?;
+    let bounded = bounded_graph.zip(request.bounded_graph_range).map(|(graph, range)| {
+        GraphParameterRange::new(range[0], range[1]).map(|range| (graph, range))
+    });
+    let bounded = match bounded {
+        Some(result) => Some(result?),
+        None => None,
+    };
+    Ok(AreaSamplePlan::new(
+        axes,
+        graph,
+        graph_range,
+        request.x_range,
+        bounded,
+    )?)
+}
+
+fn parse_graph_snapshot(snapshot_json: &str) -> Result<ObjectSnapshot, ManimAxesQueryError> {
+    serde_json::from_str(snapshot_json)
+        .map_err(|error| ManimAxesQueryError::InvalidGraphSnapshot(error.to_string()))
+}
+
+fn parse_optional_graph_snapshot(
+    snapshot_json: &str,
+) -> Result<Option<ObjectSnapshot>, ManimAxesQueryError> {
+    if snapshot_json.is_empty() {
+        Ok(None)
+    } else {
+        parse_graph_snapshot(snapshot_json).map(Some)
+    }
+}
+
+fn parse_optional_json<T>(value: &str) -> Result<Option<T>, serde_json::Error>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::from_str(value).map(Some)
+    }
+}
+
+fn validate_bounded_presence(
+    expected: bool,
+    actual: bool,
+    context: &str,
+) -> Result<(), ManimAxesQueryError> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(ManimAxesQueryError::InvalidAreaRequest(format!(
+            "{context} bounded graph presence must match request"
+        )))
+    }
 }
 
 fn parse_axis_snapshot(
@@ -205,13 +414,21 @@ pub enum ManimAxesQueryError {
     InvalidRequest(String),
     InvalidLineGraphValues(String),
     InvalidGraphSnapshot(String),
-    InvalidAxisSnapshot { axis: &'static str, error: String },
+    InvalidRiemannRequest(String),
+    InvalidRiemannValues(String),
+    InvalidAreaRequest(String),
+    InvalidAreaValues(String),
+    InvalidCalculusRange(String),
+    InvalidAxisSnapshot {
+        axis: &'static str,
+        error: String,
+    },
     InvalidAxisGeometry(&'static str),
-    NonFiniteGraphX(f64),
-    GraphXOutOfRange { x: f64, start: f64, end: f64 },
     Coordinates(CoordinateSystemError),
     LineGraph(LineGraphAuthoringError),
-    GeometryProportion(GeometryProportionError),
+    GraphQuery(GraphQueryError),
+    Riemann(RiemannAuthoringError),
+    Area(AreaAuthoringError),
     Serialization(String),
 }
 
@@ -225,25 +442,33 @@ impl std::fmt::Display for ManimAxesQueryError {
             Self::InvalidGraphSnapshot(error) => {
                 write!(formatter, "invalid graph snapshot: {error}")
             }
+            Self::InvalidRiemannRequest(error) => {
+                write!(formatter, "invalid Axes Riemann request: {error}")
+            }
+            Self::InvalidRiemannValues(error) => {
+                write!(formatter, "invalid Axes Riemann values: {error}")
+            }
+            Self::InvalidAreaRequest(error) => {
+                write!(formatter, "invalid Axes area request: {error}")
+            }
+            Self::InvalidAreaValues(error) => {
+                write!(formatter, "invalid Axes area values: {error}")
+            }
+            Self::InvalidCalculusRange(name) => {
+                write!(formatter, "Axes calculus {name} range must be finite")
+            }
             Self::InvalidAxisSnapshot { axis, error } => {
                 write!(formatter, "invalid Axes {axis}-axis snapshot: {error}")
             }
-            Self::InvalidAxisGeometry(axis) => {
-                write!(
-                    formatter,
-                    "Axes {axis}-axis snapshot must contain line geometry"
-                )
-            }
-            Self::NonFiniteGraphX(x) => {
-                write!(formatter, "graph x lookup requires a finite value: {x}")
-            }
-            Self::GraphXOutOfRange { x, start, end } => write!(
+            Self::InvalidAxisGeometry(axis) => write!(
                 formatter,
-                "x={x} not located in the range of the graph ([{start}, {end}])"
+                "Axes {axis}-axis snapshot must contain line geometry"
             ),
             Self::Coordinates(error) => error.fmt(formatter),
             Self::LineGraph(error) => error.fmt(formatter),
-            Self::GeometryProportion(error) => error.fmt(formatter),
+            Self::GraphQuery(error) => error.fmt(formatter),
+            Self::Riemann(error) => error.fmt(formatter),
+            Self::Area(error) => error.fmt(formatter),
             Self::Serialization(error) => {
                 write!(formatter, "unable to serialize Axes query result: {error}")
             }
@@ -265,9 +490,21 @@ impl From<LineGraphAuthoringError> for ManimAxesQueryError {
     }
 }
 
-impl From<GeometryProportionError> for ManimAxesQueryError {
-    fn from(value: GeometryProportionError) -> Self {
-        Self::GeometryProportion(value)
+impl From<GraphQueryError> for ManimAxesQueryError {
+    fn from(value: GraphQueryError) -> Self {
+        Self::GraphQuery(value)
+    }
+}
+
+impl From<RiemannAuthoringError> for ManimAxesQueryError {
+    fn from(value: RiemannAuthoringError) -> Self {
+        Self::Riemann(value)
+    }
+}
+
+impl From<AreaAuthoringError> for ManimAxesQueryError {
+    fn from(value: AreaAuthoringError) -> Self {
+        Self::Area(value)
     }
 }
 
@@ -343,6 +580,86 @@ mod wasm {
                 .graph_point_for_x_json(
                     x,
                     graph_snapshot_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = riemannSampleValuesJson)]
+        pub fn riemann_sample_values_json(
+            &self,
+            request_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .riemann_sample_values_json(
+                    request_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = riemannRectanglesJson)]
+        pub fn riemann_rectangles_json(
+            &self,
+            request_json: &str,
+            graph_y_values_json: &str,
+            bounded_graph_y_values_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .riemann_rectangles_json(
+                    request_json,
+                    graph_y_values_json,
+                    bounded_graph_y_values_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = areaEndpointXValuesJson)]
+        pub fn area_endpoint_x_values_json(
+            &self,
+            request_json: &str,
+            graph_snapshot_json: &str,
+            bounded_graph_snapshot_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .area_endpoint_x_values_json(
+                    request_json,
+                    graph_snapshot_json,
+                    bounded_graph_snapshot_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = areaSnapshotJson)]
+        pub fn area_snapshot_json(
+            &self,
+            request_json: &str,
+            graph_snapshot_json: &str,
+            bounded_graph_snapshot_json: &str,
+            graph_endpoint_y_values_json: &str,
+            bounded_graph_endpoint_y_values_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .area_snapshot_json(
+                    request_json,
+                    graph_snapshot_json,
+                    bounded_graph_snapshot_json,
+                    graph_endpoint_y_values_json,
+                    bounded_graph_endpoint_y_values_json,
                     x_axis_snapshot_json,
                     y_axis_snapshot_json,
                 )
@@ -439,10 +756,9 @@ mod tests {
     }
 
     #[test]
-    fn generic_graph_lookup_matches_manim_binary_search_for_ascending_and_descending_x() {
+    fn generic_graph_lookup_matches_shared_manim_binary_search() {
         let plan = AxesQueryPlan::from_json(request_json()).unwrap();
         let (x_axis, y_axis) = identity_axes(&plan);
-
         for values in [
             "[[-1.0,0.0,1.0],[1.0,0.0,-1.0]]",
             "[[1.0,0.0,-1.0],[1.0,0.0,-1.0]]",
@@ -462,42 +778,8 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            assert!((coords[0] - 0.5).abs() <= MANIM_GRAPH_X_SEARCH_TOLERANCE);
+            assert!((coords[0] - 0.5).abs() <= noon::MANIM_GRAPH_X_SEARCH_TOLERANCE);
         }
-    }
-
-    #[test]
-    fn generic_graph_lookup_uses_current_graph_and_axes_transforms() {
-        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
-        let axes_transform = Transform2D {
-            translation: Vec2::new(2.0, -1.0),
-            rotation: 0.2,
-            scale: Vec2::new(1.1, 1.1),
-        };
-        let x_axis = axis_snapshot(plan.axes.x_axis(), axes_transform);
-        let y_axis = axis_snapshot(plan.axes.y_axis(), axes_transform);
-        let mut graph: ObjectSnapshot = serde_json::from_str(
-            &plan
-                .line_graph_snapshot_json("[[-1.0,0.0,1.0],[0.0,0.0,0.0]]", &x_axis, &y_axis)
-                .unwrap(),
-        )
-        .unwrap();
-        graph.transform.translation = Vec2::new(0.2, 0.0);
-        let point: [f64; 2] = serde_json::from_str(
-            &plan
-                .graph_point_for_x_json(
-                    0.5,
-                    &serde_json::to_string(&graph).unwrap(),
-                    &x_axis,
-                    &y_axis,
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        let coords = TransformedAxes2DState::new(plan.axes, axes_transform, axes_transform)
-            .point_to_coords(Vec2::new(point[0] as f32, point[1] as f32))
-            .unwrap();
-        assert!((coords.0 - 0.5).abs() <= MANIM_GRAPH_X_SEARCH_TOLERANCE);
     }
 
     #[test]
@@ -509,44 +791,79 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plan.graph_point_for_x_json(3.0, &graph, &x_axis, &y_axis),
-            Err(ManimAxesQueryError::GraphXOutOfRange { .. })
+            Err(ManimAxesQueryError::GraphQuery(
+                GraphQueryError::GraphXOutOfRange { .. }
+            ))
         ));
 
         let rectangle =
             serde_json::to_string(&ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0))).unwrap();
         assert!(matches!(
             plan.graph_point_for_x_json(0.0, &rectangle, &x_axis, &y_axis),
-            Err(ManimAxesQueryError::GeometryProportion(
-                GeometryProportionError::UnsupportedGeometry
+            Err(ManimAxesQueryError::GraphQuery(
+                GraphQueryError::GeometryProportion(_)
             ))
         ));
     }
 
     #[test]
-    fn malformed_and_mismatched_line_graph_values_fail_closed() {
+    fn riemann_bridge_preserves_two_phase_callback_contract() {
         let plan = AxesQueryPlan::from_json(request_json()).unwrap();
         let (x_axis, y_axis) = identity_axes(&plan);
-        assert!(matches!(
-            plan.line_graph_snapshot_json("not json", &x_axis, &y_axis),
-            Err(ManimAxesQueryError::InvalidLineGraphValues(_))
-        ));
-        assert!(matches!(
-            plan.line_graph_snapshot_json("[[0.0,1.0],[2.0]]", &x_axis, &y_axis),
-            Err(ManimAxesQueryError::LineGraph(
-                LineGraphAuthoringError::CoordinateCountMismatch { .. }
-            ))
-        ));
+        let request = r#"{"graph_range":[-1,1],"bounded_graph_range":null,"x_range":[0,1],"dx":0.5,"input_sample_type":"center","width_scale_factor":1.001}"#;
+        let values: RiemannSampleValues = serde_json::from_str(
+            &plan
+                .riemann_sample_values_json(request, &x_axis, &y_axis)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(values.graph, vec![0.25, 0.75]);
+        assert_eq!(values.bounded_graph, None);
+
+        let rectangles: Vec<RiemannRectangleResult> = serde_json::from_str(
+            &plan
+                .riemann_rectangles_json(request, "[1.0,-0.5]", "", &x_axis, &y_axis)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rectangles.len(), 2);
+        assert!(!rectangles[0].negative_signed_area);
+        assert!(rectangles[1].negative_signed_area);
+        assert!(rectangles
+            .iter()
+            .all(|result| matches!(result.snapshot.geometry, GeometryRef::Rectangle { .. })));
     }
 
     #[test]
-    fn non_line_snapshot_fails_closed() {
+    fn area_bridge_resolves_callbacks_then_returns_one_retained_polygon() {
         let plan = AxesQueryPlan::from_json(request_json()).unwrap();
-        let bad = serde_json::to_string(&ObjectSnapshot::new(GeometryRef::circle(1.0))).unwrap();
-        let good = axis_snapshot(plan.axes.y_axis(), Transform2D::IDENTITY);
-        assert_eq!(
-            plan.coords_to_point_json(0.0, 0.0, &bad, &good)
-                .unwrap_err(),
-            ManimAxesQueryError::InvalidAxisGeometry("x")
-        );
+        let (x_axis, y_axis) = identity_axes(&plan);
+        let graph = plan
+            .line_graph_snapshot_json("[[0.0,1.0,2.0],[0.0,1.0,0.0]]", &x_axis, &y_axis)
+            .unwrap();
+        let request = r#"{"graph_range":[0,2],"bounded_graph_range":null,"x_range":[0.5,1.5]}"#;
+        let endpoints: [f64; 2] = serde_json::from_str(
+            &plan
+                .area_endpoint_x_values_json(request, &graph, "", &x_axis, &y_axis)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(endpoints, [0.5, 1.5]);
+
+        let snapshot: ObjectSnapshot = serde_json::from_str(
+            &plan
+                .area_snapshot_json(
+                    request,
+                    &graph,
+                    "",
+                    "[0.5,0.5]",
+                    "",
+                    &x_axis,
+                    &y_axis,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(snapshot.geometry, GeometryRef::VectorPath(_)));
     }
 }
