@@ -152,6 +152,9 @@ jobs:
       - name: Check retained Axes plotting
         run: node scripts/manim-axes-smoke.mjs
 
+      - name: Check retained NumberLine authoring
+        run: node scripts/manim-number-line-smoke.mjs
+
       - name: Check lazy Manim namespace dependencies
         run: node scripts/manim-namespace-smoke.mjs
 
