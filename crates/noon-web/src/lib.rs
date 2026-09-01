@@ -11,6 +11,7 @@ mod determinism;
 mod execution_canvas;
 mod execution_transport;
 mod execution_visibility;
+mod family_animation_authoring;
 mod family_bounds;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
@@ -61,6 +62,8 @@ pub use determinism::*;
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_visibility::*;
+#[cfg(target_arch = "wasm32")]
+pub use family_animation_authoring::*;
 pub use family_bounds::*;
 pub use host_player::*;
 pub use legacy::*;
