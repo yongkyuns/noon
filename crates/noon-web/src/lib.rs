@@ -25,6 +25,7 @@ mod reactive_player;
 mod retained_authoring;
 mod retained_authoring_player;
 mod retained_authoring_scene;
+mod retained_authoring_scene_spec;
 mod retained_authoring_tracks;
 mod retained_authoring_wire_scene;
 mod retained_execution_canvas;
@@ -59,6 +60,7 @@ pub use reactive_player::*;
 pub use retained_authoring::*;
 pub use retained_authoring_player::*;
 pub use retained_authoring_scene::MixedRetainedAuthoringError;
+pub use retained_authoring_scene_spec::*;
 pub use retained_authoring_tracks::*;
 pub use retained_authoring_wire_scene::MixedRetainedAuthoringScene;
 #[cfg(target_arch = "wasm32")]
