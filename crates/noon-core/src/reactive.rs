@@ -55,6 +55,10 @@ pub use text_resources::*;
 mod text_animation_members;
 pub use text_animation_members::*;
 
+#[path = "retained_animation_members.rs"]
+mod retained_animation_members;
+pub use retained_animation_members::*;
+
 #[path = "family_animation.rs"]
 mod family_animation;
 pub use family_animation::*;
