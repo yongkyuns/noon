@@ -103,6 +103,26 @@ def _line_from_snapshot(snapshot: dict[str, Any]) -> _compat.Line:
     return value
 
 
+def _vector_path_vertices(snapshot: dict[str, Any]) -> list[_base.Vec2]:
+    geometry = snapshot.get("geometry", {}).get("vector_path")
+    if not isinstance(geometry, dict):
+        raise TypeError("shared Axes line-graph snapshot is malformed")
+    commands = geometry.get("commands")
+    if not isinstance(commands, list):
+        raise TypeError("shared Axes line-graph path commands are malformed")
+
+    vertices: list[_base.Vec2] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            raise TypeError("shared Axes line-graph path command is malformed")
+        payload = command.get("move_to") or command.get("line_to")
+        if not isinstance(payload, dict) or not isinstance(payload.get("to"), dict):
+            raise TypeError("Axes line graph must contain only corner path commands")
+        point = payload["to"]
+        vertices.append(_base.Vec2(float(point["x"]), float(point["y"])))
+    return vertices
+
+
 class ParametricFunction(_compat.VMobject):
     """Source-visible retained curve type produced by :meth:`Axes.plot`.
 
@@ -127,6 +147,80 @@ class ParametricFunction(_compat.VMobject):
 
 class FunctionGraph(ParametricFunction):
     """Source-visible FunctionGraph type pending direct shared callback authoring."""
+
+
+class VDict(_compat.VGroup):
+    """Flat retained family with ManimCE v0.21 dictionary-style authoring access.
+
+    Keys are authoring metadata only. Runtime membership remains the ordinary retained
+    leaf family already used by :class:`VGroup`; no dictionary node is serialized.
+    """
+
+    def __init__(
+        self,
+        mapping_or_iterable: object = None,
+        show_keys: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise NotImplementedError(f"unsupported VDict option(s): {unsupported}")
+        if show_keys:
+            raise NotImplementedError("VDict(show_keys=True) requires exact Tex rendering")
+        self.show_keys = False
+        self.submob_dict: dict[object, object] = {}
+        self.submobjects: list[object] = []
+        if mapping_or_iterable is not None:
+            self.add(mapping_or_iterable)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.submob_dict!r})"
+
+    def add(self, mapping_or_iterable: object) -> VDict:
+        try:
+            items = dict(mapping_or_iterable).items()  # type: ignore[arg-type]
+        except (TypeError, ValueError) as error:
+            raise TypeError("VDict.add expects a mapping or iterable of key/Mobject pairs") from error
+        for key, value in items:
+            self.add_key_value_pair(key, value)
+        return self
+
+    def add_key_value_pair(self, key: object, value: object) -> VDict:
+        if not isinstance(value, (_base.Mobject, _compat.Group)):
+            raise TypeError("VDict values must be Mobjects or Groups")
+        self.submob_dict[key] = value
+        _compat.VGroup.add(self, value)
+        return self
+
+    def remove(self, key: object) -> VDict:
+        if key not in self.submob_dict:
+            raise KeyError(f"The given key '{key!s}' is not present in the VDict")
+        value = self.submob_dict[key]
+        _compat.VGroup.remove(self, value)
+        del self.submob_dict[key]
+        return self
+
+    def __getitem__(self, key: object) -> object:
+        return self.submob_dict[key]
+
+    def __setitem__(self, key: object, value: object) -> None:
+        if key in self.submob_dict:
+            self.remove(key)
+        self.add([(key, value)])
+
+    def __delitem__(self, key: object) -> None:
+        del self.submob_dict[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.submob_dict
+
+    def get_all_submobjects(self):
+        return self.submob_dict.values()
+
+    def copy(self) -> VDict:
+        return type(self)(
+            [(key, value.copy()) for key, value in self.submob_dict.items()]
+        )
 
 
 class _NumberLineFamily(_compat.VGroup):
@@ -368,6 +462,77 @@ class Axes(_compat.VGroup):
     def get_horizontal_line(self, point: object, **kwargs: Any) -> _compat.Line:
         return self.get_line_from_axis_to_point(1, point, **kwargs)
 
+    def plot_line_graph(
+        self,
+        x_values: object,
+        y_values: object,
+        z_values: object | None = None,
+        line_color: _base.Color = _base.PURE_YELLOW,
+        add_vertex_dots: bool = True,
+        vertex_dot_radius: float = _base.DEFAULT_DOT_RADIUS,
+        vertex_dot_style: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> VDict:
+        """Draw a retained corner-path line graph using current transformed Axes state."""
+
+        if not isinstance(line_color, _base.Color):
+            raise TypeError("line_color must be a Noon/Manim Color")
+        try:
+            xs = [float(value) for value in x_values]  # type: ignore[union-attr]
+            ys = [float(value) for value in y_values]  # type: ignore[union-attr]
+        except (TypeError, ValueError) as error:
+            raise TypeError("x_values and y_values must be numeric iterables") from error
+        if z_values is None:
+            zs = [0.0] * len(xs)
+        else:
+            try:
+                zs = [float(value) for value in z_values]  # type: ignore[union-attr]
+            except (TypeError, ValueError) as error:
+                raise TypeError("z_values must be a numeric iterable or None") from error
+        if len(xs) != len(ys) or len(xs) != len(zs):
+            raise ValueError("x_values, y_values, and z_values must have equal lengths")
+        if not all(math.isfinite(value) for value in (*xs, *ys, *zs)):
+            raise ValueError("line-graph coordinates must be finite")
+        if any(not math.isclose(value, 0.0, abs_tol=1.0e-12) for value in zs):
+            raise NotImplementedError("Noon Axes.plot_line_graph currently supports z=0 only")
+        if vertex_dot_style is None:
+            dot_style: dict[str, Any] = {}
+        elif isinstance(vertex_dot_style, dict):
+            dot_style = dict(vertex_dot_style)
+        else:
+            raise TypeError("vertex_dot_style must be a dict or None")
+
+        snapshot_json = str(
+            self._query_plan.lineGraphSnapshotJson(
+                json.dumps(xs, separators=(",", ":"), allow_nan=False),
+                json.dumps(ys, separators=(",", ":"), allow_nan=False),
+                self.x_axis._axis_snapshot_json(),
+                self.y_axis._axis_snapshot_json(),
+            )
+        )
+        snapshot = json.loads(snapshot_json)
+        graph = _mobject_from_snapshot(_compat.VMobject, snapshot)
+        _shared._apply_shared_constructor_kwargs(
+            graph,
+            _compat._manim_vmobject_kwargs(kwargs, default_color=line_color),
+        )
+
+        result = VDict([("line_graph", graph)])
+        if add_vertex_dots:
+            vertices = _vector_path_vertices(snapshot)
+            vertex_dots = _compat.VGroup(
+                *(
+                    _base.Dot(
+                        point=vertex,
+                        radius=float(vertex_dot_radius),
+                        **dot_style,
+                    )
+                    for vertex in vertices
+                )
+            )
+            result["vertex_dots"] = vertex_dots
+        return result
+
     def plot(
         self,
         function: Callable[[float], float],
@@ -428,6 +593,7 @@ def install() -> None:
         "Axes": Axes,
         "ParametricFunction": ParametricFunction,
         "FunctionGraph": FunctionGraph,
+        "VDict": VDict,
     }
     for name, value in public.items():
         setattr(_base, name, value)
