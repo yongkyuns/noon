@@ -111,8 +111,8 @@ _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
-# Retained text must wrap the final lifecycle-aware Scene.add implementation so
-# it is intercepted before any legacy geometry binding occurs.
+# Lifecycle owns Scene.add/remove for every content type. Retained text contributes
+# only its object-binding/resource realization below that shared scene boundary.
 import _manim_typst
 _manim_typst.install()
 # Install retained animation before later Scene.play adapters capture their

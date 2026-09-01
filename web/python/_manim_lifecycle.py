@@ -135,8 +135,7 @@ def _resolve_wrapper(
             at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
             label=label,
         )
-    assert member._object is not None
-    has_tracks, present, has_future = _presence_state(scene, member._object, time)
+    has_tracks, present, has_future = member._scene_lifecycle_state(scene, time)
     return _resolve(
         intent,
         binding="this_scene",
@@ -165,8 +164,8 @@ def _scene_add(
             _phase_b._bind_raw(self, member, key=key if index == 0 else None)
         assert member._object is not None
         if plan.show_now:
-            self._add_presence_track(
-                member._object,
+            member._record_scene_presence(
+                self,
                 False,
                 True,
                 self._cursor,
@@ -184,8 +183,8 @@ def _scene_remove(self: _compat.Scene, *mobjects: object) -> _compat.Scene:
         plan = _resolve_wrapper(self, member, "remove", self._cursor, "Scene.remove target")
         if plan.hide_now:
             assert member._object is not None
-            self._add_presence_track(
-                member._object,
+            member._record_scene_presence(
+                self,
                 True,
                 False,
                 self._cursor,
@@ -231,8 +230,8 @@ def _bind_for_animation(
             _phase_b._bind_raw(scene, member)
         assert member._object is not None
         if plan.show_now:
-            scene._add_presence_track(
-                member._object,
+            member._record_scene_presence(
+                scene,
                 False,
                 True,
                 start_time,
