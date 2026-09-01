@@ -47,6 +47,11 @@ function sceneResultJson(objectId) {
   return JSON.stringify({
     kind: "scene_document",
     document: { version: 1, objects: [{ id: objectId }], tracks: [] },
+    scene_spec: {
+      version: 1,
+      objects: [{ id: objectId, content: { kind: "geometry" } }],
+      tracks: [],
+    },
     duration: 0,
     identities: {
       objects: [{ id: objectId, key: `@object:${objectId}` }],
