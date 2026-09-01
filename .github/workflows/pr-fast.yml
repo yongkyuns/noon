@@ -111,6 +111,20 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Classify browser integration risk
+        id: browser-risk
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          changed_paths="$(git diff --name-only "$BASE_SHA" HEAD)"
+          printf '%s\n' "$changed_paths"
+          printf '%s\n' "$changed_paths" | node scripts/pr-risk-classifier.mjs >> "$GITHUB_OUTPUT"
 
       - name: Use stable Rust and WASM target
         run: |
@@ -198,6 +212,7 @@ jobs:
           exit "$status"
 
       - name: Check canonical retained execution
+        if: steps.browser-risk.outputs.retained_execution == 'true'
         id: retained-execution
         run: |
           SECONDS=0
@@ -229,6 +244,7 @@ jobs:
           PACKAGE_SECONDS: ${{ steps.browser-package.outputs.seconds }}
           REPLAY_SECONDS: ${{ steps.deterministic-replay.outputs.seconds }}
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
+          RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
         run: |
@@ -245,6 +261,11 @@ jobs:
             fi
           }
 
+          retained_duration="skipped"
+          if [[ "$RETAINED_REQUIRED" == "true" ]]; then
+            retained_duration="$(display_seconds "$RETAINED_SECONDS")"
+          fi
+
           {
             echo "### Browser fast checks timing"
             echo
@@ -253,9 +274,11 @@ jobs:
             echo "| Browser package | $(display_seconds "$PACKAGE_SECONDS") |"
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
-            echo "| Canonical retained execution | $(display_seconds "$RETAINED_SECONDS") |"
+            echo "| Canonical retained execution | $retained_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
+            echo
+            echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."
             echo
             echo "The measured browser path starts before checkout and ends after the renderer smoke. Hosted-runner queue time and post-job cleanup are intentionally excluded."
           } >> "$GITHUB_STEP_SUMMARY"
