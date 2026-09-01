@@ -349,12 +349,17 @@ mod tests {
         assert_eq!(plan.radial_lines().len(), 4);
         assert!(plan.faded_circles().is_empty());
         assert!(plan.faded_radial_lines().is_empty());
-        for (actual, expected) in plan.radial_lines().iter().map(PolarPlaneRadialLine::angle).zip([
-            0.0,
-            std::f64::consts::FRAC_PI_2,
-            std::f64::consts::PI,
-            3.0 * std::f64::consts::FRAC_PI_2,
-        ]) {
+        for (actual, expected) in plan
+            .radial_lines()
+            .iter()
+            .map(PolarPlaneRadialLine::angle)
+            .zip([
+                0.0,
+                std::f64::consts::FRAC_PI_2,
+                std::f64::consts::PI,
+                3.0 * std::f64::consts::FRAC_PI_2,
+            ])
+        {
             assert_close(actual, expected);
         }
     }
@@ -411,10 +416,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.radial_lines().len(), 3);
-        assert_close(
-            plan.radial_lines()[2].angle(),
-            1.6 * std::f64::consts::PI,
-        );
+        assert_close(plan.radial_lines()[2].angle(), 1.6 * std::f64::consts::PI);
     }
 
     #[test]
