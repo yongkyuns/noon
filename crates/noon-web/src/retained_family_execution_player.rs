@@ -1,6 +1,8 @@
 use noon::{LoweredRetainedFamilyAnimation, RetainedScene};
 use noon_compile::{RetainedCompileError, RetainedCompiledScene};
-use noon_core::{Camera2DState, FamilyAnimationSpec, ObjectId, RetainedFamilyAnimationPlan};
+use noon_core::{
+    Camera2DState, FamilyAnimationSpec, ObjectId, RetainedFamilyAnimationPlan, TrackDefinition,
+};
 use noon_runtime::{
     RetainedFamilyFrame, RetainedFamilyPlanRuntimeError, RetainedFamilyPlanSceneInstance,
     RetainedFrameState,
@@ -37,7 +39,27 @@ impl RetainedFamilyExecutionPlayer {
         camera_object: Option<ObjectId>,
         session: u32,
     ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
-        let compiled = RetainedCompiledScene::compile(scene.objects(), scene.tracks())?;
+        let tracks = scene.tracks().to_vec();
+        Self::new_with_tracks(scene, &tracks, plan, spec, camera_object, session)
+    }
+
+    /// Construct from a retained materialization whose validated timeline is carried
+    /// separately from its resource/object arena.
+    ///
+    /// Canonical mixed SceneSpec lowering currently materializes geometry first and
+    /// therefore cannot install text-targeting tracks into that temporary seed scene.
+    /// The canonical handoff nevertheless validates one exact track set after all
+    /// objects exist. Accept it here explicitly so family-aware execution cannot drop
+    /// ordinary transform/style/lifecycle animation while switching schedulers.
+    pub fn new_with_tracks(
+        scene: RetainedScene,
+        tracks: &[TrackDefinition],
+        plan: RetainedFamilyAnimationPlan,
+        spec: FamilyAnimationSpec,
+        camera_object: Option<ObjectId>,
+        session: u32,
+    ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
+        let compiled = RetainedCompiledScene::compile(scene.objects(), tracks)?;
         let bundle = RetainedResourceBundle::capture(
             scene
                 .objects()

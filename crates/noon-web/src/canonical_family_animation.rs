@@ -28,6 +28,10 @@ impl CanonicalRetainedFamilyAnimation {
     pub const fn spec(&self) -> FamilyAnimationSpec {
         self.spec
     }
+
+    pub fn into_parts(self) -> (RetainedFamilyAnimationPlan, FamilyAnimationSpec) {
+        (self.plan, self.spec)
+    }
 }
 
 /// Canonical mixed scene with semantic-family requests lowered against its own retained
@@ -81,6 +85,26 @@ impl CanonicalRetainedFamilyAnimationScene {
 
     pub fn animations(&self) -> &[CanonicalRetainedFamilyAnimation] {
         &self.animations
+    }
+
+    /// Consume the canonical source materialization without cloning retained resources.
+    ///
+    /// Tracks remain explicit because the canonical materializer validates them only
+    /// after geometry and text share one object domain. The execution owner receives
+    /// that exact validated track set rather than accidentally falling back to the
+    /// geometry-only seed scene's empty track vector.
+    pub fn into_parts(
+        self,
+    ) -> (
+        RetainedScene,
+        Vec<TrackDefinition>,
+        Option<ObjectId>,
+        Vec<CanonicalRetainedFamilyAnimation>,
+    ) {
+        let camera_object = self.scene.camera_object();
+        let tracks = self.scene.tracks().to_vec();
+        let scene = self.scene.into_scene();
+        (scene, tracks, camera_object, self.animations)
     }
 }
 

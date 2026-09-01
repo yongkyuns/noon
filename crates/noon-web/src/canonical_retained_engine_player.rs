@@ -1,17 +1,68 @@
 use noon_ir::{SceneSpec, SceneSpecError};
 
 use crate::{
-    ClockError, MixedRetainedAuthoringError, MixedRetainedAuthoringScene, PlaybackClock,
-    RetainedAuthoringPlayer, RetainedAuthoringPlayerError,
+    CanonicalRetainedFamilyAnimationScene, CanonicalRetainedFamilyAnimationSceneError, ClockError,
+    MixedRetainedAuthoringError, MixedRetainedAuthoringScene, PlaybackClock,
+    RetainedAuthoringPlayer, RetainedAuthoringPlayerError, RetainedFamilyExecutionPlayer,
+    RetainedFamilyExecutionPlayerError,
 };
+
+/// Runtime selected behind the single canonical retained browser/WASM surface.
+///
+/// Frontends and workers do not branch on family scheduling. Canonical source content
+/// determines the Rust execution owner once at construction, after which both variants
+/// expose the same clocked delta/resource API.
+#[derive(Debug)]
+enum CanonicalRetainedExecutionPlayer {
+    Ordinary(RetainedAuthoringPlayer),
+    Family(RetainedFamilyExecutionPlayer),
+}
+
+impl CanonicalRetainedExecutionPlayer {
+    fn resource_bundle_bytes(&self) -> &[u8] {
+        match self {
+            Self::Ordinary(player) => player.resource_bundle_bytes(),
+            Self::Family(player) => player.resource_bundle_bytes(),
+        }
+    }
+
+    fn evaluate_delta_json(
+        &mut self,
+        time: f64,
+    ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
+        match self {
+            Self::Ordinary(player) => player
+                .evaluate_delta(time)?
+                .map(|delta| {
+                    serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
+                })
+                .transpose(),
+            Self::Family(player) => player
+                .evaluate_delta(time)?
+                .map(|delta| {
+                    serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
+                })
+                .transpose(),
+        }
+    }
+
+    fn time(&self) -> f64 {
+        match self {
+            Self::Ordinary(player) => player.frame().time,
+            Self::Family(player) => player.frame().time,
+        }
+    }
+}
 
 /// Clocked retained execution owner constructed directly from canonical `SceneSpec`.
 ///
 /// Compatibility adapters may still produce `SceneSpec` from older payloads, but this
-/// execution boundary has no legacy geometry document or retained-text sidecar.
+/// execution boundary has no legacy geometry document or retained-text sidecar. Family
+/// animation requests are likewise consumed entirely inside Rust: the WASM class and
+/// browser worker remain one canonical protocol regardless of selected execution owner.
 #[derive(Debug)]
 pub struct CanonicalRetainedEnginePlayer {
-    player: RetainedAuthoringPlayer,
+    player: CanonicalRetainedExecutionPlayer,
     clock: PlaybackClock,
     scene_spec_json: String,
 }
@@ -22,10 +73,43 @@ impl CanonicalRetainedEnginePlayer {
         loop_duration_seconds: f64,
         session: u32,
     ) -> Result<Self, CanonicalRetainedEnginePlayerError> {
+        let family_animation_count = scene_spec.family_animations.len();
+        if family_animation_count > 1 {
+            return Err(
+                CanonicalRetainedEnginePlayerError::MultipleFamilyAnimationsUnsupported(
+                    family_animation_count,
+                ),
+            );
+        }
+
         let scene_spec_json = scene_spec.to_json()?;
-        let mixed = MixedRetainedAuthoringScene::from_scene_spec(scene_spec)?;
+        let player = if family_animation_count == 0 {
+            let mixed = MixedRetainedAuthoringScene::from_scene_spec(scene_spec)?;
+            CanonicalRetainedExecutionPlayer::Ordinary(RetainedAuthoringPlayer::new(
+                mixed, session,
+            )?)
+        } else {
+            let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
+            let (scene, tracks, camera_object, mut animations) = lowered.into_parts();
+            let animation = animations
+                .pop()
+                .expect("one canonical family request must lower to one animation");
+            debug_assert!(animations.is_empty());
+            let (plan, spec) = animation.into_parts();
+            CanonicalRetainedExecutionPlayer::Family(
+                RetainedFamilyExecutionPlayer::new_with_tracks(
+                    scene,
+                    &tracks,
+                    plan,
+                    spec,
+                    camera_object,
+                    session,
+                )?,
+            )
+        };
+
         Ok(Self {
-            player: RetainedAuthoringPlayer::new(mixed, session)?,
+            player,
             clock: PlaybackClock::looping(loop_duration_seconds)?,
             scene_spec_json,
         })
@@ -52,11 +136,9 @@ impl CanonicalRetainedEnginePlayer {
     }
 
     pub fn initial_delta_json(&mut self) -> Result<String, CanonicalRetainedEnginePlayerError> {
-        let delta = self
-            .player
-            .evaluate_delta(0.0)?
-            .expect("first retained evaluation must emit a snapshot");
-        Ok(serde_json::to_string(&delta)?)
+        self.player
+            .evaluate_delta_json(0.0)?
+            .ok_or(CanonicalRetainedEnginePlayerError::MissingInitialSnapshot)
     }
 
     pub fn tick_delta_json(
@@ -64,12 +146,7 @@ impl CanonicalRetainedEnginePlayer {
         timestamp_ms: f64,
     ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
         let scene_time = self.clock.scene_time(timestamp_ms)?;
-        self.player
-            .evaluate_delta(scene_time)?
-            .map(|delta| {
-                serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
-            })
-            .transpose()
+        self.player.evaluate_delta_json(scene_time)
     }
 
     pub fn set_loop_duration(
@@ -94,13 +171,7 @@ impl CanonicalRetainedEnginePlayer {
     ) -> Result<Option<String>, CanonicalRetainedEnginePlayerError> {
         let mut clock = self.clock.clone();
         clock.seek(scene_time)?;
-        let delta = self
-            .player
-            .evaluate_delta(scene_time)?
-            .map(|delta| {
-                serde_json::to_string(&delta).map_err(CanonicalRetainedEnginePlayerError::from)
-            })
-            .transpose()?;
+        let delta = self.player.evaluate_delta_json(scene_time)?;
         self.clock = clock;
         Ok(delta)
     }
@@ -110,7 +181,7 @@ impl CanonicalRetainedEnginePlayer {
     }
 
     pub fn time(&self) -> f64 {
-        self.player.frame().time
+        self.player.time()
     }
 }
 
@@ -119,6 +190,10 @@ pub enum CanonicalRetainedEnginePlayerError {
     SceneSpec(SceneSpecError),
     Authoring(MixedRetainedAuthoringError),
     Player(RetainedAuthoringPlayerError),
+    FamilyScene(CanonicalRetainedFamilyAnimationSceneError),
+    FamilyPlayer(RetainedFamilyExecutionPlayerError),
+    MultipleFamilyAnimationsUnsupported(usize),
+    MissingInitialSnapshot,
     Clock(ClockError),
     Json(serde_json::Error),
 }
@@ -129,6 +204,15 @@ impl std::fmt::Display for CanonicalRetainedEnginePlayerError {
             Self::SceneSpec(error) => error.fmt(formatter),
             Self::Authoring(error) => error.fmt(formatter),
             Self::Player(error) => error.fmt(formatter),
+            Self::FamilyScene(error) => error.fmt(formatter),
+            Self::FamilyPlayer(error) => error.fmt(formatter),
+            Self::MultipleFamilyAnimationsUnsupported(count) => write!(
+                formatter,
+                "canonical retained execution currently supports at most one family animation; received {count}"
+            ),
+            Self::MissingInitialSnapshot => {
+                formatter.write_str("canonical retained execution did not emit its initial snapshot")
+            }
             Self::Clock(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
         }
@@ -152,6 +236,18 @@ impl From<MixedRetainedAuthoringError> for CanonicalRetainedEnginePlayerError {
 impl From<RetainedAuthoringPlayerError> for CanonicalRetainedEnginePlayerError {
     fn from(value: RetainedAuthoringPlayerError) -> Self {
         Self::Player(value)
+    }
+}
+
+impl From<CanonicalRetainedFamilyAnimationSceneError> for CanonicalRetainedEnginePlayerError {
+    fn from(value: CanonicalRetainedFamilyAnimationSceneError) -> Self {
+        Self::FamilyScene(value)
+    }
+}
+
+impl From<RetainedFamilyExecutionPlayerError> for CanonicalRetainedEnginePlayerError {
+    fn from(value: RetainedFamilyExecutionPlayerError) -> Self {
+        Self::FamilyPlayer(value)
     }
 }
 
@@ -254,12 +350,19 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, ObjectId, RateFunction, SceneDefinition, TrackTiming, Vec2};
+    use noon_core::{
+        FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationRequest,
+        FamilyAnimationSpec, GeometryRef, ObjectId, RateFunction, SceneDefinition, SemanticStore,
+        TrackTiming, Vec2,
+    };
+    use noon_ir::SceneSpec;
     use serde_json::json;
 
     use crate::{
-        canonical_retained_scene_spec_json, RetainedAuthoringDocument, RetainedAuthoringTextObject,
-        RetainedExecutionDeltaEnvelope, RetainedTextAuthoringSpec,
+        canonical_retained_scene_spec_json, InstalledRetainedExecutionMirror,
+        RetainedAuthoringDocument, RetainedAuthoringTextObject, RetainedExecutionDeltaEnvelope,
+        RetainedFamilyExecutionDeltaEnvelope, RetainedTextAuthoringSpec,
+        RetainedTransportApplyOutcome,
     };
 
     use super::*;
@@ -284,6 +387,96 @@ mod tests {
             canonical_retained_scene_spec_json(&legacy_json, &retained_json).unwrap(),
             text_id,
         )
+    }
+
+    fn family_scene_spec() -> (SceneSpec, ObjectId, ObjectId) {
+        let mut legacy = SceneDefinition::new();
+        let circle_id = legacy.add(GeometryRef::circle(0.25));
+        legacy
+            .animate_position(
+                circle_id,
+                Vec2::ZERO,
+                Vec2::new(4.0, 0.0),
+                TrackTiming::new(0.0, 4.0, RateFunction::Linear),
+            )
+            .unwrap();
+        let (scene_spec_json, text_id) = canonical_scene_spec_json(&legacy, "AB");
+        let mut scene_spec = SceneSpec::from_json(&scene_spec_json).unwrap();
+
+        let mut semantics = SemanticStore::new();
+        let text_leaf = semantics.insert_authoring_object();
+        let circle_leaf = semantics.insert_authoring_object();
+        let family = semantics.insert_family();
+        semantics.add_member(family, text_leaf).unwrap();
+        semantics.add_member(family, circle_leaf).unwrap();
+        let family_spec = FamilyAnimationSpec::new(
+            FamilyAnimationMode::Reveal,
+            1.0,
+            2.0,
+            1.0,
+            RateFunction::Linear,
+            false,
+            false,
+        )
+        .unwrap();
+        scene_spec.family_animations.push(
+            FamilyAnimationRequest::from_semantic_bindings(
+                &semantics,
+                family,
+                family_spec,
+                [
+                    FamilyAnimationLeafBinding::new(circle_leaf, circle_id),
+                    FamilyAnimationLeafBinding::new(text_leaf, text_id),
+                ],
+            )
+            .unwrap(),
+        );
+        scene_spec.validate().unwrap();
+        (scene_spec, text_id, circle_id)
+    }
+
+    fn assert_family_midpoint(
+        mirror: &InstalledRetainedExecutionMirror,
+        text_id: ObjectId,
+        circle_id: ObjectId,
+    ) {
+        let plan = mirror.family_plan().unwrap().unwrap();
+        assert_eq!(plan.leaves()[0].span().object, text_id);
+        assert_eq!(plan.leaves()[1].span().object, circle_id);
+
+        // Canonical painter/materialization order is intentionally Circle -> Text for
+        // this fixture, while semantic family order is Text -> Circle. Renderer family
+        // lookup takes a retained runtime object slot, so resolve those slots by stable
+        // ObjectId rather than accidentally treating semantic-plan indices as painter
+        // indices. This directly proves the two ordering domains stay independent.
+        let retained = mirror.frame().unwrap();
+        let text_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == text_id)
+            .unwrap();
+        let circle_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == circle_id)
+            .unwrap();
+        assert_eq!((circle_index, text_index), (0, 1));
+
+        let family_frame = mirror.family_frame().unwrap().unwrap();
+        let text = family_frame
+            .planned_family_leaf(plan, text_index)
+            .unwrap()
+            .unwrap();
+        let circle = family_frame
+            .planned_family_leaf(plan, circle_index)
+            .unwrap()
+            .unwrap();
+        assert_eq!(text.member_progress(0).unwrap(), 1.0);
+        assert_eq!(text.member_progress(1).unwrap(), 0.5);
+        assert_eq!(circle.member_progress(0).unwrap(), 0.0);
+
+        let circle = &retained.objects[circle_index];
+        assert_eq!(circle.transform.translation, Vec2::new(2.0, 0.0));
     }
 
     #[test]
@@ -352,6 +545,89 @@ mod tests {
         assert!(engine.tick_delta_json(8_100.0).unwrap().is_none());
         engine.tick_delta_json(8_600.0).unwrap();
         assert_eq!(engine.time(), 0.75);
+    }
+
+    #[test]
+    fn canonical_engine_selects_family_execution_and_preserves_tracks() {
+        let (scene_spec, text_id, circle_id) = family_scene_spec();
+        let scene_spec_json = scene_spec.to_json().unwrap();
+        let mut engine = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 51).unwrap();
+        assert_eq!(engine.scene_spec_json(), scene_spec_json);
+
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial_json = engine.initial_delta_json().unwrap();
+        let initial: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial_json).unwrap();
+        assert!(initial.retained.snapshot);
+        assert_eq!(initial.family_plans.len(), 1);
+        assert!(!initial_json.contains("glyph"));
+        let (outcome, changes) = mirror.apply_json(&initial_json).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert!(changes.is_all());
+
+        let midpoint_json = engine
+            .seek_delta_json(2.0)
+            .unwrap()
+            .expect("family midpoint delta");
+        let midpoint: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&midpoint_json).unwrap();
+        assert!(!midpoint.retained.snapshot);
+        assert!(midpoint.family_plans.is_empty());
+        mirror.apply_json(&midpoint_json).unwrap();
+        assert_family_midpoint(&mirror, text_id, circle_id);
+    }
+
+    #[test]
+    fn canonical_family_direct_seek_matches_forward_state() {
+        let (scene_spec, text_id, circle_id) = family_scene_spec();
+
+        let mut forward = CanonicalRetainedEnginePlayer::new(scene_spec.clone(), 4.0, 61).unwrap();
+        let mut forward_mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(forward.resource_bundle_bytes())
+                .unwrap();
+        forward_mirror
+            .apply_json(&forward.initial_delta_json().unwrap())
+            .unwrap();
+        forward_mirror
+            .apply_json(
+                &forward
+                    .seek_delta_json(2.0)
+                    .unwrap()
+                    .expect("forward midpoint delta"),
+            )
+            .unwrap();
+
+        let mut direct = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 62).unwrap();
+        let mut direct_mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(direct.resource_bundle_bytes())
+                .unwrap();
+        let direct_json = direct
+            .seek_delta_json(2.0)
+            .unwrap()
+            .expect("direct midpoint snapshot");
+        let direct_delta: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&direct_json).unwrap();
+        assert!(direct_delta.retained.snapshot);
+        direct_mirror.apply_json(&direct_json).unwrap();
+
+        assert_family_midpoint(&forward_mirror, text_id, circle_id);
+        assert_family_midpoint(&direct_mirror, text_id, circle_id);
+        assert_eq!(forward_mirror.frame(), direct_mirror.frame());
+    }
+
+    #[test]
+    fn canonical_engine_rejects_multiple_family_animations_explicitly() {
+        let (mut scene_spec, _, _) = family_scene_spec();
+        scene_spec
+            .family_animations
+            .push(scene_spec.family_animations[0].clone());
+        let error = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 71).unwrap_err();
+        assert!(matches!(
+            error,
+            CanonicalRetainedEnginePlayerError::MultipleFamilyAnimationsUnsupported(2)
+        ));
     }
 
     #[test]
