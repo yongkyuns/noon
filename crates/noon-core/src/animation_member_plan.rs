@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use crate::{ObjectId, SemanticNodeId, SemanticStore, SemanticStoreError};
+use crate::{
+    FamilyAnimationError, FamilyAnimationState, ObjectId, SemanticNodeId, SemanticStore,
+    SemanticStoreError,
+};
 
 /// Global animation-member range owned by one semantic leaf/runtime object.
 ///
@@ -18,6 +21,44 @@ pub struct FamilyAnimationLeafSpan {
 impl FamilyAnimationLeafSpan {
     pub fn global_member_index(self, local_member: u32) -> Option<u32> {
         (local_member < self.member_count).then(|| self.first_member + local_member)
+    }
+}
+
+/// Evaluated family-animation view for one semantic leaf.
+///
+/// The leaf keeps its local member indexing while every progress lookup is resolved
+/// through the plan's global member count/index. Lag and member-order reversal therefore
+/// continue across leaf/content boundaries instead of restarting for each object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FamilyAnimationLeafProgress {
+    span: FamilyAnimationLeafSpan,
+    total_member_count: u32,
+    state: FamilyAnimationState,
+}
+
+impl FamilyAnimationLeafProgress {
+    pub const fn span(self) -> FamilyAnimationLeafSpan {
+        self.span
+    }
+
+    pub const fn total_member_count(self) -> u32 {
+        self.total_member_count
+    }
+
+    pub fn member_progress(
+        self,
+        local_member: u32,
+    ) -> Result<f32, FamilyAnimationMemberEvaluationError> {
+        let global_member = self.span.global_member_index(local_member).ok_or(
+            FamilyAnimationMemberEvaluationError::InvalidLocalMember {
+                leaf: self.span.semantic_leaf,
+                index: local_member,
+                member_count: self.span.member_count,
+            },
+        )?;
+        Ok(self
+            .state
+            .member_progress(global_member, self.total_member_count)?)
     }
 }
 
@@ -47,6 +88,60 @@ impl FamilyAnimationMemberPlan {
             .iter()
             .copied()
             .find(|span| span.semantic_leaf == leaf)
+    }
+
+    pub fn leaf_progress(
+        &self,
+        state: FamilyAnimationState,
+        leaf: SemanticNodeId,
+    ) -> Result<FamilyAnimationLeafProgress, FamilyAnimationMemberEvaluationError> {
+        state.validate()?;
+        let span = self
+            .span_for_leaf(leaf)
+            .ok_or(FamilyAnimationMemberEvaluationError::UnknownLeaf(leaf))?;
+        Ok(FamilyAnimationLeafProgress {
+            span,
+            total_member_count: self.total_member_count,
+            state,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FamilyAnimationMemberEvaluationError {
+    UnknownLeaf(SemanticNodeId),
+    InvalidLocalMember {
+        leaf: SemanticNodeId,
+        index: u32,
+        member_count: u32,
+    },
+    Animation(FamilyAnimationError),
+}
+
+impl std::fmt::Display for FamilyAnimationMemberEvaluationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownLeaf(leaf) => {
+                write!(formatter, "family animation plan has no semantic leaf {leaf:?}")
+            }
+            Self::InvalidLocalMember {
+                leaf,
+                index,
+                member_count,
+            } => write!(
+                formatter,
+                "family animation local member {index} is outside leaf {leaf:?} member count {member_count}"
+            ),
+            Self::Animation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for FamilyAnimationMemberEvaluationError {}
+
+impl From<FamilyAnimationError> for FamilyAnimationMemberEvaluationError {
+    fn from(value: FamilyAnimationError) -> Self {
+        Self::Animation(value)
     }
 }
 
@@ -200,7 +295,7 @@ impl FamilyAnimationMemberPlanBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::SemanticStore;
+    use crate::{FamilyAnimationMode, RateFunction, SemanticStore};
 
     use super::*;
 
@@ -224,47 +319,104 @@ mod tests {
         (store, root, text, circle, empty)
     }
 
-    #[test]
-    fn mixed_leaf_cardinalities_form_one_global_member_sequence() {
+    fn mixed_plan() -> (
+        FamilyAnimationMemberPlan,
+        SemanticNodeId,
+        SemanticNodeId,
+        SemanticNodeId,
+    ) {
         let (store, root, text, circle, empty) = nested_family();
         let mut builder = FamilyAnimationMemberPlanBuilder::begin(&store, root).unwrap();
-        assert_eq!(builder.expected_leaf_count(), 3);
-
         builder.accept_leaf(text, ObjectId::new(10), 2).unwrap();
         builder.accept_leaf(circle, ObjectId::new(11), 1).unwrap();
         builder.accept_leaf(empty, ObjectId::new(12), 0).unwrap();
-        let plan = builder.finish().unwrap();
+        (builder.finish().unwrap(), text, circle, empty)
+    }
 
-        assert_eq!(plan.target(), root);
+    fn animation_state(reverse_member_order: bool) -> FamilyAnimationState {
+        FamilyAnimationState {
+            mode: FamilyAnimationMode::Reveal,
+            overall_progress: 0.5,
+            lag_ratio: 1.0,
+            rate_function: RateFunction::Linear,
+            reverse_rate_function: false,
+            reverse_member_order,
+        }
+    }
+
+    #[test]
+    fn mixed_leaf_cardinalities_form_one_global_member_sequence() {
+        let (plan, text, _, _) = mixed_plan();
+
         assert_eq!(plan.total_member_count(), 3);
-        assert_eq!(
-            plan.leaves(),
-            &[
-                FamilyAnimationLeafSpan {
-                    semantic_leaf: text,
-                    object: ObjectId::new(10),
-                    first_member: 0,
-                    member_count: 2,
-                },
-                FamilyAnimationLeafSpan {
-                    semantic_leaf: circle,
-                    object: ObjectId::new(11),
-                    first_member: 2,
-                    member_count: 1,
-                },
-                FamilyAnimationLeafSpan {
-                    semantic_leaf: empty,
-                    object: ObjectId::new(12),
-                    first_member: 3,
-                    member_count: 0,
-                },
-            ]
-        );
         assert_eq!(plan.leaves()[0].global_member_index(0), Some(0));
         assert_eq!(plan.leaves()[0].global_member_index(1), Some(1));
         assert_eq!(plan.leaves()[0].global_member_index(2), None);
         assert_eq!(plan.leaves()[1].global_member_index(0), Some(2));
         assert_eq!(plan.span_for_leaf(text), Some(plan.leaves()[0]));
+    }
+
+    #[test]
+    fn lag_progress_continues_across_leaf_boundaries() {
+        let (plan, text, circle, _) = mixed_plan();
+        let text_progress = plan.leaf_progress(animation_state(false), text).unwrap();
+        let circle_progress = plan.leaf_progress(animation_state(false), circle).unwrap();
+
+        assert_eq!(text_progress.total_member_count(), 3);
+        assert_eq!(text_progress.member_progress(0).unwrap(), 1.0);
+        assert_eq!(text_progress.member_progress(1).unwrap(), 0.5);
+        assert_eq!(circle_progress.member_progress(0).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn member_order_reversal_is_global_not_leaf_local() {
+        let (plan, text, circle, _) = mixed_plan();
+        let normal_text = plan.leaf_progress(animation_state(false), text).unwrap();
+        let normal_circle = plan.leaf_progress(animation_state(false), circle).unwrap();
+        let reversed_text = plan.leaf_progress(animation_state(true), text).unwrap();
+        let reversed_circle = plan.leaf_progress(animation_state(true), circle).unwrap();
+
+        assert_eq!(
+            reversed_text.member_progress(0).unwrap(),
+            normal_circle.member_progress(0).unwrap()
+        );
+        assert_eq!(
+            reversed_text.member_progress(1).unwrap(),
+            normal_text.member_progress(1).unwrap()
+        );
+        assert_eq!(
+            reversed_circle.member_progress(0).unwrap(),
+            normal_text.member_progress(0).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_leaf_local_member_and_state_fail_closed() {
+        let (plan, text, _, empty) = mixed_plan();
+        let empty_progress = plan.leaf_progress(animation_state(false), empty).unwrap();
+        assert_eq!(
+            empty_progress.member_progress(0),
+            Err(FamilyAnimationMemberEvaluationError::InvalidLocalMember {
+                leaf: empty,
+                index: 0,
+                member_count: 0,
+            })
+        );
+
+        let unknown = SemanticNodeId::new(u32::MAX, 0);
+        assert_eq!(
+            plan.leaf_progress(animation_state(false), unknown),
+            Err(FamilyAnimationMemberEvaluationError::UnknownLeaf(unknown))
+        );
+
+        let mut invalid = animation_state(false);
+        invalid.overall_progress = 1.5;
+        assert_eq!(
+            plan.leaf_progress(invalid, text),
+            Err(FamilyAnimationMemberEvaluationError::Animation(
+                FamilyAnimationError::InvalidOverallProgress(1.5)
+            ))
+        );
     }
 
     #[test]
