@@ -214,11 +214,7 @@ mod wasm {
             y_axis_snapshot_json: &str,
         ) -> Result<String, JsValue> {
             self.0
-                .line_graph_snapshot_json(
-                    values_json,
-                    x_axis_snapshot_json,
-                    y_axis_snapshot_json,
-                )
+                .line_graph_snapshot_json(values_json, x_axis_snapshot_json, y_axis_snapshot_json)
                 .map_err(js_error)
         }
     }
