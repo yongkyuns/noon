@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import operator
 from typing import Any, Callable, Sequence
 
 import noon as _base
@@ -261,14 +262,9 @@ def _inclusive_linspace(start: float, end: float, count: object, name: str) -> l
     """Small authoring-only equivalent of NumPy linspace for pinned helper semantics."""
 
     try:
-        resolved = int(count)
-    except (TypeError, ValueError, OverflowError) as error:
+        resolved = operator.index(count)
+    except TypeError as error:
         raise TypeError(f"{name} must be an integer") from error
-    try:
-        if resolved != count:
-            raise TypeError(f"{name} must be an integer")
-    except TypeError:
-        raise TypeError(f"{name} must be an integer") from None
     if resolved < 0:
         raise ValueError(f"{name} must be non-negative")
     if resolved == 0:
@@ -288,10 +284,10 @@ def _trapezoid_integral(
         return 0.0
     y_values = [float(function(x)) for x in x_values]
     return sum(
-        0.5 * (y0 + y1) * (x1 - x0)
-        for x0, x1, y0, y1 in zip(
-            x_values, x_values[1:], y_values, y_values[1:], strict=True
-        )
+        0.5
+        * (y_values[index] + y_values[index + 1])
+        * (x_values[index + 1] - x_values[index])
+        for index in range(len(x_values) - 1)
     )
 
 
