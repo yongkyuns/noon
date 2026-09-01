@@ -33,15 +33,8 @@ jobs:
           ]
           for old, new in replacements:
               text = text.replace(old, new)
-          anchor = 'text = replace_once(\n    text,\n    \'\'\'    retained_objects_before = list(self._retained_text_objects)'
-          insert = '''text = replace_block(
-    text,
-    "def _retained_scene_is_present(",
-    "def _retained_document(",
-    "",
-    "remove retained presence interceptor",
-)
-'''
+          anchor = "text = replace_once(\n    text,\n    '''    retained_objects_before = list(self._retained_text_objects)"
+          insert = "text = replace_block(\n    text,\n    \"def _retained_scene_is_present(\",\n    \"def _retained_document(\",\n    \"\",\n    \"remove retained presence interceptor\",\n)\n"
           if anchor not in text:
               raise RuntimeError("unable to locate retained rollback rewrite anchor")
           text = text.replace(anchor, insert + anchor, 1)
