@@ -155,6 +155,9 @@ jobs:
       - name: Check retained NumberLine authoring
         run: node scripts/manim-number-line-smoke.mjs
 
+      - name: Check retained ComplexPlane authoring
+        run: node scripts/manim-complex-plane-smoke.mjs
+
       - name: Check lazy Manim namespace dependencies
         run: node scripts/manim-namespace-smoke.mjs
 
