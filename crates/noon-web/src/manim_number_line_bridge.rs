@@ -233,7 +233,9 @@ mod wasm {
             y: f32,
             line_snapshot_json: &str,
         ) -> Result<f64, JsValue> {
-            self.0.point_to_number(x, y, line_snapshot_json).map_err(js_error)
+            self.0
+                .point_to_number(x, y, line_snapshot_json)
+                .map_err(js_error)
         }
     }
 }
@@ -272,10 +274,8 @@ mod tests {
             scale: Vec2::new(0.75, 0.75),
         };
         let line_json = serde_json::to_string(&line).unwrap();
-        let point: [f64; 2] = serde_json::from_str(
-            &plan.number_to_point_json(1.25, &line_json).unwrap(),
-        )
-        .unwrap();
+        let point: [f64; 2] =
+            serde_json::from_str(&plan.number_to_point_json(1.25, &line_json).unwrap()).unwrap();
         let number = plan
             .point_to_number(point[0] as f32, point[1] as f32, &line_json)
             .unwrap();
