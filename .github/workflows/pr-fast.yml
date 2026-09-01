@@ -197,6 +197,17 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check canonical retained execution
+        id: retained-execution
+        run: |
+          SECONDS=0
+          set +e
+          timeout --signal=TERM 60s node scripts/retained-execution-worker-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Check primary WebGPU rendering
         id: webgpu-smoke
         env:
@@ -218,6 +229,7 @@ jobs:
           PACKAGE_SECONDS: ${{ steps.browser-package.outputs.seconds }}
           REPLAY_SECONDS: ${{ steps.deterministic-replay.outputs.seconds }}
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
+          RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
         run: |
           total=""
@@ -241,6 +253,7 @@ jobs:
             echo "| Browser package | $(display_seconds "$PACKAGE_SECONDS") |"
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
+            echo "| Canonical retained execution | $(display_seconds "$RETAINED_SECONDS") |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
