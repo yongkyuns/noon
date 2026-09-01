@@ -7,9 +7,8 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use crate::{
-        WasmAuthoringFamilyHandle, WasmAuthoringFamilyLayout,
-        WasmAuthoringFamilyMemberHandle, WasmAuthoringMobjectHandle,
-        WasmRetainedNativeTextAuthoringHandle,
+        WasmAuthoringFamilyHandle, WasmAuthoringFamilyLayout, WasmAuthoringFamilyMemberHandle,
+        WasmAuthoringMobjectHandle, WasmRetainedNativeTextAuthoringHandle,
     };
 
     const MAX_JS_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -19,10 +18,7 @@ mod wasm {
     }
 
     fn object_id(value: f64) -> Result<ObjectId, JsValue> {
-        if !value.is_finite()
-            || value < 0.0
-            || value > MAX_JS_SAFE_INTEGER
-            || value.fract() != 0.0
+        if !value.is_finite() || value < 0.0 || value > MAX_JS_SAFE_INTEGER || value.fract() != 0.0
         {
             return Err(JsValue::from_str(
                 "family animation object ID must be a non-negative JavaScript-safe integer",
@@ -105,10 +101,8 @@ mod wasm {
             final_object_id: f64,
         ) -> Result<(), JsValue> {
             self.layout.include_mobject(member)?;
-            let semantic_leaf = SemanticNodeId::new(
-                member.semantic_slot()?,
-                member.semantic_generation()?,
-            );
+            let semantic_leaf =
+                SemanticNodeId::new(member.semantic_slot()?, member.semantic_generation()?);
             self.bindings.push(FamilyAnimationLeafBinding::new(
                 semantic_leaf,
                 object_id(final_object_id)?,
