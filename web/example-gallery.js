@@ -33,6 +33,9 @@ export function normalizeGalleryManifest(manifest) {
     if (!READY_PARITY.has(entry.parity_status)) {
       throw new Error(`${entry.id}: runnable gallery example needs candidate/qualified parity status`);
     }
+    if (typeof entry.title !== "string" || entry.title.trim() === "") {
+      throw new TypeError(`${entry.id}: runnable gallery example requires a non-empty title`);
+    }
     if (typeof entry.path !== "string" || entry.path.trim() === "") {
       throw new Error(`${entry.id}: runnable gallery example requires a source path`);
     }
@@ -41,6 +44,17 @@ export function normalizeGalleryManifest(manifest) {
     }
     if (!Array.isArray(entry.features) || entry.features.length === 0) {
       throw new Error(`${entry.id}: runnable gallery example requires feature tags`);
+    }
+
+    const thumbnailTime = Number(entry.thumbnail_time ?? 0);
+    if (!Number.isFinite(thumbnailTime) || thumbnailTime < 0) {
+      throw new TypeError(
+        `${entry.id}: runnable gallery example thumbnail_time must be a finite non-negative number`,
+      );
+    }
+    const order = Number(entry.order ?? 0);
+    if (!Number.isFinite(order)) {
+      throw new TypeError(`${entry.id}: runnable gallery example order must be finite`);
     }
 
     examples.push({
@@ -55,8 +69,8 @@ export function normalizeGalleryManifest(manifest) {
       parityFixture: entry.parity_fixture ?? null,
       thumbnail: `./${entry.thumbnail}`,
       thumbnailAlt: entry.thumbnail_alt ?? `${entry.title} poster frame`,
-      thumbnailTime: Number(entry.thumbnail_time ?? 0),
-      order: Number(entry.order ?? 0),
+      thumbnailTime,
+      order,
     });
   }
 
