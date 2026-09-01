@@ -1,0 +1,66 @@
+name: Prepare SceneSpec retained lowering seam
+
+on:
+  push:
+    branches:
+      - arch/scene-spec-retained-lowering
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/scene-spec-retained-lowering
+          fetch-depth: 0
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Add content-agnostic retained geometry insertion
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/noon/src/text_authoring.rs")
+          text = path.read_text()
+
+          old = """use noon_core::{\n    Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,\n    RetainedObjectDefinition, SceneDefinition, Style, TextResource, TextResourceArena,\n    TextResourceValidationError, TextSourceKind, TrackDefinition, Transform2D, Vec2, WHITE,\n};"""
+          new = """use noon_core::{\n    Color, FontResourceArena, FontResourceError, GeometryRef, GeometryResource,\n    GeometryResourceArena, ObjectId, RetainedObjectDefinition, SceneDefinition, Style, TextResource,\n    TextResourceArena, TextResourceValidationError, TextSourceKind, TrackDefinition, Transform2D,\n    Vec2, WHITE,\n};"""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          marker = """    /// Insert native Text at an exact global painter slot using a caller-owned semantic ID.\n    pub fn insert_native_text_at("""
+          addition = """    /// Insert geometry at an exact global painter slot using a caller-owned semantic ID.\n    ///\n    /// Geometry and retained Text therefore enter the same semantic object/painter-order\n    /// domain without reconstructing a legacy geometry-only scene.\n    pub fn insert_geometry_at(\n        &mut self,\n        order: usize,\n        id: ObjectId,\n        geometry: GeometryRef,\n        transform: Transform2D,\n        style: Style,\n    ) -> Result<RetainedMobject, TextAuthoringError> {\n        let next_object_id = self.prepare_object_insertion(order, id)?;\n        let mut object = RetainedObjectDefinition::geometry(id, geometry);\n        object.transform = transform;\n        object.style = style;\n        Ok(self.commit_object_insertion(order, object, next_object_id))\n    }\n\n""" + marker
+          assert text.count(marker) == 1
+          text = text.replace(marker, addition)
+
+          old = """    fn insert_text_at<F>(\n        &mut self,\n        order: usize,\n        id: ObjectId,\n        compile: F,\n    ) -> Result<RetainedMobject, TextAuthoringError>\n    where\n        F: FnOnce(&mut Self) -> Result<RetainedObjectDefinition, TextAuthoringError>,\n    {\n        if order > self.objects.len() {\n            return Err(TextAuthoringError::InvalidPainterOrder {\n                order,\n                object_count: self.objects.len(),\n            });\n        }\n        if self.objects.iter().any(|object| object.id == id) {\n            return Err(TextAuthoringError::DuplicateObject(id));\n        }\n        let next_object_id = self.next_object_id_after(id)?;\n        let object = compile(self)?;\n        self.objects.insert(order, object);\n        self.next_object_id = next_object_id;\n        Ok(RetainedMobject { id })\n    }\n"""
+          new = """    fn insert_text_at<F>(\n        &mut self,\n        order: usize,\n        id: ObjectId,\n        compile: F,\n    ) -> Result<RetainedMobject, TextAuthoringError>\n    where\n        F: FnOnce(&mut Self) -> Result<RetainedObjectDefinition, TextAuthoringError>,\n    {\n        let next_object_id = self.prepare_object_insertion(order, id)?;\n        let object = compile(self)?;\n        debug_assert_eq!(object.id, id);\n        Ok(self.commit_object_insertion(order, object, next_object_id))\n    }\n\n    fn prepare_object_insertion(\n        &self,\n        order: usize,\n        id: ObjectId,\n    ) -> Result<u64, TextAuthoringError> {\n        if order > self.objects.len() {\n            return Err(TextAuthoringError::InvalidPainterOrder {\n                order,\n                object_count: self.objects.len(),\n            });\n        }\n        if self.objects.iter().any(|object| object.id == id) {\n            return Err(TextAuthoringError::DuplicateObject(id));\n        }\n        self.next_object_id_after(id)\n    }\n\n    fn commit_object_insertion(\n        &mut self,\n        order: usize,\n        object: RetainedObjectDefinition,\n        next_object_id: u64,\n    ) -> RetainedMobject {\n        let id = object.id;\n        self.objects.insert(order, object);\n        self.next_object_id = next_object_id;\n        RetainedMobject { id }\n    }\n"""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          marker = """    #[test]\n    fn rejected_explicit_insertion_does_not_compile_text_resources() {"""
+          tests = """    #[test]\n    fn explicit_geometry_insertion_preserves_identity_order_and_presentation() {\n        let mut scene = RetainedScene::new();\n        let text_id = ObjectId::new(100);\n        scene\n            .insert_native_text_at(0, text_id, Text::new(\"back\"))\n            .unwrap();\n\n        let geometry_id = ObjectId::new(7);\n        let transform = Transform2D {\n            translation: Vec2::new(2.0, -1.0),\n            rotation: 0.25,\n            scale: Vec2::new(1.5, 0.75),\n        };\n        let style = Style {\n            fill: Some(noon_core::BLUE),\n            stroke: Some(noon_core::YELLOW),\n            stroke_width: 0.2,\n            opacity: 0.6,\n            ..Style::default()\n        };\n        let geometry = scene\n            .insert_geometry_at(\n                0,\n                geometry_id,\n                GeometryRef::circle(0.5),\n                transform,\n                style,\n            )\n            .unwrap();\n\n        assert_eq!(geometry.id(), geometry_id);\n        assert_eq!(scene.objects()[0].id, geometry_id);\n        assert_eq!(scene.objects()[1].id, text_id);\n        assert!(scene.objects()[0].content.geometry().is_some());\n        assert_eq!(scene.objects()[0].transform, transform);\n        assert_eq!(scene.objects()[0].style, style);\n    }\n\n    #[test]\n    fn rejected_geometry_insertion_preserves_objects_and_identity_allocator() {\n        let mut scene = RetainedScene::new();\n        let existing = ObjectId::new(42);\n        scene\n            .insert_geometry_at(\n                0,\n                existing,\n                GeometryRef::circle(0.5),\n                Transform2D::default(),\n                Style::default(),\n            )\n            .unwrap();\n        let before = scene.objects().to_vec();\n\n        assert_eq!(\n            scene\n                .insert_geometry_at(\n                    1,\n                    existing,\n                    GeometryRef::rectangle(1.0, 1.0),\n                    Transform2D::default(),\n                    Style::default(),\n                )\n                .unwrap_err(),\n            TextAuthoringError::DuplicateObject(existing)\n        );\n        assert_eq!(\n            scene\n                .insert_geometry_at(\n                    2,\n                    ObjectId::new(99),\n                    GeometryRef::rectangle(1.0, 1.0),\n                    Transform2D::default(),\n                    Style::default(),\n                )\n                .unwrap_err(),\n            TextAuthoringError::InvalidPainterOrder {\n                order: 2,\n                object_count: 1,\n            }\n        );\n        assert_eq!(scene.objects(), before);\n\n        let generated = scene.add_text(Text::new(\"next\")).unwrap();\n        assert_eq!(generated.id(), ObjectId::new(43));\n    }\n\n""" + marker
+          assert text.count(marker) == 1
+          text = text.replace(marker, tests)
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo test -p noon --lib
+          cargo clippy -p noon --all-targets --all-features -- -D warnings
+
+      - name: Commit source-only result
+        run: |
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon/src/text_authoring.rs
+          git rm .github/workflows/stacked-scene-spec-lowering.yml
+          git commit -m "Add ordered retained geometry insertion"
+          git push origin HEAD:arch/scene-spec-retained-lowering
