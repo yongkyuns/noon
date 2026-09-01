@@ -15,6 +15,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tmp/848-canonical-race-fixture
+      - name: Remove temporary workflow from validation tree
+        run: rm .github/workflows/_tmp-848-canonical-preflight.yml
       - name: Run exact web preflight
         env:
           NOON_SKIP_PLAYGROUND_TEST: "1"
