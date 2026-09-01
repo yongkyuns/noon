@@ -1,0 +1,80 @@
+name: Compiler Cache Seed
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "Cargo.toml"
+      - "crates/**"
+      - "scripts/build-web-demo.sh"
+      - ".github/workflows/compiler-cache-seed.yml"
+      - ".github/workflows/pr-fast.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compiler-cache-seed-master
+  cancel-in-progress: false
+
+jobs:
+  wasm:
+    name: Seed dev WASM compiler cache
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust and WASM target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Restore and publish WASM compiler cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/noon-sccache-wasm
+          key: ${{ runner.os }}-sccache-wasm-v1-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-wasm-v1-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Seed browser compile artifacts
+        env:
+          NOON_SKIP_WEB_PREFLIGHT: "1"
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_PROFILE: "dev"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh

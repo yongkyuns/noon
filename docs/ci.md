@@ -19,13 +19,25 @@ The four real lane results are the PR validation signals; there is deliberately 
 
 Deterministic replay keeps the full workload in the PR gate: the same playground corpus, all authored objects including the 1,000-object morph stress scene, every direct-seek target and rewind check, and 32 incremental forward samples per target. The browser harness calls one Rust verifier per scene. That verifier decodes and compiles the scene once, keeps independent direct/forward/rewind runtime instances resident, and compares renderer-observable `FrameState` values in Rust. This preserves the exact determinism contract while avoiding repeated scene compilation and large normalized-frame JSON serialization across the WASM boundary solely for equality checks.
 
-Cargo source downloads and Rust compilations use the shared cache/sccache setup. PR jobs consume the GitHub Actions sccache backend in `READ_ONLY` mode: review iterations should benefit from trusted default-branch compiler artifacts without creating hundreds of branch-local cache entries or competing for the repository upload-rate budget. The master CI workflow owns compiler-cache population. Its native writer uses the same symbol-free `dev`/`test` profile overrides as the PR Rust lanes, and its browser writer uses the same symbol-free dev WASM profile as the PR browser lane. The two master writers are serialized so they do not compete for cache uploads. Debug assertions and overflow checks remain those of the ordinary profiles; only debugger symbols are omitted. Production release behavior and optimized browser artifacts remain exercised separately by platform/release validation.
+## Compiler caches
+
+Native and WASM compilation use different cache transports because measurements showed different behavior.
+
+The Rust lint/test lanes continue to consume the GitHub Actions sccache backend in `READ_ONLY` mode. Native PR measurements already show high hit rates and remain under the two-minute budget, so adding large archive restores to both Rust jobs would increase bandwidth without solving the current critical path. Main CI remains the trusted native GHA-cache writer.
+
+The browser lane uses a local sccache directory restored through `actions/cache/restore`. `.github/workflows/compiler-cache-seed.yml` is the only workflow allowed to publish that WASM archive. Relevant pushes to `master` restore the latest trusted archive, compile the same symbol-free dev WASM profile used by PRs, and save an immutable archive keyed by the master SHA. PRs request the archive for their exact base SHA and may fall back to the latest default-branch seed. Because PRs use the restore-only action and `SCCACHE_LOCAL_RW_MODE=READ_ONLY`, they cannot publish branch-local compiler archives.
+
+This archive boundary is intentional. The per-object GHA backend successfully reused native objects, but an exact-master WASM build could see 315/315 hits while a source-neutral PR saw 0/315. Packaging the local sccache directory into one default-branch cache entry gives the WASM path an explicit master-to-PR restore contract and avoids hundreds of per-object cache uploads.
+
+The WASM archive is capped at 1 GiB. Seed runs are non-cancelling so rapid master merges cannot abort the only archive writer in progress; newer relevant master pushes may queue another seed. Main CI and specialized validators are consumers rather than WASM archive owners.
 
 ## Main CI workflow
 
 `.github/workflows/ci.yml` runs on pushes to `master` and manual dispatch. It is the full Linux integration workflow rather than the pull-request inner loop.
 
-Its Rust lane runs formatting, full workspace Clippy, and the complete workspace test set while seeding the native compiler cache used by PRs. Its browser build follows that native writer, produces the same dev-profile integration package used by the PR fast path, seeds the WASM compiler cache, and uploads one reusable package artifact that fans out to authoring, reactive/editor, WebGPU, WebGL, and backend-parity jobs.
+Its Rust lane runs formatting, full workspace Clippy, and the complete workspace test set while maintaining the native compiler cache. Its browser build runs independently, restores the latest trusted WASM archive read-only, produces the same dev-profile integration package used by the PR fast path, and uploads one reusable package artifact that fans out to authoring, reactive/editor, WebGPU, WebGL, and backend-parity jobs.
+
+The browser build no longer waits for the Rust lane merely to serialize compiler-cache writes: native still uses the GHA backend, while WASM uses a separate archive owned by the seed workflow. This removes an unnecessary post-merge dependency and prevents the browser cache from being starved by cancellation before it starts.
 
 This workflow is intentionally broader than the PR fast gate. A failure after merge is still a correctness failure to fix immediately, but expensive validation and cache population do not delay every review iteration.
 

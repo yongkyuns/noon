@@ -11,6 +11,7 @@ assert.ok(workflowFiles.length > 0, "CI workflow inventory must not be empty");
 const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
+  ["compiler-cache-seed.yml", "cache-seed"],
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
   ["pages.yml", "deployment"],
@@ -43,6 +44,7 @@ assert.deepEqual(
 const requiredFamilies = new Set([
   "pr-fast",
   "main",
+  "cache-seed",
   "coverage",
   "platform-release",
   "manim",
@@ -57,6 +59,7 @@ const ciDocs = await readFile(new URL("../docs/ci.md", import.meta.url), "utf8")
 for (const [needle, purpose] of [
   [".github/workflows/pr-fast.yml", "pull-request fast gate"],
   [".github/workflows/ci.yml", "main CI"],
+  [".github/workflows/compiler-cache-seed.yml", "compiler-cache seed"],
   [".github/workflows/platform-release.yml", "platform/release validation"],
   [".github/workflows/test-coverage.yml", "test observability"],
   ["Manim compatibility workflows", "Manim validation family"],

@@ -59,12 +59,14 @@ jobs:
   web-build:
     name: Web package
     runs-on: ubuntu-latest
-    needs: rust
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_ONLY"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,6 +85,14 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
+
+      - name: Restore WASM compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/runner/.cache/noon-sccache-wasm
+          key: ${{ runner.os }}-sccache-wasm-v1-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-wasm-v1-
 
       - name: Use sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
