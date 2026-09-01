@@ -1,5 +1,5 @@
 use crate::{Axes2DState, Circle, IntoSnapshot, Line, NumberPlaneLineStyle};
-use noon_core::{ObjectSnapshot, Vec2, TAU};
+use noon_core::{ObjectSnapshot, Vec2};
 
 const CAIRO_WIDTH_SCALE: f64 = 0.01;
 
@@ -79,7 +79,7 @@ impl PolarPlaneGridPlan {
 
         let ratio = faded_line_ratio.max(1);
         let radius_step = range.step() / ratio as f64;
-        let azimuth_increment = f64::from(TAU) / azimuth_step / ratio as f64;
+        let azimuth_increment = std::f64::consts::TAU / azimuth_step / ratio as f64;
         if !radius_step.is_finite() || radius_step <= 0.0 {
             return Err(PolarPlaneAuthoringError::InvalidRadiusStep(radius_step));
         }
@@ -92,8 +92,7 @@ impl PolarPlaneGridPlan {
             return Err(PolarPlaneAuthoringError::InvalidUnitSize(unit_size));
         }
         let center = axes.origin()?;
-        let radial_end = x_axis.end();
-        let radial_vector = radial_end - center;
+        let radial_vector = x_axis.end() - center;
 
         let mut circles = Vec::new();
         let mut faded_circles = Vec::new();
@@ -101,17 +100,20 @@ impl PolarPlaneGridPlan {
         let mut logical_radius = 0.0;
         let mut index = 0_usize;
         while logical_radius < radius_stop {
+            let is_background = index.is_multiple_of(ratio);
+            let style = if is_background {
+                background_style
+            } else {
+                faded_style
+            };
             let circle = PolarPlaneRadiusCircle {
                 radius: logical_radius,
-                snapshot: styled_circle(logical_radius * unit_size, background_style)?,
+                snapshot: styled_circle(logical_radius * unit_size, style)?,
             };
-            if index.is_multiple_of(ratio) {
+            if is_background {
                 circles.push(circle);
             } else {
-                faded_circles.push(PolarPlaneRadiusCircle {
-                    radius: logical_radius,
-                    snapshot: styled_circle(logical_radius * unit_size, faded_style)?,
-                });
+                faded_circles.push(circle);
             }
             logical_radius += radius_step;
             index += 1;
@@ -121,20 +123,23 @@ impl PolarPlaneGridPlan {
         let mut faded_radial_lines = Vec::new();
         let mut angle = 0.0;
         index = 0;
-        while angle < f64::from(TAU) {
+        while angle < std::f64::consts::TAU {
             let final_angle = angle + azimuth_offset;
             let end = center + rotate(radial_vector, final_angle)?;
+            let is_background = index.is_multiple_of(ratio);
+            let style = if is_background {
+                background_style
+            } else {
+                faded_style
+            };
             let line = PolarPlaneRadialLine {
                 angle: final_angle,
-                snapshot: styled_line(center, end, background_style)?,
+                snapshot: styled_line(center, end, style)?,
             };
-            if index.is_multiple_of(ratio) {
+            if is_background {
                 radial_lines.push(line);
             } else {
-                faded_radial_lines.push(PolarPlaneRadialLine {
-                    angle: final_angle,
-                    snapshot: styled_line(center, end, faded_style)?,
-                });
+                faded_radial_lines.push(line);
             }
             angle += azimuth_increment;
             index += 1;
@@ -344,12 +349,12 @@ mod tests {
         assert_eq!(plan.radial_lines().len(), 4);
         assert!(plan.faded_circles().is_empty());
         assert!(plan.faded_radial_lines().is_empty());
-        for (actual, expected) in plan
-            .radial_lines()
-            .iter()
-            .map(PolarPlaneRadialLine::angle)
-            .zip([0.0, std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2])
-        {
+        for (actual, expected) in plan.radial_lines().iter().map(PolarPlaneRadialLine::angle).zip([
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::PI,
+            3.0 * std::f64::consts::FRAC_PI_2,
+        ]) {
             assert_close(actual, expected);
         }
     }
@@ -406,7 +411,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.radial_lines().len(), 3);
-        assert_close(plan.radial_lines()[2].angle(), 1.6 * std::f64::consts::PI);
+        assert_close(
+            plan.radial_lines()[2].angle(),
+            1.6 * std::f64::consts::PI,
+        );
     }
 
     #[test]
