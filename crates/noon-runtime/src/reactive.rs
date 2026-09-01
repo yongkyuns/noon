@@ -23,3 +23,7 @@ pub use retained_runtime::*;
 #[path = "retained_text_family.rs"]
 mod retained_text_family;
 pub use retained_text_family::*;
+
+#[path = "retained_family_plan_frame.rs"]
+mod retained_family_plan_frame;
+pub use retained_family_plan_frame::*;
