@@ -40,6 +40,14 @@ def _current_stroke_color(mobject: object, helper_name: str) -> _base.Color:
         raise TypeError("retained graph stroke color is malformed") from error
 
 
+def _scale_about_center(mobject: _base.Mobject, factor: float) -> _base.Mobject:
+    """Compose Noon's origin-space scale into Manim's default center-pivot scale."""
+
+    center = mobject.get_center()
+    mobject.scale(float(factor))
+    return mobject.move_to(center)
+
+
 def _get_secant_slope_group(
     self: _axes.Axes,
     x: float,
@@ -89,7 +97,10 @@ def _get_secant_slope_group(
             color=_axes._color("secant_line_color", secant_line_color),
         )
         graph_delta = p2 - p1
-        group.secant_line.scale(float(secant_line_length) / graph_delta.length())
+        _scale_about_center(
+            group.secant_line,
+            float(secant_line_length) / graph_delta.length(),
+        )
         group.add(group.secant_line)
 
     return group
