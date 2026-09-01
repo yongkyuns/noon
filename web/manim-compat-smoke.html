@@ -42,7 +42,11 @@ class RetainedFamilyCreateSmoke(Scene):
             if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 1) {
               throw new Error("family Create smoke did not author exactly one family animation request");
             }
-            const serialized = JSON.stringify(retained.family_animations[0]);
+            const sceneSpec = result.sceneSpec;
+            if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
+              throw new Error("family Create smoke did not reach canonical SceneSpec family animations");
+            }
+            const serialized = JSON.stringify(sceneSpec.family_animations[0]);
             for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
               if (serialized.includes(forbidden)) {
                 throw new Error(`family Create request leaked ${forbidden}`);
