@@ -294,6 +294,80 @@ class Axes(_compat.VGroup):
     def __rmatmul__(self, point: object) -> list[float]:
         return self.point_to_coords(point)
 
+    def input_to_graph_point(self, x: float, graph: ParametricFunction | _compat.VMobject) -> object:
+        """Return the point on a graph corresponding to an axis x value.
+
+        ManimCE v0.21 directly evaluates authored function graphs through their
+        `function` callback. General VMobject lookup falls back to a path-space binary
+        search upstream; Noon fails closed on that broader case until generic
+        point-from-proportion semantics are shared.
+        """
+
+        if hasattr(graph, "underlying_function"):
+            return graph.function(float(x))
+        raise NotImplementedError(
+            "input_to_graph_point for generic VMobjects requires shared point-from-proportion semantics"
+        )
+
+    def input_to_graph_coords(
+        self, x: float, graph: ParametricFunction
+    ) -> tuple[float, float]:
+        return float(x), float(graph.underlying_function(float(x)))
+
+    def i2gc(self, x: float, graph: ParametricFunction) -> tuple[float, float]:
+        return self.input_to_graph_coords(x, graph)
+
+    def i2gp(self, x: float, graph: ParametricFunction) -> object:
+        return self.input_to_graph_point(x, graph)
+
+    def get_line_from_axis_to_point(
+        self,
+        index: int,
+        point: object,
+        line_func: Callable[..., _compat.Line] | None = None,
+        line_config: dict[str, Any] | None = None,
+        color: _base.Color | None = None,
+        stroke_width: float = 2.0,
+    ) -> _compat.Line:
+        """Construct a retained line from one axis to a scene-space point.
+
+        Projection remains owned by the Rust-backed coordinate query path: convert the
+        scene point to current transformed axis coordinates, zero the orthogonal
+        coordinate, then map it back through `c2p`. This is equivalent to Manim's
+        `NumberLine.get_projection` for the supported linear 2D Axes transform model.
+        """
+
+        if index not in (0, 1):
+            raise IndexError("Noon Axes currently has only x and y axes")
+        target = _compat._as_vec2(point)
+        coords = self.p2c(target)
+        projected = self.c2p(coords[0], 0.0) if index == 0 else self.c2p(0.0, coords[1])
+
+        if line_func is None:
+            line_func = getattr(_base, "DashedLine", None)
+            if line_func is None:
+                raise NotImplementedError(
+                    "default dashed axis helper lines require the public DashedLine facade"
+                )
+        if not callable(line_func):
+            raise TypeError("line_func must construct a Line-compatible mobject")
+        if line_config is None:
+            line_config = {}
+        elif not isinstance(line_config, dict):
+            raise TypeError("line_config must be a dict or None")
+
+        # ManimCE v0.21 mutates the supplied line_config and lets these explicit
+        # helper options override any same-named entries already present.
+        line_config["color"] = _base.WHITE if color is None else color
+        line_config["stroke_width"] = float(stroke_width)
+        return line_func(projected, target, **line_config)
+
+    def get_vertical_line(self, point: object, **kwargs: Any) -> _compat.Line:
+        return self.get_line_from_axis_to_point(0, point, **kwargs)
+
+    def get_horizontal_line(self, point: object, **kwargs: Any) -> _compat.Line:
+        return self.get_line_from_axis_to_point(1, point, **kwargs)
+
     def plot(
         self,
         function: Callable[[float], float],
