@@ -13,3 +13,7 @@ pub use retained_text::*;
 #[path = "gpu/retained_family_reveal.rs"]
 mod retained_family_reveal;
 pub use retained_family_reveal::*;
+
+#[path = "gpu/retained_family_draw_border_then_fill.rs"]
+mod retained_family_draw_border_then_fill;
+pub use retained_family_draw_border_then_fill::*;
