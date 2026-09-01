@@ -2,6 +2,7 @@ import initNoonWeb, {
   RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
+  canonicalRetainedSceneSpecJson,
   manimAnnularSectorSnapshotJson,
   manimAnnulusSnapshotJson,
   manimDotSnapshotJson,
@@ -381,9 +382,15 @@ json.dumps(
     );
     const result = JSON.parse(resultJson);
     if (result.retained_document !== null) {
-      validateRetainedAuthoringDocumentJson(JSON.stringify(result.retained_document));
+      const retainedDocumentJson = JSON.stringify(result.retained_document);
+      validateRetainedAuthoringDocumentJson(retainedDocumentJson);
+      if (result.retained_document.objects.length > 0) {
+        result.scene_spec = JSON.parse(
+          canonicalRetainedSceneSpecJson(JSON.stringify(result.document), retainedDocumentJson),
+        );
+      }
     }
-    return resultJson;
+    return JSON.stringify(result);
   } finally {
     globals.destroy();
   }
