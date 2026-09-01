@@ -1,0 +1,24 @@
+name: Temporary canonical SceneSpec preflight
+
+on:
+  push:
+    branches:
+      - tmp/848-canonical-race-fixture
+
+permissions:
+  contents: read
+
+jobs:
+  web-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/848-canonical-race-fixture
+      - name: Run exact web preflight
+        env:
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WEB_PREFLIGHT_ONLY: "1"
+        run: bash scripts/build-web-demo.sh
+      - name: Verify source tree cleanliness
+        run: git diff --check
