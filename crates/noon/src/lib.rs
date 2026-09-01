@@ -23,6 +23,7 @@ mod line_matcher_authoring;
 mod number_plane_authoring;
 mod plot_geometry_authoring;
 mod plot_sampling_authoring;
+mod polar_plane_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
 mod riemann_authoring;
@@ -48,6 +49,7 @@ pub use line_matcher_authoring::*;
 pub use number_plane_authoring::*;
 pub use plot_geometry_authoring::*;
 pub use plot_sampling_authoring::*;
+pub use polar_plane_authoring::*;
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use riemann_authoring::*;
@@ -71,7 +73,8 @@ pub mod prelude {
         MovingCameraScene, NumberLineGeometryPlan, NumberLineState, NumberLineTick,
         NumberLineTickOptions, NumberPlaneAuthoringError, NumberPlaneGridLine, NumberPlaneGridPlan,
         NumberPlaneLineStyle, NumberRange, ParametricSamplePlan, PlotGeometryError,
-        PlotRangeRequest, PlotSamplingError, Polygon, Polygram, PolygramAuthoringError,
+        PlotRangeRequest, PlotSamplingError, PolarPlaneAuthoringError, PolarPlaneGridPlan,
+        PolarPlaneRadialLine, PolarPlaneRadiusCircle, Polygon, Polygram, PolygramAuthoringError,
         ReactiveScene, ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject,
         RetainedScene, RiemannAuthoringError, RiemannRectangleGeometry, RiemannSample,
         RiemannSamplePlan, RiemannSampleType, RoundedRectangle, RoundedRectangleAuthoringError,
