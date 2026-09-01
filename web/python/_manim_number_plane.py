@@ -250,10 +250,12 @@ class NumberPlane(_axes.Axes):
         self.background_lines = _compat.VGroup(*self.x_lines, *self.y_lines)
         self.faded_lines = _compat.VGroup(*self.faded_x_lines, *self.faded_y_lines)
 
-        # Match Manim's add_to_back(faded_lines, background_lines) ordering without
-        # serializing an artificial plane node. `x_lines`/`y_lines` are metadata views
-        # over the same leaves and are intentionally not added independently.
-        self.submobjects = [self.faded_lines, self.background_lines, *self.axes]
+        # Match Manim's add_to_back(faded_lines, background_lines) ordering through
+        # the ordinary Group mutation boundary so the Rust-owned family identity and
+        # Python wrapper membership remain atomically aligned. `x_lines`/`y_lines`
+        # are metadata views over the same leaves and are not added independently.
+        self.remove(self.x_axis, self.y_axis)
+        self.add(self.faded_lines, self.background_lines, self.x_axis, self.y_axis)
 
         self.axis_config = axis_config
         self.x_axis_config = merged_x_axis_config
