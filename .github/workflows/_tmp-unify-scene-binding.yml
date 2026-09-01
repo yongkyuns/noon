@@ -20,35 +20,30 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('scripts/_tmp_unify_scene_binding.py')
+          path = Path("scripts/_tmp_unify_scene_binding.py")
           text = path.read_text()
-          text = text.replace('"def _schedule_raw_transform(",', '"def _scene_add(",')
-          text = text.replace('    member._bind_to_scene(scene, key=key)\\n    _persist_semantic_handle_at_binding(member)\\n\\n\\n', '    member._bind_to_scene(scene, key=key)\\n\\n\\n')
-          text = text.replace(
-              '"def _initial_animation_state(",\n    "def _state_for(",',
-              '"def _initial_animation_state(",\n    "def _retained_presence_tracks(",',
-          )
-          text = text.replace(
-              '"def _retained_presence_tracks(",\n    "def _retained_presence_at(",',
-              '"def _retained_presence_tracks(",\n    "def _resolve_retained_lifecycle(",',
-          )
-          text = text.replace(
-              '"def _resolve_retained_lifecycle(",\n    "def _bind_retained(",',
-              '"def _resolve_retained_lifecycle(",\n    "def _append_vec2_track(",',
-          )
-          text = text.replace(
-              '"def _bind_retained(",\n    "def _append_presence_track(",',
-              '"def _bind_retained(",\n    "def _initial_animation_state(",',
-          )
-          text = text.replace(
-              '"def _retained_scene_add(",\n    "def _retained_scene_play(",\n    "",\n    "remove retained scene lifecycle interceptors",',
-              '"def _unique_retained_mobjects(",\n    "def _offset_vec2(",\n    "",\n    "remove retained add/remove interceptors",',
-          )
-          marker = '''text = replace_once(\n    text,\n    '''
-          insert = '''text = replace_block(\n    text,\n    "def _retained_scene_is_present(",\n    "def _retained_document(",\n    "",\n    "remove retained presence interceptor",\n)\n'''
-          anchor = '''text = replace_once(\n    text,\n    '''    retained_objects_before = list(self._retained_text_objects)'''
+          replacements = [
+              ('"def _schedule_raw_transform(",', '"def _scene_add(",'),
+              ('    member._bind_to_scene(scene, key=key)\\n    _persist_semantic_handle_at_binding(member)\\n\\n\\n', '    member._bind_to_scene(scene, key=key)\\n\\n\\n'),
+              ('"def _initial_animation_state(",\n    "def _state_for(",', '"def _initial_animation_state(",\n    "def _retained_presence_tracks(",'),
+              ('"def _retained_presence_tracks(",\n    "def _retained_presence_at(",', '"def _retained_presence_tracks(",\n    "def _resolve_retained_lifecycle(",'),
+              ('"def _resolve_retained_lifecycle(",\n    "def _bind_retained(",', '"def _resolve_retained_lifecycle(",\n    "def _append_vec2_track(",'),
+              ('"def _bind_retained(",\n    "def _append_presence_track(",', '"def _bind_retained(",\n    "def _initial_animation_state(",'),
+              ('"def _retained_scene_add(",\n    "def _retained_scene_play(",\n    "",\n    "remove retained scene lifecycle interceptors",', '"def _unique_retained_mobjects(",\n    "def _offset_vec2(",\n    "",\n    "remove retained add/remove interceptors",'),
+          ]
+          for old, new in replacements:
+              text = text.replace(old, new)
+          anchor = 'text = replace_once(\n    text,\n    \'\'\'    retained_objects_before = list(self._retained_text_objects)'
+          insert = '''text = replace_block(
+    text,
+    "def _retained_scene_is_present(",
+    "def _retained_document(",
+    "",
+    "remove retained presence interceptor",
+)
+'''
           if anchor not in text:
-              raise RuntimeError('unable to locate retained rollback rewrite anchor')
+              raise RuntimeError("unable to locate retained rollback rewrite anchor")
           text = text.replace(anchor, insert + anchor, 1)
           path.write_text(text)
           PY
