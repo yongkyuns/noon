@@ -78,6 +78,7 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
     web/python/_manim_phase_b.py \
     web/python/_manim_shared_geometry.py \
     web/python/_manim_axes.py \
+    web/python/_manim_axes_derived.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
     web/python/_manim_rotate.py \
