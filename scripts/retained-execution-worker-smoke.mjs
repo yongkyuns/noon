@@ -123,12 +123,10 @@ async function runMode(browser, transportMode) {
   const started = await page.evaluate(async ({ mode, retainedDocumentJson }) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
-    const { RetainedExecutionWorkerClient } = await import(
-      "./retained-execution-worker-client.js"
-    );
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
     const canvas = document.querySelector("#scene");
     const errors = [];
-    const client = new RetainedExecutionWorkerClient(canvas, {
+    const client = new ExecutionWorkerClient(canvas, {
       onError(error, owner) {
         errors.push(`${owner}: ${error}`);
       },
@@ -139,7 +137,7 @@ async function runMode(browser, transportMode) {
       sceneJson,
       retainedDocumentJson,
     );
-    const ready = await client.startCanonical(sceneSpecJson, {
+    const ready = await client.startRetainedCanonical(sceneSpecJson, {
       loopDurationSeconds: 4,
       transportMode: mode,
       sharedSlotCapacity: 1024 * 1024,
@@ -304,39 +302,9 @@ async function runMode(browser, transportMode) {
   await page.evaluate(() => window.retainedExecutionSmoke.client.terminate());
   await page.close();
   console.log(
-    `✓ canonical retained execution workers ${transportMode}: ${before.metrics.backend}, ` +
-      `${reconnected.presentedAfter} frames with canonical engine/render recovery`,
+    `✓ canonical retained execution ${transportMode}: ${before.metrics.backend}, ` +
+      `${reconnected.presentedAfter} frames through the shared execution owner`,
   );
-}
-
-async function runCompatibilityFallback(browser) {
-  const page = await browser.newPage({ viewport: { width: 480, height: 320 } });
-  await page.goto(`${baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
-  const result = await page.evaluate(async (retainedDocumentJson) => {
-    const wasm = await import("./pkg/noon_web.js");
-    await wasm.default();
-    const { RetainedExecutionWorkerClient } = await import(
-      "./retained-execution-worker-client.js"
-    );
-    const client = new RetainedExecutionWorkerClient(document.querySelector("#scene"));
-    const sceneJson = wasm.demoSceneJson();
-    const ready = await client.start(sceneJson, retainedDocumentJson, {
-      loopDurationSeconds: 1,
-      transportMode: "transferable",
-    });
-    const state = await client.state();
-    const metrics = await client.metrics();
-    client.terminate();
-    return { ready, state, engineMetrics: metrics.engineMetrics };
-  }, retainedScene);
-
-  assert.equal(result.ready.engine.canonical, false);
-  assert.equal(result.engineMetrics.canonical, false);
-  assert.equal(typeof result.state.sceneJson, "string");
-  assert.equal(typeof result.state.retainedDocumentJson, "string");
-  assert.equal("sceneSpecJson" in result.state, false);
-  await page.close();
-  console.log("✓ split retained compatibility startup remains available");
 }
 
 let browser = null;
@@ -348,7 +316,6 @@ try {
   });
   await runMode(browser, "transferable");
   await runMode(browser, "shared");
-  await runCompatibilityFallback(browser);
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
