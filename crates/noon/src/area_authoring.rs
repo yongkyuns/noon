@@ -377,6 +377,10 @@ mod tests {
     };
     use noon_core::{Transform2D, VectorPath};
 
+    fn graph_snapshot(axes: TransformedAxes2DState, xs: &[f64], ys: &[f64]) -> ObjectSnapshot {
+        Path::new(transformed_axes_line_graph_vector_path(axes, xs, ys).unwrap()).into_snapshot()
+    }
+
     fn axes(transform: Transform2D) -> TransformedAxes2DState {
         let axes = Axes2DState::new(
             NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
@@ -386,10 +390,6 @@ mod tests {
         )
         .unwrap();
         TransformedAxes2DState::new(axes, transform, transform)
-    }
-
-    fn graph(axes: TransformedAxes2DState, xs: &[f64], ys: &[f64]) -> ObjectSnapshot {
-        Path::new(transformed_axes_line_graph_vector_path(axes, xs, ys).unwrap()).into_snapshot()
     }
 
     fn path_points(snapshot: &ObjectSnapshot) -> Vec<Vec2> {
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn unbounded_area_uses_callback_endpoints_and_retained_interior_points() {
         let axes = axes(Transform2D::IDENTITY);
-        let graph = graph(axes, &[0.0, 1.0, 2.0], &[0.0, 1.0, 0.0]);
+        let graph = graph_snapshot(axes, &[0.0, 1.0, 2.0], &[0.0, 1.0, 0.0]);
         let plan = AreaSamplePlan::new(
             axes,
             &graph,
@@ -441,8 +441,16 @@ mod tests {
     #[test]
     fn bounded_area_clips_to_overlap_and_traces_second_graph_in_reverse() {
         let axes = axes(Transform2D::IDENTITY);
-        let graph = graph(axes, &[-1.0, 0.0, 1.0, 2.0], &[0.0, 1.0, 1.0, 0.0]);
-        let bounded = graph(axes, &[0.0, 1.0, 2.0, 3.0], &[-1.0, -1.0, -1.0, -1.0]);
+        let graph = graph_snapshot(
+            axes,
+            &[-1.0, 0.0, 1.0, 2.0],
+            &[0.0, 1.0, 1.0, 0.0],
+        );
+        let bounded = graph_snapshot(
+            axes,
+            &[0.0, 1.0, 2.0, 3.0],
+            &[-1.0, -1.0, -1.0, -1.0],
+        );
         let plan = AreaSamplePlan::new(
             axes,
             &graph,
@@ -470,8 +478,8 @@ mod tests {
     #[test]
     fn non_overlapping_bounded_ranges_match_upstream_errors() {
         let axes = axes(Transform2D::IDENTITY);
-        let graph = graph(axes, &[0.0, 1.0], &[0.0, 1.0]);
-        let bounded = graph(axes, &[2.0, 3.0], &[0.0, 1.0]);
+        let graph = graph_snapshot(axes, &[0.0, 1.0], &[0.0, 1.0]);
+        let bounded = graph_snapshot(axes, &[2.0, 3.0], &[0.0, 1.0]);
         let error = AreaSamplePlan::new(
             axes,
             &graph,
@@ -486,7 +494,7 @@ mod tests {
     #[test]
     fn retained_graph_transform_drives_interior_filtering() {
         let axes = axes(Transform2D::IDENTITY);
-        let mut graph = graph(axes, &[-1.0, 0.0, 1.0], &[0.0, 0.0, 0.0]);
+        let mut graph = graph_snapshot(axes, &[-1.0, 0.0, 1.0], &[0.0, 0.0, 0.0]);
         graph.transform.translation = Vec2::new(1.0, 0.0);
         let plan = AreaSamplePlan::new(
             axes,
