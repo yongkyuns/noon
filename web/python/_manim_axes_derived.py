@@ -7,7 +7,6 @@ renderer geometry. Static results remain ordinary retained primitives.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import noon as _base
 import _manim_axes as _axes
