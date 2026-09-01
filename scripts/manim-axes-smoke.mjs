@@ -115,6 +115,7 @@ class RetainedAxesPlot(Scene):
         assert len(axes.y_axis.ticks) == 2
         assert len(axes.get_axes()) == 2
         assert issubclass(FunctionGraph, ParametricFunction)
+        assert issubclass(NumberPlane, Axes)
 
         point = axes.c2p(3.25, -0.75)
         recovered = axes.p2c(point)
@@ -435,6 +436,78 @@ class RetainedAxesPlot(Scene):
         except ValueError as error:
             assert str(error) == "Invalid input sample type"
 
+        default_plane = NumberPlane()
+        assert_close(default_plane.x_range[0], -DEFAULT_FRAME_WIDTH / 2.0)
+        assert_close(default_plane.x_range[1], DEFAULT_FRAME_WIDTH / 2.0)
+        assert_close(default_plane.y_range[0], -DEFAULT_FRAME_HEIGHT / 2.0)
+        assert_close(default_plane.y_range[1], DEFAULT_FRAME_HEIGHT / 2.0)
+        assert_close(default_plane.x_length, DEFAULT_FRAME_WIDTH)
+        assert_close(default_plane.y_length, DEFAULT_FRAME_HEIGHT)
+
+        plane = NumberPlane(
+            x_range=[-2, 2, 1],
+            y_range=[-2, 2, 1],
+            x_length=8,
+            y_length=12,
+            faded_line_ratio=2,
+            background_line_style={
+                "stroke_color": RED,
+                "stroke_width": 2,
+                "stroke_opacity": 0.8,
+            },
+            faded_line_style={"stroke_opacity": 0.25},
+        )
+        assert isinstance(plane, Axes)
+        assert len(plane) == 4
+        assert plane[0] is plane.faded_lines
+        assert plane[1] is plane.background_lines
+        assert len(plane.x_lines) == 3
+        assert len(plane.y_lines) == 3
+        assert len(plane.faded_x_lines) == 4
+        assert len(plane.faded_y_lines) == 4
+        assert len(plane.background_lines) == 6
+        assert len(plane.faded_lines) == 8
+        assert plane.axis_config["include_ticks"] is False
+        assert plane.x_axis_config["include_ticks"] is False
+        assert plane.y_axis_config["label_direction"] == DR
+
+        plane_origin = plane.get_origin()
+        assert_point_close(plane.c2p(1.0, 1.0), plane_origin + Vec2(2.0, 3.0))
+
+        background_handle = _handles._handle_for(plane.x_lines[0])
+        faded_handle = _handles._handle_for(plane.faded_x_lines[0])
+        assert background_handle is not None
+        assert faded_handle is not None
+        background_snapshot = json.loads(str(background_handle.snapshotJson()))
+        faded_snapshot = json.loads(str(faded_handle.snapshotJson()))
+        assert_close(background_snapshot["style"]["stroke_width"], 0.02)
+        assert_close(background_snapshot["style"]["stroke"]["red"], RED.red)
+        assert_close(background_snapshot["style"]["stroke"]["alpha"], 0.8)
+        assert_close(faded_snapshot["style"]["stroke_width"], 0.04)
+        assert_close(faded_snapshot["style"]["stroke"]["red"], WHITE.red)
+        assert_close(faded_snapshot["style"]["stroke"]["green"], WHITE.green)
+        assert_close(faded_snapshot["style"]["stroke"]["blue"], WHITE.blue)
+        assert_close(faded_snapshot["style"]["stroke"]["alpha"], 0.25)
+
+        plane.shift(LEFT * 0.75 + DOWN * 0.25)
+        plane.scale(0.9)
+        plane.rotate(-0.2)
+        plane_point = plane.c2p(1.25, -0.75)
+        plane_coords = plane.p2c(plane_point)
+        assert_close(plane_coords[0], 1.25)
+        assert_close(plane_coords[1], -0.75)
+
+        copied_plane = plane.copy()
+        assert isinstance(copied_plane, NumberPlane)
+        assert copied_plane is not plane
+        assert copied_plane.x_axis is not plane.x_axis
+        assert copied_plane.x_lines[0] is not plane.x_lines[0]
+        assert_point_close(copied_plane.get_origin(), plane.get_origin())
+        copied_plane_point = copied_plane.c2p(1.25, -0.75)
+        assert_point_close(copied_plane_point, plane_point)
+        copied_plane.shift(RIGHT)
+        assert (copied_plane.get_origin() - plane.get_origin()).length() > 0.5
+
         self.add(
             axes,
             sin_graph,
@@ -449,6 +522,7 @@ class RetainedAxesPlot(Scene):
             curve_2,
             riemann_area,
             area,
+            plane,
         )
 `;
 
@@ -476,7 +550,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 49);
+  assert.equal(result.document.objects.length, 65);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -484,8 +558,8 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "line").length,
-    26,
-    "Axes and projection helpers must flatten to ordinary retained line geometry",
+    42,
+    "Axes, NumberPlane, and projection helpers must flatten to ordinary retained line geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
@@ -504,7 +578,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: transformed coordinates, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
+    "Retained Axes/NumberPlane smoke passed: transformed coordinates, retained grid families, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
