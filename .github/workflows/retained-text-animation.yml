@@ -28,6 +28,31 @@ on:
       - "scripts/retained-text-playback-smoke.mjs"
       - "scripts/retained-text-scene-lifecycle-smoke.mjs"
       - ".github/workflows/retained-text-animation.yml"
+  pull_request:
+    paths:
+      - "crates/noon-web/src/authoring_mobject.rs"
+      - "crates/noon-web/src/retained_authoring_player.rs"
+      - "crates/noon-web/src/retained_authoring_scene.rs"
+      - "crates/noon-web/src/retained_authoring_tracks.rs"
+      - "crates/noon-web/src/retained_authoring_wire_scene.rs"
+      - "web/authoring-render-worker.js"
+      - "web/python-worker.source.js"
+      - "web/python-compat-modules.js"
+      - "web/python/_manim_animate.py"
+      - "web/python/_manim_animation_options.py"
+      - "web/python/_manim_retained_animate.py"
+      - "web/python/_manim_retained_state.py"
+      - "web/python/_manim_semantic_handles.py"
+      - "web/python/_manim_typst.py"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/retained-text-canonical-state-smoke.mjs"
+      - "scripts/retained-text-family-identity-smoke.mjs"
+      - "scripts/retained-text-family-layout-smoke.mjs"
+      - "scripts/retained-text-family-fade-smoke.mjs"
+      - "scripts/retained-text-playback-smoke.mjs"
+      - "scripts/retained-text-scene-lifecycle-smoke.mjs"
+      - ".github/workflows/retained-text-animation.yml"
   workflow_dispatch:
 
 permissions:
