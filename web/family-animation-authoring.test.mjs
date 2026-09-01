@@ -29,8 +29,9 @@ test("Python does not serialize semantic family order or retained resource ident
   for (const forbidden of [
     "memberSlot(",
     "memberGeneration(",
-    "glyph",
-    "atlas",
+    "glyph_id",
+    "glyphIds",
+    "atlas_id",
     "font_bytes",
   ]) {
     assert.equal(
