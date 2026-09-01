@@ -206,11 +206,7 @@ impl AxesPlotAuthoringPlan {
         let values = parse_parametric_callback_values(values_json)?;
         let x_axis = parse_axis_snapshot(x_axis_snapshot_json, "x")?;
         let y_axis = parse_axis_snapshot(y_axis_snapshot_json, "y")?;
-        serialize_snapshot(&self.finish_parametric_values_with_axes(
-            &values,
-            &x_axis,
-            &y_axis,
-        )?)
+        serialize_snapshot(&self.finish_parametric_values_with_axes(&values, &x_axis, &y_axis)?)
     }
 
     fn transformed_axes(
