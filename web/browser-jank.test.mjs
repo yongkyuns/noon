@@ -27,7 +27,7 @@ class FakePerformanceObserver {
   }
 }
 
-test("collects long tasks within the requested measurement window", () => {
+test("clips overlapping long tasks to the requested measurement window", () => {
   const monitor = new BrowserJankMonitor(FakePerformanceObserver);
   assert.equal(monitor.start(), true);
   assert.deepEqual(FakePerformanceObserver.instance.observed, {
@@ -38,18 +38,43 @@ test("collects long tasks within the requested measurement window", () => {
   FakePerformanceObserver.instance.emit([
     { startTime: 10, duration: 55 },
     { startTime: 100, duration: 80 },
+    { startTime: 190, duration: 30 },
     { startTime: 300, duration: 120 },
   ]);
 
   assert.deepEqual(monitor.summary(50, 200), {
     supported: true,
-    count: 1,
-    totalMs: 80,
+    count: 3,
+    totalMs: 105,
     maxMs: 80,
-    entries: [{ startTime: 100, duration: 80 }],
+    entries: [
+      { startTime: 50, duration: 15 },
+      { startTime: 100, duration: 80 },
+      { startTime: 190, duration: 10 },
+    ],
   });
   monitor.stop();
   assert.equal(FakePerformanceObserver.instance.disconnected, true);
+});
+
+test("ignores malformed long-task entries and rejects inverted windows", () => {
+  const monitor = new BrowserJankMonitor(FakePerformanceObserver);
+  monitor.start();
+  FakePerformanceObserver.instance.emit([
+    { startTime: Number.NaN, duration: 60 },
+    { startTime: 20, duration: Number.POSITIVE_INFINITY },
+    { startTime: 30, duration: 0 },
+    { startTime: 40, duration: -1 },
+  ]);
+
+  assert.deepEqual(monitor.summary(), {
+    supported: true,
+    count: 0,
+    totalMs: 0,
+    maxMs: 0,
+    entries: [],
+  });
+  assert.throws(() => monitor.summary(200, 100), /measurementEndMs/);
 });
 
 test("reports unsupported environments without failing profiling", () => {
