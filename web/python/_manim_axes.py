@@ -20,11 +20,13 @@ try:
     from js import noonCreateAxesAuthoringPlan as _create_axes_plan
     from js import noonCreateAxesPlotPlan as _create_plot_plan
     from js import noonCreateAxesQueryPlan as _create_query_plan
+    from js import noonCreateParametricFunctionPlan as _create_parametric_plan
 except ImportError:
     _create_mobject_handle = None
     _create_axes_plan = None
     _create_plot_plan = None
     _create_query_plan = None
+    _create_parametric_plan = None
 
 _INSTALLED = False
 _DEFAULT_LINE_GRAPH_COLOR = getattr(
@@ -44,6 +46,13 @@ def _require_shared_axes() -> None:
         )
     ):
         raise RuntimeError("Axes requires Noon's browser shared-semantics runtime")
+
+
+def _require_shared_parametric() -> None:
+    if _create_mobject_handle is None or _create_parametric_plan is None:
+        raise RuntimeError(
+            "ParametricFunction requires Noon's browser shared-semantics runtime"
+        )
 
 
 def _range(value: Sequence[float] | None, default: tuple[float, float, float]) -> list[float]:
@@ -75,6 +84,31 @@ def _parametric_coordinates(function: Callable[[float], object], parameter: floa
     if len(coordinates) < 2:
         raise ValueError("parametric function must return at least two coordinates")
     return [float(coordinates[0]), float(coordinates[1])]
+
+
+def _scene_parametric_coordinates(
+    function: Callable[[float], object], parameter: float
+) -> list[float]:
+    value = function(float(parameter))
+    try:
+        coordinates = list(value)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise TypeError("ParametricFunction callback must return coordinates") from error
+    if len(coordinates) < 2:
+        raise ValueError("ParametricFunction callback must return at least two coordinates")
+    x = float(coordinates[0])
+    y = float(coordinates[1])
+    if not math.isfinite(x) or not math.isfinite(y):
+        raise ValueError("ParametricFunction callback coordinates must be finite")
+    if len(coordinates) >= 3:
+        z = float(coordinates[2])
+        if not math.isfinite(z):
+            raise ValueError("ParametricFunction callback coordinates must be finite")
+        if not math.isclose(z, 0.0, abs_tol=1.0e-12):
+            raise NotImplementedError(
+                "direct ParametricFunction with nonzero z requires the retained 3D geometry path"
+            )
+    return [x, y]
 
 
 def _rgba(value: object) -> list[float]:
@@ -224,16 +258,70 @@ def _graph_snapshot_json(graph: object, name: str) -> str:
 
 
 class ParametricFunction(_compat.VMobject):
-    """Source-visible retained curve type produced by Axes graphing helpers.
+    """Retained ManimCE v0.21 scene-space parametric curve for the 2D renderer."""
 
-    Direct `ParametricFunction` construction remains a separate scene-space callback
-    surface. Axes-owned graphing uses the shared two-phase Rust plan below.
-    """
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise NotImplementedError(
-            "direct ParametricFunction construction is not yet supported by the shared browser plan"
+    def __init__(
+        self,
+        function: Callable[[float], object],
+        t_range: Sequence[float] = (0.0, 1.0),
+        scaling: object | None = None,
+        dt: float = 1.0e-8,
+        discontinuities: Sequence[float] | None = None,
+        use_smoothing: bool = True,
+        use_vectorized: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        _require_shared_parametric()
+        if not callable(function):
+            raise TypeError("ParametricFunction function must be callable")
+        if scaling is not None:
+            raise NotImplementedError(
+                "nonlinear ParametricFunction scaling is not yet supported"
+            )
+        if use_vectorized:
+            raise NotImplementedError(
+                "ParametricFunction(use_vectorized=True) requires vectorized callback transport"
+            )
+        resolved_range = _parametric_range(t_range)
+        request = {
+            "t_range": resolved_range,
+            "discontinuities": (
+                None
+                if discontinuities is None
+                else [float(value) for value in discontinuities]
+            ),
+            "discontinuity_dt": float(dt),
+            "use_smoothing": bool(use_smoothing),
+        }
+        assert _create_parametric_plan is not None
+        plan = _create_parametric_plan(
+            json.dumps(request, separators=(",", ":"), allow_nan=False)
+        )
+        parameters = json.loads(str(plan.parametersJson()))
+        values = [
+            [_scene_parametric_coordinates(function, parameter) for parameter in subpath]
+            for subpath in parameters
+        ]
+        snapshot_json = str(
+            plan.finishSnapshotJson(
+                json.dumps(values, separators=(",", ":"), allow_nan=False)
+            )
+        )
+        assert _create_mobject_handle is not None
+        _shared._attach_shared_handle(self, _create_mobject_handle(snapshot_json))
+        self.function = function
+        self.scaling = scaling
+        self.dt = float(dt)
+        self.discontinuities = discontinuities
+        self.use_smoothing = bool(use_smoothing)
+        self.use_vectorized = False
+        self.t_range = list(resolved_range)
+        self.t_min = float(resolved_range[0])
+        self.t_max = float(resolved_range[1])
+        self.t_step = float(resolved_range[2])
+        _shared._apply_shared_constructor_kwargs(
+            self,
+            _compat._manim_vmobject_kwargs(kwargs, default_color=_base.WHITE),
         )
 
     def get_function(self) -> Callable[[float], object]:
@@ -244,7 +332,43 @@ class ParametricFunction(_compat.VMobject):
 
 
 class FunctionGraph(ParametricFunction):
-    """Source-visible FunctionGraph type pending direct shared callback authoring."""
+    """Retained v0.21 scalar function graph in scene coordinates."""
+
+    def __init__(
+        self,
+        function: Callable[[float], object],
+        x_range: Sequence[float] | None = None,
+        color: object = _DEFAULT_LINE_GRAPH_COLOR,
+        **kwargs: Any,
+    ) -> None:
+        if not callable(function):
+            raise TypeError("FunctionGraph function must be callable")
+        resolved_range = (
+            [-float(_base.DEFAULT_FRAME_WIDTH) / 2.0, float(_base.DEFAULT_FRAME_WIDTH) / 2.0]
+            if x_range is None
+            else [float(value) for value in x_range]
+        )
+        if len(resolved_range) not in (2, 3):
+            raise ValueError("FunctionGraph x_range must contain 2 or 3 finite values")
+        self.x_range = list(resolved_range)
+        self.underlying_function = function
+        self.parametric_function = lambda value: [
+            float(value),
+            float(function(float(value))),
+            0.0,
+        ]
+        super().__init__(
+            self.parametric_function,
+            t_range=self.x_range,
+            color=_color("color", color),
+            **kwargs,
+        )
+
+    def get_function(self) -> Callable[[float], object]:
+        return self.underlying_function
+
+    def get_point_from_function(self, value: float) -> object:
+        return self.parametric_function(float(value))
 
 
 class VDict(_compat.VGroup):
