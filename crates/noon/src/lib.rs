@@ -16,6 +16,7 @@ mod legacy;
 mod line_matcher_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
+mod retained_family_authoring_lowering;
 mod rounded_rectangle_authoring;
 mod sector_authoring;
 mod shape_matcher_authoring;
@@ -31,6 +32,7 @@ pub use legacy::*;
 pub use line_matcher_authoring::*;
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
+pub use retained_family_authoring_lowering::*;
 pub use rounded_rectangle_authoring::*;
 pub use sector_authoring::*;
 pub use shape_matcher_authoring::*;
@@ -42,16 +44,18 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon,
-        Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
-        SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
-        VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
-        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS,
-        DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
-        DEFAULT_NATIVE_TEXT_FONT_SIZE, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
-        DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+        GeometryAuthoringError, LineMatcherAuthoringError, LoweredRetainedFamilyAnimation,
+        MathTypst, MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram,
+        RetainedFamilyAnimationLoweringError, RetainedFamilyAnimationLoweringSession,
+        RetainedMobject, RetainedScene, RoundedRectangle, RoundedRectangleAuthoringError, Sector,
+        ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError, Triangle,
+        Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
+        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO,
+        DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
+        DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
+        DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
+        SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,

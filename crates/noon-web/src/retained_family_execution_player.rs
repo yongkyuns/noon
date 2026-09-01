@@ -1,4 +1,4 @@
-use noon::RetainedScene;
+use noon::{LoweredRetainedFamilyAnimation, RetainedScene};
 use noon_compile::{RetainedCompileError, RetainedCompiledScene};
 use noon_core::{Camera2DState, FamilyAnimationSpec, ObjectId, RetainedFamilyAnimationPlan};
 use noon_runtime::{
@@ -57,6 +57,17 @@ impl RetainedFamilyExecutionPlayer {
             camera_object,
             snapshot_sent: false,
         })
+    }
+
+    /// Enter production execution directly from the Rust-owned authoring lowering result.
+    pub fn from_lowered(
+        scene: RetainedScene,
+        lowered: LoweredRetainedFamilyAnimation,
+        camera_object: Option<ObjectId>,
+        session: u32,
+    ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
+        let (plan, spec) = lowered.into_parts();
+        Self::new(scene, plan, spec, camera_object, session)
     }
 
     pub const fn scene(&self) -> &RetainedScene {
@@ -194,10 +205,9 @@ impl From<RetainedFamilyExecutionEncodeError> for RetainedFamilyExecutionPlayerE
 
 #[cfg(test)]
 mod tests {
-    use noon::{RetainedScene, Text};
+    use noon::{RetainedFamilyAnimationLoweringSession, RetainedScene, Text};
     use noon_core::{
-        FamilyAnimationMode, GeometryRef, ObjectId, RateFunction,
-        RetainedFamilyAnimationPlanBuilder, SceneDefinition, SemanticStore,
+        FamilyAnimationMode, GeometryRef, ObjectId, RateFunction, SceneDefinition, SemanticStore,
     };
 
     use crate::{InstalledRetainedExecutionMirror, RetainedTransportApplyOutcome};
@@ -222,14 +232,6 @@ mod tests {
         let family = semantics.insert_family();
         semantics.add_member(family, text_leaf).unwrap();
         semantics.add_member(family, circle_leaf).unwrap();
-        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, family).unwrap();
-        builder
-            .accept_leaf(text_leaf, &scene.objects()[0], scene.texts())
-            .unwrap();
-        builder
-            .accept_leaf(circle_leaf, &scene.objects()[1], scene.texts())
-            .unwrap();
-        let plan = builder.finish().unwrap();
         let spec = FamilyAnimationSpec::new(
             FamilyAnimationMode::Reveal,
             1.0,
@@ -240,8 +242,15 @@ mod tests {
             false,
         )
         .unwrap();
+        let mut lowering =
+            RetainedFamilyAnimationLoweringSession::begin(&semantics, family, spec).unwrap();
+        // Retained materialization order must never become semantic animation order.
+        lowering.bind_leaf(circle_leaf, circle_id).unwrap();
+        lowering.bind_leaf(text_leaf, text_id).unwrap();
+        let lowered = lowering.finish(&scene).unwrap();
 
-        let mut player = RetainedFamilyExecutionPlayer::new(scene, plan, spec, None, 41).unwrap();
+        let mut player =
+            RetainedFamilyExecutionPlayer::from_lowered(scene, lowered, None, 41).unwrap();
         let mut mirror =
             InstalledRetainedExecutionMirror::from_bundle_bytes(player.resource_bundle_bytes())
                 .unwrap();
