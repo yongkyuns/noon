@@ -54,6 +54,32 @@ def _positive(name: str, value: object) -> float:
     return result
 
 
+def _polar_to_point(self: _axes.Axes, radius: float, azimuth: float) -> _base.Vec2:
+    """Shared v0.21 CoordinateSystem polar projection over retained c2p."""
+
+    resolved_radius = _finite("radius", radius)
+    resolved_azimuth = _finite("azimuth", azimuth)
+    return self.coords_to_point(
+        resolved_radius * math.cos(resolved_azimuth),
+        resolved_radius * math.sin(resolved_azimuth),
+    )
+
+
+def _point_to_polar(self: _axes.Axes, point: object) -> tuple[float, float]:
+    """Shared v0.21 CoordinateSystem polar inverse over retained p2c."""
+
+    x, y = self.point_to_coords(point)
+    return math.hypot(x, y), math.atan2(y, x)
+
+
+def _pr2pt(self: _axes.Axes, radius: float, azimuth: float) -> _base.Vec2:
+    return _polar_to_point(self, radius, azimuth)
+
+
+def _pt2pr(self: _axes.Axes, point: object) -> tuple[float, float]:
+    return _point_to_polar(self, point)
+
+
 def _circle_from_snapshot(snapshot: dict[str, Any]) -> _compat.Circle:
     value = _axes._mobject_from_snapshot(_compat.Circle, snapshot)
     geometry = snapshot.get("geometry", {}).get("circle")
@@ -293,6 +319,10 @@ def install() -> None:
     if _INSTALLED:
         return
     _number_plane.install()
+    _axes.Axes.polar_to_point = _polar_to_point
+    _axes.Axes.point_to_polar = _point_to_polar
+    _axes.Axes.pr2pt = _pr2pt
+    _axes.Axes.pt2pr = _pt2pr
     setattr(_base, "PolarPlane", PolarPlane)
     setattr(_compat, "PolarPlane", PolarPlane)
     if "PolarPlane" not in _base.__all__:
