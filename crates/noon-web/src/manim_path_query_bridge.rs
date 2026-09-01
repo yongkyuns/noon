@@ -1,5 +1,5 @@
-use noon_core::{GeometryRef, ObjectSnapshot, Vec2};
-use noon_geometry::point_from_proportion;
+use noon_core::{ObjectSnapshot, Vec2};
+use noon_geometry::point_from_geometry_proportion;
 
 fn validate_alpha(alpha: f64) -> Result<f32, String> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
@@ -10,39 +10,19 @@ fn validate_alpha(alpha: f64) -> Result<f32, String> {
     Ok(alpha as f32)
 }
 
-fn transform_point(snapshot: &ObjectSnapshot, point: Vec2) -> Vec2 {
-    let transform = snapshot.transform;
-    let scaled = Vec2::new(point.x * transform.scale.x, point.y * transform.scale.y);
-    let sine = transform.rotation.sin();
-    let cosine = transform.rotation.cos();
-    Vec2::new(
-        scaled.x * cosine - scaled.y * sine + transform.translation.x,
-        scaled.x * sine + scaled.y * cosine + transform.translation.y,
-    )
-}
-
 /// Query ManimCE v0.21-compatible path position from an ordinary retained snapshot.
 ///
-/// Vector paths use the shared `noon-geometry` ten-sample Bezier length measure.
-/// Analytic lines stay analytic and use exact linear interpolation. The returned point
-/// is transformed into world space from the snapshot's current retained transform.
+/// Path-like geometry resolution is owned by `noon-geometry`: vector paths use
+/// Manim's sampled Bezier length measure, lines remain analytic, and circles use
+/// Manim's nine-component quadratic Arc representation. This bridge only decodes
+/// the snapshot and applies its current retained transform into world space.
 pub fn manim_point_from_proportion(snapshot_json: &str, alpha: f64) -> Result<Vec2, String> {
     let alpha = validate_alpha(alpha)?;
     let snapshot: ObjectSnapshot = serde_json::from_str(snapshot_json)
         .map_err(|error| format!("invalid path query snapshot: {error}"))?;
-
-    let local = match &snapshot.geometry {
-        GeometryRef::Line { start, end } => *start + (*end - *start) * alpha,
-        GeometryRef::VectorPath(path) => {
-            point_from_proportion(path, alpha).map_err(|error| error.to_string())?
-        }
-        _ => {
-            return Err(
-                "point_from_proportion requires retained line or vector-path geometry".to_owned(),
-            )
-        }
-    };
-    Ok(transform_point(&snapshot, local))
+    let local = point_from_geometry_proportion(&snapshot.geometry, alpha)
+        .map_err(|error| error.to_string())?;
+    Ok(snapshot.transform.transform_point(local))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -153,11 +133,24 @@ mod tests {
     }
 
     #[test]
+    fn query_circle_matches_manim_arc_measure_then_applies_transform() {
+        let snapshot = ObjectSnapshot::new(GeometryRef::circle(2.0))
+            .scale_xy(Vec2::new(0.5, 2.0))
+            .shift(Vec2::new(3.0, -1.0));
+
+        assert_point(
+            manim_point_from_proportion(&encode(&snapshot), 0.4).expect("circle query"),
+            Vec2::new(2.190411, 1.3601226),
+        );
+    }
+
+    #[test]
     fn query_rejects_invalid_alpha_snapshot_and_unsupported_geometry() {
         let circle = encode(&ObjectSnapshot::new(GeometryRef::circle(1.0)));
+        let rectangle = encode(&ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0)));
         assert!(manim_point_from_proportion(&circle, -0.1).is_err());
         assert!(manim_point_from_proportion(&circle, f64::NAN).is_err());
         assert!(manim_point_from_proportion("not json", 0.5).is_err());
-        assert!(manim_point_from_proportion(&circle, 0.5).is_err());
+        assert!(manim_point_from_proportion(&rectangle, 0.5).is_err());
     }
 }
