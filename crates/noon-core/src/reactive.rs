@@ -28,6 +28,9 @@ pub use lifecycle::*;
 mod semantic_store;
 pub use semantic_store::*;
 
+#[path = "semantic_family.rs"]
+mod semantic_family;
+
 #[path = "semantic_model.rs"]
 mod semantic_model;
 pub use semantic_model::*;
