@@ -80,6 +80,24 @@ def _pt2pr(self: _axes.Axes, point: object) -> tuple[float, float]:
     return _point_to_polar(self, point)
 
 
+def _plot_polar_graph(
+    self: _axes.Axes,
+    r_func: object,
+    theta_range: object = None,
+    **kwargs: Any,
+) -> _axes.ParametricFunction:
+    """Pinned v0.21 polar-graph composition over retained ParametricFunction."""
+
+    resolved_range = [0.0, 2.0 * math.pi] if theta_range is None else theta_range
+    graph = _axes.ParametricFunction(
+        function=lambda theta: self.pr2pt(r_func(theta), theta),  # type: ignore[operator]
+        t_range=resolved_range,  # type: ignore[arg-type]
+        **kwargs,
+    )
+    graph.underlying_function = r_func
+    return graph
+
+
 def _circle_from_snapshot(snapshot: dict[str, Any]) -> _compat.Circle:
     value = _axes._mobject_from_snapshot(_compat.Circle, snapshot)
     geometry = snapshot.get("geometry", {}).get("circle")
@@ -323,6 +341,7 @@ def install() -> None:
     _axes.Axes.point_to_polar = _point_to_polar
     _axes.Axes.pr2pt = _pr2pt
     _axes.Axes.pt2pr = _pt2pr
+    _axes.Axes.plot_polar_graph = _plot_polar_graph
     setattr(_base, "PolarPlane", PolarPlane)
     setattr(_compat, "PolarPlane", PolarPlane)
     if "PolarPlane" not in _base.__all__:
