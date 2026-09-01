@@ -35,6 +35,52 @@ export class SceneIdentityMap {
       ? document
       : { ...document, objects, tracks, ...(reactive === undefined ? {} : { reactive }) };
   }
+
+  /// Apply the same semantic identity map to the canonical mixed scene.
+  ///
+  /// Python identity metadata currently describes the legacy geometry objects/tracks
+  /// that feed SceneSpec construction. Canonical-only objects such as retained text
+  /// are intentionally absent from that metadata and therefore keep their source IDs.
+  /// Painter order stays structural while geometry track/camera references follow the
+  /// remapped stable object IDs.
+  stabilizeSceneSpec(sceneSpec, identities) {
+    if (sceneSpec === null || sceneSpec === undefined) {
+      return sceneSpec;
+    }
+    const objectIds = this.#objects.resolve(identities.objects);
+    const trackIds = this.#tracks.resolve(identities.tracks);
+    if (objectIds === null && trackIds === null) {
+      return sceneSpec;
+    }
+
+    const objects =
+      objectIds === null
+        ? sceneSpec.objects
+        : sceneSpec.objects.map((object) => {
+            const id = optionalId(objectIds, object.id);
+            return id === object.id ? object : { ...object, id };
+          });
+    const tracks =
+      objectIds === null && trackIds === null
+        ? sceneSpec.tracks
+        : sceneSpec.tracks.map((track) => {
+            const id = trackIds === null ? track.id : optionalId(trackIds, track.id);
+            const object = objectIds === null ? track.object : optionalId(objectIds, track.object);
+            return id === track.id && object === track.object
+              ? track
+              : { ...track, id, object };
+          });
+    const cameraObject =
+      objectIds === null || sceneSpec.camera_object === null || sceneSpec.camera_object === undefined
+        ? sceneSpec.camera_object
+        : optionalId(objectIds, sceneSpec.camera_object);
+
+    return objects === sceneSpec.objects &&
+      tracks === sceneSpec.tracks &&
+      cameraObject === sceneSpec.camera_object
+      ? sceneSpec
+      : { ...sceneSpec, objects, tracks, camera_object: cameraObject };
+  }
 }
 
 function remapReactiveObjects(reactive, objectIds) {
@@ -116,4 +162,8 @@ function requiredId(ids, localId, kind) {
     throw new Error(`Scene ${kind} ${localId} has no authoring identity`);
   }
   return stableId;
+}
+
+function optionalId(ids, localId) {
+  return ids.get(localId) ?? localId;
 }

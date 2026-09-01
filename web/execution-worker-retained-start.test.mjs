@@ -50,17 +50,26 @@ globalThis.window = { devicePixelRatio: 1 };
 const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
+const SCENE_SPEC_JSON = JSON.stringify({
+  version: 1,
+  camera_object: null,
+  objects: [{ id: 7, content: { kind: "text", text: {} } }],
+  tracks: [],
+});
 const RETAINED_DOCUMENT_JSON = JSON.stringify({
   channel: "noon.authoring.retained",
   objects: [{ id: 1 }],
 });
 
-function engineReady() {
+function engineReady({ canonical = false } = {}) {
   return {
     channel: "noon.engine",
     protocolVersion: 1,
     type: "ready",
     transportMode: "transferable",
+    retained: true,
+    mixed: true,
+    canonical,
   };
 }
 
@@ -74,10 +83,10 @@ function renderReady() {
   };
 }
 
-test("retained first start boots the retained engine directly", async () => {
+test("canonical retained first start sends only SceneSpec to the retained engine", async () => {
   FakeWorker.instances.length = 0;
   const client = new AuthoringExecutionClient(new FakeCanvas());
-  const readyPromise = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON, {
+  const readyPromise = client.startRetainedCanonical(SCENE_SPEC_JSON, {
     transportMode: "transferable",
   });
 
@@ -94,13 +103,40 @@ test("retained first start boots the retained engine directly", async () => {
 
   const engineInit = retainedEngine.messages.find(({ message }) => message.type === "init")?.message;
   const renderInit = render.messages.find(({ message }) => message.type === "init")?.message;
-  assert.equal(engineInit?.retainedDocumentJson, RETAINED_DOCUMENT_JSON);
+  assert.equal(engineInit?.sceneSpecJson, SCENE_SPEC_JSON);
+  assert.equal("sceneJson" in engineInit, false);
+  assert.equal("retainedDocumentJson" in engineInit, false);
   assert.equal(renderInit?.mode, "retained");
+
+  retainedEngine.emitMessage(engineReady({ canonical: true }));
+  render.emitMessage(renderReady());
+  const ready = await readyPromise;
+
+  assert.equal(ready.session, 1);
+  assert.equal(ready.engine.canonical, true);
+  assert.equal(client.mode, "retained");
+  client.terminate();
+});
+
+test("split retained startup remains an explicit compatibility path", async () => {
+  FakeWorker.instances.length = 0;
+  const client = new AuthoringExecutionClient(new FakeCanvas());
+  const readyPromise = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON, {
+    transportMode: "transferable",
+  });
+
+  const retainedEngine = FakeWorker.instances.find(
+    ({ name }) => name === "noon-mixed-retained-engine",
+  );
+  const render = FakeWorker.instances.find(({ name }) => name === "noon-render");
+  const engineInit = retainedEngine.messages.find(({ message }) => message.type === "init")?.message;
+  assert.equal(engineInit?.sceneJson, SCENE_JSON);
+  assert.equal(engineInit?.retainedDocumentJson, RETAINED_DOCUMENT_JSON);
+  assert.equal("sceneSpecJson" in engineInit, false);
 
   retainedEngine.emitMessage(engineReady());
   render.emitMessage(renderReady());
   const ready = await readyPromise;
-
   assert.equal(ready.session, 1);
   assert.equal(client.mode, "retained");
   client.terminate();

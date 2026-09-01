@@ -3,6 +3,7 @@ import { ExecutionWorkerClient } from "./execution-worker-client.js";
 export const AUTHORING_EXECUTION_LEGACY = "legacy";
 export const AUTHORING_EXECUTION_RETAINED = "retained";
 
+const SCENE_SPEC_VERSION = 1;
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
@@ -17,11 +18,12 @@ const EMPTY_HOST_METRICS = Object.freeze({
 ///
 /// The execution client owns one render worker and one transferred OffscreenCanvas
 /// for its lifetime. Geometry-only results keep a legacy engine attached to that
-/// owner. Results with retained objects switch only the engine type and renderer
-/// implementation at an authoring boundary; the render worker, HTML canvas, and
-/// OffscreenCanvas ownership remain stable. Empty retained sidecars stay on legacy
-/// execution. Retained edits still rebuild engine state at authoring boundaries;
-/// playback itself remains retained with no per-frame Python/source work.
+/// owner. Results with canonical retained SceneSpec output switch only the engine
+/// type and renderer implementation at an authoring boundary; the render worker,
+/// HTML canvas, and OffscreenCanvas ownership remain stable. The split legacy scene
+/// plus retained sidecar API remains an explicit compatibility path. Retained edits
+/// rebuild engine state at authoring boundaries; playback itself remains retained
+/// with no per-frame Python/source work.
 export class AuthoringExecutionClient {
   #canvas;
   #player = null;
@@ -99,6 +101,7 @@ export class AuthoringExecutionClient {
     return ready;
   }
 
+  /// Compatibility startup for the transitional split retained payload.
   async startRetained(
     sceneJson,
     retainedDocumentJson,
@@ -135,9 +138,43 @@ export class AuthoringExecutionClient {
     return ready;
   }
 
+  /// Canonical retained startup used by normal Python authoring.
+  async startRetainedCanonical(
+    sceneSpecJson,
+    {
+      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
+      transportMode = undefined,
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+    } = {},
+  ) {
+    if (this.#player !== null || this.#transition !== null) {
+      throw new Error("AuthoringExecutionClient is already started");
+    }
+    validateSceneSpecJson(sceneSpecJson);
+    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
+    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    const options = {
+      loopDurationSeconds: this.#loopDurationSeconds,
+      sharedSlotCapacity: this.#sharedSlotCapacity,
+    };
+    if (transportMode !== undefined) {
+      options.transportMode = transportMode;
+    }
+    const ready = await this.#startMode(
+      AUTHORING_EXECUTION_RETAINED,
+      null,
+      null,
+      options,
+      sceneSpecJson,
+    );
+    this.#transportMode = ready.transportMode;
+    return ready;
+  }
+
   async reconcileScene(
     sceneJson,
     {
+      sceneSpecJson = null,
       retainedDocumentJson = null,
       callbacks = null,
       authoringClient = null,
@@ -152,6 +189,29 @@ export class AuthoringExecutionClient {
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
+    }
+
+    if (
+      sceneSpecJson !== null &&
+      sceneSpecJson !== undefined &&
+      retainedDocumentJson !== null &&
+      retainedDocumentJson !== undefined
+    ) {
+      throw new Error("authoring reconciliation must not mix canonical and compatibility retained inputs");
+    }
+
+    if (sceneSpecJson !== null && sceneSpecJson !== undefined) {
+      validateSceneSpecJson(sceneSpecJson);
+      if (callbacks !== null && callbacks !== undefined) {
+        throw new Error(
+          "retained authoring with Python host callbacks is not supported yet; " +
+            "split the callback work from retained text instead of silently dropping either",
+        );
+      }
+      if (this.#mode === AUTHORING_EXECUTION_RETAINED) {
+        return this.#runTransition(() => this.#rebuildRetainedCanonical(sceneSpecJson));
+      }
+      return this.#runTransition(() => this.#switchRetainedCanonical(sceneSpecJson));
     }
 
     let retainedDocument = null;
@@ -283,7 +343,7 @@ export class AuthoringExecutionClient {
     this.#transportMode = null;
   }
 
-  async #startMode(mode, sceneJson, retainedDocumentJson, options) {
+  async #startMode(mode, sceneJson, retainedDocumentJson, options, sceneSpecJson = null) {
     const generation = this.#lifecycleGeneration;
     const player = new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
@@ -292,10 +352,15 @@ export class AuthoringExecutionClient {
     const terminateCandidate = createIdempotentTerminator(player);
     let published = false;
     try {
-      const ready =
-        mode === AUTHORING_EXECUTION_RETAINED
-          ? await player.startRetained(sceneJson, retainedDocumentJson, options)
-          : await player.start(sceneJson, options);
+      let ready;
+      if (mode === AUTHORING_EXECUTION_RETAINED) {
+        ready =
+          sceneSpecJson !== null
+            ? await player.startRetainedCanonical(sceneSpecJson, options)
+            : await player.startRetained(sceneJson, retainedDocumentJson, options);
+      } else {
+        ready = await player.start(sceneJson, options);
+      }
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       this.#player = player;
       published = true;
@@ -313,6 +378,68 @@ export class AuthoringExecutionClient {
       if (generation !== this.#lifecycleGeneration) {
         throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
       }
+      throw error;
+    }
+  }
+
+  async #switchRetainedCanonical(sceneSpecJson) {
+    const generation = this.#lifecycleGeneration;
+    const player = this.#player;
+    try {
+      const ready = await player.switchToRetainedCanonical(sceneSpecJson, {
+        loopDurationSeconds: this.#loopDurationSeconds,
+      });
+      this.#assertLifecycleCurrent(generation);
+      this.#mode = AUTHORING_EXECUTION_RETAINED;
+      this.#rendererBackend = ready.render.backend;
+      this.#resizeCurrentCanvas();
+      const state = await player.state();
+      this.#assertLifecycleCurrent(generation);
+      return {
+        type: "result",
+        operation: "rebuild_retained_scene",
+        incremental: false,
+        rebuilt: true,
+        mode: this.#mode,
+        ready,
+        ...state,
+      };
+    } catch (error) {
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      this.#adoptPlayerCanvas(player);
+      throw error;
+    }
+  }
+
+  async #rebuildRetainedCanonical(sceneSpecJson) {
+    const generation = this.#lifecycleGeneration;
+    const player = this.#player;
+    try {
+      const ready = await player.rebuildRetainedCanonical(sceneSpecJson, {
+        loopDurationSeconds: this.#loopDurationSeconds,
+      });
+      this.#assertLifecycleCurrent(generation);
+      this.#mode = AUTHORING_EXECUTION_RETAINED;
+      this.#rendererBackend = ready.render.backend;
+      this.#resizeCurrentCanvas();
+      const state = await player.state();
+      this.#assertLifecycleCurrent(generation);
+      return {
+        type: "result",
+        operation: "rebuild_retained_scene",
+        incremental: false,
+        rebuilt: true,
+        mode: this.#mode,
+        ready,
+        ...state,
+      };
+    } catch (error) {
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      this.#adoptPlayerCanvas(player);
       throw error;
     }
   }
@@ -516,6 +643,28 @@ function validateSceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("scene must be non-empty JSON text");
   }
+}
+
+function validateSceneSpecJson(sceneSpecJson) {
+  if (typeof sceneSpecJson !== "string" || sceneSpecJson.trim() === "") {
+    throw new TypeError("canonical SceneSpec must be non-empty JSON text");
+  }
+  let sceneSpec;
+  try {
+    sceneSpec = JSON.parse(sceneSpecJson);
+  } catch (error) {
+    throw new TypeError(`canonical SceneSpec must be valid JSON: ${error}`);
+  }
+  if (!sceneSpec || typeof sceneSpec !== "object" || Array.isArray(sceneSpec)) {
+    throw new TypeError("canonical SceneSpec must be an object");
+  }
+  if (sceneSpec.version !== SCENE_SPEC_VERSION) {
+    throw new TypeError(`unsupported canonical SceneSpec version ${sceneSpec.version}`);
+  }
+  if (!Array.isArray(sceneSpec.objects) || !Array.isArray(sceneSpec.tracks)) {
+    throw new TypeError("canonical SceneSpec must contain object and track arrays");
+  }
+  return sceneSpec;
 }
 
 function validateRetainedDocumentJson(retainedDocumentJson) {

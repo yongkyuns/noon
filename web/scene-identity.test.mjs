@@ -87,6 +87,60 @@ test("rewrites track IDs and object references by stable keys", () => {
   ]);
 });
 
+test("canonical SceneSpec stabilizes geometry identities without renumbering retained text", () => {
+  const identities = new SceneIdentityMap();
+  const textId = 4503599627370496;
+  const firstKeys = {
+    objects: [{ id: 0, key: "hero" }],
+    tracks: [{ id: 0, key: "hero.move" }],
+  };
+  identities.stabilizeSceneSpec(
+    {
+      version: 1,
+      objects: [
+        { id: 0, content: { kind: "geometry" } },
+        { id: textId, content: { kind: "text" } },
+      ],
+      tracks: [{ id: 0, object: 0 }],
+      camera_object: 0,
+    },
+    firstKeys,
+  );
+
+  const second = identities.stabilizeSceneSpec(
+    {
+      version: 1,
+      objects: [
+        { id: textId, content: { kind: "text" } },
+        { id: 0, content: { kind: "geometry" } },
+        { id: 1, content: { kind: "geometry" } },
+      ],
+      tracks: [
+        { id: 0, object: 1 },
+        { id: 1, object: 0 },
+      ],
+      camera_object: 1,
+    },
+    {
+      objects: [
+        { id: 0, key: "other" },
+        { id: 1, key: "hero" },
+      ],
+      tracks: [
+        { id: 0, key: "hero.move" },
+        { id: 1, key: "other.move" },
+      ],
+    },
+  );
+
+  assert.deepEqual(second.objects.map(({ id }) => id), [textId, 1, 0]);
+  assert.deepEqual(second.tracks, [
+    { id: 0, object: 0 },
+    { id: 1, object: 1 },
+  ]);
+  assert.equal(second.camera_object, 0);
+});
+
 function keyedScene(count) {
   return {
     document: {

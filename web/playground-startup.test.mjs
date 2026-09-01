@@ -23,8 +23,13 @@ assert.match(
 );
 assert.match(
   runtimeReadyBody,
-  /await nextPlayer\.startRetained\(sceneJson, retainedDocumentJson,/,
-  "retained first runs must start directly in retained mode",
+  /await nextPlayer\.startRetainedCanonical\(sceneSpecJson,/,
+  "retained first runs must start directly from canonical SceneSpec",
+);
+assert.doesNotMatch(
+  runtimeReadyBody,
+  /startRetained\(sceneJson, retainedDocumentJson/,
+  "normal retained startup must not reconstruct the transitional split payload",
 );
 assert.match(
   runtimeReadyBody,
@@ -43,7 +48,7 @@ assert.ok(
   "concurrent startup callers must await the in-flight startup before observing the published player",
 );
 const playerPublish = runtimeReadyBody.indexOf("player = nextPlayer;");
-const retainedStart = runtimeReadyBody.indexOf("await nextPlayer.startRetained");
+const retainedStart = runtimeReadyBody.indexOf("await nextPlayer.startRetainedCanonical");
 const legacyStart = runtimeReadyBody.indexOf("await nextPlayer.start(sceneJson");
 assert.ok(
   playerPublish > retainedStart && playerPublish > legacyStart,
@@ -79,8 +84,13 @@ assert.ok(
 );
 assert.match(
   runSceneBody,
-  /const startRetained = \(authored\.retainedDocument\?\.objects\?\.length \?\? 0\) > 0;/,
-  "first-run engine selection must derive from the authored retained sidecar",
+  /const startRetained = sceneSpecJson !== null;/,
+  "first-run retained engine selection must derive from canonical SceneSpec availability",
+);
+assert.doesNotMatch(
+  runSceneBody,
+  /authored\.retainedDocument|retainedDocumentJson/,
+  "normal playground routing must not depend on the transitional retained sidecar",
 );
 
 const bootStart = main.indexOf("try {\n  const requested = requestedExampleId();");

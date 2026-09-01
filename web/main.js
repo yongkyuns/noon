@@ -446,7 +446,7 @@ function ensureAuthoringClient() {
 
 async function ensureRuntimeReady({
   sceneJson,
-  retainedDocumentJson,
+  sceneSpecJson,
   startRetained,
   callbacks,
   authoringClient: client,
@@ -478,7 +478,7 @@ async function ensureRuntimeReady({
     });
     try {
       const ready = startRetained
-        ? await nextPlayer.startRetained(sceneJson, retainedDocumentJson, {
+        ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
             loopDurationSeconds,
           })
         : await nextPlayer.start(sceneJson, { loopDurationSeconds });
@@ -726,10 +726,13 @@ async function runScene() {
         authored.callbacks === null
           ? sceneIdentities.stabilize(authored.document, authored.identities)
           : authored.document;
+      const runtimeSceneSpec =
+        authored.sceneSpec === null || authored.sceneSpec === undefined
+          ? null
+          : sceneIdentities.stabilizeSceneSpec(authored.sceneSpec, authored.identities);
       const sceneJson = JSON.stringify(runtimeDocument);
-      const retainedDocumentJson =
-        authored.retainedDocument === null ? null : JSON.stringify(authored.retainedDocument);
-      const startRetained = (authored.retainedDocument?.objects?.length ?? 0) > 0;
+      const sceneSpecJson = runtimeSceneSpec === null ? null : JSON.stringify(runtimeSceneSpec);
+      const startRetained = sceneSpecJson !== null;
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
 
       await runPlaygroundTestHook("beforeReconcile", {
@@ -743,7 +746,7 @@ async function runScene() {
       if (player === null) {
         result = await ensureRuntimeReady({
           sceneJson,
-          retainedDocumentJson,
+          sceneSpecJson,
           startRetained,
           callbacks: authored.callbacks,
           authoringClient: client,
@@ -754,7 +757,7 @@ async function runScene() {
         await ensureExecutionReady();
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-restart");
         result = await player.reconcileScene(sceneJson, {
-          retainedDocumentJson,
+          sceneSpecJson,
           callbacks: authored.callbacks,
           authoringClient: client,
           loopDurationSeconds: authored.duration > 0 ? authored.duration : null,
