@@ -1,6 +1,6 @@
 use noon::RetainedScene;
 use noon_compile::RetainedCompiledScene;
-use noon_core::{ObjectId, SceneDefinition, TrackDefinition};
+use noon_core::{ObjectId, SceneDefinition, TextFamilyAnimationDefinition, TrackDefinition};
 use serde::Deserialize;
 
 use crate::{
@@ -11,26 +11,30 @@ use crate::{
 /// One protocol-v2 retained payload.
 ///
 /// The established object document remains the canonical source-level text schema;
-/// animation tracks are an additive wire field. Flattening the object document here
-/// lets the complete payload deserialize exactly once while preserving backwards
-/// compatibility with object-only v2 JSON.
+/// animation tracks and Text-family animations are additive wire fields. Flattening
+/// the object document here lets the complete payload deserialize exactly once while
+/// preserving backwards compatibility with object-only v2 JSON.
 #[derive(Debug, Deserialize)]
 struct RetainedAuthoringWireDocument {
     #[serde(flatten)]
     document: RetainedAuthoringDocument,
     #[serde(default)]
     tracks: Vec<RetainedTrackAuthoringSpec>,
+    #[serde(default)]
+    text_family_animations: Vec<TextFamilyAnimationDefinition>,
 }
 
 /// Wire-facing mixed retained scene.
 ///
 /// Protocol v2 remains backwards-compatible with object-only retained documents while
-/// allowing an additive `tracks` field. Object validation stays source-level; track
-/// semantics are compiled only after legacy geometry and retained text share one object
-/// domain.
+/// allowing additive `tracks` and `text_family_animations` fields. Ordinary property
+/// tracks compile into the unified retained runtime. Text-family definitions stay as a
+/// separate semantic sidecar until `RetainedAuthoringPlayer` installs the shared family
+/// scheduler, preserving raw overall progress until per-member lag evaluation.
 #[derive(Clone, Debug)]
 pub struct MixedRetainedAuthoringScene {
     inner: retained_authoring_scene::MixedRetainedAuthoringScene,
+    text_family_animations: Vec<TextFamilyAnimationDefinition>,
 }
 
 impl MixedRetainedAuthoringScene {
@@ -48,18 +52,24 @@ impl MixedRetainedAuthoringScene {
         wire.document
             .validate()
             .map_err(MixedRetainedAuthoringError::RetainedDocument)?;
-        Self::from_parts_with_tracks(&legacy, wire.document, wire.tracks)
+        Self::from_parts_with_tracks_and_text_family_animations(
+            &legacy,
+            wire.document,
+            wire.tracks,
+            wire.text_family_animations,
+        )
     }
 
     pub fn from_parts(
         legacy: &SceneDefinition,
         retained: RetainedAuthoringDocument,
     ) -> Result<Self, MixedRetainedAuthoringError> {
-        Ok(Self {
-            inner: retained_authoring_scene::MixedRetainedAuthoringScene::from_parts(
-                legacy, retained,
-            )?,
-        })
+        Self::from_parts_with_tracks_and_text_family_animations(
+            legacy,
+            retained,
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     pub fn from_parts_with_tracks(
@@ -67,12 +77,27 @@ impl MixedRetainedAuthoringScene {
         retained: RetainedAuthoringDocument,
         retained_tracks: Vec<RetainedTrackAuthoringSpec>,
     ) -> Result<Self, MixedRetainedAuthoringError> {
+        Self::from_parts_with_tracks_and_text_family_animations(
+            legacy,
+            retained,
+            retained_tracks,
+            Vec::new(),
+        )
+    }
+
+    pub fn from_parts_with_tracks_and_text_family_animations(
+        legacy: &SceneDefinition,
+        retained: RetainedAuthoringDocument,
+        retained_tracks: Vec<RetainedTrackAuthoringSpec>,
+        text_family_animations: Vec<TextFamilyAnimationDefinition>,
+    ) -> Result<Self, MixedRetainedAuthoringError> {
         Ok(Self {
             inner: retained_authoring_scene::MixedRetainedAuthoringScene::from_parts_with_tracks(
                 legacy,
                 retained,
                 retained_tracks,
             )?,
+            text_family_animations,
         })
     }
 
@@ -82,6 +107,10 @@ impl MixedRetainedAuthoringScene {
 
     pub fn tracks(&self) -> &[TrackDefinition] {
         self.inner.tracks()
+    }
+
+    pub fn text_family_animations(&self) -> &[TextFamilyAnimationDefinition] {
+        &self.text_family_animations
     }
 
     pub fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
@@ -100,7 +129,9 @@ impl MixedRetainedAuthoringScene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{Property, RateFunction, TrackTiming, TrackValues, Vec2};
+    use noon_core::{
+        Property, RateFunction, TextFamilyAnimationMode, TrackTiming, TrackValues, Vec2,
+    };
     use noon_ir::encode_scene;
     use serde_json::json;
 
@@ -132,6 +163,7 @@ mod tests {
         )
         .unwrap();
         assert!(mixed.tracks().is_empty());
+        assert!(mixed.text_family_animations().is_empty());
         assert_eq!(mixed.scene().objects()[0].id, object);
     }
 
@@ -169,6 +201,34 @@ mod tests {
                 to: Vec2::ZERO,
             }
         );
+    }
+
+    #[test]
+    fn protocol_v2_text_family_field_preserves_raw_family_timing() {
+        let legacy = SceneDefinition::new();
+        let object = ObjectId::new(1_u64 << 52);
+        let document = retained_document(object);
+        let animation = TextFamilyAnimationDefinition::new(
+            object,
+            TextFamilyAnimationMode::Reveal,
+            0.25,
+            2.0,
+            1.0,
+            RateFunction::Smooth,
+            true,
+            false,
+        )
+        .unwrap();
+        let mut wire = serde_json::to_value(document).unwrap();
+        wire["text_family_animations"] = json!([animation]);
+
+        let mixed = MixedRetainedAuthoringScene::from_json(
+            &encode_scene(&legacy).unwrap(),
+            &serde_json::to_string(&wire).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mixed.text_family_animations(), &[animation]);
+        assert!(mixed.tracks().is_empty());
     }
 
     #[test]
