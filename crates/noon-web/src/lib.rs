@@ -3,6 +3,7 @@
 mod authoring_facade;
 mod authoring_mobject;
 mod authoring_options;
+mod canonical_retained_engine_player;
 mod composition;
 mod determinism;
 mod execution_canvas;
@@ -47,6 +48,7 @@ mod spatial_query;
 pub use authoring_facade::*;
 pub use authoring_mobject::*;
 pub use authoring_options::*;
+pub use canonical_retained_engine_player::*;
 pub use composition::*;
 pub use determinism::*;
 #[cfg(target_arch = "wasm32")]
