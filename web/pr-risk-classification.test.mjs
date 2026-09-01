@@ -15,29 +15,35 @@ import { classifyChangedPaths } from "../scripts/classify-pr-risk.mjs";
   const classification = classifyChangedPaths([
     "crates/noon-render-wgpu/src/lib.rs",
     "crates/noon-text-render-wgpu/src/glyph.rs",
-    "web/render-worker.js",
+    "web/execution-render-worker.js",
+    "web/retained-execution-render-worker.js",
   ]);
   assert.equal(classification.rendererCritical, true);
   assert.deepEqual(classification.rendererCriticalPaths, [
     "crates/noon-render-wgpu/src/lib.rs",
     "crates/noon-text-render-wgpu/src/glyph.rs",
-    "web/render-worker.js",
+    "web/execution-render-worker.js",
+    "web/retained-execution-render-worker.js",
   ]);
 }
 
 {
   const classification = classifyChangedPaths([
+    ".github/workflows/pr-fast.yml",
     "crates/noon-web/src/lib.rs",
     "scripts/browser-smoke.mjs",
     "web/browser-smoke.js",
     "web/authoring-render-worker.js",
+    "web/render-gpu-diagnostics.js",
   ]);
   assert.equal(classification.rendererCritical, true);
   assert.deepEqual(classification.rendererCriticalPaths, [
+    ".github/workflows/pr-fast.yml",
     "crates/noon-web/src/lib.rs",
     "scripts/browser-smoke.mjs",
     "web/browser-smoke.js",
     "web/authoring-render-worker.js",
+    "web/render-gpu-diagnostics.js",
   ]);
 }
 
