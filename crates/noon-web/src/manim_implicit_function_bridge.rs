@@ -84,18 +84,21 @@ impl ImplicitFunctionAuthoringPlan {
     where
         F: FnMut(f64, f64) -> Result<f64, ImplicitFunctionAuthoringError>,
     {
-        let request: AxesMappingRequest = serde_json::from_str(axes_request_json)
-            .map_err(|error| ManimImplicitFunctionBridgeError::InvalidAxesRequest(error.to_string()))?;
+        let request: AxesMappingRequest =
+            serde_json::from_str(axes_request_json).map_err(|error| {
+                ManimImplicitFunctionBridgeError::InvalidAxesRequest(error.to_string())
+            })?;
         let x_range = NumberRange::new(request.x_range[0], request.x_range[1], request.x_range[2])?;
         let y_range = NumberRange::new(request.y_range[0], request.y_range[1], request.y_range[2])?;
         let axes = Axes2DState::new(x_range, y_range, request.x_length, request.y_length)?;
         let x_axis = parse_axis_snapshot(x_axis_snapshot_json, "x")?;
         let y_axis = parse_axis_snapshot(y_axis_snapshot_json, "y")?;
         let transformed = TransformedAxes2DState::new(axes, x_axis.transform, y_axis.transform);
-        let path = self.plan.vector_path_with_evaluator_and_mapper(
-            evaluator,
-            |x, y| transformed.coords_to_point(x, y),
-        )?;
+        let path = self
+            .plan
+            .vector_path_with_evaluator_and_mapper(evaluator, |x, y| {
+                transformed.coords_to_point(x, y)
+            })?;
         Ok(Path::new(path).into_snapshot())
     }
 
@@ -151,10 +154,7 @@ fn serialize_snapshot(
 pub enum ManimImplicitFunctionBridgeError {
     InvalidRequest(String),
     InvalidAxesRequest(String),
-    InvalidAxisSnapshot {
-        axis: &'static str,
-        message: String,
-    },
+    InvalidAxisSnapshot { axis: &'static str, message: String },
     Coordinates(CoordinateSystemError),
     Geometry(ImplicitFunctionAuthoringError),
     Serialization(String),
@@ -176,7 +176,10 @@ impl std::fmt::Display for ManimImplicitFunctionBridgeError {
             Self::Coordinates(error) => error.fmt(formatter),
             Self::Geometry(error) => error.fmt(formatter),
             Self::Serialization(error) => {
-                write!(formatter, "unable to serialize ImplicitFunction geometry: {error}")
+                write!(
+                    formatter,
+                    "unable to serialize ImplicitFunction geometry: {error}"
+                )
             }
         }
     }
@@ -296,7 +299,10 @@ mod tests {
         let GeometryRef::VectorPath(path) = snapshot.geometry else {
             panic!("ImplicitFunction must lower to ordinary VectorPath geometry")
         };
-        assert!(matches!(path.commands().first(), Some(PathCommand::MoveTo { .. })));
+        assert!(matches!(
+            path.commands().first(),
+            Some(PathCommand::MoveTo { .. })
+        ));
         assert!(path
             .commands()
             .iter()
@@ -307,7 +313,8 @@ mod tests {
     #[test]
     fn axes_finish_maps_logical_contours_through_current_axis_transforms() {
         let plan = ImplicitFunctionAuthoringPlan::from_json(&request(false)).unwrap();
-        let axes_request = r#"{"x_range":[-2.0,2.0,1.0],"y_range":[-2.0,2.0,1.0],"x_length":8.0,"y_length":4.0}"#;
+        let axes_request =
+            r#"{"x_range":[-2.0,2.0,1.0],"y_range":[-2.0,2.0,1.0],"x_length":8.0,"y_length":4.0}"#;
         let axes = Axes2DState::new(
             NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
             NumberRange::new(-2.0, 2.0, 1.0).unwrap(),
