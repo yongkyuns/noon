@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use noon_compile::{RetainedCompileError, RetainedCompiledScene};
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,
-    RetainedObjectDefinition, SceneDefinition, Style, TextResource, TextResourceArena,
-    TextResourceValidationError, TextSourceKind, TrackDefinition, Transform2D, Vec2, WHITE,
+    Color, FontResourceArena, FontResourceError, GeometryRef, GeometryResource,
+    GeometryResourceArena, ObjectId, RetainedObjectDefinition, SceneDefinition, Style,
+    TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind, TrackDefinition,
+    Transform2D, Vec2, WHITE,
 };
 use noon_text_native::{
     NativeFontFace, NativeTextCompiler, NativeTextError, NativeTextOptions,
@@ -530,6 +531,25 @@ impl RetainedScene {
         Ok(self.push_object(object))
     }
 
+    /// Insert geometry at an exact global painter slot using a caller-owned semantic ID.
+    ///
+    /// Geometry and retained Text therefore enter the same semantic object/painter-order
+    /// domain without reconstructing a legacy geometry-only scene.
+    pub fn insert_geometry_at(
+        &mut self,
+        order: usize,
+        id: ObjectId,
+        geometry: GeometryRef,
+        transform: Transform2D,
+        style: Style,
+    ) -> Result<RetainedMobject, TextAuthoringError> {
+        let next_object_id = self.prepare_object_insertion(order, id)?;
+        let mut object = RetainedObjectDefinition::geometry(id, geometry);
+        object.transform = transform;
+        object.style = style;
+        Ok(self.commit_object_insertion(order, object, next_object_id))
+    }
+
     /// Insert native Text at an exact global painter slot using a caller-owned semantic ID.
     pub fn insert_native_text_at(
         &mut self,
@@ -593,6 +613,17 @@ impl RetainedScene {
     where
         F: FnOnce(&mut Self) -> Result<RetainedObjectDefinition, TextAuthoringError>,
     {
+        let next_object_id = self.prepare_object_insertion(order, id)?;
+        let object = compile(self)?;
+        debug_assert_eq!(object.id, id);
+        Ok(self.commit_object_insertion(order, object, next_object_id))
+    }
+
+    fn prepare_object_insertion(
+        &self,
+        order: usize,
+        id: ObjectId,
+    ) -> Result<u64, TextAuthoringError> {
         if order > self.objects.len() {
             return Err(TextAuthoringError::InvalidPainterOrder {
                 order,
@@ -602,11 +633,19 @@ impl RetainedScene {
         if self.objects.iter().any(|object| object.id == id) {
             return Err(TextAuthoringError::DuplicateObject(id));
         }
-        let next_object_id = self.next_object_id_after(id)?;
-        let object = compile(self)?;
+        self.next_object_id_after(id)
+    }
+
+    fn commit_object_insertion(
+        &mut self,
+        order: usize,
+        object: RetainedObjectDefinition,
+        next_object_id: u64,
+    ) -> RetainedMobject {
+        let id = object.id;
         self.objects.insert(order, object);
         self.next_object_id = next_object_id;
-        Ok(RetainedMobject { id })
+        RetainedMobject { id }
     }
 
     fn push_object(&mut self, object: RetainedObjectDefinition) -> RetainedMobject {
@@ -903,6 +942,87 @@ mod tests {
             retained.texts().get(handle).unwrap().kind,
             TextSourceKind::MathTypst
         );
+    }
+
+    #[test]
+    fn explicit_geometry_insertion_preserves_identity_order_and_presentation() {
+        let mut scene = RetainedScene::new();
+        let text_id = ObjectId::new(100);
+        scene
+            .insert_native_text_at(0, text_id, Text::new("back"))
+            .unwrap();
+
+        let geometry_id = ObjectId::new(7);
+        let transform = Transform2D {
+            translation: Vec2::new(2.0, -1.0),
+            rotation: 0.25,
+            scale: Vec2::new(1.5, 0.75),
+        };
+        let style = Style {
+            fill: Some(noon_core::BLUE),
+            stroke: Some(noon_core::YELLOW),
+            stroke_width: 0.2,
+            opacity: 0.6,
+            ..Style::default()
+        };
+        let geometry = scene
+            .insert_geometry_at(0, geometry_id, GeometryRef::circle(0.5), transform, style)
+            .unwrap();
+
+        assert_eq!(geometry.id(), geometry_id);
+        assert_eq!(scene.objects()[0].id, geometry_id);
+        assert_eq!(scene.objects()[1].id, text_id);
+        assert!(scene.objects()[0].content.geometry().is_some());
+        assert_eq!(scene.objects()[0].transform, transform);
+        assert_eq!(scene.objects()[0].style, style);
+    }
+
+    #[test]
+    fn rejected_geometry_insertion_preserves_objects_and_identity_allocator() {
+        let mut scene = RetainedScene::new();
+        let existing = ObjectId::new(42);
+        scene
+            .insert_geometry_at(
+                0,
+                existing,
+                GeometryRef::circle(0.5),
+                Transform2D::default(),
+                Style::default(),
+            )
+            .unwrap();
+        let before = scene.objects().to_vec();
+
+        assert_eq!(
+            scene
+                .insert_geometry_at(
+                    1,
+                    existing,
+                    GeometryRef::rectangle(1.0, 1.0),
+                    Transform2D::default(),
+                    Style::default(),
+                )
+                .unwrap_err(),
+            TextAuthoringError::DuplicateObject(existing)
+        );
+        assert_eq!(
+            scene
+                .insert_geometry_at(
+                    2,
+                    ObjectId::new(99),
+                    GeometryRef::rectangle(1.0, 1.0),
+                    Transform2D::default(),
+                    Style::default(),
+                )
+                .unwrap_err(),
+            TextAuthoringError::InvalidPainterOrder {
+                order: 2,
+                object_count: 1,
+            }
+        );
+        assert_eq!(scene.objects(), before);
+
+        let generated = scene.add_text(Text::new("next")).unwrap();
+        assert_eq!(generated.id(), ObjectId::new(43));
     }
 
     #[test]
