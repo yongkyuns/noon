@@ -2,7 +2,10 @@
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use crate::{WasmAuthoringStore, WasmAxesAuthoringPlan, WasmAxesPlotPlan, WasmAxesQueryPlan};
+    use crate::{
+        WasmAuthoringStore, WasmAxesAuthoringPlan, WasmAxesPlotPlan, WasmAxesQueryPlan,
+        WasmParametricFunctionPlan,
+    };
 
     /// Keep the browser worker coupled to one stable authoring-store import while
     /// feature-specific plans remain separate Rust/WASM modules.
@@ -30,6 +33,14 @@ mod wasm {
             request_json: &str,
         ) -> Result<WasmAxesPlotPlan, JsValue> {
             WasmAxesPlotPlan::new(request_json)
+        }
+
+        #[wasm_bindgen(js_name = createParametricFunctionPlan)]
+        pub fn create_parametric_function_plan(
+            &self,
+            request_json: &str,
+        ) -> Result<WasmParametricFunctionPlan, JsValue> {
+            WasmParametricFunctionPlan::new(request_json)
         }
     }
 }
