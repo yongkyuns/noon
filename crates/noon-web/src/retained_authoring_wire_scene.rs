@@ -1,19 +1,19 @@
 use noon::RetainedScene;
 use noon_compile::RetainedCompiledScene;
 use noon_core::{ObjectId, SceneDefinition, TrackDefinition};
+use noon_ir::{SceneSpec, SceneSpecError};
 use serde::Deserialize;
 
 use crate::{
-    retained_authoring_scene, MixedRetainedAuthoringError, RetainedAuthoringDocument,
-    RetainedTrackAuthoringSpec,
+    retained_authoring_scene_spec, retained_scene_spec_runtime, MixedRetainedAuthoringError,
+    RetainedAuthoringDocument, RetainedAuthoringSceneSpecError, RetainedTrackAuthoringSpec,
 };
 
 /// One protocol-v2 retained payload.
 ///
-/// The established object document remains the canonical source-level text schema;
-/// animation tracks are an additive wire field. Flattening the object document here
-/// lets the complete payload deserialize exactly once while preserving backwards
-/// compatibility with object-only v2 JSON.
+/// The established object document remains the compatibility source-level text schema;
+/// animation tracks are an additive wire field. The two inputs are normalized into one
+/// canonical `SceneSpec` before any retained/runtime lowering.
 #[derive(Debug, Deserialize)]
 struct RetainedAuthoringWireDocument {
     #[serde(flatten)]
@@ -24,13 +24,14 @@ struct RetainedAuthoringWireDocument {
 
 /// Wire-facing mixed retained scene.
 ///
-/// Protocol v2 remains backwards-compatible with object-only retained documents while
-/// allowing an additive `tracks` field. Object validation stays source-level; track
-/// semantics are compiled only after legacy geometry and retained text share one object
-/// domain.
+/// Protocol v2 remains backwards-compatible while the consumer path is canonical:
+///
+/// `legacy geometry + retained sidecar -> SceneSpec -> RetainedScene -> compiler`.
+///
+/// The old split lowerer remains only as an equivalence oracle during #367 migration.
 #[derive(Clone, Debug)]
 pub struct MixedRetainedAuthoringScene {
-    inner: retained_authoring_scene::MixedRetainedAuthoringScene,
+    inner: retained_scene_spec_runtime::CanonicalRetainedAuthoringScene,
 }
 
 impl MixedRetainedAuthoringScene {
@@ -45,9 +46,6 @@ impl MixedRetainedAuthoringScene {
                     "invalid retained authoring document: {error}"
                 ))
             })?;
-        wire.document
-            .validate()
-            .map_err(MixedRetainedAuthoringError::RetainedDocument)?;
         Self::from_parts_with_tracks(&legacy, wire.document, wire.tracks)
     }
 
@@ -55,11 +53,7 @@ impl MixedRetainedAuthoringScene {
         legacy: &SceneDefinition,
         retained: RetainedAuthoringDocument,
     ) -> Result<Self, MixedRetainedAuthoringError> {
-        Ok(Self {
-            inner: retained_authoring_scene::MixedRetainedAuthoringScene::from_parts(
-                legacy, retained,
-            )?,
-        })
+        Self::from_parts_with_tracks(legacy, retained, Vec::new())
     }
 
     pub fn from_parts_with_tracks(
@@ -67,11 +61,20 @@ impl MixedRetainedAuthoringScene {
         retained: RetainedAuthoringDocument,
         retained_tracks: Vec<RetainedTrackAuthoringSpec>,
     ) -> Result<Self, MixedRetainedAuthoringError> {
+        let spec = retained_authoring_scene_spec(legacy, retained, retained_tracks)
+            .map_err(map_scene_spec_adapter_error)?;
+        Self::from_scene_spec(spec)
+    }
+
+    /// Consume the canonical mixed authoring document directly.
+    ///
+    /// This is the target consumer boundary for future Rust/Python/JavaScript producer
+    /// migration. Source-level text is still compiled by the existing shared Rust
+    /// backends and enters the ordinary retained resource/runtime path.
+    pub fn from_scene_spec(spec: SceneSpec) -> Result<Self, MixedRetainedAuthoringError> {
         Ok(Self {
-            inner: retained_authoring_scene::MixedRetainedAuthoringScene::from_parts_with_tracks(
-                legacy,
-                retained,
-                retained_tracks,
+            inner: retained_scene_spec_runtime::CanonicalRetainedAuthoringScene::from_scene_spec(
+                spec,
             )?,
         })
     }
@@ -97,10 +100,41 @@ impl MixedRetainedAuthoringScene {
     }
 }
 
+fn map_scene_spec_adapter_error(
+    error: RetainedAuthoringSceneSpecError,
+) -> MixedRetainedAuthoringError {
+    match error {
+        RetainedAuthoringSceneSpecError::RetainedDocument(error) => {
+            MixedRetainedAuthoringError::RetainedDocument(error)
+        }
+        RetainedAuthoringSceneSpecError::TrackMaterialization(error) => {
+            MixedRetainedAuthoringError::TrackMaterialization(error)
+        }
+        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::PainterOrderOutOfRange {
+            order,
+            object_count,
+        }) => MixedRetainedAuthoringError::PainterOrderOutOfRange {
+            order,
+            object_count,
+        },
+        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::ObjectCountOverflow) => {
+            MixedRetainedAuthoringError::ObjectCountOverflow
+        }
+        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::DuplicateObject(object)) => {
+            MixedRetainedAuthoringError::ObjectIdentityCollision(object)
+        }
+        RetainedAuthoringSceneSpecError::SceneSpec(error) => {
+            MixedRetainedAuthoringError::RetainedDocument(format!(
+                "invalid canonical mixed SceneSpec: {error}"
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{Property, RateFunction, TrackTiming, TrackValues, Vec2};
+    use noon_core::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
     use noon_ir::encode_scene;
     use serde_json::json;
 
@@ -136,10 +170,22 @@ mod tests {
     }
 
     #[test]
-    fn protocol_v2_track_field_reaches_unified_retained_compiler() {
-        let legacy = SceneDefinition::new();
+    fn protocol_v2_normalizes_geometry_text_and_tracks_through_scene_spec() {
+        let mut legacy = SceneDefinition::new();
+        let geometry = legacy.add(GeometryRef::circle(0.5));
         let object = ObjectId::new(1_u64 << 52);
-        let document = retained_document(object);
+        let document = RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
+            object,
+            order: 1,
+            text: RetainedTextAuthoringSpec::native(
+                "Animated Noon",
+                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+                48.0,
+                -1.0,
+            )
+            .unwrap(),
+        }])
+        .unwrap();
         let mut wire = serde_json::to_value(document).unwrap();
         wire["tracks"] = json!([RetainedTrackAuthoringSpec::new(
             object,
@@ -156,6 +202,15 @@ mod tests {
             &serde_json::to_string(&wire).unwrap(),
         )
         .unwrap();
+        assert_eq!(
+            mixed
+                .scene()
+                .objects()
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            vec![geometry, object]
+        );
         assert_eq!(mixed.tracks().len(), 1);
         assert_eq!(mixed.tracks()[0].property, Property::Scale);
         assert_eq!(mixed.tracks()[0].object, object);
@@ -169,10 +224,11 @@ mod tests {
                 to: Vec2::ZERO,
             }
         );
+        assert_eq!(mixed.compile().unwrap().object_index(object), Some(1));
     }
 
     #[test]
-    fn invalid_object_document_is_rejected_before_track_materialization() {
+    fn invalid_object_document_is_rejected_before_canonical_lowering() {
         let legacy = SceneDefinition::new();
         let object = ObjectId::new(1_u64 << 52);
         let document = retained_document(object);

@@ -1,31 +1,39 @@
+#[cfg(test)]
 use std::collections::{BTreeMap, HashSet};
 
-use noon::{MathTypst, RetainedScene, Text as NativeText, TextAuthoringError, Typst};
-use noon_compile::{RetainedCompileError, RetainedCompiledScene};
-use noon_core::{ObjectId, SceneDefinition, TrackDefinition, Vec2};
+use noon::TextAuthoringError;
+#[cfg(test)]
+use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
+use noon_compile::RetainedCompileError;
+#[cfg(test)]
+use noon_compile::RetainedCompiledScene;
+use noon_core::ObjectId;
+#[cfg(test)]
+use noon_core::{SceneDefinition, TrackDefinition, Vec2};
 
+use crate::RetainedTrackMaterializationError;
+#[cfg(test)]
 use crate::{
     materialize_retained_tracks, RetainedAuthoringDocument, RetainedAuthoringTextObject,
     RetainedTextAuthoringSpec, RetainedTextBackendSpec, RetainedTrackAuthoringSpec,
-    RetainedTrackMaterializationError,
 };
 
-/// One resource-aware scene assembled from the legacy geometry document and the
-/// retained text sidecar emitted by Python authoring.
+/// Previous split-input retained lowerer, kept only as a migration oracle for #367.
 ///
-/// The merge happens before runtime compilation. Geometry and text therefore share
-/// one semantic object list, one painter order, and one retained runtime; the browser
-/// never needs a second scene model or overlay renderer.
+/// Production consumers now normalize through canonical `SceneSpec` before retained
+/// lowering. Keeping this implementation test-only lets equivalence coverage compare
+/// against the proven path without shipping two runtime architectures.
+#[cfg(test)]
 #[derive(Clone, Debug)]
-pub struct MixedRetainedAuthoringScene {
+pub(crate) struct MixedRetainedAuthoringScene {
     scene: RetainedScene,
     tracks: Vec<TrackDefinition>,
     camera_object: Option<ObjectId>,
 }
 
+#[cfg(test)]
 impl MixedRetainedAuthoringScene {
-    #[cfg(test)]
-    pub fn from_json(
+    pub(crate) fn from_json(
         legacy_scene_json: &str,
         retained_document_json: &str,
     ) -> Result<Self, MixedRetainedAuthoringError> {
@@ -35,7 +43,7 @@ impl MixedRetainedAuthoringScene {
         Self::from_parts(&legacy, retained)
     }
 
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         legacy: &SceneDefinition,
         retained: RetainedAuthoringDocument,
     ) -> Result<Self, MixedRetainedAuthoringError> {
@@ -49,7 +57,7 @@ impl MixedRetainedAuthoringScene {
     /// the legacy range, then the exact object/track set is compiled before this
     /// constructor commits a mixed scene. Invalid or text-incompatible tracks therefore
     /// fail transactionally without introducing a second animation validator.
-    pub fn from_parts_with_tracks(
+    pub(crate) fn from_parts_with_tracks(
         legacy: &SceneDefinition,
         retained: RetainedAuthoringDocument,
         retained_tracks: Vec<RetainedTrackAuthoringSpec>,
@@ -79,26 +87,22 @@ impl MixedRetainedAuthoringScene {
         })
     }
 
-    pub const fn scene(&self) -> &RetainedScene {
+    pub(crate) const fn scene(&self) -> &RetainedScene {
         &self.scene
     }
 
-    pub fn tracks(&self) -> &[TrackDefinition] {
+    pub(crate) fn tracks(&self) -> &[TrackDefinition] {
         &self.tracks
     }
 
-    pub fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
+    pub(crate) fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
         Ok(RetainedCompiledScene::compile(
             self.scene.objects(),
             &self.tracks,
         )?)
     }
 
-    pub fn into_scene(self) -> RetainedScene {
-        self.scene
-    }
-
-    pub const fn camera_object(&self) -> Option<ObjectId> {
+    pub(crate) const fn camera_object(&self) -> Option<ObjectId> {
         self.camera_object
     }
 }
@@ -168,6 +172,7 @@ impl From<RetainedCompileError> for MixedRetainedAuthoringError {
     }
 }
 
+#[cfg(test)]
 fn preflight_merge(
     legacy: &SceneDefinition,
     retained: &RetainedAuthoringDocument,
@@ -203,6 +208,7 @@ fn preflight_merge(
     Ok(())
 }
 
+#[cfg(test)]
 fn retained_scale_factors(objects: &[RetainedAuthoringTextObject]) -> BTreeMap<ObjectId, Vec2> {
     objects
         .iter()
@@ -218,6 +224,7 @@ fn retained_scale_factors(objects: &[RetainedAuthoringTextObject]) -> BTreeMap<O
         .collect()
 }
 
+#[cfg(test)]
 fn insert_text_object(
     scene: &mut RetainedScene,
     object: RetainedAuthoringTextObject,
