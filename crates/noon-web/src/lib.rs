@@ -15,10 +15,14 @@ mod host_player;
 #[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
+mod manim_axes_bridge;
+mod manim_axes_query_bridge;
+mod manim_axes_store_bridge;
 mod manim_dashed_line_bridge;
 mod manim_elbow_bridge;
 mod manim_geometry_bridge;
 mod manim_path_query_bridge;
+mod manim_plot_bridge;
 mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -53,10 +57,13 @@ pub use family_bounds::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
+pub use manim_axes_bridge::*;
+pub use manim_axes_query_bridge::*;
 pub use manim_dashed_line_bridge::*;
 pub use manim_elbow_bridge::*;
 pub use manim_geometry_bridge::*;
 pub use manim_path_query_bridge::*;
+pub use manim_plot_bridge::*;
 pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
 pub use reactive_authoring_facade::*;

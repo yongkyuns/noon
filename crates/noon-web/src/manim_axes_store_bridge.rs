@@ -1,0 +1,35 @@
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use wasm_bindgen::prelude::*;
+
+    use crate::{WasmAuthoringStore, WasmAxesAuthoringPlan, WasmAxesPlotPlan, WasmAxesQueryPlan};
+
+    /// Keep the browser worker coupled to one stable authoring-store import while
+    /// feature-specific plans remain separate Rust/WASM modules.
+    #[wasm_bindgen]
+    impl WasmAuthoringStore {
+        #[wasm_bindgen(js_name = createAxesAuthoringPlan)]
+        pub fn create_axes_authoring_plan(
+            &self,
+            request_json: &str,
+        ) -> Result<WasmAxesAuthoringPlan, JsValue> {
+            WasmAxesAuthoringPlan::new(request_json)
+        }
+
+        #[wasm_bindgen(js_name = createAxesQueryPlan)]
+        pub fn create_axes_query_plan(
+            &self,
+            request_json: &str,
+        ) -> Result<WasmAxesQueryPlan, JsValue> {
+            WasmAxesQueryPlan::new(request_json)
+        }
+
+        #[wasm_bindgen(js_name = createAxesPlotPlan)]
+        pub fn create_axes_plot_plan(
+            &self,
+            request_json: &str,
+        ) -> Result<WasmAxesPlotPlan, JsValue> {
+            WasmAxesPlotPlan::new(request_json)
+        }
+    }
+}

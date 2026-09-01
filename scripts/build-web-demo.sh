@@ -50,6 +50,9 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/cross-language-parity.mjs
   node --check scripts/manim-compat-smoke.mjs
+  node --check scripts/manim-axes-smoke.mjs
+  node --check scripts/manim-namespace-smoke.mjs
+  node --check scripts/manim-plot-example-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/composition-authoring-smoke.mjs
@@ -69,10 +72,12 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
 
   PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
     web/python/_manim_compat.py \
+    web/python/_manim_namespace.py \
     web/python/_manim_typst.py \
     web/python/_manim_rate_functions.py \
     web/python/_manim_phase_b.py \
     web/python/_manim_shared_geometry.py \
+    web/python/_manim_axes.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
     web/python/_manim_rotate.py \
