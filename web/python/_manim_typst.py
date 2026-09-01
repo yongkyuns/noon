@@ -1,9 +1,9 @@
-"""ManimCE retained Text/Typst wrappers over Noon's source-level authoring handles.
+"""ManimCE Text/Typst wrappers over Noon's retained source authoring handles.
 
-These wrappers are intentionally not geometry adapters. They never synthesize an
-``_ir.Mobject`` and ``Scene.add`` intercepts them before legacy geometry lowering.
-Only source-level text authoring state crosses the Python-worker boundary; shaping,
-font bytes, glyph/vector resources, and GPU atlas state remain Rust-owned.
+Text is a normal scene object at the lifecycle/identity boundary and specializes only
+its content binding and retained-resource realization. It never synthesizes fake
+geometry; shaping, font bytes, glyph/vector resources, and GPU atlas state remain
+Rust-owned.
 """
 
 from __future__ import annotations
@@ -28,13 +28,9 @@ except ImportError:  # Shared semantic handles are browser-only.
     _create_family_member_handle = None
 
 
-# Reserve the upper half of JavaScript's exact-integer range for retained text IDs.
-# Legacy geometry IDs start at zero and no practical scene can approach 2^52 objects.
 _RETAINED_PROTOCOL_VERSION = 2
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
 _INSTALLED = False
-_ORIGINAL_SCENE_ADD = _compat.Scene.add
-_ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
 
 
 def _color_dict(color: _base.Color) -> dict[str, float]:
@@ -263,7 +259,7 @@ class _RetainedTextMobject(_base.Mobject):
         tracks = _retained_presence_tracks(scene, object_id)
         state = scene._retained_animation_state.get(object_id)
         present = True if state is None else bool(state["presence"])
-        has_future = bool(tracks and tracks[-1]["timing"]["start_time"] > time)
+        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
         return bool(tracks), present, has_future
 
     def _record_scene_presence(
@@ -275,39 +271,18 @@ class _RetainedTextMobject(_base.Mobject):
         *,
         key: str | None = None,
     ) -> None:
+        del key
         if self._scene is not scene or self._object is None:
             raise ValueError("retained text Mobject must belong to this Scene")
-        _ensure_scene_state(scene)
-        object_id = int(self._object.id)
-        tracks = _retained_presence_tracks(scene, object_id)
-        previous = tracks[-1] if tracks else None
-        from _manim_lifecycle import _validate_shared_presence_transition
-
-        result = _validate_shared_presence_transition(
-            previous is not None,
-            0.0 if previous is None else float(previous["timing"]["start_time"]),
-            False if previous is None else bool(previous["values"]["bool"]["to"]),
-            float(time),
-            bool(from_),
-        )
-        if not bool(result.ok):
-            raise ValueError(str(result.message))
-        track_id = len(scene._retained_animation_tracks)
-        scene._retained_animation_tracks.append(
-            {
-                "id": track_id,
-                "object": object_id,
-                "property": "presence",
-                "values": {"bool": {"from": bool(from_), "to": bool(to)}},
-                "timing": {
-                    "start_time": float(time),
-                    "duration": 0.0,
-                    "easing": "linear",
-                },
-            }
+        _append_retained_presence_track(
+            scene,
+            object_id=int(self._object.id),
+            current=from_,
+            target=to,
+            start_time=time,
         )
         state = scene._retained_animation_state.setdefault(
-            object_id, self._initial_scene_animation_state()
+            int(self._object.id), self._initial_scene_animation_state()
         )
         state["presence"] = bool(to)
 
@@ -554,6 +529,42 @@ def _retained_presence_tracks(
         for track in scene._retained_animation_tracks
         if track["object"] == object_id and track["property"] == "presence"
     ]
+
+
+def _append_retained_presence_track(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    current: bool,
+    target: bool,
+    start_time: float,
+) -> None:
+    _ensure_scene_state(scene)
+    tracks = _retained_presence_tracks(scene, object_id)
+    previous = tracks[-1] if tracks else None
+    from _manim_lifecycle import _validate_shared_presence_transition
+
+    result = _validate_shared_presence_transition(
+        previous is not None,
+        0.0 if previous is None else float(previous["timing"]["start_time"]),
+        False if previous is None else bool(previous["values"]["bool"]["to"]),
+        float(start_time),
+        bool(current),
+    )
+    if not bool(result.ok):
+        raise ValueError(str(result.message))
+    scene._retained_animation_tracks.append(
+        {
+            "object": int(object_id),
+            "property": "presence",
+            "values": {"bool": {"from": bool(current), "to": bool(target)}},
+            "timing": {
+                "start_time": float(start_time),
+                "duration": 0.0,
+                "easing": "linear",
+            },
+        }
+    )
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:

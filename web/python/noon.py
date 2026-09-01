@@ -343,7 +343,7 @@ class Mobject:
         if self._scene is not scene or self._object is None:
             raise ValueError("Mobject must belong to this Scene")
         tracks = scene._presence_tracks(self._object)
-        has_future = bool(tracks and tracks[-1]["timing"]["start_time"] > time)
+        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
         return bool(tracks), scene._presence_at(self._object, time), has_future
 
     def _record_scene_presence(

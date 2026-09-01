@@ -418,29 +418,12 @@ def _append_presence_track(
     target: bool,
     start_time: float,
 ) -> None:
-    existing = _retained_presence_tracks(scene, object_id)
-    previous = existing[-1] if existing else None
-    result = _lifecycle._validate_shared_presence_transition(
-        previous is not None,
-        0.0 if previous is None else float(previous["timing"]["start_time"]),
-        False if previous is None else bool(previous["values"]["bool"]["to"]),
-        float(start_time),
-        bool(current),
-    )
-    if not bool(result.ok):
-        raise ValueError(str(result.message))
-
-    scene._retained_animation_tracks.append(
-        {
-            "object": object_id,
-            "property": "presence",
-            "values": {"bool": {"from": bool(current), "to": bool(target)}},
-            "timing": {
-                "start_time": float(start_time),
-                "duration": 0.0,
-                "easing": "linear",
-            },
-        }
+    _typst._append_retained_presence_track(
+        scene,
+        object_id=object_id,
+        current=current,
+        target=target,
+        start_time=start_time,
     )
 
 
