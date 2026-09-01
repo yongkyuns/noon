@@ -117,8 +117,10 @@ pub fn retained_family_draw_border_then_fill_members_for_object<'plan>(
     frame: &RetainedFamilyFrame<'_>,
     plan: &'plan RetainedFamilyAnimationPlan,
     object_index: usize,
-) -> Result<Option<RetainedFamilyDrawBorderThenFillMembers<'plan>>, RetainedFamilyDrawBorderThenFillError>
-{
+) -> Result<
+    Option<RetainedFamilyDrawBorderThenFillMembers<'plan>>,
+    RetainedFamilyDrawBorderThenFillError,
+> {
     let Some(leaf) = frame.planned_family_leaf(plan, object_index)? else {
         return Ok(None);
     };
@@ -126,7 +128,8 @@ pub fn retained_family_draw_border_then_fill_members_for_object<'plan>(
 }
 
 impl Iterator for RetainedFamilyDrawBorderThenFillMembers<'_> {
-    type Item = Result<RetainedFamilyDrawBorderThenFillMember, RetainedFamilyDrawBorderThenFillError>;
+    type Item =
+        Result<RetainedFamilyDrawBorderThenFillMember, RetainedFamilyDrawBorderThenFillError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let member_count = self.frame.span().member_count;
@@ -237,7 +240,11 @@ mod tests {
         }
     }
 
-    fn text_plan() -> (RetainedFamilyAnimationPlan, RetainedFrameState, Vec<Option<FamilyAnimationState>>) {
+    fn text_plan() -> (
+        RetainedFamilyAnimationPlan,
+        RetainedFrameState,
+        Vec<Option<FamilyAnimationState>>,
+    ) {
         let mut store = SemanticStore::new();
         let text_leaf = store.insert_authoring_object();
         let family = store.insert_family();
@@ -350,7 +357,8 @@ mod tests {
         let leaf = store.insert_authoring_object();
         let family_id = store.insert_family();
         store.add_member(family_id, leaf).unwrap();
-        let object = RetainedObjectDefinition::geometry(ObjectId::new(20), GeometryRef::circle(1.0));
+        let object =
+            RetainedObjectDefinition::geometry(ObjectId::new(20), GeometryRef::circle(1.0));
         let texts = TextResourceArena::new();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family_id).unwrap();
         builder.accept_leaf(leaf, &object, &texts).unwrap();
@@ -374,9 +382,10 @@ mod tests {
             retained: &frame,
             family_animations: &states,
         };
-        let mut members = retained_family_draw_border_then_fill_members_for_object(&family, &plan, 0)
-            .unwrap()
-            .unwrap();
+        let mut members =
+            retained_family_draw_border_then_fill_members_for_object(&family, &plan, 0)
+                .unwrap()
+                .unwrap();
         assert_eq!(
             members.next().unwrap().unwrap_err(),
             RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(ObjectId::new(20))
