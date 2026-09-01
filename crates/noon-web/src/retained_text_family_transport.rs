@@ -57,10 +57,14 @@ pub enum RetainedTextFamilyTransportError {
 impl std::fmt::Display for RetainedTextFamilyTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonTextObject => formatter
-                .write_str("retained Text family transport state targets non-text content"),
+            Self::NonTextObject => {
+                formatter.write_str("retained Text family transport state targets non-text content")
+            }
             Self::InvalidState(error) => {
-                write!(formatter, "invalid retained Text family transport state: {error}")
+                write!(
+                    formatter,
+                    "invalid retained Text family transport state: {error}"
+                )
             }
         }
     }
