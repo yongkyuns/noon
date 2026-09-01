@@ -1,4 +1,7 @@
-use noon::{Axes2DState, CoordinateSystemError, NumberRange, TransformedAxes2DState};
+use noon::{
+    transformed_axes_line_graph_vector_path, Axes2DState, CoordinateSystemError, IntoSnapshot,
+    LineGraphAuthoringError, NumberRange, Path, TransformedAxes2DState,
+};
 use noon_core::{GeometryRef, ObjectSnapshot, Vec2};
 use serde::Deserialize;
 
@@ -51,6 +54,24 @@ impl AxesQueryPlan {
             .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
     }
 
+    /// Build the retained corner path for ManimCE v0.21 `Axes.plot_line_graph`.
+    ///
+    /// Python/JS frontends pass only normalized coordinate arrays. Current retained
+    /// axis transforms and all path geometry remain owned by this shared Rust plan.
+    pub fn line_graph_snapshot_json(
+        &self,
+        values_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        let [x_values, y_values]: [Vec<f64>; 2] = serde_json::from_str(values_json)
+            .map_err(|error| ManimAxesQueryError::InvalidLineGraphValues(error.to_string()))?;
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let path = transformed_axes_line_graph_vector_path(transformed, &x_values, &y_values)?;
+        serde_json::to_string(&Path::new(path).into_snapshot())
+            .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
+    }
+
     fn transformed_axes(
         &self,
         x_axis_snapshot_json: &str,
@@ -90,9 +111,11 @@ fn serialize_pair(point: Vec2) -> Result<String, ManimAxesQueryError> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ManimAxesQueryError {
     InvalidRequest(String),
+    InvalidLineGraphValues(String),
     InvalidAxisSnapshot { axis: &'static str, error: String },
     InvalidAxisGeometry(&'static str),
     Coordinates(CoordinateSystemError),
+    LineGraph(LineGraphAuthoringError),
     Serialization(String),
 }
 
@@ -100,6 +123,9 @@ impl std::fmt::Display for ManimAxesQueryError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidRequest(error) => write!(formatter, "invalid Axes query request: {error}"),
+            Self::InvalidLineGraphValues(error) => {
+                write!(formatter, "invalid Axes.plot_line_graph values: {error}")
+            }
             Self::InvalidAxisSnapshot { axis, error } => {
                 write!(formatter, "invalid Axes {axis}-axis snapshot: {error}")
             }
@@ -110,6 +136,7 @@ impl std::fmt::Display for ManimAxesQueryError {
                 )
             }
             Self::Coordinates(error) => error.fmt(formatter),
+            Self::LineGraph(error) => error.fmt(formatter),
             Self::Serialization(error) => {
                 write!(formatter, "unable to serialize Axes query result: {error}")
             }
@@ -122,6 +149,12 @@ impl std::error::Error for ManimAxesQueryError {}
 impl From<CoordinateSystemError> for ManimAxesQueryError {
     fn from(value: CoordinateSystemError) -> Self {
         Self::Coordinates(value)
+    }
+}
+
+impl From<LineGraphAuthoringError> for ManimAxesQueryError {
+    fn from(value: LineGraphAuthoringError) -> Self {
+        Self::LineGraph(value)
     }
 }
 
@@ -172,6 +205,22 @@ mod wasm {
                 .point_to_coords_json(x, y, x_axis_snapshot_json, y_axis_snapshot_json)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = lineGraphSnapshotJson)]
+        pub fn line_graph_snapshot_json(
+            &self,
+            values_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .line_graph_snapshot_json(
+                    values_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
     }
 }
 
@@ -182,7 +231,7 @@ pub use wasm::WasmAxesQueryPlan;
 mod tests {
     use super::*;
     use noon::{IntoSnapshot, Line};
-    use noon_core::Transform2D;
+    use noon_core::{PathCommand, Transform2D};
 
     fn request_json() -> &'static str {
         r#"{"x_range":[-2,2,1],"y_range":[-2,2,1],"x_length":4,"y_length":4}"#
@@ -218,6 +267,58 @@ mod tests {
         .unwrap();
         assert!((coords[0] - 1.0).abs() <= 1.0e-5);
         assert!((coords[1] + 0.5).abs() <= 1.0e-5);
+    }
+
+    #[test]
+    fn line_graph_snapshot_uses_current_retained_axis_state() {
+        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
+        let transform = Transform2D {
+            translation: Vec2::new(-1.0, 2.0),
+            rotation: -0.3,
+            scale: Vec2::new(0.75, 0.75),
+        };
+        let x_axis = axis_snapshot(plan.axes.x_axis(), transform);
+        let y_axis = axis_snapshot(plan.axes.y_axis(), transform);
+        let snapshot: ObjectSnapshot = serde_json::from_str(
+            &plan
+                .line_graph_snapshot_json("[[-1.0,0.0,1.0],[1.0,0.0,-1.0]]", &x_axis, &y_axis)
+                .unwrap(),
+        )
+        .unwrap();
+        let GeometryRef::VectorPath(path) = snapshot.geometry else {
+            panic!("line graph must lower to ordinary VectorPath geometry");
+        };
+        assert_eq!(path.commands().len(), 3);
+        let expected = [
+            transform.transform_point(plan.axes.coords_to_point(-1.0, 1.0).unwrap()),
+            transform.transform_point(plan.axes.coords_to_point(0.0, 0.0).unwrap()),
+            transform.transform_point(plan.axes.coords_to_point(1.0, -1.0).unwrap()),
+        ];
+        for (command, expected) in path.commands().iter().zip(expected) {
+            match command {
+                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => {
+                    assert!((*to - expected).length() <= 1.0e-5)
+                }
+                other => panic!("expected corner path command, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_and_mismatched_line_graph_values_fail_closed() {
+        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
+        let x_axis = axis_snapshot(plan.axes.x_axis(), Transform2D::IDENTITY);
+        let y_axis = axis_snapshot(plan.axes.y_axis(), Transform2D::IDENTITY);
+        assert!(matches!(
+            plan.line_graph_snapshot_json("not json", &x_axis, &y_axis),
+            Err(ManimAxesQueryError::InvalidLineGraphValues(_))
+        ));
+        assert!(matches!(
+            plan.line_graph_snapshot_json("[[0.0,1.0],[2.0]]", &x_axis, &y_axis),
+            Err(ManimAxesQueryError::LineGraph(
+                LineGraphAuthoringError::CoordinateCountMismatch { .. }
+            ))
+        ));
     }
 
     #[test]
