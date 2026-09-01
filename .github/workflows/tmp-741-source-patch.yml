@@ -1,0 +1,98 @@
+name: Temporary #741 source rewrite
+
+on:
+  push:
+    branches:
+      - arch/store-scoped-native-text-binding-stage
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite-source:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Rewrite source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/noon-web/src/authoring_semantics.rs",
+              '''impl AuthoringSemanticIdentity {\n    fn new(store: AuthoringSemanticStore, node: SemanticNodeId) -> Self {''',
+              '''impl AuthoringSemanticIdentity {\n    #[cfg(target_arch = "wasm32")]\n    pub(crate) fn from_shared_store(\n        store: &Rc<RefCell<SemanticStore>>,\n        node: SemanticNodeId,\n    ) -> Self {\n        Self::new(\n            AuthoringSemanticStore {\n                inner: Rc::clone(store),\n            },\n            node,\n        )\n    }\n\n    fn new(store: AuthoringSemanticStore, node: SemanticNodeId) -> Self {''',
+          )
+
+          replace_once(
+              "crates/noon-web/src/authoring_mobject.rs",
+              '''    use crate::WasmRetainedNativeTextAuthoringHandle;''',
+              '''    use crate::{AuthoringSemanticIdentity, WasmRetainedNativeTextAuthoringHandle};''',
+          )
+          replace_once(
+              "crates/noon-web/src/authoring_mobject.rs",
+              '''        if text.family_identity() != Some(member.id) {\n            return Err(JsValue::from_str(&format!(\n                "{context} retained member identity does not match retained native Text handle"\n            )));\n        }''',
+              '''        let member_identity = member.authoring_identity();\n        if !text\n            .family_identity()\n            .is_some_and(|identity| identity.matches(&member_identity))\n        {\n            return Err(JsValue::from_str(&format!(\n                "{context} retained member identity does not match retained native Text handle"\n            )));\n        }''',
+          )
+          replace_once(
+              "crates/noon-web/src/authoring_mobject.rs",
+              '''    pub struct WasmAuthoringFamilyMemberHandle {\n        semantics: SharedSemanticStore,\n        id: SemanticNodeId,\n    }\n\n    impl WasmAuthoringStore {''',
+              '''    pub struct WasmAuthoringFamilyMemberHandle {\n        semantics: SharedSemanticStore,\n        id: SemanticNodeId,\n    }\n\n    impl WasmAuthoringFamilyMemberHandle {\n        pub(crate) fn authoring_identity(&self) -> AuthoringSemanticIdentity {\n            AuthoringSemanticIdentity::from_shared_store(&self.semantics, self.id)\n        }\n    }\n\n    impl WasmAuthoringStore {''',
+          )
+          replace_once(
+              "crates/noon-web/src/authoring_mobject.rs",
+              '''            text.bind_family_identity(self.id).map_err(js_error)''',
+              '''            let identity = self.authoring_identity();\n            text.bind_family_identity(&identity).map_err(js_error)''',
+          )
+
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''use std::collections::HashSet;\n\n#[cfg(any(target_arch = "wasm32", test))]\nuse noon_core::Rect;\n#[cfg(target_arch = "wasm32")]\nuse noon_core::{Bounds2D64, SemanticNodeId};''',
+              '''use std::collections::HashSet;\n\n#[cfg(any(target_arch = "wasm32", test))]\nuse crate::AuthoringSemanticIdentity;\n#[cfg(any(target_arch = "wasm32", test))]\nuse noon_core::Rect;\n#[cfg(target_arch = "wasm32")]\nuse noon_core::Bounds2D64;''',
+          )
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''    .expect("four transformed text bounds corners are never empty")\n}\n\n#[cfg(target_arch = "wasm32")]\nmod wasm {''',
+              '''    .expect("four transformed text bounds corners are never empty")\n}\n\n#[cfg(any(target_arch = "wasm32", test))]\n#[derive(Clone, Debug, Default)]\nstruct RetainedFamilyIdentityBinding {\n    identity: Option<AuthoringSemanticIdentity>,\n}\n\n#[cfg(any(target_arch = "wasm32", test))]\nimpl RetainedFamilyIdentityBinding {\n    fn bind(&mut self, identity: &AuthoringSemanticIdentity) -> Result<(), String> {\n        if let Some(existing) = &self.identity {\n            if !existing.matches(identity) {\n                return Err(\n                    "retained native Text is already bound to another family identity".to_owned(),\n                );\n            }\n            return Ok(());\n        }\n        self.identity = Some(identity.clone());\n        Ok(())\n    }\n\n    fn identity(&self) -> Option<&AuthoringSemanticIdentity> {\n        self.identity.as_ref()\n    }\n}\n\n#[cfg(target_arch = "wasm32")]\nmod wasm {''',
+          )
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''        family_identity: Option<SemanticNodeId>,''',
+              '''        family_identity: RetainedFamilyIdentityBinding,''',
+          )
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''        pub(crate) fn bind_family_identity(\n            &mut self,\n            identity: SemanticNodeId,\n        ) -> Result<(), String> {\n            if let Some(existing) = self.family_identity {\n                if existing != identity {\n                    return Err(\n                        "retained native Text is already bound to another family identity"\n                            .to_owned(),\n                    );\n                }\n                return Ok(());\n            }\n            self.family_identity = Some(identity);\n            Ok(())\n        }\n\n        pub(crate) fn family_identity(&self) -> Option<SemanticNodeId> {\n            self.family_identity\n        }''',
+              '''        pub(crate) fn bind_family_identity(\n            &mut self,\n            identity: &AuthoringSemanticIdentity,\n        ) -> Result<(), String> {\n            self.family_identity.bind(identity)\n        }\n\n        pub(crate) fn family_identity(&self) -> Option<&AuthoringSemanticIdentity> {\n            self.family_identity.identity()\n        }''',
+          )
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''                family_identity: None,''',
+              '''                family_identity: RetainedFamilyIdentityBinding::default(),''',
+          )
+          replace_once(
+              "crates/noon-web/src/retained_authoring.rs",
+              '''mod tests {\n    use super::*;\n\n    #[test]\n    fn backend_neutral_wire_stays_source_level() {''',
+              '''mod tests {\n    use super::*;\n\n    #[test]\n    fn retained_family_identity_binding_rejects_cross_store_numeric_collision() {\n        let first_store = crate::AuthoringSemanticStore::new();\n        let second_store = crate::AuthoringSemanticStore::new();\n        let first = first_store.insert_object();\n        let second = second_store.insert_object();\n\n        assert_eq!(first.node_id(), second.node_id());\n\n        let mut binding = RetainedFamilyIdentityBinding::default();\n        binding.bind(&first).unwrap();\n        binding.bind(&first).unwrap();\n        assert!(binding.bind(&second).is_err());\n        assert!(binding\n            .identity()\n            .is_some_and(|identity| identity.matches(&first)));\n    }\n\n    #[test]\n    fn backend_neutral_wire_stays_source_level() {''',
+          )
+          PY
+          cargo fmt --all
+          rm .github/workflows/tmp-741-source-patch.yml
+      - name: Commit rewritten tree
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Migrate retained Text to store-scoped semantic identity"
+          git push origin HEAD:${GITHUB_REF_NAME}
