@@ -1,15 +1,6 @@
 name: Playground playback controls
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/playground-playback-controls.yml"
-      - "crates/noon-render-wgpu/**"
-      - "crates/noon-web/**"
-      - "scripts/build-web-demo.sh"
-      - "scripts/playground-playback-controls-smoke.mjs"
-      - "scripts/playground-playback-rerun-stress.mjs"
-      - "web/**"
   push:
     branches:
       - master
@@ -41,12 +32,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -56,45 +45,37 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-
       - name: Use sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
-
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-
       - name: Build browser package
         env:
           NOON_SKIP_PLAYGROUND_TEST: "1"
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install Playwright Chromium
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
-
       - name: Test public playback controls
         env:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
         run: node scripts/playground-playback-controls-smoke.mjs
-
       - name: Stress reruns across playback states
         env:
           NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
         run: node scripts/playground-playback-rerun-stress.mjs
-
       - name: Upload playback diagnostics
         if: always()
         uses: actions/upload-artifact@v4

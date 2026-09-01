@@ -1,18 +1,6 @@
 name: Platform and release validation
 
 on:
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - 'crates/**'
-      - '!crates/**/tests/**'
-      - 'scripts/build-web-demo.sh'
-      - 'scripts/build-python-worker.mjs'
-      - 'scripts/check-web-package.mjs'
-      - 'scripts/deterministic-replay-smoke.mjs'
-      - 'web/**'
-      - '.github/workflows/platform-release.yml'
   push:
     branches:
       - master
@@ -52,10 +40,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust
         run: rustup default stable
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -65,7 +51,6 @@ jobs:
           key: ${{ runner.os }}-platform-cargo-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-platform-cargo-
-
       - name: Compile and test native workspace
         run: cargo test --workspace --all-features --lib --tests
 
@@ -77,10 +62,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust
         run: rustup default stable
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -90,7 +73,6 @@ jobs:
           key: release-cargo-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml') }}
           restore-keys: |
             release-cargo-
-
       - name: Test core execution crates in release mode
         run: cargo test --release -p noon-core -p noon-geometry -p noon-runtime --all-features
 
@@ -104,12 +86,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust and WASM target
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -119,13 +99,11 @@ jobs:
           key: optimized-wasm-cargo-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**/Cargo.toml') }}
           restore-keys: |
             optimized-wasm-cargo-
-
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-
       - name: Install pinned wasm-opt
         shell: bash
         run: |
@@ -137,12 +115,10 @@ jobs:
           binaryen_dir="$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}"
           echo "$binaryen_dir/bin" >> "$GITHUB_PATH"
           "$binaryen_dir/bin/wasm-opt" --version
-
       - name: Build and validate optimized browser package
         env:
           NOON_SKIP_PLAYGROUND_TEST: '1'
         run: bash scripts/build-web-demo.sh
-
       - name: Record optimized WASM size
         shell: bash
         run: |
@@ -156,15 +132,12 @@ jobs:
             echo '- wasm-pack: 0.15.0'
             echo "- Binaryen/wasm-opt: version ${BINARYEN_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Install Chromium smoke dependency
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
-
       - name: Exercise optimized WASM in Chromium
         run: node scripts/deterministic-replay-smoke.mjs
-
       - name: Upload optimized browser package
         uses: actions/upload-artifact@v4
         with:

@@ -1,21 +1,6 @@
 name: Manim reference inventory
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/manim-reference-inventory.yml'
-      - 'compat/manim-v0.21.0-reference-inventory-lock.json'
-      - 'compat/manim-v0.21.0-reference-coverage-lock.json'
-      - 'parity/manim-v0.21/upstream-examples/**'
-      - 'web/python/examples/manim_tutorial_manifest.json'
-      - 'scripts/manim-reference-inventory.mjs'
-      - 'scripts/manim-reference-inventory.test.mjs'
-      - 'scripts/manim-reference-ledger.mjs'
-      - 'scripts/manim-reference-ledger.test.mjs'
-      - 'scripts/manim-reference-coverage.mjs'
-      - 'scripts/manim-reference-coverage.test.mjs'
-      - 'scripts/manim-reference-classification-lock.mjs'
-      - 'scripts/manim-reference-classification-lock.test.mjs'
   push:
     branches:
       - master
@@ -54,7 +39,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: noon
-
       - name: Checkout pinned ManimCE source
         uses: actions/checkout@v4
         with:
@@ -62,64 +46,35 @@ jobs:
           ref: ${{ env.MANIM_REFERENCE_SHA }}
           path: manim-v0.21.0
           persist-credentials: false
-
       - name: Extract and validate reference inventory
         shell: bash
         run: |
           set -euo pipefail
           actual_sha="$(git -C manim-v0.21.0 rev-parse HEAD)"
           test "$actual_sha" = "$MANIM_REFERENCE_SHA"
-
           mkdir -p noon/artifacts
           node noon/scripts/manim-reference-inventory.mjs manim-v0.21.0 \
             > noon/artifacts/manim-v0.21.0-reference-inventory.json
-
           node - <<'NODE'
           const fs = require("node:fs");
           const path = "noon/artifacts/manim-v0.21.0-reference-inventory.json";
           const inventory = JSON.parse(fs.readFileSync(path, "utf8"));
           const expectedRoots = ["docs/source", "manim"];
-
-          if (inventory.schema_version !== 1) {
-            throw new Error(`unexpected reference inventory schema: ${inventory.schema_version}`);
-          }
-          if (JSON.stringify(inventory.scanned_roots) !== JSON.stringify(expectedRoots)) {
-            throw new Error(`unexpected scanned roots: ${JSON.stringify(inventory.scanned_roots)}`);
-          }
-          if (!Array.isArray(inventory.examples) || inventory.examples.length === 0) {
-            throw new Error("pinned Manim source produced no reference examples");
-          }
-
+          if (inventory.schema_version !== 1) throw new Error(`unexpected reference inventory schema: ${inventory.schema_version}`);
+          if (JSON.stringify(inventory.scanned_roots) !== JSON.stringify(expectedRoots)) throw new Error(`unexpected scanned roots: ${JSON.stringify(inventory.scanned_roots)}`);
+          if (!Array.isArray(inventory.examples) || inventory.examples.length === 0) throw new Error("pinned Manim source produced no reference examples");
           const locations = new Set();
           for (const example of inventory.examples) {
-            if (!Number.isInteger(example.directive_line) || example.directive_line < 1) {
-              throw new Error(`invalid directive line for ${example.source_path}`);
-            }
-            if (
-              typeof example.source_path !== "string" ||
-              !expectedRoots.some(
-                (root) => example.source_path === root || example.source_path.startsWith(`${root}/`),
-              )
-            ) {
-              throw new Error(`example escaped pinned source roots: ${example.source_path}`);
-            }
-            if (typeof example.source_sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(example.source_sha256)) {
-              throw new Error(`invalid source provenance hash at ${example.source_path}:${example.directive_line}`);
-            }
+            if (!Number.isInteger(example.directive_line) || example.directive_line < 1) throw new Error(`invalid directive line for ${example.source_path}`);
+            if (typeof example.source_path !== "string" || !expectedRoots.some((root) => example.source_path === root || example.source_path.startsWith(`${root}/`))) throw new Error(`example escaped pinned source roots: ${example.source_path}`);
+            if (typeof example.source_sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(example.source_sha256)) throw new Error(`invalid source provenance hash at ${example.source_path}:${example.directive_line}`);
             const location = `${example.source_path}:${example.directive_line}`;
-            if (locations.has(location)) {
-              throw new Error(`duplicate reference directive location: ${location}`);
-            }
+            if (locations.has(location)) throw new Error(`duplicate reference directive location: ${location}`);
             locations.add(location);
           }
-
-          fs.appendFileSync(
-            process.env.GITHUB_STEP_SUMMARY,
-            `Extracted ${inventory.examples.length} ManimCE v0.21.0 reference examples from immutable source commit ${process.env.MANIM_REFERENCE_SHA}.\n`,
-          );
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Extracted ${inventory.examples.length} ManimCE v0.21.0 reference examples from immutable source commit ${process.env.MANIM_REFERENCE_SHA}.\n`);
           console.log(`Validated ${inventory.examples.length} pinned Manim reference examples.`);
           NODE
-
       - name: Verify checked-in reference inventory lock
         shell: bash
         run: |
@@ -129,9 +84,7 @@ jobs:
             noon/compat/manim-v0.21.0-reference-inventory-lock.json \
             > noon/artifacts/manim-v0.21.0-reference-ledger-summary.json
           cat noon/artifacts/manim-v0.21.0-reference-ledger-summary.json
-          printf '\nReference inventory lock verified against the immutable extracted corpus.\n' \
-            >> "$GITHUB_STEP_SUMMARY"
-
+          printf '\nReference inventory lock verified against the immutable extracted corpus.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify classified reference identities
         shell: bash
         run: |
@@ -141,9 +94,7 @@ jobs:
             noon/compat/manim-v0.21.0-reference-coverage-lock.json \
             > noon/artifacts/manim-v0.21.0-reference-classification-lock.json
           cat noon/artifacts/manim-v0.21.0-reference-classification-lock.json
-          printf '\nReference classification identities verified against the checked-in ratchet.\n' \
-            >> "$GITHUB_STEP_SUMMARY"
-
+          printf '\nReference classification identities verified against the checked-in ratchet.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Reconcile canonical reference coverage
         shell: bash
         run: |
@@ -157,15 +108,9 @@ jobs:
           cat noon/artifacts/manim-v0.21.0-reference-coverage.json
           node - <<'NODE'
           const fs = require("node:fs");
-          const report = JSON.parse(
-            fs.readFileSync("noon/artifacts/manim-v0.21.0-reference-coverage.json", "utf8"),
-          );
-          fs.appendFileSync(
-            process.env.GITHUB_STEP_SUMMARY,
-            `\nReconciled ${report.reconciled_examples}/${report.inventory_examples} pinned reference directives with exact-source canonical manifest entries; ${report.unclassified_inventory_examples} remain to classify.\n`,
-          );
+          const report = JSON.parse(fs.readFileSync("noon/artifacts/manim-v0.21.0-reference-coverage.json", "utf8"));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nReconciled ${report.reconciled_examples}/${report.inventory_examples} pinned reference directives with exact-source canonical manifest entries; ${report.unclassified_inventory_examples} remain to classify.\n`);
           NODE
-
       - name: Upload reference inventory
         if: always()
         uses: actions/upload-artifact@v4

@@ -9,6 +9,7 @@
 mod analytic_geometry_authoring;
 mod arc_authoring;
 mod camera_authoring;
+mod dashed_line_authoring;
 mod elbow_authoring;
 mod geometry_authoring;
 mod legacy;
@@ -23,6 +24,7 @@ mod text_authoring;
 pub use analytic_geometry_authoring::*;
 pub use arc_authoring::*;
 pub use camera_authoring::*;
+pub use dashed_line_authoring::*;
 pub use elbow_authoring::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
@@ -39,17 +41,17 @@ pub mod prelude {
     pub use crate::legacy::prelude::*;
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
-        Cross, Dot, Elbow, ElbowAuthoringError, Ellipse, GeometryAuthoringError,
-        LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
+        Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
+        GeometryAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene, Polygon,
+        Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
         RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
         RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
         SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
         VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
-        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
-        DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
-        DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
-        SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS,
+        DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+        DEFAULT_NATIVE_TEXT_FONT_SIZE, DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS,
+        DEFAULT_UNDERLINE_BUFF, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,

@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches:
       - master
@@ -116,36 +115,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Download browser package
         uses: actions/download-artifact@v4
         with:
           name: web-pkg
           path: web
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install browser smoke dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
       - name: Test Rust/Python semantic parity
         run: node scripts/cross-language-parity.mjs
-
       - name: Test deterministic seek/playback/rewind in WASM
         run: node scripts/deterministic-replay-smoke.mjs
-
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
-
       - name: Test Manim composition authoring
         run: node scripts/composition-authoring-smoke.mjs
-
       - name: Test executable Manim tutorial corpus
         run: node scripts/manim-tutorial-smoke.mjs
 
@@ -156,54 +147,40 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Download browser package
         uses: actions/download-artifact@v4
         with:
           name: web-pkg
           path: web
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install browser smoke dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
       - name: Test playground viewport layout
         run: node scripts/playground-layout-smoke.mjs
-
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
-
       - name: Test native reactive browser runtime
         run: node scripts/reactive-runtime-smoke.mjs
-
       - name: Test native browser input signals
         run: node scripts/native-input-smoke.mjs
-
       - name: Test Python updater callback bridge
         run: node scripts/updater-callback-smoke.mjs
-
       - name: Test engine/render worker transports
         run: node scripts/execution-worker-smoke.mjs
-
       - name: Test mixed retained worker transports
         run: node scripts/retained-execution-worker-smoke.mjs
-
       - name: Test Python authoring execution routing
         run: node scripts/authoring-execution-router-smoke.mjs
-
       - name: Test authoring execution termination races
         run: node scripts/authoring-execution-lifecycle-smoke.mjs
-
       - name: Test slow Python callbacks do not block rendering
         run: node scripts/execution-worker-host-smoke.mjs
-
       - name: Test Python editor highlighting and linting
         run: node scripts/python-editor-smoke.mjs
 
@@ -220,40 +197,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Download browser package
         uses: actions/download-artifact@v4
         with:
           name: web-pkg
           path: web
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install browser smoke dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
       - name: Test browser rendering
         env:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
         run: node scripts/browser-smoke.mjs
-
       - name: Test camera backing-density invariance
         env:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
           NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/camera-density
         run: node scripts/camera-density-smoke.mjs
-
       - name: Test mixed painter order in WebGPU
         if: matrix.backend == 'webgpu'
         run: node scripts/painter-order-browser-smoke.mjs
-
       - name: Upload browser smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -270,29 +240,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install visual diff dependency
         run: npm install --no-save --ignore-scripts pngjs@7.0.0
-
       - name: Download WebGPU screenshots
         uses: actions/download-artifact@v4
         with:
           name: browser-smoke-screenshots-webgpu
           path: browser-backend-parity
-
       - name: Download WebGL screenshots
         uses: actions/download-artifact@v4
         with:
           name: browser-smoke-screenshots-webgl
           path: browser-backend-parity
-
       - name: Compare WebGPU and WebGL foreground coverage
         run: |
           node scripts/browser-backend-visual-parity.mjs \
             browser-backend-parity/webgpu \
             browser-backend-parity/webgl \
             browser-backend-parity-report
-
       - name: Upload backend visual parity report
         if: always()
         uses: actions/upload-artifact@v4

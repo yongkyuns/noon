@@ -16,6 +16,7 @@ pub const BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY: f32 = 0.75;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShapeMatcherAuthoringError {
     NoBoundedTargets,
+    NonFiniteBounds,
     NonFiniteBuffer(Vec2),
     RoundedRectangle(RoundedRectangleAuthoringError),
 }
@@ -26,6 +27,7 @@ impl std::fmt::Display for ShapeMatcherAuthoringError {
             Self::NoBoundedTargets => {
                 formatter.write_str("shape matcher requires at least one target with world bounds")
             }
+            Self::NonFiniteBounds => formatter.write_str("shape matcher bounds must be finite"),
             Self::NonFiniteBuffer(value) => write!(
                 formatter,
                 "shape matcher buffer must be finite, got ({}, {})",
@@ -120,14 +122,25 @@ fn validate_buffer(buff: Vec2) -> Result<(), ShapeMatcherAuthoringError> {
     Ok(())
 }
 
-fn surrounding_snapshot<'a>(
-    targets: impl IntoIterator<Item = &'a ObjectSnapshot>,
+fn validate_bounds(bounds: Rect) -> Result<(), ShapeMatcherAuthoringError> {
+    if !bounds.min.x.is_finite()
+        || !bounds.min.y.is_finite()
+        || !bounds.max.x.is_finite()
+        || !bounds.max.y.is_finite()
+    {
+        return Err(ShapeMatcherAuthoringError::NonFiniteBounds);
+    }
+    Ok(())
+}
+
+fn surrounding_snapshot_from_bounds(
+    bounds: Rect,
     buff: Vec2,
     corner_radius: f32,
     color: Color,
 ) -> Result<ObjectSnapshot, ShapeMatcherAuthoringError> {
+    validate_bounds(bounds)?;
     validate_buffer(buff)?;
-    let bounds = group_world_bounds(targets).ok_or(ShapeMatcherAuthoringError::NoBoundedTargets)?;
     let width = bounds.width() + 2.0 * buff.x;
     let height = bounds.height() + 2.0 * buff.y;
 
@@ -140,6 +153,16 @@ fn surrounding_snapshot<'a>(
         .move_to(bounds.center())
         .into_snapshot();
     Ok(snapshot)
+}
+
+fn surrounding_snapshot<'a>(
+    targets: impl IntoIterator<Item = &'a ObjectSnapshot>,
+    buff: Vec2,
+    corner_radius: f32,
+    color: Color,
+) -> Result<ObjectSnapshot, ShapeMatcherAuthoringError> {
+    let bounds = group_world_bounds(targets).ok_or(ShapeMatcherAuthoringError::NoBoundedTargets)?;
+    surrounding_snapshot_from_bounds(bounds, buff, corner_radius, color)
 }
 
 impl SurroundingRectangle {
@@ -165,6 +188,25 @@ impl SurroundingRectangle {
             color,
         )?))
     }
+
+    /// Construct directly from authoritative shared world bounds.
+    ///
+    /// This keeps aggregate-family adapters from fabricating temporary scene
+    /// objects merely to reuse matcher geometry. Snapshot-based construction and
+    /// bounds-based construction share the same implementation below this seam.
+    pub fn around_world_bounds(
+        bounds: Rect,
+        buff: Vec2,
+        corner_radius: f32,
+        color: Color,
+    ) -> Result<Self, ShapeMatcherAuthoringError> {
+        Ok(Self(surrounding_snapshot_from_bounds(
+            bounds,
+            buff,
+            corner_radius,
+            color,
+        )?))
+    }
 }
 
 impl BackgroundRectangle {
@@ -185,7 +227,20 @@ impl BackgroundRectangle {
         color: Color,
         fill_opacity: f32,
     ) -> Result<Self, ShapeMatcherAuthoringError> {
-        let mut snapshot = surrounding_snapshot(targets, buff, corner_radius, color)?;
+        let bounds =
+            group_world_bounds(targets).ok_or(ShapeMatcherAuthoringError::NoBoundedTargets)?;
+        Self::around_world_bounds(bounds, buff, corner_radius, color, fill_opacity)
+    }
+
+    /// Construct directly from authoritative shared world bounds.
+    pub fn around_world_bounds(
+        bounds: Rect,
+        buff: Vec2,
+        corner_radius: f32,
+        color: Color,
+        fill_opacity: f32,
+    ) -> Result<Self, ShapeMatcherAuthoringError> {
+        let mut snapshot = surrounding_snapshot_from_bounds(bounds, buff, corner_radius, color)?;
         snapshot = snapshot.set_fill(Some(color), Some(fill_opacity));
 
         // Manim defaults BackgroundRectangle to `stroke_width=0` and
@@ -258,6 +313,25 @@ mod tests {
     }
 
     #[test]
+    fn bounds_native_matcher_matches_snapshot_union_without_temporary_geometry() {
+        let left = Circle::new(1.0).shift(Vec2::new(-2.0, 0.0)).into_snapshot();
+        let right = Rectangle::new(2.0, 4.0)
+            .shift(Vec2::new(3.0, 1.0))
+            .into_snapshot();
+        let snapshots = [&left, &right];
+        let bounds = group_world_bounds(snapshots).expect("union bounds");
+
+        let from_snapshots =
+            SurroundingRectangle::around(snapshots, Vec2::new(0.25, 0.5), 0.2, RED)
+                .expect("snapshot matcher");
+        let from_bounds =
+            SurroundingRectangle::around_world_bounds(bounds, Vec2::new(0.25, 0.5), 0.2, RED)
+                .expect("bounds matcher");
+
+        assert_eq!(from_bounds.snapshot(), from_snapshots.snapshot());
+    }
+
+    #[test]
     fn background_rectangle_matches_default_geometry_and_style() {
         let target = Circle::new(1.5).into_snapshot();
         let background = BackgroundRectangle::new(&target).expect("bounded target");
@@ -295,5 +369,39 @@ mod tests {
         );
         assert_close(background.snapshot().width(), 2.2);
         assert_close(background.snapshot().height(), 1.4);
+    }
+
+    #[test]
+    fn bounds_native_background_preserves_style_contract() {
+        let bounds = Rect::new(Vec2::new(-2.0, -1.0), Vec2::new(3.0, 4.0));
+        let background =
+            BackgroundRectangle::around_world_bounds(bounds, Vec2::new(0.2, 0.3), 0.1, WHITE, 0.2)
+                .expect("bounds background");
+
+        let center = background.snapshot().center();
+        let expected_center = bounds.center();
+        assert_close(center.x, expected_center.x);
+        assert_close(center.y, expected_center.y);
+        assert_close(background.snapshot().width(), 5.4);
+        assert_close(background.snapshot().height(), 5.6);
+        assert_eq!(
+            background.snapshot().style.fill.map(|color| color.alpha),
+            Some(0.2)
+        );
+        assert_eq!(
+            background.snapshot().style.stroke.map(|color| color.alpha),
+            Some(0.0)
+        );
+        assert_close(background.snapshot().style.stroke_width, 0.0);
+    }
+
+    #[test]
+    fn bounds_native_matchers_reject_non_finite_bounds() {
+        let invalid = Rect::new(Vec2::new(f32::NAN, 0.0), Vec2::new(1.0, 1.0));
+        assert_eq!(
+            SurroundingRectangle::around_world_bounds(invalid, Vec2::ZERO, 0.0, RED)
+                .expect_err("non-finite bounds must fail"),
+            ShapeMatcherAuthoringError::NonFiniteBounds
+        );
     }
 }

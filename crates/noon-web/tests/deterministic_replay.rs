@@ -3,8 +3,8 @@ use noon_core::{
 };
 use noon_ir::encode_scene;
 use noon_web::{
-    normalized_frame_json, playback_snapshot_json, scene_snapshot_json, ReconcileOutcome,
-    ScenePlayer,
+    normalized_frame_json, playback_snapshot_json, scene_snapshot_json, verify_scene_replay,
+    ReconcileOutcome, ScenePlayer,
 };
 
 fn build_scene() -> SceneDefinition {
@@ -78,6 +78,22 @@ fn direct_seek_incremental_playback_and_backward_scrub_have_identical_frames() {
         let rewind = playback_snapshot_json(&json, &[0.1, 1.3, 2.9, 0.7, 3.4, target]).unwrap();
         assert_eq!(rewind, direct, "backward scrub diverged at target={target}");
     }
+}
+
+#[test]
+fn batched_replay_verifier_preserves_full_direct_forward_and_rewind_contract() {
+    let json = scene_json(&build_scene());
+    let targets = [0.0, 0.25, 0.499, 0.5, 1.0, 1.2, 1.75, 2.25, 2.75, 3.0, 4.0];
+
+    verify_scene_replay(&json, &targets, 38).unwrap();
+}
+
+#[test]
+fn batched_replay_verifier_rejects_invalid_workloads_before_evaluation() {
+    let json = scene_json(&build_scene());
+
+    assert!(verify_scene_replay(&json, &[0.5], 1).is_err());
+    assert!(verify_scene_replay(&json, &[f64::NAN], 38).is_err());
 }
 
 #[test]

@@ -1,15 +1,6 @@
 name: Retained Typst authoring
 
 on:
-  pull_request:
-    paths:
-      - "crates/noon-web/src/retained_authoring.rs"
-      - "web/python-worker.source.js"
-      - "web/python-compat-modules.js"
-      - "web/python/_manim_typst.py"
-      - "scripts/build-python-worker.mjs"
-      - "scripts/manim-typst-authoring-smoke.mjs"
-      - ".github/workflows/retained-typst-authoring.yml"
   push:
     branches:
       - master
@@ -41,12 +32,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -56,26 +45,21 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-
       - name: Build browser package
         run: bash scripts/build-web-demo.sh
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install browser smoke dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
       - name: Test retained Typst Python authoring
         run: node scripts/manim-typst-authoring-smoke.mjs
