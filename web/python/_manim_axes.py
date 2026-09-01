@@ -382,16 +382,7 @@ class Axes(_compat.VGroup):
         super().__init__(*self.axes)
 
     def copy(self) -> Axes:
-        """Clone retained axis families while sharing immutable Rust plans.
-
-        Generic Group copying deep-copies subclass metadata. Pyodide WASM plans are
-        immutable JsProxy values and must not cross that host-language deepcopy path.
-        The copied leaves receive fresh shared semantic identities through their normal
-        Group/Mobject copy adapters, while both Axes wrappers may safely reference the
-        same immutable construction/query plans because every query supplies its own
-        current retained line snapshots.
-        """
-
+        """Clone retained axis families while sharing immutable Rust plans."""
         clone = object.__new__(type(self))
         clone.x_range = list(self.x_range)
         clone.y_range = list(self.y_range)
@@ -473,17 +464,9 @@ class Axes(_compat.VGroup):
     def input_to_graph_point(
         self, x: float, graph: ParametricFunction | _compat.VMobject
     ) -> object:
-        """Return the point on a graph corresponding to an axis x value.
-
-        Authored function graphs retain ManimCE v0.21's direct callback fast path.
-        Generic retained VMobjects delegate the complete path-proportion binary search
-        to the shared Rust query plan in one WASM call.
-        """
-
         value = float(x)
         if hasattr(graph, "underlying_function"):
             return graph.function(value)
-
         handle = _shared._handle_for(graph)
         if handle is None:
             raise TypeError(
@@ -512,9 +495,7 @@ class Axes(_compat.VGroup):
     def i2gc(self, x: float, graph: ParametricFunction) -> tuple[float, float]:
         return self.input_to_graph_coords(x, graph)
 
-    def i2gp(
-        self, x: float, graph: ParametricFunction | _compat.VMobject
-    ) -> object:
+    def i2gp(self, x: float, graph: ParametricFunction | _compat.VMobject) -> object:
         return self.input_to_graph_point(x, graph)
 
     def get_line_from_axis_to_point(
@@ -531,7 +512,6 @@ class Axes(_compat.VGroup):
         target = _compat._as_vec2(point)
         coords = self.p2c(target)
         projected = self.c2p(coords[0], 0.0) if index == 0 else self.c2p(0.0, coords[1])
-
         if line_func is None:
             line_func = getattr(_base, "DashedLine", None)
             if line_func is None:
@@ -544,7 +524,6 @@ class Axes(_compat.VGroup):
             line_config = {}
         elif not isinstance(line_config, dict):
             raise TypeError("line_config must be a dict or None")
-
         line_config["color"] = _base.WHITE if color is None else color
         line_config["stroke_width"] = float(stroke_width)
         return line_func(projected, target, **line_config)
@@ -566,8 +545,6 @@ class Axes(_compat.VGroup):
         vertex_dot_style: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> VDict:
-        """Draw a retained corner-path line graph using current transformed Axes state."""
-
         if not isinstance(line_color, _base.Color):
             raise TypeError("line_color must be a Noon/Manim Color")
         try:
@@ -594,7 +571,6 @@ class Axes(_compat.VGroup):
             dot_style = dict(vertex_dot_style)
         else:
             raise TypeError("vertex_dot_style must be a dict or None")
-
         snapshot_json = str(
             self._query_plan.lineGraphSnapshotJson(
                 json.dumps([xs, ys], separators=(",", ":"), allow_nan=False),
@@ -608,7 +584,6 @@ class Axes(_compat.VGroup):
             graph,
             _compat._manim_vmobject_kwargs(kwargs, default_color=line_color),
         )
-
         result = VDict([("line_graph", graph)])
         if add_vertex_dots:
             vertices = _vector_path_vertices(snapshot)
@@ -652,7 +627,6 @@ class Axes(_compat.VGroup):
             if len(values) < 2:
                 raise ValueError("x_range must contain at least two values")
             explicit_range = values[:2]
-
         request = {
             "graph_range": _graph_range(graph),
             "bounded_graph_range": (
@@ -675,10 +649,10 @@ class Axes(_compat.VGroup):
                 )
             )
         except Exception as error:
-            if str(error) == "Invalid input sample type":
+            message = str(error)
+            if message.removeprefix("Error: ") == "Invalid input sample type":
                 raise ValueError("Invalid input sample type") from None
             raise
-
         graph_y_values = [float(graph_function(float(x))) for x in sample_values["graph"]]
         bounded_x_values = sample_values.get("bounded_graph")
         bounded_y_values = (
@@ -705,7 +679,6 @@ class Axes(_compat.VGroup):
                 )
             )
         )
-
         colors = _color_gradient(color, len(result))
         stroke = _color("stroke_color", stroke_color)
         rectangles: list[_base.Mobject] = []
@@ -748,7 +721,6 @@ class Axes(_compat.VGroup):
             if len(values) != 2:
                 raise ValueError("x_range must contain exactly two values")
             explicit_range = values
-
         graph_snapshot_json = _graph_snapshot_json(graph, "get_area")
         bounded_snapshot_json = (
             "" if bounded_graph is None else _graph_snapshot_json(bounded_graph, "get_area")
@@ -775,7 +747,6 @@ class Axes(_compat.VGroup):
             )
         except Exception as error:
             raise ValueError(str(error)) from None
-
         graph_y_values = [float(graph_function(float(x))) for x in endpoints]
         bounded_y_values = (
             None
