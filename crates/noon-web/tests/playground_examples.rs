@@ -1,5 +1,9 @@
 use noon_web::ScenePlayer;
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn generate_playground_scenes(extra_args: &[&str]) -> (PathBuf, String) {
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -34,7 +38,7 @@ fn generate_playground_scenes(extra_args: &[&str]) -> (PathBuf, String) {
     (output_dir, manifest)
 }
 
-fn assert_manifest_compiles(output_dir: &PathBuf, manifest: &str) {
+fn assert_manifest_compiles(output_dir: &Path, manifest: &str) {
     let registered = manifest
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -75,8 +79,7 @@ fn every_playground_scene_executes_and_compiles() {
 
 #[test]
 fn compact_morph_stress_scene_executes_and_compiles() {
-    let (output_dir, manifest) =
-        generate_playground_scenes(&["--morph-stress-count", "96"]);
+    let (output_dir, manifest) = generate_playground_scenes(&["--morph-stress-count", "96"]);
     assert!(
         manifest.contains("Morph stress · 1,000"),
         "compact generation keeps the canonical gallery corpus"
