@@ -19,7 +19,7 @@ A small aggregate `PR Fast Gate` job succeeds only when all four lanes succeed. 
 
 Deterministic replay keeps the full workload in the PR gate: the same playground corpus, all authored objects including the 1,000-object morph stress scene, every direct-seek target and rewind check, and 32 incremental forward samples per target. The browser harness calls one Rust verifier per scene. That verifier decodes and compiles the scene once, keeps independent direct/forward/rewind runtime instances resident, and compares renderer-observable `FrameState` values in Rust. This preserves the exact determinism contract while avoiding repeated scene compilation and large normalized-frame JSON serialization across the WASM boundary solely for equality checks.
 
-Cargo source downloads and Rust compilations use the shared cache/sccache setup. The browser lane builds the package once and keeps `wasm-opt` out of the pull-request path.
+Cargo source downloads and Rust compilations use the shared cache/sccache setup. PR CI overrides Cargo's `dev` and `test` profiles to omit debug information because no PR gate consumes debugger symbols; debug assertions and overflow checks remain those of the ordinary profiles. Full master/release validation uses Cargo's normal profiles unchanged. The browser lane builds the package once and keeps `wasm-opt` out of the pull-request path.
 
 ## Main CI workflow
 
