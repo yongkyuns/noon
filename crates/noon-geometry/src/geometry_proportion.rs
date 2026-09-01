@@ -143,9 +143,7 @@ mod tests {
         let circle = GeometryRef::circle(1.0);
         assert!(matches!(
             point_from_geometry_proportion(&circle, f32::NAN),
-            Err(GeometryProportionError::Path(
-                PathProportionError::InvalidProportion(_)
-            ))
+            Err(GeometryProportionError::Path(PathProportionError::InvalidProportion(_)))
         ));
         assert_eq!(
             point_from_geometry_proportion(&GeometryRef::rectangle(1.0, 1.0), 0.5),
