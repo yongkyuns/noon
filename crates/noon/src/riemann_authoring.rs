@@ -141,23 +141,13 @@ impl RiemannSamplePlan {
             self.validate_values("bounded graph", values)?;
         }
 
-        let default_baseline_y = self
-            .axes
-            .axes()
-            .y_axis()
-            .range()
-            .origin_shift();
+        let default_baseline_y = self.axes.axes().y_axis().range().origin_shift();
         let mut rectangles = Vec::new();
-        rectangles.try_reserve_exact(self.samples.len()).map_err(|_| {
-            RiemannAuthoringError::SampleAllocationFailed(self.samples.len())
-        })?;
+        rectangles
+            .try_reserve_exact(self.samples.len())
+            .map_err(|_| RiemannAuthoringError::SampleAllocationFailed(self.samples.len()))?;
 
-        for (index, (sample, &graph_y)) in self
-            .samples
-            .iter()
-            .zip(graph_y_values)
-            .enumerate()
-        {
+        for (index, (sample, &graph_y)) in self.samples.iter().zip(graph_y_values).enumerate() {
             let baseline_y = bounded_graph_y_values
                 .map(|values| values[index])
                 .unwrap_or(default_baseline_y);
@@ -398,8 +388,7 @@ mod tests {
             (RiemannSampleType::Right, vec![0.25, 0.5, 0.75, 1.0]),
             (RiemannSampleType::Center, vec![0.125, 0.375, 0.625, 0.875]),
         ] {
-            let plan = RiemannSamplePlan::new(axes, 0.0, 1.0, 0.25, sample_type, 1.001)
-                .unwrap();
+            let plan = RiemannSamplePlan::new(axes, 0.0, 1.0, 0.25, sample_type, 1.001).unwrap();
             let actual = plan.graph_sample_x_values();
             assert_eq!(actual.len(), expected.len());
             for (actual, expected) in actual.into_iter().zip(expected) {
@@ -411,26 +400,15 @@ mod tests {
     #[test]
     fn descending_and_away_steps_follow_arange_direction() {
         let axes = axes(Transform2D::IDENTITY);
-        let descending = RiemannSamplePlan::new(
-            axes,
-            1.0,
-            0.0,
-            -0.4,
-            RiemannSampleType::Left,
-            1.001,
-        )
-        .unwrap();
-        assert_eq!(descending.baseline_x_values(), vec![1.0, 0.6, 0.19999999999999996]);
+        let descending =
+            RiemannSamplePlan::new(axes, 1.0, 0.0, -0.4, RiemannSampleType::Left, 1.001).unwrap();
+        assert_eq!(
+            descending.baseline_x_values(),
+            vec![1.0, 0.6, 0.19999999999999996]
+        );
 
-        let empty = RiemannSamplePlan::new(
-            axes,
-            0.0,
-            1.0,
-            -0.1,
-            RiemannSampleType::Left,
-            1.001,
-        )
-        .unwrap();
+        let empty =
+            RiemannSamplePlan::new(axes, 0.0, 1.0, -0.1, RiemannSampleType::Left, 1.001).unwrap();
         assert!(empty.samples().is_empty());
     }
 
@@ -442,36 +420,25 @@ mod tests {
             scale: Vec2::new(1.2, 1.2),
         };
         let axes = axes(transform);
-        let plan = RiemannSamplePlan::new(
-            axes,
-            0.0,
-            1.0,
-            0.5,
-            RiemannSampleType::Center,
-            1.001,
-        )
-        .unwrap();
+        let plan =
+            RiemannSamplePlan::new(axes, 0.0, 1.0, 0.5, RiemannSampleType::Center, 1.001).unwrap();
         let rectangles = plan.finish(&[1.0, -0.5], None).unwrap();
         assert_eq!(rectangles.len(), 2);
         assert!(!rectangles[0].is_negative_signed_area());
         assert!(rectangles[1].is_negative_signed_area());
         for rectangle in rectangles {
-            assert!(matches!(rectangle.snapshot().geometry, GeometryRef::Rectangle { .. }));
+            assert!(matches!(
+                rectangle.snapshot().geometry,
+                GeometryRef::Rectangle { .. }
+            ));
         }
     }
 
     #[test]
     fn bounded_baseline_uses_left_x_values_and_drives_signed_area_metadata() {
         let axes = axes(Transform2D::IDENTITY);
-        let plan = RiemannSamplePlan::new(
-            axes,
-            -1.0,
-            1.0,
-            1.0,
-            RiemannSampleType::Right,
-            1.0,
-        )
-        .unwrap();
+        let plan =
+            RiemannSamplePlan::new(axes, -1.0, 1.0, 1.0, RiemannSampleType::Right, 1.0).unwrap();
         assert_eq!(plan.graph_sample_x_values(), vec![0.0, 1.0]);
         assert_eq!(plan.baseline_x_values(), vec![-1.0, 0.0]);
         let rectangles = plan.finish(&[0.5, -0.5], Some(&[0.25, -1.0])).unwrap();
