@@ -48,6 +48,10 @@ pub use text_resources::*;
 mod text_animation_members;
 pub use text_animation_members::*;
 
+#[path = "family_animation.rs"]
+mod family_animation;
+pub use family_animation::*;
+
 #[path = "text_family_animation.rs"]
 mod text_family_animation;
 pub use text_family_animation::*;

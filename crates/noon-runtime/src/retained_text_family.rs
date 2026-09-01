@@ -1,10 +1,226 @@
 use noon_compile::RetainedCompiledScene;
 use noon_core::{
-    ObjectId, TextFamilyAnimationDefinition, TextFamilyAnimationError, TextFamilyAnimationState,
+    FamilyAnimationDefinition, FamilyAnimationError, FamilyAnimationState, ObjectId,
+    TextFamilyAnimationDefinition, TextFamilyAnimationError, TextFamilyAnimationState,
 };
 
 use crate::{EvaluationError, FrameChanges, RetainedFrameState, RetainedSceneInstance};
 
+/// Evaluated retained frame plus content-independent family animation state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetainedFamilyFrame<'a> {
+    pub retained: &'a RetainedFrameState,
+    pub family_animations: &'a [Option<FamilyAnimationState>],
+}
+
+impl RetainedFamilyFrame<'_> {
+    pub fn family_animation(&self, object_index: usize) -> Option<FamilyAnimationState> {
+        self.family_animations.get(object_index).copied().flatten()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RetainedFamilyRuntimeError {
+    Animation(FamilyAnimationError),
+    UnknownObject(ObjectId),
+    OverlappingAnimations {
+        object: ObjectId,
+        previous_start: f64,
+        previous_end: f64,
+        next_start: f64,
+    },
+    Evaluation(EvaluationError),
+}
+
+impl std::fmt::Display for RetainedFamilyRuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Animation(error) => error.fmt(formatter),
+            Self::UnknownObject(object) => write!(
+                formatter,
+                "family animation references unknown retained object {}",
+                object.get()
+            ),
+            Self::OverlappingAnimations {
+                object,
+                previous_start,
+                previous_end,
+                next_start,
+            } => write!(
+                formatter,
+                "family animations overlap for object {}: previous [{previous_start}, {previous_end}], next starts at {next_start}",
+                object.get()
+            ),
+            Self::Evaluation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RetainedFamilyRuntimeError {}
+
+impl From<FamilyAnimationError> for RetainedFamilyRuntimeError {
+    fn from(value: FamilyAnimationError) -> Self {
+        Self::Animation(value)
+    }
+}
+
+impl From<EvaluationError> for RetainedFamilyRuntimeError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
+    }
+}
+
+/// Additive retained runtime for content-independent family animations.
+///
+/// Ordinary retained object properties remain owned by [`RetainedSceneInstance`].
+/// This wrapper evaluates only family scheduling state. Concrete content/resource
+/// layers decide how a member realizes `Reveal`, `DrawBorderThenFill`, or future
+/// family operations; no content identity or host callback enters this scheduler.
+#[derive(Clone, Debug)]
+pub struct RetainedFamilySceneInstance {
+    inner: RetainedSceneInstance,
+    animations_by_object: Vec<Vec<FamilyAnimationDefinition>>,
+    states: Vec<Option<FamilyAnimationState>>,
+    family_changed_indices: Vec<usize>,
+}
+
+impl RetainedFamilySceneInstance {
+    pub fn new(
+        compiled: RetainedCompiledScene,
+        animations: Vec<FamilyAnimationDefinition>,
+    ) -> Result<Self, RetainedFamilyRuntimeError> {
+        let object_count = compiled.objects().len();
+        let mut animations_by_object = vec![Vec::new(); object_count];
+
+        for animation in animations {
+            animation.validate()?;
+            let object_index = compiled
+                .object_index(animation.object)
+                .ok_or(RetainedFamilyRuntimeError::UnknownObject(animation.object))?
+                as usize;
+            animations_by_object[object_index].push(animation);
+        }
+
+        for object_animations in &mut animations_by_object {
+            object_animations.sort_by(|left, right| left.start_time.total_cmp(&right.start_time));
+            for pair in object_animations.windows(2) {
+                let previous = pair[0];
+                let next = pair[1];
+                if next.start_time < previous.end_time() {
+                    return Err(RetainedFamilyRuntimeError::OverlappingAnimations {
+                        object: previous.object,
+                        previous_start: previous.start_time,
+                        previous_end: previous.end_time(),
+                        next_start: next.start_time,
+                    });
+                }
+            }
+        }
+
+        let inner = RetainedSceneInstance::new(compiled);
+        let states = evaluate_family_states(&animations_by_object, 0.0)?;
+        Ok(Self {
+            inner,
+            animations_by_object,
+            states,
+            family_changed_indices: Vec::new(),
+        })
+    }
+
+    pub fn frame(&self) -> RetainedFamilyFrame<'_> {
+        RetainedFamilyFrame {
+            retained: self.inner.frame(),
+            family_animations: &self.states,
+        }
+    }
+
+    pub fn evaluate(
+        &mut self,
+        time: f64,
+    ) -> Result<RetainedFamilyFrame<'_>, RetainedFamilyRuntimeError> {
+        self.inner.evaluate(time)?;
+        self.update_family_states(time)?;
+        Ok(self.frame())
+    }
+
+    pub fn seek(
+        &mut self,
+        time: f64,
+    ) -> Result<RetainedFamilyFrame<'_>, RetainedFamilyRuntimeError> {
+        self.inner.seek(time)?;
+        self.update_family_states(time)?;
+        Ok(self.frame())
+    }
+
+    pub fn advance_to(
+        &mut self,
+        time: f64,
+    ) -> Result<RetainedFamilyFrame<'_>, RetainedFamilyRuntimeError> {
+        self.inner.advance_to(time)?;
+        self.update_family_states(time)?;
+        Ok(self.frame())
+    }
+
+    pub fn take_frame_changes(&mut self) -> FrameChanges {
+        let base = self.inner.take_frame_changes();
+        if base.is_all() {
+            self.family_changed_indices.clear();
+            return FrameChanges::all();
+        }
+
+        let mut object_indices = base.object_indices().to_vec();
+        object_indices.append(&mut self.family_changed_indices);
+        object_indices.sort_unstable();
+        object_indices.dedup();
+        FrameChanges::with_structure(
+            object_indices,
+            base.added_indices().to_vec(),
+            base.removed_indices().to_vec(),
+        )
+    }
+
+    pub fn inner(&self) -> &RetainedSceneInstance {
+        &self.inner
+    }
+
+    fn update_family_states(&mut self, time: f64) -> Result<(), RetainedFamilyRuntimeError> {
+        let next = evaluate_family_states(&self.animations_by_object, time)?;
+        for (index, (previous, current)) in self.states.iter().zip(&next).enumerate() {
+            if previous != current {
+                self.family_changed_indices.push(index);
+            }
+        }
+        self.states = next;
+        Ok(())
+    }
+}
+
+fn evaluate_family_states(
+    animations_by_object: &[Vec<FamilyAnimationDefinition>],
+    time: f64,
+) -> Result<Vec<Option<FamilyAnimationState>>, RetainedFamilyRuntimeError> {
+    if !time.is_finite() {
+        return Err(RetainedFamilyRuntimeError::Evaluation(
+            EvaluationError::InvalidTime(time),
+        ));
+    }
+
+    animations_by_object
+        .iter()
+        .map(|animations| {
+            animations
+                .iter()
+                .rev()
+                .find(|animation| animation.start_time <= time && time <= animation.end_time())
+                .copied()
+                .map(|animation| animation.state_at(time))
+                .transpose()
+                .map_err(RetainedFamilyRuntimeError::from)
+        })
+        .collect()
+}
+
+/// Compatibility frame for the retained Text consumer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedTextFamilyFrame<'a> {
     pub retained: &'a RetainedFrameState,
@@ -65,30 +281,34 @@ impl std::fmt::Display for RetainedTextFamilyRuntimeError {
 
 impl std::error::Error for RetainedTextFamilyRuntimeError {}
 
-impl From<TextFamilyAnimationError> for RetainedTextFamilyRuntimeError {
-    fn from(value: TextFamilyAnimationError) -> Self {
-        Self::Animation(value)
+impl From<RetainedFamilyRuntimeError> for RetainedTextFamilyRuntimeError {
+    fn from(value: RetainedFamilyRuntimeError) -> Self {
+        match value {
+            RetainedFamilyRuntimeError::Animation(error) => Self::Animation(error),
+            RetainedFamilyRuntimeError::UnknownObject(object) => Self::UnknownObject(object),
+            RetainedFamilyRuntimeError::OverlappingAnimations {
+                object,
+                previous_start,
+                previous_end,
+                next_start,
+            } => Self::OverlappingAnimations {
+                object,
+                previous_start,
+                previous_end,
+                next_start,
+            },
+            RetainedFamilyRuntimeError::Evaluation(error) => Self::Evaluation(error),
+        }
     }
 }
 
-impl From<EvaluationError> for RetainedTextFamilyRuntimeError {
-    fn from(value: EvaluationError) -> Self {
-        Self::Evaluation(value)
-    }
-}
-
-/// Additive retained runtime for Text family animations.
+/// Retained Text compatibility adapter over the generic family scheduler.
 ///
-/// Ordinary retained object properties remain owned by [`RetainedSceneInstance`].
-/// This wrapper evaluates only content-specific Text family state, preserving raw
-/// animation progress until the renderer combines it with shaped resource members.
-/// No glyph identity or Python callback enters runtime state.
+/// Text-specific responsibility is now limited to validating that targets are
+/// retained Text objects and exposing the historical Text-named frame/error API.
 #[derive(Clone, Debug)]
 pub struct RetainedTextFamilySceneInstance {
-    inner: RetainedSceneInstance,
-    animations_by_object: Vec<Vec<TextFamilyAnimationDefinition>>,
-    states: Vec<Option<TextFamilyAnimationState>>,
-    family_changed_indices: Vec<usize>,
+    inner: RetainedFamilySceneInstance,
 }
 
 impl RetainedTextFamilySceneInstance {
@@ -96,11 +316,10 @@ impl RetainedTextFamilySceneInstance {
         compiled: RetainedCompiledScene,
         animations: Vec<TextFamilyAnimationDefinition>,
     ) -> Result<Self, RetainedTextFamilyRuntimeError> {
-        let object_count = compiled.objects().len();
-        let mut animations_by_object = vec![Vec::new(); object_count];
-
-        for animation in animations {
-            animation.validate()?;
+        for animation in &animations {
+            animation
+                .validate()
+                .map_err(RetainedTextFamilyRuntimeError::Animation)?;
             let object_index = compiled.object_index(animation.object).ok_or(
                 RetainedTextFamilyRuntimeError::UnknownObject(animation.object),
             )? as usize;
@@ -109,39 +328,19 @@ impl RetainedTextFamilySceneInstance {
                     animation.object,
                 ));
             }
-            animations_by_object[object_index].push(animation);
         }
 
-        for object_animations in &mut animations_by_object {
-            object_animations.sort_by(|left, right| left.start_time.total_cmp(&right.start_time));
-            for pair in object_animations.windows(2) {
-                let previous = pair[0];
-                let next = pair[1];
-                if next.start_time < previous.end_time() {
-                    return Err(RetainedTextFamilyRuntimeError::OverlappingAnimations {
-                        object: previous.object,
-                        previous_start: previous.start_time,
-                        previous_end: previous.end_time(),
-                        next_start: next.start_time,
-                    });
-                }
-            }
-        }
-
-        let inner = RetainedSceneInstance::new(compiled);
-        let states = evaluate_family_states(&animations_by_object, 0.0)?;
         Ok(Self {
-            inner,
-            animations_by_object,
-            states,
-            family_changed_indices: Vec::new(),
+            inner: RetainedFamilySceneInstance::new(compiled, animations)
+                .map_err(RetainedTextFamilyRuntimeError::from)?,
         })
     }
 
     pub fn frame(&self) -> RetainedTextFamilyFrame<'_> {
+        let frame = self.inner.frame();
         RetainedTextFamilyFrame {
-            retained: self.inner.frame(),
-            text_family_animations: &self.states,
+            retained: frame.retained,
+            text_family_animations: frame.family_animations,
         }
     }
 
@@ -149,8 +348,9 @@ impl RetainedTextFamilySceneInstance {
         &mut self,
         time: f64,
     ) -> Result<RetainedTextFamilyFrame<'_>, RetainedTextFamilyRuntimeError> {
-        self.inner.evaluate(time)?;
-        self.update_family_states(time)?;
+        self.inner
+            .evaluate(time)
+            .map_err(RetainedTextFamilyRuntimeError::from)?;
         Ok(self.frame())
     }
 
@@ -158,8 +358,9 @@ impl RetainedTextFamilySceneInstance {
         &mut self,
         time: f64,
     ) -> Result<RetainedTextFamilyFrame<'_>, RetainedTextFamilyRuntimeError> {
-        self.inner.seek(time)?;
-        self.update_family_states(time)?;
+        self.inner
+            .seek(time)
+            .map_err(RetainedTextFamilyRuntimeError::from)?;
         Ok(self.frame())
     }
 
@@ -167,75 +368,26 @@ impl RetainedTextFamilySceneInstance {
         &mut self,
         time: f64,
     ) -> Result<RetainedTextFamilyFrame<'_>, RetainedTextFamilyRuntimeError> {
-        self.inner.advance_to(time)?;
-        self.update_family_states(time)?;
+        self.inner
+            .advance_to(time)
+            .map_err(RetainedTextFamilyRuntimeError::from)?;
         Ok(self.frame())
     }
 
     pub fn take_frame_changes(&mut self) -> FrameChanges {
-        let base = self.inner.take_frame_changes();
-        if base.is_all() {
-            self.family_changed_indices.clear();
-            return FrameChanges::all();
-        }
-
-        let mut object_indices = base.object_indices().to_vec();
-        object_indices.append(&mut self.family_changed_indices);
-        object_indices.sort_unstable();
-        object_indices.dedup();
-        FrameChanges::with_structure(
-            object_indices,
-            base.added_indices().to_vec(),
-            base.removed_indices().to_vec(),
-        )
+        self.inner.take_frame_changes()
     }
 
     pub fn inner(&self) -> &RetainedSceneInstance {
-        &self.inner
+        self.inner.inner()
     }
-
-    fn update_family_states(&mut self, time: f64) -> Result<(), RetainedTextFamilyRuntimeError> {
-        let next = evaluate_family_states(&self.animations_by_object, time)?;
-        for (index, (previous, current)) in self.states.iter().zip(&next).enumerate() {
-            if previous != current {
-                self.family_changed_indices.push(index);
-            }
-        }
-        self.states = next;
-        Ok(())
-    }
-}
-
-fn evaluate_family_states(
-    animations_by_object: &[Vec<TextFamilyAnimationDefinition>],
-    time: f64,
-) -> Result<Vec<Option<TextFamilyAnimationState>>, RetainedTextFamilyRuntimeError> {
-    if !time.is_finite() {
-        return Err(RetainedTextFamilyRuntimeError::Evaluation(
-            EvaluationError::InvalidTime(time),
-        ));
-    }
-
-    animations_by_object
-        .iter()
-        .map(|animations| {
-            animations
-                .iter()
-                .rev()
-                .find(|animation| animation.start_time <= time && time <= animation.end_time())
-                .copied()
-                .map(|animation| animation.state_at(time))
-                .transpose()
-                .map_err(Into::into)
-        })
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, RateFunction, RetainedObjectDefinition, TextFamilyAnimationMode,
-        TextResourceHandle, TextResourceId,
+        FamilyAnimationMode, GeometryRef, RateFunction, RetainedObjectDefinition,
+        TextFamilyAnimationMode, TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -250,6 +402,17 @@ mod tests {
     fn compiled_text(object: ObjectId) -> RetainedCompiledScene {
         RetainedCompiledScene::compile(
             &[RetainedObjectDefinition::text(object, text_handle())],
+            &[],
+        )
+        .unwrap()
+    }
+
+    fn compiled_geometry(object: ObjectId) -> RetainedCompiledScene {
+        RetainedCompiledScene::compile(
+            &[RetainedObjectDefinition::geometry(
+                object,
+                GeometryRef::circle(1.0),
+            )],
             &[],
         )
         .unwrap()
@@ -273,6 +436,33 @@ mod tests {
             reverse_member_order,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn generic_family_runtime_accepts_non_text_retained_objects() {
+        let object = ObjectId::new(5);
+        let definition = FamilyAnimationDefinition::new(
+            object,
+            FamilyAnimationMode::Reveal,
+            0.0,
+            2.0,
+            0.0,
+            RateFunction::Linear,
+            false,
+            false,
+        )
+        .unwrap();
+        let mut instance =
+            RetainedFamilySceneInstance::new(compiled_geometry(object), vec![definition]).unwrap();
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance
+                .frame()
+                .family_animation(0)
+                .unwrap()
+                .overall_progress,
+            0.5
+        );
     }
 
     #[test]
@@ -348,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_animations_on_one_text_object_fail_before_runtime_start() {
+    fn overlapping_animations_on_one_text_object_keep_compatibility_error() {
         let object = ObjectId::new(7);
         let error = RetainedTextFamilySceneInstance::new(
             compiled_text(object),
@@ -370,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_non_text_targets_fail_closed() {
+    fn unknown_and_non_text_text_targets_fail_closed() {
         let text = ObjectId::new(7);
         assert_eq!(
             RetainedTextFamilySceneInstance::new(
@@ -382,17 +572,9 @@ mod tests {
         );
 
         let geometry = ObjectId::new(8);
-        let compiled = RetainedCompiledScene::compile(
-            &[RetainedObjectDefinition::geometry(
-                geometry,
-                GeometryRef::circle(1.0),
-            )],
-            &[],
-        )
-        .unwrap();
         assert_eq!(
             RetainedTextFamilySceneInstance::new(
-                compiled,
+                compiled_geometry(geometry),
                 vec![animation(geometry, 0.0, 1.0, false, false)],
             )
             .unwrap_err(),
