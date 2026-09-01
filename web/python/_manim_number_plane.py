@@ -14,6 +14,7 @@ from typing import Any, Sequence
 import noon as _base
 import _manim_axes as _axes
 import _manim_compat as _compat
+import _manim_number_line as _number_line
 
 try:
     from js import noonCreateNumberPlaneGridPlan as _create_grid_plan
@@ -327,6 +328,7 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
+    _number_line.install()
     setattr(_base, "NumberPlane", NumberPlane)
     setattr(_compat, "NumberPlane", NumberPlane)
     if "NumberPlane" not in _base.__all__:
