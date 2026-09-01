@@ -96,13 +96,9 @@ globalThis.window = { devicePixelRatio: 1 };
 const { AuthoringExecutionClient, AUTHORING_EXECUTION_LEGACY } =
   await import("./authoring-execution-client.js");
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
-const { RetainedExecutionWorkerClient } = await import("./retained-execution-worker-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
-const RETAINED_JSON = JSON.stringify({
-  channel: "noon.authoring.retained",
-  objects: [{ id: "retained-probe" }],
-});
+const SCENE_SPEC_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
 
 function envelope(channel, type, payload = {}) {
   return { channel, protocolVersion: 1, type, ...payload };
@@ -135,6 +131,7 @@ function emitUnifiedRetainedReady(offset) {
       transportMode: "transferable",
       retained: true,
       mixed: true,
+      canonical: true,
     }),
   );
   render.emitMessage(
@@ -143,19 +140,6 @@ function emitUnifiedRetainedReady(offset) {
       backend: "WebGL2",
       retained: true,
       mixed: true,
-    }),
-  );
-  return { engine, render };
-}
-
-function emitRetainedReady(offset) {
-  const engine = workerByName(offset, "noon-retained-engine");
-  const render = workerByName(offset, "noon-mixed-retained-render");
-  engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  render.emitMessage(
-    envelope("noon.render", "ready", {
-      transportMode: "transferable",
-      backend: "WebGL2",
     }),
   );
   return { engine, render };
@@ -187,7 +171,7 @@ test("legacy constructor failure rolls back transferred canvas and retry succeed
   client.terminate();
 });
 
-test("direct retained startup failure rolls back transferred canvas and retry succeeds", async () => {
+test("canonical retained startup failure rolls back transferred canvas and retry succeeds", async () => {
   const original = new FakeCanvas();
   const errors = [];
   const client = new ExecutionWorkerClient(original, {
@@ -196,7 +180,7 @@ test("direct retained startup failure rolls back transferred canvas and retry su
     },
   });
   const offset = FakeWorker.instances.length;
-  const started = client.startRetained(SCENE_JSON, RETAINED_JSON, {
+  const started = client.startRetainedCanonical(SCENE_SPEC_JSON, {
     transportMode: "transferable",
   });
   const engine = workerByName(offset, "noon-mixed-retained-engine");
@@ -206,56 +190,27 @@ test("direct retained startup failure rolls back transferred canvas and retry su
       transportMode: "transferable",
       retained: true,
       mixed: true,
+      canonical: true,
     }),
   );
-  render.emitError("direct retained render startup crashed");
+  render.emitError("canonical retained render startup crashed");
 
-  await assert.rejects(started, /direct retained render startup crashed/);
+  await assert.rejects(started, /canonical retained render startup crashed/);
   assert.equal(engine.terminated, true);
   assert.equal(render.terminated, true);
   assert.equal(original.transferred, true);
   assert.notEqual(client.canvas, original);
   assert.equal(original.replacement, client.canvas);
   assert.equal(client.canvas.transferred, false);
-  assert.deepEqual(errors, ["render: direct retained render startup crashed"]);
+  assert.deepEqual(errors, ["render: canonical retained render startup crashed"]);
 
   const retryOffset = FakeWorker.instances.length;
-  const retry = client.startRetained(SCENE_JSON, RETAINED_JSON, {
+  const retry = client.startRetainedCanonical(SCENE_SPEC_JSON, {
     transportMode: "transferable",
   });
   emitUnifiedRetainedReady(retryOffset);
   const ready = await retry;
   assert.equal(ready.session, 2, "failed retained startup generation must not be reused");
-  client.terminate();
-});
-
-test("retained pre-ready crash rolls back transferred canvas and retry succeeds", async () => {
-  const original = new FakeCanvas();
-  const errors = [];
-  const client = new RetainedExecutionWorkerClient(original, {
-    onError(error, owner) {
-      errors.push(`${owner}: ${error.message}`);
-    },
-  });
-  const offset = FakeWorker.instances.length;
-  const started = client.start(SCENE_JSON, RETAINED_JSON, { transportMode: "transferable" });
-  const engine = workerByName(offset, "noon-retained-engine");
-  const render = workerByName(offset, "noon-mixed-retained-render");
-  engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
-  render.emitError("retained render startup crashed");
-
-  await assert.rejects(started, /retained render startup crashed/);
-  assert.equal(engine.terminated, true);
-  assert.equal(render.terminated, true);
-  assert.notEqual(client.canvas, original);
-  assert.equal(original.replacement, client.canvas);
-  assert.deepEqual(errors, ["render: retained render startup crashed"]);
-
-  const retryOffset = FakeWorker.instances.length;
-  const retry = client.start(SCENE_JSON, RETAINED_JSON, { transportMode: "transferable" });
-  emitRetainedReady(retryOffset);
-  const ready = await retry;
-  assert.equal(ready.session, 2);
   client.terminate();
 });
 
