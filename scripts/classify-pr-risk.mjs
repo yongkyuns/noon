@@ -11,6 +11,7 @@ const RENDERER_CRITICAL_PREFIXES = Object.freeze([
 ]);
 
 const RENDERER_CRITICAL_FILES = new Set([
+  ".github/workflows/pr-fast.yml",
   "scripts/browser-smoke.mjs",
   "web/authoring-render-worker.js",
   "web/browser-smoke.html",
