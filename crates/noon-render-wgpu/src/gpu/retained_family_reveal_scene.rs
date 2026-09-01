@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use noon_core::{
     FamilyAnimationState, ObjectId, RetainedFamilyAnimationEvaluationError,
     RetainedFamilyAnimationPlan,
@@ -7,72 +9,96 @@ use super::{
     retained_family_reveal_members, RetainedFamilyRevealError, RetainedFamilyRevealMembers,
 };
 
-/// One active family animation paired with its immutable prepared retained-content plan.
+/// Prepared scene-level binding for a set of concurrently active family animations.
 ///
-/// The plan owns semantic leaf/member binding while the state owns only this frame's
-/// timing position. Keeping them separate lets render preparation borrow both without
-/// rebuilding member metadata or moving family timing into the renderer.
-#[derive(Clone, Copy, Debug)]
-pub struct ActiveRetainedFamilyReveal<'a> {
-    pub plan: &'a RetainedFamilyAnimationPlan,
-    pub state: FamilyAnimationState,
+/// This index is rebuilt only when the active animation set changes, not every frame.
+/// It maps each retained leaf to exactly one prepared family plan so the mixed retained
+/// renderer can resolve family realization in O(1) while it already walks objects in
+/// painter order. Family timing state intentionally stays out of this immutable index.
+#[derive(Clone, Debug)]
+pub struct RetainedFamilyRevealScenePlan<'a> {
+    plans: Vec<&'a RetainedFamilyAnimationPlan>,
+    plan_by_object: HashMap<ObjectId, usize>,
 }
 
-impl<'a> ActiveRetainedFamilyReveal<'a> {
-    pub const fn new(plan: &'a RetainedFamilyAnimationPlan, state: FamilyAnimationState) -> Self {
-        Self { plan, state }
+impl<'a> RetainedFamilyRevealScenePlan<'a> {
+    pub fn new(
+        plans: impl IntoIterator<Item = &'a RetainedFamilyAnimationPlan>,
+    ) -> Result<Self, RetainedFamilyRevealSceneError> {
+        let mut retained_plans = Vec::new();
+        let mut plan_by_object = HashMap::new();
+        for plan in plans {
+            let plan_index = retained_plans.len();
+            for leaf in plan.leaves() {
+                let object = leaf.span().object;
+                if let Some(&first_animation) = plan_by_object.get(&object) {
+                    return Err(RetainedFamilyRevealSceneError::OverlappingObject {
+                        object,
+                        first_animation,
+                        second_animation: plan_index,
+                    });
+                }
+                plan_by_object.insert(object, plan_index);
+            }
+            retained_plans.push(plan);
+        }
+        Ok(Self {
+            plans: retained_plans,
+            plan_by_object,
+        })
     }
-}
 
-/// Borrowed frame-level view of all concurrently active retained family reveals.
-///
-/// Lookup is allocation-free and deliberately object-addressable because
-/// `RetainedFramePreparer` already walks retained objects in painter order. Semantic
-/// family traversal and member flattening happened when each immutable plan was built.
-/// If two active plans claim the same retained leaf, this view fails closed rather than
-/// making renderer order decide which animation wins.
-#[derive(Clone, Copy, Debug)]
-pub struct RetainedFamilyRevealScene<'a> {
-    active: &'a [ActiveRetainedFamilyReveal<'a>],
-}
-
-impl<'a> RetainedFamilyRevealScene<'a> {
-    pub const fn new(active: &'a [ActiveRetainedFamilyReveal<'a>]) -> Self {
-        Self { active }
+    pub fn animation_count(&self) -> usize {
+        self.plans.len()
     }
 
-    pub const fn active(&self) -> &'a [ActiveRetainedFamilyReveal<'a>] {
-        self.active
+    pub fn is_empty(&self) -> bool {
+        self.plans.is_empty()
     }
 
-    /// Resolve the already-prepared reveal members for one retained object.
+    /// Borrow this immutable binding with the timing states for one frame.
     ///
-    /// `None` means no active family animation owns this object. A returned iterator
-    /// contains only realization commands; global lag/easing/reversal was evaluated by
-    /// the shared family plan before this renderer boundary.
+    /// The state slice is parallel to the plan order supplied to [`Self::new`]. No map
+    /// or member metadata is rebuilt as progress advances.
+    pub fn frame<'plan, 'state>(
+        &'plan self,
+        states: &'state [FamilyAnimationState],
+    ) -> Result<RetainedFamilyRevealSceneFrame<'plan, 'state, 'a>, RetainedFamilyRevealSceneError>
+    {
+        if states.len() != self.plans.len() {
+            return Err(RetainedFamilyRevealSceneError::StateCountMismatch {
+                expected: self.plans.len(),
+                actual: states.len(),
+            });
+        }
+        Ok(RetainedFamilyRevealSceneFrame { plan: self, states })
+    }
+}
+
+/// Allocation-free frame view over an immutable active-family scene plan.
+#[derive(Clone, Copy, Debug)]
+pub struct RetainedFamilyRevealSceneFrame<'plan, 'state, 'content> {
+    plan: &'plan RetainedFamilyRevealScenePlan<'content>,
+    states: &'state [FamilyAnimationState],
+}
+
+impl<'content> RetainedFamilyRevealSceneFrame<'_, '_, 'content> {
+    /// Resolve already-prepared realization commands for one retained object.
+    ///
+    /// `None` means the object is outside every active family animation. A returned
+    /// iterator performs only leaf-local realization; global lag/easing/reversal was
+    /// evaluated by the shared family plan before this renderer boundary.
     pub fn members_for_object(
         &self,
         object: ObjectId,
-    ) -> Result<Option<RetainedFamilyRevealMembers<'a>>, RetainedFamilyRevealSceneError> {
-        let mut matched = None;
-        for active in self.active {
-            if active.plan.leaf_for_object(object).is_none() {
-                continue;
-            }
-            if matched.is_some() {
-                return Err(RetainedFamilyRevealSceneError::OverlappingObject {
-                    object,
-                });
-            }
-            matched = Some(*active);
-        }
-
-        let Some(active) = matched else {
+    ) -> Result<Option<RetainedFamilyRevealMembers<'content>>, RetainedFamilyRevealSceneError> {
+        let Some(&plan_index) = self.plan.plan_by_object.get(&object) else {
             return Ok(None);
         };
-        let frame = active
-            .plan
-            .leaf_frame_for_object(active.state, object)
+        let plan = self.plan.plans[plan_index];
+        let state = self.states[plan_index];
+        let frame = plan
+            .leaf_frame_for_object(state, object)
             .map_err(RetainedFamilyRevealSceneError::Evaluation)?;
         Ok(Some(
             retained_family_reveal_members(frame).map_err(RetainedFamilyRevealSceneError::Reveal)?,
@@ -82,7 +108,15 @@ impl<'a> RetainedFamilyRevealScene<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RetainedFamilyRevealSceneError {
-    OverlappingObject { object: ObjectId },
+    OverlappingObject {
+        object: ObjectId,
+        first_animation: usize,
+        second_animation: usize,
+    },
+    StateCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
     Evaluation(RetainedFamilyAnimationEvaluationError),
     Reveal(RetainedFamilyRevealError),
 }
@@ -90,10 +124,18 @@ pub enum RetainedFamilyRevealSceneError {
 impl std::fmt::Display for RetainedFamilyRevealSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OverlappingObject { object } => write!(
+            Self::OverlappingObject {
+                object,
+                first_animation,
+                second_animation,
+            } => write!(
                 formatter,
-                "multiple active family animations target retained object {}",
+                "family animations {first_animation} and {second_animation} both target retained object {}",
                 object.get()
+            ),
+            Self::StateCountMismatch { expected, actual } => write!(
+                formatter,
+                "retained family reveal scene expects {expected} animation states, got {actual}"
             ),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::Reveal(error) => error.fmt(formatter),
@@ -139,39 +181,24 @@ mod tests {
     }
 
     #[test]
-    fn absent_object_has_no_family_realization() {
-        let plan = geometry_plan(ObjectId::new(10));
-        let active = [ActiveRetainedFamilyReveal::new(
-            &plan,
-            state(FamilyAnimationMode::Reveal, 0.5),
-        )];
-        let scene = RetainedFamilyRevealScene::new(&active);
-        assert!(scene.members_for_object(ObjectId::new(99)).unwrap().is_none());
-    }
-
-    #[test]
-    fn distinct_active_plans_resolve_by_retained_object() {
+    fn frame_lookup_is_object_addressable_across_distinct_plans() {
         let first = geometry_plan(ObjectId::new(10));
         let second = geometry_plan(ObjectId::new(20));
-        let active = [
-            ActiveRetainedFamilyReveal::new(
-                &first,
-                state(FamilyAnimationMode::Reveal, 0.25),
-            ),
-            ActiveRetainedFamilyReveal::new(
-                &second,
-                state(FamilyAnimationMode::Reveal, 0.75),
-            ),
+        let scene = RetainedFamilyRevealScenePlan::new([&first, &second]).unwrap();
+        let states = [
+            state(FamilyAnimationMode::Reveal, 0.25),
+            state(FamilyAnimationMode::Reveal, 0.75),
         ];
-        let scene = RetainedFamilyRevealScene::new(&active);
+        let frame = scene.frame(&states).unwrap();
 
-        let first_members = scene
+        assert!(frame.members_for_object(ObjectId::new(99)).unwrap().is_none());
+        let first_members = frame
             .members_for_object(ObjectId::new(10))
             .unwrap()
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let second_members = scene
+        let second_members = frame
             .members_for_object(ObjectId::new(20))
             .unwrap()
             .unwrap()
@@ -194,24 +221,31 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_active_plans_fail_closed_before_realization() {
+    fn overlapping_plan_ownership_fails_when_active_set_is_built() {
         let first = geometry_plan(ObjectId::new(10));
         let second = geometry_plan(ObjectId::new(10));
-        let active = [
-            ActiveRetainedFamilyReveal::new(
-                &first,
-                state(FamilyAnimationMode::Reveal, 0.25),
-            ),
-            ActiveRetainedFamilyReveal::new(
-                &second,
-                state(FamilyAnimationMode::Reveal, 0.75),
-            ),
-        ];
-        let scene = RetainedFamilyRevealScene::new(&active);
         assert_eq!(
-            scene.members_for_object(ObjectId::new(10)).unwrap_err(),
+            RetainedFamilyRevealScenePlan::new([&first, &second]).unwrap_err(),
             RetainedFamilyRevealSceneError::OverlappingObject {
                 object: ObjectId::new(10),
+                first_animation: 0,
+                second_animation: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn frame_requires_one_state_per_prepared_plan() {
+        let first = geometry_plan(ObjectId::new(10));
+        let second = geometry_plan(ObjectId::new(20));
+        let scene = RetainedFamilyRevealScenePlan::new([&first, &second]).unwrap();
+        assert_eq!(
+            scene
+                .frame(&[state(FamilyAnimationMode::Reveal, 0.5)])
+                .unwrap_err(),
+            RetainedFamilyRevealSceneError::StateCountMismatch {
+                expected: 2,
+                actual: 1,
             }
         );
     }
@@ -219,13 +253,11 @@ mod tests {
     #[test]
     fn unsupported_operation_is_not_silently_treated_as_reveal() {
         let plan = geometry_plan(ObjectId::new(10));
-        let active = [ActiveRetainedFamilyReveal::new(
-            &plan,
-            state(FamilyAnimationMode::DrawBorderThenFill, 0.5),
-        )];
-        let scene = RetainedFamilyRevealScene::new(&active);
+        let scene = RetainedFamilyRevealScenePlan::new([&plan]).unwrap();
+        let states = [state(FamilyAnimationMode::DrawBorderThenFill, 0.5)];
+        let frame = scene.frame(&states).unwrap();
         assert!(matches!(
-            scene.members_for_object(ObjectId::new(10)),
+            frame.members_for_object(ObjectId::new(10)),
             Err(RetainedFamilyRevealSceneError::Reveal(
                 RetainedFamilyRevealError::UnsupportedMode(
                     FamilyAnimationMode::DrawBorderThenFill
