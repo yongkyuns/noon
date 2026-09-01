@@ -5,9 +5,20 @@ set -euo pipefail
 noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
-node scripts/build-python-worker.mjs
+skip_web_preflight="${NOON_SKIP_WEB_PREFLIGHT:-0}"
+web_preflight_only="${NOON_WEB_PREFLIGHT_ONLY:-0}"
+parallel_worker=0
 
-if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
+# The package-only path has no preflight dependency on the generated Python worker,
+# so overlap worker generation with the much longer WASM build. Full/preflight builds
+# keep the historical synchronous order because their checks consume worker artifacts.
+if [[ "$skip_web_preflight" == "1" && "$web_preflight_only" != "1" ]]; then
+  parallel_worker=1
+else
+  node scripts/build-python-worker.mjs
+fi
+
+if [[ "$skip_web_preflight" != "1" ]]; then
   # The #61 ownership inventory is an architecture ratchet, not passive documentation.
   # Validate both the checked-in inventory and the validator's ownership-class invariants
   # in the required web build so contradictory or growing Python semantic debt cannot land.
@@ -91,7 +102,7 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
   fi
 fi
 
-if [[ "${NOON_WEB_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+if [[ "$web_preflight_only" == "1" ]]; then
   exit 0
 fi
 
@@ -108,5 +119,26 @@ wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg "--$w
 if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
 fi
-wasm-pack "${wasm_pack_args[@]}"
+
+worker_pid=""
+if (( parallel_worker == 1 )); then
+  node scripts/build-python-worker.mjs &
+  worker_pid=$!
+fi
+
+wasm_status=0
+wasm-pack "${wasm_pack_args[@]}" || wasm_status=$?
+
+worker_status=0
+if [[ -n "$worker_pid" ]]; then
+  wait "$worker_pid" || worker_status=$?
+fi
+
+if (( wasm_status != 0 )); then
+  exit "$wasm_status"
+fi
+if (( worker_status != 0 )); then
+  exit "$worker_status"
+fi
+
 node scripts/check-web-package.mjs
