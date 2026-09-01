@@ -7,6 +7,7 @@ metadata, and keeps unsupported nonlinear/text surfaces explicit.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Sequence
 
@@ -20,8 +21,8 @@ except ImportError:
     _create_grid_plan = None
 
 _INSTALLED = False
-_FRAME_X_RADIUS = 64.0 / 9.0
-_FRAME_Y_RADIUS = 4.0
+_FRAME_X_RADIUS = float(getattr(_base, "DEFAULT_FRAME_WIDTH", 128.0 / 9.0)) / 2.0
+_FRAME_Y_RADIUS = float(getattr(_base, "DEFAULT_FRAME_HEIGHT", 8.0)) / 2.0
 _AXIS_GEOMETRY_KEYS = {
     "include_tip",
     "include_ticks",
@@ -40,6 +41,11 @@ _AXIS_METADATA_KEYS = {
     "numbers_to_exclude",
 }
 _GRID_STYLE_KEYS = {"stroke_color", "stroke_width", "stroke_opacity"}
+_DEFAULT_GRID_LINE_STYLE = {
+    "stroke_color": _base.WHITE,
+    "stroke_width": 4.0,
+    "stroke_opacity": 1.0,
+}
 
 
 def _require_shared_plane() -> None:
@@ -123,6 +129,16 @@ def _line_group(wire: list[dict[str, Any]]) -> _compat.VGroup:
     )
 
 
+def _faded_line_ratio(value: object) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as error:
+        raise TypeError("NumberPlane faded_line_ratio must be a non-negative integer") from error
+    if not math.isfinite(numeric) or numeric < 0.0 or not numeric.is_integer():
+        raise ValueError("NumberPlane faded_line_ratio must be a non-negative integer")
+    return int(numeric)
+
+
 class NumberPlane(_axes.Axes):
     """Static linear retained NumberPlane with ManimCE v0.21 grid semantics."""
 
@@ -158,6 +174,10 @@ class NumberPlane(_axes.Axes):
         axis_config.update(axis_user)
         y_axis_config: dict[str, Any] = {"label_direction": _base.DR}
         y_axis_config.update(y_axis_user)
+        merged_x_axis_config = dict(axis_config)
+        merged_x_axis_config.update(x_axis_user)
+        merged_y_axis_config = dict(axis_config)
+        merged_y_axis_config.update(y_axis_config)
 
         resolved_x_range = _axes._range(
             x_range, (-_FRAME_X_RADIUS, _FRAME_X_RADIUS, 1.0)
@@ -192,11 +212,13 @@ class NumberPlane(_axes.Axes):
         faded = (
             _faded_style(background)
             if faded_line_style is None
-            else _grid_style(faded_line_style, background, "faded_line_style")
+            else _grid_style(
+                faded_line_style,
+                _DEFAULT_GRID_LINE_STYLE,
+                "faded_line_style",
+            )
         )
-        ratio = int(faded_line_ratio)
-        if ratio < 0:
-            raise ValueError("NumberPlane faded_line_ratio must be non-negative")
+        ratio = _faded_line_ratio(faded_line_ratio)
 
         super().__init__(
             x_range=resolved_x_range,
@@ -217,9 +239,9 @@ class NumberPlane(_axes.Axes):
         }
         assert _create_grid_plan is not None
         plan = _create_grid_plan(
-            __import__("json").dumps(request, separators=(",", ":"), allow_nan=False)
+            json.dumps(request, separators=(",", ":"), allow_nan=False)
         )
-        wire = __import__("json").loads(str(plan.geometryJson()))
+        wire = json.loads(str(plan.geometryJson()))
 
         self.x_lines = _line_group(wire["x_lines"])
         self.y_lines = _line_group(wire["y_lines"])
@@ -234,14 +256,17 @@ class NumberPlane(_axes.Axes):
         self.submobjects = [self.faded_lines, self.background_lines, *self.axes]
 
         self.axis_config = axis_config
-        self.x_axis_config = x_axis_user
-        self.y_axis_config = y_axis_config
+        self.x_axis_config = merged_x_axis_config
+        self.y_axis_config = merged_y_axis_config
         self.background_line_style = background
         self.faded_line_style = faded
         self.faded_line_ratio = ratio
         self.make_smooth_after_applying_functions = bool(
             make_smooth_after_applying_functions
         )
+        self._number_plane_axis_user = axis_user
+        self._number_plane_x_axis_user = x_axis_user
+        self._number_plane_y_axis_user = y_axis_user
         self._number_plane_grid_plan = plan
 
     def copy(self) -> NumberPlane:
@@ -254,9 +279,9 @@ class NumberPlane(_axes.Axes):
             faded_line_style=dict(self.faded_line_style),
             faded_line_ratio=self.faded_line_ratio,
             make_smooth_after_applying_functions=self.make_smooth_after_applying_functions,
-            axis_config=dict(self.axis_config),
-            x_axis_config=dict(self.x_axis_config),
-            y_axis_config=dict(self.y_axis_config),
+            axis_config=dict(self._number_plane_axis_user),
+            x_axis_config=dict(self._number_plane_x_axis_user),
+            y_axis_config=dict(self._number_plane_y_axis_user),
         )
 
     def prepare_for_nonlinear_transform(self, num_inserted_curves: int = 50) -> NumberPlane:
