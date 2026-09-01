@@ -67,7 +67,9 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use noon::{DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH};
-    use noon_core::{GeometryRef, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, WHITE};
+    use noon_core::{
+        GeometryRef, PathCommand, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, WHITE,
+    };
 
     use super::*;
 
