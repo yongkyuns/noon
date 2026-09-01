@@ -149,9 +149,9 @@ fn binary_search_graph_x(
     graph: &ObjectSnapshot,
     target: f64,
 ) -> Result<Option<f64>, ManimAxesQueryError> {
-    let mut left = 0.0;
-    let mut right = 1.0;
-    let mut middle = 0.5;
+    let mut left: f64 = 0.0;
+    let mut right: f64 = 1.0;
+    let mut middle: f64 = 0.5;
     while (right - left).abs() > MANIM_GRAPH_X_SEARCH_TOLERANCE {
         middle = (left + right) * 0.5;
         let left_x = graph_x_at_proportion(axes, graph, left)?;
@@ -512,8 +512,8 @@ mod tests {
             Err(ManimAxesQueryError::GraphXOutOfRange { .. })
         ));
 
-        let rectangle = serde_json::to_string(&ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0)))
-            .unwrap();
+        let rectangle =
+            serde_json::to_string(&ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0))).unwrap();
         assert!(matches!(
             plan.graph_point_for_x_json(0.0, &rectangle, &x_axis, &y_axis),
             Err(ManimAxesQueryError::GeometryProportion(
