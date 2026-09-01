@@ -16,7 +16,9 @@ const RENDERER_CRITICAL_FILES = new Set([
   "web/authoring-render-worker.js",
   "web/browser-smoke.html",
   "web/browser-smoke.js",
-  "web/render-worker.js",
+  "web/execution-render-worker.js",
+  "web/render-gpu-diagnostics.js",
+  "web/retained-execution-render-worker.js",
 ]);
 
 export function classifyChangedPaths(paths) {
