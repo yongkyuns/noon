@@ -58,6 +58,23 @@ async function initializePyodide() {
     authoringStore.createAxesPlotPlan(requestJson);
   self.noonCreateParametricFunctionPlan = (requestJson) =>
     authoringStore.createParametricFunctionPlan(requestJson);
+  self.noonCreateImplicitFunctionPlan = (requestJson) =>
+    authoringStore.createImplicitFunctionPlan(requestJson);
+  self.noonFinishImplicitFunctionPlan = (plan, callback) =>
+    plan.finishSnapshotJson((x, y) => evaluatePythonScalar(callback, x, y));
+  self.noonFinishImplicitFunctionPlanWithAxes = (
+    plan,
+    callback,
+    axesRequestJson,
+    xAxisSnapshotJson,
+    yAxisSnapshotJson,
+  ) =>
+    plan.finishSnapshotJsonWithAxes(
+      (x, y) => evaluatePythonScalar(callback, x, y),
+      axesRequestJson,
+      xAxisSnapshotJson,
+      yAxisSnapshotJson,
+    );
   self.noonCreateNumberPlaneGridPlan = (requestJson) =>
     authoringStore.createNumberPlaneGridPlan(requestJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -118,6 +135,8 @@ import _manim_shared_geometry
 _manim_shared_geometry.install()
 import _manim_axes
 _manim_axes.install()
+import _manim_implicit_function
+_manim_implicit_function.install()
 import _manim_number_plane
 _manim_number_plane.install()
 import _manim_animate
@@ -180,6 +199,16 @@ async function loadCompatibilityBundle() {
     }
   }
   return bundle.modules;
+}
+
+function evaluatePythonScalar(callback, x, y) {
+  const value = callback(x, y);
+  if (typeof value === "number") return value;
+  try {
+    return Number(value);
+  } finally {
+    value?.destroy?.();
+  }
 }
 
 function resolveAnimationOptionsPlain(...args) {
