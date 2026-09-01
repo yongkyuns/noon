@@ -12,6 +12,7 @@ import _manim_compat as _compat
 
 _INSTALLED = False
 _ORIGINAL_AXES_INIT = _axes.Axes.__init__
+_ORIGINAL_NUMBER_LINE_FAMILY = _axes._NumberLineFamily
 _NUMBER_LINE_FACTORY = None
 
 
@@ -91,7 +92,7 @@ def _query_plan(
     )
 
 
-class NumberLine(_axes._NumberLineFamily):
+class NumberLine(_ORIGINAL_NUMBER_LINE_FAMILY):
     """Static linear retained NumberLine with scalar ManimCE v0.21 queries."""
 
     def __init__(
@@ -124,18 +125,20 @@ class NumberLine(_axes._NumberLineFamily):
         # Internal Axes construction passes the already-lowered wire as the sole
         # positional argument. Public construction always passes a range/None.
         if isinstance(x_range, dict) and "line" in x_range and "ticks" in x_range:
-            wire = x_range
-            _axes._NumberLineFamily.__mro__[1].__init__(self, wire)
+            _ORIGINAL_NUMBER_LINE_FAMILY.__init__(self, x_range)
             self.x_range = None
             self._number_line_plan = None
             self.rotation = 0.0
             return
 
-        del tip_width, tip_height, tip_shape, label_constructor, scaling
+        del tip_width, tip_height, tip_shape, label_constructor
         if include_tip:
             raise NotImplementedError("NumberLine tips require the retained Arrow tip surface")
         if include_numbers or numbers_to_include is not None:
             raise NotImplementedError("NumberLine numbers require retained MathTex/number labels")
+        if scaling is not None:
+            raise NotImplementedError("NumberLine nonlinear/logarithmic scaling is not yet supported")
+        color = kwargs.pop("color", _base.WHITE)
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported NumberLine option(s): {unsupported}")
@@ -144,13 +147,16 @@ class NumberLine(_axes._NumberLineFamily):
         numeric_unit_size = float(unit_size)
         if not math.isfinite(numeric_unit_size) or numeric_unit_size <= 0.0:
             raise ValueError("NumberLine unit_size must be finite and positive")
+        requested_length = None if length is None else float(length)
+        if requested_length is not None and not math.isfinite(requested_length):
+            raise ValueError("NumberLine length must be finite")
         resolved_length = (
             (resolved_range[1] - resolved_range[0]) * numeric_unit_size
-            if length is None
-            else float(length)
+            if requested_length is None or requested_length == 0.0
+            else requested_length
         )
-        if not math.isfinite(resolved_length) or resolved_length <= 0.0:
-            raise ValueError("NumberLine length must be finite and positive")
+        if resolved_length <= 0.0:
+            raise ValueError("NumberLine length must be positive when specified")
         numeric_rotation = float(rotation)
         if not math.isfinite(numeric_rotation):
             raise ValueError("NumberLine rotation must be finite")
@@ -161,9 +167,6 @@ class NumberLine(_axes._NumberLineFamily):
         )
         if not all(math.isfinite(value) for value in elongated):
             raise ValueError("NumberLine elongated tick values must be finite")
-        color = kwargs.pop("color", _base.WHITE) if "color" in kwargs else _base.WHITE
-        # `color` is a Line kwarg upstream; support it explicitly while keeping
-        # unsupported arbitrary VMobject kwargs closed.
         request = {
             "x_range": resolved_range,
             "length": resolved_length,
@@ -182,13 +185,13 @@ class NumberLine(_axes._NumberLineFamily):
             json.dumps(request, separators=(",", ":"), allow_nan=False)
         )
         wire = json.loads(str(plan.geometryJson()))
-        _axes._NumberLineFamily.__mro__[1].__init__(self, wire)
+        _ORIGINAL_NUMBER_LINE_FAMILY.__init__(self, wire)
 
         self.x_range = list(resolved_range)
         self.x_min = resolved_range[0]
         self.x_max = resolved_range[1]
         self.x_step = resolved_range[2]
-        self.length = None if length is None else resolved_length
+        self.length = requested_length
         self.unit_size = resolved_length / (resolved_range[1] - resolved_range[0])
         self.include_ticks = bool(include_ticks)
         self.tick_size = float(tick_size)
@@ -216,23 +219,6 @@ class NumberLine(_axes._NumberLineFamily):
         )
         self.numbers_to_include = numbers_to_include
         self._number_line_plan = plan
-
-    @classmethod
-    def _from_axes_wire(
-        cls,
-        wire: dict[str, Any],
-        x_range: Sequence[float],
-        length: float,
-        rotation: float,
-    ) -> NumberLine:
-        value = cls(wire)
-        value.x_range = [float(component) for component in x_range]
-        value.x_min, value.x_max, value.x_step = value.x_range
-        value.length = float(length)
-        value.unit_size = float(length) / (value.x_max - value.x_min)
-        value.rotation = float(rotation)
-        value._number_line_plan = _query_plan(value.x_range, length, rotation)
-        return value
 
     def _require_plan(self):
         plan = self._number_line_plan
@@ -346,27 +332,28 @@ class UnitInterval(NumberLine):
         )
 
 
+def _attach_axis_plan(
+    axis: NumberLine,
+    x_range: Sequence[float],
+    length: float,
+    rotation: float,
+) -> None:
+    axis.x_range = [float(component) for component in x_range]
+    axis.x_min, axis.x_max, axis.x_step = axis.x_range
+    axis.length = float(length)
+    axis.unit_size = float(length) / (axis.x_max - axis.x_min)
+    axis.rotation = float(rotation)
+    axis._number_line_plan = _query_plan(axis.x_range, length, rotation)
+
+
 def _axes_init(self: _axes.Axes, *args: Any, **kwargs: Any) -> None:
     # Make the existing Axes constructor resolve its internal wrapper to the public
     # NumberLine class, then attach range-aware query plans to the two retained axes.
     _ORIGINAL_AXES_INIT(self, *args, **kwargs)
     if not isinstance(self.x_axis, NumberLine) or not isinstance(self.y_axis, NumberLine):
         raise RuntimeError("Axes NumberLine wrapper installation did not take effect")
-    self.x_axis.x_range = list(self.x_range)
-    self.x_axis.x_min, self.x_axis.x_max, self.x_axis.x_step = self.x_axis.x_range
-    self.x_axis.length = self.x_length
-    self.x_axis.unit_size = self.x_length / (self.x_range[1] - self.x_range[0])
-    self.x_axis.rotation = 0.0
-    self.x_axis._number_line_plan = _query_plan(self.x_range, self.x_length, 0.0)
-
-    self.y_axis.x_range = list(self.y_range)
-    self.y_axis.x_min, self.y_axis.x_max, self.y_axis.x_step = self.y_axis.x_range
-    self.y_axis.length = self.y_length
-    self.y_axis.unit_size = self.y_length / (self.y_range[1] - self.y_range[0])
-    self.y_axis.rotation = math.pi / 2.0
-    self.y_axis._number_line_plan = _query_plan(
-        self.y_range, self.y_length, math.pi / 2.0
-    )
+    _attach_axis_plan(self.x_axis, self.x_range, self.x_length, 0.0)
+    _attach_axis_plan(self.y_axis, self.y_range, self.y_length, math.pi / 2.0)
 
 
 def install() -> None:
