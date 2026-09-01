@@ -315,9 +315,11 @@ mod tests {
     fn dashed_ratio_endpoints_remain_deterministic() {
         let empty = DashedLine::with_options(Vec2::ZERO, Vec2::new(2.0, 0.0), 0.5, 0.0).unwrap();
         assert_eq!(empty.num_dashes(), 2);
-        assert!(commands(&empty)
-            .chunks_exact(2)
-            .all(|dash| { command_point(&dash[0]) == command_point(&dash[1]) }));
+        let (empty_dashes, empty_remainder) = commands(&empty).as_chunks::<2>();
+        assert!(empty_remainder.is_empty());
+        assert!(empty_dashes
+            .iter()
+            .all(|dash| command_point(&dash[0]) == command_point(&dash[1])));
 
         let solid = DashedLine::with_options(Vec2::ZERO, Vec2::new(2.0, 0.0), 0.5, 1.0).unwrap();
         assert_eq!(solid.num_dashes(), 4);
@@ -327,11 +329,9 @@ mod tests {
             command_point(solid_commands.last().unwrap()),
             Vec2::new(2.0, 0.0),
         );
-        for pair in solid_commands
-            .chunks_exact(2)
-            .collect::<Vec<_>>()
-            .windows(2)
-        {
+        let (solid_dashes, solid_remainder) = solid_commands.as_chunks::<2>();
+        assert!(solid_remainder.is_empty());
+        for pair in solid_dashes.windows(2) {
             assert_point_close(command_point(&pair[0][1]), command_point(&pair[1][0]));
         }
     }
