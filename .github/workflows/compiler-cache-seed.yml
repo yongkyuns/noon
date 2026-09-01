@@ -52,8 +52,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
 
-      - name: Restore and publish WASM compiler cache
+      - name: Restore and publish WASM build cache
         uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.cache/noon-sccache-wasm
+            ~/.cache/.wasm-pack
+          key: ${{ runner.os }}-wasm-build-v1-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-build-v1-
+
+      - name: Detect combined WASM build cache
+        id: wasm-build-cache-state
+        shell: bash
+        run: |
+          if [[ -d "$HOME/.cache/.wasm-pack" ]] && [[ -n "$(find "$HOME/.cache/.wasm-pack" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+            echo "tools=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tools=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore legacy WASM compiler cache
+        if: steps.wasm-build-cache-state.outputs.tools != 'true'
+        uses: actions/cache/restore@v4
         with:
           path: /home/runner/.cache/noon-sccache-wasm
           key: ${{ runner.os }}-sccache-wasm-v1-${{ github.sha }}
