@@ -127,6 +127,82 @@ def _vector_path_vertices(snapshot: dict[str, Any]) -> list[_base.Vec2]:
     return vertices
 
 
+def _color(name: str, value: object) -> _base.Color:
+    return _shared._phase_b._as_color(name, value)
+
+
+def _invert_color(value: _base.Color) -> _base.Color:
+    """ManimColor.invert(with_alpha=False): linearly invert RGB, preserve alpha."""
+
+    return _base.Color(
+        1.0 - float(value.red),
+        1.0 - float(value.green),
+        1.0 - float(value.blue),
+        float(value.alpha),
+    )
+
+
+def _color_gradient(reference_colors: object, length: int) -> list[_base.Color]:
+    """Pinned ManimCE v0.21 ``color_gradient`` for per-rectangle colors."""
+
+    if length == 0:
+        return []
+    raw = list(reference_colors) if isinstance(reference_colors, (list, tuple)) else [reference_colors]
+    colors = [_color("color", value) for value in raw]
+    if not colors:
+        raise ValueError("Expected 1 or more reference colors. Got 0 colors.")
+    if len(colors) == 1:
+        return colors * length
+    if length == 1:
+        return [colors[-1]]
+
+    result: list[_base.Color] = []
+    last = len(colors) - 1
+    for index in range(length):
+        scaled = last * index / (length - 1)
+        floor = min(int(scaled), last - 1)
+        alpha = scaled - floor
+        if index == length - 1:
+            floor = last - 1
+            alpha = 1.0
+        start = colors[floor]
+        end = colors[floor + 1]
+        result.append(
+            _base.Color(
+                float(start.red) * (1.0 - alpha) + float(end.red) * alpha,
+                float(start.green) * (1.0 - alpha) + float(end.green) * alpha,
+                float(start.blue) * (1.0 - alpha) + float(end.blue) * alpha,
+                1.0,
+            )
+        )
+    return result
+
+
+def _graph_range(graph: object) -> list[float]:
+    if hasattr(graph, "t_min") and hasattr(graph, "t_max"):
+        return [float(graph.t_min), float(graph.t_max)]
+    values = getattr(graph, "x_range", None)
+    if values is None or len(values) < 2:
+        raise TypeError("Axes calculus helpers require an authored graph range")
+    return [float(values[0]), float(values[1])]
+
+
+def _authored_graph_function(graph: object, name: str) -> Callable[[float], float]:
+    function = getattr(graph, "underlying_function", None)
+    if not callable(function):
+        raise NotImplementedError(
+            f"{name} currently requires an Axes.plot authored function graph"
+        )
+    return function
+
+
+def _graph_snapshot_json(graph: object, name: str) -> str:
+    handle = _shared._handle_for(graph)
+    if handle is None or not hasattr(handle, "snapshotJson"):
+        raise NotImplementedError(f"{name} requires current retained graph geometry")
+    return str(handle.snapshotJson())
+
+
 class ParametricFunction(_compat.VMobject):
     """Source-visible retained curve type produced by :meth:`Axes.plot`.
 
@@ -425,8 +501,6 @@ class Axes(_compat.VGroup):
                 )
             )
         except Exception as error:
-            # ManimCE surfaces generic graph lookup misses as ValueError. The shared
-            # Rust path already owns the exact diagnostic, including graph endpoints.
             raise ValueError(str(error)) from None
         return _base.Vec2(float(result[0]), float(result[1]))
 
@@ -452,14 +526,6 @@ class Axes(_compat.VGroup):
         color: _base.Color | None = None,
         stroke_width: float = 2.0,
     ) -> _compat.Line:
-        """Construct a retained line from one axis to a scene-space point.
-
-        Projection remains owned by the Rust-backed coordinate query path: convert the
-        scene point to current transformed axis coordinates, zero the orthogonal
-        coordinate, then map it back through `c2p`. This is equivalent to Manim's
-        `NumberLine.get_projection` for the supported linear 2D Axes transform model.
-        """
-
         if index not in (0, 1):
             raise IndexError("Noon Axes currently has only x and y axes")
         target = _compat._as_vec2(point)
@@ -479,8 +545,6 @@ class Axes(_compat.VGroup):
         elif not isinstance(line_config, dict):
             raise TypeError("line_config must be a dict or None")
 
-        # ManimCE v0.21 mutates the supplied line_config and lets these explicit
-        # helper options override any same-named entries already present.
         line_config["color"] = _base.WHITE if color is None else color
         line_config["stroke_width"] = float(stroke_width)
         return line_func(projected, target, **line_config)
@@ -561,6 +625,193 @@ class Axes(_compat.VGroup):
             result["vertex_dots"] = vertex_dots
         return result
 
+    def get_riemann_rectangles(
+        self,
+        graph: ParametricFunction,
+        x_range: Sequence[float] | None = None,
+        dx: float = 0.1,
+        input_sample_type: str = "left",
+        stroke_width: float = 1.0,
+        stroke_color: object = _base.BLACK,
+        fill_opacity: float = 1.0,
+        color: object = (_base.BLUE, _base.GREEN),
+        show_signed_area: bool = True,
+        bounded_graph: ParametricFunction | None = None,
+        blend: bool = False,
+        width_scale_factor: float = 1.001,
+    ) -> _compat.VGroup:
+        graph_function = _authored_graph_function(graph, "get_riemann_rectangles")
+        bounded_function = (
+            None
+            if bounded_graph is None
+            else _authored_graph_function(bounded_graph, "get_riemann_rectangles")
+        )
+        explicit_range = None
+        if x_range is not None:
+            values = [float(value) for value in x_range]
+            if len(values) < 2:
+                raise ValueError("x_range must contain at least two values")
+            explicit_range = values[:2]
+
+        request = {
+            "graph_range": _graph_range(graph),
+            "bounded_graph_range": (
+                None if bounded_graph is None else _graph_range(bounded_graph)
+            ),
+            "x_range": explicit_range,
+            "dx": float(dx),
+            "input_sample_type": str(input_sample_type),
+            "width_scale_factor": float(width_scale_factor),
+        }
+        request_json = json.dumps(request, separators=(",", ":"), allow_nan=False)
+        try:
+            sample_values = json.loads(
+                str(
+                    self._query_plan.riemannSampleValuesJson(
+                        request_json,
+                        self.x_axis._axis_snapshot_json(),
+                        self.y_axis._axis_snapshot_json(),
+                    )
+                )
+            )
+        except Exception as error:
+            if str(error) == "Invalid input sample type":
+                raise ValueError("Invalid input sample type") from None
+            raise
+
+        graph_y_values = [float(graph_function(float(x))) for x in sample_values["graph"]]
+        bounded_x_values = sample_values.get("bounded_graph")
+        bounded_y_values = (
+            None
+            if bounded_function is None
+            else [float(bounded_function(float(x))) for x in bounded_x_values]
+        )
+        result = json.loads(
+            str(
+                self._query_plan.riemannRectanglesJson(
+                    request_json,
+                    json.dumps(graph_y_values, separators=(",", ":"), allow_nan=False),
+                    (
+                        ""
+                        if bounded_y_values is None
+                        else json.dumps(
+                            bounded_y_values,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                    ),
+                    self.x_axis._axis_snapshot_json(),
+                    self.y_axis._axis_snapshot_json(),
+                )
+            )
+        )
+
+        colors = _color_gradient(color, len(result))
+        stroke = _color("stroke_color", stroke_color)
+        rectangles: list[_base.Mobject] = []
+        for wire, fill_color in zip(result, colors, strict=True):
+            if bool(wire["negative_signed_area"]) and bool(show_signed_area):
+                fill_color = _invert_color(fill_color)
+            rectangle = _mobject_from_snapshot(_compat.Rectangle, wire["snapshot"])
+            _shared._apply_shared_constructor_kwargs(
+                rectangle,
+                {
+                    "fill_color": fill_color,
+                    "fill_opacity": float(fill_opacity),
+                    "stroke_color": fill_color if blend else stroke,
+                    "stroke_width": float(stroke_width),
+                },
+            )
+            rectangles.append(rectangle)
+        return _compat.VGroup(*rectangles)
+
+    def get_area(
+        self,
+        graph: ParametricFunction,
+        x_range: Sequence[float] | None = None,
+        color: object = (_base.BLUE, _base.GREEN),
+        opacity: float = 0.3,
+        bounded_graph: ParametricFunction | None = None,
+        **kwargs: Any,
+    ) -> _compat.VMobject:
+        graph_function = _authored_graph_function(graph, "get_area")
+        bounded_function = (
+            None if bounded_graph is None else _authored_graph_function(bounded_graph, "get_area")
+        )
+        if isinstance(color, (list, tuple)):
+            raise NotImplementedError(
+                "gradient-filled Axes.get_area requires retained gradient-fill support"
+            )
+        explicit_range = None
+        if x_range is not None:
+            values = [float(value) for value in x_range]
+            if len(values) != 2:
+                raise ValueError("x_range must contain exactly two values")
+            explicit_range = values
+
+        graph_snapshot_json = _graph_snapshot_json(graph, "get_area")
+        bounded_snapshot_json = (
+            "" if bounded_graph is None else _graph_snapshot_json(bounded_graph, "get_area")
+        )
+        request = {
+            "graph_range": _graph_range(graph),
+            "bounded_graph_range": (
+                None if bounded_graph is None else _graph_range(bounded_graph)
+            ),
+            "x_range": explicit_range,
+        }
+        request_json = json.dumps(request, separators=(",", ":"), allow_nan=False)
+        try:
+            endpoints = json.loads(
+                str(
+                    self._query_plan.areaEndpointXValuesJson(
+                        request_json,
+                        graph_snapshot_json,
+                        bounded_snapshot_json,
+                        self.x_axis._axis_snapshot_json(),
+                        self.y_axis._axis_snapshot_json(),
+                    )
+                )
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+
+        graph_y_values = [float(graph_function(float(x))) for x in endpoints]
+        bounded_y_values = (
+            None
+            if bounded_function is None
+            else [float(bounded_function(float(x))) for x in endpoints]
+        )
+        snapshot = json.loads(
+            str(
+                self._query_plan.areaSnapshotJson(
+                    request_json,
+                    graph_snapshot_json,
+                    bounded_snapshot_json,
+                    json.dumps(graph_y_values, separators=(",", ":"), allow_nan=False),
+                    (
+                        ""
+                        if bounded_y_values is None
+                        else json.dumps(
+                            bounded_y_values,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                    ),
+                    self.x_axis._axis_snapshot_json(),
+                    self.y_axis._axis_snapshot_json(),
+                )
+            )
+        )
+        area = _mobject_from_snapshot(_compat.VMobject, snapshot)
+        _shared._apply_shared_constructor_kwargs(
+            area,
+            _compat._manim_vmobject_kwargs(kwargs, default_color=_base.BLUE),
+        )
+        area.set_opacity(float(opacity))
+        area.set_color(_color("color", color))
+        return area
+
     def plot(
         self,
         function: Callable[[float], float],
@@ -607,6 +858,8 @@ class Axes(_compat.VGroup):
         graph.function = lambda value: self.coords_to_point(float(value), function(float(value)))
         graph.underlying_function = function
         graph.x_range = self.x_range if x_range is None else list(x_range)
+        graph.t_min = float(graph.x_range[0])
+        graph.t_max = float(graph.x_range[1])
         graph.axes = self
         if color is not None:
             graph.set_color(color)
