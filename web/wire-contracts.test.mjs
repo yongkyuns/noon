@@ -21,7 +21,11 @@ test("canonical scene, patch, and authoring result fixtures are accepted", async
   const patch = await fixture("v1/patch-empty.json");
   assert.equal(validatePatchBatch(patch), patch);
   const result = await fixture("v1/authoring-result-empty-scene.json");
-  assert.deepEqual(parseAuthoringResult(JSON.stringify(result)), result);
+  const { scene_spec: sceneSpec, ...compatibilityResult } = result;
+  assert.deepEqual(parseAuthoringResult(JSON.stringify(result)), {
+    ...compatibilityResult,
+    sceneSpec,
+  });
 });
 
 test("future IR fixtures fail with explicit version diagnostics in JS", async () => {

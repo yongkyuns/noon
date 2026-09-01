@@ -225,18 +225,19 @@ export function parseAuthoringResult(resultJson) {
     const document = validateSceneDocument(result.document);
     const retainedDocument = validateRetainedAuthoringDocument(result.retained_document);
     const sceneSpec = validateSceneSpec(result.scene_spec);
+    if (sceneSpec === null) {
+      throw new Error("Python Scene result must include canonical SceneSpec");
+    }
     const parsed = {
       kind: result.kind,
       document,
+      sceneSpec,
       duration: validateSceneDuration(result.duration),
       identities: validateSceneIdentities(result.identities, document),
       callbacks: validateCallbackSession(result.callbacks, document),
     };
     if (retainedDocument !== null) {
       parsed.retainedDocument = retainedDocument;
-    }
-    if (sceneSpec !== null) {
-      parsed.sceneSpec = sceneSpec;
     }
     return parsed;
   }

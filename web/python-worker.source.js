@@ -384,11 +384,9 @@ json.dumps(
     if (result.retained_document !== null) {
       const retainedDocumentJson = JSON.stringify(result.retained_document);
       validateRetainedAuthoringDocumentJson(retainedDocumentJson);
-      if (result.retained_document.objects.length > 0) {
-        result.scene_spec = JSON.parse(
-          canonicalRetainedSceneSpecJson(JSON.stringify(result.document), retainedDocumentJson),
-        );
-      }
+      result.scene_spec = JSON.parse(
+        canonicalRetainedSceneSpecJson(JSON.stringify(result.document), retainedDocumentJson),
+      );
     }
     return JSON.stringify(result);
   } finally {
