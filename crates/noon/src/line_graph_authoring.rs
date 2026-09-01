@@ -59,15 +59,8 @@ where
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LineGraphAuthoringError {
-    CoordinateCountMismatch {
-        x_values: usize,
-        y_values: usize,
-    },
-    NonFiniteCoordinate {
-        index: usize,
-        x: f64,
-        y: f64,
-    },
+    CoordinateCountMismatch { x_values: usize, y_values: usize },
+    NonFiniteCoordinate { index: usize, x: f64, y: f64 },
     Coordinates(CoordinateSystemError),
 }
 
@@ -121,12 +114,8 @@ mod tests {
     #[test]
     fn preserves_input_order_as_corner_path() {
         let axes = axes();
-        let path = axes_line_graph_vector_path(
-            axes,
-            &[0.0, 2.0, 2.0, 8.0],
-            &[1.0, 3.0, -1.0, 4.0],
-        )
-        .unwrap();
+        let path = axes_line_graph_vector_path(axes, &[0.0, 2.0, 2.0, 8.0], &[1.0, 3.0, -1.0, 4.0])
+            .unwrap();
 
         assert_eq!(path.commands().len(), 4);
         let expected = [
@@ -153,12 +142,8 @@ mod tests {
             scale: Vec2::new(1.25, 1.25),
         };
         let transformed = TransformedAxes2DState::new(axes, transform, transform);
-        let path = transformed_axes_line_graph_vector_path(
-            transformed,
-            &[1.0, 4.0],
-            &[2.0, -3.0],
-        )
-        .unwrap();
+        let path = transformed_axes_line_graph_vector_path(transformed, &[1.0, 4.0], &[2.0, -3.0])
+            .unwrap();
 
         let expected = [
             transform.transform_point(axes.coords_to_point(1.0, 2.0).unwrap()),
