@@ -36,6 +36,7 @@ mod retained_execution_resources;
 mod retained_execution_transport;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
+mod retained_scene_spec_runtime;
 mod retained_text_family_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
