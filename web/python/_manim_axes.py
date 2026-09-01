@@ -57,6 +57,26 @@ def _range(value: Sequence[float] | None, default: tuple[float, float, float]) -
     return values
 
 
+def _parametric_range(value: Sequence[float] | None) -> list[float]:
+    values = [0.0, 1.0, 0.01] if value is None else [float(component) for component in value]
+    if len(values) == 2:
+        values.append(0.01)
+    if len(values) != 3 or not all(math.isfinite(component) for component in values):
+        raise ValueError("t_range must contain 2 or 3 finite values")
+    return values
+
+
+def _parametric_coordinates(function: Callable[[float], object], parameter: float) -> list[float]:
+    value = function(float(parameter))
+    try:
+        coordinates = value[:2]  # type: ignore[index]
+    except (TypeError, IndexError) as error:
+        raise TypeError("parametric function must return at least two coordinates") from error
+    if len(coordinates) < 2:
+        raise ValueError("parametric function must return at least two coordinates")
+    return [float(coordinates[0]), float(coordinates[1])]
+
+
 def _rgba(value: object) -> list[float]:
     if not isinstance(value, _base.Color):
         raise TypeError("axis color must be a Noon/Manim Color")
@@ -204,12 +224,10 @@ def _graph_snapshot_json(graph: object, name: str) -> str:
 
 
 class ParametricFunction(_compat.VMobject):
-    """Source-visible retained curve type produced by :meth:`Axes.plot`.
+    """Source-visible retained curve type produced by Axes graphing helpers.
 
-    The current browser slice owns scalar Axes plots through the shared two-phase Rust
-    plan. Direct ParametricFunction authoring needs the more general vector-valued
-    callback plan and therefore fails explicitly rather than constructing a Python-only
-    geometry path.
+    Direct `ParametricFunction` construction remains a separate scene-space callback
+    surface. Axes-owned graphing uses the shared two-phase Rust plan below.
     """
 
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -782,6 +800,68 @@ class Axes(_compat.VGroup):
         area.set_opacity(float(opacity))
         area.set_color(_color("color", color))
         return area
+
+    def plot_parametric_curve(
+        self,
+        function: Callable[[float], object],
+        use_vectorized: bool = False,
+        **kwargs: Any,
+    ) -> ParametricFunction:
+        if not callable(function):
+            raise TypeError("Axes.plot_parametric_curve function must be callable")
+        if use_vectorized:
+            raise NotImplementedError(
+                "Axes.plot_parametric_curve(use_vectorized=True) requires vectorized callback transport"
+            )
+        t_range = _parametric_range(kwargs.pop("t_range", None))
+        discontinuities = kwargs.pop("discontinuities", None)
+        dt = float(kwargs.pop("dt", 1.0e-8))
+        use_smoothing = bool(kwargs.pop("use_smoothing", True))
+        color = kwargs.pop("color", None)
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise NotImplementedError(
+                f"unsupported Axes.plot_parametric_curve option(s): {unsupported}"
+            )
+        request = {
+            **self._base_request,
+            "plot_range": t_range,
+            "discontinuities": (
+                None
+                if discontinuities is None
+                else [float(value) for value in discontinuities]
+            ),
+            "discontinuity_dt": dt,
+            "use_smoothing": use_smoothing,
+        }
+        assert _create_plot_plan is not None
+        plan = _create_plot_plan(json.dumps(request, separators=(",", ":"), allow_nan=False))
+        parameters = json.loads(str(plan.parametersJson()))
+        values = [
+            [_parametric_coordinates(function, parameter) for parameter in subpath]
+            for subpath in parameters
+        ]
+        snapshot_json = str(
+            plan.finishParametricSnapshotJsonWithAxes(
+                json.dumps(values, separators=(",", ":"), allow_nan=False),
+                self.x_axis._axis_snapshot_json(),
+                self.y_axis._axis_snapshot_json(),
+            )
+        )
+        graph = object.__new__(ParametricFunction)
+        assert _create_mobject_handle is not None
+        _shared._attach_shared_handle(graph, _create_mobject_handle(snapshot_json))
+        graph.function = lambda value: self.coords_to_point(
+            *_parametric_coordinates(function, float(value))
+        )
+        graph.underlying_function = function
+        graph.t_range = list(t_range)
+        graph.t_min = float(t_range[0])
+        graph.t_max = float(t_range[1])
+        graph.axes = self
+        if color is not None:
+            graph.set_color(_color("color", color))
+        return graph
 
     def plot(
         self,
