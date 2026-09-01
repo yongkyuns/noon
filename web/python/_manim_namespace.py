@@ -34,6 +34,15 @@ _PURE_COLORS = {
     "PURE_YELLOW": 0xFFFF00,
 }
 
+# Noon already owns the Manim palette values. Namespace compatibility only needs to
+# make every shade visible to ``from noon import *`` just as ``from manim import *``
+# does; do not duplicate color definitions or conversion logic here.
+_MANIM_PALETTE_EXPORTS = tuple(
+    f"{family}_{shade}"
+    for family in ("BLUE", "TEAL", "GREEN", "YELLOW", "RED", "PURPLE", "GRAY", "GREY")
+    for shade in "ABCDE"
+)
+
 
 class _PendingOptionalNamespace:
     """Explicit placeholder replaced by the worker before user code executes."""
@@ -128,6 +137,10 @@ def install() -> None:
     for name, value in _PURE_COLORS.items():
         setattr(_base, name, _base.color_from_hex(value))
         if name not in exports:
+            exports.append(name)
+
+    for name in _MANIM_PALETTE_EXPORTS:
+        if hasattr(_base, name) and name not in exports:
             exports.append(name)
 
     _base.__all__ = exports
