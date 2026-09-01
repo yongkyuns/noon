@@ -4,6 +4,23 @@ use noon_core::{Color, ObjectSnapshot, Vec2};
 const CAIRO_WIDTH_SCALE: f64 = 0.01;
 const AXIS_TOLERANCE: f64 = 1.0e-6;
 
+/// Direction used when enumerating PolarPlane radial members.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PolarPlaneAzimuthDirection {
+    #[default]
+    CounterClockwise,
+    Clockwise,
+}
+
+impl PolarPlaneAzimuthDirection {
+    const fn sign(self) -> f64 {
+        match self {
+            Self::CounterClockwise => 1.0,
+            Self::Clockwise => -1.0,
+        }
+    }
+}
+
 /// One retained radial line in a Manim-compatible `PolarPlane` background grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolarPlaneRadialLine {
@@ -40,10 +57,10 @@ impl PolarPlaneCircle {
 
 /// Renderer-independent retained background geometry for ManimCE v0.21 `PolarPlane`.
 ///
-/// The caller supplies the already-normalized symmetric `Axes2DState`. This plan owns
-/// polar subdivision, faded/background classification, scene-space scaling through the
-/// NumberLine unit size, and the upstream family order. It emits only ordinary retained
-/// `Line` and analytic `Circle` snapshots; there is no PolarPlane renderer primitive.
+/// The caller supplies the normalized symmetric `Axes2DState`. This plan owns polar
+/// subdivision, azimuth direction/offset, faded classification, NumberLine-unit-size
+/// scaling, and upstream family order. It emits only existing retained `Line` and
+/// analytic `Circle` snapshots; no PolarPlane renderer primitive is introduced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolarPlaneGridPlan {
     radial_lines: Vec<PolarPlaneRadialLine>,
@@ -53,9 +70,11 @@ pub struct PolarPlaneGridPlan {
 }
 
 impl PolarPlaneGridPlan {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         axes: Axes2DState,
         azimuth_step: f64,
+        azimuth_direction: PolarPlaneAzimuthDirection,
         azimuth_offset: f64,
         faded_line_ratio: usize,
         background_style: NumberPlaneLineStyle,
@@ -73,8 +92,7 @@ impl PolarPlaneGridPlan {
 
         let ratio = faded_line_ratio.max(1);
         let radius_max = axes.x_axis().range().max();
-        let radius_step = axes.x_axis().range().step();
-        let radial_step = radius_step / ratio as f64;
+        let radial_step = axes.x_axis().range().step() / ratio as f64;
         let angular_step = std::f64::consts::TAU / azimuth_step / ratio as f64;
         if !radial_step.is_finite() || radial_step <= 0.0 {
             return Err(PolarPlaneAuthoringError::InvalidRadiusStep(radial_step));
@@ -104,6 +122,7 @@ impl PolarPlaneGridPlan {
             origin,
             radial_vector,
             angular_step,
+            azimuth_direction,
             azimuth_offset,
             ratio,
             background_style,
@@ -118,28 +137,24 @@ impl PolarPlaneGridPlan {
         })
     }
 
-    /// Non-faded radial lines. Manim places these before non-faded circles.
     pub fn radial_lines(&self) -> &[PolarPlaneRadialLine] {
         &self.radial_lines
     }
 
-    /// Non-faded concentric circles.
     pub fn circles(&self) -> &[PolarPlaneCircle] {
         &self.circles
     }
 
-    /// Faded radial lines. Manim places these before faded circles.
     pub fn faded_radial_lines(&self) -> &[PolarPlaneRadialLine] {
         &self.faded_radial_lines
     }
 
-    /// Faded concentric circles.
     pub fn faded_circles(&self) -> &[PolarPlaneCircle] {
         &self.faded_circles
     }
 
-    /// Iterate retained snapshots in Manim's exact background-family order:
-    /// ordinary radial lines, ordinary circles, faded radial lines, faded circles.
+    /// Manim family order: ordinary radials, ordinary circles, faded radials,
+    /// then faded circles.
     pub fn snapshots_in_manim_order(&self) -> impl Iterator<Item = &ObjectSnapshot> {
         self.radial_lines
             .iter()
@@ -178,8 +193,7 @@ fn build_circles(
     let mut radius = 0.0;
     let mut index = 0_usize;
 
-    // Match `np.arange(0, radius_max + rstep, rstep)`: the enlarged stop makes the
-    // outer radius part of the retained family when it falls on the subdivision grid.
+    // Upstream uses arange(0, radius_max + rstep, rstep), including radius zero.
     while radius < stop {
         let is_background = index.is_multiple_of(ratio);
         let style = if is_background {
@@ -208,6 +222,7 @@ fn build_radial_lines(
     origin: Vec2,
     radial_vector: Vec2,
     angular_step: f64,
+    direction: PolarPlaneAzimuthDirection,
     azimuth_offset: f64,
     ratio: usize,
     background_style: NumberPlaneLineStyle,
@@ -218,10 +233,10 @@ fn build_radial_lines(
     let mut base_angle = 0.0;
     let mut index = 0_usize;
 
-    // Preserve `np.arange(0, TAU, astep)` behavior, including a final partial
-    // azimuth division when `azimuth_step` is non-integral.
+    // Keep the arange(0, TAU, astep) enumeration before applying direction and
+    // offset so non-integral azimuth divisions preserve Manim's final partial member.
     while base_angle < std::f64::consts::TAU {
-        let angle = base_angle + azimuth_offset;
+        let angle = direction.sign() * base_angle + azimuth_offset;
         let endpoint = origin + rotate(radial_vector, angle)?;
         let is_background = index.is_multiple_of(ratio);
         let style = if is_background {
@@ -411,6 +426,27 @@ mod tests {
         NumberPlaneLineStyle::new(color, width, opacity)
     }
 
+    fn plan_with_direction(
+        radius_max: f64,
+        radius_step: f64,
+        size: f32,
+        azimuth_step: f64,
+        direction: PolarPlaneAzimuthDirection,
+        azimuth_offset: f64,
+        ratio: usize,
+    ) -> PolarPlaneGridPlan {
+        PolarPlaneGridPlan::new(
+            axes(radius_max, radius_step, size),
+            azimuth_step,
+            direction,
+            azimuth_offset,
+            ratio,
+            style(BLUE_D, 2.0, 1.0),
+            style(BLUE_D, 1.0, 0.5),
+        )
+        .unwrap()
+    }
+
     fn plan(
         radius_max: f64,
         radius_step: f64,
@@ -419,15 +455,15 @@ mod tests {
         azimuth_offset: f64,
         ratio: usize,
     ) -> PolarPlaneGridPlan {
-        PolarPlaneGridPlan::new(
-            axes(radius_max, radius_step, size),
+        plan_with_direction(
+            radius_max,
+            radius_step,
+            size,
             azimuth_step,
+            PolarPlaneAzimuthDirection::CounterClockwise,
             azimuth_offset,
             ratio,
-            style(BLUE_D, 2.0, 1.0),
-            style(BLUE_D, 1.0, 0.5),
         )
-        .unwrap()
     }
 
     fn assert_close(actual: f64, expected: f64) {
@@ -456,9 +492,8 @@ mod tests {
     }
 
     #[test]
-    fn ratio_two_matches_upstream_independent_circle_and_radial_classification() {
+    fn ratio_two_matches_independent_circle_and_radial_classification() {
         let plan = plan(4.0, 1.0, 8.0, 4.0, 0.0, 2);
-
         assert_eq!(
             plan.circles()
                 .iter()
@@ -488,11 +523,9 @@ mod tests {
     }
 
     #[test]
-    fn custom_size_scales_circle_radius_and_radial_endpoint_through_axis_unit_size() {
+    fn custom_size_scales_circles_and_radials_through_number_line_unit_size() {
         let plan = plan(4.0, 1.0, 12.0, 4.0, 0.0, 1);
-        let outer = plan.circles().last().unwrap();
-        assert_close(circle_scene_radius(outer), 6.0);
-
+        assert_close(circle_scene_radius(plan.circles().last().unwrap()), 6.0);
         let (start, end) = line_points(&plan.radial_lines()[0]);
         assert_close(f64::from(start.x), 0.0);
         assert_close(f64::from(start.y), 0.0);
@@ -501,40 +534,57 @@ mod tests {
     }
 
     #[test]
-    fn azimuth_offset_rotates_radial_geometry_without_changing_member_count() {
-        let plan = plan(2.0, 1.0, 4.0, 4.0, std::f64::consts::FRAC_PI_2, 1);
-        let first = &plan.radial_lines()[0];
-        let (_, end) = line_points(first);
-        assert_close(first.angle(), std::f64::consts::FRAC_PI_2);
-        assert_close(f64::from(end.x), 0.0);
-        assert_close(f64::from(end.y), 2.0);
-        assert_eq!(plan.radial_lines().len(), 4);
+    fn direction_and_offset_are_owned_by_the_shared_radial_planner() {
+        let ccw = plan_with_direction(
+            2.0,
+            1.0,
+            4.0,
+            4.0,
+            PolarPlaneAzimuthDirection::CounterClockwise,
+            0.25,
+            1,
+        );
+        let cw = plan_with_direction(
+            2.0,
+            1.0,
+            4.0,
+            4.0,
+            PolarPlaneAzimuthDirection::Clockwise,
+            0.25,
+            1,
+        );
+        assert_close(ccw.radial_lines()[1].angle(), std::f64::consts::FRAC_PI_2 + 0.25);
+        assert_close(cw.radial_lines()[1].angle(), -std::f64::consts::FRAC_PI_2 + 0.25);
+        assert_eq!(ccw.radial_lines().len(), cw.radial_lines().len());
     }
 
     #[test]
-    fn non_integer_azimuth_divisions_keep_final_partial_arange_member() {
+    fn non_integer_azimuth_divisions_keep_the_final_partial_arange_member() {
         let plan = plan(2.0, 1.0, 4.0, 3.5, 0.0, 1);
         assert_eq!(plan.radial_lines().len(), 4);
-        let angles = plan
-            .radial_lines()
-            .iter()
-            .map(PolarPlaneRadialLine::angle)
-            .collect::<Vec<_>>();
-        assert!(angles[3] < std::f64::consts::TAU);
-        assert!(angles[3] > 3.0 * std::f64::consts::FRAC_PI_2);
+        let last = plan.radial_lines().last().unwrap().angle();
+        assert!(last < std::f64::consts::TAU);
+        assert!(last > 3.0 * std::f64::consts::FRAC_PI_2);
     }
 
     #[test]
-    fn retained_member_order_matches_manim_radials_then_circles_for_each_style_family() {
-        let plan = plan(2.0, 1.0, 4.0, 4.0, 0.0, 2);
+    fn retained_order_and_styles_use_only_existing_geometry_kinds() {
+        let plan = PolarPlaneGridPlan::new(
+            axes(2.0, 1.0, 4.0),
+            4.0,
+            PolarPlaneAzimuthDirection::CounterClockwise,
+            0.0,
+            2,
+            style(BLUE_D, 2.0, 1.0),
+            style(RED, 6.0, 0.25),
+        )
+        .unwrap();
         let ordered = plan.snapshots_in_manim_order().collect::<Vec<_>>();
-        assert_eq!(ordered.len(), 9);
+        assert_eq!(ordered.len(), 13);
 
-        for snapshot in &ordered[..plan.radial_lines().len()] {
-            assert!(matches!(snapshot.geometry, GeometryRef::Line { .. }));
-        }
         let ordinary_circle_start = plan.radial_lines().len();
         let faded_radial_start = ordinary_circle_start + plan.circles().len();
+        assert!(matches!(ordered[0].geometry, GeometryRef::Line { .. }));
         assert!(matches!(
             ordered[ordinary_circle_start].geometry,
             GeometryRef::Circle { .. }
@@ -547,34 +597,13 @@ mod tests {
             ordered.last().unwrap().geometry,
             GeometryRef::Circle { .. }
         ));
-    }
-
-    #[test]
-    fn background_and_faded_styles_are_applied_to_existing_geometry_kinds() {
-        let plan = PolarPlaneGridPlan::new(
-            axes(2.0, 1.0, 4.0),
-            4.0,
-            0.0,
-            2,
-            style(BLUE_D, 2.0, 1.0),
-            style(RED, 6.0, 0.25),
-        )
-        .unwrap();
-
         assert_close(f64::from(plan.radial_lines()[0].snapshot().style.stroke_width), 0.02);
         assert_close(
             f64::from(plan.faded_radial_lines()[0].snapshot().style.stroke_width),
             0.06,
         );
         assert_close(
-            f64::from(
-                plan.faded_circles()[0]
-                    .snapshot()
-                    .style
-                    .stroke
-                    .unwrap()
-                    .alpha,
-            ),
+            f64::from(plan.faded_circles()[0].snapshot().style.stroke.unwrap().alpha),
             0.25,
         );
     }
@@ -585,6 +614,7 @@ mod tests {
             PolarPlaneGridPlan::new(
                 axes(2.0, 1.0, 4.0),
                 0.0,
+                PolarPlaneAzimuthDirection::CounterClockwise,
                 0.0,
                 1,
                 style(BLUE_D, 2.0, 1.0),
@@ -604,6 +634,7 @@ mod tests {
             PolarPlaneGridPlan::new(
                 asymmetric,
                 4.0,
+                PolarPlaneAzimuthDirection::CounterClockwise,
                 0.0,
                 1,
                 style(BLUE_D, 2.0, 1.0),
