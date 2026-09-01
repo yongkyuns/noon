@@ -8,6 +8,7 @@
 
 mod analytic_geometry_authoring;
 mod arc_authoring;
+mod area_authoring;
 mod axis_tick_authoring;
 mod camera_authoring;
 mod coordinate_system_authoring;
@@ -31,6 +32,7 @@ mod text_authoring;
 
 pub use analytic_geometry_authoring::*;
 pub use arc_authoring::*;
+pub use area_authoring::*;
 pub use axis_tick_authoring::*;
 pub use camera_authoring::*;
 pub use coordinate_system_authoring::*;
@@ -60,19 +62,19 @@ pub mod prelude {
         transformed_axes_function_vector_path, transformed_axes_line_graph_vector_path,
         transformed_axes_sampled_values_vector_path, transformed_graph_point_for_x,
         transformed_graph_point_from_proportion, AnnularSector, Annulus, Arc, ArcAuthoringError,
-        ArcBetweenPoints, Axes2DState, AxisTickError, BackgroundRectangle, CoordinateSystemError,
-        Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        GeometryAuthoringError, GraphQueryError, LineGraphAuthoringError,
-        LineMatcherAuthoringError, MathTypst, MovingCameraScene, NumberLineGeometryPlan,
-        NumberLineState, NumberLineTick, NumberLineTickOptions, NumberRange, ParametricSamplePlan,
-        PlotGeometryError, PlotRangeRequest, PlotSamplingError, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedMobject, RetainedScene, RiemannAuthoringError,
-        RiemannRectangleGeometry, RiemannSample, RiemannSamplePlan, RiemannSampleType,
-        RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
-        ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError,
-        TransformedAxes2DState, TransformedNumberLineState, Triangle, Typst, Underline,
-        ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
+        ArcBetweenPoints, AreaAuthoringError, AreaSamplePlan, Axes2DState, AxisTickError,
+        BackgroundRectangle, CoordinateSystemError, Cross, DashedLine, DashedLineAuthoringError,
+        Dot, Elbow, ElbowAuthoringError, Ellipse, GeometryAuthoringError, GraphParameterRange,
+        GraphQueryError, LineGraphAuthoringError, LineMatcherAuthoringError, MathTypst,
+        MovingCameraScene, NumberLineGeometryPlan, NumberLineState, NumberLineTick,
+        NumberLineTickOptions, NumberRange, ParametricSamplePlan, PlotGeometryError,
+        PlotRangeRequest, PlotSamplingError, Polygon, Polygram, PolygramAuthoringError,
+        ReactiveScene, ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject,
+        RetainedScene, RiemannAuthoringError, RiemannRectangleGeometry, RiemannSample,
+        RiemannSamplePlan, RiemannSampleType, RoundedRectangle, RoundedRectangleAuthoringError,
+        SampleRange, SampleSpan, Sector, ShapeMatcherAuthoringError, Star, SurroundingRectangle,
+        Text, TextAuthoringError, TransformedAxes2DState, TransformedNumberLineState, Triangle,
+        Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
         DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO,
         DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
         DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
