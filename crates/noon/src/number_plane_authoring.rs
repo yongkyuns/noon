@@ -138,13 +138,7 @@ fn lines_parallel_to_axis(
     // Upstream handles the zero range separately, then resets the enumeration for
     // the positive and negative half-open ranges. Preserve those reset points: they
     // determine which lines are faded when `ratio > 1`.
-    push_grid_line(
-        &mut background,
-        0.0,
-        parallel,
-        shift_unit,
-        background_style,
-    )?;
+    push_grid_line(&mut background, 0.0, parallel, shift_unit, background_style)?;
 
     let mut value = step;
     let mut index = 0_usize;
@@ -293,7 +287,9 @@ pub enum NumberPlaneAuthoringError {
 impl std::fmt::Display for NumberPlaneAuthoringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidGridStep(value) => write!(formatter, "invalid NumberPlane grid step: {value}"),
+            Self::InvalidGridStep(value) => {
+                write!(formatter, "invalid NumberPlane grid step: {value}")
+            }
             Self::InvalidStrokeWidth(value) => {
                 write!(formatter, "invalid NumberPlane stroke width: {value}")
             }
@@ -303,7 +299,10 @@ impl std::fmt::Display for NumberPlaneAuthoringError {
             Self::NonFiniteColor => formatter.write_str("NumberPlane grid color must be finite"),
             Self::DegenerateAxis => formatter.write_str("NumberPlane axis must not be degenerate"),
             Self::Overflow(value) => {
-                write!(formatter, "NumberPlane geometry cannot be represented as f32: {value}")
+                write!(
+                    formatter,
+                    "NumberPlane geometry cannot be represented as f32: {value}"
+                )
             }
         }
     }
@@ -314,15 +313,10 @@ impl std::error::Error for NumberPlaneAuthoringError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NumberRange, Transform2D};
-    use noon_core::{BLUE_D, RED};
+    use crate::NumberRange;
+    use noon_core::{GeometryRef, BLUE_D, RED};
 
-    fn axes(
-        x_range: [f64; 3],
-        y_range: [f64; 3],
-        x_length: f32,
-        y_length: f32,
-    ) -> Axes2DState {
+    fn axes(x_range: [f64; 3], y_range: [f64; 3], x_length: f32, y_length: f32) -> Axes2DState {
         Axes2DState::new(
             NumberRange::new(x_range[0], x_range[1], x_range[2]).unwrap(),
             NumberRange::new(y_range[0], y_range[1], y_range[2]).unwrap(),
@@ -338,11 +332,12 @@ mod tests {
 
     fn line_points(line: &NumberPlaneGridLine) -> (Vec2, Vec2) {
         let snapshot = line.snapshot();
-        let geometry = snapshot.geometry.as_line().unwrap();
-        let transform = Transform2D::from_affine(snapshot.transform);
+        let GeometryRef::Line { start, end } = &snapshot.geometry else {
+            panic!("NumberPlane grid must lower to retained Line geometry");
+        };
         (
-            transform.transform_point(geometry.start),
-            transform.transform_point(geometry.end),
+            snapshot.transform.transform_point(*start),
+            snapshot.transform.transform_point(*end),
         )
     }
 
@@ -364,11 +359,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            plan.x_lines().iter().map(NumberPlaneGridLine::offset).collect::<Vec<_>>(),
+            plan.x_lines()
+                .iter()
+                .map(NumberPlaneGridLine::offset)
+                .collect::<Vec<_>>(),
             vec![0.0, 1.0, 2.0, -1.0, -2.0]
         );
         assert_eq!(
-            plan.y_lines().iter().map(NumberPlaneGridLine::offset).collect::<Vec<_>>(),
+            plan.y_lines()
+                .iter()
+                .map(NumberPlaneGridLine::offset)
+                .collect::<Vec<_>>(),
             vec![0.0, 1.0, 2.0, -1.0, -2.0]
         );
         assert_eq!(plan.background_line_count(), 10);
@@ -436,7 +437,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            plan.y_lines().iter().map(NumberPlaneGridLine::offset).collect::<Vec<_>>(),
+            plan.y_lines()
+                .iter()
+                .map(NumberPlaneGridLine::offset)
+                .collect::<Vec<_>>(),
             vec![0.0, 1.0, 2.0, 3.0]
         );
     }
