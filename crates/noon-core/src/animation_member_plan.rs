@@ -148,6 +148,7 @@ impl From<FamilyAnimationError> for FamilyAnimationMemberEvaluationError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FamilyAnimationMemberPlanError {
     Semantic(SemanticStoreError),
+    DuplicateSemanticLeaf(SemanticNodeId),
     UnexpectedLeaf {
         index: usize,
         expected: SemanticNodeId,
@@ -168,6 +169,12 @@ impl std::fmt::Display for FamilyAnimationMemberPlanError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Semantic(error) => error.fmt(formatter),
+            Self::DuplicateSemanticLeaf(leaf) => write!(
+                formatter,
+                "family animation member plan repeats semantic leaf {}:{}",
+                leaf.slot(),
+                leaf.generation()
+            ),
             Self::UnexpectedLeaf {
                 index,
                 expected,
@@ -225,7 +232,24 @@ impl FamilyAnimationMemberPlanBuilder {
         store: &SemanticStore,
         target: SemanticNodeId,
     ) -> Result<Self, FamilyAnimationMemberPlanError> {
-        let expected_leaves = store.ordered_leaf_nodes(target)?;
+        Self::begin_ordered(target, store.ordered_leaf_nodes(target)?)
+    }
+
+    /// Begin from an already-snapshotted authoritative semantic leaf sequence.
+    ///
+    /// This is the execution-side counterpart to a serialized family-animation request:
+    /// semantic identity/order survive the boundary, while content-local member counts
+    /// are still resolved only from execution-local retained resources.
+    pub fn begin_ordered(
+        target: SemanticNodeId,
+        expected_leaves: Vec<SemanticNodeId>,
+    ) -> Result<Self, FamilyAnimationMemberPlanError> {
+        let mut seen = HashSet::with_capacity(expected_leaves.len());
+        for leaf in &expected_leaves {
+            if !seen.insert(*leaf) {
+                return Err(FamilyAnimationMemberPlanError::DuplicateSemanticLeaf(*leaf));
+            }
+        }
         Ok(Self {
             target,
             spans: Vec::with_capacity(expected_leaves.len()),
@@ -429,6 +453,27 @@ mod tests {
         assert_eq!(plan.target(), leaf);
         assert_eq!(plan.total_member_count(), 4);
         assert_eq!(plan.leaves().len(), 1);
+    }
+
+    #[test]
+    fn ordered_constructor_preserves_semantic_identity_and_rejects_duplicates() {
+        let target = SemanticNodeId::new(99, 7);
+        let first = SemanticNodeId::new(41, 3);
+        let second = SemanticNodeId::new(12, 8);
+        let mut builder =
+            FamilyAnimationMemberPlanBuilder::begin_ordered(target, vec![first, second]).unwrap();
+        builder.accept_leaf(first, ObjectId::new(10), 2).unwrap();
+        builder.accept_leaf(second, ObjectId::new(11), 1).unwrap();
+        let plan = builder.finish().unwrap();
+        assert_eq!(plan.target(), target);
+        assert_eq!(plan.leaves()[0].semantic_leaf, first);
+        assert_eq!(plan.leaves()[1].semantic_leaf, second);
+
+        assert_eq!(
+            FamilyAnimationMemberPlanBuilder::begin_ordered(target, vec![first, first])
+                .unwrap_err(),
+            FamilyAnimationMemberPlanError::DuplicateSemanticLeaf(first)
+        );
     }
 
     #[test]

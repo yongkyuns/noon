@@ -1,8 +1,9 @@
 use crate::{
     FamilyAnimationLeafProgress, FamilyAnimationLeafSpan, FamilyAnimationMemberEvaluationError,
-    FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationState, ObjectId,
-    RetainedAnimationMember, RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError,
-    RetainedObjectDefinition, SemanticNodeId, SemanticStore, TextResourceArena,
+    FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationRequest,
+    FamilyAnimationRequestError, FamilyAnimationState, ObjectId, RetainedAnimationMember,
+    RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError, RetainedObjectDefinition,
+    SemanticNodeId, SemanticStore, TextResourceArena,
 };
 
 /// Prepared retained-content binding for one semantic family leaf.
@@ -57,6 +58,37 @@ impl RetainedFamilyAnimationPlan {
     /// is only the lowering-time bridge back to the retained object slot.
     pub fn leaf_for_object(&self, object: ObjectId) -> Option<&RetainedFamilyAnimationLeafPlan> {
         self.leaves.iter().find(|leaf| leaf.span.object == object)
+    }
+
+    /// Lower an authoring request only after retained content has been materialized.
+    ///
+    /// The request contributes stable semantic/runtime identities and authoritative
+    /// leaf order. Text glyph/member identity is derived exclusively from the supplied
+    /// execution-local retained objects and text resource arena.
+    pub fn from_request(
+        request: &FamilyAnimationRequest,
+        objects: &[RetainedObjectDefinition],
+        texts: &TextResourceArena,
+    ) -> Result<Self, RetainedFamilyAnimationRequestPlanError> {
+        request.validate()?;
+        let expected_leaves = request
+            .bindings()
+            .iter()
+            .map(|binding| binding.semantic_leaf)
+            .collect();
+        let mut builder =
+            RetainedFamilyAnimationPlanBuilder::begin_ordered(request.target(), expected_leaves)?;
+
+        for binding in request.bindings() {
+            let object = objects
+                .iter()
+                .find(|object| object.id == binding.object)
+                .ok_or(RetainedFamilyAnimationRequestPlanError::MissingObject(
+                    binding.object,
+                ))?;
+            builder.accept_leaf(binding.semantic_leaf, object, texts)?;
+        }
+        Ok(builder.finish()?)
     }
 
     /// Borrow prepared content metadata together with the globally evaluated leaf
@@ -118,6 +150,17 @@ impl RetainedFamilyAnimationPlanBuilder {
         })
     }
 
+    /// Begin from semantic leaf order already snapshotted by the authoring side.
+    pub fn begin_ordered(
+        target: SemanticNodeId,
+        expected_leaves: Vec<SemanticNodeId>,
+    ) -> Result<Self, RetainedFamilyAnimationMemberPlanError> {
+        Ok(Self {
+            inner: FamilyAnimationMemberPlanBuilder::begin_ordered(target, expected_leaves)?,
+            members_by_leaf: Vec::new(),
+        })
+    }
+
     pub fn expected_leaf_count(&self) -> usize {
         self.inner.expected_leaf_count()
     }
@@ -153,6 +196,43 @@ impl RetainedFamilyAnimationPlanBuilder {
             member_plan,
             leaves,
         })
+    }
+}
+
+/// Failure while resolving a canonical authoring request against one materialized
+/// retained scene.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RetainedFamilyAnimationRequestPlanError {
+    Request(FamilyAnimationRequestError),
+    Plan(RetainedFamilyAnimationMemberPlanError),
+    MissingObject(ObjectId),
+}
+
+impl std::fmt::Display for RetainedFamilyAnimationRequestPlanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Request(error) => error.fmt(formatter),
+            Self::Plan(error) => error.fmt(formatter),
+            Self::MissingObject(object) => write!(
+                formatter,
+                "family animation request references missing retained object {}",
+                object.get()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RetainedFamilyAnimationRequestPlanError {}
+
+impl From<FamilyAnimationRequestError> for RetainedFamilyAnimationRequestPlanError {
+    fn from(value: FamilyAnimationRequestError) -> Self {
+        Self::Request(value)
+    }
+}
+
+impl From<RetainedFamilyAnimationMemberPlanError> for RetainedFamilyAnimationRequestPlanError {
+    fn from(value: RetainedFamilyAnimationMemberPlanError) -> Self {
+        Self::Plan(value)
     }
 }
 
@@ -226,9 +306,10 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        FamilyAnimationMode, FontFaceIdentity, GeometryRef, GlyphRun, ObjectId, PositionedGlyph,
-        RateFunction, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
-        TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, Vec2,
+        FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationSpec, FontFaceIdentity,
+        GeometryRef, GlyphRun, ObjectId, PositionedGlyph, RateFunction, Rect, TextAffineTransform,
+        TextClusterIdentity, TextDirection, TextRenderItem, TextResource, TextSourceKind,
+        TextSourceSpan, Vec2,
     };
 
     use super::*;
@@ -338,6 +419,87 @@ mod tests {
 
         let prepared = plan.leaf(text_leaf).unwrap();
         assert!(std::ptr::eq(text.members(), prepared.members().members()));
+    }
+
+    #[test]
+    fn request_lowering_resolves_members_from_execution_local_resources() {
+        let text_leaf = SemanticNodeId::new(41, 3);
+        let circle_leaf = SemanticNodeId::new(12, 8);
+        let family = SemanticNodeId::new(99, 7);
+        let text_id = ObjectId::new(10);
+        let circle_id = ObjectId::new(11);
+        let spec = FamilyAnimationSpec::new(
+            FamilyAnimationMode::Reveal,
+            1.0,
+            2.0,
+            1.0,
+            RateFunction::Linear,
+            false,
+            false,
+        )
+        .unwrap();
+        let request = FamilyAnimationRequest::new(
+            family,
+            vec![
+                FamilyAnimationLeafBinding::new(text_leaf, text_id),
+                FamilyAnimationLeafBinding::new(circle_leaf, circle_id),
+            ],
+            spec,
+        )
+        .unwrap();
+
+        let mut texts = TextResourceArena::new();
+        let text_handle = texts
+            .insert(plain_resource(
+                "AB",
+                vec![
+                    glyph(TextSourceSpan::new(0, 1), 1, 0.0),
+                    glyph(TextSourceSpan::new(1, 2), 2, 1.0),
+                ],
+            ))
+            .unwrap();
+        let objects = vec![
+            RetainedObjectDefinition::text(text_id, text_handle),
+            RetainedObjectDefinition::geometry(circle_id, GeometryRef::circle(1.0)),
+        ];
+
+        let plan = RetainedFamilyAnimationPlan::from_request(&request, &objects, &texts).unwrap();
+        assert_eq!(plan.member_plan().target(), family);
+        assert_eq!(plan.member_plan().total_member_count(), 3);
+        let midpoint = spec.state_at(2.0).unwrap();
+        let text = plan.leaf_frame_for_object(midpoint, text_id).unwrap();
+        let circle = plan.leaf_frame_for_object(midpoint, circle_id).unwrap();
+        assert_eq!(text.member_progress(0).unwrap(), 1.0);
+        assert_eq!(text.member_progress(1).unwrap(), 0.5);
+        assert_eq!(circle.member_progress(0).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn request_lowering_rejects_unknown_runtime_object() {
+        let leaf = SemanticNodeId::new(3, 4);
+        let target = SemanticNodeId::new(5, 6);
+        let request = FamilyAnimationRequest::new(
+            target,
+            vec![FamilyAnimationLeafBinding::new(leaf, ObjectId::new(99))],
+            FamilyAnimationSpec::new(
+                FamilyAnimationMode::Reveal,
+                0.0,
+                1.0,
+                0.0,
+                RateFunction::Linear,
+                false,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let error =
+            RetainedFamilyAnimationPlan::from_request(&request, &[], &TextResourceArena::new())
+                .unwrap_err();
+        assert_eq!(
+            error,
+            RetainedFamilyAnimationRequestPlanError::MissingObject(ObjectId::new(99))
+        );
     }
 
     #[test]
