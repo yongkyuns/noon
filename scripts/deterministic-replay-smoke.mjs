@@ -14,16 +14,20 @@ const sceneDir = await mkdtemp(path.join(tmpdir(), "noon-determinism-scenes-"));
 const port = Number(process.env.NOON_DETERMINISM_PORT ?? "4183");
 const baseUrl = `http://127.0.0.1:${port}`;
 const forwardSampleCount = 32;
+const morphStressCount = process.env.NOON_DETERMINISM_MORPH_STRESS_COUNT;
+const generatorArgs = ["web/python/playground_examples.py", sceneDir];
+if (morphStressCount !== undefined) {
+  if (!/^\d+$/.test(morphStressCount) || Number(morphStressCount) < 12) {
+    throw new Error("NOON_DETERMINISM_MORPH_STRESS_COUNT must be an integer >= 12");
+  }
+  generatorArgs.push("--morph-stress-count", morphStressCount);
+}
 
-const generated = spawnSync(
-  "python3",
-  ["web/python/playground_examples.py", sceneDir],
-  {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
-  },
-);
+const generated = spawnSync("python3", generatorArgs, {
+  cwd: repoRoot,
+  encoding: "utf8",
+  env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+});
 if (generated.status !== 0) {
   throw new Error(`Unable to generate deterministic scenes:\n${generated.stdout}\n${generated.stderr}`);
 }
@@ -91,9 +95,8 @@ try {
     const sceneJson = await readFile(example.file, "utf8");
     const document = JSON.parse(sceneJson);
     const end = sceneEnd(document);
-    const targets = end > 0
-      ? [0, end * 0.125, end * 0.5, end * 0.875, end, end + 0.75]
-      : [0, 0.5];
+    const targets =
+      end > 0 ? [0, end * 0.125, end * 0.5, end * 0.875, end, end + 0.75] : [0, 0.5];
 
     await page.evaluate(
       ({ json, targetTimes, sampleCount }) => {
