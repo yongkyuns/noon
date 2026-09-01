@@ -133,25 +133,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-wasm-build-v1-
 
-      - name: Detect combined WASM build cache
-        id: wasm-build-cache-state
-        shell: bash
-        run: |
-          if [[ -d "$HOME/.cache/.wasm-pack" ]] && [[ -n "$(find "$HOME/.cache/.wasm-pack" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
-            echo "tools=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "tools=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Restore legacy WASM compiler cache
-        if: steps.wasm-build-cache-state.outputs.tools != 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: /home/runner/.cache/noon-sccache-wasm
-          key: ${{ runner.os }}-sccache-wasm-v1-${{ github.event.pull_request.base.sha }}
-          restore-keys: |
-            ${{ runner.os }}-sccache-wasm-v1-
-
       - name: Use sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
