@@ -97,6 +97,20 @@ def assert_corner_path(graph, expected_points):
     return snapshot
 
 
+def snapshot_for(mobject):
+    handle = _handles._handle_for(mobject)
+    assert handle is not None
+    return json.loads(str(handle.snapshotJson()))
+
+
+def assert_stroke_color(mobject, expected):
+    stroke = snapshot_for(mobject)["style"]["stroke"]
+    assert_close(stroke["red"], expected.red)
+    assert_close(stroke["green"], expected.green)
+    assert_close(stroke["blue"], expected.blue)
+    assert_close(stroke["alpha"], expected.alpha)
+
+
 class RetainedAxesPlot(Scene):
     def construct(self):
         axes = Axes(
@@ -264,6 +278,77 @@ class RetainedAxesPlot(Scene):
         assert isinstance(cos_graph, ParametricFunction)
         cos_point = axes.input_to_graph_point(0.25, cos_graph)
         assert_point_close(cos_point, axes.c2p(0.25, math.cos(0.25)))
+
+        cos_graph.set_color(MAROON)
+        secant_x = 0.25
+        secant_dx = 0.5
+        secant_p1 = axes.i2gp(secant_x, cos_graph)
+        secant_p2 = axes.i2gp(secant_x + secant_dx, cos_graph)
+        secant_interim = Vec2(secant_p2.x, secant_p1.y)
+        secant_group = axes.get_secant_slope_group(
+            secant_x,
+            cos_graph,
+            dx=secant_dx,
+            dx_line_color=PURE_GREEN,
+            secant_line_color=PURPLE,
+            secant_line_length=4.0,
+        )
+        assert isinstance(secant_group, VGroup)
+        assert len(secant_group) == 3
+        assert secant_group[0] is secant_group.dx_line
+        assert secant_group[1] is secant_group.df_line
+        assert secant_group[2] is secant_group.secant_line
+        assert_point_close(secant_group.dx_line.start, secant_p1)
+        assert_point_close(secant_group.dx_line.end, secant_interim)
+        assert_point_close(secant_group.df_line.start, secant_interim)
+        assert_point_close(secant_group.df_line.end, secant_p2)
+        assert_stroke_color(secant_group.dx_line, PURE_GREEN)
+        assert_stroke_color(secant_group.df_line, MAROON)
+        assert_stroke_color(secant_group.secant_line, PURPLE)
+        assert_point_close(
+            secant_group.secant_line.get_center(),
+            (secant_p1 + secant_p2) * 0.5,
+        )
+        raw_secant_length = (secant_p2 - secant_p1).length()
+        secant_snapshot = snapshot_for(secant_group.secant_line)
+        expected_secant_scale = 4.0 / raw_secant_length
+        assert_close(secant_snapshot["transform"]["scale"]["x"], expected_secant_scale)
+        assert_close(secant_snapshot["transform"]["scale"]["y"], expected_secant_scale)
+
+        default_dx = (axes.x_range[1] - axes.x_range[0]) / 10.0
+        default_secant = axes.get_secant_slope_group(
+            secant_x,
+            cos_graph,
+            dx=0.0,
+            include_secant_line=False,
+        )
+        assert len(default_secant) == 2
+        assert not hasattr(default_secant, "secant_line")
+        assert_point_close(
+            default_secant.df_line.end,
+            axes.i2gp(secant_x + default_dx, cos_graph),
+        )
+        assert_stroke_color(default_secant.dx_line, PURE_YELLOW)
+        assert_stroke_color(default_secant.df_line, MAROON)
+
+        negative_secant = axes.get_secant_slope_group(
+            secant_x,
+            cos_graph,
+            dx=-0.25,
+            include_secant_line=False,
+        )
+        assert len(negative_secant) == 2
+        assert_point_close(
+            negative_secant.df_line.end,
+            axes.i2gp(secant_x - 0.25, cos_graph),
+        )
+
+        for label_kwargs in ({"dx_label": "dx"}, {"dy_label": "dy"}):
+            try:
+                axes.get_secant_slope_group(secant_x, cos_graph, **label_kwargs)
+                raise AssertionError("secant labels must wait for exact retained text")
+            except NotImplementedError as error:
+                assert "MathTex/number labels" in str(error)
 
         parametric_calls = []
 
@@ -512,6 +597,7 @@ class RetainedAxesPlot(Scene):
             axes,
             sin_graph,
             cos_graph,
+            secant_group,
             parametric,
             direct_parametric,
             function_graph,
@@ -550,7 +636,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 65);
+  assert.equal(result.document.objects.length, 68);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -558,8 +644,8 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "line").length,
-    42,
-    "Axes, NumberPlane, and projection helpers must flatten to ordinary retained line geometry",
+    45,
+    "Axes, NumberPlane, projection helpers, and secant groups must flatten to ordinary retained line geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
@@ -578,7 +664,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes/NumberPlane smoke passed: transformed coordinates, retained grid families, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
+    "Retained Axes/NumberPlane smoke passed: transformed coordinates, retained grid families, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, secant slope groups, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
