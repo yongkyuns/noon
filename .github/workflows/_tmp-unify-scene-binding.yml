@@ -16,6 +16,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tmp/367-unified-scene-binding
+      - name: Fix rewrite anchor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/_tmp_unify_scene_binding.py')
+          text = path.read_text()
+          text = text.replace('"def _schedule_raw_transform(",', '"def _scene_add(",')
+          text = text.replace('    member._bind_to_scene(scene, key=key)\\n    _persist_semantic_handle_at_binding(member)\\n\\n\\n', '    member._bind_to_scene(scene, key=key)\\n\\n\\n')
+          path.write_text(text)
+          PY
       - name: Apply architecture rewrite
         run: python scripts/_tmp_unify_scene_binding.py
       - name: Validate Python syntax and focused ratchets
