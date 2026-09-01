@@ -104,31 +104,6 @@ fn semantic_family_leaf_ids(
     store: &SemanticStore,
     family: SemanticNodeId,
 ) -> Result<Vec<SemanticNodeId>, String> {
-    fn collect(
-        store: &SemanticStore,
-        node_id: SemanticNodeId,
-        leaves: &mut Vec<SemanticNodeId>,
-    ) -> Result<(), String> {
-        let node = store
-            .node(node_id)
-            .ok_or_else(|| format!("unknown semantic family member {node_id:?}"))?;
-        match node.kind() {
-            SemanticNodeKind::AuthoringObject => {
-                leaves.push(node_id);
-                Ok(())
-            }
-            SemanticNodeKind::Family => {
-                for member in node.members() {
-                    collect(store, *member, leaves)?;
-                }
-                Ok(())
-            }
-            SemanticNodeKind::Object(_) => Err(format!(
-                "family bounds member {node_id:?} is not an authoring object"
-            )),
-        }
-    }
-
     let root = store
         .node(family)
         .ok_or_else(|| format!("unknown family semantic node {family:?}"))?;
@@ -136,8 +111,19 @@ fn semantic_family_leaf_ids(
         return Err(format!("semantic node {family:?} is not a family"));
     }
 
-    let mut leaves = Vec::new();
-    collect(store, family, &mut leaves)?;
+    let leaves = store
+        .ordered_leaf_nodes(family)
+        .map_err(|error| error.to_string())?;
+    for leaf in &leaves {
+        let node = store
+            .node(*leaf)
+            .ok_or_else(|| format!("unknown semantic family member {leaf:?}"))?;
+        if !matches!(node.kind(), SemanticNodeKind::AuthoringObject) {
+            return Err(format!(
+                "family bounds member {leaf:?} is not an authoring object"
+            ));
+        }
+    }
     Ok(leaves)
 }
 
@@ -207,6 +193,25 @@ mod tests {
             plan.finish_world_bounds().expect("lowered bounds"),
             Some(Rect::new(Vec2::new(-2.0, -4.0), Vec2::new(5.0, 1.0)))
         );
+    }
+
+    #[test]
+    fn shared_alias_is_consumed_once_in_first_semantic_occurrence() {
+        let mut store = SemanticStore::new();
+        let shared = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        let nested = store.insert_family();
+        let root = store.insert_family();
+        store.add_member(nested, second).unwrap();
+        store.add_member(nested, shared).unwrap();
+        store.add_member(root, shared).unwrap();
+        store.add_member(root, nested).unwrap();
+
+        let mut plan = FrontendFamilyBoundsPlan::begin(&store, root).unwrap();
+        assert_eq!(plan.leaf_count(), 2);
+        plan.accept_leaf_bounds(shared, None).unwrap();
+        plan.accept_leaf_bounds(second, None).unwrap();
+        assert_eq!(plan.finish().unwrap(), None);
     }
 
     #[test]
