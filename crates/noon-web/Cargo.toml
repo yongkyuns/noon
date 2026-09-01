@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"] }
 noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["web"] }
 wasm-bindgen = "0.2"
