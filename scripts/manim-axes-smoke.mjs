@@ -82,6 +82,21 @@ def assert_line_graph_matches_axes(axes, graph, x_values, y_values):
     return snapshot, expected_points
 
 
+def assert_corner_path(graph, expected_points):
+    handle = _handles._handle_for(graph)
+    assert handle is not None
+    snapshot = json.loads(str(handle.snapshotJson()))
+    commands = snapshot["geometry"]["vector_path"]["commands"]
+    assert len(commands) == len(expected_points)
+    for command, expected in zip(commands, expected_points):
+        payload = command.get("move_to") or command.get("line_to")
+        assert payload is not None, command
+        actual = payload["to"]
+        assert_close(actual["x"], expected[0])
+        assert_close(actual["y"], expected[1])
+    return snapshot
+
+
 class RetainedAxesPlot(Scene):
     def construct(self):
         axes = Axes(
@@ -297,6 +312,68 @@ class RetainedAxesPlot(Scene):
         except NotImplementedError:
             pass
 
+        direct_calls = []
+
+        def direct_fn(t):
+            direct_calls.append(float(t))
+            return [math.cos(t), math.sin(t), 0.0]
+
+        direct_parametric = ParametricFunction(
+            direct_fn,
+            t_range=[0.0, math.pi, math.pi / 2.0],
+            use_smoothing=False,
+            color=TEAL,
+        )
+        assert isinstance(direct_parametric, VMobject)
+        assert len(direct_calls) == 3
+        for actual, expected in zip(direct_calls, [0.0, math.pi / 2.0, math.pi]):
+            assert_close(actual, expected)
+        direct_snapshot = assert_corner_path(
+            direct_parametric,
+            [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)],
+        )
+        assert_close(direct_parametric.t_min, 0.0)
+        assert_close(direct_parametric.t_max, math.pi)
+        assert_close(direct_parametric.t_step, math.pi / 2.0)
+        assert direct_snapshot["style"]["stroke"]["color"] == [0.0, 0.5, 0.5, 1.0]
+        direct_calls.clear()
+        direct_point = direct_parametric.get_point_from_function(math.pi / 2.0)
+        assert_close(direct_point[0], 0.0)
+        assert_close(direct_point[1], 1.0)
+        assert len(direct_calls) == 1
+
+        function_graph = FunctionGraph(
+            lambda x: x * x,
+            x_range=[-1.0, 1.0, 1.0],
+            color=MAROON,
+            use_smoothing=False,
+        )
+        assert isinstance(function_graph, ParametricFunction)
+        assert_corner_path(
+            function_graph,
+            [(-1.0, 1.0), (0.0, 0.0), (1.0, 1.0)],
+        )
+        assert_close(function_graph.get_function()(0.5), 0.25)
+        function_point = function_graph.get_point_from_function(0.5)
+        assert_close(function_point[0], 0.5)
+        assert_close(function_point[1], 0.25)
+        assert_close(function_point[2], 0.0)
+
+        try:
+            ParametricFunction(
+                lambda t: [t, 0.0, 1.0],
+                t_range=[0.0, 1.0, 1.0],
+                use_smoothing=False,
+            )
+            raise AssertionError("direct nonzero-z parametric geometry must fail explicitly")
+        except NotImplementedError:
+            pass
+        try:
+            ParametricFunction(direct_fn, use_vectorized=True)
+            raise AssertionError("direct vectorized callbacks must fail explicitly")
+        except NotImplementedError:
+            pass
+
         curve_1_calls = []
         curve_2_calls = []
 
@@ -360,6 +437,8 @@ class RetainedAxesPlot(Scene):
             sin_graph,
             cos_graph,
             parametric,
+            direct_parametric,
+            function_graph,
             vertical,
             horizontal,
             line_graph,
@@ -394,7 +473,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 47);
+  assert.equal(result.document.objects.length, 49);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -407,8 +486,8 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
-    7,
-    "Axes scalar/parametric plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
+    9,
+    "Axes/direct scalar and parametric plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "circle").length,
@@ -422,7 +501,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: transformed coordinates, authored/generic i2gp, scalar and parametric plots, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
+    "Retained Axes smoke passed: transformed coordinates, direct/Axes parametric functions, FunctionGraph, authored/generic i2gp, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
