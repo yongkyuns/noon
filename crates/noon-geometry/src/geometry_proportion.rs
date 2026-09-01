@@ -1,6 +1,6 @@
-use noon_core::{GeometryRef, Vec2, TAU};
+use noon_core::{GeometryRef, TAU, Vec2};
 
-use crate::{point_from_proportion, PathProportionError};
+use crate::{PathProportionError, point_from_proportion};
 
 const MANIM_CIRCLE_COMPONENTS: usize = 9;
 
