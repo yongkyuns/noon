@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tmp/367-unified-scene-binding
-      - name: Fix rewrite anchor
+      - name: Fix rewrite anchors
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -24,6 +24,18 @@ jobs:
           text = path.read_text()
           text = text.replace('"def _schedule_raw_transform(",', '"def _scene_add(",')
           text = text.replace('    member._bind_to_scene(scene, key=key)\\n    _persist_semantic_handle_at_binding(member)\\n\\n\\n', '    member._bind_to_scene(scene, key=key)\\n\\n\\n')
+          text = text.replace(
+              '"def _initial_animation_state(",\n    "def _state_for(",',
+              '"def _initial_animation_state(",\n    "def _retained_presence_tracks(",',
+          )
+          text = text.replace(
+              '"def _resolve_retained_lifecycle(",\n    "def _bind_retained(",',
+              '"def _resolve_retained_lifecycle(",\n    "def _append_vec2_track(",',
+          )
+          text = text.replace(
+              '"def _bind_retained(",\n    "def _append_presence_track(",',
+              '"def _bind_retained(",\n    "def _initial_animation_state(",',
+          )
           path.write_text(text)
           PY
       - name: Apply architecture rewrite
