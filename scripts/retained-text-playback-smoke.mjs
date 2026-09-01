@@ -155,6 +155,9 @@ try {
     if ((authored.retainedDocument?.objects?.length ?? 0) !== 1) {
       throw new Error("ShrinkToCenter must author exactly one retained Text object");
     }
+    if (!authored.sceneSpec) {
+      throw new Error("ShrinkToCenter retained playback requires canonical SceneSpec output");
+    }
     const retainedObject = authored.retainedDocument.objects[0];
     const tracks = authored.retainedDocument?.tracks ?? [];
     const scales = tracks.filter((track) => track.property === "scale");
@@ -162,9 +165,8 @@ try {
       throw new Error(`ShrinkToCenter must author one scale track, got ${scales.length}`);
     }
     const positions = tracks.filter((track) => track.property === "position");
-    const ready = await execution.startRetained(
-      JSON.stringify(authored.document),
-      JSON.stringify(authored.retainedDocument),
+    const ready = await execution.startRetainedCanonical(
+      JSON.stringify(authored.sceneSpec),
       { loopDurationSeconds: authored.duration, transportMode: "transferable" },
     );
     await execution.pause();
