@@ -37,7 +37,9 @@ async function waitForServer() {
 
 const source = `
 from noon import *
+import json
 import math
+import _manim_semantic_handles as _handles
 
 
 def assert_close(actual, expected, tolerance=1e-5):
@@ -58,6 +60,23 @@ def assert_polar_close(actual, expected, tolerance=1e-5):
     assert_close(delta, 0.0, tolerance)
 
 
+def snapshot(mobject):
+    handle = _handles._handle_for(mobject)
+    assert handle is not None
+    return json.loads(str(handle.snapshotJson()))
+
+
+def corner_points(mobject):
+    commands = snapshot(mobject)["geometry"]["vector_path"]["commands"]
+    points = []
+    for command in commands:
+        payload = command.get("move_to") or command.get("line_to")
+        assert payload is not None, command
+        point = payload["to"]
+        points.append(Vec2(float(point["x"]), float(point["y"])))
+    return points
+
+
 class RetainedPolarPlaneScene(Scene):
     def construct(self):
         plane = PolarPlane(
@@ -71,6 +90,7 @@ class RetainedPolarPlaneScene(Scene):
 
         assert isinstance(plane, Axes)
         assert type(plane) is PolarPlane
+        assert hasattr(Axes, "plot_polar_graph")
         assert len(plane.axes) == 2
         assert len(plane._radial_lines) == 4
         assert len(plane._circles) == 3
@@ -95,6 +115,25 @@ class RetainedPolarPlaneScene(Scene):
         assert_close(radial_delta.length(), 4.0)
         assert_close(math.atan2(radial_delta.y, radial_delta.x), 0.25)
 
+        # plot_polar_graph is exactly the upstream composition over pr2pt + ParametricFunction.
+        default_radius = lambda theta: 0.75 + 0.25 * math.cos(theta)
+        default_graph = plane.plot_polar_graph(
+            default_radius,
+            use_smoothing=False,
+        )
+        assert isinstance(default_graph, ParametricFunction)
+        assert default_graph.underlying_function is default_radius
+        assert_close(default_graph.t_range[0], 0.0)
+        assert_close(default_graph.t_range[1], 2.0 * math.pi)
+        assert_close(default_graph.t_range[2], 0.01)
+        default_points = corner_points(default_graph)
+        assert len(default_points) > 600
+        assert_point_close(default_points[0], plane.pr2pt(default_radius(0.0), 0.0))
+        assert_point_close(
+            default_points[-1],
+            plane.pr2pt(default_radius(2.0 * math.pi), 2.0 * math.pi),
+        )
+
         # The shared polar helpers are CoordinateSystem behavior, not PolarPlane-only math.
         axes = Axes(
             x_range=[-3, 3, 1],
@@ -112,6 +151,22 @@ class RetainedPolarPlaneScene(Scene):
         target = (1.25, -0.7)
         transformed = plane.pr2pt(*target)
         assert_polar_close(plane.pt2pr(transformed), target)
+
+        rose = lambda theta: 1.0 + 0.5 * math.cos(2.0 * theta)
+        explicit_graph = plane.plot_polar_graph(
+            rose,
+            theta_range=[0.0, math.pi, math.pi / 2.0],
+            use_smoothing=False,
+            color=ORANGE,
+            stroke_width=4,
+        )
+        assert explicit_graph.underlying_function is rose
+        assert explicit_graph.t_range == [0.0, math.pi, math.pi / 2.0]
+        explicit_points = corner_points(explicit_graph)
+        assert len(explicit_points) == 3
+        for point, theta in zip(explicit_points, [0.0, math.pi / 2.0, math.pi]):
+            assert_point_close(point, plane.pr2pt(rose(theta), theta))
+        assert_close(snapshot(explicit_graph)["style"]["stroke_width"], 0.04)
 
         copied = plane.copy()
         assert type(copied) is PolarPlane
@@ -152,7 +207,7 @@ class RetainedPolarPlaneScene(Scene):
             except NotImplementedError as error:
                 assert "number/MathTex labels" in str(error)
 
-        self.add(plane)
+        self.add(plane, explicit_graph)
 `;
 
 let browser = null;
@@ -180,22 +235,22 @@ try {
 
   assert.equal(result.kind, "scene_document");
   assert.equal(result.document.tracks.length, 0);
-  assert.equal(result.document.objects.length, 15);
+  assert.equal(result.document.objects.length, 16);
   const kinds = result.document.objects.map((object) => Object.keys(object.geometry)[0]);
   assert.deepEqual(kinds, [
     "line", "line", "line", "line",
     "circle", "circle",
     "line", "line", "line", "line",
     "circle", "circle", "circle",
-    "line", "line",
+    "line", "line", "vector_path",
   ]);
   assert.ok(
-    kinds.every((kind) => kind === "line" || kind === "circle"),
-    "PolarPlane must lower only to existing retained Line/Circle geometry",
+    kinds.every((kind) => kind === "line" || kind === "circle" || kind === "vector_path"),
+    "PolarPlane/plot_polar_graph must lower only to existing retained geometry",
   );
   assert.deepEqual(errors, [], `browser errors while testing retained PolarPlane:\n${errors.join("\n")}`);
   console.log(
-    "Retained PolarPlane smoke passed: exact radial/circle subdivision and order, unit-size scaling, transform-safe polar round trips, copy independence, explicit label deferral, and ordinary retained Line/Circle geometry.",
+    "Retained PolarPlane smoke passed: exact radial/circle subdivision and order, unit-size scaling, retained polar graphs with default/explicit theta ranges, transform-safe polar mapping, copy independence, explicit label deferral, and ordinary retained geometry.",
   );
 } finally {
   await browser?.close();
