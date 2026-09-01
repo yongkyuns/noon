@@ -140,11 +140,38 @@ class RetainedAxesPlot(Scene):
         assert isinstance(identity_graph, ParametricFunction)
         assert_three_point_graph_matches_axes(axes, identity_graph)
 
+        graph_point = axes.i2gp(0.75, identity_graph)
+        assert_point_close(graph_point, axes.c2p(0.75, 0.75))
+        graph_coords = axes.i2gc(0.75, identity_graph)
+        assert_close(graph_coords[0], 0.75)
+        assert_close(graph_coords[1], 0.75)
+
+        vertical_config = {}
+        vertical = axes.get_vertical_line(
+            graph_point,
+            line_func=Line,
+            line_config=vertical_config,
+            color=PURE_GREEN,
+            stroke_width=3,
+        )
+        assert_close(vertical_config["stroke_width"], 3)
+        assert vertical_config["color"] == PURE_GREEN
+        assert_point_close(vertical.start, axes.c2p(0.75, 0.0))
+        assert_point_close(vertical.end, graph_point)
+
+        horizontal = axes.get_horizontal_line(
+            graph_point,
+            line_func=Line,
+            color=ORANGE,
+        )
+        assert_point_close(horizontal.start, axes.c2p(0.0, 0.75))
+        assert_point_close(horizontal.end, graph_point)
+
         sin_graph = axes.plot(lambda x: math.sin(x), color=BLUE)
         cos_graph = axes.plot(lambda x: math.cos(x), color=RED)
         assert isinstance(sin_graph, ParametricFunction)
         assert isinstance(cos_graph, ParametricFunction)
-        self.add(axes, sin_graph, cos_graph)
+        self.add(axes, sin_graph, cos_graph, vertical, horizontal)
 `;
 
 let browser = null;
@@ -171,7 +198,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 26);
+  assert.equal(result.document.objects.length, 28);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -179,8 +206,8 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "line").length,
-    24,
-    "Axes must flatten to retained line/tick leaves",
+    26,
+    "Axes and projection helpers must flatten to ordinary retained line geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
@@ -189,7 +216,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: VGroup type, copy/placement independence, shared line/tick families, transform-safe c2p/p2c, exact transformed plot points, and ParametricFunction results.",
+    "Retained Axes smoke passed: VGroup type, copy/placement independence, shared line/tick families, transform-safe c2p/p2c/i2gp, retained axis projections, exact transformed plot points, and ParametricFunction results.",
   );
 } finally {
   await browser?.close();
