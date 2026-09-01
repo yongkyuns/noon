@@ -68,8 +68,9 @@ test("retained scene results expose canonical SceneSpec beside the compatibility
   assert.deepEqual(parsed.sceneSpec.objects.map(({ id }) => id), [0, 2 ** 52]);
 });
 
-test("geometry-only scene results remain unchanged while the SceneSpec migration is retained-only", () => {
+test("geometry-only scene results carry canonical SceneSpec beside the empty compatibility sidecar", () => {
   const document = { version: 1, objects: [], tracks: [] };
+  const sceneSpec = { version: 1, objects: [], tracks: [] };
   const parsed = parseAuthoringResult(
     JSON.stringify({
       kind: "scene_document",
@@ -79,13 +80,14 @@ test("geometry-only scene results remain unchanged while the SceneSpec migration
         protocol_version: 2,
         objects: [],
       },
+      scene_spec: sceneSpec,
       duration: 0,
       identities: { objects: [], tracks: [] },
       callbacks: null,
     }),
   );
 
-  assert.equal("sceneSpec" in parsed, false);
+  assert.deepEqual(parsed.sceneSpec, sceneSpec);
   assert.equal(parsed.retainedDocument.objects.length, 0);
 });
 
@@ -112,4 +114,5 @@ test("Python worker canonicalizes retained output through the Rust WASM bridge",
     source,
     /canonicalRetainedSceneSpecJson\(JSON\.stringify\(result\.document\), retainedDocumentJson\)/,
   );
+  assert.doesNotMatch(source, /retained_document\.objects\.length/);
 });

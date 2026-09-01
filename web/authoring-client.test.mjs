@@ -114,6 +114,14 @@ test("correlates a Python request with Scene callback, retained, and duration me
   const identities = { objects: [{ id: 0, key: "@object:0" }], tracks: [] };
   const callbacks = { session_id: 3, slots: [{ id: 0, objects: [0] }] };
   const retained = retainedDocument();
+  const sceneSpec = {
+    version: 1,
+    objects: [
+      { id: 0, content: { kind: "geometry" } },
+      { id: 2 ** 52, content: { kind: "text" } },
+    ],
+    tracks: [],
+  };
   worker.emit(
     "message",
     workerMessage("result", {
@@ -122,6 +130,7 @@ test("correlates a Python request with Scene callback, retained, and duration me
         kind: "scene_document",
         document: scene,
         retained_document: retained,
+        scene_spec: sceneSpec,
         duration: 2.75,
         identities,
         callbacks,
@@ -132,6 +141,7 @@ test("correlates a Python request with Scene callback, retained, and duration me
   assert.deepEqual(await resultPromise, {
     kind: "scene_document",
     document: scene,
+    sceneSpec,
     retainedDocument: retained,
     duration: 2.75,
     identities,
@@ -139,18 +149,21 @@ test("correlates a Python request with Scene callback, retained, and duration me
   });
 });
 
-test("older scene results without a retained sidecar remain compatible", () => {
+test("scene results without canonical SceneSpec are rejected at the current protocol boundary", () => {
   const scene = { version: 1, objects: [], tracks: [] };
-  const parsed = parseAuthoringResult(
-    JSON.stringify({
-      kind: "scene_document",
-      document: scene,
-      duration: 0,
-      identities: { objects: [], tracks: [] },
-      callbacks: null,
-    }),
+  assert.throws(
+    () =>
+      parseAuthoringResult(
+        JSON.stringify({
+          kind: "scene_document",
+          document: scene,
+          duration: 0,
+          identities: { objects: [], tracks: [] },
+          callbacks: null,
+        }),
+      ),
+    /must include canonical SceneSpec/,
   );
-  assert.equal("retainedDocument" in parsed, false);
 });
 
 test("validates retained native/Typst authoring documents and JS-safe identities", () => {
@@ -200,6 +213,7 @@ test("Scene duration accepts zero and rejects missing, negative, or non-finite v
   const sceneResult = {
     kind: "scene_document",
     document: { version: 1, objects: [], tracks: [] },
+    scene_spec: { version: 1, objects: [], tracks: [] },
     identities: { objects: [], tracks: [] },
     callbacks: null,
   };
