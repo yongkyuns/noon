@@ -49,11 +49,9 @@ impl ParametricFunctionAuthoringPlan {
             values => return Err(ManimParametricBridgeError::InvalidRangeLength(values.len())),
         };
         let samples = match request.discontinuities {
-            Some(discontinuities) => ParametricSamplePlan::new(
-                sample_range,
-                &discontinuities,
-                request.discontinuity_dt,
-            )?,
+            Some(discontinuities) => {
+                ParametricSamplePlan::new(sample_range, &discontinuities, request.discontinuity_dt)?
+            }
             None => ParametricSamplePlan::without_discontinuities(sample_range),
         };
         Ok(Self {
@@ -85,7 +83,8 @@ impl ParametricFunctionAuthoringPlan {
         }
 
         let mut points = Vec::new();
-        for (subpath, (parameter_values, coordinates)) in parameters.iter().zip(values).enumerate() {
+        for (subpath, (parameter_values, coordinates)) in parameters.iter().zip(values).enumerate()
+        {
             if coordinates.len() != parameter_values.len() {
                 return Err(PlotGeometryError::SampleValueCountMismatch {
                     subpath,
@@ -112,7 +111,11 @@ impl ParametricFunctionAuthoringPlan {
         let mut points = points.into_iter();
         let path = parametric_vector_path(
             &self.samples,
-            |_| points.next().expect("validated parametric callback cardinality"),
+            |_| {
+                points
+                    .next()
+                    .expect("validated parametric callback cardinality")
+            },
             self.use_smoothing,
         )?;
         debug_assert!(points.next().is_none());
@@ -123,8 +126,9 @@ impl ParametricFunctionAuthoringPlan {
         &self,
         values_json: &str,
     ) -> Result<String, ManimParametricBridgeError> {
-        let values: Vec<Vec<[f64; 2]>> = serde_json::from_str(values_json)
-            .map_err(|error| ManimParametricBridgeError::InvalidCallbackValues(error.to_string()))?;
+        let values: Vec<Vec<[f64; 2]>> = serde_json::from_str(values_json).map_err(|error| {
+            ManimParametricBridgeError::InvalidCallbackValues(error.to_string())
+        })?;
         serde_json::to_string(&self.finish_values(&values)?)
             .map_err(|error| ManimParametricBridgeError::Serialization(error.to_string()))
     }
@@ -148,7 +152,10 @@ impl std::fmt::Display for ManimParametricBridgeError {
                 write!(formatter, "invalid ParametricFunction request: {error}")
             }
             Self::InvalidCallbackValues(error) => {
-                write!(formatter, "invalid ParametricFunction callback values: {error}")
+                write!(
+                    formatter,
+                    "invalid ParametricFunction callback values: {error}"
+                )
             }
             Self::InvalidRangeLength(length) => write!(
                 formatter,
@@ -160,7 +167,10 @@ impl std::fmt::Display for ManimParametricBridgeError {
             Self::Sampling(error) => error.fmt(formatter),
             Self::Geometry(error) => error.fmt(formatter),
             Self::Serialization(error) => {
-                write!(formatter, "unable to serialize ParametricFunction state: {error}")
+                write!(
+                    formatter,
+                    "unable to serialize ParametricFunction state: {error}"
+                )
             }
         }
     }
@@ -230,12 +240,9 @@ mod tests {
 
     #[test]
     fn two_value_range_uses_manim_default_parametric_step() {
-        let plan = ParametricFunctionAuthoringPlan::from_json(&request_json(
-            "[0.0,1.0]",
-            "null",
-            false,
-        ))
-        .unwrap();
+        let plan =
+            ParametricFunctionAuthoringPlan::from_json(&request_json("[0.0,1.0]", "null", false))
+                .unwrap();
         let parameters = plan.parameter_subpaths().unwrap();
         assert_eq!(parameters.len(), 1);
         assert_eq!(parameters[0].first(), Some(&0.0));
@@ -297,21 +304,15 @@ mod tests {
         .unwrap();
         assert!(matches!(
             plan.finish_values(&[vec![[0.0, 0.0]]]).unwrap_err(),
-            ManimParametricBridgeError::Geometry(
-                PlotGeometryError::SampleValueCountMismatch {
-                    subpath: 0,
-                    expected: 3,
-                    actual: 1,
-                }
-            )
+            ManimParametricBridgeError::Geometry(PlotGeometryError::SampleValueCountMismatch {
+                subpath: 0,
+                expected: 3,
+                actual: 1,
+            })
         ));
         assert!(matches!(
-            plan.finish_values(&[vec![
-                [-1.0, 0.0],
-                [0.0, f64::NAN],
-                [1.0, 0.0],
-            ]])
-            .unwrap_err(),
+            plan.finish_values(&[vec![[-1.0, 0.0], [0.0, f64::NAN], [1.0, 0.0],]])
+                .unwrap_err(),
             ManimParametricBridgeError::Geometry(PlotGeometryError::NonFinitePoint { .. })
         ));
     }
