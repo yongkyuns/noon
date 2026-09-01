@@ -335,7 +335,11 @@ class RetainedAxesPlot(Scene):
         assert_close(direct_parametric.t_min, 0.0)
         assert_close(direct_parametric.t_max, math.pi)
         assert_close(direct_parametric.t_step, math.pi / 2.0)
-        assert direct_snapshot["style"]["stroke"]["color"] == [0.0, 0.5, 0.5, 1.0]
+        expected_teal = [TEAL.red, TEAL.green, TEAL.blue, TEAL.alpha]
+        for actual, expected in zip(
+            direct_snapshot["style"]["stroke"]["color"], expected_teal
+        ):
+            assert_close(actual, expected)
         direct_calls.clear()
         direct_point = direct_parametric.get_point_from_function(math.pi / 2.0)
         assert_close(direct_point[0], 0.0)
