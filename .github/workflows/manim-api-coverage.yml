@@ -1,7 +1,9 @@
 name: Manim API coverage
 
 on:
-  pull_request:
+  push:
+    branches:
+      - master
     paths-ignore:
       - "crates/**/tests/**"
   workflow_dispatch:

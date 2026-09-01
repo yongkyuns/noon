@@ -1,13 +1,6 @@
 name: Test coverage
 
 on:
-  pull_request:
-    paths:
-      - "crates/**"
-      - "web/**"
-      - "scripts/**"
-      - "compat/**"
-      - ".github/workflows/test-coverage.yml"
   push:
     branches:
       - master
@@ -33,17 +26,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Generate inventory
         run: |
           python3 scripts/test-inventory.py \
             --check \
             --json test-artifacts/test-inventory.json \
             --markdown test-artifacts/test-inventory.md
-
       - name: Validate semantic ownership inventory
         run: python3 scripts/semantic_ownership_check.py
-
       - name: Upload inventory
         uses: actions/upload-artifact@v4
         with:
@@ -58,22 +48,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Use stable Rust
         run: rustup default stable
-
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a
         with:
           tool: cargo-llvm-cov
           fallback: none
-
       - name: Generate Rust coverage
         run: |
           mkdir -p test-artifacts
           cargo llvm-cov --workspace --all-features \
             --lcov --output-path test-artifacts/rust.lcov
-
       - name: Upload Rust coverage
         uses: actions/upload-artifact@v4
         with:
@@ -88,12 +74,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Python coverage
         run: |
           python -m pip install --disable-pip-version-check "coverage==7.6.12"
@@ -103,7 +87,6 @@ jobs:
           coverage json -o test-artifacts/python-coverage.json
           coverage report > test-artifacts/python-coverage.txt
           cat test-artifacts/python-coverage.txt
-
       - name: JavaScript coverage
         run: |
           npm install --no-save --ignore-scripts c8@10.1.3
@@ -112,7 +95,6 @@ jobs:
             --reporter=text \
             --report-dir=test-artifacts/js \
             node --test web/*.test.mjs
-
       - name: Upload scripting coverage
         uses: actions/upload-artifact@v4
         with:

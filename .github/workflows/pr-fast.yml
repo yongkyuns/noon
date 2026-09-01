@@ -1,0 +1,176 @@
+name: PR Fast Gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-fast-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  rust-lint:
+    name: Rust format and lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  rust-test:
+    name: Rust unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: rustup default stable
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Run fast Rust tests
+        run: cargo test --workspace --all-features --lib
+
+  web-preflight:
+    name: Web static and unit checks
+    runs-on: ubuntu-latest
+    env:
+      NOON_SKIP_PLAYGROUND_TEST: "1"
+      NOON_WEB_PREFLIGHT_ONLY: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run web preflight
+        run: bash scripts/build-web-demo.sh
+
+  web-fast:
+    name: Browser fast checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust and WASM target
+        run: |
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package once
+        env:
+          NOON_SKIP_WEB_PREFLIGHT: "1"
+          NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_SKIP_OPT: "1"
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Check deterministic playback
+        run: node scripts/deterministic-replay-smoke.mjs
+
+      - name: Check Manim-style authoring
+        run: node scripts/manim-compat-smoke.mjs
+
+      - name: Check primary WebGPU rendering
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
+        run: node scripts/browser-smoke.mjs
+
+  fast-gate:
+    name: PR Fast Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - rust-lint
+      - rust-test
+      - web-preflight
+      - web-fast
+    steps:
+      - name: Require fast checks
+        env:
+          LINT_RESULT: ${{ needs.rust-lint.result }}
+          TEST_RESULT: ${{ needs.rust-test.result }}
+          WEB_PREFLIGHT_RESULT: ${{ needs.web-preflight.result }}
+          WEB_RESULT: ${{ needs.web-fast.result }}
+        run: |
+          test "$LINT_RESULT" = success
+          test "$TEST_RESULT" = success
+          test "$WEB_PREFLIGHT_RESULT" = success
+          test "$WEB_RESULT" = success
