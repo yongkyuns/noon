@@ -66,6 +66,22 @@ def assert_three_point_graph_matches_axes(axes, graph):
         assert_close(actual["y"], expected.y)
 
 
+def assert_line_graph_matches_axes(axes, graph, x_values, y_values):
+    handle = _handles._handle_for(graph)
+    assert handle is not None
+    snapshot = json.loads(str(handle.snapshotJson()))
+    commands = snapshot["geometry"]["vector_path"]["commands"]
+    assert len(commands) == len(x_values)
+    expected_points = [axes.c2p(x, y) for x, y in zip(x_values, y_values)]
+    for command, expected in zip(commands, expected_points):
+        payload = command.get("move_to") or command.get("line_to")
+        assert payload is not None, command
+        actual = payload["to"]
+        assert_close(actual["x"], expected.x)
+        assert_close(actual["y"], expected.y)
+    return snapshot, expected_points
+
+
 class RetainedAxesPlot(Scene):
     def construct(self):
         axes = Axes(
@@ -167,11 +183,55 @@ class RetainedAxesPlot(Scene):
         assert_point_close(horizontal.start, axes.c2p(0.0, 0.75))
         assert_point_close(horizontal.end, graph_point)
 
+        x_values = [0.0, 1.0, 1.0, 2.0]
+        y_values = [0.5, 1.0, -0.5, 0.0]
+        line_graph = axes.plot_line_graph(
+            x_values=x_values,
+            y_values=y_values,
+            line_color=PURE_GREEN,
+            stroke_width=4,
+        )
+        assert isinstance(line_graph, VDict)
+        assert "line_graph" in line_graph
+        assert "vertex_dots" in line_graph
+        assert len(line_graph["vertex_dots"]) == 4
+        line_snapshot, expected_vertices = assert_line_graph_matches_axes(
+            axes, line_graph["line_graph"], x_values, y_values
+        )
+        assert_close(line_snapshot["style"]["stroke_width"], 0.04)
+        for dot, expected in zip(line_graph["vertex_dots"], expected_vertices):
+            assert_point_close(dot.get_center(), expected)
+
+        no_dots = axes.plot_line_graph(
+            x_values=[0, 1],
+            y_values=[0, 1],
+            add_vertex_dots=False,
+        )
+        assert isinstance(no_dots, VDict)
+        assert "line_graph" in no_dots
+        assert "vertex_dots" not in no_dots
+
+        try:
+            axes.plot_line_graph([0, 1], [0])
+            raise AssertionError("mismatched line-graph coordinates must fail")
+        except ValueError:
+            pass
+        try:
+            axes.plot_line_graph([0], [0], z_values=[1])
+            raise AssertionError("nonzero z must fail in 2D Axes")
+        except NotImplementedError:
+            pass
+        try:
+            VDict(show_keys=True)
+            raise AssertionError("VDict key labels must fail until exact Tex is available")
+        except NotImplementedError:
+            pass
+
         sin_graph = axes.plot(lambda x: math.sin(x), color=BLUE)
         cos_graph = axes.plot(lambda x: math.cos(x), color=RED)
         assert isinstance(sin_graph, ParametricFunction)
         assert isinstance(cos_graph, ParametricFunction)
-        self.add(axes, sin_graph, cos_graph, vertical, horizontal)
+        self.add(axes, sin_graph, cos_graph, vertical, horizontal, line_graph)
 `;
 
 let browser = null;
@@ -198,7 +258,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 28);
+  assert.equal(result.document.objects.length, 33);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -211,12 +271,17 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
-    2,
-    "Axes.plot must lower to ordinary retained VectorPath curves",
+    3,
+    "Axes.plot and plot_line_graph must lower to ordinary retained VectorPath geometry",
+  );
+  assert.equal(
+    geometryKinds.filter((kind) => kind === "circle").length,
+    4,
+    "plot_line_graph vertex dots must remain ordinary retained circle geometry",
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: VGroup type, copy/placement independence, shared line/tick families, transform-safe c2p/p2c/i2gp, retained axis projections, exact transformed plot points, and ParametricFunction results.",
+    "Retained Axes smoke passed: transformed c2p/p2c/i2gp, retained projections, plot curves, and VDict line graphs with shared corner-path geometry and optional retained dots.",
   );
 } finally {
   await browser?.close();
