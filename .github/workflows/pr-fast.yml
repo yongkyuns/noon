@@ -158,6 +158,9 @@ jobs:
       - name: Check retained ComplexPlane authoring
         run: node scripts/manim-complex-plane-smoke.mjs
 
+      - name: Check retained PolarPlane authoring
+        run: node scripts/manim-polar-plane-smoke.mjs
+
       - name: Check lazy Manim namespace dependencies
         run: node scripts/manim-namespace-smoke.mjs
 
