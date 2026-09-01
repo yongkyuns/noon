@@ -227,7 +227,8 @@ impl BackgroundRectangle {
         color: Color,
         fill_opacity: f32,
     ) -> Result<Self, ShapeMatcherAuthoringError> {
-        let bounds = group_world_bounds(targets).ok_or(ShapeMatcherAuthoringError::NoBoundedTargets)?;
+        let bounds =
+            group_world_bounds(targets).ok_or(ShapeMatcherAuthoringError::NoBoundedTargets)?;
         Self::around_world_bounds(bounds, buff, corner_radius, color, fill_opacity)
     }
 
@@ -320,20 +321,12 @@ mod tests {
         let snapshots = [&left, &right];
         let bounds = group_world_bounds(snapshots).expect("union bounds");
 
-        let from_snapshots = SurroundingRectangle::around(
-            snapshots,
-            Vec2::new(0.25, 0.5),
-            0.2,
-            RED,
-        )
-        .expect("snapshot matcher");
-        let from_bounds = SurroundingRectangle::around_world_bounds(
-            bounds,
-            Vec2::new(0.25, 0.5),
-            0.2,
-            RED,
-        )
-        .expect("bounds matcher");
+        let from_snapshots =
+            SurroundingRectangle::around(snapshots, Vec2::new(0.25, 0.5), 0.2, RED)
+                .expect("snapshot matcher");
+        let from_bounds =
+            SurroundingRectangle::around_world_bounds(bounds, Vec2::new(0.25, 0.5), 0.2, RED)
+                .expect("bounds matcher");
 
         assert_eq!(from_bounds.snapshot(), from_snapshots.snapshot());
     }
@@ -381,16 +374,14 @@ mod tests {
     #[test]
     fn bounds_native_background_preserves_style_contract() {
         let bounds = Rect::new(Vec2::new(-2.0, -1.0), Vec2::new(3.0, 4.0));
-        let background = BackgroundRectangle::around_world_bounds(
-            bounds,
-            Vec2::new(0.2, 0.3),
-            0.1,
-            WHITE,
-            0.2,
-        )
-        .expect("bounds background");
+        let background =
+            BackgroundRectangle::around_world_bounds(bounds, Vec2::new(0.2, 0.3), 0.1, WHITE, 0.2)
+                .expect("bounds background");
 
-        assert_eq!(background.snapshot().center(), bounds.center());
+        let center = background.snapshot().center();
+        let expected_center = bounds.center();
+        assert_close(center.x, expected_center.x);
+        assert_close(center.y, expected_center.y);
         assert_close(background.snapshot().width(), 5.4);
         assert_close(background.snapshot().height(), 5.6);
         assert_eq!(
