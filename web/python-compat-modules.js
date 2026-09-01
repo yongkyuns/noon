@@ -14,6 +14,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_axes.py", runtimePath: "/tmp/_manim_axes.py", label: "Noon shared Axes adapter" },
   { sourcePath: "python/_manim_number_line.py", runtimePath: "/tmp/_manim_number_line.py", label: "Noon shared NumberLine adapter" },
   { sourcePath: "python/_manim_number_plane.py", runtimePath: "/tmp/_manim_number_plane.py", label: "Noon shared NumberPlane adapter" },
+  { sourcePath: "python/_manim_polar_plane.py", runtimePath: "/tmp/_manim_polar_plane.py", label: "Noon shared PolarPlane adapter" },
   { sourcePath: "python/_manim_animation_options.py", runtimePath: "/tmp/_manim_animation_options.py", label: "Noon Manim animation options" },
   { sourcePath: "python/_manim_animate.py", runtimePath: "/tmp/_manim_animate.py", label: "Noon Manim animate layer" },
   { sourcePath: "python/_manim_rotate.py", runtimePath: "/tmp/_manim_rotate.py", label: "Noon Manim Rotate layer" },
