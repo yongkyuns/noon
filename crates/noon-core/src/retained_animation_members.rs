@@ -1,6 +1,6 @@
 use crate::{
-    plain_text_animation_members, ObjectContentRef, TextAnimationMember, TextAnimationMemberError,
-    TextResourceArena, TextResourceHandle,
+    plain_text_animation_members, FamilyAnimationError, FamilyAnimationState, ObjectContentRef,
+    TextAnimationMember, TextAnimationMemberError, TextResourceArena, TextResourceHandle,
 };
 
 /// Lightweight content-local identity for one Manim-visible animation member.
@@ -19,8 +19,10 @@ pub enum RetainedAnimationMember {
 /// Ordered content-local animation members for one retained semantic leaf.
 ///
 /// The global family planner consumes only [`Self::member_count`]. Renderer/content
-/// adapters may later use the same sequence to map a leaf-local member index back to
-/// its lightweight retained-content identity.
+/// adapters use this same sequence to map a leaf-local member index back to its
+/// lightweight retained-content identity. Per-member timing is evaluated here as well
+/// so every renderer observes the same authoritative count/order and cannot subtly
+/// reimplement Manim's lag/reversal indexing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetainedAnimationMembers {
     members: Vec<RetainedAnimationMember>,
@@ -67,6 +69,19 @@ impl RetainedAnimationMembers {
     pub fn member(&self, local_member: u32) -> Option<RetainedAnimationMember> {
         self.members.get(local_member as usize).copied()
     }
+
+    /// Evaluate one valid local member through the shared Manim family schedule.
+    ///
+    /// This is allocation-free after member resolution. `FamilyAnimationState` owns
+    /// overall progress, lag ratio, rate-function reversal, and member-order reversal;
+    /// this container contributes only authoritative content-local cardinality/order.
+    pub fn member_progress(
+        &self,
+        state: FamilyAnimationState,
+        local_member: u32,
+    ) -> Result<f32, FamilyAnimationError> {
+        state.member_progress(local_member, self.member_count)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,9 +122,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, PositionedGlyph, Rect,
-        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
-        TextResourceId, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
+        FamilyAnimationMode, FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, PositionedGlyph,
+        RateFunction, Rect, TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem,
+        TextResource, TextResourceId, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
     };
 
     use super::*;
@@ -153,6 +168,21 @@ mod tests {
             bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
             baseline: 0.0,
             layout_artifact: None,
+        }
+    }
+
+    fn family_state(
+        overall_progress: f64,
+        reverse_rate_function: bool,
+        reverse_member_order: bool,
+    ) -> FamilyAnimationState {
+        FamilyAnimationState {
+            mode: FamilyAnimationMode::Reveal,
+            overall_progress,
+            lag_ratio: 1.0,
+            rate_function: RateFunction::Linear,
+            reverse_rate_function,
+            reverse_member_order,
         }
     }
 
@@ -209,6 +239,48 @@ mod tests {
                     && member.glyph.run_index == 0
                     && member.glyph.glyph_index == 2
         ));
+    }
+
+    #[test]
+    fn resolved_member_count_drives_shared_lag_and_reversal_semantics() {
+        let mut texts = TextResourceArena::new();
+        let handle = texts
+            .insert(plain_resource(
+                "A B",
+                vec![
+                    glyph(TextSourceSpan::new(0, 1), 1, 0.0),
+                    glyph(TextSourceSpan::new(1, 2), 2, 1.0),
+                    glyph(TextSourceSpan::new(2, 3), 3, 2.0),
+                ],
+            ))
+            .unwrap();
+        let members =
+            RetainedAnimationMembers::resolve(&ObjectContentRef::Text(handle), &texts).unwrap();
+
+        let create = family_state(0.25, false, false);
+        assert_eq!(members.member_progress(create, 0).unwrap(), 0.5);
+        assert_eq!(members.member_progress(create, 1).unwrap(), 0.0);
+
+        let uncreate = family_state(0.25, true, false);
+        assert_eq!(members.member_progress(uncreate, 0).unwrap(), 0.5);
+        assert_eq!(members.member_progress(uncreate, 1).unwrap(), 1.0);
+
+        let reversed_order = family_state(0.25, false, true);
+        assert_eq!(members.member_progress(reversed_order, 0).unwrap(), 0.0);
+        assert_eq!(members.member_progress(reversed_order, 1).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn invalid_member_index_is_rejected_by_shared_family_state() {
+        let texts = TextResourceArena::new();
+        let members = RetainedAnimationMembers::resolve(
+            &ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            &texts,
+        )
+        .unwrap();
+        assert!(members
+            .member_progress(family_state(0.5, false, false), 1)
+            .is_err());
     }
 
     #[test]
