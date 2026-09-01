@@ -20,6 +20,8 @@ mod manim_geometry_bridge;
 mod manim_path_query_bridge;
 mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
+#[cfg(any(target_arch = "wasm32", test))]
+mod manim_shape_matcher_handle_bridge;
 mod reactive_authoring_facade;
 mod reactive_player;
 mod retained_authoring;

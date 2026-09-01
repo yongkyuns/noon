@@ -273,6 +273,117 @@ class RoundedRectangle(_compat.Rectangle):
             _set_shared_color(self, color)
 
 
+def _shape_matcher_buff(buff: object) -> tuple[float, float]:
+    if isinstance(buff, (int, float)) and not isinstance(buff, bool):
+        value = _shared._ir._finite_number("buff", buff)
+        return value, value
+    value = _compat._as_vec2(buff)
+    return (
+        _shared._ir._finite_number("buff.x", value.x),
+        _shared._ir._finite_number("buff.y", value.y),
+    )
+
+
+def _shape_matcher_target(target: object):
+    if not isinstance(target, _base.Mobject):
+        raise TypeError("shape matcher target must be a Mobject")
+    if isinstance(target, _compat.Group):
+        shared = _shared._shared_family_layout_session(target)
+        if shared is None:
+            raise NotImplementedError(
+                "shape matcher Group/VGroup targets require shared semantic family bounds"
+            )
+        return shared[0]
+    handle = _shared._handle_for(target)
+    if handle is None or not hasattr(handle, "snapshotJson"):
+        raise NotImplementedError(
+            "shape matcher target requires current shared semantic geometry"
+        )
+    return handle
+
+
+def _shape_matcher_handle(target: object, method: str, *args: float):
+    if _shared._create_handle is None:
+        raise RuntimeError("shape matchers require the shared browser geometry bridge")
+    source = _shape_matcher_target(target)
+    constructor = getattr(source, method, None)
+    if constructor is None:
+        raise NotImplementedError(
+            "shape matcher target bridge does not expose shared matcher construction"
+        )
+    return _shared._create_handle(constructor(*args))
+
+
+class SurroundingRectangle(RoundedRectangle):
+    """Manim SurroundingRectangle backed entirely by shared layout/matcher bounds."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject,
+        color: _base.Color = _geometry.PURE_YELLOW,
+        buff: object = _base.SMALL_BUFF,
+        corner_radius: float = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        buff_x, buff_y = _shape_matcher_buff(buff)
+        radius = _shared._ir._finite_number("corner_radius", corner_radius)
+        _shared._attach_shared_handle(
+            self,
+            _shape_matcher_handle(
+                mobject,
+                "surroundingRectangleSnapshotJson",
+                buff_x,
+                buff_y,
+                radius,
+            ),
+        )
+        self.buff = buff
+        self.corner_radius = radius
+        _shared._apply_shared_constructor_kwargs(self, dict(kwargs))
+        if color is not None:
+            _set_shared_color(self, color)
+
+
+class BackgroundRectangle(SurroundingRectangle):
+    """Manim BackgroundRectangle using the same shared family-bounds matcher path."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject,
+        color: _base.Color = _base.BLACK,
+        stroke_width: float = 0.0,
+        stroke_opacity: float = 0.0,
+        fill_opacity: float = 0.75,
+        buff: object = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        options = dict(kwargs)
+        corner_radius = _shared._ir._finite_number(
+            "corner_radius", options.pop("corner_radius", 0.0)
+        )
+        buff_x, buff_y = _shape_matcher_buff(buff)
+        fill_value = _shared._phase_b._opacity("fill_opacity", fill_opacity)
+        _shared._attach_shared_handle(
+            self,
+            _shape_matcher_handle(
+                mobject,
+                "backgroundRectangleSnapshotJson",
+                buff_x,
+                buff_y,
+                corner_radius,
+                fill_value,
+            ),
+        )
+        self.buff = buff
+        self.corner_radius = corner_radius
+        options["stroke_width"] = stroke_width
+        options["stroke_opacity"] = stroke_opacity
+        options["fill_opacity"] = fill_value
+        _shared._apply_shared_constructor_kwargs(self, options)
+        if color is not None:
+            _set_shared_color(self, color)
+
+
 class Underline(_compat.Line):
     """Manim Underline backed by the shared Rust line-matcher semantics."""
 
@@ -499,6 +610,8 @@ def install() -> None:
     public = {
         "Elbow": Elbow,
         "RoundedRectangle": RoundedRectangle,
+        "SurroundingRectangle": SurroundingRectangle,
+        "BackgroundRectangle": BackgroundRectangle,
         "Underline": Underline,
         "AnnularSector": AnnularSector,
         "Sector": Sector,
