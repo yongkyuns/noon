@@ -69,7 +69,7 @@ pub use retained_authoring_player::*;
 pub use retained_authoring_scene::MixedRetainedAuthoringError;
 pub use retained_authoring_scene_spec::*;
 pub use retained_authoring_tracks::*;
-pub use retained_authoring_wire_scene::MixedRetainedAuthoringScene;
+pub use retained_authoring_wire_scene::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;
