@@ -122,6 +122,7 @@ async function runMode(browser, transportMode) {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     const sceneJson = wasm.demoSceneJson();
+    const sceneSpecJson = wasm.canonicalRetainedSceneSpecJson(sceneJson, retainedDocumentJson);
     const originalCanvas = document.querySelector("#scene");
     const devicePixelRatio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(originalCanvas.clientWidth * devicePixelRatio));
@@ -252,8 +253,7 @@ async function runMode(browser, transportMode) {
           protocolVersion: 1,
           type: "init",
           port,
-          sceneJson,
-          ...(retained ? { retainedDocumentJson } : {}),
+          ...(retained ? { sceneSpecJson } : { sceneJson }),
           loopDurationSeconds: 4,
           transportMode: mode,
           sharedSlotCapacity: 1024 * 1024,
