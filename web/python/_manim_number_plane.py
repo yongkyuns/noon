@@ -270,19 +270,43 @@ class NumberPlane(_axes.Axes):
         self._number_plane_grid_plan = plan
 
     def copy(self) -> NumberPlane:
-        return type(self)(
-            x_range=list(self.x_range),
-            y_range=list(self.y_range),
-            x_length=self.x_length,
-            y_length=self.y_length,
-            background_line_style=dict(self.background_line_style),
-            faded_line_style=dict(self.faded_line_style),
-            faded_line_ratio=self.faded_line_ratio,
-            make_smooth_after_applying_functions=self.make_smooth_after_applying_functions,
-            axis_config=dict(self._number_plane_axis_user),
-            x_axis_config=dict(self._number_plane_x_axis_user),
-            y_axis_config=dict(self._number_plane_y_axis_user),
+        clone = object.__new__(type(self))
+        clone.x_range = list(self.x_range)
+        clone.y_range = list(self.y_range)
+        clone.x_length = self.x_length
+        clone.y_length = self.y_length
+        clone.axis_config = _axes._plain_copy(self.axis_config)
+        clone.x_axis_config = _axes._plain_copy(self.x_axis_config)
+        clone.y_axis_config = _axes._plain_copy(self.y_axis_config)
+        clone.background_line_style = dict(self.background_line_style)
+        clone.faded_line_style = dict(self.faded_line_style)
+        clone.faded_line_ratio = self.faded_line_ratio
+        clone.make_smooth_after_applying_functions = self.make_smooth_after_applying_functions
+        clone._number_plane_axis_user = _axes._plain_copy(self._number_plane_axis_user)
+        clone._number_plane_x_axis_user = _axes._plain_copy(self._number_plane_x_axis_user)
+        clone._number_plane_y_axis_user = _axes._plain_copy(self._number_plane_y_axis_user)
+        clone._base_request = _axes._plain_copy(self._base_request)
+        clone._axes_plan = self._axes_plan
+        clone._query_plan = self._query_plan
+        clone._number_plane_grid_plan = self._number_plane_grid_plan
+
+        clone.x_axis = self.x_axis.copy()
+        clone.y_axis = self.y_axis.copy()
+        clone.axes = _compat.VGroup(clone.x_axis, clone.y_axis)
+        clone.x_lines = self.x_lines.copy()
+        clone.y_lines = self.y_lines.copy()
+        clone.faded_x_lines = self.faded_x_lines.copy()
+        clone.faded_y_lines = self.faded_y_lines.copy()
+        clone.background_lines = _compat.VGroup(*clone.x_lines, *clone.y_lines)
+        clone.faded_lines = _compat.VGroup(*clone.faded_x_lines, *clone.faded_y_lines)
+        _compat.VGroup.__init__(
+            clone,
+            clone.faded_lines,
+            clone.background_lines,
+            clone.x_axis,
+            clone.y_axis,
         )
+        return clone
 
     def prepare_for_nonlinear_transform(self, num_inserted_curves: int = 50) -> NumberPlane:
         del num_inserted_curves
