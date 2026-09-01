@@ -60,6 +60,8 @@ async function initializePyodide() {
     authoringStore.createParametricFunctionPlan(requestJson);
   self.noonCreateNumberPlaneGridPlan = (requestJson) =>
     authoringStore.createNumberPlaneGridPlan(requestJson);
+  self.noonCreatePolarPlaneGridPlan = (requestJson) =>
+    authoringStore.createPolarPlaneGridPlan(requestJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
@@ -120,6 +122,8 @@ import _manim_axes
 _manim_axes.install()
 import _manim_number_plane
 _manim_number_plane.install()
+import _manim_polar_plane
+_manim_polar_plane.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()
