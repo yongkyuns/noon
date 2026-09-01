@@ -1,6 +1,7 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 5;
 export const NOON_IR_VERSION = 1;
+export const SCENE_SPEC_VERSION = 1;
 export const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
 export const RETAINED_AUTHORING_VERSION = 2;
 
@@ -223,6 +224,7 @@ export function parseAuthoringResult(resultJson) {
   if (result.kind === "scene_document") {
     const document = validateSceneDocument(result.document);
     const retainedDocument = validateRetainedAuthoringDocument(result.retained_document);
+    const sceneSpec = validateSceneSpec(result.scene_spec);
     const parsed = {
       kind: result.kind,
       document,
@@ -232,6 +234,9 @@ export function parseAuthoringResult(resultJson) {
     };
     if (retainedDocument !== null) {
       parsed.retainedDocument = retainedDocument;
+    }
+    if (sceneSpec !== null) {
+      parsed.sceneSpec = sceneSpec;
     }
     return parsed;
   }
@@ -281,6 +286,45 @@ export function validateSceneDocument(scene) {
     throw new Error("Python Scene tracks must be an array");
   }
   return scene;
+}
+
+export function validateSceneSpec(sceneSpec) {
+  if (sceneSpec === null || sceneSpec === undefined) {
+    return null;
+  }
+  if (!isRecord(sceneSpec)) {
+    throw new Error("Python canonical SceneSpec result must be an object");
+  }
+  if (sceneSpec.version !== SCENE_SPEC_VERSION) {
+    throw new Error(`Unsupported canonical SceneSpec version ${sceneSpec.version}`);
+  }
+  if (!Array.isArray(sceneSpec.objects)) {
+    throw new Error("Python canonical SceneSpec objects must be an array");
+  }
+  if (!Array.isArray(sceneSpec.tracks)) {
+    throw new Error("Python canonical SceneSpec tracks must be an array");
+  }
+
+  const objectIds = new Set();
+  for (const object of sceneSpec.objects) {
+    if (!isRecord(object) || !Number.isSafeInteger(object.id) || object.id < 0) {
+      throw new Error("Python canonical SceneSpec object has an invalid object ID");
+    }
+    if (objectIds.has(object.id)) {
+      throw new Error("Python canonical SceneSpec has duplicate object IDs");
+    }
+    objectIds.add(object.id);
+  }
+  if (
+    sceneSpec.camera_object !== null &&
+    sceneSpec.camera_object !== undefined &&
+    (!Number.isSafeInteger(sceneSpec.camera_object) ||
+      sceneSpec.camera_object < 0 ||
+      !objectIds.has(sceneSpec.camera_object))
+  ) {
+    throw new Error("Python canonical SceneSpec has an invalid camera object");
+  }
+  return sceneSpec;
 }
 
 export function validateRetainedAuthoringDocument(document) {
