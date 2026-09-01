@@ -13,6 +13,7 @@ const repoRoot = path.resolve(scriptDir, "..");
 const sceneDir = await mkdtemp(path.join(tmpdir(), "noon-determinism-scenes-"));
 const port = Number(process.env.NOON_DETERMINISM_PORT ?? "4183");
 const baseUrl = `http://127.0.0.1:${port}`;
+const forwardSampleCount = 32;
 
 const generated = spawnSync(
   "python3",
@@ -83,10 +84,7 @@ try {
   await page.evaluate(async () => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
-    window.noonDeterminism = {
-      direct: wasm.evaluateSceneSnapshot,
-      playback: wasm.evaluateScenePlaybackSnapshot,
-    };
+    window.noonDeterminism = { verify: wasm.verifySceneReplay };
   });
 
   for (const example of examples) {
@@ -97,47 +95,20 @@ try {
       ? [0, end * 0.125, end * 0.5, end * 0.875, end, end + 0.75]
       : [0, 0.5];
 
-    for (const target of targets) {
-      const result = await page.evaluate(
-        ({ json, targetTime }) => {
-          const direct = JSON.parse(window.noonDeterminism.direct(json, targetTime));
-          const forwardTimes = Array.from(
-            { length: 32 },
-            (_, index) => targetTime * index / 31,
-          );
-          const forward = JSON.parse(
-            window.noonDeterminism.playback(json, JSON.stringify(forwardTimes)),
-          );
-          const rewind = JSON.parse(
-            window.noonDeterminism.playback(
-              json,
-              JSON.stringify([0, Math.max(targetTime, 0.25) + 0.4, 0.1, targetTime]),
-            ),
-          );
-          return { direct, forward, rewind };
-        },
-        { json: sceneJson, targetTime: target },
-      );
-      assert.deepEqual(
-        result.forward,
-        result.direct,
-        `${example.name}: WASM incremental playback diverged at t=${target}`,
-      );
-      assert.deepEqual(
-        result.rewind,
-        result.direct,
-        `${example.name}: WASM rewind diverged at t=${target}`,
-      );
-      assert.ok(
-        Math.abs(result.direct.time - target) <= 1e-12,
-        `${example.name}: snapshot time drifted (${result.direct.time} vs ${target})`,
-      );
-    }
+    await page.evaluate(
+      ({ json, targetTimes, sampleCount }) => {
+        window.noonDeterminism.verify(json, JSON.stringify(targetTimes), sampleCount);
+      },
+      { json: sceneJson, targetTimes: targets, sampleCount: forwardSampleCount },
+    );
     console.log(`✓ ${example.name}: direct/playback/rewind WASM snapshots agree`);
   }
 
   assert.deepEqual(browserErrors, [], `unexpected browser errors:\n${browserErrors.join("\n")}`);
-  console.log(`Deterministic replay smoke passed for ${examples.length} playground scenes.`);
+  console.log(
+    `Deterministic replay smoke passed for ${examples.length} playground scenes ` +
+      `with ${forwardSampleCount} forward samples per target.`,
+  );
 } finally {
   if (browser) await browser.close();
   server.kill("SIGTERM");

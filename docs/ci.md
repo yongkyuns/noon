@@ -17,6 +17,8 @@ A small aggregate `PR Fast Gate` job succeeds only when all four lanes succeed. 
 
 `scripts/build-web-demo.sh` remains the canonical full web validation entry point. `NOON_WEB_PREFLIGHT_ONLY=1` runs only its static/unit preflight, while `NOON_SKIP_WEB_PREFLIGHT=1` skips that preflight and proceeds directly to the package build. The full master/release invocation sets neither flag and therefore preserves the original all-in-one behavior.
 
+Deterministic replay keeps the full workload in the PR gate: the same playground corpus, all authored objects including the 1,000-object morph stress scene, every direct-seek target and rewind check, and 32 incremental forward samples per target. The browser harness calls one Rust verifier per scene. That verifier decodes and compiles the scene once, keeps independent direct/forward/rewind runtime instances resident, and compares renderer-observable `FrameState` values in Rust. This preserves the exact determinism contract while avoiding repeated scene compilation and large normalized-frame JSON serialization across the WASM boundary solely for equality checks.
+
 Cargo source downloads and Rust compilations use the shared cache/sccache setup. The browser lane builds the package once and keeps `wasm-opt` out of the pull-request path.
 
 ## Main CI workflow
