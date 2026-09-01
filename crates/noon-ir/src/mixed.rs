@@ -45,6 +45,27 @@ pub enum TextSpecKind {
     MathTex,
 }
 
+/// Backend-specific source/layout options that participate in text compilation identity.
+///
+/// Presentation remains on `ObjectSpec`; this enum carries only source/layout policy
+/// that must survive the canonical authoring boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TextSpecOptions {
+    #[default]
+    Default,
+    NativePlain {
+        font_family: String,
+        line_spacing: f32,
+    },
+}
+
+impl TextSpecOptions {
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+}
+
 /// Backend-source text definition before compilation into immutable retained resources.
 ///
 /// Presentation is deliberately absent. Transform, color, opacity and painter order
@@ -55,6 +76,8 @@ pub struct TextSpec {
     pub kind: TextSpecKind,
     pub source: String,
     pub font_size: f32,
+    #[serde(default, skip_serializing_if = "TextSpecOptions::is_default")]
+    pub options: TextSpecOptions,
 }
 
 impl TextSpec {
@@ -63,6 +86,24 @@ impl TextSpec {
             kind,
             source: source.into(),
             font_size,
+            options: TextSpecOptions::Default,
+        }
+    }
+
+    pub fn native_plain(
+        source: impl Into<String>,
+        font_family: impl Into<String>,
+        font_size: f32,
+        line_spacing: f32,
+    ) -> Self {
+        Self {
+            kind: TextSpecKind::Plain,
+            source: source.into(),
+            font_size,
+            options: TextSpecOptions::NativePlain {
+                font_family: font_family.into(),
+                line_spacing,
+            },
         }
     }
 
@@ -75,11 +116,28 @@ impl TextSpec {
     }
 
     pub fn validate(&self) -> Result<(), SceneSpecError> {
-        if self.source.is_empty() {
+        if self.source.is_empty() && self.kind != TextSpecKind::Plain {
             return Err(SceneSpecError::EmptyTextSource);
         }
         if !self.font_size.is_finite() || self.font_size <= 0.0 {
             return Err(SceneSpecError::InvalidTextFontSize(self.font_size));
+        }
+        match &self.options {
+            TextSpecOptions::Default => {}
+            TextSpecOptions::NativePlain {
+                font_family,
+                line_spacing,
+            } => {
+                if self.kind != TextSpecKind::Plain {
+                    return Err(SceneSpecError::NativeTextOptionsRequirePlain(self.kind));
+                }
+                if font_family.trim().is_empty() {
+                    return Err(SceneSpecError::EmptyNativeTextFontFamily);
+                }
+                if !line_spacing.is_finite() || *line_spacing < -1.0 {
+                    return Err(SceneSpecError::InvalidNativeTextLineSpacing(*line_spacing));
+                }
+            }
         }
         Ok(())
     }
@@ -332,6 +390,9 @@ pub enum SceneSpecError {
     UnsupportedVersion(u32),
     EmptyTextSource,
     InvalidTextFontSize(f32),
+    NativeTextOptionsRequirePlain(TextSpecKind),
+    EmptyNativeTextFontFamily,
+    InvalidNativeTextLineSpacing(f32),
     DuplicateObject(ObjectId),
     DuplicatePainterOrder(u32),
     PainterOrderOutOfRange {
@@ -364,6 +425,17 @@ impl std::fmt::Display for SceneSpecError {
             Self::InvalidTextFontSize(size) => {
                 write!(formatter, "text font_size must be finite and positive, got {size}")
             }
+            Self::NativeTextOptionsRequirePlain(kind) => write!(
+                formatter,
+                "native plain-text options require plain text content, got {kind:?}"
+            ),
+            Self::EmptyNativeTextFontFamily => {
+                formatter.write_str("native plain-text font family must not be empty")
+            }
+            Self::InvalidNativeTextLineSpacing(value) => write!(
+                formatter,
+                "native plain-text line spacing must be finite and at least -1, got {value}"
+            ),
             Self::DuplicateObject(object) => {
                 write!(formatter, "duplicate SceneSpec object {}", object.get())
             }
@@ -682,6 +754,57 @@ mod tests {
         let decoded = SceneSpec::from_json(&json).unwrap();
         assert_eq!(decoded, mixed);
         assert_eq!(decoded.objects[1].id, ObjectId::new(100));
+    }
+
+    #[test]
+    fn native_plain_options_round_trip_without_changing_scene_spec_version() {
+        let text = TextSpec::native_plain("A\nB", "DejaVu Sans Mono", 48.0, 0.5);
+        let spec = SceneSpec::new(
+            vec![ObjectSpec::text(ObjectId::new(100), text.clone())],
+            Vec::new(),
+        )
+        .unwrap();
+        let decoded = SceneSpec::from_json(&spec.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.version, SCENE_SPEC_VERSION);
+        let ObjectSpecContent::Text(decoded_text) = &decoded.objects[0].content else {
+            panic!("native text must remain source-level text");
+        };
+        assert_eq!(decoded_text, &text);
+        assert!(matches!(
+            &decoded_text.options,
+            TextSpecOptions::NativePlain { font_family, line_spacing }
+                if font_family == "DejaVu Sans Mono" && *line_spacing == 0.5
+        ));
+    }
+
+    #[test]
+    fn native_plain_allows_empty_source_but_validates_layout_options() {
+        TextSpec::native_plain("", "DejaVu Sans Mono", 48.0, -1.0)
+            .validate()
+            .unwrap();
+        assert!(matches!(
+            TextSpec::native_plain("x", "", 48.0, -1.0).validate(),
+            Err(SceneSpecError::EmptyNativeTextFontFamily)
+        ));
+        assert!(matches!(
+            TextSpec::native_plain("x", "DejaVu Sans Mono", 48.0, -1.5).validate(),
+            Err(SceneSpecError::InvalidNativeTextLineSpacing(-1.5))
+        ));
+        let mut typst = TextSpec::typst("x", 48.0);
+        typst.options = TextSpecOptions::NativePlain {
+            font_family: "DejaVu Sans Mono".to_owned(),
+            line_spacing: -1.0,
+        };
+        assert!(matches!(
+            typst.validate(),
+            Err(SceneSpecError::NativeTextOptionsRequirePlain(
+                TextSpecKind::Typst
+            ))
+        ));
+        assert!(matches!(
+            TextSpec::typst("", 48.0).validate(),
+            Err(SceneSpecError::EmptyTextSource)
+        ));
     }
 
     #[test]
