@@ -92,8 +92,7 @@ mod tests {
 
     fn assert_point(actual: Vec2, expected: Vec2) {
         assert!(
-            (actual.x - expected.x).abs() <= 1.0e-5
-                && (actual.y - expected.y).abs() <= 1.0e-5,
+            (actual.x - expected.x).abs() <= 1.0e-5 && (actual.y - expected.y).abs() <= 1.0e-5,
             "{actual:?} != {expected:?}"
         );
     }
