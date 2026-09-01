@@ -394,20 +394,41 @@ class Axes(_compat.VGroup):
     def __rmatmul__(self, point: object) -> list[float]:
         return self.point_to_coords(point)
 
-    def input_to_graph_point(self, x: float, graph: ParametricFunction | _compat.VMobject) -> object:
+    def input_to_graph_point(
+        self, x: float, graph: ParametricFunction | _compat.VMobject
+    ) -> object:
         """Return the point on a graph corresponding to an axis x value.
 
-        ManimCE v0.21 directly evaluates authored function graphs through their
-        `function` callback. General VMobject lookup falls back to a path-space binary
-        search upstream; Noon fails closed on that broader case until generic
-        point-from-proportion semantics are shared.
+        Authored function graphs retain ManimCE v0.21's direct callback fast path.
+        Generic retained VMobjects delegate the complete path-proportion binary search
+        to the shared Rust query plan in one WASM call.
         """
 
+        value = float(x)
         if hasattr(graph, "underlying_function"):
-            return graph.function(float(x))
-        raise NotImplementedError(
-            "input_to_graph_point for generic VMobjects requires shared point-from-proportion semantics"
-        )
+            return graph.function(value)
+
+        handle = _shared._handle_for(graph)
+        if handle is None:
+            raise TypeError(
+                "input_to_graph_point requires an authored graph or retained VMobject"
+            )
+        try:
+            result = json.loads(
+                str(
+                    self._query_plan.graphPointForXJson(
+                        value,
+                        str(handle.snapshotJson()),
+                        self.x_axis._axis_snapshot_json(),
+                        self.y_axis._axis_snapshot_json(),
+                    )
+                )
+            )
+        except Exception as error:
+            # ManimCE surfaces generic graph lookup misses as ValueError. The shared
+            # Rust path already owns the exact diagnostic, including graph endpoints.
+            raise ValueError(str(error)) from None
+        return _base.Vec2(float(result[0]), float(result[1]))
 
     def input_to_graph_coords(
         self, x: float, graph: ParametricFunction
@@ -417,7 +438,9 @@ class Axes(_compat.VGroup):
     def i2gc(self, x: float, graph: ParametricFunction) -> tuple[float, float]:
         return self.input_to_graph_coords(x, graph)
 
-    def i2gp(self, x: float, graph: ParametricFunction) -> object:
+    def i2gp(
+        self, x: float, graph: ParametricFunction | _compat.VMobject
+    ) -> object:
         return self.input_to_graph_point(x, graph)
 
     def get_line_from_axis_to_point(
