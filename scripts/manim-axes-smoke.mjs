@@ -249,6 +249,54 @@ class RetainedAxesPlot(Scene):
         cos_point = axes.input_to_graph_point(0.25, cos_graph)
         assert_point_close(cos_point, axes.c2p(0.25, math.cos(0.25)))
 
+        parametric_calls = []
+
+        def parametric_fn(t):
+            parametric_calls.append(float(t))
+            return [math.cos(t), math.sin(t), 42.0]
+
+        parametric = axes.plot_parametric_curve(
+            parametric_fn,
+            t_range=[0.0, math.pi, math.pi / 2.0],
+            use_smoothing=False,
+            color=PURPLE,
+        )
+        assert isinstance(parametric, ParametricFunction)
+        assert len(parametric_calls) == 3
+        for actual, expected in zip(
+            parametric_calls, [0.0, math.pi / 2.0, math.pi]
+        ):
+            assert_close(actual, expected)
+        assert_close(parametric.t_min, 0.0)
+        assert_close(parametric.t_max, math.pi)
+        parametric_handle = _handles._handle_for(parametric)
+        assert parametric_handle is not None
+        parametric_snapshot = json.loads(str(parametric_handle.snapshotJson()))
+        parametric_commands = parametric_snapshot["geometry"]["vector_path"]["commands"]
+        assert len(parametric_commands) == 3
+        parametric_expected = [
+            axes.c2p(1.0, 0.0),
+            axes.c2p(0.0, 1.0),
+            axes.c2p(-1.0, 0.0),
+        ]
+        for command, expected in zip(parametric_commands, parametric_expected):
+            payload = command.get("move_to") or command.get("line_to")
+            assert payload is not None, command
+            actual = payload["to"]
+            assert_close(actual["x"], expected.x)
+            assert_close(actual["y"], expected.y)
+        parametric_calls.clear()
+        assert_point_close(
+            parametric.get_point_from_function(math.pi / 2.0),
+            axes.c2p(0.0, 1.0),
+        )
+        assert len(parametric_calls) == 1
+        try:
+            axes.plot_parametric_curve(parametric_fn, use_vectorized=True)
+            raise AssertionError("vectorized parametric callbacks must fail explicitly")
+        except NotImplementedError:
+            pass
+
         curve_1_calls = []
         curve_2_calls = []
 
@@ -311,6 +359,7 @@ class RetainedAxesPlot(Scene):
             axes,
             sin_graph,
             cos_graph,
+            parametric,
             vertical,
             horizontal,
             line_graph,
@@ -345,7 +394,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 46);
+  assert.equal(result.document.objects.length, 47);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -358,8 +407,8 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
-    6,
-    "Axes plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
+    7,
+    "Axes scalar/parametric plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "circle").length,
@@ -373,7 +422,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: transformed coordinates, authored/generic i2gp, retained projections and plots, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
+    "Retained Axes smoke passed: transformed coordinates, authored/generic i2gp, scalar and parametric plots, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
