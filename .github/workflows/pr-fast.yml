@@ -152,6 +152,9 @@ jobs:
       - name: Check retained Axes plotting
         run: node scripts/manim-axes-smoke.mjs
 
+      - name: Check retained ImplicitFunction authoring
+        run: node scripts/manim-implicit-function-smoke.mjs
+
       - name: Check retained NumberLine authoring
         run: node scripts/manim-number-line-smoke.mjs
 
