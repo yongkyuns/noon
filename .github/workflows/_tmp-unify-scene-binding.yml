@@ -1,0 +1,40 @@
+name: Temporary unified scene binding rewrite
+
+on:
+  push:
+    branches:
+      - tmp/367-unified-scene-binding
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/367-unified-scene-binding
+      - name: Apply architecture rewrite
+        run: python scripts/_tmp_unify_scene_binding.py
+      - name: Validate Python syntax and focused ratchets
+        run: |
+          python -m compileall -q web/python
+          PYTHONPATH=web/python python - <<'PY'
+          import test_unified_scene_binding as test
+          test.test_scene_allocator_is_shared_across_content_projections()
+          test.test_retained_content_modules_do_not_own_scene_lifecycle()
+          test.test_phase_b_binding_is_content_polymorphic()
+          PY
+      - name: Regenerate Python worker artifacts
+        run: node scripts/build-python-worker.mjs
+      - name: Remove temporary rewrite machinery
+        run: rm scripts/_tmp_unify_scene_binding.py .github/workflows/_tmp-unify-scene-binding.yml
+      - name: Commit rewritten tree
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Unify scene object binding across retained content"
+          git push origin HEAD:tmp/367-unified-scene-binding
