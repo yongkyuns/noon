@@ -18,6 +18,8 @@ mod elbow_authoring;
 mod geometry_authoring;
 mod graph_query_authoring;
 mod implicit_function_authoring;
+#[cfg(test)]
+mod implicit_function_parity_tests;
 mod legacy;
 mod line_graph_authoring;
 mod line_matcher_authoring;
