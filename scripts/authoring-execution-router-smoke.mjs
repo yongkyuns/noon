@@ -126,11 +126,10 @@ try {
 
     const mixed = await authoring.run(mixedSource, {});
     const mixedRetainedBackend = mixed.retainedDocument.objects[0].text.backend.kind;
+    const mixedSceneSpecJson = JSON.stringify(mixed.sceneSpec);
     const inFlightLegacyMetrics = execution.metrics();
     const mixedTransition = execution.reconcileScene(JSON.stringify(mixed.document), {
-      retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
-      callbacks: mixed.callbacks,
-      authoringClient: authoring,
+      sceneSpecJson: mixedSceneSpecJson,
       loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
     });
     const mixedTransitionMetrics = execution.metrics();
@@ -146,9 +145,7 @@ try {
     const mixedCanvas = execution.canvas;
 
     const secondMixed = await execution.reconcileScene(JSON.stringify(mixed.document), {
-      retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
-      callbacks: mixed.callbacks,
-      authoringClient: authoring,
+      sceneSpecJson: mixedSceneSpecJson,
       loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
     });
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -177,7 +174,7 @@ try {
     let callbackError = null;
     try {
       await execution.reconcileScene(JSON.stringify(mixed.document), {
-        retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
+        sceneSpecJson: mixedSceneSpecJson,
         callbacks: { session_id: 1, slots: [{}] },
         authoringClient: authoring,
       });
@@ -189,7 +186,6 @@ try {
     const legacyRetainedObjectCount = legacy.retainedDocument?.objects?.length ?? -1;
     const inFlightRetainedMetrics = execution.metrics();
     const legacyTransition = execution.reconcileScene(JSON.stringify(legacy.document), {
-      retainedDocumentJson: JSON.stringify(legacy.retainedDocument),
       callbacks: legacy.callbacks,
       authoringClient: authoring,
       loopDurationSeconds: legacy.duration > 0 ? legacy.duration : null,
@@ -221,7 +217,6 @@ try {
     const legacyPlaybackRestartState = await execution.state();
 
     const secondLegacy = await execution.reconcileScene(JSON.stringify(legacy.document), {
-      retainedDocumentJson: JSON.stringify(legacy.retainedDocument),
       callbacks: legacy.callbacks,
       authoringClient: authoring,
     });
@@ -230,6 +225,8 @@ try {
     const legacyRestartMetrics = await execution.metrics();
 
     const state = await execution.state();
+    const mixedRaceSceneSpec = JSON.parse(mixedRaceState.sceneSpecJson);
+    const mixedRestartSceneSpec = JSON.parse(mixedRestartState.sceneSpecJson);
     const summary = {
       initialMode: AUTHORING_EXECUTION_LEGACY,
       retainedMode: AUTHORING_EXECUTION_RETAINED,
@@ -241,7 +238,8 @@ try {
       mixedRebuilt: mixedResult.rebuilt,
       mixedCanvasChanged: mixedCanvas !== initialCanvas,
       mixedRaceMode: mixedRaceMetrics.executionMode,
-      mixedRaceRetainedChannel: JSON.parse(mixedRaceState.retainedDocumentJson).channel,
+      mixedRaceSceneSpecVersion: mixedRaceSceneSpec.version,
+      mixedRaceSceneSpecObjectCount: mixedRaceSceneSpec.objects.length,
       mixedMetrics,
       secondMixedMode: secondMixed.mode,
       secondMixedRebuilt: secondMixed.rebuilt,
@@ -261,7 +259,8 @@ try {
       mixedRestartMode: mixedRestartReady.mode,
       mixedRestartCanvasChanged: mixedRestartCanvas !== mixedCanvas,
       mixedRestartObjectCount: mixedRestartMetrics.metrics.objectCount,
-      mixedRestartRetainedChannel: JSON.parse(mixedRestartState.retainedDocumentJson).channel,
+      mixedRestartSceneSpecVersion: mixedRestartSceneSpec.version,
+      mixedRestartSceneSpecObjectCount: mixedRestartSceneSpec.objects.length,
       callbackError,
       legacyRetainedObjectCount,
       retainedRaceModeBeforeLegacy: retainedRaceMetrics.executionMode,
@@ -306,7 +305,8 @@ try {
   assert.equal(result.mixedRebuilt, true);
   assert.equal(result.mixedCanvasChanged, false);
   assert.equal(result.mixedRaceMode, result.retainedMode);
-  assert.equal(result.mixedRaceRetainedChannel, "noon.authoring.retained");
+  assert.equal(result.mixedRaceSceneSpecVersion, 1);
+  assert.equal(result.mixedRaceSceneSpecObjectCount, 3);
   assert.equal(result.mixedMetrics.executionMode, result.retainedMode);
   assert.equal(result.mixedMetrics.metrics.ready, true);
   assert.equal(result.mixedMetrics.metrics.objectCount, 3);
@@ -349,7 +349,8 @@ try {
   assert.equal(result.mixedRestartMode, result.retainedMode);
   assert.equal(result.mixedRestartCanvasChanged, true);
   assert.equal(result.mixedRestartObjectCount, 3);
-  assert.equal(result.mixedRestartRetainedChannel, "noon.authoring.retained");
+  assert.equal(result.mixedRestartSceneSpecVersion, 1);
+  assert.equal(result.mixedRestartSceneSpecObjectCount, 3);
   assert.match(result.callbackError, /retained authoring with Python host callbacks is not supported yet/);
 
   assert.equal(result.legacyRetainedObjectCount, 0, "geometry-only authoring should emit an empty sidecar");
