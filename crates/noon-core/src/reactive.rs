@@ -31,6 +31,10 @@ pub use semantic_store::*;
 #[path = "semantic_family.rs"]
 mod semantic_family;
 
+#[path = "animation_member_plan.rs"]
+mod animation_member_plan;
+pub use animation_member_plan::*;
+
 #[path = "semantic_model.rs"]
 mod semantic_model;
 pub use semantic_model::*;
