@@ -29,6 +29,10 @@ jobs:
               '"def _initial_animation_state(",\n    "def _retained_presence_tracks(",',
           )
           text = text.replace(
+              '"def _retained_presence_tracks(",\n    "def _retained_presence_at(",',
+              '"def _retained_presence_tracks(",\n    "def _resolve_retained_lifecycle(",',
+          )
+          text = text.replace(
               '"def _resolve_retained_lifecycle(",\n    "def _bind_retained(",',
               '"def _resolve_retained_lifecycle(",\n    "def _append_vec2_track(",',
           )
@@ -36,6 +40,16 @@ jobs:
               '"def _bind_retained(",\n    "def _append_presence_track(",',
               '"def _bind_retained(",\n    "def _initial_animation_state(",',
           )
+          text = text.replace(
+              '"def _retained_scene_add(",\n    "def _retained_scene_play(",\n    "",\n    "remove retained scene lifecycle interceptors",',
+              '"def _unique_retained_mobjects(",\n    "def _offset_vec2(",\n    "",\n    "remove retained add/remove interceptors",',
+          )
+          marker = '''text = replace_once(\n    text,\n    '''
+          insert = '''text = replace_block(\n    text,\n    "def _retained_scene_is_present(",\n    "def _retained_document(",\n    "",\n    "remove retained presence interceptor",\n)\n'''
+          anchor = '''text = replace_once(\n    text,\n    '''    retained_objects_before = list(self._retained_text_objects)'''
+          if anchor not in text:
+              raise RuntimeError('unable to locate retained rollback rewrite anchor')
+          text = text.replace(anchor, insert + anchor, 1)
           path.write_text(text)
           PY
       - name: Apply architecture rewrite
