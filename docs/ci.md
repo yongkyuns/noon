@@ -1,109 +1,79 @@
 # Continuous integration policy
 
-Noon uses CI as a correctness gate, but not as the inner development loop. The required workflow is split by subsystem so expensive browser work fans out after one reusable WASM build instead of rebuilding the package in every job.
+Noon separates fast pull-request feedback from exhaustive post-merge validation. Pull requests should get one high-signal result quickly; broader compatibility, recovery, coverage, release, and cross-browser matrices remain available without forcing every change to pay their startup cost.
+
+## Pull-request fast gate
+
+`.github/workflows/pr-fast.yml` is the only workflow triggered for every pull request. It is the intended branch-protection check and targets a warm-run wall clock of at most two minutes.
+
+The workflow runs four independent lanes in parallel:
+
+- **Rust format and lint:** `cargo fmt --all -- --check` and workspace Clippy with all targets/features;
+- **Rust unit tests:** `cargo test --workspace --all-features --lib`;
+- **Web static and unit checks:** ownership ratchets, JavaScript syntax/unit tests, and Python compile/unit tests;
+- **Browser fast checks:** one unoptimized WASM/browser package build followed by deterministic replay, Manim-style authoring, and primary WebGPU smoke coverage.
+
+A small aggregate `PR Fast Gate` job succeeds only when all four lanes succeed. Rust lint and unit-test compilation are deliberately separate jobs because Clippy and the test profile cannot reuse enough artifacts to justify serializing roughly independent compile work on the critical path. The web preflight is similarly independent of the WASM build and browser runtime, so it runs beside rather than ahead of that work.
+
+`scripts/build-web-demo.sh` remains the canonical full web validation entry point. `NOON_WEB_PREFLIGHT_ONLY=1` runs only its static/unit preflight, while `NOON_SKIP_WEB_PREFLIGHT=1` skips that preflight and proceeds directly to the package build. The full master/release invocation sets neither flag and therefore preserves the original all-in-one behavior.
+
+Cargo source downloads and Rust compilations use the shared cache/sccache setup. The browser lane builds the package once and keeps `wasm-opt` out of the pull-request path.
 
 ## Main CI workflow
 
-`.github/workflows/ci.yml` runs on pull requests, pushes to `master`, and manual dispatch.
+`.github/workflows/ci.yml` runs on pushes to `master` and manual dispatch. It is the full Linux integration workflow rather than the pull-request inner loop.
 
-### Rust
+Its Rust lane runs formatting, full workspace Clippy, and the complete workspace test set. Its browser build produces one reusable package artifact that fans out to authoring, reactive/editor, WebGPU, WebGL, and backend-parity jobs.
 
-The Rust job runs on Ubuntu and requires:
+This workflow is intentionally broader than the PR fast gate. A failure after merge is still a correctness failure to fix immediately, but expensive validation does not delay every review iteration.
 
-- `cargo fmt --all -- --check`;
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`;
-- `cargo test --workspace --all-features`.
+## Specialized validation
 
-Cargo sources and compiled Rust work are accelerated with sccache. The workspace is treated as one current architecture; there is no separate legacy compatibility gate.
+Feature-specific workflows under `.github/workflows/` do not independently cold-start on every pull request. They run on their documented `master`, scheduled, or manual triggers.
 
-### Browser package build
-
-The web-build job:
-
-- syntax-checks the checked-in JavaScript harnesses;
-- runs Node unit tests;
-- compiles/checks the Python compatibility modules and examples;
-- runs the Python unittest suite;
-- builds `noon-web` for `wasm32-unknown-unknown` with pinned `wasm-pack`;
-- validates the generated JavaScript/TypeScript/WASM package surface;
-- uploads the package once for downstream browser jobs.
-
-PR CI intentionally skips `wasm-opt` in this fast package build. The production-optimized artifact is validated separately by the release/platform testing lane rather than making every browser job pay the optimization cost.
-
-### Browser authoring
-
-The authoring job consumes the shared browser package and runs:
-
-- Rust/Python semantic parity;
-- Manim-style Python compatibility;
-- composition authoring;
-- the executable Manim tutorial corpus.
-
-### Browser reactive/editor
-
-The reactive/editor job runs:
-
-- native reactive Python authoring;
-- native reactive browser runtime;
-- Python updater callback bridge;
-- Python editor syntax-highlighting/linting smoke coverage.
-
-### Browser rendering
-
-Rendering is a two-entry matrix over WebGPU and WebGL2 fallback. Both run the deterministic playground/browser smoke corpus and upload screenshots on success or failure. The required Linux browser path uses Playwright Chromium/SwiftShader so it is repeatable on hosted runners.
-
-### Test-only trigger policy
-
-A change whose crate paths are exclusively integration tests under `crates/**/tests/**` remains covered by normal CI and test coverage, but does not start the separate Manim semantic/API/raster, cross-browser, or platform/release matrices. Those product-validation workflows run unchanged as soon as the same change set includes any non-test crate path, Cargo metadata, browser/authoring source, workflow definition, or other path already owned by that workflow. This keeps new deterministic Rust regressions cheap to add without weakening validation of production changes.
+This keeps their focused contracts intact while avoiding repeated checkout, Rust/WASM setup, browser installation, and `build-web-demo.sh` invocations for the same PR head. If a future class of change proves too risky to defer, add measured change-aware escalation to the fast workflow instead of adding another unconditional PR workflow.
 
 ## Platform and release validation
 
-`.github/workflows/platform-release.yml` is the compact portability and production-artifact lane. It runs when native/browser production paths or their build generators change, on pushes to `master`, and by manual dispatch.
+`.github/workflows/platform-release.yml` is the portability and production-artifact lane. It runs on relevant pushes to `master` and by manual dispatch.
 
-The workflow deliberately stays separate from fast main CI and provides three contracts:
+It provides three distinct contracts:
 
-- **native platform matrix:** Linux, macOS, and Windows compile and run the workspace library/integration test set with stable Rust;
-- **release-mode native check:** `noon-core`, `noon-geometry`, and `noon-runtime` run their tests with release optimizations enabled to catch optimization-sensitive failures without tripling the cost across every OS;
-- **optimized browser artifact:** pinned `wasm-pack` 0.15.0 and Binaryen/`wasm-opt` version 132 build the real release package, including generated Python-worker assets; the normal package-surface validation runs, the optimized WASM is loaded/evaluated through deterministic Chromium replay, and the resulting package is retained as a short-lived artifact.
+- Linux, macOS, and Windows native workspace validation;
+- release-mode testing for core execution crates;
+- a production browser artifact built with pinned `wasm-pack` and Binaryen/`wasm-opt`, then exercised in Chromium.
 
-The supported Rust policy for this lane is current stable Rust plus `wasm32-unknown-unknown`. If a minimum supported Rust version becomes a product requirement, add it as a separate explicit matrix entry rather than relying on whatever a hosted runner happens to contain. Binaryen is downloaded from its versioned release artifact and checksum-verified before adding its `wasm-opt` to `PATH`; this prevents wasm-pack's default "latest" optimizer download from making release output silently drift.
-
-The optimized job records `noon_web_bg.wasm` byte size in the workflow summary as diagnostic trend data. Size is not yet a required budget; establish a stable baseline before adding a ratchet.
-
-Machine-readable subprocess protocols used by the platform matrix must define their encoding rather than inherit a host locale. In particular, the playground scene manifest is explicitly UTF-8 and its integration test forces a hostile inherited Python encoding so the contract is deterministic on every runner.
-
-This matrix is intentionally compact. Add another operating system, browser, toolchain, or backend only when it proves a distinct product contract or catches a demonstrated class of failure. Browser-engine/DPR/UI variation belongs to the separate #110 lane rather than expanding this workflow combinatorially.
+The optimized job records WASM size as diagnostic trend data. Size should become a ratchet only after a stable baseline exists.
 
 ## Manim compatibility workflows
 
-Manim API-surface and semantic compatibility are separate workflows because they require a pinned ManimCE/Python environment. Manim Community v0.21.0 is the reference version. API inventory and semantic differential tests should remain separate: surface presence does not prove behavior, and behavioral fixtures should not become a second API manifest.
+Manim compatibility workflows validate Noon against the pinned Manim Community reference independently of the fast PR loop. API inventory, semantic differential, raster differential, and reference-inventory checks remain separate because surface presence, semantic behavior, rendered output, and corpus provenance are different contracts.
+
+The expensive reference environment belongs on `master` or manual validation unless a measured change classifier explicitly escalates a PR.
 
 ## Test inventory and coverage
 
-`.github/workflows/test-coverage.yml` is the observability workflow introduced by #104. It runs in parallel with normal CI when production/test files change and produces:
+`.github/workflows/test-coverage.yml` is the test-observability workflow. On `master` and manual runs it produces:
 
-- a generated machine-readable/Markdown test inventory;
-- Rust LCOV data from `cargo llvm-cov`;
-- Python coverage from the normal unit suite;
-- V8/c8 coverage for browser JavaScript unit modules.
+- generated test inventory data;
+- Rust LCOV coverage;
+- Python coverage;
+- JavaScript/V8 coverage.
 
-The inventory has a small required ratchet now: every production module must belong to an explicit test strategy. Line coverage is initially diagnostic. After a stable baseline is established, use changed-code or per-layer non-regression ratchets rather than an arbitrary global percentage.
+Coverage is not duplicated in the required fast gate. Prefer changed-code or per-layer non-regression ratchets over an arbitrary repository-wide percentage.
 
 See `docs/testing.md` for the verification hierarchy and local commands.
 
+## Fuzzing and recovery
+
+Fuzzing remains scheduled/manual, and recovery/cross-browser workflows remain post-merge/manual validation. Their purpose is to exercise failure and environment matrices that are valuable but structurally unsuitable for a two-minute review loop.
+
 ## Performance policy
 
-Shared GitHub runners are too noisy for small wall-clock regressions to be a reliable correctness gate. Required CI should prefer deterministic structural invariants such as:
+Shared hosted runners are noisy, so correctness tests should prefer deterministic structural invariants over tiny wall-clock thresholds. CI architecture itself is different: the PR feedback budget is a developer-productivity contract, so workflow wall time should be measured and regressions in the critical path should be visible.
 
-- objects/tracks/reactive nodes visited;
-- dirty slots and instances repacked;
-- upload bytes;
-- geometry/cache misses and rebuild counts;
-- host callback slots/payload size;
-- retained resource counts.
-
-Named-machine p50/p95 measurements remain useful diagnostic/release evidence and are documented in `docs/performance.md`.
+Useful runtime invariants include objects/tracks visited, dirty slots, upload bytes, cache misses, callback payload sizes, and retained resource counts. Named-machine p50/p95 measurements remain diagnostic/release evidence and are documented in `docs/performance.md`.
 
 ## Development cadence
 
-Use local focused tests as the inner loop and update branches in coherent batches. A change should run the cheapest relevant subsystem tests first; the full required CI is the integration gate before merge. Avoid serializing tiny formatting/lint-only commits solely to trigger Actions repeatedly.
+Use local focused tests as the inner loop, `PR Fast Gate` as the pre-merge integration signal, and the exhaustive master workflows as the full correctness matrix. Extend CI by adding tests to existing ownership lanes or change-aware escalation; avoid introducing another independently bootstrapped unconditional pull-request workflow.

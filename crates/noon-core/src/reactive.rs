@@ -6,6 +6,10 @@ pub use authoring::*;
 mod composition;
 pub use composition::*;
 
+#[path = "family_timing.rs"]
+mod family_timing;
+pub use family_timing::*;
+
 #[path = "host_callbacks.rs"]
 mod host_callbacks;
 pub use host_callbacks::*;
@@ -39,6 +43,18 @@ pub use font_resources::*;
 #[path = "text_resources.rs"]
 mod text_resources;
 pub use text_resources::*;
+
+#[path = "text_animation_members.rs"]
+mod text_animation_members;
+pub use text_animation_members::*;
+
+#[path = "family_animation.rs"]
+mod family_animation;
+pub use family_animation::*;
+
+#[path = "text_family_animation.rs"]
+mod text_family_animation;
+pub use text_family_animation::*;
 
 #[path = "resource_mutation.rs"]
 mod resource_mutation;
