@@ -129,6 +129,7 @@ jobs:
         env:
           NOON_SKIP_WEB_PREFLIGHT: "1"
           NOON_SKIP_PLAYGROUND_TEST: "1"
+          NOON_WASM_PROFILE: "dev"
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
 
