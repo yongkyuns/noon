@@ -527,6 +527,31 @@ function validateSceneSpecJson(sceneSpecJson) {
   if (!Array.isArray(sceneSpec.objects) || !Array.isArray(sceneSpec.tracks)) {
     throw new TypeError("canonical SceneSpec must contain object and track arrays");
   }
+  const objectIds = new Set();
+  for (const object of sceneSpec.objects) {
+    if (
+      !object ||
+      typeof object !== "object" ||
+      Array.isArray(object) ||
+      !Number.isSafeInteger(object.id) ||
+      object.id < 0
+    ) {
+      throw new TypeError("canonical SceneSpec object has an invalid object ID");
+    }
+    if (objectIds.has(object.id)) {
+      throw new TypeError("canonical SceneSpec has duplicate object IDs");
+    }
+    objectIds.add(object.id);
+  }
+  if (
+    sceneSpec.camera_object !== null &&
+    sceneSpec.camera_object !== undefined &&
+    (!Number.isSafeInteger(sceneSpec.camera_object) ||
+      sceneSpec.camera_object < 0 ||
+      !objectIds.has(sceneSpec.camera_object))
+  ) {
+    throw new TypeError("canonical SceneSpec has an invalid camera object");
+  }
   return sceneSpec;
 }
 
