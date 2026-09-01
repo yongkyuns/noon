@@ -13,11 +13,29 @@ pub enum FamilyAnimationMode {
     DrawBorderThenFill,
 }
 
-/// One source-level retained animation over an authoritative semantic family.
+/// Target-independent timing and scheduling semantics for one family animation.
 ///
-/// The overall timeline stays object/family-level. Member decomposition is owned by
-/// the target content/resource, while this shared definition owns deterministic
-/// timing and ordering semantics for every content type.
+/// Semantic families such as `VGroup`, axes, or graphs do not need to fabricate a
+/// render `ObjectId` merely to own timing. Higher semantic layers pair this spec with
+/// their authoritative target identity, while retained-object compatibility paths can
+/// continue using [`FamilyAnimationDefinition`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FamilyAnimationSpec {
+    pub mode: FamilyAnimationMode,
+    pub start_time: f64,
+    pub duration: f64,
+    pub lag_ratio: f64,
+    pub rate_function: RateFunction,
+    pub reverse_rate_function: bool,
+    pub reverse_member_order: bool,
+}
+
+/// One retained-object family animation definition.
+///
+/// This keeps the existing object-targeted compatibility/wire shape while delegating
+/// all timing and member-scheduling semantics to target-independent
+/// [`FamilyAnimationSpec`]. Semantic family targets should pair their own identity
+/// with the spec instead of inventing a fake retained object.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FamilyAnimationDefinition {
     pub object: ObjectId,
@@ -78,10 +96,9 @@ impl From<FamilyAnimationProgressError> for FamilyAnimationError {
     }
 }
 
-impl FamilyAnimationDefinition {
+impl FamilyAnimationSpec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        object: ObjectId,
         mode: FamilyAnimationMode,
         start_time: f64,
         duration: f64,
@@ -90,8 +107,7 @@ impl FamilyAnimationDefinition {
         reverse_rate_function: bool,
         reverse_member_order: bool,
     ) -> Result<Self, FamilyAnimationError> {
-        let definition = Self {
-            object,
+        let spec = Self {
             mode,
             start_time,
             duration,
@@ -100,11 +116,11 @@ impl FamilyAnimationDefinition {
             reverse_rate_function,
             reverse_member_order,
         };
-        definition.validate()?;
-        Ok(definition)
+        spec.validate()?;
+        Ok(spec)
     }
 
-    /// Revalidate a definition after any serialization boundary.
+    /// Revalidate a spec after any serialization or semantic-lowering boundary.
     pub fn validate(self) -> Result<(), FamilyAnimationError> {
         if !self.start_time.is_finite() {
             return Err(FamilyAnimationError::InvalidStartTime(self.start_time));
@@ -126,9 +142,9 @@ impl FamilyAnimationDefinition {
         self.start_time + self.duration
     }
 
-    /// Evaluate only object/family-level timeline position. Per-member lag and
-    /// easing are preserved in the returned state and applied after the concrete
-    /// resource supplies the authoritative member count/order.
+    /// Evaluate only family-level timeline position. Per-member lag and easing are
+    /// preserved in the returned state and applied after lowering supplies the
+    /// authoritative global member count/order.
     pub fn state_at(self, time: f64) -> Result<FamilyAnimationState, FamilyAnimationError> {
         self.validate()?;
         if !time.is_finite() {
@@ -143,6 +159,69 @@ impl FamilyAnimationDefinition {
             reverse_rate_function: self.reverse_rate_function,
             reverse_member_order: self.reverse_member_order,
         })
+    }
+}
+
+impl FamilyAnimationDefinition {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        object: ObjectId,
+        mode: FamilyAnimationMode,
+        start_time: f64,
+        duration: f64,
+        lag_ratio: f64,
+        rate_function: RateFunction,
+        reverse_rate_function: bool,
+        reverse_member_order: bool,
+    ) -> Result<Self, FamilyAnimationError> {
+        let spec = FamilyAnimationSpec::new(
+            mode,
+            start_time,
+            duration,
+            lag_ratio,
+            rate_function,
+            reverse_rate_function,
+            reverse_member_order,
+        )?;
+        Ok(Self::from_spec(object, spec))
+    }
+
+    pub const fn from_spec(object: ObjectId, spec: FamilyAnimationSpec) -> Self {
+        Self {
+            object,
+            mode: spec.mode,
+            start_time: spec.start_time,
+            duration: spec.duration,
+            lag_ratio: spec.lag_ratio,
+            rate_function: spec.rate_function,
+            reverse_rate_function: spec.reverse_rate_function,
+            reverse_member_order: spec.reverse_member_order,
+        }
+    }
+
+    pub const fn spec(self) -> FamilyAnimationSpec {
+        FamilyAnimationSpec {
+            mode: self.mode,
+            start_time: self.start_time,
+            duration: self.duration,
+            lag_ratio: self.lag_ratio,
+            rate_function: self.rate_function,
+            reverse_rate_function: self.reverse_rate_function,
+            reverse_member_order: self.reverse_member_order,
+        }
+    }
+
+    /// Revalidate a definition after any serialization boundary.
+    pub fn validate(self) -> Result<(), FamilyAnimationError> {
+        self.spec().validate()
+    }
+
+    pub fn end_time(self) -> f64 {
+        self.spec().end_time()
+    }
+
+    pub fn state_at(self, time: f64) -> Result<FamilyAnimationState, FamilyAnimationError> {
+        self.spec().state_at(time)
     }
 }
 
@@ -209,12 +288,8 @@ mod tests {
         );
     }
 
-    fn definition(
-        reverse_rate_function: bool,
-        reverse_member_order: bool,
-    ) -> FamilyAnimationDefinition {
-        FamilyAnimationDefinition::new(
-            ObjectId::new(7),
+    fn spec(reverse_rate_function: bool, reverse_member_order: bool) -> FamilyAnimationSpec {
+        FamilyAnimationSpec::new(
             FamilyAnimationMode::Reveal,
             2.0,
             4.0,
@@ -224,6 +299,30 @@ mod tests {
             reverse_member_order,
         )
         .unwrap()
+    }
+
+    fn definition(
+        reverse_rate_function: bool,
+        reverse_member_order: bool,
+    ) -> FamilyAnimationDefinition {
+        FamilyAnimationDefinition::from_spec(
+            ObjectId::new(7),
+            spec(reverse_rate_function, reverse_member_order),
+        )
+    }
+
+    #[test]
+    fn target_free_spec_and_object_definition_share_identical_timing() {
+        let spec = spec(false, false);
+        let first = FamilyAnimationDefinition::from_spec(ObjectId::new(7), spec);
+        let second = FamilyAnimationDefinition::from_spec(ObjectId::new(99), spec);
+
+        assert_eq!(first.spec(), spec);
+        assert_eq!(second.spec(), spec);
+        assert_eq!(first.state_at(4.0), spec.state_at(4.0));
+        assert_eq!(second.state_at(4.0), spec.state_at(4.0));
+        assert_eq!(first.end_time(), spec.end_time());
+        assert_eq!(second.end_time(), spec.end_time());
     }
 
     #[test]
@@ -266,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_definition_and_state_are_revalidated() {
+    fn serialized_definition_spec_and_state_are_revalidated() {
         let mut invalid_definition = definition(false, false);
         invalid_definition.duration = f64::INFINITY;
         assert_eq!(
@@ -275,6 +374,17 @@ mod tests {
         );
         assert_eq!(
             invalid_definition.state_at(3.0),
+            Err(FamilyAnimationError::InvalidDuration(f64::INFINITY))
+        );
+
+        let mut invalid_spec = spec(false, false);
+        invalid_spec.duration = f64::INFINITY;
+        assert_eq!(
+            invalid_spec.validate(),
+            Err(FamilyAnimationError::InvalidDuration(f64::INFINITY))
+        );
+        assert_eq!(
+            invalid_spec.state_at(3.0),
             Err(FamilyAnimationError::InvalidDuration(f64::INFINITY))
         );
 
@@ -293,8 +403,7 @@ mod tests {
     #[test]
     fn invalid_timing_and_member_inputs_fail_closed() {
         assert!(matches!(
-            FamilyAnimationDefinition::new(
-                ObjectId::new(1),
+            FamilyAnimationSpec::new(
                 FamilyAnimationMode::Reveal,
                 f64::NAN,
                 1.0,
@@ -319,8 +428,7 @@ mod tests {
             Err(FamilyAnimationError::InvalidDuration(0.0))
         );
         assert_eq!(
-            FamilyAnimationDefinition::new(
-                ObjectId::new(1),
+            FamilyAnimationSpec::new(
                 FamilyAnimationMode::Reveal,
                 f64::MAX,
                 f64::MAX,
@@ -332,8 +440,7 @@ mod tests {
             Err(FamilyAnimationError::InvalidEndTime(f64::INFINITY))
         );
         assert_eq!(
-            FamilyAnimationDefinition::new(
-                ObjectId::new(1),
+            FamilyAnimationSpec::new(
                 FamilyAnimationMode::Reveal,
                 0.0,
                 1.0,
@@ -362,7 +469,7 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            definition(false, false).state_at(f64::INFINITY),
+            spec(false, false).state_at(f64::INFINITY),
             Err(FamilyAnimationError::InvalidEvaluationTime(value)) if value.is_infinite()
         ));
     }
