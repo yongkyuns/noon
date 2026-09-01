@@ -1,9 +1,6 @@
 name: Manim raster differential
 
 on:
-  pull_request:
-    paths-ignore:
-      - "crates/**/tests/**"
   push:
     branches:
       - master
@@ -16,7 +13,7 @@ permissions:
 
 concurrency:
   group: manim-raster-differential-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   raster:
@@ -31,15 +28,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install Manim system dependencies
         run: |
           sudo apt-get update
@@ -48,15 +42,12 @@ jobs:
             libcairo2-dev \
             libpango1.0-dev \
             pkg-config
-
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
-
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
-
       - name: Cache Cargo sources
         uses: actions/cache@v4
         with:
@@ -66,44 +57,36 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-
       - name: Use sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
-
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-
       - name: Build browser package
         run: bash scripts/build-web-demo.sh
-
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-
       - name: Install raster harness dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-
       - name: Render and compare retained Typst fixtures
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
         run: node scripts/manim-typst-raster-differential.mjs
-
       - name: Enforce retained Typst raster ratchets
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
         run: node scripts/manim-typst-raster-enforce.mjs
-
       - name: Upload retained Typst measurement artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,29 +95,24 @@ jobs:
           path: manim-raster-artifacts/retained-typst
           if-no-files-found: warn
           retention-days: 14
-
       - name: Render and compare canonical Manim scenes
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-differential.mjs
-
       - name: Capture semantic state at raster frame times
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-semantic-state.mjs
-
       - name: Enforce per-fixture raster ratchet
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-raster-enforce.mjs
-
       - name: Verify direct seek and incremental playback at Manim frame times
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
         run: node scripts/manim-seek-playback-raster.mjs
-
       - name: Upload Manim/Noon/diff artifacts
         if: always()
         uses: actions/upload-artifact@v4
