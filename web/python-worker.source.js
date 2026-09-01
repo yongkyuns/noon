@@ -96,6 +96,8 @@ import sys
 sys.path.insert(0, "/tmp")
 import _manim_compat
 _manim_compat.install()
+import _manim_namespace
+_manim_namespace.install()
 import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_phase_b
@@ -302,7 +304,52 @@ async function handleHostRequest(request) {
   }
 }
 
+async function prepareAuthoringDependencies(pyodide, source) {
+  // Explicit user imports use Pyodide's normal package resolver. Local/stdlib imports
+  // remain cheap, while packages present in the Pyodide lockfile load only on demand.
+  await pyodide.loadPackagesFromImports(source);
+
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_dependency_source", source);
+  try {
+    const requiredJson = pyodide.runPython(
+      `
+import _manim_namespace
+_manim_namespace.required_packages_json(__noon_dependency_source)
+`,
+      { globals },
+    );
+    const requiredPackages = JSON.parse(requiredJson);
+    if (requiredPackages.length === 0) return;
+
+    const requiredPackagesJson = JSON.stringify(requiredPackages);
+    globals.set("__noon_required_packages_json", requiredPackagesJson);
+    const missingJson = pyodide.runPython(
+      `
+_manim_namespace.missing_packages_json(__noon_required_packages_json)
+`,
+      { globals },
+    );
+    const missingPackages = JSON.parse(missingJson);
+    if (missingPackages.length > 0) {
+      await pyodide.loadPackage(missingPackages);
+    }
+    pyodide.runPython(
+      `
+_manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
 async function runAuthoringSource(pyodide, source, context) {
+  await prepareAuthoringDependencies(pyodide, source);
+
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();

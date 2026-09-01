@@ -147,6 +147,9 @@ jobs:
       - name: Check Manim-style authoring
         run: node scripts/manim-compat-smoke.mjs
 
+      - name: Check lazy Manim namespace dependencies
+        run: node scripts/manim-namespace-smoke.mjs
+
       - name: Check primary WebGPU rendering
         env:
           NOON_BROWSER_SMOKE_BACKEND: webgpu

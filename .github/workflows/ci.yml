@@ -135,6 +135,8 @@ jobs:
         run: node scripts/deterministic-replay-smoke.mjs
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
+      - name: Test lazy Manim namespace dependencies
+        run: node scripts/manim-namespace-smoke.mjs
       - name: Test Manim composition authoring
         run: node scripts/composition-authoring-smoke.mjs
       - name: Test executable Manim tutorial corpus

@@ -2,6 +2,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_noon_ir.py", runtimePath: "/tmp/_noon_ir.py", label: "Noon Python IR emitter" },
   { sourcePath: "python/_manim_compat.py", runtimePath: "/tmp/_manim_compat.py", label: "Noon Manim compatibility layer" },
+  { sourcePath: "python/_manim_namespace.py", runtimePath: "/tmp/_manim_namespace.py", label: "Noon Manim namespace compatibility layer" },
   { sourcePath: "python/_manim_semantic_handles.py", runtimePath: "/tmp/_manim_semantic_handles.py", label: "Noon shared semantic handle layer" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
   { sourcePath: "python/_manim_retained_animate.py", runtimePath: "/tmp/_manim_retained_animate.py", label: "Noon retained text animation layer" },
