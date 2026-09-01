@@ -38,17 +38,29 @@ def _bound_sources(scene: _compat.Scene) -> list[_typst._RetainedTextMobject]:
     ]
 
 
+def _source_revision(source: _typst._RetainedTextMobject) -> int:
+    return int(source._retained_handle.mutationRevision)
+
+
+def _read_source_spec(source: _typst._RetainedTextMobject) -> dict[str, Any]:
+    source._retained_state_spec_reads = (
+        int(getattr(source, "_retained_state_spec_reads", 0)) + 1
+    )
+    return source._spec()
+
+
 def _freeze_base(source: _typst._RetainedTextMobject) -> dict[str, Any]:
     base = getattr(source, "_retained_timeline_base_spec", None)
     if base is None:
-        base = copy.deepcopy(source._spec())
+        base = copy.deepcopy(_read_source_spec(source))
         source._retained_timeline_base_spec = base
     return base
 
 
 def _observe_source(source: _typst._RetainedTextMobject) -> dict[str, Any]:
-    observed = copy.deepcopy(source._spec())
+    observed = copy.deepcopy(_read_source_spec(source))
     source._retained_observed_spec = observed
+    source._retained_observed_revision = _source_revision(source)
     return observed
 
 
@@ -57,6 +69,7 @@ def _observed_source(source: _typst._RetainedTextMobject) -> dict[str, Any]:
     if observed is None:
         observed = copy.deepcopy(_freeze_base(source))
         source._retained_observed_spec = observed
+        source._retained_observed_revision = _source_revision(source)
     return observed
 
 
@@ -163,12 +176,15 @@ def _sync_source(
     if source._scene is not scene or source._retained_object_id is None:
         return
 
+    previous = _observed_source(source)
+    current_revision = _source_revision(source)
+    if current_revision == int(source._retained_observed_revision):
+        return
+
     object_id = int(source.id)
     base = _freeze_base(source)
-    previous = copy.deepcopy(_observed_source(source))
-    current = source._spec()
-    if current == previous:
-        return
+    previous = copy.deepcopy(previous)
+    current = _read_source_spec(source)
     _validate_static_source_contract(base, current)
 
     state = _state_for(scene, source)
@@ -178,6 +194,7 @@ def _sync_source(
         source._retained_timeline_base_spec = copy.deepcopy(current)
         _update_state_from_spec(state, current)
         source._retained_observed_spec = copy.deepcopy(current)
+        source._retained_observed_revision = current_revision
         return
 
     previous_transform = _retained._transform(previous)
@@ -256,6 +273,7 @@ def _sync_source(
 
     _update_state_from_spec(state, current)
     source._retained_observed_spec = copy.deepcopy(current)
+    source._retained_observed_revision = current_revision
 
 
 def _sync_all(scene: _compat.Scene) -> None:

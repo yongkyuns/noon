@@ -330,6 +330,13 @@ mod wasm {
     #[wasm_bindgen(js_name = RetainedTypstAuthoringHandle)]
     pub struct WasmRetainedTypstAuthoringHandle {
         inner: RetainedTextAuthoringSpec,
+        mutation_revision: u64,
+    }
+
+    impl WasmRetainedTypstAuthoringHandle {
+        fn mark_mutated(&mut self) {
+            self.mutation_revision = self.mutation_revision.saturating_add(1);
+        }
     }
 
     #[wasm_bindgen(js_class = RetainedTypstAuthoringHandle)]
@@ -338,6 +345,7 @@ mod wasm {
         pub fn new(source: &str, math: bool, font_size: f32) -> Result<Self, JsValue> {
             Ok(Self {
                 inner: RetainedTextAuthoringSpec::new(source, math, font_size).map_err(js_error)?,
+                mutation_revision: 0,
             })
         }
 
@@ -359,27 +367,42 @@ mod wasm {
             self.inner.font_size
         }
 
+        #[wasm_bindgen(getter, js_name = mutationRevision)]
+        pub fn mutation_revision(&self) -> u64 {
+            self.mutation_revision
+        }
+
         #[wasm_bindgen(js_name = shift)]
         pub fn shift(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
-            self.inner.shift(Vec2::new(x, y)).map_err(js_error)
+            self.inner.shift(Vec2::new(x, y)).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = moveTo)]
         pub fn move_to(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
-            self.inner.move_to(Vec2::new(x, y)).map_err(js_error)
+            self.inner.move_to(Vec2::new(x, y)).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         pub fn scale(&mut self, factor: f32) -> Result<(), JsValue> {
-            self.inner.scale(factor).map_err(js_error)
+            self.inner.scale(factor).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         pub fn rotate(&mut self, angle: f32) -> Result<(), JsValue> {
-            self.inner.rotate(angle).map_err(js_error)
+            self.inner.rotate(angle).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = setOpacity)]
         pub fn set_opacity(&mut self, opacity: f32) -> Result<(), JsValue> {
-            self.inner.set_opacity(opacity).map_err(js_error)
+            self.inner.set_opacity(opacity).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = setColor)]
@@ -392,7 +415,9 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .set_color(Color::rgba(red, green, blue, alpha))
-                .map_err(js_error)
+                .map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = specJson)]
@@ -411,11 +436,16 @@ mod wasm {
         inner: RetainedTextAuthoringSpec,
         intrinsic_bounds: Rect,
         family_identity: Option<SemanticNodeId>,
+        mutation_revision: u64,
     }
 
     impl WasmRetainedNativeTextAuthoringHandle {
         fn bounds(&self) -> Rect {
             transformed_bounds(self.intrinsic_bounds, self.inner.transform)
+        }
+
+        fn mark_mutated(&mut self) {
+            self.mutation_revision = self.mutation_revision.saturating_add(1);
         }
 
         pub(crate) fn bind_family_identity(
@@ -466,7 +496,10 @@ mod wasm {
                     "retained native Text family translation must remain f32-compatible".to_owned(),
                 );
             }
-            self.inner.move_to(Vec2::new(next_x as f32, next_y as f32))
+            self.inner
+                .move_to(Vec2::new(next_x as f32, next_y as f32))?;
+            self.mark_mutated();
+            Ok(())
         }
     }
 
@@ -487,6 +520,7 @@ mod wasm {
                 inner,
                 intrinsic_bounds,
                 family_identity: None,
+                mutation_revision: 0,
             })
         }
 
@@ -514,6 +548,11 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = fontSize)]
         pub fn font_size(&self) -> f32 {
             self.inner.font_size
+        }
+
+        #[wasm_bindgen(getter, js_name = mutationRevision)]
+        pub fn mutation_revision(&self) -> u64 {
+            self.mutation_revision
         }
 
         #[wasm_bindgen(getter, js_name = centerX)]
@@ -554,25 +593,35 @@ mod wasm {
 
         #[wasm_bindgen(js_name = shift)]
         pub fn shift(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
-            self.inner.shift(Vec2::new(x, y)).map_err(js_error)
+            self.inner.shift(Vec2::new(x, y)).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = moveTo)]
         pub fn move_to(&mut self, x: f32, y: f32) -> Result<(), JsValue> {
-            self.inner.move_to(Vec2::new(x, y)).map_err(js_error)
+            self.inner.move_to(Vec2::new(x, y)).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         pub fn scale(&mut self, factor: f32) -> Result<(), JsValue> {
-            self.inner.scale(factor).map_err(js_error)
+            self.inner.scale(factor).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         pub fn rotate(&mut self, angle: f32) -> Result<(), JsValue> {
-            self.inner.rotate(angle).map_err(js_error)
+            self.inner.rotate(angle).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = setOpacity)]
         pub fn set_opacity(&mut self, opacity: f32) -> Result<(), JsValue> {
-            self.inner.set_opacity(opacity).map_err(js_error)
+            self.inner.set_opacity(opacity).map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = setColor)]
@@ -585,7 +634,9 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .set_color(Color::rgba(red, green, blue, alpha))
-                .map_err(js_error)
+                .map_err(js_error)?;
+            self.mark_mutated();
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = specJson)]
