@@ -155,25 +155,3 @@ jobs:
           NOON_BROWSER_SMOKE_BACKEND: webgpu
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
         run: node scripts/browser-smoke.mjs
-
-  fast-gate:
-    name: PR Fast Gate
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - rust-lint
-      - rust-test
-      - web-preflight
-      - web-fast
-    steps:
-      - name: Require fast checks
-        env:
-          LINT_RESULT: ${{ needs.rust-lint.result }}
-          TEST_RESULT: ${{ needs.rust-test.result }}
-          WEB_PREFLIGHT_RESULT: ${{ needs.web-preflight.result }}
-          WEB_RESULT: ${{ needs.web-fast.result }}
-        run: |
-          test "$LINT_RESULT" = success
-          test "$TEST_RESULT" = success
-          test "$WEB_PREFLIGHT_RESULT" = success
-          test "$WEB_RESULT" = success

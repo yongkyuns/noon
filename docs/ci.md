@@ -4,7 +4,7 @@ Noon separates fast pull-request feedback from exhaustive post-merge validation.
 
 ## Pull-request fast gate
 
-`.github/workflows/pr-fast.yml` is the only workflow triggered for every pull request. It is the intended branch-protection check and targets a warm-run wall clock of at most two minutes.
+`.github/workflows/pr-fast.yml` is the only workflow triggered for every pull request. It targets a warm-run wall clock of at most two minutes.
 
 The workflow runs four independent lanes in parallel:
 
@@ -13,7 +13,7 @@ The workflow runs four independent lanes in parallel:
 - **Web static and unit checks:** ownership ratchets, JavaScript syntax/unit tests, and Python compile/unit tests;
 - **Browser fast checks:** one symbol-free dev-profile WASM/browser package build followed by deterministic replay, Manim-style authoring, and primary WebGPU smoke coverage.
 
-A small aggregate `PR Fast Gate` job succeeds only when all four lanes succeed. Rust lint and unit-test compilation are deliberately separate jobs because Clippy and the test profile cannot reuse enough artifacts to justify serializing roughly independent compile work on the critical path. The web preflight is similarly independent of the WASM build and browser runtime, so it runs beside rather than ahead of that work.
+The four real lane results are the PR validation signals; there is deliberately no fifth aggregate runner whose only work is to re-check already-published job conclusions. If branch protection is configured, require these lane checks directly. Rust lint and unit-test compilation remain separate because Clippy and the test profile cannot reuse enough artifacts to justify serializing roughly independent compile work on the critical path. The web preflight is similarly independent of the WASM build and browser runtime, so it runs beside rather than ahead of that work.
 
 `scripts/build-web-demo.sh` remains the canonical full web validation entry point. `NOON_WEB_PREFLIGHT_ONLY=1` runs only its static/unit preflight, while `NOON_SKIP_WEB_PREFLIGHT=1` skips that preflight and proceeds directly to the package build. `NOON_WASM_PROFILE=dev` explicitly selects wasm-pack's development profile for the PR feedback path; the script defaults to `release` and rejects unknown values. Full master/release invocations therefore retain the production release profile without relying on workflow-specific command duplication.
 
@@ -78,4 +78,4 @@ Useful runtime invariants include objects/tracks visited, dirty slots, upload by
 
 ## Development cadence
 
-Use local focused tests as the inner loop, `PR Fast Gate` as the pre-merge integration signal, and the exhaustive master workflows as the full correctness matrix. Extend CI by adding tests to existing ownership lanes or change-aware escalation; avoid introducing another independently bootstrapped unconditional pull-request workflow.
+Use local focused tests as the inner loop, the four `PR Fast Gate` workflow lanes as the pre-merge integration signal, and the exhaustive master workflows as the full correctness matrix. Extend CI by adding tests to existing ownership lanes or change-aware escalation; avoid introducing another independently bootstrapped unconditional pull-request workflow.
