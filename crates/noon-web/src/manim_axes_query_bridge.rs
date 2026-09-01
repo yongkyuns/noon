@@ -3,7 +3,10 @@ use noon::{
     LineGraphAuthoringError, NumberRange, Path, TransformedAxes2DState,
 };
 use noon_core::{GeometryRef, ObjectSnapshot, Vec2};
+use noon_geometry::{point_from_geometry_proportion, GeometryProportionError};
 use serde::Deserialize;
+
+const MANIM_GRAPH_X_SEARCH_TOLERANCE: f64 = 1.0e-4;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +75,41 @@ impl AxesQueryPlan {
             .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
     }
 
+    /// ManimCE v0.21 generic `input_to_graph_point` fallback for retained path-like graphs.
+    ///
+    /// The authored-function fast path remains frontend-visible because it calls the user's
+    /// callback directly. For generic VMobjects, however, path proportion, current graph
+    /// transform, current Axes transforms, and Manim's binary-search semantics all remain
+    /// inside Rust so the host does not repeatedly cross the WASM boundary.
+    pub fn graph_point_for_x_json(
+        &self,
+        x: f64,
+        graph_snapshot_json: &str,
+        x_axis_snapshot_json: &str,
+        y_axis_snapshot_json: &str,
+    ) -> Result<String, ManimAxesQueryError> {
+        if !x.is_finite() {
+            return Err(ManimAxesQueryError::NonFiniteGraphX(x));
+        }
+        let graph: ObjectSnapshot = serde_json::from_str(graph_snapshot_json)
+            .map_err(|error| ManimAxesQueryError::InvalidGraphSnapshot(error.to_string()))?;
+        let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
+        let alpha = binary_search_graph_x(&transformed, &graph, x)?;
+        if let Some(alpha) = alpha {
+            return serialize_pair(graph_point_from_proportion(&graph, alpha)?);
+        }
+
+        let start = graph_point_from_proportion(&graph, 0.0)?;
+        let end = graph_point_from_proportion(&graph, 1.0)?;
+        let start_x = transformed.point_to_coords(start)?.0;
+        let end_x = transformed.point_to_coords(end)?.0;
+        Err(ManimAxesQueryError::GraphXOutOfRange {
+            x,
+            start: start_x,
+            end: end_x,
+        })
+    }
+
     fn transformed_axes(
         &self,
         x_axis_snapshot_json: &str,
@@ -85,6 +123,60 @@ impl AxesQueryPlan {
             y_axis.transform,
         ))
     }
+}
+
+fn graph_point_from_proportion(
+    graph: &ObjectSnapshot,
+    alpha: f64,
+) -> Result<Vec2, ManimAxesQueryError> {
+    let local = point_from_geometry_proportion(&graph.geometry, alpha as f32)?;
+    Ok(graph.transform.transform_point(local))
+}
+
+fn graph_x_at_proportion(
+    axes: &TransformedAxes2DState,
+    graph: &ObjectSnapshot,
+    alpha: f64,
+) -> Result<f64, ManimAxesQueryError> {
+    Ok(axes
+        .point_to_coords(graph_point_from_proportion(graph, alpha)?)?
+        .0)
+}
+
+/// Exact control flow of ManimCE v0.21 `binary_search` for graph-x lookup.
+fn binary_search_graph_x(
+    axes: &TransformedAxes2DState,
+    graph: &ObjectSnapshot,
+    target: f64,
+) -> Result<Option<f64>, ManimAxesQueryError> {
+    let mut left = 0.0;
+    let mut right = 1.0;
+    let mut middle = 0.5;
+    while (right - left).abs() > MANIM_GRAPH_X_SEARCH_TOLERANCE {
+        middle = (left + right) * 0.5;
+        let left_x = graph_x_at_proportion(axes, graph, left)?;
+        let middle_x = graph_x_at_proportion(axes, graph, middle)?;
+        let right_x = graph_x_at_proportion(axes, graph, right)?;
+        if left_x == target {
+            return Ok(Some(left));
+        }
+        if right_x == target {
+            return Ok(Some(right));
+        }
+
+        if left_x <= target && target <= right_x {
+            if middle_x > target {
+                right = middle;
+            } else {
+                left = middle;
+            }
+        } else if left_x > target && target > right_x {
+            std::mem::swap(&mut left, &mut right);
+        } else {
+            return Ok(None);
+        }
+    }
+    Ok(Some(middle))
 }
 
 fn parse_axis_snapshot(
@@ -112,10 +204,14 @@ fn serialize_pair(point: Vec2) -> Result<String, ManimAxesQueryError> {
 pub enum ManimAxesQueryError {
     InvalidRequest(String),
     InvalidLineGraphValues(String),
+    InvalidGraphSnapshot(String),
     InvalidAxisSnapshot { axis: &'static str, error: String },
     InvalidAxisGeometry(&'static str),
+    NonFiniteGraphX(f64),
+    GraphXOutOfRange { x: f64, start: f64, end: f64 },
     Coordinates(CoordinateSystemError),
     LineGraph(LineGraphAuthoringError),
+    GeometryProportion(GeometryProportionError),
     Serialization(String),
 }
 
@@ -126,6 +222,9 @@ impl std::fmt::Display for ManimAxesQueryError {
             Self::InvalidLineGraphValues(error) => {
                 write!(formatter, "invalid Axes.plot_line_graph values: {error}")
             }
+            Self::InvalidGraphSnapshot(error) => {
+                write!(formatter, "invalid graph snapshot: {error}")
+            }
             Self::InvalidAxisSnapshot { axis, error } => {
                 write!(formatter, "invalid Axes {axis}-axis snapshot: {error}")
             }
@@ -135,8 +234,16 @@ impl std::fmt::Display for ManimAxesQueryError {
                     "Axes {axis}-axis snapshot must contain line geometry"
                 )
             }
+            Self::NonFiniteGraphX(x) => {
+                write!(formatter, "graph x lookup requires a finite value: {x}")
+            }
+            Self::GraphXOutOfRange { x, start, end } => write!(
+                formatter,
+                "x={x} not located in the range of the graph ([{start}, {end}])"
+            ),
             Self::Coordinates(error) => error.fmt(formatter),
             Self::LineGraph(error) => error.fmt(formatter),
+            Self::GeometryProportion(error) => error.fmt(formatter),
             Self::Serialization(error) => {
                 write!(formatter, "unable to serialize Axes query result: {error}")
             }
@@ -155,6 +262,12 @@ impl From<CoordinateSystemError> for ManimAxesQueryError {
 impl From<LineGraphAuthoringError> for ManimAxesQueryError {
     fn from(value: LineGraphAuthoringError) -> Self {
         Self::LineGraph(value)
+    }
+}
+
+impl From<GeometryProportionError> for ManimAxesQueryError {
+    fn from(value: GeometryProportionError) -> Self {
+        Self::GeometryProportion(value)
     }
 }
 
@@ -217,6 +330,24 @@ mod wasm {
                 .line_graph_snapshot_json(values_json, x_axis_snapshot_json, y_axis_snapshot_json)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = graphPointForXJson)]
+        pub fn graph_point_for_x_json(
+            &self,
+            x: f64,
+            graph_snapshot_json: &str,
+            x_axis_snapshot_json: &str,
+            y_axis_snapshot_json: &str,
+        ) -> Result<String, JsValue> {
+            self.0
+                .graph_point_for_x_json(
+                    x,
+                    graph_snapshot_json,
+                    x_axis_snapshot_json,
+                    y_axis_snapshot_json,
+                )
+                .map_err(js_error)
+        }
     }
 }
 
@@ -237,6 +368,13 @@ mod tests {
         let mut snapshot = Line::new(axis.start(), axis.end()).into_snapshot();
         snapshot.transform = transform;
         serde_json::to_string(&snapshot).unwrap()
+    }
+
+    fn identity_axes(plan: &AxesQueryPlan) -> (String, String) {
+        (
+            axis_snapshot(plan.axes.x_axis(), Transform2D::IDENTITY),
+            axis_snapshot(plan.axes.y_axis(), Transform2D::IDENTITY),
+        )
     }
 
     #[test]
@@ -301,10 +439,93 @@ mod tests {
     }
 
     #[test]
+    fn generic_graph_lookup_matches_manim_binary_search_for_ascending_and_descending_x() {
+        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
+        let (x_axis, y_axis) = identity_axes(&plan);
+
+        for values in [
+            "[[-1.0,0.0,1.0],[1.0,0.0,-1.0]]",
+            "[[1.0,0.0,-1.0],[1.0,0.0,-1.0]]",
+        ] {
+            let graph = plan
+                .line_graph_snapshot_json(values, &x_axis, &y_axis)
+                .unwrap();
+            let point: [f64; 2] = serde_json::from_str(
+                &plan
+                    .graph_point_for_x_json(0.5, &graph, &x_axis, &y_axis)
+                    .unwrap(),
+            )
+            .unwrap();
+            let coords: [f64; 2] = serde_json::from_str(
+                &plan
+                    .point_to_coords_json(point[0] as f32, point[1] as f32, &x_axis, &y_axis)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!((coords[0] - 0.5).abs() <= MANIM_GRAPH_X_SEARCH_TOLERANCE);
+        }
+    }
+
+    #[test]
+    fn generic_graph_lookup_uses_current_graph_and_axes_transforms() {
+        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
+        let axes_transform = Transform2D {
+            translation: Vec2::new(2.0, -1.0),
+            rotation: 0.2,
+            scale: Vec2::new(1.1, 1.1),
+        };
+        let x_axis = axis_snapshot(plan.axes.x_axis(), axes_transform);
+        let y_axis = axis_snapshot(plan.axes.y_axis(), axes_transform);
+        let mut graph: ObjectSnapshot = serde_json::from_str(
+            &plan
+                .line_graph_snapshot_json("[[-1.0,0.0,1.0],[0.0,0.0,0.0]]", &x_axis, &y_axis)
+                .unwrap(),
+        )
+        .unwrap();
+        graph.transform.translation = Vec2::new(0.2, 0.0);
+        let point: [f64; 2] = serde_json::from_str(
+            &plan
+                .graph_point_for_x_json(
+                    0.5,
+                    &serde_json::to_string(&graph).unwrap(),
+                    &x_axis,
+                    &y_axis,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let coords = TransformedAxes2DState::new(plan.axes, axes_transform, axes_transform)
+            .point_to_coords(Vec2::new(point[0] as f32, point[1] as f32))
+            .unwrap();
+        assert!((coords.0 - 0.5).abs() <= MANIM_GRAPH_X_SEARCH_TOLERANCE);
+    }
+
+    #[test]
+    fn generic_graph_lookup_rejects_out_of_range_and_non_path_geometry() {
+        let plan = AxesQueryPlan::from_json(request_json()).unwrap();
+        let (x_axis, y_axis) = identity_axes(&plan);
+        let graph = plan
+            .line_graph_snapshot_json("[[-1.0,0.0,1.0],[0.0,0.0,0.0]]", &x_axis, &y_axis)
+            .unwrap();
+        assert!(matches!(
+            plan.graph_point_for_x_json(3.0, &graph, &x_axis, &y_axis),
+            Err(ManimAxesQueryError::GraphXOutOfRange { .. })
+        ));
+
+        let rectangle = serde_json::to_string(&ObjectSnapshot::new(GeometryRef::rectangle(1.0, 1.0)))
+            .unwrap();
+        assert!(matches!(
+            plan.graph_point_for_x_json(0.0, &rectangle, &x_axis, &y_axis),
+            Err(ManimAxesQueryError::GeometryProportion(
+                GeometryProportionError::UnsupportedGeometry
+            ))
+        ));
+    }
+
+    #[test]
     fn malformed_and_mismatched_line_graph_values_fail_closed() {
         let plan = AxesQueryPlan::from_json(request_json()).unwrap();
-        let x_axis = axis_snapshot(plan.axes.x_axis(), Transform2D::IDENTITY);
-        let y_axis = axis_snapshot(plan.axes.y_axis(), Transform2D::IDENTITY);
+        let (x_axis, y_axis) = identity_axes(&plan);
         assert!(matches!(
             plan.line_graph_snapshot_json("not json", &x_axis, &y_axis),
             Err(ManimAxesQueryError::InvalidLineGraphValues(_))
