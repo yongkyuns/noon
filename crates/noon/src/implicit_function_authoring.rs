@@ -46,7 +46,10 @@ impl ImplicitFunctionPlan {
             (x_range[1] - x_range[0]) / 1000.0,
             (y_range[1] - y_range[0]) / 1000.0,
         ];
-        if tolerance.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+        if tolerance
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
             return Err(ImplicitFunctionAuthoringError::InvalidTolerance(tolerance));
         }
         Ok(Self {
@@ -90,10 +93,7 @@ impl ImplicitFunctionPlan {
     {
         let pmin = [self.x_range[0], self.y_range[0]];
         let pmax = [self.x_range[1], self.y_range[1]];
-        let tolerance = [
-            (pmax[0] - pmin[0]) / 1000.0,
-            (pmax[1] - pmin[1]) / 1000.0,
-        ];
+        let tolerance = [(pmax[0] - pmin[0]) / 1000.0, (pmax[1] - pmin[1]) / 1000.0];
         let cells = build_tree(
             &mut evaluator,
             pmin,
@@ -158,10 +158,7 @@ struct ValuedPoint {
 }
 
 impl ValuedPoint {
-    fn evaluated<F>(
-        pos: Point,
-        evaluator: &mut F,
-    ) -> Result<Self, ImplicitFunctionAuthoringError>
+    fn evaluated<F>(pos: Point, evaluator: &mut F) -> Result<Self, ImplicitFunctionAuthoringError>
     where
         F: FnMut(f64, f64) -> Result<f64, ImplicitFunctionAuthoringError>,
     {
@@ -283,10 +280,22 @@ where
 {
     let width = point_sub(pmax, pmin);
     let mut vertices = [
-        ValuedPoint { pos: [0.0; 2], val: 0.0 },
-        ValuedPoint { pos: [0.0; 2], val: 0.0 },
-        ValuedPoint { pos: [0.0; 2], val: 0.0 },
-        ValuedPoint { pos: [0.0; 2], val: 0.0 },
+        ValuedPoint {
+            pos: [0.0; 2],
+            val: 0.0,
+        },
+        ValuedPoint {
+            pos: [0.0; 2],
+            val: 0.0,
+        },
+        ValuedPoint {
+            pos: [0.0; 2],
+            val: 0.0,
+        },
+        ValuedPoint {
+            pos: [0.0; 2],
+            val: 0.0,
+        },
     ];
     for (index, slot) in vertices.iter_mut().enumerate() {
         let pos = [
@@ -411,13 +420,7 @@ where
                     let edge = self.edge_dual(a, c)?;
                     (a, c, edge)
                 };
-                self.add_four_triangles(four_triangles(
-                    a,
-                    face_right,
-                    c,
-                    face_left,
-                    edge,
-                ))?;
+                self.add_four_triangles(four_triangles(a, face_right, c, face_left, edge))?;
             }
         }
         Ok(())
@@ -457,13 +460,7 @@ where
                     let edge = self.edge_dual(a, c)?;
                     (a, c, edge)
                 };
-                self.add_four_triangles(four_triangles(
-                    a,
-                    face_top,
-                    c,
-                    face_bottom,
-                    edge,
-                ))?;
+                self.add_four_triangles(four_triangles(a, face_top, c, face_bottom, edge))?;
             }
         }
         Ok(())
@@ -728,7 +725,9 @@ fn checked_vec2(x: f64, y: f64) -> Result<Vec2, ImplicitFunctionAuthoringError> 
     if point.x.is_finite() && point.y.is_finite() {
         Ok(point)
     } else {
-        Err(ImplicitFunctionAuthoringError::NonFiniteContourPoint([x, y]))
+        Err(ImplicitFunctionAuthoringError::NonFiniteContourPoint([
+            x, y,
+        ]))
     }
 }
 
@@ -776,10 +775,7 @@ fn point_sum_key(first: Point, second: Point) -> [u64; 2] {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImplicitFunctionAuthoringError {
-    InvalidRange {
-        axis: &'static str,
-        range: [f64; 2],
-    },
+    InvalidRange { axis: &'static str, range: [f64; 2] },
     InvalidTolerance(Point),
     DepthOverflow(usize),
     CellBudgetOverflow,
@@ -802,7 +798,10 @@ impl std::fmt::Display for ImplicitFunctionAuthoringError {
                 "ImplicitFunction contour tolerance must be finite and positive, got {tolerance:?}"
             ),
             Self::DepthOverflow(depth) => {
-                write!(formatter, "ImplicitFunction min_depth is too large: {depth}")
+                write!(
+                    formatter,
+                    "ImplicitFunction min_depth is too large: {depth}"
+                )
             }
             Self::CellBudgetOverflow => {
                 formatter.write_str("ImplicitFunction quadtree cell budget overflow")
@@ -840,7 +839,9 @@ mod tests {
     use super::*;
     use noon_core::PathCommand;
 
-    fn evaluate<F>(function: F) -> impl FnMut(f64, f64) -> Result<f64, ImplicitFunctionAuthoringError>
+    fn evaluate<F>(
+        function: F,
+    ) -> impl FnMut(f64, f64) -> Result<f64, ImplicitFunctionAuthoringError>
     where
         F: Fn(f64, f64) -> f64,
     {
@@ -867,7 +868,10 @@ mod tests {
         let path = plan
             .vector_path_with_evaluator(evaluate(|x, y| x * x + y * y - 1.0))
             .unwrap();
-        assert!(matches!(path.commands().first(), Some(PathCommand::MoveTo { .. })));
+        assert!(matches!(
+            path.commands().first(),
+            Some(PathCommand::MoveTo { .. })
+        ));
         assert!(path
             .commands()
             .iter()
@@ -887,9 +891,7 @@ mod tests {
     #[test]
     fn minimum_depth_takes_precedence_over_smaller_quad_budget() {
         let plan = ImplicitFunctionPlan::new([-1.0, 1.0], [-1.0, 1.0], 3, 1, false).unwrap();
-        let curves = plan
-            .curves_with_evaluator(evaluate(|x, _| x))
-            .unwrap();
+        let curves = plan.curves_with_evaluator(evaluate(|x, _| x)).unwrap();
         assert!(!curves.is_empty());
     }
 
