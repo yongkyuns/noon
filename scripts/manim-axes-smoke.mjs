@@ -248,7 +248,77 @@ class RetainedAxesPlot(Scene):
         assert isinstance(cos_graph, ParametricFunction)
         cos_point = axes.input_to_graph_point(0.25, cos_graph)
         assert_point_close(cos_point, axes.c2p(0.25, math.cos(0.25)))
-        self.add(axes, sin_graph, cos_graph, vertical, horizontal, line_graph)
+
+        curve_1_calls = []
+        curve_2_calls = []
+
+        def curve_1_fn(x):
+            curve_1_calls.append(float(x))
+            return 4 * x - x ** 2
+
+        def curve_2_fn(x):
+            curve_2_calls.append(float(x))
+            return 0.8 * x ** 2 - 3 * x + 4
+
+        curve_1 = axes.plot(curve_1_fn, x_range=[0, 4], color=BLUE_C)
+        curve_2 = axes.plot(curve_2_fn, x_range=[0, 4], color=GREEN_B)
+        assert_close(curve_1.t_min, 0.0)
+        assert_close(curve_1.t_max, 4.0)
+        curve_1_calls.clear()
+        curve_2_calls.clear()
+
+        riemann_area = axes.get_riemann_rectangles(
+            curve_1,
+            x_range=[0.3, 0.6],
+            dx=0.03,
+            color=BLUE,
+            fill_opacity=0.5,
+        )
+        assert isinstance(riemann_area, VGroup)
+        assert len(riemann_area) == 10
+        assert len(curve_1_calls) == 10
+        for rectangle in riemann_area:
+            handle = _handles._handle_for(rectangle)
+            assert handle is not None
+            snapshot = json.loads(str(handle.snapshotJson()))
+            assert "rectangle" in snapshot["geometry"]
+            assert_close(snapshot["style"]["fill"]["alpha"], 0.5)
+
+        curve_1_calls.clear()
+        curve_2_calls.clear()
+        area = axes.get_area(
+            curve_2,
+            [2, 3],
+            bounded_graph=curve_1,
+            color=GREY,
+            opacity=0.5,
+        )
+        assert curve_2_calls == [2.0, 3.0]
+        assert curve_1_calls == [2.0, 3.0]
+        area_handle = _handles._handle_for(area)
+        assert area_handle is not None
+        area_snapshot = json.loads(str(area_handle.snapshotJson()))
+        assert "vector_path" in area_snapshot["geometry"]
+        assert area_snapshot["geometry"]["vector_path"]["commands"][-1] == "close"
+
+        try:
+            axes.get_riemann_rectangles(curve_1, input_sample_type="other")
+            raise AssertionError("invalid Riemann sample type must fail")
+        except ValueError as error:
+            assert str(error) == "Invalid input sample type"
+
+        self.add(
+            axes,
+            sin_graph,
+            cos_graph,
+            vertical,
+            horizontal,
+            line_graph,
+            curve_1,
+            curve_2,
+            riemann_area,
+            area,
+        )
 `;
 
 let browser = null;
@@ -275,7 +345,7 @@ try {
     axesSource,
   );
   assert.equal(result.kind, "scene_document");
-  assert.equal(result.document.objects.length, 33);
+  assert.equal(result.document.objects.length, 46);
   assert.equal(result.document.tracks.length, 0);
 
   const geometryKinds = result.document.objects.map(
@@ -288,17 +358,22 @@ try {
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "vector_path").length,
-    3,
-    "Axes.plot and plot_line_graph must lower to ordinary retained VectorPath geometry",
+    6,
+    "Axes plots, line graphs, and area polygons must remain ordinary retained VectorPath geometry",
   );
   assert.equal(
     geometryKinds.filter((kind) => kind === "circle").length,
     4,
     "plot_line_graph vertex dots must remain ordinary retained circle geometry",
   );
+  assert.equal(
+    geometryKinds.filter((kind) => kind === "rectangle").length,
+    10,
+    "Riemann rectangles must remain ordinary retained rectangle geometry",
+  );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: transformed c2p/p2c, authored and generic i2gp, retained projections, plot curves, and VDict line graphs with shared corner-path geometry and optional retained dots.",
+    "Retained Axes smoke passed: transformed coordinates, authored/generic i2gp, retained projections and plots, line graphs, two-phase Riemann rectangles, and bounded area polygons.",
   );
 } finally {
   await browser?.close();
