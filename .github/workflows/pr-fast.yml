@@ -146,6 +146,8 @@ jobs:
           npx playwright install chromium
 
       - name: Check deterministic playback
+        env:
+          NOON_DETERMINISM_MORPH_STRESS_COUNT: "96"
         run: node scripts/deterministic-replay-smoke.mjs
 
       - name: Check Manim-style authoring
