@@ -15,7 +15,7 @@ def test_scene_allocator_is_shared_across_content_projections():
     assert (first.id, retained.id, third.id) == (0, 1, 2)
     assert retained_order == 1
     assert [obj["id"] for obj in scene.to_document()["objects"]] == [0, 2]
-    assert [entry["id"] for entry in scene.identity_document()["objects"]] == [0, 1, 2]
+    assert [entry["id"] for entry in scene.identity_document()["objects"]] == [0, 2]
 
 
 def test_retained_content_modules_do_not_own_scene_lifecycle():
@@ -58,4 +58,4 @@ def test_mixed_geometry_and_text_share_public_scene_identity_and_order():
     assert retained[0]["object"] == 1
     assert retained[0]["order"] == 1
     assert [obj["id"] for obj in scene.to_document()["objects"]] == [0, 2]
-    assert [entry["id"] for entry in scene.identity_document()["objects"]] == [0, 1, 2]
+    assert [entry["id"] for entry in scene.identity_document()["objects"]] == [0, 2]

@@ -1415,6 +1415,7 @@ class Scene:
             "objects": [
                 {"id": object_id, "key": key}
                 for object_id, key in self._object_keys.items()
+                if object_id in self._object_positions
             ],
             "tracks": [
                 {"id": track_id, "key": key}
