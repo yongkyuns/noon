@@ -255,7 +255,8 @@ retained.write_text(text.replace(old, new, 1))
 
 # Strengthen the ratchet with the actual public compatibility path: geometry and Text
 # interleave in one scene-global identity/order domain despite separate transitional
-# serialization projections.
+# serialization projections. Native CPython exercises binding here; browser lifecycle
+# policy is independently covered by the existing WASM/browser lanes.
 test = Path("web/python/test_unified_scene_binding.py")
 text = test.read_text()
 text = text.replace(
@@ -266,7 +267,6 @@ text = text.replace(
 text += '''\n\ndef test_mixed_geometry_and_text_share_public_scene_identity_and_order():
     _compat.install()
     _typst.install()
-    import _manim_lifecycle  # noqa: F401 - installs the single lifecycle owner
 
     scene = _compat.Scene()
     first = _base.Circle(1.0)
