@@ -257,6 +257,44 @@ def _graph_snapshot_json(graph: object, name: str) -> str:
     return str(handle.snapshotJson())
 
 
+def _inclusive_linspace(start: float, end: float, count: object, name: str) -> list[float]:
+    """Small authoring-only equivalent of NumPy linspace for pinned helper semantics."""
+
+    try:
+        resolved = int(count)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise TypeError(f"{name} must be an integer") from error
+    try:
+        if resolved != count:
+            raise TypeError(f"{name} must be an integer")
+    except TypeError:
+        raise TypeError(f"{name} must be an integer") from None
+    if resolved < 0:
+        raise ValueError(f"{name} must be non-negative")
+    if resolved == 0:
+        return []
+    first = float(start)
+    if resolved == 1:
+        return [first]
+    step = (float(end) - first) / float(resolved - 1)
+    return [first + step * index for index in range(resolved)]
+
+
+def _trapezoid_integral(
+    function: Callable[[float], float], end: float, samples: object
+) -> float:
+    x_values = _inclusive_linspace(0.0, float(end), samples, "samples")
+    if len(x_values) < 2:
+        return 0.0
+    y_values = [float(function(x)) for x in x_values]
+    return sum(
+        0.5 * (y0 + y1) * (x1 - x0)
+        for x0, x1, y0, y1 in zip(
+            x_values, x_values[1:], y_values, y_values[1:], strict=True
+        )
+    )
+
+
 class ParametricFunction(_compat.VMobject):
     """Retained ManimCE v0.21 scene-space parametric curve for the 2D renderer."""
 
@@ -679,6 +717,12 @@ class Axes(_compat.VGroup):
     def get_horizontal_line(self, point: object, **kwargs: Any) -> _compat.Line:
         return self.get_line_from_axis_to_point(1, point, **kwargs)
 
+    def get_lines_to_point(self, point: object, **kwargs: Any) -> _compat.VGroup:
+        return _compat.VGroup(
+            self.get_horizontal_line(point, **kwargs),
+            self.get_vertical_line(point, **kwargs),
+        )
+
     def plot_line_graph(
         self,
         x_values: object,
@@ -928,6 +972,74 @@ class Axes(_compat.VGroup):
         area.set_color(_color("color", color))
         return area
 
+    def angle_of_tangent(
+        self,
+        x: float,
+        graph: ParametricFunction,
+        dx: float = 1.0e-8,
+    ) -> float:
+        p0 = self.input_to_graph_coords(float(x), graph)
+        p1 = self.input_to_graph_coords(float(x) + float(dx), graph)
+        return math.atan2(p1[1] - p0[1], p1[0] - p0[0])
+
+    def slope_of_tangent(
+        self, x: float, graph: ParametricFunction, **kwargs: Any
+    ) -> float:
+        return math.tan(self.angle_of_tangent(float(x), graph, **kwargs))
+
+    def plot_derivative_graph(
+        self,
+        graph: ParametricFunction,
+        color: object = _base.GREEN,
+        **kwargs: Any,
+    ) -> ParametricFunction:
+        _authored_graph_function(graph, "plot_derivative_graph")
+
+        def derivative(x: float) -> float:
+            return self.slope_of_tangent(x, graph)
+
+        return self.plot(derivative, color=_color("color", color), **kwargs)
+
+    def plot_antiderivative_graph(
+        self,
+        graph: ParametricFunction,
+        y_intercept: float = 0.0,
+        samples: int = 50,
+        use_vectorized: bool = False,
+        **kwargs: Any,
+    ) -> ParametricFunction:
+        function = _authored_graph_function(graph, "plot_antiderivative_graph")
+        if use_vectorized:
+            raise NotImplementedError(
+                "Axes.plot_antiderivative_graph(use_vectorized=True) requires vectorized callback transport"
+            )
+        intercept = float(y_intercept)
+        _inclusive_linspace(0.0, 0.0, samples, "samples")
+
+        def antiderivative(x: float) -> float:
+            return _trapezoid_integral(function, float(x), samples) + intercept
+
+        return self.plot(
+            antiderivative,
+            use_vectorized=False,
+            **kwargs,
+        )
+
+    def get_vertical_lines_to_graph(
+        self,
+        graph: ParametricFunction,
+        x_range: Sequence[float] | None = None,
+        num_lines: int = 20,
+        **kwargs: Any,
+    ) -> _compat.VGroup:
+        values = self.x_range if x_range is None else [float(value) for value in x_range]
+        if len(values) < 2:
+            raise ValueError("x_range must contain at least two values")
+        samples = _inclusive_linspace(values[0], values[1], num_lines, "num_lines")
+        return _compat.VGroup(
+            *(self.get_vertical_line(self.i2gp(x, graph), **kwargs) for x in samples)
+        )
+
     def plot_parametric_curve(
         self,
         function: Callable[[float], object],
@@ -994,6 +1106,7 @@ class Axes(_compat.VGroup):
         self,
         function: Callable[[float], float],
         x_range: Sequence[float] | None = None,
+        use_vectorized: bool = False,
         use_smoothing: bool = True,
         discontinuities: Sequence[float] | None = None,
         dt: float = 1.0e-8,
@@ -1005,6 +1118,10 @@ class Axes(_compat.VGroup):
             raise NotImplementedError(f"unsupported Axes.plot option(s): {unsupported}")
         if not callable(function):
             raise TypeError("Axes.plot function must be callable")
+        if use_vectorized:
+            raise NotImplementedError(
+                "Axes.plot(use_vectorized=True) requires vectorized callback transport"
+            )
         request = {
             **self._base_request,
             "plot_range": None if x_range is None else [float(value) for value in x_range],
@@ -1039,6 +1156,7 @@ class Axes(_compat.VGroup):
         graph.t_min = float(graph.x_range[0])
         graph.t_max = float(graph.x_range[1])
         graph.axes = self
+        graph.use_vectorized = False
         if color is not None:
             graph.set_color(color)
         return graph
