@@ -68,11 +68,13 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/reactive-runtime-smoke.mjs
   node --check scripts/native-input-smoke.mjs
   node --check scripts/updater-callback-smoke.mjs
+  node --check scripts/pr-risk-classifier.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
   node --test scripts/manim-reference-inventory.test.mjs
   node --test scripts/manim-reference-ledger.test.mjs
   node --test scripts/manim-reference-coverage.test.mjs
   node --test scripts/manim-reference-classification-lock.test.mjs
+  node --test scripts/pr-risk-classifier.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"
