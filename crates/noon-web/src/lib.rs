@@ -22,6 +22,7 @@ mod manim_dashed_line_bridge;
 mod manim_elbow_bridge;
 mod manim_geometry_bridge;
 mod manim_number_line_bridge;
+mod manim_number_line_factory_bridge;
 mod manim_number_plane_bridge;
 mod manim_parametric_bridge;
 mod manim_path_query_bridge;
