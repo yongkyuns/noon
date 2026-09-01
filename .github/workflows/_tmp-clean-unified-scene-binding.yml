@@ -20,6 +20,7 @@ jobs:
         run: python scripts/_tmp_clean_unified_scene_binding.py
       - name: Validate Python suite
         run: |
+          python -m pip install -q pytest
           python -m compileall -q web/python
           python -m pytest -q web/python
       - name: Regenerate Python worker artifacts
