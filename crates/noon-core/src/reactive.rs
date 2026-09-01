@@ -52,6 +52,10 @@ pub use text_animation_members::*;
 mod text_family_animation;
 pub use text_family_animation::*;
 
+#[path = "text_family_evaluator.rs"]
+mod text_family_evaluator;
+pub use text_family_evaluator::*;
+
 #[path = "resource_mutation.rs"]
 mod resource_mutation;
 pub use resource_mutation::*;
