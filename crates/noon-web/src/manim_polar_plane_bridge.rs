@@ -56,11 +56,7 @@ impl PolarPlaneGridAuthoringPlan {
     pub fn from_json(request_json: &str) -> Result<Self, ManimPolarPlaneBridgeError> {
         let request: PolarPlaneGridRequest = serde_json::from_str(request_json)
             .map_err(|error| ManimPolarPlaneBridgeError::InvalidRequest(error.to_string()))?;
-        let range = NumberRange::new(
-            -request.radius_max,
-            request.radius_max,
-            request.radius_step,
-        )?;
+        let range = NumberRange::new(-request.radius_max, request.radius_max, request.radius_step)?;
         let axes = Axes2DState::new(range, range, request.size, request.size)?;
         let grid = PolarPlaneGridPlan::new(
             axes,
