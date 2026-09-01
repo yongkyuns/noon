@@ -134,12 +134,13 @@ impl AreaSamplePlan {
         ) {
             let bounded_a = self.axes.coords_to_point(self.a, bounded_a_y)?;
             let bounded_b = self.axes.coords_to_point(self.b, bounded_b_y)?;
-            points.try_reserve_exact(
-                self.graph_points.len() + bounded_points.len() + 4,
-            )
-            .map_err(|_| AreaAuthoringError::PointAllocationFailed(
-                self.graph_points.len() + bounded_points.len() + 4,
-            ))?;
+            points
+                .try_reserve_exact(self.graph_points.len() + bounded_points.len() + 4)
+                .map_err(|_| {
+                    AreaAuthoringError::PointAllocationFailed(
+                        self.graph_points.len() + bounded_points.len() + 4,
+                    )
+                })?;
             points.push(graph_a);
             points.extend(self.graph_points.iter().copied());
             points.push(graph_b);
@@ -350,7 +351,10 @@ impl std::fmt::Display for AreaAuthoringError {
                 formatter.write_str("bounded graph endpoint values were not requested")
             }
             Self::PointAllocationFailed(count) => {
-                write!(formatter, "area point allocation failed for {count} vertices")
+                write!(
+                    formatter,
+                    "area point allocation failed for {count} vertices"
+                )
             }
             Self::Coordinates(error) => error.fmt(formatter),
         }
@@ -384,11 +388,7 @@ mod tests {
         TransformedAxes2DState::new(axes, transform, transform)
     }
 
-    fn graph(
-        axes: TransformedAxes2DState,
-        xs: &[f64],
-        ys: &[f64],
-    ) -> ObjectSnapshot {
+    fn graph(axes: TransformedAxes2DState, xs: &[f64], ys: &[f64]) -> ObjectSnapshot {
         Path::new(transformed_axes_line_graph_vector_path(axes, xs, ys).unwrap()).into_snapshot()
     }
 
@@ -454,9 +454,7 @@ mod tests {
         assert_eq!(plan.x_range(), [0.0, 2.5]);
         assert_eq!(plan.bounded_graph_endpoint_x_values(), Some([0.0, 2.5]));
 
-        let snapshot = plan
-            .finish([1.0, 0.0], Some([-1.0, -1.0]))
-            .unwrap();
+        let snapshot = plan.finish([1.0, 0.0], Some([-1.0, -1.0])).unwrap();
         let points = path_points(&snapshot);
         let bounded_start_index = 1 + plan.graph_interior_points().len() + 1;
         assert_point(
