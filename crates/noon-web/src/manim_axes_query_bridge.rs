@@ -39,6 +39,14 @@ struct AreaQueryRequest {
     x_range: Option<[f64; 2]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AreaFinishInput<'a> {
+    graph_snapshot_json: &'a str,
+    bounded_graph_snapshot_json: &'a str,
+    graph_endpoint_y_values_json: &'a str,
+    bounded_graph_endpoint_y_values_json: &'a str,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct RiemannSampleValues {
     graph: Vec<f64>,
@@ -213,28 +221,26 @@ impl AxesQueryPlan {
     }
 
     /// Finish one ManimCE v0.21 `Axes.get_area` retained polygon snapshot.
-    pub fn area_snapshot_json(
+    fn area_snapshot_json(
         &self,
         request_json: &str,
-        graph_snapshot_json: &str,
-        bounded_graph_snapshot_json: &str,
-        graph_endpoint_y_values_json: &str,
-        bounded_graph_endpoint_y_values_json: &str,
+        finish: AreaFinishInput<'_>,
         x_axis_snapshot_json: &str,
         y_axis_snapshot_json: &str,
     ) -> Result<String, ManimAxesQueryError> {
         let request = parse_area_request(request_json)?;
-        let graph = parse_graph_snapshot(graph_snapshot_json)?;
-        let bounded_graph = parse_optional_graph_snapshot(bounded_graph_snapshot_json)?;
+        let graph = parse_graph_snapshot(finish.graph_snapshot_json)?;
+        let bounded_graph = parse_optional_graph_snapshot(finish.bounded_graph_snapshot_json)?;
         validate_bounded_presence(
             request.bounded_graph_range.is_some(),
             bounded_graph.is_some(),
             "area",
         )?;
-        let graph_endpoint_y_values: [f64; 2] = serde_json::from_str(graph_endpoint_y_values_json)
-            .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
+        let graph_endpoint_y_values: [f64; 2] =
+            serde_json::from_str(finish.graph_endpoint_y_values_json)
+                .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
         let bounded_graph_endpoint_y_values: Option<[f64; 2]> =
-            parse_optional_json(bounded_graph_endpoint_y_values_json)
+            parse_optional_json(finish.bounded_graph_endpoint_y_values_json)
                 .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
         validate_bounded_presence(
             bounded_graph.is_some(),
@@ -508,7 +514,7 @@ impl From<AreaAuthoringError> for ManimAxesQueryError {
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::AxesQueryPlan;
+    use super::{AreaFinishInput, AxesQueryPlan};
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {
         JsValue::from_str(&error.to_string())
@@ -652,10 +658,12 @@ mod wasm {
             self.0
                 .area_snapshot_json(
                     request_json,
-                    graph_snapshot_json,
-                    bounded_graph_snapshot_json,
-                    graph_endpoint_y_values_json,
-                    bounded_graph_endpoint_y_values_json,
+                    AreaFinishInput {
+                        graph_snapshot_json,
+                        bounded_graph_snapshot_json,
+                        graph_endpoint_y_values_json,
+                        bounded_graph_endpoint_y_values_json,
+                    },
                     x_axis_snapshot_json,
                     y_axis_snapshot_json,
                 )
@@ -848,7 +856,17 @@ mod tests {
 
         let snapshot: ObjectSnapshot = serde_json::from_str(
             &plan
-                .area_snapshot_json(request, &graph, "", "[0.5,0.5]", "", &x_axis, &y_axis)
+                .area_snapshot_json(
+                    request,
+                    AreaFinishInput {
+                        graph_snapshot_json: &graph,
+                        bounded_graph_snapshot_json: "",
+                        graph_endpoint_y_values_json: "[0.5,0.5]",
+                        bounded_graph_endpoint_y_values_json: "",
+                    },
+                    &x_axis,
+                    &y_axis,
+                )
                 .unwrap(),
         )
         .unwrap();
