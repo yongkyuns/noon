@@ -1,10 +1,12 @@
-use noon_core::{Camera2DState, ObjectContentRef};
-use noon_runtime::{FrameChanges, RetainedFrameState};
+use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
+use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedFrameState};
 
 use crate::{
-    InstalledRetainedResources, RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror,
-    RetainedExecutionTransportError, RetainedResourceBundle, RetainedResourceTransportError,
-    RetainedTransportApplyOutcome, TransportObjectContent,
+    InstalledRetainedFamilyExecutionState, InstalledRetainedResources,
+    RetainedExecutionDeltaEnvelope, RetainedExecutionFrameMirror, RetainedExecutionTransportError,
+    RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
+    RetainedResourceBundle, RetainedResourceTransportError, RetainedTransportApplyOutcome,
+    TransportObjectContent,
 };
 
 /// Render-side retained execution mirror with renderer-local resource handles.
@@ -19,6 +21,7 @@ pub struct InstalledRetainedExecutionMirror {
     wire: RetainedExecutionFrameMirror,
     resources: InstalledRetainedResources,
     resolved: Option<RetainedFrameState>,
+    family: InstalledRetainedFamilyExecutionState,
 }
 
 impl InstalledRetainedExecutionMirror {
@@ -28,6 +31,7 @@ impl InstalledRetainedExecutionMirror {
             wire: RetainedExecutionFrameMirror::default(),
             resources,
             resolved: None,
+            family: InstalledRetainedFamilyExecutionState::default(),
         })
     }
 
@@ -39,23 +43,48 @@ impl InstalledRetainedExecutionMirror {
         self.resolved.as_ref()
     }
 
+    pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
+        if self.family.plans().is_empty() {
+            return Ok(None);
+        }
+        let frame = self
+            .resolved
+            .as_ref()
+            .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+        Ok(Some(self.family.frame(frame)?))
+    }
+
+    pub fn family_plan(
+        &self,
+    ) -> Result<Option<&RetainedFamilyAnimationPlan>, InstalledExecutionError> {
+        Ok(self.family.single_plan()?)
+    }
+
     pub const fn camera(&self) -> Camera2DState {
         self.wire.camera()
     }
 
+    /// Decode the additive family envelope. Ordinary retained JSON is accepted
+    /// unchanged because the flattened family fields default to empty.
     pub fn apply_json(
         &mut self,
         json: &str,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
-        let delta: RetainedExecutionDeltaEnvelope = serde_json::from_str(json)?;
-        self.apply(delta)
+        let delta: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(json)?;
+        self.apply_family(delta)
     }
 
+    /// Apply a base retained delta without family metadata.
+    ///
+    /// A successfully applied snapshot is authoritative for the whole retained scene,
+    /// so it also clears any previously installed family sidecar. Incrementals preserve
+    /// the sidecar because they cannot change retained identity/content shape.
     pub fn apply(
         &mut self,
         delta: RetainedExecutionDeltaEnvelope,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
-        if delta.snapshot {
+        let snapshot = delta.snapshot;
+        if snapshot {
             self.validate_snapshot_resources(&delta)?;
         }
 
@@ -69,6 +98,43 @@ impl InstalledRetainedExecutionMirror {
         } else {
             self.apply_resolved_incremental(&changes)?;
         }
+        if snapshot {
+            self.family = InstalledRetainedFamilyExecutionState::default();
+        }
+        Ok((outcome, changes))
+    }
+
+    /// Transactionally apply retained execution plus generic family sidecar state.
+    pub fn apply_family(
+        &mut self,
+        delta: RetainedFamilyExecutionDeltaEnvelope,
+    ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        delta.validate()?;
+        if delta.retained.snapshot {
+            self.validate_snapshot_resources(&delta.retained)?;
+        }
+
+        // Family validation happens against the frame shape that will exist after the
+        // retained delta, but live family state is not changed until the base mirror
+        // accepts the sequence. Incrementals cannot change retained identity/content,
+        // so the current resolved frame is sufficient for their sidecar validation.
+        let mut next_family = self.family.clone();
+        if delta.retained.snapshot {
+            let preview = self.preview_resolved_snapshot(&delta.retained)?;
+            next_family.apply(&delta, &preview, self.resources.texts())?;
+        } else {
+            let current = self
+                .resolved
+                .as_ref()
+                .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+            next_family.apply(&delta, current, self.resources.texts())?;
+        }
+
+        let (outcome, changes) = self.apply(delta.retained)?;
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            return Ok((outcome, changes));
+        }
+        self.family = next_family;
         Ok((outcome, changes))
     }
 
@@ -89,11 +155,32 @@ impl InstalledRetainedExecutionMirror {
         Ok(())
     }
 
+    fn preview_resolved_snapshot(
+        &self,
+        delta: &RetainedExecutionDeltaEnvelope,
+    ) -> Result<RetainedFrameState, InstalledExecutionError> {
+        let mut wire = RetainedExecutionFrameMirror::default();
+        let (outcome, _) = wire.apply(delta.clone())?;
+        debug_assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        let frame = wire
+            .frame()
+            .ok_or(InstalledExecutionError::MissingWireFrame)?;
+        self.resolve_wire_frame(frame)
+    }
+
     fn rebuild_resolved_snapshot(&mut self) -> Result<(), InstalledExecutionError> {
         let wire = self
             .wire
             .frame()
             .ok_or(InstalledExecutionError::MissingWireFrame)?;
+        self.resolved = Some(self.resolve_wire_frame(wire)?);
+        Ok(())
+    }
+
+    fn resolve_wire_frame(
+        &self,
+        wire: &RetainedFrameState,
+    ) -> Result<RetainedFrameState, InstalledExecutionError> {
         let mut resolved = wire.clone();
         for object in &mut resolved.objects {
             if let ObjectContentRef::Text(wire_handle) = object.content {
@@ -107,8 +194,7 @@ impl InstalledRetainedExecutionMirror {
                 object.content = ObjectContentRef::Text(local);
             }
         }
-        self.resolved = Some(resolved);
-        Ok(())
+        Ok(resolved)
     }
 
     fn apply_resolved_incremental(
@@ -157,6 +243,7 @@ impl InstalledRetainedExecutionMirror {
 pub enum InstalledExecutionError {
     Resource(RetainedResourceTransportError),
     Transport(RetainedExecutionTransportError),
+    Family(RetainedFamilyExecutionTransportError),
     Json(String),
     UnknownTextResource { id: u64, version: u64 },
     MissingWireFrame,
@@ -170,6 +257,7 @@ impl std::fmt::Display for InstalledExecutionError {
         match self {
             Self::Resource(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
+            Self::Family(error) => error.fmt(formatter),
             Self::Json(error) => write!(formatter, "invalid retained execution JSON: {error}"),
             Self::UnknownTextResource { id, version } => {
                 write!(formatter, "unknown installed text resource {id}@{version}")
@@ -205,6 +293,12 @@ impl From<RetainedExecutionTransportError> for InstalledExecutionError {
     }
 }
 
+impl From<RetainedFamilyExecutionTransportError> for InstalledExecutionError {
+    fn from(value: RetainedFamilyExecutionTransportError) -> Self {
+        Self::Family(value)
+    }
+}
+
 impl From<serde_json::Error> for InstalledExecutionError {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value.to_string())
@@ -213,13 +307,25 @@ impl From<serde_json::Error> for InstalledExecutionError {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{ObjectId, SceneDefinition, Vec2};
+    use noon_core::{
+        FamilyAnimationMode, FamilyAnimationState, ObjectId, RateFunction, SceneDefinition, Vec2,
+    };
 
     use super::*;
     use crate::{
         RetainedAuthoringDocument, RetainedAuthoringEnginePlayer, RetainedAuthoringTextObject,
-        RetainedTypstAuthoringSpec,
+        RetainedFamilyExecutionObjectState, RetainedFamilyPlanTransport, RetainedTextAuthoringSpec,
     };
+
+    fn native_text(source: &str, font_size: f32) -> RetainedTextAuthoringSpec {
+        RetainedTextAuthoringSpec::native(
+            source,
+            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+            font_size,
+            -1.0,
+        )
+        .unwrap()
+    }
 
     fn engine() -> RetainedAuthoringEnginePlayer {
         let legacy = SceneDefinition::new();
@@ -227,12 +333,12 @@ mod tests {
             RetainedAuthoringTextObject {
                 object: ObjectId::new(8),
                 order: 0,
-                text: RetainedTypstAuthoringSpec::new("*Hello*", false, 64.0).unwrap(),
+                text: native_text("Hello", 64.0),
             },
             RetainedAuthoringTextObject {
                 object: ObjectId::new(21),
                 order: 1,
-                text: RetainedTypstAuthoringSpec::new("frac(x, 2)", true, 72.0).unwrap(),
+                text: native_text("World", 72.0),
             },
         ])
         .unwrap();
@@ -243,6 +349,31 @@ mod tests {
             17,
         )
         .unwrap()
+    }
+
+    fn family_state(progress: f64) -> FamilyAnimationState {
+        FamilyAnimationState {
+            mode: FamilyAnimationMode::Reveal,
+            overall_progress: progress,
+            lag_ratio: 1.0,
+            rate_function: RateFunction::Linear,
+            reverse_rate_function: false,
+            reverse_member_order: false,
+        }
+    }
+
+    fn family_snapshot(
+        retained: RetainedExecutionDeltaEnvelope,
+    ) -> RetainedFamilyExecutionDeltaEnvelope {
+        RetainedFamilyExecutionDeltaEnvelope {
+            retained,
+            family_states: vec![RetainedFamilyExecutionObjectState::new(
+                ObjectId::new(8),
+                Some(family_state(0.5)),
+            )
+            .unwrap()],
+            family_plans: vec![RetainedFamilyPlanTransport::new(vec![ObjectId::new(8)]).unwrap()],
+        }
     }
 
     #[test]
@@ -271,6 +402,76 @@ mod tests {
             mirror.resources().resolve_text_handle(wire_text)
         );
         assert!(mirror.resources().texts().get(local).is_some());
+        assert!(mirror.family_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn family_snapshot_installs_local_plan_and_scheduler_state() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let retained: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        let family = family_snapshot(retained);
+        let json = serde_json::to_string(&family).unwrap();
+
+        let (outcome, changes) = mirror.apply_json(&json).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert!(changes.is_all());
+        assert!(mirror.family_plan().unwrap().is_some());
+        assert_eq!(
+            mirror.family_frame().unwrap().unwrap().family_animation(0),
+            Some(family_state(0.5))
+        );
+    }
+
+    #[test]
+    fn plain_snapshot_replaces_scene_and_clears_family_sidecar() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let retained: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        mirror
+            .apply_family(family_snapshot(retained.clone()))
+            .unwrap();
+        assert!(mirror.family_plan().unwrap().is_some());
+
+        let mut replacement = retained;
+        replacement.session = replacement.session.wrapping_add(1);
+        replacement.sequence = 0;
+        replacement.time = 1.0;
+        mirror.apply(replacement).unwrap();
+        assert!(mirror.family_plan().unwrap().is_none());
+        assert!(mirror.family_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_family_snapshot_does_not_advance_base_mirror() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let retained: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        mirror.apply(retained.clone()).unwrap();
+        assert_eq!(mirror.frame().unwrap().time, retained.time);
+
+        let mut replacement = retained;
+        replacement.session = replacement.session.wrapping_add(1);
+        replacement.sequence = 0;
+        replacement.time = 2.0;
+        let invalid = RetainedFamilyExecutionDeltaEnvelope {
+            retained: replacement,
+            family_states: Vec::new(),
+            family_plans: vec![
+                RetainedFamilyPlanTransport::new(vec![ObjectId::new(u64::MAX)]).unwrap(),
+            ],
+        };
+        assert!(mirror.apply_family(invalid).is_err());
+        assert_ne!(mirror.frame().unwrap().time, 2.0);
     }
 
     #[test]
