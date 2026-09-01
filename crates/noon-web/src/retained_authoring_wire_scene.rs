@@ -22,6 +22,36 @@ struct RetainedAuthoringWireDocument {
     tracks: Vec<RetainedTrackAuthoringSpec>,
 }
 
+/// Normalize the current browser compatibility pair into one canonical mixed scene JSON.
+///
+/// This is the bounded producer/transport migration edge for #367. Python may still
+/// assemble legacy geometry plus the retained text sidecar internally, but browser code
+/// can immediately collapse that transitional shape into `SceneSpec` and carry only one
+/// semantic scene document beyond the authoring worker.
+pub fn canonical_retained_scene_spec_json(
+    legacy_scene_json: &str,
+    retained_document_json: &str,
+) -> Result<String, MixedRetainedAuthoringError> {
+    retained_authoring_scene_spec_from_json(legacy_scene_json, retained_document_json)?
+        .to_json()
+        .map_err(map_scene_spec_error)
+}
+
+fn retained_authoring_scene_spec_from_json(
+    legacy_scene_json: &str,
+    retained_document_json: &str,
+) -> Result<SceneSpec, MixedRetainedAuthoringError> {
+    let legacy = noon_ir::decode_scene(legacy_scene_json)?;
+    let wire: RetainedAuthoringWireDocument = serde_json::from_str(retained_document_json)
+        .map_err(|error| {
+            MixedRetainedAuthoringError::RetainedDocument(format!(
+                "invalid retained authoring document: {error}"
+            ))
+        })?;
+    retained_authoring_scene_spec(&legacy, wire.document, wire.tracks)
+        .map_err(map_scene_spec_adapter_error)
+}
+
 /// Wire-facing mixed retained scene.
 ///
 /// Protocol v2 remains backwards-compatible while the consumer path is canonical:
@@ -39,14 +69,10 @@ impl MixedRetainedAuthoringScene {
         legacy_scene_json: &str,
         retained_document_json: &str,
     ) -> Result<Self, MixedRetainedAuthoringError> {
-        let legacy = noon_ir::decode_scene(legacy_scene_json)?;
-        let wire: RetainedAuthoringWireDocument = serde_json::from_str(retained_document_json)
-            .map_err(|error| {
-                MixedRetainedAuthoringError::RetainedDocument(format!(
-                    "invalid retained authoring document: {error}"
-                ))
-            })?;
-        Self::from_parts_with_tracks(&legacy, wire.document, wire.tracks)
+        Self::from_scene_spec(retained_authoring_scene_spec_from_json(
+            legacy_scene_json,
+            retained_document_json,
+        )?)
     }
 
     pub fn from_parts(
@@ -110,32 +136,51 @@ fn map_scene_spec_adapter_error(
         RetainedAuthoringSceneSpecError::TrackMaterialization(error) => {
             MixedRetainedAuthoringError::TrackMaterialization(error)
         }
-        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::PainterOrderOutOfRange {
+        RetainedAuthoringSceneSpecError::SceneSpec(error) => map_scene_spec_error(error),
+    }
+}
+
+fn map_scene_spec_error(error: SceneSpecError) -> MixedRetainedAuthoringError {
+    match error {
+        SceneSpecError::PainterOrderOutOfRange {
             order,
             object_count,
-        }) => MixedRetainedAuthoringError::PainterOrderOutOfRange {
+        } => MixedRetainedAuthoringError::PainterOrderOutOfRange {
             order,
             object_count,
         },
-        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::ObjectCountOverflow) => {
-            MixedRetainedAuthoringError::ObjectCountOverflow
-        }
-        RetainedAuthoringSceneSpecError::SceneSpec(SceneSpecError::DuplicateObject(object)) => {
+        SceneSpecError::ObjectCountOverflow => MixedRetainedAuthoringError::ObjectCountOverflow,
+        SceneSpecError::DuplicateObject(object) => {
             MixedRetainedAuthoringError::ObjectIdentityCollision(object)
         }
-        RetainedAuthoringSceneSpecError::SceneSpec(error) => {
-            MixedRetainedAuthoringError::RetainedDocument(format!(
-                "invalid canonical mixed SceneSpec: {error}"
-            ))
-        }
+        error => MixedRetainedAuthoringError::RetainedDocument(format!(
+            "invalid canonical mixed SceneSpec: {error}"
+        )),
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen(js_name = canonicalRetainedSceneSpecJson)]
+    pub fn wasm_canonical_retained_scene_spec_json(
+        legacy_scene_json: &str,
+        retained_document_json: &str,
+    ) -> Result<String, JsValue> {
+        super::canonical_retained_scene_spec_json(legacy_scene_json, retained_document_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use noon_core::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
-    use noon_ir::encode_scene;
+    use noon_ir::{encode_scene, ObjectSpecContent};
     use serde_json::json;
 
     use crate::{RetainedAuthoringTextObject, RetainedTextAuthoringSpec};
@@ -225,6 +270,45 @@ mod tests {
             }
         );
         assert_eq!(mixed.compile().unwrap().object_index(object), Some(1));
+    }
+
+    #[test]
+    fn browser_normalizer_emits_one_valid_canonical_scene_spec() {
+        let mut legacy = SceneDefinition::new();
+        let geometry = legacy.add(GeometryRef::circle(0.5));
+        let object = ObjectId::new(1_u64 << 52);
+        let document = RetainedAuthoringDocument::new(vec![RetainedAuthoringTextObject {
+            object,
+            order: 1,
+            text: RetainedTextAuthoringSpec::native(
+                "Canonical transport",
+                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+                48.0,
+                -1.0,
+            )
+            .unwrap(),
+        }])
+        .unwrap();
+
+        let json = canonical_retained_scene_spec_json(
+            &encode_scene(&legacy).unwrap(),
+            &document.to_json().unwrap(),
+        )
+        .unwrap();
+        assert!(!json.contains("noon.authoring.retained"));
+
+        let spec = SceneSpec::from_json(&json).unwrap();
+        assert_eq!(spec.objects.len(), 2);
+        assert_eq!(spec.objects[0].id, geometry);
+        assert_eq!(spec.objects[1].id, object);
+        assert!(matches!(
+            spec.objects[0].content,
+            ObjectSpecContent::Geometry(_)
+        ));
+        assert!(matches!(
+            spec.objects[1].content,
+            ObjectSpecContent::Text(_)
+        ));
     }
 
     #[test]
