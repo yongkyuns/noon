@@ -23,6 +23,7 @@ mod plot_geometry_authoring;
 mod plot_sampling_authoring;
 mod polygram_authoring;
 mod reactive_authoring;
+mod riemann_authoring;
 mod rounded_rectangle_authoring;
 mod sector_authoring;
 mod shape_matcher_authoring;
@@ -45,6 +46,7 @@ pub use plot_geometry_authoring::*;
 pub use plot_sampling_authoring::*;
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
+pub use riemann_authoring::*;
 pub use rounded_rectangle_authoring::*;
 pub use sector_authoring::*;
 pub use shape_matcher_authoring::*;
@@ -66,15 +68,17 @@ pub mod prelude {
         NumberRange, ParametricSamplePlan, PlotGeometryError, PlotRangeRequest,
         PlotSamplingError, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
         ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
-        RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
-        ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError,
-        TransformedAxes2DState, TransformedNumberLineState, Triangle, Typst, Underline,
-        ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
+        RiemannAuthoringError, RiemannRectangleGeometry, RiemannSample, RiemannSamplePlan,
+        RiemannSampleType, RoundedRectangle, RoundedRectangleAuthoringError, SampleRange,
+        SampleSpan, Sector, ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text,
+        TextAuthoringError, TransformedAxes2DState, TransformedNumberLineState, Triangle, Typst,
+        Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
         DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO,
         DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
         DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
         DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
         MANIM_DEFAULT_DISCONTINUITY_DT, MANIM_DEFAULT_PARAMETRIC_STEP,
+        MANIM_DEFAULT_RIEMANN_DX, MANIM_DEFAULT_RIEMANN_WIDTH_SCALE_FACTOR,
         MANIM_GRAPH_X_SEARCH_TOLERANCE, MANIM_SAMPLED_GRAPH_POINTS_PER_TICK,
         SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
