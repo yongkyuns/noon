@@ -1,6 +1,6 @@
-use noon_core::{GeometryRef, TAU, Vec2};
+use noon_core::{GeometryRef, Vec2, TAU};
 
-use crate::{PathProportionError, point_from_proportion};
+use crate::{point_from_proportion, PathProportionError};
 
 const MANIM_CIRCLE_COMPONENTS: usize = 9;
 
@@ -142,7 +142,9 @@ mod tests {
         let circle = GeometryRef::circle(1.0);
         assert!(matches!(
             point_from_geometry_proportion(&circle, f32::NAN),
-            Err(GeometryProportionError::Path(PathProportionError::InvalidProportion(_)))
+            Err(GeometryProportionError::Path(
+                PathProportionError::InvalidProportion(_)
+            ))
         ));
         assert_eq!(
             point_from_geometry_proportion(&GeometryRef::rectangle(1.0, 1.0), 0.5),
