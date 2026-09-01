@@ -21,14 +21,8 @@ pub fn manim_dashed_line_snapshot_json(
     dash_length: f64,
     dashed_ratio: f64,
 ) -> Result<String, String> {
-    let start = Vec2::new(
-        finite_f32("start.x", start_x)?,
-        finite_f32("start.y", start_y)?,
-    );
-    let end = Vec2::new(
-        finite_f32("end.x", end_x)?,
-        finite_f32("end.y", end_y)?,
-    );
+    let start = Vec2::new(finite_f32("start.x", start_x)?, finite_f32("start.y", start_y)?);
+    let end = Vec2::new(finite_f32("end.x", end_x)?, finite_f32("end.y", end_y)?);
     let line = DashedLine::with_options(start, end, dash_length, dashed_ratio)
         .map_err(|error| error.to_string())?;
     snapshot_json(line.into_snapshot())
