@@ -282,6 +282,7 @@ class ParametricFunction(_compat.VMobject):
             raise NotImplementedError(
                 "ParametricFunction(use_vectorized=True) requires vectorized callback transport"
             )
+        color = kwargs.pop("color", None)
         resolved_range = _parametric_range(t_range)
         request = {
             "t_range": resolved_range,
@@ -323,6 +324,8 @@ class ParametricFunction(_compat.VMobject):
             self,
             _compat._manim_vmobject_kwargs(kwargs, default_color=_base.WHITE),
         )
+        if color is not None:
+            self.set_color(_color("color", color))
 
     def get_function(self) -> Callable[[float], object]:
         return self.function
