@@ -111,6 +111,12 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Classify PR risk
+        id: pr-risk
+        run: node scripts/classify-pr-risk.mjs "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
 
       - name: Use stable Rust and WASM target
         run: |
@@ -222,6 +228,21 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check WebGL rendering for renderer-critical changes
+        if: steps.pr-risk.outputs.renderer_critical == 'true'
+        id: webgl-smoke
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgl
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/browser-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Summarize browser timing
         if: always()
         env:
@@ -231,6 +252,9 @@ jobs:
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
+          WEBGL_SECONDS: ${{ steps.webgl-smoke.outputs.seconds }}
+          RENDERER_CRITICAL: ${{ steps.pr-risk.outputs.renderer_critical }}
+          RENDERER_CRITICAL_PATHS: ${{ steps.pr-risk.outputs.renderer_critical_paths }}
         run: |
           total=""
           if [[ "$START_EPOCH" =~ ^[0-9]+$ ]]; then
@@ -255,11 +279,22 @@ jobs:
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
             echo "| Canonical retained execution | $(display_seconds "$RETAINED_SECONDS") |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
+            if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+              echo "| WebGL renderer-risk smoke | $(display_seconds "$WEBGL_SECONDS") |"
+            fi
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
+            if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+              echo "Renderer-risk escalation: WebGL smoke enabled for: $RENDERER_CRITICAL_PATHS"
+              echo
+            fi
             echo "The measured browser path starts before checkout and ends after the renderer smoke. Hosted-runner queue time and post-job cleanup are intentionally excluded."
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$total" =~ ^[0-9]+$ ]] && (( total >= 110 )); then
-            echo "::warning title=PR Fast Gate timing::Browser fast path reached ${total}s, leaving less than 10s of margin against the 120s target."
+            if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+              echo "::notice title=PR Fast Gate timing::Renderer-critical escalation extended the browser path to ${total}s; low-risk PRs retain the 120s target."
+            else
+              echo "::warning title=PR Fast Gate timing::Browser fast path reached ${total}s, leaving less than 10s of margin against the 120s target."
+            fi
           fi
