@@ -441,16 +441,8 @@ mod tests {
     #[test]
     fn bounded_area_clips_to_overlap_and_traces_second_graph_in_reverse() {
         let axes = axes(Transform2D::IDENTITY);
-        let graph = graph_snapshot(
-            axes,
-            &[-1.0, 0.0, 1.0, 2.0],
-            &[0.0, 1.0, 1.0, 0.0],
-        );
-        let bounded = graph_snapshot(
-            axes,
-            &[0.0, 1.0, 2.0, 3.0],
-            &[-1.0, -1.0, -1.0, -1.0],
-        );
+        let graph = graph_snapshot(axes, &[-1.0, 0.0, 1.0, 2.0], &[0.0, 1.0, 1.0, 0.0]);
+        let bounded = graph_snapshot(axes, &[0.0, 1.0, 2.0, 3.0], &[-1.0, -1.0, -1.0, -1.0]);
         let plan = AreaSamplePlan::new(
             axes,
             &graph,
