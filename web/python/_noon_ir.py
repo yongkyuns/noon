@@ -370,10 +370,29 @@ class Scene:
         self._objects: list[dict[str, Any]] = []
         self._tracks: list[dict[str, Any]] = []
         self._object_keys: dict[int, str] = {}
+        self._object_positions: dict[int, int] = {}
         self._track_keys: dict[int, str] = {}
+        self._next_object_id = 0
+        self._next_painter_order = 0
         self._scheduled_transform_targets: dict[int, dict[str, Any]] = {}
         self._scheduled_transform_ends: dict[int, float] = {}
         self._scheduled_fade_ends: dict[int, float] = {}
+
+    def _allocate_object(self, key: str | None = None) -> tuple[Object, int]:
+        """Allocate one scene-global object identity and painter slot.
+
+        Content backends may store their payloads in different authoring projections,
+        but identity/order are scene concerns and therefore come from this one allocator.
+        """
+        object_id = self._next_object_id
+        painter_order = self._next_painter_order
+        authoring_key = _authoring_key("key", key, f"@object:{object_id}")
+        if authoring_key in self._object_keys.values():
+            raise ValueError(f"duplicate object key: {authoring_key}")
+        self._object_keys[object_id] = authoring_key
+        self._next_object_id += 1
+        self._next_painter_order += 1
+        return Object(object_id, self._owner), painter_order
 
     def add(self, mobject: Mobject, *, key: str | None = None) -> Object:
         if not isinstance(mobject, Mobject):
@@ -583,6 +602,11 @@ class Scene:
         return (
             len(self._objects),
             len(self._tracks),
+            self._next_object_id,
+            self._next_painter_order,
+            dict(self._object_keys),
+            dict(self._object_positions),
+            dict(self._track_keys),
             dict(self._scheduled_transform_targets),
             dict(self._scheduled_transform_ends),
             dict(self._scheduled_fade_ends),
@@ -592,16 +616,22 @@ class Scene:
         (
             object_count,
             track_count,
+            next_object_id,
+            next_painter_order,
+            object_keys,
+            object_positions,
+            track_keys,
             scheduled_transform_targets,
             scheduled_transform_ends,
             scheduled_fade_ends,
         ) = checkpoint
-        for object_id in range(object_count, len(self._objects)):
-            self._object_keys.pop(object_id, None)
-        for track_id in range(track_count, len(self._tracks)):
-            self._track_keys.pop(track_id, None)
         del self._objects[object_count:]
         del self._tracks[track_count:]
+        self._next_object_id = next_object_id
+        self._next_painter_order = next_painter_order
+        self._object_keys = object_keys
+        self._object_positions = object_positions
+        self._track_keys = track_keys
         self._scheduled_transform_targets = scheduled_transform_targets
         self._scheduled_transform_ends = scheduled_transform_ends
         self._scheduled_fade_ends = scheduled_fade_ends
@@ -1152,7 +1182,12 @@ class Scene:
         )
 
     def _snapshot_for_object(self, obj: Object) -> dict[str, Any]:
-        stored = self._objects[obj.id]
+        if not isinstance(obj, Object) or obj._owner is not self._owner:
+            raise ValueError("object must belong to this Scene")
+        position = self._object_positions.get(obj.id)
+        if position is None:
+            raise ValueError(f"object {obj.id} is not geometry-backed")
+        stored = self._objects[position]
         return {
             "geometry": copy.deepcopy(stored["geometry"]),
             "transform": copy.deepcopy(stored["transform"]),
@@ -1248,15 +1283,12 @@ class Scene:
     def _append_snapshot(
         self, snapshot: dict[str, Any], key: str | None
     ) -> Object:
-        object_id = len(self._objects)
-        authoring_key = _authoring_key("key", key, f"@object:{object_id}")
-        if authoring_key in self._object_keys.values():
-            raise ValueError(f"duplicate object key: {authoring_key}")
-        self._object_keys[object_id] = authoring_key
+        obj, _ = self._allocate_object(key)
         stored = copy.deepcopy(snapshot)
-        stored["id"] = object_id
+        stored["id"] = obj.id
+        self._object_positions[obj.id] = len(self._objects)
         self._objects.append(stored)
-        return Object(object_id, self._owner)
+        return obj
 
     def _add_object(
         self,
