@@ -1,0 +1,89 @@
+name: Prepare direct SceneSpec retained consumer
+
+on:
+  push:
+    branches:
+      - arch/scene-spec-retained-lowering
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arch/scene-spec-retained-lowering
+          fetch-depth: 0
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Add direct canonical SceneSpec lowering
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/noon-web/src/retained_authoring_scene.rs")
+          text = path.read_text()
+
+          old = """use noon_core::{ObjectId, SceneDefinition, TrackDefinition, Vec2};\n\nuse crate::{"""
+          new = """use noon_core::{Color, ObjectId, SceneDefinition, Style, TrackDefinition, Transform2D, Vec2};\nuse noon_ir::{ObjectSpecContent, SceneSpec, SceneSpecError, TextSpec, TextSpecKind, TextSpecOptions};\n\nuse crate::{"""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          marker = """    pub const fn scene(&self) -> &RetainedScene {"""
+          addition = """    /// Lower the canonical mixed authoring document directly into the retained\n    /// resource/runtime domain.\n    ///\n    /// The entire source document and every currently supported text presentation are\n    /// preflighted before any text resource is compiled. Geometry and text are then\n    /// inserted in the sole canonical painter-order vector; tracks and camera identity\n    /// are already canonical and are therefore preserved without re-materialization.\n    pub fn from_scene_spec(spec: SceneSpec) -> Result<Self, MixedRetainedAuthoringError> {\n        spec.validate()?;\n        for object in &spec.objects {\n            if let ObjectSpecContent::Text(text) = &object.content {\n                preflight_scene_spec_text(\n                    object.id,\n                    text,\n                    object.transform,\n                    object.style,\n                )?;\n            }\n        }\n\n        let SceneSpec {\n            objects,\n            tracks,\n            camera_object,\n            ..\n        } = spec;\n        let mut scene = RetainedScene::new();\n        for (order, object) in objects.into_iter().enumerate() {\n            let noon_ir::ObjectSpec {\n                id,\n                content,\n                transform,\n                style,\n            } = object;\n            match content {\n                ObjectSpecContent::Geometry(geometry) => {\n                    scene.insert_geometry_at(order, id, geometry, transform, style)?;\n                }\n                ObjectSpecContent::Text(text) => {\n                    insert_scene_spec_text(&mut scene, order, id, text, transform, style)?;\n                }\n            }\n        }\n        RetainedCompiledScene::compile(scene.objects(), &tracks)?;\n\n        Ok(Self {\n            scene,\n            tracks,\n            camera_object,\n        })\n    }\n\n""" + marker
+          assert text.count(marker) == 1
+          text = text.replace(marker, addition)
+
+          old = """    Compile(RetainedCompileError),\n    ObjectCountOverflow,"""
+          new = """    Compile(RetainedCompileError),\n    SceneSpec(SceneSpecError),\n    UnsupportedTextKind { object: ObjectId, kind: TextSpecKind },\n    UnsupportedTextPresentation(ObjectId),\n    ObjectCountOverflow,"""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = """            Self::Compile(error) => error.fmt(formatter),\n            Self::ObjectCountOverflow => {"""
+          new = """            Self::Compile(error) => error.fmt(formatter),\n            Self::SceneSpec(error) => error.fmt(formatter),\n            Self::UnsupportedTextKind { object, kind } => write!(\n                formatter,\n                \"SceneSpec text object {} uses unsupported source kind {kind:?}\",\n                object.get()\n            ),\n            Self::UnsupportedTextPresentation(object) => write!(\n                formatter,\n                \"SceneSpec text object {} uses presentation not representable by the current retained text backend\",\n                object.get()\n            ),\n            Self::ObjectCountOverflow => {"""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          marker = """impl From<RetainedCompileError> for MixedRetainedAuthoringError {\n    fn from(value: RetainedCompileError) -> Self {\n        Self::Compile(value)\n    }\n}\n"""
+          addition = marker + """\nimpl From<SceneSpecError> for MixedRetainedAuthoringError {\n    fn from(value: SceneSpecError) -> Self {\n        Self::SceneSpec(value)\n    }\n}\n"""
+          assert text.count(marker) == 1
+          text = text.replace(marker, addition)
+
+          marker = """fn preflight_merge(\n    legacy: &SceneDefinition,"""
+          helpers = """fn preflight_scene_spec_text(\n    object: ObjectId,\n    text: &TextSpec,\n    transform: Transform2D,\n    style: Style,\n) -> Result<(), MixedRetainedAuthoringError> {\n    match text.kind {\n        TextSpecKind::Plain | TextSpecKind::Typst | TextSpecKind::MathTypst => {}\n        kind => {\n            return Err(MixedRetainedAuthoringError::UnsupportedTextKind { object, kind });\n        }\n    }\n\n    let defaults = Style::default();\n    let Some(fill) = style.fill else {\n        return Err(MixedRetainedAuthoringError::UnsupportedTextPresentation(object));\n    };\n    let color_values = [fill.red, fill.green, fill.blue, fill.alpha];\n    let transform_values = [\n        transform.translation.x,\n        transform.translation.y,\n        transform.rotation,\n        transform.scale.x,\n        transform.scale.y,\n    ];\n    if style.stroke.is_some()\n        || style.stroke_width != 0.0\n        || style.stroke_width_mode != defaults.stroke_width_mode\n        || style.stroke_join != defaults.stroke_join\n        || style.stroke_cap != defaults.stroke_cap\n        || !style.opacity.is_finite()\n        || !(0.0..=1.0).contains(&style.opacity)\n        || color_values.iter().any(|value| !value.is_finite())\n        || transform_values.iter().any(|value| !value.is_finite())\n    {\n        return Err(MixedRetainedAuthoringError::UnsupportedTextPresentation(object));\n    }\n    Ok(())\n}\n\nfn insert_scene_spec_text(\n    scene: &mut RetainedScene,\n    order: usize,\n    id: ObjectId,\n    text: TextSpec,\n    transform: Transform2D,\n    style: Style,\n) -> Result<(), MixedRetainedAuthoringError> {\n    let color = style\n        .fill\n        .expect(\"SceneSpec text presentation was preflighted before lowering\");\n    let TextSpec {\n        kind,\n        source,\n        font_size,\n        options,\n    } = text;\n\n    match kind {\n        TextSpecKind::Plain => {\n            let mut text = NativeText::new(source).with_font_size(font_size);\n            match options {\n                TextSpecOptions::Default => {}\n                TextSpecOptions::NativePlain {\n                    font_family,\n                    line_spacing,\n                } => {\n                    text = text\n                        .with_font(font_family)\n                        .with_line_spacing(line_spacing);\n                }\n            }\n            let text = text\n                .color(color)\n                .set_opacity(style.opacity)\n                .move_to(transform.translation)\n                .scale_xy(transform.scale)\n                .rotate(transform.rotation);\n            scene.insert_native_text_at(order, id, text)?;\n        }\n        TextSpecKind::Typst => {\n            debug_assert!(matches!(options, TextSpecOptions::Default));\n            let text = Typst::new(source)\n                .with_font_size(font_size)\n                .color(color)\n                .set_opacity(style.opacity)\n                .move_to(transform.translation)\n                .scale_xy(transform.scale)\n                .rotate(transform.rotation);\n            scene.insert_typst_at(order, id, text)?;\n        }\n        TextSpecKind::MathTypst => {\n            debug_assert!(matches!(options, TextSpecOptions::Default));\n            let text = MathTypst::new(source)\n                .with_font_size(font_size)\n                .color(color)\n                .set_opacity(style.opacity)\n                .move_to(transform.translation)\n                .scale_xy(transform.scale)\n                .rotate(transform.rotation);\n            scene.insert_math_typst_at(order, id, text)?;\n        }\n        kind => {\n            return Err(MixedRetainedAuthoringError::UnsupportedTextKind { object: id, kind });\n        }\n    }\n    Ok(())\n}\n\n""" + marker
+          assert text.count(marker) == 1
+          text = text.replace(marker, helpers)
+
+          marker = """    #[test]\n    fn native_text_only_authoring_decodes_into_one_retained_plain_text_object() {"""
+          tests = """    fn supported_text_style() -> Style {\n        Style {\n            fill: Some(Color::WHITE),\n            stroke: None,\n            stroke_width: 0.0,\n            opacity: 1.0,\n            ..Style::default()\n        }\n    }\n\n    #[test]\n    fn direct_scene_spec_lowering_preserves_mixed_order_tracks_and_camera() {\n        let camera = ObjectId::new(1);\n        let text_id = ObjectId::new(2);\n        let geometry = ObjectId::new(3);\n        let mut text = noon_ir::ObjectSpec::text(\n            text_id,\n            TextSpec::native_plain(\n                \"middle\",\n                noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,\n                48.0,\n                -1.0,\n            ),\n        );\n        text.style = supported_text_style();\n        let track = TrackDefinition {\n            id: noon_core::TrackId::new(0),\n            object: text_id,\n            property: Property::Opacity,\n            values: TrackValues::Scalar { from: 1.0, to: 0.5 },\n            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),\n            time_map: noon_core::CompositionTimeMap::identity(),\n        };\n        let mut spec = SceneSpec::new(\n            vec![\n                noon_ir::ObjectSpec::geometry(camera, GeometryRef::rectangle(14.0, 8.0)),\n                text,\n                noon_ir::ObjectSpec::geometry(geometry, GeometryRef::circle(0.5)),\n            ],\n            vec![track.clone()],\n        )\n        .unwrap();\n        spec.camera_object = Some(camera);\n        spec.validate().unwrap();\n\n        let mixed = MixedRetainedAuthoringScene::from_scene_spec(spec).unwrap();\n        assert_eq!(\n            mixed\n                .scene()\n                .objects()\n                .iter()\n                .map(|object| object.id)\n                .collect::<Vec<_>>(),\n            vec![camera, text_id, geometry]\n        );\n        assert!(mixed.scene().objects()[0].content.geometry().is_some());\n        let handle = mixed.scene().objects()[1].content.text().unwrap();\n        assert_eq!(mixed.scene().texts().get(handle).unwrap().source.as_ref(), \"middle\");\n        assert!(mixed.scene().objects()[2].content.geometry().is_some());\n        assert_eq!(mixed.tracks(), [track]);\n        assert_eq!(mixed.camera_object(), Some(camera));\n        assert_eq!(mixed.compile().unwrap().object_index(text_id), Some(1));\n    }\n\n    #[test]\n    fn direct_scene_spec_lowering_rejects_unsupported_text_kind() {\n        let id = ObjectId::new(1);\n        let mut object = noon_ir::ObjectSpec::text(\n            id,\n            TextSpec::new(TextSpecKind::Markup, \"<b>Noon</b>\", 48.0),\n        );\n        object.style = supported_text_style();\n        let spec = SceneSpec::new(vec![object], Vec::new()).unwrap();\n        assert!(matches!(\n            MixedRetainedAuthoringScene::from_scene_spec(spec),\n            Err(MixedRetainedAuthoringError::UnsupportedTextKind { object, kind })\n                if object == id && kind == TextSpecKind::Markup\n        ));\n    }\n\n    #[test]\n    fn direct_scene_spec_lowering_rejects_unrepresentable_text_style() {\n        let id = ObjectId::new(1);\n        let mut object = noon_ir::ObjectSpec::text(id, TextSpec::typst(\"Noon\", 48.0));\n        object.style = supported_text_style();\n        object.style.stroke = Some(Color::WHITE);\n        object.style.stroke_width = 0.1;\n        let spec = SceneSpec::new(vec![object], Vec::new()).unwrap();\n        assert!(matches!(\n            MixedRetainedAuthoringScene::from_scene_spec(spec),\n            Err(MixedRetainedAuthoringError::UnsupportedTextPresentation(object)) if object == id\n        ));\n    }\n\n""" + marker
+          assert text.count(marker) == 1
+          text = text.replace(marker, tests)
+          path.write_text(text)
+
+          path = Path("crates/noon-web/src/retained_authoring_scene_spec.rs")
+          text = path.read_text()
+          old = """        let current =\n            MixedRetainedAuthoringScene::from_parts_with_tracks(&legacy, retained, vec![track])\n                .unwrap();\n\n        assert_eq!("""
+          new = """        let current =\n            MixedRetainedAuthoringScene::from_parts_with_tracks(&legacy, retained, vec![track])\n                .unwrap();\n        let direct = MixedRetainedAuthoringScene::from_scene_spec(canonical.clone()).unwrap();\n\n        assert_eq!(direct.scene().objects(), current.scene().objects());\n        assert_eq!(direct.tracks(), current.tracks());\n        assert_eq!(direct.camera_object(), current.camera_object());\n\n        assert_eq!("""
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo test -p noon-web --lib
+          cargo clippy -p noon-web --all-targets --all-features -- -D warnings
+
+      - name: Commit source-only result
+        run: |
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-web/src/retained_authoring_scene.rs crates/noon-web/src/retained_authoring_scene_spec.rs
+          git rm .github/workflows/stacked-scene-spec-consumer.yml
+          git commit -m "Lower canonical SceneSpec into retained runtime"
+          git push origin HEAD:arch/scene-spec-retained-lowering
