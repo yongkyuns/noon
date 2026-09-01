@@ -15,6 +15,7 @@ mod coordinate_transform_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
 mod geometry_authoring;
+mod graph_query_authoring;
 mod legacy;
 mod line_graph_authoring;
 mod line_matcher_authoring;
@@ -36,6 +37,7 @@ pub use coordinate_transform_authoring::*;
 pub use dashed_line_authoring::*;
 pub use elbow_authoring::*;
 pub use geometry_authoring::*;
+pub use graph_query_authoring::*;
 pub use legacy::*;
 pub use line_graph_authoring::*;
 pub use line_matcher_authoring::*;
@@ -54,16 +56,17 @@ pub mod prelude {
     pub use crate::{
         axes_function_vector_path, axes_line_graph_vector_path, parametric_vector_path,
         transformed_axes_function_vector_path, transformed_axes_line_graph_vector_path,
-        transformed_axes_sampled_values_vector_path, AnnularSector, Annulus, Arc,
+        transformed_axes_sampled_values_vector_path, transformed_graph_point_for_x,
+        transformed_graph_point_from_proportion, AnnularSector, Annulus, Arc,
         ArcAuthoringError, ArcBetweenPoints, Axes2DState, AxisTickError, BackgroundRectangle,
         CoordinateSystemError, Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow,
-        ElbowAuthoringError, Ellipse, GeometryAuthoringError, LineGraphAuthoringError,
-        LineMatcherAuthoringError, MathTypst, MovingCameraScene, NumberLineGeometryPlan,
-        NumberLineState, NumberLineTick, NumberLineTickOptions, NumberRange, ParametricSamplePlan,
-        PlotGeometryError, PlotRangeRequest, PlotSamplingError, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedMobject, RetainedScene, RoundedRectangle,
-        RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
+        ElbowAuthoringError, Ellipse, GeometryAuthoringError, GraphQueryError,
+        LineGraphAuthoringError, LineMatcherAuthoringError, MathTypst, MovingCameraScene,
+        NumberLineGeometryPlan, NumberLineState, NumberLineTick, NumberLineTickOptions,
+        NumberRange, ParametricSamplePlan, PlotGeometryError, PlotRangeRequest,
+        PlotSamplingError, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
+        ReactiveTimelineScene, RegularPolygon, RegularPolygram, RetainedMobject, RetainedScene,
+        RoundedRectangle, RoundedRectangleAuthoringError, SampleRange, SampleSpan, Sector,
         ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError,
         TransformedAxes2DState, TransformedNumberLineState, Triangle, Typst, Underline,
         ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
@@ -72,7 +75,8 @@ pub mod prelude {
         DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
         DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
         MANIM_DEFAULT_DISCONTINUITY_DT, MANIM_DEFAULT_PARAMETRIC_STEP,
-        MANIM_SAMPLED_GRAPH_POINTS_PER_TICK, SURROUNDING_RECTANGLE_DEFAULT_COLOR,
+        MANIM_GRAPH_X_SEARCH_TOLERANCE, MANIM_SAMPLED_GRAPH_POINTS_PER_TICK,
+        SURROUNDING_RECTANGLE_DEFAULT_COLOR,
     };
     pub use noon_core::{
         resolve_animation_options, resolve_composition_schedule, resolve_lifecycle_plan,
