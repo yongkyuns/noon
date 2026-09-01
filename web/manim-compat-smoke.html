@@ -12,8 +12,54 @@
 
       const client = new PythonAuthoringClient();
       const wasmReady = init();
+      const familyCreateSource = `
+from noon import *
+
+class RetainedFamilyCreateSmoke(Scene):
+    def construct(self):
+        family = VGroup(Text("AB"), Circle(radius=0.25))
+        self.play(Create(family), run_time=1.0, rate_func=linear)
+`;
+
+      let readyPromise = null;
+      async function ready() {
+        if (readyPromise == null) {
+          readyPromise = (async () => {
+            await Promise.all([client.ready(), wasmReady]);
+            const result = await client.run(familyCreateSource);
+            if (result.kind !== "scene_document") {
+              throw new Error(`family Create smoke returned ${result.kind}`);
+            }
+            if (result.document.objects.length !== 1) {
+              throw new Error(
+                `family Create smoke expected one geometry leaf, got ${result.document.objects.length}`,
+              );
+            }
+            const retained = result.retainedDocument;
+            if (!retained || retained.objects.length !== 1) {
+              throw new Error("family Create smoke expected one retained native Text leaf");
+            }
+            if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 1) {
+              throw new Error("family Create smoke did not author exactly one family animation request");
+            }
+            const sceneSpec = result.sceneSpec;
+            if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
+              throw new Error("family Create smoke did not reach canonical SceneSpec family animations");
+            }
+            const serialized = JSON.stringify(sceneSpec.family_animations[0]);
+            for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
+              if (serialized.includes(forbidden)) {
+                throw new Error(`family Create request leaked ${forbidden}`);
+              }
+            }
+            return result;
+          })();
+        }
+        return readyPromise;
+      }
+
       window.noonManimCompat = {
-        ready: () => Promise.all([client.ready(), wasmReady]),
+        ready,
         run: (source) => client.run(source),
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };

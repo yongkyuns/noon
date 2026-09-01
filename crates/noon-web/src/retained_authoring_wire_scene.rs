@@ -1,6 +1,6 @@
 use noon::RetainedScene;
 use noon_compile::RetainedCompiledScene;
-use noon_core::{ObjectId, SceneDefinition, TrackDefinition};
+use noon_core::{FamilyAnimationRequest, ObjectId, SceneDefinition, TrackDefinition};
 use noon_ir::{SceneSpec, SceneSpecError};
 use serde::Deserialize;
 
@@ -12,14 +12,16 @@ use crate::{
 /// One protocol-v2 retained payload.
 ///
 /// The established object document remains the compatibility source-level text schema;
-/// animation tracks are an additive wire field. The two inputs are normalized into one
-/// canonical `SceneSpec` before any retained/runtime lowering.
+/// animation tracks and semantic-family animations are additive wire fields. Inputs are
+/// normalized into one canonical `SceneSpec` before any retained/runtime lowering.
 #[derive(Debug, Deserialize)]
 struct RetainedAuthoringWireDocument {
     #[serde(flatten)]
     document: RetainedAuthoringDocument,
     #[serde(default)]
     tracks: Vec<RetainedTrackAuthoringSpec>,
+    #[serde(default)]
+    family_animations: Vec<FamilyAnimationRequest>,
 }
 
 /// Normalize the current browser compatibility pair into one canonical mixed scene JSON.
@@ -48,8 +50,11 @@ fn retained_authoring_scene_spec_from_json(
                 "invalid retained authoring document: {error}"
             ))
         })?;
-    retained_authoring_scene_spec(&legacy, wire.document, wire.tracks)
-        .map_err(map_scene_spec_adapter_error)
+    let mut spec = retained_authoring_scene_spec(&legacy, wire.document, wire.tracks)
+        .map_err(map_scene_spec_adapter_error)?;
+    spec.family_animations = wire.family_animations;
+    spec.validate().map_err(map_scene_spec_error)?;
+    Ok(spec)
 }
 
 /// Wire-facing mixed retained scene.
@@ -179,7 +184,10 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_core::{GeometryRef, Property, RateFunction, TrackTiming, TrackValues, Vec2};
+    use noon_core::{
+        FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationSpec, GeometryRef,
+        Property, RateFunction, SemanticNodeId, TrackTiming, TrackValues, Vec2,
+    };
     use noon_ir::{encode_scene, ObjectSpecContent};
     use serde_json::json;
 
@@ -309,6 +317,41 @@ mod tests {
             spec.objects[1].content,
             ObjectSpecContent::Text(_)
         ));
+    }
+
+    #[test]
+    fn browser_normalizer_carries_family_animation_requests_into_scene_spec() {
+        let legacy = SceneDefinition::new();
+        let object = ObjectId::new(1_u64 << 52);
+        let document = retained_document(object);
+        let mut wire = serde_json::to_value(document).unwrap();
+        let target = SemanticNodeId::new(7, 0);
+        let leaf = SemanticNodeId::new(8, 0);
+        let animation = FamilyAnimationRequest::new(
+            target,
+            vec![FamilyAnimationLeafBinding::new(leaf, object)],
+            FamilyAnimationSpec::new(
+                FamilyAnimationMode::Reveal,
+                0.0,
+                1.0,
+                1.0,
+                RateFunction::Smooth,
+                false,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        wire["family_animations"] = json!([animation]);
+
+        let json = canonical_retained_scene_spec_json(
+            &encode_scene(&legacy).unwrap(),
+            &serde_json::to_string(&wire).unwrap(),
+        )
+        .unwrap();
+        let spec = SceneSpec::from_json(&json).unwrap();
+        assert_eq!(spec.family_animations.len(), 1);
+        assert_eq!(spec.family_animations[0], animation);
     }
 
     #[test]
