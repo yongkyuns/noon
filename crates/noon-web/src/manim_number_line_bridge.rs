@@ -246,6 +246,7 @@ pub use wasm::WasmNumberLineAuthoringPlan;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon::IntoSnapshot;
     use noon_core::{Transform2D, Vec2};
     use serde_json::Value;
 
