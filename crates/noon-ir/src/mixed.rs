@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use noon_core::{
-    validate_track_definition, GeometryRef, ObjectDefinition, ObjectId, Style, TimelineError,
-    TrackDefinition, TrackId, Transform2D,
+    validate_track_definition, FamilyAnimationRequest, FamilyAnimationRequestError, GeometryRef,
+    ObjectDefinition, ObjectId, SemanticNodeId, Style, TimelineError, TrackDefinition, TrackId,
+    Transform2D,
 };
 use serde::{Deserialize, Serialize};
 
@@ -218,12 +219,16 @@ impl OrderedTextObjectSpec {
 ///
 /// The object vector is the single painter-order stream. Tracks continue to target
 /// stable `ObjectId`s, so geometry and text can share timeline semantics without a
-/// parallel text scene or fake geometry representation.
+/// parallel text scene or fake geometry representation. Semantic family animations
+/// carry only authoritative leaf/runtime bindings and timing; content-local animation
+/// members remain execution-local retained metadata.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SceneSpec {
     pub version: u32,
     pub objects: Vec<ObjectSpec>,
     pub tracks: Vec<TrackDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub family_animations: Vec<FamilyAnimationRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_object: Option<ObjectId>,
 }
@@ -237,6 +242,7 @@ impl SceneSpec {
             version: SCENE_SPEC_VERSION,
             objects,
             tracks,
+            family_animations: Vec::new(),
             camera_object: None,
         };
         spec.validate()?;
@@ -253,6 +259,7 @@ impl SceneSpec {
             version: SCENE_SPEC_VERSION,
             objects: legacy.objects.iter().map(ObjectSpec::from_legacy).collect(),
             tracks: legacy.tracks.clone(),
+            family_animations: Vec::new(),
             camera_object: legacy.camera_object,
         };
         spec.validate()?;
@@ -326,6 +333,7 @@ impl SceneSpec {
                 .map(|object| object.expect("every mixed scene painter slot must be filled"))
                 .collect(),
             tracks: legacy.tracks.clone(),
+            family_animations: Vec::new(),
             camera_object: legacy.camera_object,
         };
         spec.validate()?;
@@ -362,6 +370,21 @@ impl SceneSpec {
                 track: track.id,
                 error,
             })?;
+        }
+
+        for animation in &self.family_animations {
+            animation
+                .validate()
+                .map_err(SceneSpecError::FamilyAnimation)?;
+            for binding in animation.bindings() {
+                if !ids.contains(&binding.object) {
+                    return Err(SceneSpecError::UnknownFamilyAnimationObject {
+                        target: animation.target(),
+                        semantic_leaf: binding.semantic_leaf,
+                        object: binding.object,
+                    });
+                }
+            }
         }
 
         if let Some(camera) = self.camera_object {
@@ -408,6 +431,12 @@ pub enum SceneSpecError {
     InvalidTrack {
         track: TrackId,
         error: TimelineError,
+    },
+    FamilyAnimation(FamilyAnimationRequestError),
+    UnknownFamilyAnimationObject {
+        target: SemanticNodeId,
+        semantic_leaf: SemanticNodeId,
+        object: ObjectId,
     },
     UnknownCameraObject(ObjectId),
     ObjectCountOverflow,
@@ -466,6 +495,22 @@ impl std::fmt::Display for SceneSpecError {
             Self::InvalidTrack { track, error } => {
                 write!(formatter, "invalid mixed SceneSpec track {}: {error}", track.get())
             }
+            Self::FamilyAnimation(error) => {
+                write!(formatter, "invalid mixed SceneSpec family animation: {error}")
+            }
+            Self::UnknownFamilyAnimationObject {
+                target,
+                semantic_leaf,
+                object,
+            } => write!(
+                formatter,
+                "family animation target {}:{} leaf {}:{} references unknown SceneSpec object {}",
+                target.slot(),
+                target.generation(),
+                semantic_leaf.slot(),
+                semantic_leaf.generation(),
+                object.get()
+            ),
             Self::UnknownCameraObject(object) => {
                 write!(formatter, "unknown SceneSpec camera object {}", object.get())
             }
@@ -480,7 +525,10 @@ impl std::error::Error for SceneSpecError {}
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Color, GeometryRef, RateFunction, SceneDefinition, TrackTiming, Vec2};
+    use noon_core::{
+        Color, FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationSpec, GeometryRef,
+        RateFunction, SceneDefinition, SemanticStore, TrackTiming, Vec2,
+    };
 
     use super::*;
     use crate::SceneDocument;
@@ -506,6 +554,34 @@ mod tests {
             )
             .unwrap();
         scene
+    }
+
+    fn family_request(text: ObjectId, circle: ObjectId) -> FamilyAnimationRequest {
+        let mut semantics = SemanticStore::new();
+        let text_leaf = semantics.insert_authoring_object();
+        let circle_leaf = semantics.insert_authoring_object();
+        let family = semantics.insert_family();
+        semantics.add_member(family, text_leaf).unwrap();
+        semantics.add_member(family, circle_leaf).unwrap();
+        FamilyAnimationRequest::from_semantic_bindings(
+            &semantics,
+            family,
+            FamilyAnimationSpec::new(
+                FamilyAnimationMode::Reveal,
+                1.0,
+                2.0,
+                1.0,
+                RateFunction::Linear,
+                false,
+                false,
+            )
+            .unwrap(),
+            [
+                FamilyAnimationLeafBinding::new(circle_leaf, circle),
+                FamilyAnimationLeafBinding::new(text_leaf, text),
+            ],
+        )
+        .unwrap()
     }
 
     #[test]
@@ -635,6 +711,7 @@ mod tests {
                 TextSpec::typst("x", 24.0),
             )],
             tracks: vec![track.clone()],
+            family_animations: Vec::new(),
             camera_object: None,
         };
 
@@ -654,6 +731,7 @@ mod tests {
             version: SCENE_SPEC_VERSION,
             objects: vec![ObjectSpec::geometry(object, GeometryRef::circle(1.0))],
             tracks: vec![track.clone(), track.clone()],
+            family_animations: Vec::new(),
             camera_object: None,
         };
 
@@ -679,6 +757,7 @@ mod tests {
             version: SCENE_SPEC_VERSION,
             objects: vec![ObjectSpec::geometry(object, GeometryRef::circle(1.0))],
             tracks: vec![track.clone()],
+            family_animations: Vec::new(),
             camera_object: None,
         };
 
@@ -697,6 +776,114 @@ mod tests {
                 track: id,
                 error: TimelineError::InvalidDuration(-1.0),
             }) if id == track.id
+        ));
+    }
+
+    #[test]
+    fn family_animation_requests_round_trip_without_content_local_identity() {
+        let text_id = ObjectId::new(100);
+        let circle_id = ObjectId::new(101);
+        let mut spec = SceneSpec::new(
+            vec![
+                ObjectSpec::text(
+                    text_id,
+                    TextSpec::native_plain("AB", "DejaVu Sans Mono", 48.0, -1.0),
+                ),
+                ObjectSpec::geometry(circle_id, GeometryRef::circle(1.0)),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        spec.family_animations
+            .push(family_request(text_id, circle_id));
+        spec.validate().unwrap();
+
+        let request_json = serde_json::to_string(&spec.family_animations[0]).unwrap();
+        for forbidden in ["glyph", "font", "resource", "atlas", "svg"] {
+            assert!(!request_json.contains(forbidden));
+        }
+
+        let json = spec.to_json().unwrap();
+        assert!(json.contains("family_animations"));
+        let decoded = SceneSpec::from_json(&json).unwrap();
+        assert_eq!(decoded, spec);
+    }
+
+    #[test]
+    fn empty_family_animation_list_is_omitted_for_backward_compatible_json() {
+        let spec = SceneSpec::new(
+            vec![ObjectSpec::geometry(
+                ObjectId::new(7),
+                GeometryRef::circle(1.0),
+            )],
+            Vec::new(),
+        )
+        .unwrap();
+        let json = spec.to_json().unwrap();
+        assert!(!json.contains("family_animations"));
+    }
+
+    #[test]
+    fn family_animation_must_reference_existing_scene_objects() {
+        let existing = ObjectId::new(7);
+        let missing = ObjectId::new(99);
+        let leaf = SemanticNodeId::new(3, 4);
+        let target = SemanticNodeId::new(5, 6);
+        let mut spec = SceneSpec::new(
+            vec![ObjectSpec::geometry(existing, GeometryRef::circle(1.0))],
+            Vec::new(),
+        )
+        .unwrap();
+        spec.family_animations.push(
+            FamilyAnimationRequest::new(
+                target,
+                vec![FamilyAnimationLeafBinding::new(leaf, missing)],
+                FamilyAnimationSpec::new(
+                    FamilyAnimationMode::Reveal,
+                    0.0,
+                    1.0,
+                    0.0,
+                    RateFunction::Linear,
+                    false,
+                    false,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            spec.validate(),
+            Err(SceneSpecError::UnknownFamilyAnimationObject {
+                target: actual_target,
+                semantic_leaf,
+                object,
+            }) if actual_target == target && semantic_leaf == leaf && object == missing
+        ));
+    }
+
+    #[test]
+    fn deserialized_family_animation_timing_is_revalidated() {
+        let text_id = ObjectId::new(100);
+        let circle_id = ObjectId::new(101);
+        let mut spec = SceneSpec::new(
+            vec![
+                ObjectSpec::text(
+                    text_id,
+                    TextSpec::native_plain("AB", "DejaVu Sans Mono", 48.0, -1.0),
+                ),
+                ObjectSpec::geometry(circle_id, GeometryRef::circle(1.0)),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        spec.family_animations
+            .push(family_request(text_id, circle_id));
+        let mut json = serde_json::to_value(&spec).unwrap();
+        json["family_animations"][0]["spec"]["duration"] = serde_json::json!(-1.0);
+        let json = serde_json::to_string(&json).unwrap();
+        assert!(matches!(
+            SceneSpec::from_json(&json),
+            Err(SceneSpecError::FamilyAnimation(_))
         ));
     }
 

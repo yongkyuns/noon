@@ -35,6 +35,10 @@ mod semantic_family;
 mod animation_member_plan;
 pub use animation_member_plan::*;
 
+#[path = "family_animation_request.rs"]
+mod family_animation_request;
+pub use family_animation_request::*;
+
 #[path = "semantic_model.rs"]
 mod semantic_model;
 pub use semantic_model::*;
