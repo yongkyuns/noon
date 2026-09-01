@@ -10,6 +10,9 @@ const ENGINE_PROTOCOL_VERSION = 1;
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const RETAINED_AUTHORING_CHANNEL = "noon.authoring.retained";
+const SCENE_SPEC_VERSION = 1;
+const AUTHORING_CANONICAL = "canonical";
+const AUTHORING_COMPATIBILITY = "compatibility";
 const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 
 export class RetainedExecutionWorkerClient {
@@ -19,8 +22,7 @@ export class RetainedExecutionWorkerClient {
   #nextRequestId = 0;
   #pending = new Map();
   #session = 0;
-  #sceneJson = null;
-  #retainedDocumentJson = null;
+  #authoring = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
   #sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY;
@@ -57,13 +59,36 @@ export class RetainedExecutionWorkerClient {
   get diagnostics() {
     return Object.freeze({
       session: this.#session,
+      authoring: this.#authoring?.kind ?? null,
       staleWorkerEvents: Object.freeze({ ...this.#staleWorkerEvents }),
     });
   }
 
-  async start(
-    sceneJson,
-    retainedDocumentJson,
+  /// Compatibility entry point for the transitional split authoring payload.
+  async start(sceneJson, retainedDocumentJson, options = {}) {
+    validateLegacySceneJson(sceneJson);
+    validateRetainedDocumentJson(retainedDocumentJson);
+    return this.#startAuthoring(
+      Object.freeze({
+        kind: AUTHORING_COMPATIBILITY,
+        sceneJson,
+        retainedDocumentJson,
+      }),
+      options,
+    );
+  }
+
+  /// Canonical retained startup. Browser execution after #367 should use this path.
+  async startCanonical(sceneSpecJson, options = {}) {
+    validateSceneSpecJson(sceneSpecJson);
+    return this.#startAuthoring(
+      Object.freeze({ kind: AUTHORING_CANONICAL, sceneSpecJson }),
+      options,
+    );
+  }
+
+  async #startAuthoring(
+    authoring,
     {
       loopDurationSeconds = 4,
       transportMode = selectExecutionTransportMode(),
@@ -73,9 +98,9 @@ export class RetainedExecutionWorkerClient {
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       throw new Error("RetainedExecutionWorkerClient is already started");
     }
-    validateLegacySceneJson(sceneJson);
-    validateRetainedDocumentJson(retainedDocumentJson);
+    validateAuthoringPayload(authoring);
     validateLoopDurationSeconds(loopDurationSeconds);
+    validateSharedSlotCapacity(sharedSlotCapacity);
     if (
       transportMode !== EXECUTION_TRANSPORT_SHARED &&
       transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
@@ -92,8 +117,7 @@ export class RetainedExecutionWorkerClient {
       throw new Error("OffscreenCanvas transfer is unavailable in this browser");
     }
 
-    this.#sceneJson = sceneJson;
-    this.#retainedDocumentJson = retainedDocumentJson;
+    this.#authoring = authoring;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
     this.#sharedSlotCapacity = sharedSlotCapacity;
@@ -112,7 +136,7 @@ export class RetainedExecutionWorkerClient {
       canvasTransferred = true;
       this.#engineWorker = new Worker(
         new URL("./retained-execution-engine-worker.js", import.meta.url),
-        { type: "module", name: "noon-mixed-retained-engine" },
+        { type: "module", name: "noon-retained-engine" },
       );
       this.#renderWorker = new Worker(
         new URL("./retained-execution-render-worker.js", import.meta.url),
@@ -138,18 +162,7 @@ export class RetainedExecutionWorkerClient {
         }),
         [offscreen, channel.port2],
       );
-      this.#engineWorker.postMessage(
-        engineEnvelope("init", {
-          port: channel.port1,
-          sceneJson,
-          retainedDocumentJson,
-          loopDurationSeconds,
-          transportMode,
-          sharedSlotCapacity,
-          session: this.#session,
-        }),
-        [channel.port1],
-      );
+      this.#postEngineInit(this.#engineWorker, channel.port1);
       const ready = await this.#ready;
       this.#playing = true;
       this.#fatalOwner = null;
@@ -227,11 +240,7 @@ export class RetainedExecutionWorkerClient {
   }
 
   async restart({ failedOwner = this.#fatalOwner } = {}) {
-    if (
-      this.#sceneJson === null ||
-      this.#retainedDocumentJson === null ||
-      this.#transportMode === null
-    ) {
+    if (this.#authoring === null || this.#transportMode === null) {
       throw new Error("RetainedExecutionWorkerClient has not been started");
     }
     if (failedOwner !== null && failedOwner !== "engine" && failedOwner !== "render") {
@@ -265,7 +274,7 @@ export class RetainedExecutionWorkerClient {
     this.#session = checkedNext(this.#session, "mixed retained execution session");
     this.#engineWorker = new Worker(
       new URL("./retained-execution-engine-worker.js", import.meta.url),
-      { type: "module", name: "noon-mixed-retained-engine" },
+      { type: "module", name: "noon-retained-engine" },
     );
     const engineReady = this.#workerReady(this.#engineWorker, ENGINE_CHANNEL, "engine");
     const nextReady = Promise.all([engineReady, renderAttached]).then(([engine, render]) => ({
@@ -275,18 +284,7 @@ export class RetainedExecutionWorkerClient {
       session: this.#session,
     }));
     this.#ready = nextReady;
-    this.#engineWorker.postMessage(
-      engineEnvelope("init", {
-        port: channel.port1,
-        sceneJson: this.#sceneJson,
-        retainedDocumentJson: this.#retainedDocumentJson,
-        loopDurationSeconds: this.#loopDurationSeconds,
-        transportMode: this.#transportMode,
-        sharedSlotCapacity: this.#sharedSlotCapacity,
-        session: this.#session,
-      }),
-      [channel.port1],
-    );
+    this.#postEngineInit(this.#engineWorker, channel.port1);
 
     const ready = await nextReady;
     this.#playing = true;
@@ -298,8 +296,7 @@ export class RetainedExecutionWorkerClient {
   }
 
   async #restartAll() {
-    const sceneJson = this.#sceneJson;
-    const retainedDocumentJson = this.#retainedDocumentJson;
+    const authoring = this.#authoring;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
     const sharedSlotCapacity = this.#sharedSlotCapacity;
@@ -308,7 +305,7 @@ export class RetainedExecutionWorkerClient {
       this.terminate();
       this.#canvas = replaceExecutionCanvas(this.#canvas);
     }
-    const ready = await this.start(sceneJson, retainedDocumentJson, {
+    const ready = await this.#startAuthoring(authoring, {
       loopDurationSeconds,
       transportMode,
       sharedSlotCapacity,
@@ -332,6 +329,23 @@ export class RetainedExecutionWorkerClient {
     }
     this.#pending.clear();
     this.#fatalOwner = null;
+  }
+
+  #postEngineInit(worker, port) {
+    if (this.#authoring === null) {
+      throw new Error("retained execution authoring payload is unavailable");
+    }
+    worker.postMessage(
+      engineEnvelope("init", {
+        port,
+        ...authoringWirePayload(this.#authoring),
+        loopDurationSeconds: this.#loopDurationSeconds,
+        transportMode: this.#transportMode,
+        sharedSlotCapacity: this.#sharedSlotCapacity,
+        session: this.#session,
+      }),
+      [port],
+    );
   }
 
   async #requestEngine(type, payload, transfer = []) {
@@ -531,6 +545,50 @@ function validateWorkerEnvelope(message, channel) {
   }
 }
 
+function validateAuthoringPayload(authoring) {
+  if (authoring?.kind === AUTHORING_CANONICAL) {
+    validateSceneSpecJson(authoring.sceneSpecJson);
+    return;
+  }
+  if (authoring?.kind === AUTHORING_COMPATIBILITY) {
+    validateLegacySceneJson(authoring.sceneJson);
+    validateRetainedDocumentJson(authoring.retainedDocumentJson);
+    return;
+  }
+  throw new TypeError("unsupported retained execution authoring payload");
+}
+
+function authoringWirePayload(authoring) {
+  if (authoring.kind === AUTHORING_CANONICAL) {
+    return { sceneSpecJson: authoring.sceneSpecJson };
+  }
+  return {
+    sceneJson: authoring.sceneJson,
+    retainedDocumentJson: authoring.retainedDocumentJson,
+  };
+}
+
+function validateSceneSpecJson(sceneSpecJson) {
+  if (typeof sceneSpecJson !== "string" || sceneSpecJson.trim() === "") {
+    throw new TypeError("canonical SceneSpec must be non-empty JSON text");
+  }
+  let document;
+  try {
+    document = JSON.parse(sceneSpecJson);
+  } catch (error) {
+    throw new TypeError(`canonical SceneSpec must be valid JSON: ${error}`);
+  }
+  if (!document || typeof document !== "object" || Array.isArray(document)) {
+    throw new TypeError("canonical SceneSpec must decode to an object");
+  }
+  if (document.version !== SCENE_SPEC_VERSION) {
+    throw new TypeError(`unsupported canonical SceneSpec version ${document.version}`);
+  }
+  if (!Array.isArray(document.objects) || !Array.isArray(document.tracks)) {
+    throw new TypeError("canonical SceneSpec must contain objects and tracks arrays");
+  }
+}
+
 function validateLegacySceneJson(sceneJson) {
   if (typeof sceneJson !== "string" || sceneJson.trim() === "") {
     throw new TypeError("legacy scene must be non-empty JSON text");
@@ -566,6 +624,13 @@ function validateLoopDurationSeconds(loopDurationSeconds) {
     throw new TypeError("mixed retained loop duration must be positive and finite");
   }
   return loopDurationSeconds;
+}
+
+function validateSharedSlotCapacity(sharedSlotCapacity) {
+  if (!Number.isSafeInteger(sharedSlotCapacity) || sharedSlotCapacity <= 0) {
+    throw new TypeError("mixed retained shared slot capacity must be a positive safe integer");
+  }
+  return sharedSlotCapacity;
 }
 
 function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {

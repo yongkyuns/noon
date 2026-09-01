@@ -1,4 +1,7 @@
-import init, { MixedRetainedEngineScenePlayer } from "./pkg/noon_web.js";
+import init, {
+  CanonicalRetainedEngineScenePlayer,
+  MixedRetainedEngineScenePlayer,
+} from "./pkg/noon_web.js";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
@@ -9,15 +12,19 @@ import {
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
+const AUTHORING_CANONICAL = "canonical";
+const AUTHORING_COMPATIBILITY = "compatibility";
 
 let renderPort = null;
 let transportMode = null;
 let transport = null;
 let player = null;
+let authoringKind = null;
 let latestTick = null;
 let controlQueue = [];
 let initialized = false;
 let stopped = false;
+let fatalErrorMessage = null;
 let resourceBundleBytes = 0;
 
 self.addEventListener("message", (event) => {
@@ -40,14 +47,7 @@ async function handleMainMessage(message) {
         return;
       case "state":
         requireInitialized();
-        respond(message.requestId, {
-          type: "state",
-          time: player.time(),
-          playing: player.isPlaying(),
-          nextPatchSequence: "0",
-          sceneJson: player.legacySceneJson(),
-          retainedDocumentJson: player.retainedDocumentJson(),
-        });
+        respond(message.requestId, runtimeState("state"));
         return;
       case "metrics":
         requireInitialized();
@@ -56,8 +56,11 @@ async function handleMainMessage(message) {
           metrics: {
             retained: true,
             mixed: true,
+            canonical: authoringKind === AUTHORING_CANONICAL,
             time: player.time(),
             playing: player.isPlaying(),
+            stopped,
+            fatalErrorMessage,
             resourceBundleBytes,
             resourceBundleTransfers: 1,
           },
@@ -69,7 +72,7 @@ async function handleMainMessage(message) {
       case "configure_callbacks":
       case "attach_host_port":
         throw new Error(
-          `${message.type} is not supported by mixed retained execution yet; rebuild the scene instead`,
+          `${message.type} is not supported by retained execution yet; rebuild the scene instead`,
         );
       case "stop":
         stopped = true;
@@ -79,7 +82,7 @@ async function handleMainMessage(message) {
         self.close();
         return;
       default:
-        throw new Error(`unknown mixed retained engine command ${message.type}`);
+        throw new Error(`unknown retained engine command ${message.type}`);
     }
   } catch (error) {
     fail(error, message?.requestId ?? null);
@@ -88,42 +91,30 @@ async function handleMainMessage(message) {
 
 async function initialize(message) {
   if (initialized) {
-    throw new Error("mixed retained execution engine worker is already initialized");
+    throw new Error("retained execution engine worker is already initialized");
   }
   if (!(message.port instanceof MessagePort)) {
-    throw new Error("mixed retained execution engine init requires a render MessagePort");
+    throw new Error("retained execution engine init requires a render MessagePort");
   }
-  if (typeof message.sceneJson !== "string" || message.sceneJson.trim() === "") {
-    throw new Error("mixed retained execution engine init requires legacy scene JSON");
-  }
-  if (
-    typeof message.retainedDocumentJson !== "string" ||
-    message.retainedDocumentJson.trim() === ""
-  ) {
-    throw new Error("mixed retained execution engine init requires retained document JSON");
-  }
+  const authoring = validateAuthoringInput(message);
   validateLoopDuration(message.loopDurationSeconds);
   if (!Number.isSafeInteger(message.session) || message.session < 0) {
-    throw new Error("mixed retained execution session must be a non-negative safe integer");
+    throw new Error("retained execution session must be a non-negative safe integer");
   }
   if (
     message.transportMode !== EXECUTION_TRANSPORT_SHARED &&
     message.transportMode !== EXECUTION_TRANSPORT_TRANSFERABLE
   ) {
-    throw new Error(`unsupported mixed retained execution transport mode ${message.transportMode}`);
+    throw new Error(`unsupported retained execution transport mode ${message.transportMode}`);
   }
 
   renderPort = message.port;
   renderPort.addEventListener("message", (event) => handleRenderMessage(event.data));
   renderPort.start();
   transportMode = message.transportMode;
+  authoringKind = authoring.kind;
   await init();
-  player = new MixedRetainedEngineScenePlayer(
-    message.sceneJson,
-    message.retainedDocumentJson,
-    message.loopDurationSeconds,
-    message.session,
-  );
+  player = createPlayer(authoring, message.loopDurationSeconds, message.session);
 
   // wasm-bindgen returns a view/copy for Vec<u8>; make an independently owned
   // transferable buffer so detaching it cannot affect WebAssembly memory.
@@ -151,8 +142,30 @@ async function initialize(message) {
 
   sendDeltaOrThrow(player.initialDeltaJson());
   initialized = true;
-  postMain({ type: "ready", transportMode, retained: true, mixed: true });
+  postMain({
+    type: "ready",
+    transportMode,
+    retained: true,
+    mixed: true,
+    canonical: authoringKind === AUTHORING_CANONICAL,
+  });
   drainWork();
+}
+
+function createPlayer(authoring, loopDurationSeconds, session) {
+  if (authoring.kind === AUTHORING_CANONICAL) {
+    return new CanonicalRetainedEngineScenePlayer(
+      authoring.sceneSpecJson,
+      loopDurationSeconds,
+      session,
+    );
+  }
+  return new MixedRetainedEngineScenePlayer(
+    authoring.sceneJson,
+    authoring.retainedDocumentJson,
+    loopDurationSeconds,
+    session,
+  );
 }
 
 function handleRenderMessage(message) {
@@ -173,14 +186,21 @@ function handleRenderMessage(message) {
     return;
   }
   if (message.type === "render_error") {
-    fail(new Error(`mixed retained render worker failed: ${message.message}`), null);
+    fail(new Error(`retained render worker failed: ${message.message}`), null);
   }
 }
 
 function enqueueControl(message) {
   requireInitialized();
   if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) {
-    throw new Error("mixed retained engine request ID must be a non-negative safe integer");
+    throw new Error("retained engine request ID must be a non-negative safe integer");
+  }
+  if (stopped) {
+    throw new Error(
+      fatalErrorMessage === null
+        ? "retained execution engine is stopped"
+        : `retained execution engine is stopped after: ${fatalErrorMessage}`,
+    );
   }
   controlQueue.push(message);
   drainWork();
@@ -191,17 +211,18 @@ function drainWork() {
     return;
   }
 
-  while (controlQueue.length > 0 && transportCanSend()) {
-    const message = controlQueue.shift();
+  while (controlQueue.length > 0) {
+    const message = controlQueue[0];
+    if (controlRequiresTransport(message) && !transportCanSend()) {
+      return;
+    }
+    controlQueue.shift();
     try {
       executeControl(message);
     } catch (error) {
       fail(error, message.requestId);
       return;
     }
-  }
-  if (controlQueue.length > 0) {
-    return;
   }
 
   if (latestTick === null || !transportCanSend()) {
@@ -219,22 +240,26 @@ function drainWork() {
   }
 }
 
+function controlRequiresTransport(message) {
+  return message.type === "seek" || message.type === "restart_playback";
+}
+
 function executeControl(message) {
   switch (message.type) {
     case "set_loop_duration":
       validateLoopDuration(message.loopDurationSeconds);
       player.setLoopDurationSeconds(message.loopDurationSeconds);
-      respond(message.requestId, runtimeResult("set_loop_duration"));
+      respond(message.requestId, runtimeState("result", "set_loop_duration"));
       return;
     case "pause":
       player.pause();
       latestTick = null;
-      respond(message.requestId, runtimeResult("pause"));
+      respond(message.requestId, runtimeState("result", "pause"));
       return;
     case "resume":
       player.resume();
       latestTick = null;
-      respond(message.requestId, runtimeResult("resume"));
+      respond(message.requestId, runtimeState("result", "resume"));
       return;
     case "seek": {
       const delta = player.seekDeltaJson(message.time);
@@ -242,7 +267,7 @@ function executeControl(message) {
       if (delta !== undefined && delta !== null) {
         sendDeltaOrThrow(delta);
       }
-      respond(message.requestId, runtimeResult("seek"));
+      respond(message.requestId, runtimeState("result", "seek"));
       return;
     }
     case "restart_playback": {
@@ -251,11 +276,11 @@ function executeControl(message) {
       if (delta !== undefined && delta !== null) {
         sendDeltaOrThrow(delta);
       }
-      respond(message.requestId, runtimeResult("restart_playback"));
+      respond(message.requestId, runtimeState("result", "restart_playback"));
       return;
     }
     default:
-      throw new Error(`unknown mixed retained queued engine command ${message.type}`);
+      throw new Error(`unknown retained queued engine command ${message.type}`);
   }
 }
 
@@ -277,35 +302,77 @@ function sendDeltaOrThrow(json) {
     return;
   }
   if (!transport.send(json)) {
-    throw new Error("mixed retained execution transport became backpressured after work was admitted");
+    throw new Error("retained execution transport became backpressured after work was admitted");
   }
   if (transportMode === EXECUTION_TRANSPORT_SHARED) {
     renderPort.postMessage({ type: "shared_delta" });
   }
 }
 
-function runtimeResult(operation) {
-  return {
-    type: "result",
-    operation,
+function runtimeState(type, operation = undefined) {
+  const state = {
+    type,
     time: player.time(),
     playing: player.isPlaying(),
     nextPatchSequence: "0",
+    ...authoringState(),
+  };
+  if (operation !== undefined) {
+    state.operation = operation;
+  }
+  return state;
+}
+
+function authoringState() {
+  if (authoringKind === AUTHORING_CANONICAL) {
+    return { sceneSpecJson: player.sceneSpecJson() };
+  }
+  return {
     sceneJson: player.legacySceneJson(),
     retainedDocumentJson: player.retainedDocumentJson(),
   };
 }
 
+function validateAuthoringInput(message) {
+  const hasCanonical =
+    typeof message.sceneSpecJson === "string" && message.sceneSpecJson.trim() !== "";
+  const hasLegacyScene =
+    typeof message.sceneJson === "string" && message.sceneJson.trim() !== "";
+  const hasRetainedDocument =
+    typeof message.retainedDocumentJson === "string" &&
+    message.retainedDocumentJson.trim() !== "";
+
+  if (hasCanonical) {
+    if (message.sceneJson !== undefined || message.retainedDocumentJson !== undefined) {
+      throw new Error("retained execution init must not mix canonical and compatibility inputs");
+    }
+    return { kind: AUTHORING_CANONICAL, sceneSpecJson: message.sceneSpecJson };
+  }
+  if (hasLegacyScene && hasRetainedDocument) {
+    return {
+      kind: AUTHORING_COMPATIBILITY,
+      sceneJson: message.sceneJson,
+      retainedDocumentJson: message.retainedDocumentJson,
+    };
+  }
+  throw new Error(
+    "retained execution init requires sceneSpecJson or the complete legacy scene + retained document pair",
+  );
+}
+
 function respond(requestId, payload) {
   if (!Number.isSafeInteger(requestId) || requestId < 0) {
-    throw new Error("mixed retained engine request ID must be a non-negative safe integer");
+    throw new Error("retained engine request ID must be a non-negative safe integer");
   }
   postMain({ requestId, ...payload });
 }
 
 function fail(error, requestId) {
-  stopped = true;
   const message = String(error?.message ?? error);
+  if (fatalErrorMessage === null) {
+    fatalErrorMessage = message;
+  }
+  stopped = true;
   renderPort?.postMessage({ type: "render_error", message });
   postMain({ type: "error", requestId, message });
 }
@@ -325,18 +392,18 @@ function validateMainMessage(message) {
     message.channel !== ENGINE_CHANNEL ||
     message.protocolVersion !== ENGINE_PROTOCOL_VERSION
   ) {
-    throw new Error("invalid mixed retained execution engine control envelope");
+    throw new Error("invalid retained execution engine control envelope");
   }
 }
 
 function validateLoopDuration(duration) {
   if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error("mixed retained execution loop duration must be positive and finite");
+    throw new Error("retained execution loop duration must be positive and finite");
   }
 }
 
 function requireInitialized() {
   if (!initialized || player === null) {
-    throw new Error("mixed retained execution engine worker is not initialized");
+    throw new Error("retained execution engine worker is not initialized");
   }
 }

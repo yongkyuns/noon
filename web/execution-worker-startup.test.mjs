@@ -149,7 +149,7 @@ function emitUnifiedRetainedReady(offset) {
 }
 
 function emitRetainedReady(offset) {
-  const engine = workerByName(offset, "noon-mixed-retained-engine");
+  const engine = workerByName(offset, "noon-retained-engine");
   const render = workerByName(offset, "noon-mixed-retained-render");
   engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
   render.emitMessage(
@@ -239,7 +239,7 @@ test("retained pre-ready crash rolls back transferred canvas and retry succeeds"
   });
   const offset = FakeWorker.instances.length;
   const started = client.start(SCENE_JSON, RETAINED_JSON, { transportMode: "transferable" });
-  const engine = workerByName(offset, "noon-mixed-retained-engine");
+  const engine = workerByName(offset, "noon-retained-engine");
   const render = workerByName(offset, "noon-mixed-retained-render");
   engine.emitMessage(envelope("noon.engine", "ready", { transportMode: "transferable" }));
   render.emitError("retained render startup crashed");

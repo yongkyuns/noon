@@ -159,7 +159,7 @@ impl InstalledRetainedExecutionMirror {
         &self,
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<RetainedFrameState, InstalledExecutionError> {
-        let mut wire = RetainedExecutionFrameMirror::default();
+        let mut wire = self.wire.clone();
         let (outcome, _) = wire.apply(delta.clone())?;
         debug_assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         let frame = wire
@@ -424,6 +424,28 @@ mod tests {
             mirror.family_frame().unwrap().unwrap().family_animation(0),
             Some(family_state(0.5))
         );
+    }
+
+    #[test]
+    fn later_family_snapshot_previews_against_live_wire_sequence() {
+        let mut engine = engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&engine.initial_delta_json().unwrap()).unwrap();
+        mirror
+            .apply_family(family_snapshot(initial.clone()))
+            .unwrap();
+
+        let mut later = initial;
+        later.sequence = 1;
+        later.time = 0.5;
+        let (outcome, changes) = mirror.apply_family(family_snapshot(later)).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert!(changes.is_all());
+        assert_eq!(mirror.frame().unwrap().time, 0.5);
+        assert!(mirror.family_plan().unwrap().is_some());
     }
 
     #[test]

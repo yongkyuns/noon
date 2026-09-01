@@ -15,9 +15,7 @@ test("engine ready is emitted only after the complete initial render bootstrap i
 
   const retainedResources = retained.indexOf('type: "retained_resources"');
   const retainedSnapshot = retained.indexOf("sendDeltaOrThrow(player.initialDeltaJson())");
-  const retainedReady = retained.indexOf(
-    'postMain({ type: "ready", transportMode, retained: true, mixed: true })',
-  );
+  const retainedReady = retained.indexOf('type: "ready"', retainedSnapshot);
   assert.ok(retainedResources >= 0);
   assert.ok(retainedSnapshot > retainedResources);
   assert.ok(retainedReady > retainedSnapshot);
