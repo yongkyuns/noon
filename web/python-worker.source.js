@@ -50,6 +50,12 @@ async function initializePyodide() {
   const authoringStore = new WasmAuthoringStore();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
+  self.noonCreateAxesAuthoringPlan = (requestJson) =>
+    authoringStore.createAxesAuthoringPlan(requestJson);
+  self.noonCreateAxesQueryPlan = (requestJson) =>
+    authoringStore.createAxesQueryPlan(requestJson);
+  self.noonCreateAxesPlotPlan = (requestJson) =>
+    authoringStore.createAxesPlotPlan(requestJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
     authoringStore.createMobject(manimDotSnapshotJson(pointX, pointY, radius));
   self.noonCreateAuthoringTriangleHandle = () =>
@@ -104,6 +110,8 @@ import _manim_semantic_handles
 _manim_semantic_handles.install()
 import _manim_shared_geometry
 _manim_shared_geometry.install()
+import _manim_axes
+_manim_axes.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()

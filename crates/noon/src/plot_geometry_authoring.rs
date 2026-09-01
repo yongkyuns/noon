@@ -1,4 +1,7 @@
-use crate::{Axes2DState, CoordinateSystemError, ParametricSamplePlan, PlotSamplingError};
+use crate::{
+    Axes2DState, CoordinateSystemError, ParametricSamplePlan, PlotSamplingError,
+    TransformedAxes2DState,
+};
 use noon_core::{Vec2, VectorPath};
 use noon_geometry::{smooth_cubic_path_from_subpaths, PathSmoothingError};
 
@@ -25,41 +28,91 @@ where
 }
 
 /// Compile the initial Manim-compatible `Axes.plot(function)` subset.
-///
-/// Parameters come from [`ParametricSamplePlan`], `function` is evaluated once
-/// per parameter, and [`Axes2DState`] owns the coordinate-to-scene mapping. With
-/// `use_smoothing=true`, the mapped anchors pass through the shared Manim cubic
-/// spline implementation in `noon-geometry`; otherwise they remain corners.
 pub fn axes_function_vector_path<F>(
     axes: Axes2DState,
     plan: &ParametricSamplePlan,
-    mut function: F,
+    function: F,
     use_smoothing: bool,
 ) -> Result<VectorPath, PlotGeometryError>
 where
     F: FnMut(f64) -> f64,
+{
+    axes_function_vector_path_with_mapper(plan, function, use_smoothing, |x, y| {
+        axes.coords_to_point(x, y)
+    })
+}
+
+/// Compile `Axes.plot(function)` against the current retained x/y-axis transforms.
+///
+/// This is the transform-safe path for an Axes family that has already been shifted,
+/// rotated, or scaled. Sampling and smoothing remain identical to the initial path;
+/// only coordinate mapping reads the current retained affine placement.
+pub fn transformed_axes_function_vector_path<F>(
+    axes: TransformedAxes2DState,
+    plan: &ParametricSamplePlan,
+    function: F,
+    use_smoothing: bool,
+) -> Result<VectorPath, PlotGeometryError>
+where
+    F: FnMut(f64) -> f64,
+{
+    axes_function_vector_path_with_mapper(plan, function, use_smoothing, |x, y| {
+        axes.coords_to_point(x, y)
+    })
+}
+
+fn axes_function_vector_path_with_mapper<F, M>(
+    plan: &ParametricSamplePlan,
+    mut function: F,
+    use_smoothing: bool,
+    mut coords_to_point: M,
+) -> Result<VectorPath, PlotGeometryError>
+where
+    F: FnMut(f64) -> f64,
+    M: FnMut(f64, f64) -> Result<Vec2, CoordinateSystemError>,
 {
     build_sampled_path(plan, use_smoothing, |parameter| {
         let value = function(parameter);
         if !value.is_finite() {
             return Err(PlotGeometryError::NonFiniteFunctionValue { parameter, value });
         }
-        Ok(axes.coords_to_point(parameter, value)?)
+        Ok(coords_to_point(parameter, value)?)
     })
 }
 
 /// Finish an `Axes.plot` after a host frontend evaluates the user callback.
-///
-/// Rust remains authoritative for parameter generation, sample cardinality,
-/// coordinate mapping, finite-value validation, smoothing, and final geometry.
-/// The host only supplies one scalar result for each parameter previously exposed
-/// by [`ParametricSamplePlan::parameter_subpaths`].
 pub fn axes_sampled_values_vector_path(
     axes: Axes2DState,
     plan: &ParametricSamplePlan,
     value_subpaths: &[Vec<f64>],
     use_smoothing: bool,
 ) -> Result<VectorPath, PlotGeometryError> {
+    axes_sampled_values_vector_path_with_mapper(plan, value_subpaths, use_smoothing, |x, y| {
+        axes.coords_to_point(x, y)
+    })
+}
+
+/// Finish host-evaluated plot samples against current retained Axes transforms.
+pub fn transformed_axes_sampled_values_vector_path(
+    axes: TransformedAxes2DState,
+    plan: &ParametricSamplePlan,
+    value_subpaths: &[Vec<f64>],
+    use_smoothing: bool,
+) -> Result<VectorPath, PlotGeometryError> {
+    axes_sampled_values_vector_path_with_mapper(plan, value_subpaths, use_smoothing, |x, y| {
+        axes.coords_to_point(x, y)
+    })
+}
+
+fn axes_sampled_values_vector_path_with_mapper<M>(
+    plan: &ParametricSamplePlan,
+    value_subpaths: &[Vec<f64>],
+    use_smoothing: bool,
+    mut coords_to_point: M,
+) -> Result<VectorPath, PlotGeometryError>
+where
+    M: FnMut(f64, f64) -> Result<Vec2, CoordinateSystemError>,
+{
     let parameter_subpaths = plan.parameter_subpaths()?;
     if value_subpaths.len() != parameter_subpaths.len() {
         return Err(PlotGeometryError::SampleSubpathCountMismatch {
@@ -84,7 +137,7 @@ pub fn axes_sampled_values_vector_path(
             if !value.is_finite() {
                 return Err(PlotGeometryError::NonFiniteFunctionValue { parameter, value });
             }
-            points.push(axes.coords_to_point(parameter, value)?);
+            points.push(coords_to_point(parameter, value)?);
         }
         point_subpaths.push(points);
     }
@@ -220,7 +273,7 @@ impl From<PathSmoothingError> for PlotGeometryError {
 mod tests {
     use super::*;
     use crate::{NumberRange, SampleRange};
-    use noon_core::PathCommand;
+    use noon_core::{PathCommand, Transform2D};
 
     fn assert_point(actual: Vec2, expected: Vec2) {
         assert!(
@@ -285,6 +338,67 @@ mod tests {
         assert!(matches!(path.commands()[0], PathCommand::MoveTo { .. }));
         assert!(matches!(path.commands()[1], PathCommand::CubicTo { .. }));
         assert!(matches!(path.commands()[2], PathCommand::CubicTo { .. }));
+    }
+
+    #[test]
+    fn transformed_host_samples_follow_current_axis_affine_state() {
+        let axes = test_axes();
+        let transform = Transform2D {
+            translation: Vec2::new(2.0, -1.0),
+            rotation: 0.5,
+            scale: Vec2::new(1.25, 1.25),
+        };
+        let transformed = TransformedAxes2DState::new(axes, transform, transform);
+        let plan = ParametricSamplePlan::without_discontinuities(
+            SampleRange::new(-1.0, 1.0, 1.0).unwrap(),
+        );
+        let path = transformed_axes_sampled_values_vector_path(
+            transformed,
+            &plan,
+            &[vec![1.0, 0.0, 1.0]],
+            false,
+        )
+        .unwrap();
+
+        let expected = [
+            transform.transform_point(Vec2::new(-1.0, 1.0)),
+            transform.transform_point(Vec2::ZERO),
+            transform.transform_point(Vec2::new(1.0, 1.0)),
+        ];
+        for (command, expected) in path.commands().iter().zip(expected) {
+            match command {
+                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => {
+                    assert_point(*to, expected)
+                }
+                other => panic!("expected corner path command, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn transformed_direct_callback_is_evaluated_once_per_parameter() {
+        let axes = test_axes();
+        let transform = Transform2D {
+            translation: Vec2::new(-3.0, 2.0),
+            rotation: -0.35,
+            scale: Vec2::new(0.8, 0.8),
+        };
+        let transformed = TransformedAxes2DState::new(axes, transform, transform);
+        let plan = ParametricSamplePlan::without_discontinuities(
+            SampleRange::new(-1.0, 1.0, 1.0).unwrap(),
+        );
+        let mut calls = Vec::new();
+        transformed_axes_function_vector_path(
+            transformed,
+            &plan,
+            |x| {
+                calls.push(x);
+                x * x
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(calls, vec![-1.0, 0.0, 1.0]);
     }
 
     #[test]

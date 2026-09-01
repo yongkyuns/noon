@@ -49,6 +49,7 @@ node --check scripts/host-callback-perf.mjs
 node --check scripts/deterministic-replay-smoke.mjs
 node --check scripts/cross-language-parity.mjs
 node --check scripts/manim-compat-smoke.mjs
+node --check scripts/manim-axes-smoke.mjs
 node --check scripts/manim-tutorial-smoke.mjs
 node --check scripts/playground-layout-smoke.mjs
 node --check scripts/composition-authoring-smoke.mjs
@@ -72,6 +73,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   web/python/_manim_rate_functions.py \
   web/python/_manim_phase_b.py \
   web/python/_manim_shared_geometry.py \
+  web/python/_manim_axes.py \
   web/python/_manim_animation_options.py \
   web/python/_manim_animate.py \
   web/python/_manim_rotate.py \
