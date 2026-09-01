@@ -85,7 +85,9 @@ fn grid_lines_wire(lines: &[NumberPlaneGridLine]) -> Vec<GridLineWire<'_>> {
         .collect()
 }
 
-fn line_style(request: GridStyleRequest) -> Result<NumberPlaneLineStyle, ManimNumberPlaneBridgeError> {
+fn line_style(
+    request: GridStyleRequest,
+) -> Result<NumberPlaneLineStyle, ManimNumberPlaneBridgeError> {
     Ok(NumberPlaneLineStyle::new(
         rgba(request.color)?,
         request.stroke_width,
@@ -120,7 +122,9 @@ pub enum ManimNumberPlaneBridgeError {
 impl std::fmt::Display for ManimNumberPlaneBridgeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidRequest(error) => write!(formatter, "invalid NumberPlane request: {error}"),
+            Self::InvalidRequest(error) => {
+                write!(formatter, "invalid NumberPlane request: {error}")
+            }
             Self::InvalidColor(value) => write!(
                 formatter,
                 "NumberPlane color must contain finite RGBA components in [0, 1], got {value:?}"
