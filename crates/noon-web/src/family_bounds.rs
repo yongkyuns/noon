@@ -1,4 +1,4 @@
-use noon_core::{Bounds2D64, SemanticNodeId, SemanticNodeKind, SemanticStore};
+use noon_core::{Bounds2D64, Rect, SemanticNodeId, SemanticNodeKind, SemanticStore, Vec2};
 
 /// Aggregate layout bounds for a semantic family using authoritative shared leaf order.
 ///
@@ -61,6 +61,34 @@ impl FrontendFamilyBoundsPlan {
         }
         Ok(self.bounds)
     }
+
+    /// Finish aggregation and explicitly lower the authoritative semantic bounds
+    /// to the compact world-bounds representation consumed by retained matcher
+    /// geometry. This keeps f64 -> f32 conversion in shared Rust rather than in a
+    /// Python/JS adapter and avoids fabricating a temporary aggregate scene object.
+    pub fn finish_world_bounds(&self) -> Result<Option<Rect>, String> {
+        self.finish()?
+            .map(|bounds| {
+                Ok(Rect::new(
+                    Vec2::new(
+                        lower_f32("family bounds min.x", bounds.min_x)?,
+                        lower_f32("family bounds min.y", bounds.min_y)?,
+                    ),
+                    Vec2::new(
+                        lower_f32("family bounds max.x", bounds.max_x)?,
+                        lower_f32("family bounds max.y", bounds.max_y)?,
+                    ),
+                ))
+            })
+            .transpose()
+    }
+}
+
+fn lower_f32(name: &str, value: f64) -> Result<f32, String> {
+    if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
+        return Err(format!("{name} must be a finite f32-compatible number"));
+    }
+    Ok(value as f32)
 }
 
 fn include_bounds(aggregate: &mut Option<Bounds2D64>, bounds: Bounds2D64) {
@@ -175,6 +203,10 @@ mod tests {
                 max_y: 1.0,
             })
         );
+        assert_eq!(
+            plan.finish_world_bounds().expect("lowered bounds"),
+            Some(Rect::new(Vec2::new(-2.0, -4.0), Vec2::new(5.0, 1.0)))
+        );
     }
 
     #[test]
@@ -207,6 +239,10 @@ mod tests {
         let plan = FrontendFamilyBoundsPlan::begin(&store, family).expect("empty family plan");
         assert_eq!(plan.leaf_count(), 0);
         assert_eq!(plan.finish().expect("empty family is complete"), None);
+        assert_eq!(
+            plan.finish_world_bounds().expect("empty lowered bounds"),
+            None
+        );
     }
 
     #[test]
@@ -216,5 +252,28 @@ mod tests {
         let error = FrontendFamilyBoundsPlan::begin(&store, leaf)
             .expect_err("authoring object is not a family");
         assert!(error.contains("is not a family"));
+    }
+
+    #[test]
+    fn world_bounds_lowering_rejects_values_outside_runtime_precision() {
+        let (store, root, first, second, third) = nested_family();
+        let mut plan = FrontendFamilyBoundsPlan::begin(&store, root).expect("family bounds plan");
+        plan.accept_leaf_bounds(
+            first,
+            Some(Bounds2D64 {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: f64::from(f32::MAX) * 2.0,
+                max_y: 1.0,
+            }),
+        )
+        .expect("semantic f64 bounds remain valid");
+        plan.accept_leaf_bounds(second, None).expect("second leaf");
+        plan.accept_leaf_bounds(third, None).expect("third leaf");
+
+        let error = plan
+            .finish_world_bounds()
+            .expect_err("runtime lowering must be explicit and checked");
+        assert!(error.contains("f32-compatible"));
     }
 }
