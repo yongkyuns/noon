@@ -39,14 +39,14 @@ struct AreaQueryRequest {
     x_range: Option<[f64; 2]>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct RiemannSampleValues {
     graph: Vec<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bounded_graph: Option<Vec<f64>>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct RiemannRectangleResult {
     snapshot: ObjectSnapshot,
     negative_signed_area: bool,
@@ -167,9 +167,8 @@ impl AxesQueryPlan {
         let graph_y_values: Vec<f64> = serde_json::from_str(graph_y_values_json)
             .map_err(|error| ManimAxesQueryError::InvalidRiemannValues(error.to_string()))?;
         let bounded_graph_y_values: Option<Vec<f64>> =
-            parse_optional_json(bounded_graph_y_values_json).map_err(|error| {
-                ManimAxesQueryError::InvalidRiemannValues(error.to_string())
-            })?;
+            parse_optional_json(bounded_graph_y_values_json)
+                .map_err(|error| ManimAxesQueryError::InvalidRiemannValues(error.to_string()))?;
         if request.bounded_graph_range.is_some() != bounded_graph_y_values.is_some() {
             return Err(ManimAxesQueryError::InvalidRiemannRequest(
                 "bounded graph range/value presence must match".to_owned(),
@@ -232,9 +231,8 @@ impl AxesQueryPlan {
             bounded_graph.is_some(),
             "area",
         )?;
-        let graph_endpoint_y_values: [f64; 2] =
-            serde_json::from_str(graph_endpoint_y_values_json)
-                .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
+        let graph_endpoint_y_values: [f64; 2] = serde_json::from_str(graph_endpoint_y_values_json)
+            .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
         let bounded_graph_endpoint_y_values: Option<[f64; 2]> =
             parse_optional_json(bounded_graph_endpoint_y_values_json)
                 .map_err(|error| ManimAxesQueryError::InvalidAreaValues(error.to_string()))?;
@@ -246,10 +244,7 @@ impl AxesQueryPlan {
 
         let transformed = self.transformed_axes(x_axis_snapshot_json, y_axis_snapshot_json)?;
         let plan = area_plan(transformed, &request, &graph, bounded_graph.as_ref())?;
-        let snapshot = plan.finish(
-            graph_endpoint_y_values,
-            bounded_graph_endpoint_y_values,
-        )?;
+        let snapshot = plan.finish(graph_endpoint_y_values, bounded_graph_endpoint_y_values)?;
         serde_json::to_string(&snapshot)
             .map_err(|error| ManimAxesQueryError::Serialization(error.to_string()))
     }
@@ -308,12 +303,14 @@ fn riemann_plan(
     request: &RiemannQueryRequest,
 ) -> Result<RiemannSamplePlan, ManimAxesQueryError> {
     let [x_min, x_max] = request.x_range.unwrap_or_else(|| {
-        request.bounded_graph_range.map_or(request.graph_range, |bounded| {
-            [
-                request.graph_range[0].max(bounded[0]),
-                request.graph_range[1].min(bounded[1]),
-            ]
-        })
+        request
+            .bounded_graph_range
+            .map_or(request.graph_range, |bounded| {
+                [
+                    request.graph_range[0].max(bounded[0]),
+                    request.graph_range[1].min(bounded[1]),
+                ]
+            })
     });
     Ok(RiemannSamplePlan::new(
         axes,
@@ -332,9 +329,11 @@ fn area_plan(
     bounded_graph: Option<&ObjectSnapshot>,
 ) -> Result<AreaSamplePlan, ManimAxesQueryError> {
     let graph_range = GraphParameterRange::new(request.graph_range[0], request.graph_range[1])?;
-    let bounded = bounded_graph.zip(request.bounded_graph_range).map(|(graph, range)| {
-        GraphParameterRange::new(range[0], range[1]).map(|range| (graph, range))
-    });
+    let bounded = bounded_graph
+        .zip(request.bounded_graph_range)
+        .map(|(graph, range)| {
+            GraphParameterRange::new(range[0], range[1]).map(|range| (graph, range))
+        });
     let bounded = match bounded {
         Some(result) => Some(result?),
         None => None,
@@ -419,10 +418,7 @@ pub enum ManimAxesQueryError {
     InvalidAreaRequest(String),
     InvalidAreaValues(String),
     InvalidCalculusRange(String),
-    InvalidAxisSnapshot {
-        axis: &'static str,
-        error: String,
-    },
+    InvalidAxisSnapshot { axis: &'static str, error: String },
     InvalidAxisGeometry(&'static str),
     Coordinates(CoordinateSystemError),
     LineGraph(LineGraphAuthoringError),
@@ -852,15 +848,7 @@ mod tests {
 
         let snapshot: ObjectSnapshot = serde_json::from_str(
             &plan
-                .area_snapshot_json(
-                    request,
-                    &graph,
-                    "",
-                    "[0.5,0.5]",
-                    "",
-                    &x_axis,
-                    &y_axis,
-                )
+                .area_snapshot_json(request, &graph, "", "[0.5,0.5]", "", &x_axis, &y_axis)
                 .unwrap(),
         )
         .unwrap();
