@@ -27,6 +27,7 @@ mod manim_number_plane_bridge;
 mod manim_parametric_bridge;
 mod manim_path_query_bridge;
 mod manim_plot_bridge;
+mod manim_polar_plane_bridge;
 mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -71,6 +72,7 @@ pub use manim_number_plane_bridge::*;
 pub use manim_parametric_bridge::*;
 pub use manim_path_query_bridge::*;
 pub use manim_plot_bridge::*;
+pub use manim_polar_plane_bridge::*;
 pub use manim_sector_bridge::*;
 pub use manim_shape_matcher_bridge::*;
 pub use reactive_authoring_facade::*;
