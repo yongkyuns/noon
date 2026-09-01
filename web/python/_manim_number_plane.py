@@ -1,4 +1,4 @@
-"""ManimCE v0.21 NumberPlane facade over shared retained grid geometry.
+"""ManimCE v0.21 Cartesian plane facades over shared retained grid geometry.
 
 Coordinate mapping and grid placement remain Rust-owned. This module only resolves the
 public Manim defaults, composes ordinary retained Line leaves into the expected family
@@ -324,6 +324,36 @@ class NumberPlane(_axes.Axes):
         )
 
 
+class ComplexPlane(NumberPlane):
+    """NumberPlane specialized for ManimCE v0.21 scalar complex conversion."""
+
+    def number_to_point(self, number: float | complex) -> _base.Vec2:
+        value = complex(number)
+        return self.coords_to_point(value.real, value.imag)
+
+    def n2p(self, number: float | complex) -> _base.Vec2:
+        return self.number_to_point(number)
+
+    def point_to_number(self, point: object) -> complex:
+        x, y = self.point_to_coords(point)
+        return complex(x, y)
+
+    def p2n(self, point: object) -> complex:
+        return self.point_to_number(point)
+
+    def get_coordinate_labels(self, *numbers: object, **kwargs: Any):
+        del numbers, kwargs
+        raise NotImplementedError(
+            "ComplexPlane coordinate labels require retained number/MathTex labels"
+        )
+
+    def add_coordinates(self, *numbers: object, **kwargs: Any):
+        del numbers, kwargs
+        raise NotImplementedError(
+            "ComplexPlane.add_coordinates requires retained number/MathTex labels"
+        )
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -331,6 +361,9 @@ def install() -> None:
     _number_line.install()
     setattr(_base, "NumberPlane", NumberPlane)
     setattr(_compat, "NumberPlane", NumberPlane)
-    if "NumberPlane" not in _base.__all__:
-        _base.__all__.append("NumberPlane")
+    setattr(_base, "ComplexPlane", ComplexPlane)
+    setattr(_compat, "ComplexPlane", ComplexPlane)
+    for name in ("NumberPlane", "ComplexPlane"):
+        if name not in _base.__all__:
+            _base.__all__.append(name)
     _INSTALLED = True
