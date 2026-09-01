@@ -27,6 +27,10 @@ except ImportError:
     _create_query_plan = None
 
 _INSTALLED = False
+_DEFAULT_LINE_GRAPH_COLOR = getattr(
+    _base, "PURE_YELLOW", _base.color_from_hex("#FFFF00")
+)
+_DEFAULT_DOT_RADIUS = float(getattr(_base, "DEFAULT_DOT_RADIUS", 0.08))
 
 
 def _require_shared_axes() -> None:
@@ -169,14 +173,16 @@ class VDict(_compat.VGroup):
             raise NotImplementedError("VDict(show_keys=True) requires exact Tex rendering")
         self.show_keys = False
         self.submob_dict: dict[object, object] = {}
-        self.submobjects: list[object] = []
+        _compat.VGroup.__init__(self)
         if mapping_or_iterable is not None:
             self.add(mapping_or_iterable)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.submob_dict!r})"
 
-    def add(self, mapping_or_iterable: object) -> VDict:
+    def add(self, mapping_or_iterable: object = None) -> VDict:
+        if mapping_or_iterable is None:
+            return self
         try:
             items = dict(mapping_or_iterable).items()  # type: ignore[arg-type]
         except (TypeError, ValueError) as error:
@@ -467,9 +473,9 @@ class Axes(_compat.VGroup):
         x_values: object,
         y_values: object,
         z_values: object | None = None,
-        line_color: _base.Color = _base.PURE_YELLOW,
+        line_color: _base.Color = _DEFAULT_LINE_GRAPH_COLOR,
         add_vertex_dots: bool = True,
-        vertex_dot_radius: float = _base.DEFAULT_DOT_RADIUS,
+        vertex_dot_radius: float = _DEFAULT_DOT_RADIUS,
         vertex_dot_style: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> VDict:
@@ -504,8 +510,7 @@ class Axes(_compat.VGroup):
 
         snapshot_json = str(
             self._query_plan.lineGraphSnapshotJson(
-                json.dumps(xs, separators=(",", ":"), allow_nan=False),
-                json.dumps(ys, separators=(",", ":"), allow_nan=False),
+                json.dumps([xs, ys], separators=(",", ":"), allow_nan=False),
                 self.x_axis._axis_snapshot_json(),
                 self.y_axis._axis_snapshot_json(),
             )
