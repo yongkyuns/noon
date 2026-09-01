@@ -126,6 +126,7 @@ try {
     const authoring = new PythonAuthoringClient();
     const emptySceneJson = '{"version":1,"objects":[],"tracks":[]}';
     const mixed = await authoring.run(mixedSource, {});
+    const mixedSceneSpecJson = JSON.stringify(mixed.sceneSpec);
     const legacy = await authoring.run(legacySource, {});
 
     function freshCanvas() {
@@ -183,9 +184,7 @@ try {
     });
     const toRetained = await expectTerminated(retainedExecution, () =>
       retainedExecution.reconcileScene(JSON.stringify(mixed.document), {
-        retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
-        callbacks: mixed.callbacks,
-        authoringClient: authoring,
+        sceneSpecJson: mixedSceneSpecJson,
         loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
       }),
     );
@@ -196,14 +195,11 @@ try {
       transportMode: "transferable",
     });
     const retainedReady = await legacyExecution.reconcileScene(JSON.stringify(mixed.document), {
-      retainedDocumentJson: JSON.stringify(mixed.retainedDocument),
-      callbacks: mixed.callbacks,
-      authoringClient: authoring,
+      sceneSpecJson: mixedSceneSpecJson,
       loopDurationSeconds: mixed.duration > 0 ? mixed.duration : null,
     });
     const toLegacy = await expectTerminated(legacyExecution, () =>
       legacyExecution.reconcileScene(JSON.stringify(legacy.document), {
-        retainedDocumentJson: JSON.stringify(legacy.retainedDocument),
         callbacks: legacy.callbacks,
         authoringClient: authoring,
         loopDurationSeconds: legacy.duration > 0 ? legacy.duration : null,
