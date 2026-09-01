@@ -202,6 +202,21 @@ class RetainedAxesPlot(Scene):
         for dot, expected in zip(line_graph["vertex_dots"], expected_vertices):
             assert_point_close(dot.get_center(), expected)
 
+        lookup_line_graph = axes.plot_line_graph(
+            x_values=[-1.0, 0.0, 1.0],
+            y_values=[1.0, 0.0, 1.0],
+            add_vertex_dots=False,
+        )["line_graph"]
+        lookup_point = axes.input_to_graph_point(0.5, lookup_line_graph)
+        assert_point_close(lookup_point, axes.c2p(0.5, 0.5), tolerance=2e-4)
+        assert_point_close(axes.i2gp(0.5, lookup_line_graph), lookup_point, tolerance=2e-4)
+        try:
+            axes.input_to_graph_point(3.0, lookup_line_graph)
+            raise AssertionError("out-of-range generic graph lookup must fail")
+        except ValueError as error:
+            assert "x=3" in str(error)
+            assert "not located in the range of the graph" in str(error)
+
         no_dots = axes.plot_line_graph(
             x_values=[0, 1],
             y_values=[0, 1],
@@ -231,6 +246,8 @@ class RetainedAxesPlot(Scene):
         cos_graph = axes.plot(lambda x: math.cos(x), color=RED)
         assert isinstance(sin_graph, ParametricFunction)
         assert isinstance(cos_graph, ParametricFunction)
+        cos_point = axes.input_to_graph_point(0.25, cos_graph)
+        assert_point_close(cos_point, axes.c2p(0.25, math.cos(0.25)))
         self.add(axes, sin_graph, cos_graph, vertical, horizontal, line_graph)
 `;
 
@@ -281,7 +298,7 @@ try {
   );
   assert.deepEqual(errors, [], `browser errors while testing retained Axes:\n${errors.join("\n")}`);
   console.log(
-    "Retained Axes smoke passed: transformed c2p/p2c/i2gp, retained projections, plot curves, and VDict line graphs with shared corner-path geometry and optional retained dots.",
+    "Retained Axes smoke passed: transformed c2p/p2c, authored and generic i2gp, retained projections, plot curves, and VDict line graphs with shared corner-path geometry and optional retained dots.",
   );
 } finally {
   await browser?.close();
