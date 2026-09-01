@@ -87,7 +87,9 @@ impl PolarPlaneGridPlan {
             return Err(PolarPlaneAuthoringError::InvalidAzimuthStep(azimuth_step));
         }
         if !azimuth_offset.is_finite() {
-            return Err(PolarPlaneAuthoringError::InvalidAzimuthOffset(azimuth_offset));
+            return Err(PolarPlaneAuthoringError::InvalidAzimuthOffset(
+                azimuth_offset,
+            ));
         }
 
         let ratio = faded_line_ratio.max(1);
@@ -101,7 +103,9 @@ impl PolarPlaneGridPlan {
             return Err(PolarPlaneAuthoringError::InvalidAngularStep(angular_step));
         }
 
-        let origin = axes.origin().map_err(PolarPlaneAuthoringError::Coordinates)?;
+        let origin = axes
+            .origin()
+            .map_err(PolarPlaneAuthoringError::Coordinates)?;
         let unit_size = checked_f32(axes.x_axis().unit_size())?;
         let positive_x = axes
             .x_axis()
@@ -298,9 +302,7 @@ fn styled_line(
         .into_snapshot())
 }
 
-fn lowered_style(
-    style: NumberPlaneLineStyle,
-) -> Result<(Color, f32), PolarPlaneAuthoringError> {
+fn lowered_style(style: NumberPlaneLineStyle) -> Result<(Color, f32), PolarPlaneAuthoringError> {
     validate_style(style)?;
     let width = checked_f32(style.stroke_width * CAIRO_WIDTH_SCALE)?;
     let mut color = style.color;
@@ -310,7 +312,9 @@ fn lowered_style(
 
 fn validate_style(style: NumberPlaneLineStyle) -> Result<(), PolarPlaneAuthoringError> {
     if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
-        return Err(PolarPlaneAuthoringError::InvalidStrokeWidth(style.stroke_width));
+        return Err(PolarPlaneAuthoringError::InvalidStrokeWidth(
+            style.stroke_width,
+        ));
     }
     if !style.stroke_opacity.is_finite() || !(0.0..=1.0).contains(&style.stroke_opacity) {
         return Err(PolarPlaneAuthoringError::InvalidStrokeOpacity(
@@ -553,8 +557,14 @@ mod tests {
             0.25,
             1,
         );
-        assert_close(ccw.radial_lines()[1].angle(), std::f64::consts::FRAC_PI_2 + 0.25);
-        assert_close(cw.radial_lines()[1].angle(), -std::f64::consts::FRAC_PI_2 + 0.25);
+        assert_close(
+            ccw.radial_lines()[1].angle(),
+            std::f64::consts::FRAC_PI_2 + 0.25,
+        );
+        assert_close(
+            cw.radial_lines()[1].angle(),
+            -std::f64::consts::FRAC_PI_2 + 0.25,
+        );
         assert_eq!(ccw.radial_lines().len(), cw.radial_lines().len());
     }
 
@@ -597,13 +607,28 @@ mod tests {
             ordered.last().unwrap().geometry,
             GeometryRef::Circle { .. }
         ));
-        assert_close(f64::from(plan.radial_lines()[0].snapshot().style.stroke_width), 0.02);
         assert_close(
-            f64::from(plan.faded_radial_lines()[0].snapshot().style.stroke_width),
+            f64::from(plan.radial_lines()[0].snapshot().style.stroke_width),
+            0.02,
+        );
+        assert_close(
+            f64::from(
+                plan.faded_radial_lines()[0]
+                    .snapshot()
+                    .style
+                    .stroke_width,
+            ),
             0.06,
         );
         assert_close(
-            f64::from(plan.faded_circles()[0].snapshot().style.stroke.unwrap().alpha),
+            f64::from(
+                plan.faded_circles()[0]
+                    .snapshot()
+                    .style
+                    .stroke
+                    .unwrap()
+                    .alpha,
+            ),
             0.25,
         );
     }
