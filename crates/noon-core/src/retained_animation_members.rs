@@ -1,6 +1,7 @@
 use crate::{
-    plain_text_animation_members, ObjectContentRef, TextAnimationMember, TextAnimationMemberError,
-    TextResourceArena, TextResourceHandle,
+    plain_text_animation_members, FamilyAnimationMemberPlanBuilder, FamilyAnimationMemberPlanError,
+    ObjectContentRef, RetainedObjectDefinition, SemanticNodeId, TextAnimationMember,
+    TextAnimationMemberError, TextResourceArena, TextResourceHandle,
 };
 
 /// Lightweight content-local identity for one Manim-visible animation member.
@@ -102,14 +103,67 @@ impl From<TextAnimationMemberError> for RetainedAnimationMemberError {
     }
 }
 
+/// Failure while binding retained content metadata into the content-independent
+/// global family member plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RetainedFamilyAnimationMemberPlanError {
+    Members(RetainedAnimationMemberError),
+    Plan(FamilyAnimationMemberPlanError),
+}
+
+impl std::fmt::Display for RetainedFamilyAnimationMemberPlanError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Members(error) => error.fmt(formatter),
+            Self::Plan(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RetainedFamilyAnimationMemberPlanError {}
+
+impl From<RetainedAnimationMemberError> for RetainedFamilyAnimationMemberPlanError {
+    fn from(value: RetainedAnimationMemberError) -> Self {
+        Self::Members(value)
+    }
+}
+
+impl From<FamilyAnimationMemberPlanError> for RetainedFamilyAnimationMemberPlanError {
+    fn from(value: FamilyAnimationMemberPlanError) -> Self {
+        Self::Plan(value)
+    }
+}
+
+impl FamilyAnimationMemberPlanBuilder {
+    /// Resolve one retained leaf's content-local members and bind only their count
+    /// into the global semantic-family plan.
+    ///
+    /// The returned lightweight member sequence may be retained by a compile/render
+    /// adapter for local-index realization. The generic plan itself remains free of
+    /// Text/geometry payloads and content-specific branches.
+    ///
+    /// Resolution happens before the plan is mutated, and `accept_leaf` is itself
+    /// transactional, so any failure leaves the same semantic leaf pending for retry.
+    pub fn accept_retained_leaf(
+        &mut self,
+        semantic_leaf: SemanticNodeId,
+        object: &RetainedObjectDefinition,
+        texts: &TextResourceArena,
+    ) -> Result<RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError> {
+        let members = RetainedAnimationMembers::resolve(&object.content, texts)?;
+        self.accept_leaf(semantic_leaf, object.id, members.member_count())?;
+        Ok(members)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::{
-        FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, PositionedGlyph, Rect,
-        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
-        TextResourceId, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
+        FontFaceIdentity, GeometryId, GeometryRef, GlyphRun, ObjectId, PositionedGlyph, Rect,
+        SemanticStore, TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem,
+        TextResource, TextResourceId, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
     };
 
     use super::*;
@@ -248,5 +302,87 @@ mod tests {
                 TextAnimationMemberError::UnsupportedSourceKind(TextSourceKind::Typst)
             ))
         );
+    }
+
+    #[test]
+    fn mixed_retained_family_uses_one_global_member_sequence() {
+        let mut store = SemanticStore::new();
+        let text_leaf = store.insert_authoring_object();
+        let circle_leaf = store.insert_authoring_object();
+        let family = store.insert_family();
+        store.add_member(family, text_leaf).unwrap();
+        store.add_member(family, circle_leaf).unwrap();
+
+        let mut texts = TextResourceArena::new();
+        let text_handle = texts
+            .insert(plain_resource(
+                "AB",
+                vec![
+                    glyph(TextSourceSpan::new(0, 1), 1, 0.0),
+                    glyph(TextSourceSpan::new(1, 2), 2, 1.0),
+                ],
+            ))
+            .unwrap();
+        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
+        let circle =
+            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+
+        let mut builder = FamilyAnimationMemberPlanBuilder::begin(&store, family).unwrap();
+        let text_members = builder
+            .accept_retained_leaf(text_leaf, &text, &texts)
+            .unwrap();
+        let circle_members = builder
+            .accept_retained_leaf(circle_leaf, &circle, &texts)
+            .unwrap();
+        let plan = builder.finish().unwrap();
+
+        assert_eq!(text_members.member_count(), 2);
+        assert_eq!(circle_members.member_count(), 1);
+        assert_eq!(plan.total_member_count(), 3);
+
+        let text_span = plan.span_for_leaf(text_leaf).unwrap();
+        let circle_span = plan.span_for_leaf(circle_leaf).unwrap();
+        assert_eq!(text_span.global_member_index(0), Some(0));
+        assert_eq!(text_span.global_member_index(1), Some(1));
+        assert_eq!(circle_span.global_member_index(0), Some(2));
+        assert!(matches!(
+            text_members.member(1),
+            Some(RetainedAnimationMember::Text(member))
+                if member.glyph.glyph_index == 1
+        ));
+        assert_eq!(
+            circle_members.member(0),
+            Some(RetainedAnimationMember::Geometry)
+        );
+    }
+
+    #[test]
+    fn retained_member_resolution_failure_does_not_consume_plan_leaf() {
+        let mut store = SemanticStore::new();
+        let leaf = store.insert_authoring_object();
+        let texts = TextResourceArena::new();
+        let missing = TextResourceHandle {
+            id: TextResourceId::new(99),
+            version: 7,
+        };
+        let missing_text = RetainedObjectDefinition::text(ObjectId::new(1), missing);
+
+        let mut builder = FamilyAnimationMemberPlanBuilder::begin(&store, leaf).unwrap();
+        assert_eq!(
+            builder.accept_retained_leaf(leaf, &missing_text, &texts),
+            Err(RetainedFamilyAnimationMemberPlanError::Members(
+                RetainedAnimationMemberError::MissingTextResource(missing)
+            ))
+        );
+
+        let geometry = RetainedObjectDefinition::geometry(
+            ObjectId::new(2),
+            GeometryRef::line(Vec2::ZERO, Vec2::ONE),
+        );
+        let members = builder
+            .accept_retained_leaf(leaf, &geometry, &texts)
+            .unwrap();
+        assert_eq!(members.member_count(), 1);
+        assert_eq!(builder.finish().unwrap().total_member_count(), 1);
     }
 }
