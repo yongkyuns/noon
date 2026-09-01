@@ -590,12 +590,7 @@ class Scene(_BaseScene):
         leaves = _leaf_mobjects(value)
         if not leaves:
             return False
-        return any(
-            member._scene is self
-            and member._object is not None
-            and self._presence_at(member._object, self._cursor)
-            for member in leaves
-        )
+        return any(member._is_present_in_scene(self, self._cursor) for member in leaves)
 
     @property
     def mobjects(self) -> list[object]:
@@ -611,10 +606,7 @@ class Scene(_BaseScene):
         for index, member in enumerate(leaves):
             newly_bound = member._scene is None
             if newly_bound:
-                raw_object = _ir.Scene.add(
-                    self, member._current_raw(), key=key if index == 0 else None
-                )
-                member._bind(self, raw_object)
+                member._bind_to_scene(self, key=key if index == 0 else None)
             elif member._scene is not self:
                 raise ValueError("Mobject already belongs to another Scene")
 
@@ -693,16 +685,14 @@ class Scene(_BaseScene):
         if isinstance(target, Group):
             for member in _leaf_mobjects(target):
                 if member._scene is None:
-                    raw_object = super().add(member._current_raw())
-                    member._bind(self, raw_object)
+                    member._bind_to_scene(self)
                 elif member._scene is not self:
                     raise ValueError("Mobject already belongs to another Scene")
             self._register_top_level(target)
             return
         if isinstance(target, _BaseMobject):
             if target._scene is None:
-                raw_object = super().add(target._current_raw())
-                target._bind(self, raw_object)
+                target._bind_to_scene(self)
             elif target._scene is not self:
                 raise ValueError("Mobject already belongs to another Scene")
             self._register_top_level(target)

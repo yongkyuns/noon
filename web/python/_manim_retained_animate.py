@@ -15,14 +15,12 @@ import _manim_animate as _animate
 import _manim_animation_options as _options
 import _manim_compat as _compat
 import _manim_lifecycle as _lifecycle
+import _manim_phase_b as _phase_b
 import _manim_typst as _typst
 
 
 _INSTALLED = False
-_ORIGINAL_SCENE_ADD = _compat.Scene.add
-_ORIGINAL_SCENE_REMOVE = _compat.Scene.remove
 _ORIGINAL_SCENE_PLAY = _compat.Scene.play
-_ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
 _ORIGINAL_RETAINED_DOCUMENT = _compat.Scene.retained_document
 _ORIGINAL_BUILDER_GETATTR = _animate._AlignedAnimationBuilder.__getattr__
 
@@ -37,9 +35,6 @@ def _retained_copy_for_animate_target(
 
 def _ensure_animation_state(scene: _compat.Scene) -> None:
     _typst._ensure_scene_state(scene)
-    if not hasattr(scene, "_retained_animation_tracks"):
-        scene._retained_animation_tracks = []
-        scene._retained_animation_state = {}
 
 
 def _vec2(value: object, label: str) -> dict[str, float]:
@@ -329,41 +324,25 @@ def _normalize_retained_family_top_level(
 
 
 def _bind_retained(
-    scene: _compat.Scene,
-    source: _typst._RetainedTextMobject,
+    scene: _compat.Scene, source: _typst._RetainedTextMobject
 ) -> None:
     if source._scene is None:
-        _typst._add_retained(scene, source, None)
+        _phase_b._bind_raw(scene, source)
     elif source._scene is not scene:
-        raise ValueError("retained text Mobject already belongs to another Scene")
-    else:
-        scene._register_top_level(source)
+        raise ValueError("retained Text already belongs to another Scene")
+    scene._register_top_level(source)
 
 
-def _initial_animation_state(source: _typst._RetainedTextMobject) -> dict[str, Any]:
-    spec = source._spec()
-    transform = _transform(spec)
-    return {
-        "appearance": 1.0,
-        "opacity": _unit_scalar(spec.get("opacity"), "opacity"),
-        "position": _vec2(transform.get("translation"), "translation"),
-        "presence": True,
-        "rotation": _finite_scalar(transform.get("rotation"), "rotation"),
-        "scale": _vec2(transform.get("scale"), "scale"),
-        "runtime_position": _vec2(transform.get("translation"), "translation"),
-        "runtime_scale": _vec2(transform.get("scale"), "scale"),
-    }
+def _initial_animation_state(
+    source: _typst._RetainedTextMobject,
+) -> dict[str, Any]:
+    return source._initial_scene_animation_state()
 
 
 def _retained_presence_tracks(
-    scene: _compat.Scene,
-    object_id: int,
+    scene: _compat.Scene, object_id: int
 ) -> list[dict[str, Any]]:
-    return [
-        track
-        for track in getattr(scene, "_retained_animation_tracks", [])
-        if int(track["object"]) == object_id and track["property"] == "presence"
-    ]
+    return _typst._retained_presence_tracks(scene, object_id)
 
 
 def _resolve_retained_lifecycle(
@@ -373,42 +352,7 @@ def _resolve_retained_lifecycle(
     time: float,
     label: str,
 ) -> _lifecycle.LifecyclePlan:
-    _ensure_animation_state(scene)
-    if source._scene is None:
-        return _lifecycle._resolve(
-            intent,
-            binding="detached",
-            has_presence_timeline=False,
-            present=True,
-            has_future_event=False,
-            at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
-            label=label,
-        )
-    if source._scene is not scene:
-        return _lifecycle._resolve(
-            intent,
-            binding="other_scene",
-            has_presence_timeline=False,
-            present=True,
-            has_future_event=False,
-            at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
-            label=label,
-        )
-
-    object_id = int(source.id)
-    tracks = _retained_presence_tracks(scene, object_id)
-    state = scene._retained_animation_state.get(object_id)
-    present = True if state is None else bool(state["presence"])
-    has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
-    return _lifecycle._resolve(
-        intent,
-        binding="this_scene",
-        has_presence_timeline=bool(tracks),
-        present=present,
-        has_future_event=has_future,
-        at_time_zero=math.isclose(time, 0.0, abs_tol=1e-12),
-        label=label,
-    )
+    return _lifecycle._resolve_wrapper(scene, source, intent, time, label)
 
 
 def _append_vec2_track(
@@ -474,29 +418,12 @@ def _append_presence_track(
     target: bool,
     start_time: float,
 ) -> None:
-    existing = _retained_presence_tracks(scene, object_id)
-    previous = existing[-1] if existing else None
-    result = _lifecycle._validate_shared_presence_transition(
-        previous is not None,
-        0.0 if previous is None else float(previous["timing"]["start_time"]),
-        False if previous is None else bool(previous["values"]["bool"]["to"]),
-        float(start_time),
-        bool(current),
-    )
-    if not bool(result.ok):
-        raise ValueError(str(result.message))
-
-    scene._retained_animation_tracks.append(
-        {
-            "object": object_id,
-            "property": "presence",
-            "values": {"bool": {"from": bool(current), "to": bool(target)}},
-            "timing": {
-                "start_time": float(start_time),
-                "duration": 0.0,
-                "easing": "linear",
-            },
-        }
+    _typst._append_retained_presence_track(
+        scene,
+        object_id=object_id,
+        current=current,
+        target=target,
+        start_time=start_time,
     )
 
 
@@ -549,111 +476,6 @@ def _restore_reintroduced_runtime_state(
     state["appearance"] = 1.0
     state["runtime_position"] = copy.deepcopy(current_position)
     state["runtime_scale"] = copy.deepcopy(current_scale)
-
-
-def _unique_retained_mobjects(
-    mobjects: tuple[object, ...],
-) -> list[_typst._RetainedTextMobject]:
-    retained: list[_typst._RetainedTextMobject] = []
-    identities: set[int] = set()
-    for value in mobjects:
-        if not isinstance(value, _typst._RetainedTextMobject) or id(value) in identities:
-            continue
-        identities.add(id(value))
-        retained.append(value)
-    return retained
-
-
-def _retained_scene_add(
-    self: _compat.Scene,
-    *mobjects: object,
-    key: str | None = None,
-):
-    retained = _unique_retained_mobjects(mobjects)
-    if not retained:
-        return _ORIGINAL_SCENE_ADD(self, *mobjects, key=key)
-
-    plans = [
-        (
-            value,
-            _resolve_retained_lifecycle(
-                self,
-                value,
-                "add",
-                self._cursor,
-                "Scene.add target",
-            ),
-        )
-        for value in retained
-    ]
-    result = _ORIGINAL_SCENE_ADD(self, *mobjects, key=key)
-    _ensure_animation_state(self)
-    for value, plan in plans:
-        object_id = int(value.id)
-        state = self._retained_animation_state.setdefault(
-            object_id, _initial_animation_state(value)
-        )
-        if plan.show_now:
-            state["presence"] = False
-            _append_presence_track(
-                self,
-                object_id=object_id,
-                current=False,
-                target=True,
-                start_time=self._cursor,
-            )
-            state["presence"] = True
-        else:
-            state["presence"] = True
-    return result
-
-
-def _retained_scene_remove(self: _compat.Scene, *mobjects: object) -> _compat.Scene:
-    retained = _unique_retained_mobjects(mobjects)
-    if not retained:
-        return _ORIGINAL_SCENE_REMOVE(self, *mobjects)
-
-    plans = [
-        (
-            value,
-            _resolve_retained_lifecycle(
-                self,
-                value,
-                "remove",
-                self._cursor,
-                "Scene.remove target",
-            ),
-        )
-        for value in retained
-    ]
-    _ensure_animation_state(self)
-    for value, plan in plans:
-        if value._scene is not self or value._retained_object_id is None:
-            continue
-        object_id = int(value.id)
-        state = self._retained_animation_state.setdefault(
-            object_id, _initial_animation_state(value)
-        )
-        if plan.hide_now:
-            _append_presence_track(
-                self,
-                object_id=object_id,
-                current=True,
-                target=False,
-                start_time=self._cursor,
-            )
-            state["presence"] = False
-
-    legacy = tuple(
-        value for value in mobjects if not isinstance(value, _typst._RetainedTextMobject)
-    )
-    if legacy:
-        _ORIGINAL_SCENE_REMOVE(self, *legacy)
-    retained_identities = {id(value) for value in retained}
-    self._compat_top_level = [
-        value for value in self._compat_top_level if id(value) not in retained_identities
-    ]
-    return self
 
 
 def _offset_vec2(
@@ -1071,21 +893,6 @@ def _schedule_retained_plan(
             state["opacity"] = target_opacity
 
 
-def _retained_scene_is_present(self: _compat.Scene, value: object) -> bool:
-    if isinstance(value, _compat.Group):
-        leaves = _compat._leaf_mobjects(value)
-        if leaves and all(
-            isinstance(member, _typst._RetainedTextMobject) for member in leaves
-        ):
-            return any(_retained_scene_is_present(self, member) for member in leaves)
-    if not isinstance(value, _typst._RetainedTextMobject):
-        return _ORIGINAL_SCENE_IS_PRESENT(self, value)
-    if value._scene is not self or value._retained_object_id is None:
-        return False
-    state = getattr(self, "_retained_animation_state", {}).get(int(value._retained_object_id))
-    return True if state is None else bool(state["presence"])
-
-
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:
     document = _ORIGINAL_RETAINED_DOCUMENT(self)
     tracks = getattr(self, "_retained_animation_tracks", None)
@@ -1169,9 +976,8 @@ def _retained_scene_play(
     _ensure_animation_state(self)
     cursor_before = self._cursor
     top_level_before = list(self._compat_top_level)
+    authoring_checkpoint = self._authoring_checkpoint()
     retained_objects_before = list(self._retained_text_objects)
-    next_object_id_before = self._retained_next_object_id
-    next_order_before = self._retained_next_painter_order
     tracks_before = copy.deepcopy(self._retained_animation_tracks)
     state_before = copy.deepcopy(self._retained_animation_state)
     retained_sources = [
@@ -1183,6 +989,7 @@ def _retained_scene_play(
         id(source): (
             source,
             source._scene,
+            source._object,
             source._retained_object_id,
             source._retained_order,
         )
@@ -1215,22 +1022,22 @@ def _retained_scene_play(
         self._cursor = max(cursor_before, max_end)
         return self
     except Exception:
+        self._restore_authoring_checkpoint(authoring_checkpoint)
         self._cursor = cursor_before
         self._compat_top_level = top_level_before
         self._retained_text_objects = retained_objects_before
-        self._retained_next_object_id = next_object_id_before
-        self._retained_next_painter_order = next_order_before
         self._retained_animation_tracks = tracks_before
         self._retained_animation_state = state_before
-        for source, old_scene, old_object_id, old_order in wrapper_states.values():
+        for source, old_scene, old_object, old_object_id, old_order in wrapper_states.values():
             source._scene = old_scene
+            source._object = old_object
             source._retained_object_id = old_object_id
             source._retained_order = old_order
         raise
 
 
 def install() -> None:
-    """Install retained animation scheduling after retained Text Scene hooks."""
+    """Install retained animation scheduling without taking over Scene lifecycle."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -1238,8 +1045,5 @@ def install() -> None:
     _INSTALLED = True
     _typst._RetainedTextMobject._copy_for_animate_target = _retained_copy_for_animate_target
     _animate._AlignedAnimationBuilder.__getattr__ = _retained_builder_getattr
-    _compat.Scene.add = _retained_scene_add
-    _compat.Scene.remove = _retained_scene_remove
-    _compat.Scene._is_present = _retained_scene_is_present
     _compat.Scene.play = _retained_scene_play
     _compat.Scene.retained_document = _retained_document

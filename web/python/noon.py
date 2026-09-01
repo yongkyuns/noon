@@ -332,6 +332,38 @@ class Mobject:
         self._scene = scene
         self._object = obj
 
+    def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
+        obj = _ir.Scene.add(scene, self._current_raw(), key=key)
+        self._bind(scene, obj)
+        return obj
+
+    def _scene_lifecycle_state(
+        self, scene: Scene, time: float
+    ) -> tuple[bool, bool, bool]:
+        if self._scene is not scene or self._object is None:
+            raise ValueError("Mobject must belong to this Scene")
+        tracks = scene._presence_tracks(self._object)
+        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
+        return bool(tracks), scene._presence_at(self._object, time), has_future
+
+    def _record_scene_presence(
+        self,
+        scene: Scene,
+        from_: bool,
+        to: bool,
+        time: float,
+        *,
+        key: str | None = None,
+    ) -> None:
+        if self._scene is not scene or self._object is None:
+            raise ValueError("Mobject must belong to this Scene")
+        scene._add_presence_track(self._object, from_, to, time, key=key)
+
+    def _is_present_in_scene(self, scene: Scene, time: float) -> bool:
+        if self._scene is not scene or self._object is None:
+            return False
+        return self._scene_lifecycle_state(scene, time)[1]
+
     def _current_raw(self) -> _ir.Mobject:
         if self._scene is None or self._object is None:
             return self._raw
@@ -762,7 +794,10 @@ class Scene(_ir.Scene):
             raise ValueError(
                 "direct Mobject mutation after animation authoring is ambiguous; use mobject.animate"
             )
-        stored = self._objects[obj.id]
+        position = self._object_positions.get(obj.id)
+        if position is None:
+            raise ValueError(f"object {obj.id} is not geometry-backed")
+        stored = self._objects[position]
         stored["geometry"] = copy.deepcopy(raw.geometry)
         stored["transform"] = copy.deepcopy(raw.transform)
         stored["style"] = copy.deepcopy(raw.style)
@@ -783,8 +818,7 @@ class Scene(_ir.Scene):
         for index, mobject in enumerate(flattened):
             if mobject._scene is self:
                 continue
-            raw_object = super().add(mobject._current_raw(), key=key if index == 0 else None)
-            mobject._bind(self, raw_object)
+            mobject._bind_to_scene(self, key=key if index == 0 else None)
         return flattened[0] if len(flattened) == 1 else self
 
     def circle(self, radius: float, *, key: str | None = None, **kwargs: Any) -> Mobject:

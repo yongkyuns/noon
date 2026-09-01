@@ -1,9 +1,9 @@
-"""ManimCE retained Text/Typst wrappers over Noon's source-level authoring handles.
+"""ManimCE Text/Typst wrappers over Noon's retained source authoring handles.
 
-These wrappers are intentionally not geometry adapters. They never synthesize an
-``_ir.Mobject`` and ``Scene.add`` intercepts them before legacy geometry lowering.
-Only source-level text authoring state crosses the Python-worker boundary; shaping,
-font bytes, glyph/vector resources, and GPU atlas state remain Rust-owned.
+Text is a normal scene object at the lifecycle/identity boundary and specializes only
+its content binding and retained-resource realization. It never synthesizes fake
+geometry; shaping, font bytes, glyph/vector resources, and GPU atlas state remain
+Rust-owned.
 """
 
 from __future__ import annotations
@@ -28,14 +28,9 @@ except ImportError:  # Shared semantic handles are browser-only.
     _create_family_member_handle = None
 
 
-# Reserve the upper half of JavaScript's exact-integer range for retained text IDs.
-# Legacy geometry IDs start at zero and no practical scene can approach 2^52 objects.
-_RETAINED_OBJECT_ID_BASE = 1 << 52
 _RETAINED_PROTOCOL_VERSION = 2
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
 _INSTALLED = False
-_ORIGINAL_SCENE_ADD = _compat.Scene.add
-_ORIGINAL_SCENE_IS_PRESENT = _compat.Scene._is_present
 
 
 def _color_dict(color: _base.Color) -> dict[str, float]:
@@ -212,12 +207,89 @@ class _RetainedTextMobject(_base.Mobject):
         del raw
         raise TypeError("retained text objects cannot be lowered through legacy geometry")
 
-    def _bind_retained(self, scene: _compat.Scene, object_id: int, order: int) -> None:
+    def _bind_retained(
+        self, scene: _compat.Scene, obj: object, order: int
+    ) -> None:
         if self._scene is not None and self._scene is not scene:
             raise ValueError("retained text Mobject already belongs to another Scene")
         self._scene = scene
-        self._retained_object_id = int(object_id)
+        self._object = obj
+        self._retained_object_id = int(obj.id)
         self._retained_order = int(order)
+
+    def _bind_to_scene(
+        self, scene: _compat.Scene, *, key: str | None = None
+    ) -> object:
+        if self._scene is scene and self._object is not None:
+            return self._object
+        if self._scene is not None:
+            raise ValueError("retained text Mobject already belongs to another Scene")
+        _ensure_scene_state(scene)
+        obj, order = scene._allocate_object(key)
+        self._bind_retained(scene, obj, order)
+        scene._retained_text_objects.append(self)
+        return obj
+
+    def _initial_scene_animation_state(self) -> dict[str, Any]:
+        spec = self._spec()
+        transform = spec["transform"]
+        translation = transform["translation"]
+        scale = transform["scale"]
+        return {
+            "appearance": 1.0,
+            "opacity": float(spec["opacity"]),
+            "position": {"x": float(translation["x"]), "y": float(translation["y"])},
+            "presence": True,
+            "rotation": float(transform["rotation"]),
+            "scale": {"x": float(scale["x"]), "y": float(scale["y"])},
+            "runtime_position": {
+                "x": float(translation["x"]),
+                "y": float(translation["y"]),
+            },
+            "runtime_scale": {"x": float(scale["x"]), "y": float(scale["y"])},
+        }
+
+    def _scene_lifecycle_state(
+        self, scene: _compat.Scene, time: float
+    ) -> tuple[bool, bool, bool]:
+        if self._scene is not scene or self._object is None:
+            raise ValueError("retained text Mobject must belong to this Scene")
+        _ensure_scene_state(scene)
+        object_id = int(self._object.id)
+        tracks = _retained_presence_tracks(scene, object_id)
+        state = scene._retained_animation_state.get(object_id)
+        present = True if state is None else bool(state["presence"])
+        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
+        return bool(tracks), present, has_future
+
+    def _record_scene_presence(
+        self,
+        scene: _compat.Scene,
+        from_: bool,
+        to: bool,
+        time: float,
+        *,
+        key: str | None = None,
+    ) -> None:
+        del key
+        if self._scene is not scene or self._object is None:
+            raise ValueError("retained text Mobject must belong to this Scene")
+        _append_retained_presence_track(
+            scene,
+            object_id=int(self._object.id),
+            current=from_,
+            target=to,
+            start_time=time,
+        )
+        state = scene._retained_animation_state.setdefault(
+            int(self._object.id), self._initial_scene_animation_state()
+        )
+        state["presence"] = bool(to)
+
+    def _is_present_in_scene(self, scene: _compat.Scene, time: float) -> bool:
+        if self._scene is not scene or self._object is None:
+            return False
+        return self._scene_lifecycle_state(scene, time)[1]
 
     def _retained_entry(self) -> dict[str, Any]:
         if self._retained_object_id is None or self._retained_order is None:
@@ -442,57 +514,57 @@ class Text(_RetainedTextMobject):
 def _ensure_scene_state(scene: _compat.Scene) -> None:
     if not hasattr(scene, "_retained_text_objects"):
         scene._retained_text_objects = []
-        scene._retained_next_object_id = _RETAINED_OBJECT_ID_BASE
-        # Existing geometry objects already occupy the leading global painter slots.
-        scene._retained_next_painter_order = len(scene._objects)
+    if not hasattr(scene, "_retained_animation_tracks"):
+        scene._retained_animation_tracks = []
+    if not hasattr(scene, "_retained_animation_state"):
+        scene._retained_animation_state = {}
 
 
-def _add_retained(scene: _compat.Scene, mobject: _RetainedTextMobject, key: str | None) -> None:
-    if key is not None:
-        raise NotImplementedError("explicit Scene.add keys for retained text are not implemented")
+def _retained_presence_tracks(
+    scene: _compat.Scene, object_id: int
+) -> list[dict[str, Any]]:
     _ensure_scene_state(scene)
-    if mobject._scene is scene:
-        scene._register_top_level(mobject)
-        return
-    if mobject._scene is not None:
-        raise ValueError("retained text Mobject already belongs to another Scene")
-    object_id = int(scene._retained_next_object_id)
-    order = int(scene._retained_next_painter_order)
-    scene._retained_next_object_id += 1
-    scene._retained_next_painter_order += 1
-    mobject._bind_retained(scene, object_id, order)
-    scene._retained_text_objects.append(mobject)
-    scene._register_top_level(mobject)
+    return [
+        track
+        for track in scene._retained_animation_tracks
+        if track["object"] == object_id and track["property"] == "presence"
+    ]
 
 
-def _scene_add(self: _compat.Scene, *mobjects: object, key: str | None = None):
-    if not mobjects:
-        return self
-    if key is not None and len(mobjects) != 1:
-        raise ValueError("an explicit key can only be used when adding one Mobject")
-    _ensure_scene_state(self)
+def _append_retained_presence_track(
+    scene: _compat.Scene,
+    *,
+    object_id: int,
+    current: bool,
+    target: bool,
+    start_time: float,
+) -> None:
+    _ensure_scene_state(scene)
+    tracks = _retained_presence_tracks(scene, object_id)
+    previous = tracks[-1] if tracks else None
+    from _manim_lifecycle import _validate_shared_presence_transition
 
-    single_result: object = self
-    for value in mobjects:
-        if isinstance(value, _RetainedTextMobject):
-            _add_retained(self, value, key)
-            single_result = value
-            continue
-
-        before = len(self._objects)
-        result = _ORIGINAL_SCENE_ADD(self, value, key=key)
-        added = len(self._objects) - before
-        if added > 0:
-            self._retained_next_painter_order += added
-        single_result = result
-
-    return single_result if len(mobjects) == 1 else self
-
-
-def _scene_is_present(self: _compat.Scene, value: object) -> bool:
-    if isinstance(value, _RetainedTextMobject):
-        return value._scene is self
-    return _ORIGINAL_SCENE_IS_PRESENT(self, value)
+    result = _validate_shared_presence_transition(
+        previous is not None,
+        0.0 if previous is None else float(previous["timing"]["start_time"]),
+        False if previous is None else bool(previous["values"]["bool"]["to"]),
+        float(start_time),
+        bool(current),
+    )
+    if not bool(result.ok):
+        raise ValueError(str(result.message))
+    scene._retained_animation_tracks.append(
+        {
+            "object": int(object_id),
+            "property": "presence",
+            "values": {"bool": {"from": bool(current), "to": bool(target)}},
+            "timing": {
+                "start_time": float(start_time),
+                "duration": 0.0,
+                "easing": "linear",
+            },
+        }
+    )
 
 
 def _retained_document(self: _compat.Scene) -> dict[str, Any]:
@@ -513,8 +585,6 @@ def install() -> None:
         return
     _INSTALLED = True
 
-    _compat.Scene.add = _scene_add
-    _compat.Scene._is_present = _scene_is_present
     _compat.Scene.retained_document = _retained_document
     _base.Scene = _compat.Scene
 

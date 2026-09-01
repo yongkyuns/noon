@@ -283,16 +283,8 @@ def _manim_layout_bounds(raw: _base._ir.Mobject) -> tuple[_base.Vec2, _base.Vec2
 _base._bounds = _manim_layout_bounds
 
 
-def _bind_raw(
-    scene: _compat.Scene,
-    member: _base.Mobject,
-    *,
-    key: str | None = None,
-) -> None:
-    """Bind one public wrapper using the canonical low-level Scene emitter."""
-
-    raw_object = _base._ir.Scene.add(scene, member._current_raw(), key=key)
-    member._bind(scene, raw_object)
+def _bind_raw(scene: _compat.Scene, member: _base.Mobject, *, key: str | None = None) -> None:
+    member._bind_to_scene(scene, key=key)
 
 
 def _scene_add(
