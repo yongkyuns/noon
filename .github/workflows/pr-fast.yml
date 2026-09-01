@@ -13,7 +13,6 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
   SCCACHE_GHA_RW_MODE: "READ_ONLY"
@@ -22,6 +21,8 @@ jobs:
   rust-lint:
     name: Rust format and lint
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +56,8 @@ jobs:
   rust-test:
     name: Rust unit tests
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

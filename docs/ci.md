@@ -31,6 +31,8 @@ This archive boundary is intentional. The per-object GHA backend successfully re
 
 The WASM archive is capped at 1 GiB. Seed runs are non-cancelling so rapid master merges cannot abort the only archive writer in progress; newer relevant master pushes may queue another seed. Main CI and specialized validators are consumers rather than WASM archive owners.
 
+When changing compiler-cache policy, validate it with a source-neutral pull request after a default-branch seed has completed so cache transport behavior is measured independently from source invalidation.
+
 ## Main CI workflow
 
 `.github/workflows/ci.yml` runs on pushes to `master` and manual dispatch. It is the full Linux integration workflow rather than the pull-request inner loop.
