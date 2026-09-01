@@ -1484,7 +1484,7 @@ mod wasm {
 
     use wasm_bindgen::prelude::*;
 
-    use crate::WasmRetainedNativeTextAuthoringHandle;
+    use crate::{AuthoringSemanticIdentity, WasmRetainedNativeTextAuthoringHandle};
 
     use super::{
         manim_family_align_to_delta, manim_family_next_to_delta, render_f64,
@@ -1510,7 +1510,11 @@ mod wasm {
                 "{context} and retained member belong to different authoring stores"
             )));
         }
-        if text.family_identity() != Some(member.id) {
+        let member_identity = member.authoring_identity();
+        if !text
+            .family_identity()
+            .is_some_and(|identity| identity.matches(&member_identity))
+        {
             return Err(JsValue::from_str(&format!(
                 "{context} retained member identity does not match retained native Text handle"
             )));
@@ -1556,6 +1560,12 @@ mod wasm {
     pub struct WasmAuthoringFamilyMemberHandle {
         semantics: SharedSemanticStore,
         id: SemanticNodeId,
+    }
+
+    impl WasmAuthoringFamilyMemberHandle {
+        pub(crate) fn authoring_identity(&self) -> AuthoringSemanticIdentity {
+            AuthoringSemanticIdentity::from_shared_store(&self.semantics, self.id)
+        }
     }
 
     impl WasmAuthoringStore {
@@ -1664,7 +1674,8 @@ mod wasm {
             &self,
             text: &mut WasmRetainedNativeTextAuthoringHandle,
         ) -> Result<(), JsValue> {
-            text.bind_family_identity(self.id).map_err(js_error)
+            let identity = self.authoring_identity();
+            text.bind_family_identity(&identity).map_err(js_error)
         }
     }
 

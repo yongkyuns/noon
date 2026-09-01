@@ -81,6 +81,19 @@ pub struct AuthoringSemanticIdentity {
 }
 
 impl AuthoringSemanticIdentity {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn from_shared_store(
+        store: &Rc<RefCell<SemanticStore>>,
+        node: SemanticNodeId,
+    ) -> Self {
+        Self::new(
+            AuthoringSemanticStore {
+                inner: Rc::clone(store),
+            },
+            node,
+        )
+    }
+
     fn new(store: AuthoringSemanticStore, node: SemanticNodeId) -> Self {
         Self { store, node }
     }

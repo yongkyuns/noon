@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
 #[cfg(any(target_arch = "wasm32", test))]
-use noon_core::Rect;
+use crate::AuthoringSemanticIdentity;
 #[cfg(target_arch = "wasm32")]
-use noon_core::{Bounds2D64, SemanticNodeId};
+use noon_core::Bounds2D64;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::Rect;
 use noon_core::{Color, ObjectId, Transform2D, Vec2, WHITE};
 use serde::{Deserialize, Serialize};
 
@@ -321,6 +323,32 @@ fn transformed_bounds(bounds: Rect, transform: Transform2D) -> Rect {
     .expect("four transformed text bounds corners are never empty")
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Default)]
+struct RetainedFamilyIdentityBinding {
+    identity: Option<AuthoringSemanticIdentity>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl RetainedFamilyIdentityBinding {
+    fn bind(&mut self, identity: &AuthoringSemanticIdentity) -> Result<(), String> {
+        if let Some(existing) = &self.identity {
+            if !existing.matches(identity) {
+                return Err(
+                    "retained native Text is already bound to another family identity".to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        self.identity = Some(identity.clone());
+        Ok(())
+    }
+
+    fn identity(&self) -> Option<&AuthoringSemanticIdentity> {
+        self.identity.as_ref()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
@@ -435,7 +463,7 @@ mod wasm {
     pub struct WasmRetainedNativeTextAuthoringHandle {
         inner: RetainedTextAuthoringSpec,
         intrinsic_bounds: Rect,
-        family_identity: Option<SemanticNodeId>,
+        family_identity: RetainedFamilyIdentityBinding,
         mutation_revision: u64,
     }
 
@@ -450,23 +478,13 @@ mod wasm {
 
         pub(crate) fn bind_family_identity(
             &mut self,
-            identity: SemanticNodeId,
+            identity: &AuthoringSemanticIdentity,
         ) -> Result<(), String> {
-            if let Some(existing) = self.family_identity {
-                if existing != identity {
-                    return Err(
-                        "retained native Text is already bound to another family identity"
-                            .to_owned(),
-                    );
-                }
-                return Ok(());
-            }
-            self.family_identity = Some(identity);
-            Ok(())
+            self.family_identity.bind(identity)
         }
 
-        pub(crate) fn family_identity(&self) -> Option<SemanticNodeId> {
-            self.family_identity
+        pub(crate) fn family_identity(&self) -> Option<&AuthoringSemanticIdentity> {
+            self.family_identity.identity()
         }
 
         pub(crate) fn family_layout_bounds(&self) -> Bounds2D64 {
@@ -519,7 +537,7 @@ mod wasm {
             Ok(Self {
                 inner,
                 intrinsic_bounds,
-                family_identity: None,
+                family_identity: RetainedFamilyIdentityBinding::default(),
                 mutation_revision: 0,
             })
         }
@@ -664,6 +682,24 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_family_identity_binding_rejects_cross_store_numeric_collision() {
+        let first_store = crate::AuthoringSemanticStore::new();
+        let second_store = crate::AuthoringSemanticStore::new();
+        let first = first_store.insert_object();
+        let second = second_store.insert_object();
+
+        assert_eq!(first.node_id(), second.node_id());
+
+        let mut binding = RetainedFamilyIdentityBinding::default();
+        binding.bind(&first).unwrap();
+        binding.bind(&first).unwrap();
+        assert!(binding.bind(&second).is_err());
+        assert!(binding
+            .identity()
+            .is_some_and(|identity| identity.matches(&first)));
+    }
 
     #[test]
     fn backend_neutral_wire_stays_source_level() {
