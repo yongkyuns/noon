@@ -3,6 +3,7 @@
 mod authoring_facade;
 mod authoring_mobject;
 mod authoring_options;
+mod authoring_semantics;
 mod canonical_retained_engine_player;
 mod composition;
 mod determinism;
@@ -50,6 +51,7 @@ mod spatial_query;
 pub use authoring_facade::*;
 pub use authoring_mobject::*;
 pub use authoring_options::*;
+pub use authoring_semantics::*;
 pub use canonical_retained_engine_player::*;
 pub use composition::*;
 pub use determinism::*;
