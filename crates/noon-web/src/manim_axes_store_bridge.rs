@@ -4,7 +4,7 @@ mod wasm {
 
     use crate::{
         WasmAuthoringStore, WasmAxesAuthoringPlan, WasmAxesPlotPlan, WasmAxesQueryPlan,
-        WasmNumberPlaneGridPlan, WasmParametricFunctionPlan,
+        WasmNumberLineAuthoringPlan, WasmNumberPlaneGridPlan, WasmParametricFunctionPlan,
     };
 
     /// Keep the browser worker coupled to one stable authoring-store import while
@@ -41,6 +41,14 @@ mod wasm {
             request_json: &str,
         ) -> Result<WasmParametricFunctionPlan, JsValue> {
             WasmParametricFunctionPlan::new(request_json)
+        }
+
+        #[wasm_bindgen(js_name = createNumberLineAuthoringPlan)]
+        pub fn create_number_line_authoring_plan(
+            &self,
+            request_json: &str,
+        ) -> Result<WasmNumberLineAuthoringPlan, JsValue> {
+            WasmNumberLineAuthoringPlan::new(request_json)
         }
 
         #[wasm_bindgen(js_name = createNumberPlaneGridPlan)]
