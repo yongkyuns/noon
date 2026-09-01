@@ -85,9 +85,11 @@ globalThis.window = { devicePixelRatio: 1 };
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
-const RETAINED_DOCUMENT_JSON = JSON.stringify({
-  channel: "noon.authoring.retained",
-  objects: [{ id: 1 }],
+const SCENE_SPEC_JSON = JSON.stringify({
+  version: 1,
+  camera_object: null,
+  objects: [{ id: 1, content: { kind: "text", text: {} } }],
+  tracks: [],
 });
 
 function engineMessage(type, payload = {}) {
@@ -158,7 +160,7 @@ test("prepared render owner waits for preparation before starting the authored r
   const prepareRequest = requestMessage(render, "prepare");
   assert.equal(prepareRequest.mode, undefined, "render preparation must remain mode-free");
 
-  const startPromise = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON);
+  const startPromise = client.startRetainedCanonical(SCENE_SPEC_JSON);
   assert.equal(
     FakeWorker.instances.length,
     1,
@@ -180,11 +182,14 @@ test("prepared render owner waits for preparation before starting the authored r
   assert.equal(startRequest.mode, "retained");
   assert.equal(startRequest.transportMode, "transferable");
   const engineInit = requestMessage(retainedEngine, "init");
-  assert.equal(engineInit.retainedDocumentJson, RETAINED_DOCUMENT_JSON);
+  assert.equal(engineInit.sceneSpecJson, SCENE_SPEC_JSON);
+  assert.equal("sceneJson" in engineInit, false);
+  assert.equal("retainedDocumentJson" in engineInit, false);
 
   retainedEngine.emitMessage(
     engineMessage("ready", {
       transportMode: "transferable",
+      canonical: true,
     }),
   );
   render.emitMessage(
@@ -209,7 +214,7 @@ test("prepared render owner admits only one authored start while preparation is 
 
   const preparePromise = client.prepare({ transportMode: "transferable" });
   const render = workerByName(0, "noon-render");
-  const retainedStart = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON);
+  const retainedStart = client.startRetainedCanonical(SCENE_SPEC_JSON);
   let competingError = null;
   const competingStart = client.start(SCENE_JSON).catch((error) => {
     competingError = error;
@@ -232,7 +237,9 @@ test("prepared render owner admits only one authored start while preparation is 
   const retainedEngine = engineWorkers[0];
   const startRequest = requestMessage(render, "start_engine");
   assert.equal(startRequest.mode, "retained");
-  retainedEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+  retainedEngine.emitMessage(
+    engineMessage("ready", { transportMode: "transferable", canonical: true }),
+  );
   render.emitMessage(
     renderMessage("engine_started", {
       requestId: startRequest.requestId,
@@ -258,7 +265,7 @@ test("failed prepared engine attachment replaces the transferred canvas and rema
   acknowledgePreparation(render);
   await preparePromise;
 
-  const started = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON);
+  const started = client.startRetainedCanonical(SCENE_SPEC_JSON);
   await new Promise((resolve) => setImmediate(resolve));
   const engine = workerByName(1, "noon-mixed-retained-engine");
   requestMessage(render, "start_engine");
@@ -273,12 +280,14 @@ test("failed prepared engine attachment replaces the transferred canvas and rema
   assert.equal(client.canvas.transferred, false);
 
   const retryOffset = FakeWorker.instances.length;
-  const retry = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON, {
+  const retry = client.startRetainedCanonical(SCENE_SPEC_JSON, {
     transportMode: "transferable",
   });
   const retryEngine = workerByName(retryOffset, "noon-mixed-retained-engine");
   const retryRender = workerByName(retryOffset, "noon-render");
-  retryEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+  retryEngine.emitMessage(
+    engineMessage("ready", { transportMode: "transferable", canonical: true }),
+  );
   retryRender.emitMessage(
     renderMessage("ready", {
       transportMode: "transferable",
@@ -339,12 +348,14 @@ test("abandoning preparation restores the transferred canvas before any engine s
   assert.equal(client.canvas.transferred, false);
 
   const retryOffset = FakeWorker.instances.length;
-  const retry = client.startRetained(SCENE_JSON, RETAINED_DOCUMENT_JSON, {
+  const retry = client.startRetainedCanonical(SCENE_SPEC_JSON, {
     transportMode: "transferable",
   });
   const retryEngine = workerByName(retryOffset, "noon-mixed-retained-engine");
   const retryRender = workerByName(retryOffset, "noon-render");
-  retryEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+  retryEngine.emitMessage(
+    engineMessage("ready", { transportMode: "transferable", canonical: true }),
+  );
   retryRender.emitMessage(
     renderMessage("ready", {
       transportMode: "transferable",

@@ -20,10 +20,9 @@ const EMPTY_HOST_METRICS = Object.freeze({
 /// for its lifetime. Geometry-only results keep a legacy engine attached to that
 /// owner. Results with canonical retained SceneSpec output switch only the engine
 /// type and renderer implementation at an authoring boundary; the render worker,
-/// HTML canvas, and OffscreenCanvas ownership remain stable. The split legacy scene
-/// plus retained sidecar API remains an explicit compatibility path. Retained edits
-/// rebuild engine state at authoring boundaries; playback itself remains retained
-/// with no per-frame Python/source work.
+/// HTML canvas, and OffscreenCanvas ownership remain stable. Retained edits rebuild
+/// engine state at authoring boundaries; playback itself remains retained with no
+/// per-frame Python/source work.
 export class AuthoringExecutionClient {
   #canvas;
   #player = null;
@@ -91,54 +90,11 @@ export class AuthoringExecutionClient {
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
     }
-    const ready = await this.#startMode(
-      AUTHORING_EXECUTION_LEGACY,
-      sceneJson,
-      null,
-      options,
-    );
+    const ready = await this.#startMode(AUTHORING_EXECUTION_LEGACY, sceneJson, options);
     this.#transportMode = ready.transportMode;
     return ready;
   }
 
-  /// Compatibility startup for the transitional split retained payload.
-  async startRetained(
-    sceneJson,
-    retainedDocumentJson,
-    {
-      loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
-      transportMode = undefined,
-      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
-    } = {},
-  ) {
-    if (this.#player !== null || this.#transition !== null) {
-      throw new Error("AuthoringExecutionClient is already started");
-    }
-    validateSceneJson(sceneJson);
-    const retainedDocument = validateRetainedDocumentJson(retainedDocumentJson);
-    if (retainedDocument.objects.length === 0) {
-      throw new TypeError("retained startup requires at least one retained object");
-    }
-    this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    const options = {
-      loopDurationSeconds: this.#loopDurationSeconds,
-      sharedSlotCapacity: this.#sharedSlotCapacity,
-    };
-    if (transportMode !== undefined) {
-      options.transportMode = transportMode;
-    }
-    const ready = await this.#startMode(
-      AUTHORING_EXECUTION_RETAINED,
-      sceneJson,
-      retainedDocumentJson,
-      options,
-    );
-    this.#transportMode = ready.transportMode;
-    return ready;
-  }
-
-  /// Canonical retained startup used by normal Python authoring.
   async startRetainedCanonical(
     sceneSpecJson,
     {
@@ -163,7 +119,6 @@ export class AuthoringExecutionClient {
     const ready = await this.#startMode(
       AUTHORING_EXECUTION_RETAINED,
       null,
-      null,
       options,
       sceneSpecJson,
     );
@@ -186,18 +141,14 @@ export class AuthoringExecutionClient {
     }
     this.#requireStarted();
     validateSceneJson(sceneJson);
+    if (retainedDocumentJson !== null && retainedDocumentJson !== undefined) {
+      throw new Error(
+        "split retained reconciliation is retired; provide canonical sceneSpecJson instead",
+      );
+    }
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
-    }
-
-    if (
-      sceneSpecJson !== null &&
-      sceneSpecJson !== undefined &&
-      retainedDocumentJson !== null &&
-      retainedDocumentJson !== undefined
-    ) {
-      throw new Error("authoring reconciliation must not mix canonical and compatibility retained inputs");
     }
 
     if (sceneSpecJson !== null && sceneSpecJson !== undefined) {
@@ -212,27 +163,6 @@ export class AuthoringExecutionClient {
         return this.#runTransition(() => this.#rebuildRetainedCanonical(sceneSpecJson));
       }
       return this.#runTransition(() => this.#switchRetainedCanonical(sceneSpecJson));
-    }
-
-    let retainedDocument = null;
-    if (retainedDocumentJson !== null && retainedDocumentJson !== undefined) {
-      retainedDocument = validateRetainedDocumentJson(retainedDocumentJson);
-    }
-    if (retainedDocument !== null && retainedDocument.objects.length > 0) {
-      if (callbacks !== null && callbacks !== undefined) {
-        throw new Error(
-          "retained authoring with Python host callbacks is not supported yet; " +
-            "split the callback work from retained text instead of silently dropping either",
-        );
-      }
-      if (this.#mode === AUTHORING_EXECUTION_RETAINED) {
-        return this.#runTransition(() =>
-          this.#rebuildRetained(sceneJson, retainedDocumentJson),
-        );
-      }
-      return this.#runTransition(() =>
-        this.#switchRetained(sceneJson, retainedDocumentJson),
-      );
     }
 
     if (this.#mode === AUTHORING_EXECUTION_LEGACY) {
@@ -343,7 +273,7 @@ export class AuthoringExecutionClient {
     this.#transportMode = null;
   }
 
-  async #startMode(mode, sceneJson, retainedDocumentJson, options, sceneSpecJson = null) {
+  async #startMode(mode, sceneJson, options, sceneSpecJson = null) {
     const generation = this.#lifecycleGeneration;
     const player = new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
@@ -352,15 +282,10 @@ export class AuthoringExecutionClient {
     const terminateCandidate = createIdempotentTerminator(player);
     let published = false;
     try {
-      let ready;
-      if (mode === AUTHORING_EXECUTION_RETAINED) {
-        ready =
-          sceneSpecJson !== null
-            ? await player.startRetainedCanonical(sceneSpecJson, options)
-            : await player.startRetained(sceneJson, retainedDocumentJson, options);
-      } else {
-        ready = await player.start(sceneJson, options);
-      }
+      const ready =
+        mode === AUTHORING_EXECUTION_RETAINED
+          ? await player.startRetainedCanonical(sceneSpecJson, options)
+          : await player.start(sceneJson, options);
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       this.#player = player;
       published = true;
@@ -418,68 +343,6 @@ export class AuthoringExecutionClient {
     const player = this.#player;
     try {
       const ready = await player.rebuildRetainedCanonical(sceneSpecJson, {
-        loopDurationSeconds: this.#loopDurationSeconds,
-      });
-      this.#assertLifecycleCurrent(generation);
-      this.#mode = AUTHORING_EXECUTION_RETAINED;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      const state = await player.state();
-      this.#assertLifecycleCurrent(generation);
-      return {
-        type: "result",
-        operation: "rebuild_retained_scene",
-        incremental: false,
-        rebuilt: true,
-        mode: this.#mode,
-        ready,
-        ...state,
-      };
-    } catch (error) {
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      this.#adoptPlayerCanvas(player);
-      throw error;
-    }
-  }
-
-  async #switchRetained(sceneJson, retainedDocumentJson) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#player;
-    try {
-      const ready = await player.switchToRetained(sceneJson, retainedDocumentJson, {
-        loopDurationSeconds: this.#loopDurationSeconds,
-      });
-      this.#assertLifecycleCurrent(generation);
-      this.#mode = AUTHORING_EXECUTION_RETAINED;
-      this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
-      const state = await player.state();
-      this.#assertLifecycleCurrent(generation);
-      return {
-        type: "result",
-        operation: "rebuild_retained_scene",
-        incremental: false,
-        rebuilt: true,
-        mode: this.#mode,
-        ready,
-        ...state,
-      };
-    } catch (error) {
-      if (generation !== this.#lifecycleGeneration) {
-        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
-      }
-      this.#adoptPlayerCanvas(player);
-      throw error;
-    }
-  }
-
-  async #rebuildRetained(sceneJson, retainedDocumentJson) {
-    const generation = this.#lifecycleGeneration;
-    const player = this.#player;
-    try {
-      const ready = await player.rebuildRetained(sceneJson, retainedDocumentJson, {
         loopDurationSeconds: this.#loopDurationSeconds,
       });
       this.#assertLifecycleCurrent(generation);
@@ -665,25 +528,6 @@ function validateSceneSpecJson(sceneSpecJson) {
     throw new TypeError("canonical SceneSpec must contain object and track arrays");
   }
   return sceneSpec;
-}
-
-function validateRetainedDocumentJson(retainedDocumentJson) {
-  if (typeof retainedDocumentJson !== "string" || retainedDocumentJson.trim() === "") {
-    throw new TypeError("retained document must be non-empty JSON text");
-  }
-  let document;
-  try {
-    document = JSON.parse(retainedDocumentJson);
-  } catch (error) {
-    throw new TypeError(`retained document must be valid JSON: ${error}`);
-  }
-  if (document?.channel !== "noon.authoring.retained") {
-    throw new TypeError("retained document must use noon.authoring.retained");
-  }
-  if (!Array.isArray(document.objects)) {
-    throw new TypeError("retained document objects must be an array");
-  }
-  return document;
 }
 
 function validateLoopDurationSeconds(loopDurationSeconds) {

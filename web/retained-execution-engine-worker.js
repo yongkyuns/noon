@@ -1,7 +1,4 @@
-import init, {
-  CanonicalRetainedEngineScenePlayer,
-  MixedRetainedEngineScenePlayer,
-} from "./pkg/noon_web.js";
+import init, { CanonicalRetainedEngineScenePlayer } from "./pkg/noon_web.js";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
@@ -12,14 +9,11 @@ import {
 
 const ENGINE_CHANNEL = "noon.engine";
 const ENGINE_PROTOCOL_VERSION = 1;
-const AUTHORING_CANONICAL = "canonical";
-const AUTHORING_COMPATIBILITY = "compatibility";
 
 let renderPort = null;
 let transportMode = null;
 let transport = null;
 let player = null;
-let authoringKind = null;
 let latestTick = null;
 let controlQueue = [];
 let initialized = false;
@@ -56,7 +50,7 @@ async function handleMainMessage(message) {
           metrics: {
             retained: true,
             mixed: true,
-            canonical: authoringKind === AUTHORING_CANONICAL,
+            canonical: true,
             time: player.time(),
             playing: player.isPlaying(),
             stopped,
@@ -96,7 +90,7 @@ async function initialize(message) {
   if (!(message.port instanceof MessagePort)) {
     throw new Error("retained execution engine init requires a render MessagePort");
   }
-  const authoring = validateAuthoringInput(message);
+  const sceneSpecJson = validateSceneSpecInput(message);
   validateLoopDuration(message.loopDurationSeconds);
   if (!Number.isSafeInteger(message.session) || message.session < 0) {
     throw new Error("retained execution session must be a non-negative safe integer");
@@ -112,9 +106,12 @@ async function initialize(message) {
   renderPort.addEventListener("message", (event) => handleRenderMessage(event.data));
   renderPort.start();
   transportMode = message.transportMode;
-  authoringKind = authoring.kind;
   await init();
-  player = createPlayer(authoring, message.loopDurationSeconds, message.session);
+  player = new CanonicalRetainedEngineScenePlayer(
+    sceneSpecJson,
+    message.loopDurationSeconds,
+    message.session,
+  );
 
   // wasm-bindgen returns a view/copy for Vec<u8>; make an independently owned
   // transferable buffer so detaching it cannot affect WebAssembly memory.
@@ -147,25 +144,9 @@ async function initialize(message) {
     transportMode,
     retained: true,
     mixed: true,
-    canonical: authoringKind === AUTHORING_CANONICAL,
+    canonical: true,
   });
   drainWork();
-}
-
-function createPlayer(authoring, loopDurationSeconds, session) {
-  if (authoring.kind === AUTHORING_CANONICAL) {
-    return new CanonicalRetainedEngineScenePlayer(
-      authoring.sceneSpecJson,
-      loopDurationSeconds,
-      session,
-    );
-  }
-  return new MixedRetainedEngineScenePlayer(
-    authoring.sceneJson,
-    authoring.retainedDocumentJson,
-    loopDurationSeconds,
-    session,
-  );
 }
 
 function handleRenderMessage(message) {
@@ -315,7 +296,7 @@ function runtimeState(type, operation = undefined) {
     time: player.time(),
     playing: player.isPlaying(),
     nextPatchSequence: "0",
-    ...authoringState(),
+    sceneSpecJson: player.sceneSpecJson(),
   };
   if (operation !== undefined) {
     state.operation = operation;
@@ -323,41 +304,14 @@ function runtimeState(type, operation = undefined) {
   return state;
 }
 
-function authoringState() {
-  if (authoringKind === AUTHORING_CANONICAL) {
-    return { sceneSpecJson: player.sceneSpecJson() };
+function validateSceneSpecInput(message) {
+  if (message.sceneJson !== undefined || message.retainedDocumentJson !== undefined) {
+    throw new Error("retained execution init accepts only canonical sceneSpecJson");
   }
-  return {
-    sceneJson: player.legacySceneJson(),
-    retainedDocumentJson: player.retainedDocumentJson(),
-  };
-}
-
-function validateAuthoringInput(message) {
-  const hasCanonical =
-    typeof message.sceneSpecJson === "string" && message.sceneSpecJson.trim() !== "";
-  const hasLegacyScene =
-    typeof message.sceneJson === "string" && message.sceneJson.trim() !== "";
-  const hasRetainedDocument =
-    typeof message.retainedDocumentJson === "string" &&
-    message.retainedDocumentJson.trim() !== "";
-
-  if (hasCanonical) {
-    if (message.sceneJson !== undefined || message.retainedDocumentJson !== undefined) {
-      throw new Error("retained execution init must not mix canonical and compatibility inputs");
-    }
-    return { kind: AUTHORING_CANONICAL, sceneSpecJson: message.sceneSpecJson };
+  if (typeof message.sceneSpecJson !== "string" || message.sceneSpecJson.trim() === "") {
+    throw new Error("retained execution init requires canonical sceneSpecJson");
   }
-  if (hasLegacyScene && hasRetainedDocument) {
-    return {
-      kind: AUTHORING_COMPATIBILITY,
-      sceneJson: message.sceneJson,
-      retainedDocumentJson: message.retainedDocumentJson,
-    };
-  }
-  throw new Error(
-    "retained execution init requires sceneSpecJson or the complete legacy scene + retained document pair",
-  );
+  return message.sceneSpecJson;
 }
 
 function respond(requestId, payload) {

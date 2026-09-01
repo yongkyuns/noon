@@ -52,13 +52,13 @@ assert.doesNotMatch(
 );
 assert.match(
   authoringExecutionClient,
-  /player\.switchToRetained\(/,
-  "legacy to retained authoring must switch the persistent execution owner in place",
+  /player\.switchToRetainedCanonical\(/,
+  "legacy to retained authoring must switch the persistent execution owner in place using canonical SceneSpec",
 );
 assert.match(
   authoringExecutionClient,
-  /player\.rebuildRetained\(/,
-  "retained authoring edits must rebuild on the persistent execution owner",
+  /player\.rebuildRetainedCanonical\(/,
+  "retained authoring edits must rebuild on the persistent execution owner using canonical SceneSpec",
 );
 assert.match(
   authoringExecutionClient,

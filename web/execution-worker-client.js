@@ -31,7 +31,6 @@ export class ExecutionWorkerClient {
   #session = 0;
   #mode = EXECUTION_MODE_LEGACY;
   #sceneJson = null;
-  #retainedDocumentJson = null;
   #sceneSpecJson = null;
   #loopDurationSeconds = 4;
   #transportMode = null;
@@ -150,31 +149,13 @@ export class ExecutionWorkerClient {
       (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
     validateSceneJson(sceneJson);
     sceneJson = projectLegacyReactiveSceneJson(sceneJson);
-    return this.#startMode(EXECUTION_MODE_LEGACY, sceneJson, null, {
+    return this.#startMode(EXECUTION_MODE_LEGACY, sceneJson, {
       loopDurationSeconds,
       transportMode,
       sharedSlotCapacity,
     });
   }
 
-  /// Compatibility entry point for the transitional split retained payload.
-  async startRetained(sceneJson, retainedDocumentJson, options = {}) {
-    const loopDurationSeconds = options.loopDurationSeconds ?? 4;
-    const transportMode =
-      options.transportMode ?? this.#transportMode ?? selectExecutionTransportMode();
-    const sharedSlotCapacity =
-      options.sharedSlotCapacity ??
-      (this.#renderPrepared === null ? DEFAULT_SHARED_SLOT_CAPACITY : this.#sharedSlotCapacity);
-    validateSceneJson(sceneJson);
-    validateRetainedDocumentJson(retainedDocumentJson);
-    return this.#startMode(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
-      loopDurationSeconds,
-      transportMode,
-      sharedSlotCapacity,
-    });
-  }
-
-  /// Canonical retained startup. Normal authoring should use this path.
   async startRetainedCanonical(sceneSpecJson, options = {}) {
     const loopDurationSeconds = options.loopDurationSeconds ?? 4;
     const transportMode =
@@ -186,7 +167,6 @@ export class ExecutionWorkerClient {
     return this.#startMode(
       EXECUTION_MODE_RETAINED,
       null,
-      null,
       { loopDurationSeconds, transportMode, sharedSlotCapacity },
       sceneSpecJson,
     );
@@ -195,7 +175,6 @@ export class ExecutionWorkerClient {
   async #startMode(
     mode,
     sceneJson,
-    retainedDocumentJson,
     {
       loopDurationSeconds,
       transportMode,
@@ -213,17 +192,14 @@ export class ExecutionWorkerClient {
     validateExecutionMode(mode);
     if (mode === EXECUTION_MODE_LEGACY) {
       validateSceneJson(sceneJson);
-      if (sceneSpecJson !== null || retainedDocumentJson !== null) {
-        throw new Error("legacy execution must not include retained authoring payloads");
-      }
-    } else if (sceneSpecJson !== null) {
-      validateSceneSpecJson(sceneSpecJson);
-      if (sceneJson !== null || retainedDocumentJson !== null) {
-        throw new Error("retained execution must not mix canonical and compatibility inputs");
+      if (sceneSpecJson !== null) {
+        throw new Error("legacy execution must not include canonical retained authoring");
       }
     } else {
-      validateSceneJson(sceneJson);
-      validateRetainedDocumentJson(retainedDocumentJson);
+      validateSceneSpecJson(sceneSpecJson);
+      if (sceneJson !== null) {
+        throw new Error("retained execution accepts only canonical SceneSpec authoring");
+      }
     }
     validateLoopDurationSeconds(loopDurationSeconds);
     validateTransportMode(transportMode);
@@ -249,7 +225,6 @@ export class ExecutionWorkerClient {
         return await this.#startPreparedMode(
           mode,
           sceneJson,
-          retainedDocumentJson,
           loopDurationSeconds,
           sceneSpecJson,
         );
@@ -267,7 +242,6 @@ export class ExecutionWorkerClient {
     this.#configureStart(
       mode,
       sceneJson,
-      retainedDocumentJson,
       loopDurationSeconds,
       transportMode,
       slotCapacity,
@@ -311,7 +285,6 @@ export class ExecutionWorkerClient {
         channel.port1,
         mode,
         sceneJson,
-        retainedDocumentJson,
         loopDurationSeconds,
         this.#session,
         sceneSpecJson,
@@ -333,14 +306,12 @@ export class ExecutionWorkerClient {
   async #startPreparedMode(
     mode,
     sceneJson,
-    retainedDocumentJson,
     loopDurationSeconds,
     sceneSpecJson = null,
   ) {
     this.#configureStart(
       mode,
       sceneJson,
-      retainedDocumentJson,
       loopDurationSeconds,
       this.#transportMode,
       this.#sharedSlotCapacity,
@@ -373,7 +344,6 @@ export class ExecutionWorkerClient {
         channel.port1,
         mode,
         sceneJson,
-        retainedDocumentJson,
         loopDurationSeconds,
         this.#session,
         sceneSpecJson,
@@ -397,7 +367,6 @@ export class ExecutionWorkerClient {
   #configureStart(
     mode,
     sceneJson,
-    retainedDocumentJson,
     loopDurationSeconds,
     transportMode,
     sharedSlotCapacity,
@@ -405,8 +374,6 @@ export class ExecutionWorkerClient {
   ) {
     this.#mode = mode;
     this.#sceneJson = sceneJson;
-    this.#retainedDocumentJson =
-      mode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
     this.#sceneSpecJson = mode === EXECUTION_MODE_RETAINED ? sceneSpecJson : null;
     this.#loopDurationSeconds = loopDurationSeconds;
     this.#transportMode = transportMode;
@@ -472,26 +439,9 @@ export class ExecutionWorkerClient {
     return result;
   }
 
-  /// Compatibility transition for the split retained payload.
-  async switchToRetained(
-    sceneJson,
-    retainedDocumentJson,
-    { loopDurationSeconds = null } = {},
-  ) {
-    validateSceneJson(sceneJson);
-    validateRetainedDocumentJson(retainedDocumentJson);
-    return this.#transitionEngine(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
-      loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
-      callbacks: null,
-      authoringClient: null,
-      renderCommand: "switch_engine",
-    });
-  }
-
-  /// Canonical retained transition used by normal browser authoring.
   async switchToRetainedCanonical(sceneSpecJson, { loopDurationSeconds = null } = {}) {
     validateSceneSpecJson(sceneSpecJson);
-    return this.#transitionEngine(EXECUTION_MODE_RETAINED, null, null, {
+    return this.#transitionEngine(EXECUTION_MODE_RETAINED, null, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       callbacks: null,
       authoringClient: null,
@@ -500,26 +450,9 @@ export class ExecutionWorkerClient {
     });
   }
 
-  /// Compatibility rebuild for the split retained payload.
-  async rebuildRetained(
-    sceneJson,
-    retainedDocumentJson,
-    { loopDurationSeconds = null } = {},
-  ) {
-    validateSceneJson(sceneJson);
-    validateRetainedDocumentJson(retainedDocumentJson);
-    return this.#transitionEngine(EXECUTION_MODE_RETAINED, sceneJson, retainedDocumentJson, {
-      loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
-      callbacks: null,
-      authoringClient: null,
-      renderCommand: "rebuild_engine",
-    });
-  }
-
-  /// Canonical retained rebuild used by normal browser authoring.
   async rebuildRetainedCanonical(sceneSpecJson, { loopDurationSeconds = null } = {}) {
     validateSceneSpecJson(sceneSpecJson);
-    return this.#transitionEngine(EXECUTION_MODE_RETAINED, null, null, {
+    return this.#transitionEngine(EXECUTION_MODE_RETAINED, null, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       callbacks: null,
       authoringClient: null,
@@ -542,7 +475,7 @@ export class ExecutionWorkerClient {
       validateCallbacks(callbacks);
       validateAuthoringClient(authoringClient);
     }
-    return this.#transitionEngine(EXECUTION_MODE_LEGACY, sceneJson, null, {
+    return this.#transitionEngine(EXECUTION_MODE_LEGACY, sceneJson, {
       loopDurationSeconds: validateOptionalLoopDurationSeconds(loopDurationSeconds),
       callbacks,
       authoringClient,
@@ -553,25 +486,19 @@ export class ExecutionWorkerClient {
   async #transitionEngine(
     nextMode,
     sceneJson,
-    retainedDocumentJson,
     { loopDurationSeconds, callbacks, authoringClient, renderCommand, sceneSpecJson = null },
   ) {
     this.#requireStarted();
     validateExecutionMode(nextMode);
     if (nextMode === EXECUTION_MODE_RETAINED) {
-      if (sceneSpecJson !== null) {
-        validateSceneSpecJson(sceneSpecJson);
-        if (sceneJson !== null || retainedDocumentJson !== null) {
-          throw new Error("retained execution must not mix canonical and compatibility inputs");
-        }
-      } else {
-        validateSceneJson(sceneJson);
-        validateRetainedDocumentJson(retainedDocumentJson);
+      validateSceneSpecJson(sceneSpecJson);
+      if (sceneJson !== null) {
+        throw new Error("retained execution accepts only canonical SceneSpec authoring");
       }
     } else {
       validateSceneJson(sceneJson);
-      if (sceneSpecJson !== null || retainedDocumentJson !== null) {
-        throw new Error("legacy execution must not include retained authoring payloads");
+      if (sceneSpecJson !== null) {
+        throw new Error("legacy execution must not include canonical retained authoring");
       }
     }
     if (renderCommand === "switch_engine" && nextMode === this.#mode) {
@@ -604,7 +531,6 @@ export class ExecutionWorkerClient {
         channel.port1,
         nextMode,
         sceneJson,
-        retainedDocumentJson,
         duration,
         nextSession,
         sceneSpecJson,
@@ -685,8 +611,6 @@ export class ExecutionWorkerClient {
 
       this.#mode = nextMode;
       this.#sceneJson = sceneJson;
-      this.#retainedDocumentJson =
-        nextMode === EXECUTION_MODE_RETAINED ? retainedDocumentJson : null;
       this.#sceneSpecJson = nextMode === EXECUTION_MODE_RETAINED ? sceneSpecJson : null;
       this.#loopDurationSeconds = duration;
       this.#fatalOwner = null;
@@ -808,8 +732,7 @@ export class ExecutionWorkerClient {
     const hasAuthoring =
       this.#mode === EXECUTION_MODE_LEGACY
         ? this.#sceneJson !== null
-        : this.#sceneSpecJson !== null ||
-          (this.#sceneJson !== null && this.#retainedDocumentJson !== null);
+        : this.#sceneSpecJson !== null;
     if (!hasAuthoring || this.#transportMode === null) {
       throw new Error("ExecutionWorkerClient has not been started");
     }
@@ -866,7 +789,6 @@ export class ExecutionWorkerClient {
         channel.port1,
         mode,
         this.#sceneJson,
-        this.#retainedDocumentJson,
         this.#loopDurationSeconds,
         this.#session,
         this.#sceneSpecJson,
@@ -900,7 +822,6 @@ export class ExecutionWorkerClient {
   async #restartAll() {
     const mode = this.#mode;
     const sceneJson = this.#sceneJson;
-    const retainedDocumentJson = this.#retainedDocumentJson;
     const sceneSpecJson = this.#sceneSpecJson;
     const loopDurationSeconds = this.#loopDurationSeconds;
     const transportMode = this.#transportMode;
@@ -918,7 +839,6 @@ export class ExecutionWorkerClient {
     const ready = await this.#startMode(
       mode,
       sceneJson,
-      retainedDocumentJson,
       { loopDurationSeconds, transportMode, sharedSlotCapacity },
       sceneSpecJson,
     );
@@ -1211,7 +1131,6 @@ export class ExecutionWorkerClient {
     port,
     mode,
     sceneJson,
-    retainedDocumentJson,
     loopDurationSeconds,
     session = this.#session,
     sceneSpecJson = null,
@@ -1223,13 +1142,12 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity: this.#sharedSlotCapacity,
       session,
     };
-    if (mode === EXECUTION_MODE_RETAINED && sceneSpecJson !== null) {
+    if (mode === EXECUTION_MODE_RETAINED) {
+      validateSceneSpecJson(sceneSpecJson);
       payload.sceneSpecJson = sceneSpecJson;
     } else {
+      validateSceneJson(sceneJson);
       payload.sceneJson = sceneJson;
-      if (mode === EXECUTION_MODE_RETAINED) {
-        payload.retainedDocumentJson = retainedDocumentJson;
-      }
     }
     worker.postMessage(engineEnvelope("init", payload), [port]);
   }
@@ -1406,24 +1324,6 @@ function validateSceneSpecJson(sceneSpecJson) {
     throw new TypeError("canonical SceneSpec has an invalid camera object");
   }
   return sceneSpec;
-}
-
-function validateRetainedDocumentJson(retainedDocumentJson) {
-  if (typeof retainedDocumentJson !== "string" || retainedDocumentJson.trim() === "") {
-    throw new TypeError("retained document must be non-empty JSON text");
-  }
-  let document;
-  try {
-    document = JSON.parse(retainedDocumentJson);
-  } catch (error) {
-    throw new TypeError(`retained document must be valid JSON: ${error}`);
-  }
-  if (document?.channel !== "noon.authoring.retained") {
-    throw new TypeError("retained document must use noon.authoring.retained");
-  }
-  if (!Array.isArray(document.objects) || document.objects.length === 0) {
-    throw new TypeError("retained document must contain objects");
-  }
 }
 
 function validateLoopDurationSeconds(loopDurationSeconds) {

@@ -84,10 +84,11 @@ globalThis.window = { devicePixelRatio: 1 };
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
 
 const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
-const RETAINED_JSON = JSON.stringify({
-  channel: "noon.authoring.retained",
+const SCENE_SPEC_JSON = JSON.stringify({
   version: 1,
-  objects: [{ id: 1, kind: "typst" }],
+  camera_object: null,
+  objects: [{ id: 1, content: { kind: "text", text: {} } }],
+  tracks: [],
 });
 
 function engineMessage(type, payload = {}) {
@@ -142,7 +143,7 @@ test("mode transition preflights the candidate before touching the live render o
   const { client, engine: oldEngine, render } = await startLegacyClient();
   const canvas = client.canvas;
 
-  const transition = client.switchToRetained(SCENE_JSON, RETAINED_JSON);
+  const transition = client.switchToRetainedCanonical(SCENE_SPEC_JSON);
   await flush();
   const candidate = latestWorker("noon-mixed-retained-engine");
   assert.ok(candidate, "retained candidate must be created during preflight");
@@ -154,6 +155,9 @@ test("mode transition preflights the candidate before touching the live render o
   );
   const init = requestMessage(candidate, "init");
   assert.equal(init.session, 2, "candidate may reserve the next session without publishing it");
+  assert.equal(init.sceneSpecJson, SCENE_SPEC_JSON);
+  assert.equal("sceneJson" in init, false);
+  assert.equal("retainedDocumentJson" in init, false);
 
   const oldStatePromise = client.state();
   await flush();
@@ -170,7 +174,12 @@ test("mode transition preflights the candidate before touching the live render o
   assert.equal((await oldStatePromise).sceneJson, SCENE_JSON);
 
   candidate.emitMessage(
-    engineMessage("ready", { transportMode: "transferable", retained: true, mixed: true }),
+    engineMessage("ready", {
+      transportMode: "transferable",
+      retained: true,
+      mixed: true,
+      canonical: true,
+    }),
   );
   await flush();
 
@@ -199,7 +208,7 @@ test("candidate failure before readiness leaves the old engine and renderer auth
   const { client, engine: oldEngine, render } = await startLegacyClient();
   const canvas = client.canvas;
 
-  const transition = client.switchToRetained(SCENE_JSON, RETAINED_JSON);
+  const transition = client.switchToRetainedCanonical(SCENE_SPEC_JSON);
   await flush();
   const candidate = latestWorker("noon-mixed-retained-engine");
   candidate.emitMessage(engineMessage("error", { message: "candidate bootstrap rejected" }));
@@ -235,7 +244,7 @@ test("candidate failure before readiness leaves the old engine and renderer auth
 test("terminate cancels an unpublished candidate without resurrecting either generation", async () => {
   const { client, engine: oldEngine, render } = await startLegacyClient();
 
-  const transition = client.switchToRetained(SCENE_JSON, RETAINED_JSON);
+  const transition = client.switchToRetainedCanonical(SCENE_SPEC_JSON);
   await flush();
   const candidate = latestWorker("noon-mixed-retained-engine");
   assert.ok(candidate);
