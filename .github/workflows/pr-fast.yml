@@ -105,6 +105,10 @@ jobs:
       SCCACHE_CACHE_SIZE: "1G"
       SCCACHE_LOCAL_RW_MODE: "READ_ONLY"
     steps:
+      - name: Start browser timing
+        id: browser-clock
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -145,12 +149,20 @@ jobs:
           fallback: none
 
       - name: Build browser package once
+        id: browser-package
         env:
           NOON_SKIP_WEB_PREFLIGHT: "1"
           NOON_SKIP_PLAYGROUND_TEST: "1"
           NOON_WASM_PROFILE: "dev"
           NOON_WASM_SKIP_OPT: "1"
-        run: bash scripts/build-web-demo.sh
+        run: |
+          SECONDS=0
+          set +e
+          bash scripts/build-web-demo.sh
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
@@ -164,13 +176,77 @@ jobs:
           npx playwright install chromium
 
       - name: Check deterministic playback
-        run: node scripts/deterministic-replay-smoke.mjs
+        id: deterministic-replay
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/deterministic-replay-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
       - name: Check Manim-style authoring
-        run: node scripts/manim-compat-smoke.mjs
+        id: manim-authoring
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/manim-compat-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
       - name: Check primary WebGPU rendering
+        id: webgpu-smoke
         env:
           NOON_BROWSER_SMOKE_BACKEND: webgpu
           NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
-        run: node scripts/browser-smoke.mjs
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/browser-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Summarize browser timing
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.browser-clock.outputs.epoch }}
+          PACKAGE_SECONDS: ${{ steps.browser-package.outputs.seconds }}
+          REPLAY_SECONDS: ${{ steps.deterministic-replay.outputs.seconds }}
+          AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
+          WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
+        run: |
+          total=""
+          if [[ "$START_EPOCH" =~ ^[0-9]+$ ]]; then
+            total=$(( $(date +%s) - START_EPOCH ))
+          fi
+
+          display_seconds() {
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+              printf '%ss' "$1"
+            else
+              printf 'n/a'
+            fi
+          }
+
+          {
+            echo "### Browser fast checks timing"
+            echo
+            echo "| Phase | Duration |"
+            echo "| --- | ---: |"
+            echo "| Browser package | $(display_seconds "$PACKAGE_SECONDS") |"
+            echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
+            echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
+            echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
+            echo "| Measured browser path | $(display_seconds "$total") |"
+            echo
+            echo "The measured browser path starts before checkout and ends after the renderer smoke. Hosted-runner queue time and post-job cleanup are intentionally excluded."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$total" =~ ^[0-9]+$ ]] && (( total >= 110 )); then
+            echo "::warning title=PR Fast Gate timing::Browser fast path reached ${total}s, leaving less than 10s of margin against the 120s target."
+          fi
