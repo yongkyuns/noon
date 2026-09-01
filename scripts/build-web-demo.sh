@@ -95,7 +95,16 @@ if [[ "${NOON_WEB_PREFLIGHT_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg --release)
+wasm_profile="${NOON_WASM_PROFILE:-release}"
+case "$wasm_profile" in
+  dev|release) ;;
+  *)
+    echo "unsupported NOON_WASM_PROFILE: $wasm_profile (expected dev or release)" >&2
+    exit 2
+    ;;
+esac
+
+wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg "--$wasm_profile")
 if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
 fi
