@@ -298,6 +298,23 @@ async function assertDeferredRuntime(page) {
 }
 
 async function chooseDifferentExample(page) {
+  const trigger = page.locator("#example-browser-trigger");
+  await trigger.waitFor({ state: "visible" });
+  assert.equal(
+    await trigger.getAttribute("aria-expanded"),
+    "false",
+    `${browserName}/${profileName}: Examples browser should start closed`,
+  );
+  await trigger.click();
+
+  const browserLayer = page.locator(".example-browser-layer");
+  await browserLayer.waitFor({ state: "visible" });
+  assert.equal(
+    await trigger.getAttribute("aria-expanded"),
+    "true",
+    `${browserName}/${profileName}: Examples trigger did not enter expanded state`,
+  );
+
   const targetId = await page.evaluate(() => {
     const selected = document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId;
     return [...document.querySelectorAll(".example-card")]
@@ -306,6 +323,12 @@ async function chooseDifferentExample(page) {
   });
   assert.ok(targetId, `${browserName}/${profileName}: gallery must expose a second example`);
   await page.locator(`.example-card[data-example-id="${targetId}"]`).click();
+  await browserLayer.waitFor({ state: "hidden" });
+  assert.equal(
+    await trigger.getAttribute("aria-expanded"),
+    "false",
+    `${browserName}/${profileName}: Examples browser did not close after selection`,
+  );
   await waitForAppliedScene(page, targetId);
   return targetId;
 }
