@@ -6,7 +6,7 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_family_create as _family_create
+import _manim_family_creation as _family_creation
 import _manim_phase_b as _phase_b
 
 
@@ -55,9 +55,9 @@ def install() -> None:
     """Install final authoring wrappers and expose the moving-camera name."""
 
     # Camera is the final compatibility module installed by the browser bootstrap.
-    # Install family Create/Uncreate here so it wraps every existing Scene.play layer
-    # and delegates all unrelated animations unchanged.
-    _family_create.install()
+    # Install semantic-family creation animations here so Create/Uncreate/Write/Unwrite
+    # wrap every earlier Scene.play layer and delegate unrelated animations unchanged.
+    _family_creation.install()
     _base.MovingCameraScene = MovingCameraScene
     if "MovingCameraScene" not in _base.__all__:
         _base.__all__.append("MovingCameraScene")

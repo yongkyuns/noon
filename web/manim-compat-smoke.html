@@ -6,9 +6,11 @@
     <title>Noon Manim compatibility smoke</title>
   </head>
   <body>
+    <canvas id="retained-write-smoke" width="640" height="360"></canvas>
     <script type="module">
       import init, { semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
+      import { ExecutionWorkerClient } from "./execution-worker-client.js";
 
       const client = new PythonAuthoringClient();
       const wasmReady = init();
@@ -20,39 +22,159 @@ class RetainedFamilyCreateSmoke(Scene):
         family = VGroup(Text("AB"), Circle(radius=0.25))
         self.play(Create(family), run_time=1.0, rate_func=linear)
 `;
+      const familyWriteSource = `
+from noon import *
+
+class RetainedFamilyWriteSmoke(Scene):
+    def construct(self):
+        # Source length is 15 while the rendered family has 14 visible glyphs.
+        # Manim Write must therefore retain its <15-member one-second default.
+        self.play(Write(Text("ABCDEFG HIJKLMN")))
+`;
+      const familyUnwriteSource = `
+from noon import *
+
+class RetainedFamilyUnwriteSmoke(Scene):
+    def construct(self):
+        text = Text("AB")
+        self.add(text)
+        self.play(Unwrite(text))
+`;
 
       let readyPromise = null;
+      let writeResult = null;
+      let writeRenderResult = null;
+
+      function oneFamilyRequest(result, label) {
+        if (result.kind !== "scene_document") {
+          throw new Error(`${label} smoke returned ${result.kind}`);
+        }
+        const retained = result.retainedDocument;
+        if (!retained || retained.objects.length !== 1) {
+          throw new Error(`${label} smoke expected one retained native Text leaf`);
+        }
+        if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 1) {
+          throw new Error(`${label} smoke did not author exactly one retained family request`);
+        }
+        const sceneSpec = result.sceneSpec;
+        if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
+          throw new Error(`${label} smoke did not reach canonical SceneSpec family animations`);
+        }
+        const request = sceneSpec.family_animations[0];
+        const serialized = JSON.stringify(request);
+        for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
+          if (serialized.includes(forbidden)) {
+            throw new Error(`${label} request leaked ${forbidden}`);
+          }
+        }
+        return request;
+      }
+
+      async function renderWriteMidpoint() {
+        if (writeResult == null) {
+          throw new Error("family Write authoring result is unavailable");
+        }
+
+        const canvas = document.querySelector("#retained-write-smoke");
+        const errors = [];
+        const execution = new ExecutionWorkerClient(canvas, {
+          onError(error, owner) {
+            errors.push(`${owner}: ${error}`);
+          },
+        });
+        try {
+          const readyState = await execution.startRetainedCanonical(
+            JSON.stringify(writeResult.sceneSpec),
+            {
+              loopDurationSeconds: 1.0,
+              transportMode: "transferable",
+            },
+          );
+          await execution.pause();
+          await execution.seek(0.5);
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          const metrics = await execution.metrics();
+          if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
+            throw new Error("family Write midpoint did not run through canonical retained execution");
+          }
+          if (metrics.metrics.objectCount !== 1) {
+            throw new Error(`family Write renderer expected one object, got ${metrics.metrics.objectCount}`);
+          }
+          if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
+            throw new Error("family Write midpoint did not produce a presented retained render frame");
+          }
+          if (Math.abs(Number(metrics.engineMetrics.time) - 0.5) > 1e-6) {
+            throw new Error(`family Write deterministic seek drifted to ${metrics.engineMetrics.time}`);
+          }
+          if (errors.length !== 0) {
+            throw new Error(`family Write retained execution reported errors: ${errors.join("; ")}`);
+          }
+          return {
+            backend: metrics.metrics.backend,
+            presentedFrames: metrics.metrics.presentedFrames,
+            drawCalls: metrics.metrics.drawCalls,
+            instancesDrawn: metrics.metrics.instancesDrawn,
+            engineTime: metrics.engineMetrics.time,
+            readyState,
+          };
+        } finally {
+          execution.terminate();
+        }
+      }
+
       async function ready() {
         if (readyPromise == null) {
           readyPromise = (async () => {
             await Promise.all([client.ready(), wasmReady]);
-            const result = await client.run(familyCreateSource);
-            if (result.kind !== "scene_document") {
-              throw new Error(`family Create smoke returned ${result.kind}`);
-            }
-            if (result.document.objects.length !== 1) {
+
+            const create = await client.run(familyCreateSource);
+            if (create.document.objects.length !== 1) {
               throw new Error(
-                `family Create smoke expected one geometry leaf, got ${result.document.objects.length}`,
+                `family Create smoke expected one geometry leaf, got ${create.document.objects.length}`,
               );
             }
-            const retained = result.retainedDocument;
-            if (!retained || retained.objects.length !== 1) {
-              throw new Error("family Create smoke expected one retained native Text leaf");
+            const createRequest = oneFamilyRequest(create, "family Create");
+            if (createRequest.spec.mode !== "reveal") {
+              throw new Error(`family Create authored unexpected mode ${createRequest.spec.mode}`);
             }
-            if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 1) {
-              throw new Error("family Create smoke did not author exactly one family animation request");
+
+            writeResult = await client.run(familyWriteSource);
+            const writeRequest = oneFamilyRequest(writeResult, "family Write");
+            if (writeRequest.spec.mode !== "draw_border_then_fill") {
+              throw new Error(`family Write authored unexpected mode ${writeRequest.spec.mode}`);
             }
-            const sceneSpec = result.sceneSpec;
-            if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
-              throw new Error("family Create smoke did not reach canonical SceneSpec family animations");
+            if (Math.abs(Number(writeRequest.spec.duration) - 1.0) > 1e-12) {
+              throw new Error(
+                `family Write must derive one-second duration from 14 rendered members, got ${writeRequest.spec.duration}`,
+              );
             }
-            const serialized = JSON.stringify(sceneSpec.family_animations[0]);
-            for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
-              if (serialized.includes(forbidden)) {
-                throw new Error(`family Create request leaked ${forbidden}`);
-              }
+            if (Math.abs(Number(writeRequest.spec.lag_ratio) - 0.2) > 1e-12) {
+              throw new Error(`family Write default lag ratio drifted to ${writeRequest.spec.lag_ratio}`);
             }
-            return result;
+            if (writeRequest.spec.rate_function !== "linear") {
+              throw new Error(`family Write default rate function drifted to ${writeRequest.spec.rate_function}`);
+            }
+            if (writeRequest.spec.reverse_rate_function || writeRequest.spec.reverse_member_order) {
+              throw new Error("forward Write unexpectedly reversed rate or member order");
+            }
+            if (Math.abs(Number(writeResult.duration) - 1.0) > 1e-12) {
+              throw new Error(`family Write scene cursor did not use Rust-resolved duration: ${writeResult.duration}`);
+            }
+
+            const unwrite = await client.run(familyUnwriteSource);
+            const unwriteRequest = oneFamilyRequest(unwrite, "family Unwrite");
+            if (unwriteRequest.spec.mode !== "draw_border_then_fill") {
+              throw new Error(`family Unwrite authored unexpected mode ${unwriteRequest.spec.mode}`);
+            }
+            if (!unwriteRequest.spec.reverse_rate_function || !unwriteRequest.spec.reverse_member_order) {
+              throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
+            }
+
+            // Reuse this already-loaded browser/Pyodide smoke for one real execution
+            // frame. A midpoint seek forces DrawBorderThenFill through the canonical
+            // family runtime and retained renderer instead of only checking authoring JSON.
+            writeRenderResult = await renderWriteMidpoint();
+            return { create, write: writeResult, unwrite, writeRender: writeRenderResult };
           })();
         }
         return readyPromise;
@@ -60,6 +182,10 @@ class RetainedFamilyCreateSmoke(Scene):
 
       window.noonManimCompat = {
         ready,
+        renderRetainedWriteMidpoint: async () => {
+          await ready();
+          return writeRenderResult;
+        },
         run: (source) => client.run(source),
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
