@@ -142,7 +142,11 @@ def _family_candidate(animation: object):
         synthetic = True
 
     family_handle = getattr(family, "_semantic_family_handle", None)
-    method = "familyWriteAnimationRequest" if _is_write_animation(animation) else "familyAnimationRequest"
+    method = (
+        "familyWriteAnimationRequest"
+        if _is_write_animation(animation)
+        else "familyAnimationRequest"
+    )
     if family_handle is None or not hasattr(family_handle, method):
         raise RuntimeError(f"family {label} requires the shared Rust authoring family handle")
     return target, family, leaves, synthetic
@@ -414,9 +418,13 @@ def _write_request_inputs(
     elif play_rate_func is not None:
         rate_id = _compat._easing_from_rate_func(play_rate_func)
     else:
-        rate_id = _compat._easing_from_rate_func(args.get("rate_func", _rate_functions.linear))
+        rate_id = _compat._easing_from_rate_func(
+            args.get("rate_func", _rate_functions.linear)
+        )
 
-    reverse_rate = bool(args.get("reverse_rate_function", animation.reverse_rate_function))
+    reverse_rate = bool(
+        args.get("reverse_rate_function", animation.reverse_rate_function)
+    )
     reverse_members = bool(animation.reverse)
     return run_time_override, lag_override, str(rate_id), reverse_rate, reverse_members
 
@@ -470,7 +478,8 @@ def _family_scene_play(
     **kwargs: Any,
 ) -> _compat.Scene:
     candidates = [_family_candidate(animation) for animation in animations]
-    if not any(candidate is not None for candidate in candidates):
+    family_count = sum(candidate is not None for candidate in candidates)
+    if family_count == 0:
         assert _ORIGINAL_SCENE_PLAY is not None
         return _ORIGINAL_SCENE_PLAY(
             self,
@@ -483,9 +492,10 @@ def _family_scene_play(
             lag_ratio=lag_ratio,
             **kwargs,
         )
-    if len(animations) != 1 or candidates[0] is None:
+    if family_count != len(animations):
         raise NotImplementedError(
-            "canonical retained family creation animation must currently be the only animation in Scene.play"
+            "canonical retained family animations cannot currently be mixed with "
+            "ordinary animations in the same Scene.play"
         )
     if duration is not None and run_time is not None:
         raise ValueError("use either duration or run_time, not both")
@@ -495,8 +505,19 @@ def _family_scene_play(
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
 
-    animation = animations[0]
-    target, family, leaves, _synthetic = candidates[0]
+    family_candidates = [candidate for candidate in candidates if candidate is not None]
+    leaf_owners: dict[int, int] = {}
+    for animation_index, candidate in enumerate(family_candidates):
+        _target, _family, leaves, _synthetic = candidate
+        for member in leaves:
+            previous = leaf_owners.get(id(member))
+            if previous is not None:
+                raise ValueError(
+                    "concurrent retained family animations must target disjoint family leaves; "
+                    f"animations {previous} and {animation_index} share one target"
+                )
+            leaf_owners[id(member)] = animation_index
+
     play_run_time = run_time if run_time is not None else duration
     if play_run_time is not None:
         play_run_time = float(play_run_time)
@@ -511,91 +532,112 @@ def _family_scene_play(
     retained_objects_before = list(getattr(self, "_retained_text_objects", []))
     next_object_id_before = getattr(self, "_retained_next_object_id", None)
     next_order_before = getattr(self, "_retained_next_painter_order", None)
-    retained_tracks_before = copy.deepcopy(getattr(self, "_retained_animation_tracks", []))
-    retained_state_before = copy.deepcopy(getattr(self, "_retained_animation_state", {}))
-    family_requests_before = copy.deepcopy(getattr(self, "_retained_family_animations", []))
+    retained_tracks_before = copy.deepcopy(
+        getattr(self, "_retained_animation_tracks", [])
+    )
+    retained_state_before = copy.deepcopy(
+        getattr(self, "_retained_animation_state", {})
+    )
+    family_requests_before = copy.deepcopy(
+        getattr(self, "_retained_family_animations", [])
+    )
 
     geometry_states: dict[int, tuple[_base.Mobject, object, object]] = {}
-    retained_states: dict[int, tuple[_typst._RetainedTextMobject, object, object, object]] = {}
-    for member in leaves:
-        if _native_text(member):
-            retained_states[id(member)] = (
-                member,
-                member._scene,
-                member._retained_object_id,
-                member._retained_order,
-            )
-        else:
-            _animate._record_wrapper_state(member, geometry_states)
+    retained_states: dict[
+        int, tuple[_typst._RetainedTextMobject, object, object, object]
+    ] = {}
+    for candidate in family_candidates:
+        _target, _family, leaves, _synthetic = candidate
+        for member in leaves:
+            if _native_text(member):
+                retained_states[id(member)] = (
+                    member,
+                    member._scene,
+                    member._retained_object_id,
+                    member._retained_order,
+                )
+            else:
+                _animate._record_wrapper_state(member, geometry_states)
 
     try:
-        lifecycle_plans = _begin_family_lifecycle(
-            self,
-            animation,
-            target,
-            leaves,
-            start_time=base_start,
-        )
-
-        if _is_write_animation(animation):
-            assert isinstance(animation, Write)
-            (
-                duration_override,
-                lag_override,
-                rate_id,
-                reverse_rate,
-                reverse_members,
-            ) = _write_request_inputs(
-                animation,
-                play_run_time=play_run_time,
-                play_easing=easing,
-                play_rate_func=rate_func,
-                play_lag_ratio=play_lag_ratio,
-            )
-            actual_run_time, _actual_lag = _append_write_request(
+        completed: list[tuple[object, object, list[tuple[_base.Mobject, object]], float]] = []
+        for animation, candidate in zip(animations, family_candidates, strict=True):
+            target, family, leaves, _synthetic = candidate
+            lifecycle_plans = _begin_family_lifecycle(
                 self,
                 animation,
-                family,
+                target,
                 leaves,
                 start_time=base_start,
-                duration_override=duration_override,
-                lag_ratio_override=lag_override,
-                rate_function=rate_id,
-                reverse_rate_function=reverse_rate,
-                reverse_member_order=reverse_members,
-            )
-        else:
-            resolved = _options.resolve(
-                builder_args=_options.builder_args(animation),
-                default_lag_ratio=1.0,
-                play_run_time=play_run_time,
-                play_easing=easing,
-                play_rate_func=rate_func,
-                play_lag_ratio=play_lag_ratio,
-            )
-            if not math.isclose(resolved.path_arc, 0.0, abs_tol=1e-15):
-                raise NotImplementedError("family Create/Uncreate does not support path_arc")
-            actual_run_time = resolved.run_time
-            _append_reveal_request(
-                self,
-                animation,
-                family,
-                leaves,
-                start_time=base_start,
-                duration=resolved.run_time,
-                lag_ratio=resolved.lag_ratio,
-                rate_function=resolved.rate_func,
             )
 
-        end_time = base_start + actual_run_time
-        _finish_family_lifecycle(
-            self,
-            animation,
-            target,
-            lifecycle_plans,
-            end_time=end_time,
-        )
-        self._cursor = max(cursor_before, end_time)
+            if _is_write_animation(animation):
+                assert isinstance(animation, Write)
+                (
+                    duration_override,
+                    lag_override,
+                    rate_id,
+                    reverse_rate,
+                    reverse_members,
+                ) = _write_request_inputs(
+                    animation,
+                    play_run_time=play_run_time,
+                    play_easing=easing,
+                    play_rate_func=rate_func,
+                    play_lag_ratio=play_lag_ratio,
+                )
+                actual_run_time, _actual_lag = _append_write_request(
+                    self,
+                    animation,
+                    family,
+                    leaves,
+                    start_time=base_start,
+                    duration_override=duration_override,
+                    lag_ratio_override=lag_override,
+                    rate_function=rate_id,
+                    reverse_rate_function=reverse_rate,
+                    reverse_member_order=reverse_members,
+                )
+            else:
+                resolved = _options.resolve(
+                    builder_args=_options.builder_args(animation),
+                    default_lag_ratio=1.0,
+                    play_run_time=play_run_time,
+                    play_easing=easing,
+                    play_rate_func=rate_func,
+                    play_lag_ratio=play_lag_ratio,
+                )
+                if not math.isclose(resolved.path_arc, 0.0, abs_tol=1e-15):
+                    raise NotImplementedError(
+                        "family Create/Uncreate does not support path_arc"
+                    )
+                actual_run_time = resolved.run_time
+                _append_reveal_request(
+                    self,
+                    animation,
+                    family,
+                    leaves,
+                    start_time=base_start,
+                    duration=resolved.run_time,
+                    lag_ratio=resolved.lag_ratio,
+                    rate_function=resolved.rate_func,
+                )
+
+            completed.append(
+                (animation, target, lifecycle_plans, base_start + actual_run_time)
+            )
+
+        for animation, target, lifecycle_plans, end_time in completed:
+            _finish_family_lifecycle(
+                self,
+                animation,
+                target,
+                lifecycle_plans,
+                end_time=end_time,
+            )
+
+        play_end = max(end_time for _animation, _target, _plans, end_time in completed)
+        self._cursor = max(cursor_before, play_end)
         return self
     except Exception:
         self._restore_authoring_checkpoint(checkpoint)
