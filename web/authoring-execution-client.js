@@ -26,6 +26,7 @@ const EMPTY_HOST_METRICS = Object.freeze({
 export class AuthoringExecutionClient {
   #canvas;
   #player = null;
+  #preparedPlayer = null;
   #mode = null;
   #rendererBackend = "";
   #loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS;
@@ -69,12 +70,52 @@ export class AuthoringExecutionClient {
     return this.#transportMode;
   }
 
+  async prepare(
+    {
+      transportMode = undefined,
+      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+    } = {},
+  ) {
+    if (this.#player !== null || this.#preparedPlayer !== null || this.#transition !== null) {
+      throw new Error("AuthoringExecutionClient is already started or preparing");
+    }
+    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    const options = { sharedSlotCapacity: this.#sharedSlotCapacity };
+    if (transportMode !== undefined) {
+      options.transportMode = transportMode;
+    }
+
+    const generation = this.#lifecycleGeneration;
+    const player = this.#createPlayer();
+    this.#preparedPlayer = player;
+    try {
+      const ready = await player.prepare(options);
+      this.#assertLifecycleCurrent(generation);
+      if (this.#preparedPlayer !== player && this.#player !== player) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      this.#transportMode = ready.transportMode;
+      return ready;
+    } catch (error) {
+      if (this.#preparedPlayer === player) {
+        this.#preparedPlayer = null;
+      }
+      if (generation === this.#lifecycleGeneration) {
+        this.#adoptPlayerCanvas(player);
+      }
+      if (generation !== this.#lifecycleGeneration) {
+        throw new Error(LIFECYCLE_CANCELLED_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
   async start(
     sceneJson,
     {
       loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
       transportMode = undefined,
-      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      sharedSlotCapacity = undefined,
       callbacks = null,
       authoringClient = null,
     } = {},
@@ -84,7 +125,7 @@ export class AuthoringExecutionClient {
     }
     validateSceneJson(sceneJson);
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
     const options = {
       loopDurationSeconds: this.#loopDurationSeconds,
       sharedSlotCapacity: this.#sharedSlotCapacity,
@@ -105,7 +146,7 @@ export class AuthoringExecutionClient {
     {
       loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
       transportMode = undefined,
-      sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      sharedSlotCapacity = undefined,
     } = {},
   ) {
     if (this.#player !== null || this.#transition !== null) {
@@ -113,7 +154,7 @@ export class AuthoringExecutionClient {
     }
     validateSceneSpecJson(sceneSpecJson);
     this.#loopDurationSeconds = validateLoopDurationSeconds(loopDurationSeconds);
-    this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
+    this.#sharedSlotCapacity = this.#resolveStartupSharedSlotCapacity(sharedSlotCapacity);
     const options = {
       loopDurationSeconds: this.#loopDurationSeconds,
       sharedSlotCapacity: this.#sharedSlotCapacity,
@@ -271,6 +312,12 @@ export class AuthoringExecutionClient {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+    const preparedPlayer = this.#preparedPlayer;
+    preparedPlayer?.terminate();
+    if (preparedPlayer !== null && this.#canvas !== preparedPlayer.canvas) {
+      this.#canvas = preparedPlayer.canvas;
+    }
+    this.#preparedPlayer = null;
     this.#player?.terminate();
     this.#player = null;
     this.#mode = null;
@@ -280,10 +327,7 @@ export class AuthoringExecutionClient {
 
   async #startMode(mode, sceneJson, options, sceneSpecJson = null) {
     const generation = this.#lifecycleGeneration;
-    const player = new ExecutionWorkerClient(this.#canvas, {
-      onError: this.#onError,
-      onRecoverableError: this.#onRecoverableError,
-    });
+    const player = this.#preparedPlayer ?? this.#createPlayer();
     const terminateCandidate = createIdempotentTerminator(player);
     let published = false;
     try {
@@ -292,6 +336,9 @@ export class AuthoringExecutionClient {
           ? await player.startRetainedCanonical(sceneSpecJson, options)
           : await player.start(sceneJson, options);
       this.#assertLifecycleCurrent(generation, terminateCandidate);
+      if (this.#preparedPlayer === player) {
+        this.#preparedPlayer = null;
+      }
       this.#player = player;
       published = true;
       this.#mode = mode;
@@ -299,6 +346,9 @@ export class AuthoringExecutionClient {
       this.#resizeCurrentCanvas();
       return ready;
     } catch (error) {
+      if (this.#preparedPlayer === player) {
+        this.#preparedPlayer = null;
+      }
       if (!published || generation === this.#lifecycleGeneration) {
         terminateCandidate();
       }
@@ -310,6 +360,22 @@ export class AuthoringExecutionClient {
       }
       throw error;
     }
+  }
+
+  #createPlayer() {
+    return new ExecutionWorkerClient(this.#canvas, {
+      onError: this.#onError,
+      onRecoverableError: this.#onRecoverableError,
+    });
+  }
+
+  #resolveStartupSharedSlotCapacity(sharedSlotCapacity) {
+    if (sharedSlotCapacity !== undefined) {
+      return validateSharedSlotCapacity(sharedSlotCapacity);
+    }
+    return this.#preparedPlayer === null
+      ? DEFAULT_SHARED_SLOT_CAPACITY
+      : this.#sharedSlotCapacity;
   }
 
   async #switchRetainedCanonical(sceneSpecJson) {
