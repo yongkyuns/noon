@@ -29,9 +29,7 @@ if (typeof document !== "undefined") {
 }
 
 function isVisiblePythonTextarea(textarea) {
-  if (!textarea || textarea.hidden) return false;
-  const editorPanel = textarea.closest(".editor-panel");
-  return editorPanel === null || editorPanel.dataset.active === "true";
+  return textarea !== null && textarea.closest("[hidden]") === null;
 }
 
 async function enhancePythonEditors() {
