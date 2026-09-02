@@ -24,14 +24,15 @@ assert.equal(
   canonical.replace("from manim import *", "from noon import *"),
   "stress source must remain import-only Manim compatible",
 );
-assert.match(noon, /FadeIn\(title\)/);
+assert.match(noon, /self\.play\(FadeIn\(title\), FadeIn\(subtitle\), run_time=0\.4\)/);
+assert.match(noon, /self\.play\(\*\[Create\(shape\) for shape in shapes\], run_time=0\.6\)/);
 assert.doesNotMatch(
   noon,
   /Create\(title\)/,
   "retained family Create cannot share the stress scene's mass mixed-animation play yet",
 );
 assert.match(noon, /shape\.animate\.rotate\(angle\)\.shift\(0\.11 \* direction\)\.set_color\(color\)/);
-assert.match(noon, /title\.animate\.rotate\(PI \/ 18\)/);
+assert.match(noon, /self\.play\(title\.animate\.rotate\(PI \/ 18\), run_time=0\.2\)/);
 assert.match(noon, /title\.animate\.rotate\(-PI \/ 18\)/);
 assert.doesNotMatch(
   noon,
@@ -42,6 +43,11 @@ assert.match(
   retainedAnimate,
   /position, rotation, opacity, and uniform scale animations are supported/,
   "contract should track the retained Text animation capability boundary",
+);
+assert.match(
+  retainedAnimate,
+  /mixing retained Text animations with legacy animations in one Scene\.play is not supported yet/,
+  "contract should track the retained-vs-geometry mixed-play capability boundary",
 );
 assert.match(
   familyCreation,
