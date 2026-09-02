@@ -42,6 +42,20 @@ test("Python appends family requests without owning the scene-wide scheduler lim
   );
 });
 
+test("one Scene.play can author concurrent disjoint retained families", () => {
+  assert.doesNotMatch(
+    pythonSource,
+    /must currently be the only animation in Scene\.play/,
+  );
+  assert.match(
+    pythonSource,
+    /cannot currently be mixed with[\s\S]*ordinary animations/,
+  );
+  assert.match(pythonSource, /must target disjoint family leaves/);
+  assert.match(pythonSource, /base_start \+ actual_run_time/);
+  assert.match(pythonSource, /play_end = max\(/);
+});
+
 test("Python does not serialize semantic family order or retained resource identity", () => {
   for (const forbidden of [
     "memberSlot(",
