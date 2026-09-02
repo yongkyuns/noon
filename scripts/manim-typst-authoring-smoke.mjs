@@ -97,7 +97,7 @@ class MixedPainterOrder(Scene):
         self.add(Square(side_length=0.5))
 `;
 
-function retainedObject(result, { source, fontSize, order }) {
+function retainedObject(result, { source, fontSize, order, objectId }) {
   assert.equal(result.kind, "scene_document");
   assert.ok(result.retained_document, "scene result must include a retained authoring document");
   assert.equal(result.retained_document.channel, "noon.authoring.retained");
@@ -105,10 +105,14 @@ function retainedObject(result, { source, fontSize, order }) {
   assert.equal(result.retained_document.objects.length, 1);
   const object = result.retained_document.objects[0];
   assert.ok(Number.isSafeInteger(object.object), "retained object identity must survive JSON exactly");
-  assert.ok(object.object >= 2 ** 52 && object.object < Number.MAX_SAFE_INTEGER);
+  assert.equal(object.object, objectId, "retained content must use the scene-global object ID allocator");
   assert.equal(object.order, order);
   assert.equal(object.text.source, source);
   assert.equal(object.text.font_size, fontSize);
+
+  assert.ok(result.scene_spec, "scene result must include canonical SceneSpec");
+  assert.equal(result.scene_spec.objects[order].id, objectId);
+  assert.equal(result.scene_spec.objects[order].content.kind, "text");
 
   const wire = JSON.stringify(result.retained_document);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
@@ -233,6 +237,7 @@ try {
     source: "Native Noon",
     fontSize: 48,
     order: 0,
+    objectId: 0,
   });
 
   const multilineText = await page.evaluate(
@@ -249,6 +254,7 @@ try {
     fontSize: 36,
     lineSpacing: 0.5,
     order: 0,
+    objectId: 0,
   });
 
   const nativeLayout = await page.evaluate(
@@ -261,6 +267,7 @@ try {
     source: "Native Noon",
     fontSize: 48,
     order: 1,
+    objectId: 1,
   });
   assert.ok(
     Math.abs(nativeLayoutText.text.transform.translation.x - 2.25) < 1e-4,
@@ -280,6 +287,7 @@ try {
     math: false,
     fontSize: 96,
     order: 0,
+    objectId: 0,
   });
 
   const helloMathTypst = await page.evaluate(
@@ -296,6 +304,7 @@ try {
     math: true,
     fontSize: 72,
     order: 0,
+    objectId: 0,
   });
 
   const mixed = await page.evaluate(
@@ -304,17 +313,18 @@ try {
   );
   assert.equal(mixed.document.objects.length, 2, "only the circle and square belong to legacy geometry");
   assert.equal(mixed.document.objects[0].id, 0);
-  assert.equal(mixed.document.objects[1].id, 1);
+  assert.equal(mixed.document.objects[1].id, 2);
   assertNativeText(mixed, {
     source: "middle",
     fontSize: 48,
     order: 1,
+    objectId: 1,
   });
 
   await page.evaluate(() => window.noonRetainedTextSmoke.stop());
   assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
   console.log(
-    "Retained text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Retained text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, canonical mixed SceneSpec identities, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();
