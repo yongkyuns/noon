@@ -4,8 +4,8 @@ use noon_core::{
     Camera2DState, FamilyAnimationSpec, ObjectId, RetainedFamilyAnimationPlan, TrackDefinition,
 };
 use noon_runtime::{
-    RetainedFamilyFrame, RetainedFamilyPlanRuntimeError, RetainedFamilyPlanSceneInstance,
-    RetainedFrameState,
+    RetainedFamilyPlanSetRuntimeError, RetainedFamilyPlanSetSceneInstance, RetainedFrameState,
+    RetainedPlannedFamilyFrame,
 };
 
 use crate::{
@@ -13,18 +13,16 @@ use crate::{
     RetainedFamilyExecutionEncodeError, RetainedResourceBundle, RetainedResourceTransportError,
 };
 
-/// Production owner for one prepared retained semantic-family animation.
+/// Production owner for prepared retained semantic-family animations.
 ///
-/// Authoring and semantic lowering end before this boundary. The player receives the
-/// authoritative retained scene plus one prepared family plan/spec, compiles the
-/// ordinary retained timeline once, captures renderer resources once, and then drives
-/// the shared family runtime directly into the family-aware retained transport.
-/// Object identity, resource identity, camera state, and transport sequencing therefore
-/// stay on the same path as ordinary retained playback.
+/// The ordinary retained scene is compiled once and resources are captured once. Any
+/// number of immutable family plans then share one deterministic runtime. Plan indices
+/// are stable in canonical request order and are carried with active per-object state,
+/// allowing sequential reuse of an object without exposing glyph/resource identity.
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyExecutionPlayer {
     scene: RetainedScene,
-    runtime: RetainedFamilyPlanSceneInstance,
+    runtime: RetainedFamilyPlanSetSceneInstance,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     resource_bundle: Vec<u8>,
     camera_object: Option<ObjectId>,
@@ -43,19 +41,33 @@ impl RetainedFamilyExecutionPlayer {
         Self::new_with_tracks(scene, &tracks, plan, spec, camera_object, session)
     }
 
-    /// Construct from a retained materialization whose validated timeline is carried
-    /// separately from its resource/object arena.
-    ///
-    /// Canonical mixed SceneSpec lowering currently materializes geometry first and
-    /// therefore cannot install text-targeting tracks into that temporary seed scene.
-    /// The canonical handoff nevertheless validates one exact track set after all
-    /// objects exist. Accept it here explicitly so family-aware execution cannot drop
-    /// ordinary transform/style/lifecycle animation while switching schedulers.
+    /// Single-plan compatibility constructor over the plural production owner.
     pub fn new_with_tracks(
         scene: RetainedScene,
         tracks: &[TrackDefinition],
         plan: RetainedFamilyAnimationPlan,
         spec: FamilyAnimationSpec,
+        camera_object: Option<ObjectId>,
+        session: u32,
+    ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
+        Self::new_many_with_tracks(
+            scene,
+            tracks,
+            vec![(plan, spec)],
+            camera_object,
+            session,
+        )
+    }
+
+    /// Construct the production family player from all canonical family requests.
+    ///
+    /// The runtime validates same-object overlap before playback. Concurrent requests
+    /// targeting disjoint objects are allowed, as are touching/sequential requests on
+    /// the same object.
+    pub fn new_many_with_tracks(
+        scene: RetainedScene,
+        tracks: &[TrackDefinition],
+        animations: Vec<(RetainedFamilyAnimationPlan, FamilyAnimationSpec)>,
         camera_object: Option<ObjectId>,
         session: u32,
     ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
@@ -70,7 +82,7 @@ impl RetainedFamilyExecutionPlayer {
             scene.fonts(),
         )?;
         let resource_bundle = bundle.encode_binary()?;
-        let runtime = RetainedFamilyPlanSceneInstance::new(compiled, plan, spec)?;
+        let runtime = RetainedFamilyPlanSetSceneInstance::new(compiled, animations)?;
         Ok(Self {
             scene,
             runtime,
@@ -81,7 +93,7 @@ impl RetainedFamilyExecutionPlayer {
         })
     }
 
-    /// Enter production execution directly from the Rust-owned authoring lowering result.
+    /// Enter production execution directly from one Rust-owned authoring lowering result.
     pub fn from_lowered(
         scene: RetainedScene,
         lowered: LoweredRetainedFamilyAnimation,
@@ -100,16 +112,29 @@ impl RetainedFamilyExecutionPlayer {
         self.runtime.inner().frame()
     }
 
-    pub fn family_frame(&self) -> RetainedFamilyFrame<'_> {
+    pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
         self.runtime.frame()
     }
 
-    pub fn plan(&self) -> &RetainedFamilyAnimationPlan {
-        self.runtime.plan()
+    pub fn plans(&self) -> &[RetainedFamilyAnimationPlan] {
+        self.runtime.plans()
     }
 
-    pub const fn spec(&self) -> FamilyAnimationSpec {
-        self.runtime.spec()
+    /// Compatibility accessor for players constructed through the single-plan API.
+    pub fn plan(&self) -> &RetainedFamilyAnimationPlan {
+        self.runtime
+            .plans()
+            .first()
+            .expect("single-plan compatibility player must contain one plan")
+    }
+
+    /// Compatibility accessor for players constructed through the single-plan API.
+    pub fn spec(&self) -> FamilyAnimationSpec {
+        *self
+            .runtime
+            .specs()
+            .first()
+            .expect("single-plan compatibility player must contain one spec")
     }
 
     pub const fn camera_object(&self) -> Option<ObjectId> {
@@ -122,10 +147,9 @@ impl RetainedFamilyExecutionPlayer {
 
     /// Evaluate one absolute scene time and encode the renderer-facing family delta.
     ///
-    /// The first call is always an authoritative snapshot carrying the immutable plan.
-    /// Later calls are sparse: ordinary retained dirtiness and family-state changes are
-    /// merged by the shared runtime before the shared retained encoder assigns sequence.
-    /// A backward seek naturally promotes to a complete snapshot through `FrameChanges`.
+    /// The first call is an authoritative snapshot carrying every immutable plan.
+    /// Later calls remain sparse. A backward seek naturally promotes to a complete
+    /// snapshot through `FrameChanges`, reinstalling the same stable plan ordering.
     pub fn evaluate_delta(
         &mut self,
         time: f64,
@@ -135,17 +159,19 @@ impl RetainedFamilyExecutionPlayer {
         let camera = self.camera_state()?;
         let changes = self.runtime.take_frame_changes();
         let frame = self.runtime.frame();
-        let plans = std::slice::from_ref(self.runtime.plan());
+        let plans = self.runtime.plans();
 
         if !self.snapshot_sent {
-            let delta = self.encoder.encode_snapshot(&frame, plans, camera)?;
+            let delta = self
+                .encoder
+                .encode_planned_snapshot(&frame, plans, camera)?;
             self.snapshot_sent = true;
             return Ok(Some(delta));
         }
 
         Ok(self
             .encoder
-            .encode_incremental(&frame, plans, &changes, camera)?)
+            .encode_planned_incremental(&frame, plans, &changes, camera)?)
     }
 
     fn camera_state(&self) -> Result<Camera2DState, RetainedFamilyExecutionPlayerError> {
@@ -162,12 +188,11 @@ impl RetainedFamilyExecutionPlayer {
             .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
                 camera_object,
             ))?;
-        let geometry =
-            object
-                .geometry()
-                .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
-                    camera_object,
-                ))?;
+        let geometry = object
+            .geometry()
+            .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
+                camera_object,
+            ))?;
         Camera2DState::from_frame_object(geometry, object.transform).ok_or(
             RetainedFamilyExecutionPlayerError::InvalidCameraObject(camera_object),
         )
@@ -178,7 +203,7 @@ impl RetainedFamilyExecutionPlayer {
 pub enum RetainedFamilyExecutionPlayerError {
     Compile(RetainedCompileError),
     Resource(RetainedResourceTransportError),
-    Runtime(RetainedFamilyPlanRuntimeError),
+    Runtime(RetainedFamilyPlanSetRuntimeError),
     Transport(RetainedFamilyExecutionEncodeError),
     InvalidCameraObject(ObjectId),
 }
@@ -213,8 +238,8 @@ impl From<RetainedResourceTransportError> for RetainedFamilyExecutionPlayerError
     }
 }
 
-impl From<RetainedFamilyPlanRuntimeError> for RetainedFamilyExecutionPlayerError {
-    fn from(value: RetainedFamilyPlanRuntimeError) -> Self {
+impl From<RetainedFamilyPlanSetRuntimeError> for RetainedFamilyExecutionPlayerError {
+    fn from(value: RetainedFamilyPlanSetRuntimeError) -> Self {
         Self::Runtime(value)
     }
 }
@@ -266,7 +291,6 @@ mod tests {
         .unwrap();
         let mut lowering =
             RetainedFamilyAnimationLoweringSession::begin(&semantics, family, spec).unwrap();
-        // Retained materialization order must never become semantic animation order.
         lowering.bind_leaf(circle_leaf, circle_id).unwrap();
         lowering.bind_leaf(text_leaf, text_id).unwrap();
         let lowered = lowering.finish(&scene).unwrap();
@@ -292,6 +316,10 @@ mod tests {
         assert_eq!(midpoint.retained.sequence, 1);
         assert!(midpoint.family_plans.is_empty());
         assert_eq!(midpoint.family_states.len(), 2);
+        assert!(midpoint
+            .family_states
+            .iter()
+            .all(|state| state.family_plan_index == Some(0)));
         let midpoint_json = serde_json::to_string(&midpoint).unwrap();
         assert!(!midpoint_json.contains("glyph"));
         let (outcome, changes) = mirror.apply_json(&midpoint_json).unwrap();
