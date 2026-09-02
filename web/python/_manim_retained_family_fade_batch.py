@@ -165,6 +165,34 @@ def _schedule_plan(
         )
 
 
+def _restore_family_membership(
+    scene: _compat.Scene,
+    batches: list[_RetainedFamilyFadeBatch],
+    top_level_before: list[object],
+) -> None:
+    """Apply source-level FadeIn/FadeOut membership after leaf scheduling completes."""
+
+    introduced = [
+        (batch.family, list(batch.leaves))
+        for batch in batches
+        if batch[0]["kind"] == "fade_in"
+    ]
+    if introduced:
+        _retained._normalize_retained_family_top_level(
+            scene,
+            introduced,
+            top_level_before,
+        )
+
+    removed = {
+        id(batch.family) for batch in batches if batch[0]["kind"] == "fade_out"
+    }
+    if removed:
+        scene._compat_top_level = [
+            value for value in scene._compat_top_level if id(value) not in removed
+        ]
+
+
 def _scene_play(
     self: _compat.Scene,
     *animations: Any,
@@ -228,11 +256,7 @@ def _scene_play(
             lag_ratio=lag_ratio,
             **kwargs,
         )
-        _retained._normalize_retained_family_top_level(
-            self,
-            [(batch.family, list(batch.leaves)) for batch in batches],
-            top_level_before,
-        )
+        _restore_family_membership(self, batches, top_level_before)
         return result
     except Exception:
         self._compat_top_level = top_level_before
