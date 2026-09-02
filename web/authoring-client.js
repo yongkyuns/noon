@@ -24,7 +24,12 @@ export class PythonAuthoringClient {
     });
     worker.addEventListener("message", (event) => this.#handleMessage(event.data));
     worker.addEventListener("error", (event) => {
-      this.#fail(new Error(event.message || "Python authoring worker crashed"));
+      const details = [
+        event.message,
+        event.error?.stack,
+        event.filename && `${event.filename}:${event.lineno ?? 0}:${event.colno ?? 0}`,
+      ].filter(Boolean);
+      this.#fail(new Error(details.join("\n") || "Python authoring worker crashed"));
     });
   }
 
@@ -136,7 +141,11 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "error") {
-        const error = new Error(String(message.message || "Python authoring failed"));
+        const details = [
+          message.message,
+          message.diagnostic?.stack,
+        ].filter(Boolean);
+        const error = new Error(String(details.join("\n") || "Python authoring failed"));
         if (message.requestId === null) {
           this.#fail(error);
           return;

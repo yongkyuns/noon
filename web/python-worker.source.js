@@ -494,6 +494,7 @@ function postError(requestId, error) {
   post("error", {
     requestId,
     message: error instanceof Error ? error.message : String(error),
+    diagnostic: error instanceof Error && error.stack ? { stack: error.stack } : null,
   });
 }
 

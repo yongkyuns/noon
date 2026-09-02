@@ -76,10 +76,17 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
+    /// Capture the append-only authoring frontier.
+    ///
+    /// Checkpoints intentionally cover bind/append transactions only. Updates to
+    /// an already-bound object are in-place canonical mutations and are not part
+    /// of rollback; callers must perform those updates outside an append
+    /// transaction (or restore the prior value themselves if needed).
     pub const fn checkpoint(&self) -> usize {
         self.objects.len()
     }
 
+    /// Remove objects appended after an append-only checkpoint.
     pub fn restore(&mut self, checkpoint: usize) -> Result<(), String> {
         if checkpoint > self.objects.len() {
             return Err(format!(
@@ -351,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn updates_preserve_slots_and_checkpoint_restore_reclaims_failed_binds() {
+    fn updates_preserve_slots_and_append_checkpoint_restore_reclaims_failed_binds() {
         let mut context = CanonicalAuthoringScene::default();
         let first = ObjectId::new(0);
         context
@@ -361,7 +368,16 @@ mod tests {
         context
             .bind_text(ObjectId::new(1), native_text("temporary"))
             .unwrap();
+        // Checkpoint rollback is intentionally append-only: an update to an
+        // existing slot remains visible after the failed bind is reclaimed.
+        context
+            .update_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.75)))
+            .unwrap();
         context.restore(checkpoint).unwrap();
+        let ObjectSpecContent::Geometry(geometry) = &context.objects[0].content else {
+            panic!("first object must remain geometry-backed");
+        };
+        assert_eq!(geometry, &GeometryRef::circle(0.75));
 
         let mut replacement = ObjectSnapshot::new(GeometryRef::circle(1.0));
         replacement.transform = Transform2D {

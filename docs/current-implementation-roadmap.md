@@ -187,6 +187,13 @@ The target is one authored semantic scene and one canonical `SceneSpec`. The tra
 
 The repository has already unified geometry/Text object IDs and canonical retained execution. The remaining seam is the internal compatibility flow where Python retained output is still adapted into the canonical Rust-owned scene representation.
 
+The first producer-ownership slice keeps one intentional transport seam: Python
+bind/update/finalize calls currently use compact JSON payloads to invoke the typed
+Rust/WASM canonical context. This is transitional authoring transport, not a
+frame-loop mutation API. The follow-up should pass the existing typed semantic
+handles (or equivalent Rust-owned request values) directly and retain JSON only
+for debug/export compatibility.
+
 ### Implementation tranches
 
 #### 6.1 Remove retained sidecar from normal authoring results

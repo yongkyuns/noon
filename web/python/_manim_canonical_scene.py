@@ -33,6 +33,12 @@ _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 
 
 def _json(value: object) -> str:
+    # This is a deliberate migration seam for #367. The canonical context owns
+    # the scene, while the existing typed/semantic handles still expose their
+    # stable snapshot/spec accessors here. Replace these bind/update/finalize
+    # payloads with typed WASM handle arguments once the context API can consume
+    # those handles directly; JSON must remain a boundary/debug/export format,
+    # not a per-frame mutation API.
     return json.dumps(value, separators=(",", ":"), allow_nan=False)
 
 
