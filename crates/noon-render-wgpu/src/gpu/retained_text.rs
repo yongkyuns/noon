@@ -87,7 +87,9 @@ pub struct PreparedRetainedTextSnapshot<'a> {
     pub items: &'a [PreparedTextItem],
     pub stats: RetainedTextPrepareStats,
     pub atlas: &'a GpuGlyphAtlas,
-    pub partial_upload: bool,
+    /// The text generation whose GPU contents a partial update assumes are resident.
+    /// `None` means the snapshot requires the full-upload path.
+    pub partial_upload_base_generation: Option<u64>,
     pub dirty_mask_ranges: &'a [std::ops::Range<u32>],
     pub dirty_color_ranges: &'a [std::ops::Range<u32>],
 }
@@ -553,6 +555,7 @@ pub struct RetainedFramePreparer {
     snapshot_text_items: Vec<PreparedTextItem>,
     snapshot_text_stats: RetainedTextPrepareStats,
     text_item_ranges: Vec<std::ops::Range<usize>>,
+    fast_text_only: Vec<bool>,
     dirty_mask_ranges: Vec<std::ops::Range<u32>>,
     dirty_color_ranges: Vec<std::ops::Range<u32>>,
     snapshot_prepare_stats: RetainedPrepareStats,
@@ -586,6 +589,7 @@ impl Default for RetainedFramePreparer {
             snapshot_text_items: Vec::new(),
             snapshot_text_stats: RetainedTextPrepareStats::default(),
             text_item_ranges: Vec::new(),
+            fast_text_only: Vec::new(),
             dirty_mask_ranges: Vec::new(),
             dirty_color_ranges: Vec::new(),
             snapshot_prepare_stats: RetainedPrepareStats::default(),
@@ -701,7 +705,7 @@ impl RetainedFramePreparer {
                 items: &self.snapshot_text_items,
                 stats: self.snapshot_text_stats,
                 atlas: self.text.atlas(),
-                partial_upload: false,
+                partial_upload_base_generation: None,
                 dirty_mask_ranges: &self.dirty_mask_ranges,
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
@@ -716,6 +720,7 @@ impl RetainedFramePreparer {
 
         if text_can_update_locally {
             self.prepared_generation_ready = false;
+            let partial_upload_base_generation = self.text_generation;
             let prepared = self
                 .text
                 .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
@@ -746,7 +751,7 @@ impl RetainedFramePreparer {
                 items: &self.snapshot_text_items,
                 stats: self.snapshot_text_stats,
                 atlas: self.text.atlas(),
-                partial_upload: true,
+                partial_upload_base_generation: Some(partial_upload_base_generation),
                 dirty_mask_ranges: &self.dirty_mask_ranges,
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
@@ -836,7 +841,7 @@ impl RetainedFramePreparer {
             items: &self.snapshot_text_items,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
-            partial_upload: false,
+            partial_upload_base_generation: None,
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };
@@ -885,7 +890,11 @@ impl RetainedFramePreparer {
         frame: &RetainedFrameState,
         changes: &FrameChanges,
     ) -> bool {
-        if changes.is_all() || changes.is_structural() || changes.is_empty() {
+        if !self.scratch_ready
+            || changes.is_all()
+            || changes.is_structural()
+            || changes.is_empty()
+        {
             return false;
         }
         changes.object_indices().iter().all(|&index| {
@@ -895,10 +904,7 @@ impl RetainedFramePreparer {
             if !frame.is_present(index) || !matches!(&object.content, ObjectContentRef::Text(_)) {
                 return false;
             }
-            self.sources.iter().filter(|source| match source {
-                SourceItem::FastGlyphRun { object_id, .. } => *object_id == object.id,
-                SourceItem::Geometry { object_id, .. } => *object_id == object.id,
-            }).all(|source| matches!(source, SourceItem::FastGlyphRun { .. }))
+            self.fast_text_only.get(index).copied().unwrap_or(false)
         })
     }
 
@@ -916,6 +922,8 @@ impl RetainedFramePreparer {
         self.scratch.morphs.clear();
         self.scratch.render_geometries.clear();
         self.sources.clear();
+        self.fast_text_only.clear();
+        self.fast_text_only.resize(frame.objects.len(), false);
 
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
@@ -935,6 +943,7 @@ impl RetainedFramePreparer {
                     );
                 }
                 ObjectContentRef::Text(handle) => {
+                    let mut fast_text_only = true;
                     let resource = texts
                         .get(*handle)
                         .ok_or(RetainedPrepareError::MissingTextResource)?;
@@ -947,6 +956,7 @@ impl RetainedFramePreparer {
                             TextRenderItem::GlyphRun(run_index) => {
                                 let run = &resource.runs[run_index as usize];
                                 if run.stroke.is_some() || reveal < 1.0 || morph != 0.0 {
+                                    fast_text_only = false;
                                     self.push_outline_run(
                                         object.id,
                                         object.transform,
@@ -966,6 +976,7 @@ impl RetainedFramePreparer {
                                 }
                             }
                             TextRenderItem::Vector(vector_index) => {
+                                fast_text_only = false;
                                 let vector = &resource.vector_items[vector_index as usize];
                                 self.push_text_vector(
                                     object.id,
@@ -980,6 +991,7 @@ impl RetainedFramePreparer {
                             }
                         }
                     }
+                    self.fast_text_only[object_index] = fast_text_only;
                 }
             }
         }
@@ -1561,7 +1573,10 @@ impl GpuRenderer {
             prepared.text_generation,
         ) {
             let text_frame = prepared.text.as_prepared_frame();
-            let uploaded = if prepared.text.partial_upload {
+            let uploaded = if prepared.text.partial_upload_base_generation.is_some()
+                && prepared.text.partial_upload_base_generation
+                    == text_state.last_uploaded_generation
+            {
                 text_state.glyphs.upload_ranges(
                     device,
                     queue,

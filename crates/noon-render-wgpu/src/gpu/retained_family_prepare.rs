@@ -186,7 +186,7 @@ impl RetainedFramePreparer {
             items: &self.snapshot_text_items,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
-            partial_upload: false,
+            partial_upload_base_generation: None,
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };

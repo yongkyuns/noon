@@ -132,7 +132,46 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     };
     assert!(first_upload.text.bytes_uploaded > 0);
 
-    for frame_number in 1..=STATIC_FRAMES {
+    // Prepare one local generation without submitting it. The next local generation
+    // must not patch over the skipped generation's stale GPU ranges.
+    frame.time = 1.0 / 60.0;
+    frame.objects[STATIC_OBJECTS / 2].transform.translation = Vec2::new(0.01, -0.005);
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
+            &texts,
+            &fonts,
+            &geometries,
+            metrics,
+        )
+        .unwrap();
+
+    frame.time = 2.0 / 60.0;
+    frame.objects[STATIC_OBJECTS / 2 + 1].transform.translation = Vec2::new(0.02, -0.01);
+    let upload_after_skipped_generation = {
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::objects(vec![STATIC_OBJECTS / 2 + 1]),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        renderer.upload_retained(&device, &queue, &prepared, &mut text_gpu)
+    };
+    assert_eq!(
+        upload_after_skipped_generation.text.bytes_uploaded,
+        first_upload.text.bytes_uploaded
+    );
+
+    for frame_number in 3..=(STATIC_FRAMES + 2) {
         frame.time = frame_number as f64 / 60.0;
         frame.objects[STATIC_OBJECTS / 2].transform.translation =
             Vec2::new(frame_number as f32 * 0.01, -(frame_number as f32) * 0.005);
@@ -160,7 +199,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         preparer.incremental_stats(),
         RetainedFrameIncrementalStats {
             scratch_rebuilds: 1,
-            scratch_reuses: STATIC_FRAMES,
+            scratch_reuses: STATIC_FRAMES + 2,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
         }
