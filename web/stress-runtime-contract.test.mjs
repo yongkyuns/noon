@@ -56,7 +56,7 @@ assert.match(
 assert.match(
   retainedAnimate,
   /mixing retained Text animations with legacy animations in one Scene\.play /,
-  "contract should track the retained-vs-geometry property-animation mixed-play boundary",
+  "standalone retained-vs-geometry property animation remains a separate composition boundary",
 );
 assert.doesNotMatch(
   familyCreation,
@@ -65,13 +65,13 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   familyCreation,
-  /family animations cannot currently be mixed with[\s\S]*ordinary animations/,
-  "retained family animations should compose with ordinary geometry animations",
+  /retained Text property animations in the same Scene\.play still require/,
+  "family composition should now admit direct retained Text property animations",
 );
 assert.match(
   familyCreation,
-  /retained family animations can mix with ordinary geometry animations/,
-  "contract should retain the narrower retained-property-track composition boundary",
+  /_retained\._schedule_retained_plan/,
+  "family composition must reuse the retained property-track scheduler",
 );
 assert.match(
   familyCreation,

@@ -11,6 +11,7 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-authoring-error-recovery-smoke.mjs"
       - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/mixed-family-retained-text-smoke.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-authoring-error-recovery-smoke.mjs"
       - "scripts/playground-stress-edit-smoke.mjs"
+      - "scripts/mixed-family-retained-text-smoke.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -86,6 +88,8 @@ jobs:
         env:
           NOON_PLAYGROUND_STRESS_EDIT_ARTIFACTS: browser-smoke-artifacts/playground-stress-edit
         run: node scripts/playground-stress-edit-smoke.mjs
+      - name: Test mixed retained family edit and rerun
+        run: node scripts/mixed-family-retained-text-smoke.mjs
       - name: Upload authoring recovery diagnostics
         if: always()
         uses: actions/upload-artifact@v4

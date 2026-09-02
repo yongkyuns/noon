@@ -164,7 +164,7 @@ def _value_contains_retained_text(value: object) -> bool:
 
 
 def _ordinary_requires_retained_scheduler(animation: object) -> bool:
-    """Keep retained Text property-track composition on its existing scheduler."""
+    """Return whether an ordinary animation touches retained Text content."""
 
     values = (
         _animate._builder_source(animation),
@@ -172,6 +172,21 @@ def _ordinary_requires_retained_scheduler(animation: object) -> bool:
         getattr(animation, "target", None),
     )
     return any(_value_contains_retained_text(value) for value in values if value is not None)
+
+
+def _retained_ordinary_plan(animation: object) -> list[dict[str, Any]] | None:
+    """Classify one non-family animation without inventing a second retained scheduler."""
+
+    plan = _retained._retained_animation_plan(animation)
+    if plan is not None:
+        return plan
+    if _ordinary_requires_retained_scheduler(animation):
+        raise NotImplementedError(
+            "retained family animations can currently compose with direct retained Text "
+            "property animations and fades; retained Group/VGroup property scheduling "
+            "must first use the shared retained family scheduler"
+        )
+    return None
 
 
 def _ordinary_scene_leaves(animation: object) -> list[_base.Mobject]:
@@ -550,17 +565,14 @@ def _family_scene_play(
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
 
-    ordinary_animations = [
-        animation
+    # Resolve retained-property intent before any Scene mutation. Direct retained Text
+    # animations reuse the existing retained scheduler; geometry remains on the aligned
+    # scheduler. A retained Group/VGroup that has not joined the shared retained-family
+    # scheduler still fails explicitly rather than falling through to legacy geometry.
+    retained_ordinary_plans = [
+        None if candidate is not None else _retained_ordinary_plan(animation)
         for animation, candidate in zip(animations, candidates, strict=True)
-        if candidate is None
     ]
-    if any(_ordinary_requires_retained_scheduler(animation) for animation in ordinary_animations):
-        raise NotImplementedError(
-            "retained family animations can mix with ordinary geometry animations, but "
-            "retained Text property animations in the same Scene.play still require "
-            "unified retained-track scheduling"
-        )
 
     leaf_owners: dict[int, int] = {}
     for animation_index, candidate in enumerate(candidates):
@@ -576,6 +588,9 @@ def _family_scene_play(
                 )
             leaf_owners[id(member)] = animation_index
 
+    # This check runs before lifecycle binding, retained track emission, or canonical
+    # family request creation. Same-leaf ownership is therefore rejected transactionally
+    # instead of depending on whichever scheduler happens to run first.
     for animation_index, (animation, candidate) in enumerate(
         zip(animations, candidates, strict=True)
     ):
@@ -616,11 +631,25 @@ def _family_scene_play(
 
     geometry_states: dict[int, tuple[_base.Mobject, object, object]] = {}
     retained_states: dict[
-        int, tuple[_typst._RetainedTextMobject, object, object, object]
+        int, tuple[_typst._RetainedTextMobject, object, object, object, object]
     ] = {}
-    for animation, candidate in zip(animations, candidates, strict=True):
+    for animation, candidate, retained_plan in zip(
+        animations, candidates, retained_ordinary_plans, strict=True
+    ):
         if candidate is None:
-            _animate._record_animation_wrapper_state(animation, geometry_states)
+            if retained_plan is not None:
+                source = _retained._retained_animation_source(animation)
+                if source is None:
+                    raise RuntimeError("retained animation classification lost its source")
+                retained_states[id(source)] = (
+                    source,
+                    source._scene,
+                    source._object,
+                    source._retained_object_id,
+                    source._retained_order,
+                )
+            else:
+                _animate._record_animation_wrapper_state(animation, geometry_states)
             continue
         _target, _family, leaves, _synthetic = candidate
         for member in leaves:
@@ -628,6 +657,7 @@ def _family_scene_play(
                 retained_states[id(member)] = (
                     member,
                     member._scene,
+                    member._object,
                     member._retained_object_id,
                     member._retained_order,
                 )
@@ -636,16 +666,42 @@ def _family_scene_play(
 
     try:
         completed: list[tuple[object, object, list[tuple[_base.Mobject, object]], float]] = []
-        bound_ordinary: list[object] = []
+        bound_geometry: list[object] = []
+        retained_ordinary_end = base_start
 
-        # Bind in exact source order so canonical object/painter order is independent
-        # of whether one sibling uses family realization or ordinary geometry tracks.
-        for animation, candidate in zip(animations, candidates, strict=True):
+        # Participate in one source-ordered transaction. Family lifecycle/request
+        # authoring and direct retained Text property scheduling both own their existing
+        # semantics; this layer only coordinates ownership/order and the commit boundary.
+        # Geometry semantic-handle commits remain deferred until every sibling succeeds.
+        for animation, candidate, retained_plan in zip(
+            animations, candidates, retained_ordinary_plans, strict=True
+        ):
             if candidate is None:
-                _animate._prepare_aligned_animation_binding(
-                    self, animation, start_time=base_start
-                )
-                bound_ordinary.append(animation)
+                if retained_plan is not None:
+                    resolved = _options.resolve(
+                        builder_args=_options.builder_args(animation),
+                        default_lag_ratio=0.0,
+                        play_run_time=play_run_time,
+                        play_easing=easing,
+                        play_rate_func=rate_func,
+                        play_lag_ratio=play_lag_ratio,
+                    )
+                    _retained._schedule_retained_plan(
+                        self,
+                        animation,
+                        retained_plan,
+                        start_time=base_start,
+                        duration=resolved.run_time,
+                        easing=resolved.rate_func,
+                    )
+                    retained_ordinary_end = max(
+                        retained_ordinary_end, base_start + resolved.run_time
+                    )
+                else:
+                    _animate._prepare_aligned_animation_binding(
+                        self, animation, start_time=base_start
+                    )
+                    bound_geometry.append(animation)
                 continue
 
             target, family, leaves, _synthetic = candidate
@@ -722,9 +778,9 @@ def _family_scene_play(
                 end_time=end_time,
             )
 
-        ordinary_end, semantic_targets = _animate._schedule_aligned_bound_animations(
+        geometry_end, semantic_targets = _animate._schedule_aligned_bound_animations(
             self,
-            bound_ordinary,
+            bound_geometry,
             base_start=base_start,
             play_run_time=play_run_time,
             play_easing=easing,
@@ -732,19 +788,19 @@ def _family_scene_play(
             play_lag_ratio=play_lag_ratio,
         )
         play_end = max(
-            [ordinary_end]
+            [geometry_end, retained_ordinary_end]
             + [end_time for _animation, _target, _plans, end_time in completed]
         )
         self._cursor = max(cursor_before, play_end)
 
-        # This is deliberately the final authoring mutation. No family/runtime work
-        # follows a semantic-handle commit, so a failed sibling cannot leak target
-        # state into a subsequent source edit/rerun.
+        # Deliberately last: neither family requests nor retained Text tracks can fail
+        # after ordinary semantic handles are committed. A source edit/rerun therefore
+        # starts from its fresh Scene/context rather than leaked target state.
         _animate._commit_semantic_targets(semantic_targets)
         return self
     except Exception:
-        # #882's Scene checkpoint also restores the Rust-owned canonical authoring
-        # context, so an edit/rerun never inherits objects or requests from a failed play.
+        # #882's Scene checkpoint restores the Rust-owned canonical authoring context;
+        # the sidecar/wrapper restoration below covers the retained compatibility views.
         self._restore_authoring_checkpoint(checkpoint)
         self._cursor = cursor_before
         self._compat_top_level = top_level_before
@@ -759,8 +815,15 @@ def _family_scene_play(
         for member, old_scene, old_object in geometry_states.values():
             member._scene = old_scene
             member._object = old_object
-        for member, old_scene, old_object_id, old_order in retained_states.values():
+        for (
+            member,
+            old_scene,
+            old_object,
+            old_object_id,
+            old_order,
+        ) in retained_states.values():
             member._scene = old_scene
+            member._object = old_object
             member._retained_object_id = old_object_id
             member._retained_order = old_order
         raise
