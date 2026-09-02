@@ -27,11 +27,10 @@ test("Examples browser cards bypass deferred painting inside the revealable over
 });
 
 test("WebKit paint workaround stays scoped to the Examples browser", () => {
-  const selector = ".example-browser-layer .example-card";
-  const occurrences = source.split(selector).length - 1;
+  const occurrences = source.match(/\.example-browser-layer\s+\.example-card\s*\{/g) ?? [];
 
   assert.equal(
-    occurrences,
+    occurrences.length,
     1,
     "keep the eager-paint override scoped to the paginated Examples overlay instead of disabling gallery virtualization globally",
   );
