@@ -1,8 +1,6 @@
 use std::mem::{offset_of, size_of};
 
-use noon_render_wgpu::{
-    line_instance_layout, LineInstance, PackedStyle, PackedTransform,
-};
+use noon_render_wgpu::{line_instance_layout, LineInstance, PackedStyle, PackedTransform};
 
 #[test]
 fn line_instance_vertex_layout_matches_packed_cpu_abi() {
@@ -79,7 +77,14 @@ fn line_instance_vertex_layout_matches_packed_cpu_abi() {
 fn line_instance_partial_upload_stride_is_four_byte_aligned() {
     let stride = size_of::<LineInstance>();
 
-    assert_eq!(stride, 88, "changing the line ABI requires updating GPU layout and diagnostics");
+    assert_eq!(
+        stride, 88,
+        "changing the line ABI requires updating GPU layout and diagnostics"
+    );
     assert_eq!(stride % wgpu::COPY_BUFFER_ALIGNMENT as usize, 0);
-    assert_eq!(stride * 1, 88, "the second packed line starts at the frame-90 diagnostic offset");
+    assert_eq!(
+        stride * 1,
+        88,
+        "the second packed line starts at the frame-90 diagnostic offset"
+    );
 }
