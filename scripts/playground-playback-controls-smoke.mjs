@@ -100,9 +100,7 @@ async function playbackSnapshot(page) {
   return page.evaluate(() => {
     const controls = document.querySelector(".playback-controls");
     const play = document.querySelector(".playback-toggle");
-    const restart = [...document.querySelectorAll(".playback-button")].find(
-      (button) => button.textContent === "Restart",
-    );
+    const restart = document.querySelector(".playback-restart");
     const scrubber = document.querySelector(".playback-scrubber");
     const time = document.querySelector(".playback-time");
     const canvas = document.querySelector("#scene");
