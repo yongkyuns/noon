@@ -3,11 +3,15 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-const pythonPath = "web/python/_manim_family_create.py";
+const pythonPath = "web/python/_manim_family_creation.py";
 const pythonSource = readFileSync(pythonPath, "utf8");
 const moduleManifest = readFileSync("web/python-compat-modules.js", "utf8");
-const rustBridge = readFileSync(
+const genericRustBridge = readFileSync(
   "crates/noon-web/src/family_animation_authoring.rs",
+  "utf8",
+);
+const writeRustBridge = readFileSync(
+  "crates/noon-web/src/family_write_authoring.rs",
   "utf8",
 );
 const canonicalWire = readFileSync(
@@ -15,13 +19,15 @@ const canonicalWire = readFileSync(
   "utf8",
 );
 
-test("retained family Create authoring module is valid Python and bundled", () => {
+test("retained family creation-animation module is valid Python and bundled", () => {
   const result = spawnSync("python3", ["-m", "py_compile", pythonPath], {
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(moduleManifest, /python\/_manim_family_create\.py/);
+  assert.match(moduleManifest, /python\/_manim_family_creation\.py/);
+  assert.doesNotMatch(moduleManifest, /python\/_manim_family_create\.py/);
   assert.match(pythonSource, /familyAnimationRequest/);
+  assert.match(pythonSource, /familyWriteAnimationRequest/);
   assert.match(pythonSource, /bindRetainedNativeText/);
 });
 
@@ -40,9 +46,18 @@ test("Python does not serialize semantic family order or retained resource ident
       `Python family authoring must not contain ${forbidden}`,
     );
   }
-  assert.match(rustBridge, /layout\.include_mobject/);
-  assert.match(rustBridge, /layout\.include_retained_native_text/);
-  assert.match(rustBridge, /FamilyAnimationRequest::new/);
+  assert.match(genericRustBridge, /layout\.include_mobject/);
+  assert.match(genericRustBridge, /layout\.include_retained_native_text/);
+  assert.match(genericRustBridge, /FamilyAnimationRequest::new/);
+});
+
+test("Write defaults stay Rust-owned and depend on rendered retained members", () => {
+  assert.doesNotMatch(pythonSource, /len\([^\n]*(?:source|text)/i);
+  assert.match(writeRustBridge, /plain_text_animation_members/);
+  assert.match(writeRustBridge, /write_duration\(self\.member_count/);
+  assert.match(writeRustBridge, /write_lag_ratio\(self\.member_count/);
+  assert.match(writeRustBridge, /FamilyAnimationMode::DrawBorderThenFill/);
+  assert.match(writeRustBridge, /FamilyAnimationRequest::new/);
 });
 
 test("canonical retained normalization owns family animation transport", () => {
