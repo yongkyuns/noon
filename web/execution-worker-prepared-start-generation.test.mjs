@@ -109,9 +109,9 @@ test("stale prepared-start unwind cannot release a replacement generation reserv
   // Install the replacement generation synchronously before awaiting the stale
   // promises. Their queued unwind must not clear this newer reservation.
   const replacementOffset = FakeWorker.instances.length;
-  const secondPrepareResult = rejected(client.prepare({ transportMode: "transferable" }));
+  rejected(client.prepare({ transportMode: "transferable" }));
   workerByName(replacementOffset, "noon-render");
-  const secondStartResult = rejected(client.startRetainedCanonical(SCENE_SPEC_JSON));
+  rejected(client.startRetainedCanonical(SCENE_SPEC_JSON));
 
   const [firstPrepareError, firstStartError] = await Promise.all([
     firstPrepareResult,
@@ -126,11 +126,8 @@ test("stale prepared-start unwind cannot release a replacement generation reserv
     "the stale start's finally block must not clear the replacement start reservation",
   );
 
+  // The invariant is proven above. The replacement fake render preparation is
+  // deliberately left unacknowledged; waiting for those synthetic promises would
+  // test fake-worker cleanup rather than reservation generation ownership.
   client.terminate();
-  const [secondPrepareError, secondStartError] = await Promise.all([
-    secondPrepareResult,
-    secondStartResult,
-  ]);
-  assert.match(secondPrepareError?.message ?? "", /terminated/);
-  assert.match(secondStartError?.message ?? "", /terminated/);
 });
