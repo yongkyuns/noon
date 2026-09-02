@@ -225,7 +225,7 @@ class RetainedFamilyUnwriteSmoke(Scene):
             if (stressResult.kind !== "scene_document") {
               throw new Error(`stress smoke returned ${stressResult.kind}`);
             }
-            if (Math.abs(Number(stressResult.duration) - 6.06) > 1e-12) {
+            if (Math.abs(Number(stressResult.duration) - 5.0) > 1e-12) {
               throw new Error(`stress scene duration drifted to ${stressResult.duration}`);
             }
             if (!stressResult.sceneSpec) {
@@ -250,9 +250,9 @@ class RetainedFamilyUnwriteSmoke(Scene):
               result: stressResult,
               canvasSelector: "#retained-stress-smoke",
               label: "dynamic load stress",
-              loopDurationSeconds: 6.06,
-              seekTime: 3.6,
-              // At t=3.6 all 600 primary shapes and all 26 retained Text objects
+              loopDurationSeconds: 5.0,
+              seekTime: 3.0,
+              // At t=3.0 all 600 primary shapes and all 26 retained Text objects
               // are present. The 200 pulse circles are authored but enter later.
               expectedObjectCount: 626,
             });
