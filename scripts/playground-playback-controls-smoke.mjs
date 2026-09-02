@@ -48,7 +48,9 @@ async function waitForServer() {
 }
 
 function parseSeconds(text) {
-  const match = String(text).match(/([0-9]+(?:\.[0-9]+)?)\s*s/);
+  const match = String(text).match(
+    /^\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\/\s*[0-9]+(?:\.[0-9]+)?)?\s*s\s*$/,
+  );
   assert.ok(match, `unable to parse seconds from ${JSON.stringify(text)}`);
   return Number(match[1]);
 }
