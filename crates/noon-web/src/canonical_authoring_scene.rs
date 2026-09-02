@@ -41,7 +41,10 @@ impl CanonicalAuthoringSceneContext {
         snapshot: ObjectSnapshot,
     ) -> Result<(), String> {
         let position = self.position(id)?;
-        if !matches!(self.objects[position].content, ObjectSpecContent::Geometry(_)) {
+        if !matches!(
+            &self.objects[position].content,
+            ObjectSpecContent::Geometry(_)
+        ) {
             return Err(format!("canonical object {} is not geometry-backed", id.get()));
         }
         let mut object = ObjectSpec::geometry(id, snapshot.geometry);
@@ -67,7 +70,7 @@ impl CanonicalAuthoringSceneContext {
         text: RetainedTextAuthoringSpec,
     ) -> Result<(), String> {
         let position = self.position(id)?;
-        if !matches!(self.objects[position].content, ObjectSpecContent::Text(_)) {
+        if !matches!(&self.objects[position].content, ObjectSpecContent::Text(_)) {
             return Err(format!("canonical object {} is not text-backed", id.get()));
         }
         let scale_factor = retained_scale_factor(&text);
