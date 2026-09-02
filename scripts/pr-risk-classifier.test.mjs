@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyPrRisk,
   requiresHostUpdaterDiagnostic,
+  requiresRendererCriticalWebglSmoke,
   requiresRenderModeSwitchSmoke,
   requiresRetainedExecutionSmoke,
 } from "./pr-risk-classifier.mjs";
@@ -37,12 +38,26 @@ const renderModeSwitchChanges = [
   "web/retained-execution-engine-worker.js",
 ];
 
+const rendererCriticalChanges = [
+  ".github/workflows/pr-fast.yml",
+  "scripts/browser-smoke.mjs",
+  "scripts/pr-risk-classifier.mjs",
+  "web/authoring-render-worker.js",
+  "web/browser-smoke.html",
+  "web/browser-smoke.js",
+  "web/execution-render-worker.js",
+  "web/render-gpu-diagnostics.js",
+  "crates/noon-render-wgpu/src/lib.rs",
+  "crates/noon-text-render-wgpu/src/glyph.rs",
+  "crates/noon-web/src/lib.rs",
+];
+
 const ordinaryChanges = [
   "docs/ci.md",
   "web/main.js",
   "web/playground-gallery.js",
+  "crates/noon-core/src/lib.rs",
   "crates/noon-geometry/src/lib.rs",
-  "crates/noon-web/src/manim_geometry_bridge.rs",
 ];
 
 test("canonical retained routing changes escalate the retained worker smoke", () => {
@@ -66,7 +81,17 @@ test("render-owner, transition, and risk-policy changes escalate the mode-switch
   }
 });
 
-test("ordinary docs, demo, geometry, and Manim bridge changes stay on the base fast path", () => {
+test("renderer crates, browser render owners, smoke plumbing, and policy escalate WebGL", () => {
+  const risk = classifyPrRisk(rendererCriticalChanges);
+  assert.equal(risk.rendererCritical, true);
+  assert.deepEqual(risk.rendererCriticalPaths, rendererCriticalChanges.slice().sort());
+  for (const path of rendererCriticalChanges) {
+    assert.equal(requiresRendererCriticalWebglSmoke(path), true, path);
+  }
+  assert.equal(requiresRendererCriticalWebglSmoke("README.md"), false);
+});
+
+test("ordinary docs, demo, core, and geometry changes stay on the base fast path", () => {
   const risk = classifyPrRisk(ordinaryChanges);
   assert.equal(risk.retainedExecution, false);
   assert.deepEqual(risk.retainedExecutionPaths, []);
@@ -74,6 +99,8 @@ test("ordinary docs, demo, geometry, and Manim bridge changes stay on the base f
   assert.deepEqual(risk.renderModeSwitchPaths, []);
   assert.equal(risk.hostUpdaterDiagnostics, false);
   assert.deepEqual(risk.hostUpdaterDiagnosticPaths, []);
+  assert.equal(risk.rendererCritical, false);
+  assert.deepEqual(risk.rendererCriticalPaths, []);
 });
 
 test("classifier normalizes diff-style paths and de-duplicates triggers", () => {
@@ -85,6 +112,7 @@ test("classifier normalizes diff-style paths and de-duplicates triggers", () => 
   ]);
   assert.deepEqual(risk.retainedExecutionPaths, ["web/authoring-render-worker.js"]);
   assert.deepEqual(risk.renderModeSwitchPaths, ["web/authoring-render-worker.js"]);
+  assert.deepEqual(risk.rendererCriticalPaths, ["web/authoring-render-worker.js"]);
 });
 
 test("host-updater changes escalate the backend diagnostic harness", () => {
