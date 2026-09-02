@@ -1,8 +1,8 @@
 use noon_core::ObjectId;
 
 use crate::{
-    RetainedResourceBundle, RetainedResourceMutationEnvelope, RetainedResourceMutationTransportError,
-    TransportTextResourceHandle,
+    RetainedResourceBundle, RetainedResourceMutationEnvelope,
+    RetainedResourceMutationTransportError, TransportTextResourceHandle,
 };
 
 /// Authoritative session/sequence allocator for outbound retained resource mutations.
@@ -117,12 +117,7 @@ mod tests {
         let mut encoder = RetainedResourceMutationEncoder::new(23);
 
         let replace = encoder
-            .encode_replace(
-                ObjectId::new(41),
-                expected,
-                replacement,
-                resources,
-            )
+            .encode_replace(ObjectId::new(41), expected, replacement, resources)
             .unwrap();
         assert_eq!(replace.session, 23);
         assert_eq!(replace.sequence, 0);
