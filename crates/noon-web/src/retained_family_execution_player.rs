@@ -50,13 +50,7 @@ impl RetainedFamilyExecutionPlayer {
         camera_object: Option<ObjectId>,
         session: u32,
     ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
-        Self::new_many_with_tracks(
-            scene,
-            tracks,
-            vec![(plan, spec)],
-            camera_object,
-            session,
-        )
+        Self::new_many_with_tracks(scene, tracks, vec![(plan, spec)], camera_object, session)
     }
 
     /// Construct the production family player from all canonical family requests.
@@ -188,11 +182,12 @@ impl RetainedFamilyExecutionPlayer {
             .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
                 camera_object,
             ))?;
-        let geometry = object
-            .geometry()
-            .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
-                camera_object,
-            ))?;
+        let geometry =
+            object
+                .geometry()
+                .ok_or(RetainedFamilyExecutionPlayerError::InvalidCameraObject(
+                    camera_object,
+                ))?;
         Camera2DState::from_frame_object(geometry, object.transform).ok_or(
             RetainedFamilyExecutionPlayerError::InvalidCameraObject(camera_object),
         )
