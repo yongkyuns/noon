@@ -1,3 +1,5 @@
+import "./example-browser-ui.js";
+
 const MANIM_REUSE = "source-equivalent-manim-v0.21";
 const MANIM_PARITY_REUSE = "manim-compatible-parity-v0.21";
 const READY_REUSE = new Set([MANIM_REUSE, MANIM_PARITY_REUSE]);
