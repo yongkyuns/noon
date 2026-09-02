@@ -43,6 +43,7 @@ class RetainedFamilyUnwriteSmoke(Scene):
 
       let readyPromise = null;
       let writeResult = null;
+      let writeRenderResult = null;
 
       function oneFamilyRequest(result, label) {
         if (result.kind !== "scene_document") {
@@ -67,6 +68,58 @@ class RetainedFamilyUnwriteSmoke(Scene):
           }
         }
         return request;
+      }
+
+      async function renderWriteMidpoint() {
+        if (writeResult == null) {
+          throw new Error("family Write authoring result is unavailable");
+        }
+
+        const canvas = document.querySelector("#retained-write-smoke");
+        const errors = [];
+        const execution = new ExecutionWorkerClient(canvas, {
+          onError(error, owner) {
+            errors.push(`${owner}: ${error}`);
+          },
+        });
+        try {
+          const readyState = await execution.startRetainedCanonical(
+            JSON.stringify(writeResult.sceneSpec),
+            {
+              loopDurationSeconds: 1.0,
+              transportMode: "transferable",
+            },
+          );
+          await execution.pause();
+          await execution.seek(0.5);
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          const metrics = await execution.metrics();
+          if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
+            throw new Error("family Write midpoint did not run through canonical retained execution");
+          }
+          if (metrics.metrics.objectCount !== 1) {
+            throw new Error(`family Write renderer expected one object, got ${metrics.metrics.objectCount}`);
+          }
+          if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
+            throw new Error("family Write midpoint did not produce a presented retained render frame");
+          }
+          if (Math.abs(Number(metrics.engineMetrics.time) - 0.5) > 1e-6) {
+            throw new Error(`family Write deterministic seek drifted to ${metrics.engineMetrics.time}`);
+          }
+          if (errors.length !== 0) {
+            throw new Error(`family Write retained execution reported errors: ${errors.join("; ")}`);
+          }
+          return {
+            backend: metrics.metrics.backend,
+            presentedFrames: metrics.metrics.presentedFrames,
+            drawCalls: metrics.metrics.drawCalls,
+            instancesDrawn: metrics.metrics.instancesDrawn,
+            engineTime: metrics.engineMetrics.time,
+            readyState,
+          };
+        } finally {
+          execution.terminate();
+        }
       }
 
       async function ready() {
@@ -117,65 +170,22 @@ class RetainedFamilyUnwriteSmoke(Scene):
               throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
             }
 
-            return { create, write: writeResult, unwrite };
+            // Reuse this already-loaded browser/Pyodide smoke for one real execution
+            // frame. A midpoint seek forces DrawBorderThenFill through the canonical
+            // family runtime and retained renderer instead of only checking authoring JSON.
+            writeRenderResult = await renderWriteMidpoint();
+            return { create, write: writeResult, unwrite, writeRender: writeRenderResult };
           })();
         }
         return readyPromise;
       }
 
-      async function renderRetainedWriteMidpoint() {
-        await ready();
-        if (writeResult == null) {
-          throw new Error("family Write authoring result is unavailable");
-        }
-
-        const canvas = document.querySelector("#retained-write-smoke");
-        const errors = [];
-        const execution = new ExecutionWorkerClient(canvas, {
-          onError(error, owner) {
-            errors.push(`${owner}: ${error}`);
-          },
-        });
-        try {
-          const readyState = await execution.startRetainedCanonical(
-            JSON.stringify(writeResult.sceneSpec),
-            {
-              loopDurationSeconds: 1.0,
-              transportMode: "transferable",
-            },
-          );
-          await execution.pause();
-          await execution.seek(0.5);
-          await new Promise((resolve) => setTimeout(resolve, 120));
-          const metrics = await execution.metrics();
-          if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-            throw new Error("family Write midpoint did not run through canonical retained execution");
-          }
-          if (metrics.metrics.objectCount !== 1) {
-            throw new Error(`family Write renderer expected one object, got ${metrics.metrics.objectCount}`);
-          }
-          if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
-            throw new Error("family Write midpoint did not produce a presented retained render frame");
-          }
-          if (errors.length !== 0) {
-            throw new Error(`family Write retained execution reported errors: ${errors.join("; ")}`);
-          }
-          return {
-            backend: metrics.metrics.backend,
-            presentedFrames: metrics.metrics.presentedFrames,
-            drawCalls: metrics.metrics.drawCalls,
-            instancesDrawn: metrics.metrics.instancesDrawn,
-            engineTime: metrics.engineMetrics.time,
-            readyState,
-          };
-        } finally {
-          execution.terminate();
-        }
-      }
-
       window.noonManimCompat = {
         ready,
-        renderRetainedWriteMidpoint,
+        renderRetainedWriteMidpoint: async () => {
+          await ready();
+          return writeRenderResult;
+        },
         run: (source) => client.run(source),
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
       };
