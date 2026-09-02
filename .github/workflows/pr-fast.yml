@@ -223,6 +223,18 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check persistent render mode switching
+        if: steps.browser-risk.outputs.render_mode_switch == 'true'
+        id: render-mode-switch
+        run: |
+          SECONDS=0
+          set +e
+          timeout --signal=TERM 60s node scripts/authoring-render-mode-switch-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Check primary WebGPU rendering
         id: webgpu-smoke
         env:
@@ -246,6 +258,8 @@ jobs:
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
           RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
+          MODE_SWITCH_REQUIRED: ${{ steps.browser-risk.outputs.render_mode_switch }}
+          MODE_SWITCH_SECONDS: ${{ steps.render-mode-switch.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
         run: |
           total=""
@@ -266,6 +280,11 @@ jobs:
             retained_duration="$(display_seconds "$RETAINED_SECONDS")"
           fi
 
+          mode_switch_duration="skipped"
+          if [[ "$MODE_SWITCH_REQUIRED" == "true" ]]; then
+            mode_switch_duration="$(display_seconds "$MODE_SWITCH_SECONDS")"
+          fi
+
           {
             echo "### Browser fast checks timing"
             echo
@@ -275,10 +294,12 @@ jobs:
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
             echo "| Canonical retained execution | $retained_duration |"
+            echo "| Persistent render mode switching | $mode_switch_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
             echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."
+            echo "Render mode-switch escalation required: ${MODE_SWITCH_REQUIRED:-unknown}."
             echo
             echo "The measured browser path starts before checkout and ends after the renderer smoke. Hosted-runner queue time and post-job cleanup are intentionally excluded."
           } >> "$GITHUB_STEP_SUMMARY"
