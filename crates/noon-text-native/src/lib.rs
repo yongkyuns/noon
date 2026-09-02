@@ -224,10 +224,10 @@ impl NativeTextCompiler {
                         },
                         origin,
                         advance,
-                        // Exact outlines remain lazy. The line-box bound is conservative
-                        // and sufficient for semantic layout until exact ink metrics land.
+                        // Swash reports descent as a positive distance below the baseline;
+                        // retained Y coordinates use negative values below the baseline.
                         bounds: Rect::new(
-                            Vec2::new(origin.x.min(right), metrics.descent),
+                            Vec2::new(origin.x.min(right), -metrics.descent),
                             Vec2::new(origin.x.max(right), metrics.ascent),
                         ),
                     });
@@ -241,7 +241,7 @@ impl NativeTextCompiler {
                 Rect::new(Vec2::ZERO, Vec2::ZERO)
             } else {
                 Rect::new(
-                    Vec2::new(0.0_f32.min(cursor_x), metrics.descent + baseline_y),
+                    Vec2::new(0.0_f32.min(cursor_x), -metrics.descent + baseline_y),
                     Vec2::new(0.0_f32.max(cursor_x), metrics.ascent + baseline_y),
                 )
             };
