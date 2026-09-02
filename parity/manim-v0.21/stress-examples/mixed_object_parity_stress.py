@@ -85,7 +85,6 @@ class MixedObjectParityStress(Scene):
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets)
             ],
-            title.animate.set_color(YELLOW),
             run_time=1.2,
         )
 
@@ -100,8 +99,7 @@ class MixedObjectParityStress(Scene):
 
         self.play(
             *motion,
-            title.animate.rotate(PI / 18).set_color(PINK),
-            subtitle.animate.set_color(TEAL),
+            title.animate.rotate(PI / 18),
             run_time=1.2,
         )
 
@@ -127,6 +125,6 @@ class MixedObjectParityStress(Scene):
             *[FadeIn(shape, scale=0.35) for shape in leaving],
             *[FadeOut(pulse, scale=1.8) for pulse in pulses],
             FadeIn(subtitle),
-            title.animate.rotate(-PI / 18).set_color(WHITE),
+            title.animate.rotate(-PI / 18),
             run_time=0.8,
         )
