@@ -10,6 +10,16 @@ on:
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-authoring-error-recovery-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
+      - "web/**"
+  pull_request:
+    paths:
+      - ".github/workflows/playground-authoring-recovery.yml"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-web/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/playground-authoring-error-recovery-smoke.mjs"
+      - "scripts/playground-stress-edit-smoke.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -72,11 +82,17 @@ jobs:
         env:
           NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS: browser-smoke-artifacts/playground-authoring-recovery
         run: node scripts/playground-authoring-error-recovery-smoke.mjs
+      - name: Test stress edit and rerun
+        env:
+          NOON_PLAYGROUND_STRESS_EDIT_ARTIFACTS: browser-smoke-artifacts/playground-stress-edit
+        run: node scripts/playground-stress-edit-smoke.mjs
       - name: Upload authoring recovery diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playground-authoring-recovery
-          path: browser-smoke-artifacts/playground-authoring-recovery
+          path: |
+            browser-smoke-artifacts/playground-authoring-recovery
+            browser-smoke-artifacts/playground-stress-edit
           if-no-files-found: error
           retention-days: 7
