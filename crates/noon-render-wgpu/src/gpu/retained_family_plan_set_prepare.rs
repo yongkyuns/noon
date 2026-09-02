@@ -143,7 +143,7 @@ impl RetainedFramePreparer {
         }
 
         let family_frame = frame.as_family_frame();
-        let baseline_sources = mem::take(&mut self.sources);
+        let baseline_sources = std::mem::take(&mut self.sources);
         self.sources.reserve(baseline_sources.len());
 
         for source in baseline_sources {
@@ -169,7 +169,7 @@ impl RetainedFramePreparer {
                     };
 
                     match state.mode {
-                        FamilyAnimationMode::Reveal => {
+                        noon_core::FamilyAnimationMode::Reveal => {
                             if let Some(reveal) = self.family_geometry_reveal(
                                 &family_frame,
                                 plan,
@@ -190,10 +190,13 @@ impl RetainedFramePreparer {
                                 kind,
                             });
                         }
-                        FamilyAnimationMode::DrawBorderThenFill => {
-                            return Err(RetainedFamilyDrawBorderPrepareError::
-                                UnsupportedTextOutlineBaseline(object_id)
-                                .into());
+                        noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                            return Err(
+                                RetainedFamilyDrawBorderPrepareError::UnsupportedTextOutlineBaseline(
+                                    object_id,
+                                )
+                                .into(),
+                            );
                         }
                     }
                 }
@@ -215,7 +218,7 @@ impl RetainedFramePreparer {
                     };
 
                     match state.mode {
-                        FamilyAnimationMode::Reveal => {
+                        noon_core::FamilyAnimationMode::Reveal => {
                             if self.family_text_run_needs_outline(
                                 &family_frame,
                                 plan,
@@ -240,7 +243,7 @@ impl RetainedFramePreparer {
                                 });
                             }
                         }
-                        FamilyAnimationMode::DrawBorderThenFill => {
+                        noon_core::FamilyAnimationMode::DrawBorderThenFill => {
                             if self.family_text_run_needs_draw_border_paths(
                                 &family_frame,
                                 plan,
@@ -277,8 +280,13 @@ fn selected_family_plan<'a>(
     frame: &RetainedPlannedFamilyFrame<'_>,
     plans: &'a [RetainedFamilyAnimationPlan],
     object_index: usize,
-) -> Result<Option<(FamilyAnimationState, &'a RetainedFamilyAnimationPlan)>, RetainedPlannedFamilyFrameError>
-{
+) -> Result<
+    Option<(
+        noon_core::FamilyAnimationState,
+        &'a RetainedFamilyAnimationPlan,
+    )>,
+    RetainedPlannedFamilyFrameError,
+> {
     let Some(state) = frame.family_animation(object_index) else {
         return Ok(None);
     };
@@ -286,7 +294,9 @@ fn selected_family_plan<'a>(
         .retained
         .objects
         .get(object_index)
-        .ok_or(RetainedPlannedFamilyFrameError::InvalidObjectIndex(object_index))?;
+        .ok_or(RetainedPlannedFamilyFrameError::InvalidObjectIndex(
+            object_index,
+        ))?;
     let plan_index = frame
         .family_plan_index(object_index)
         .ok_or(RetainedPlannedFamilyFrameError::MissingPlanIndex(object.id))?;
