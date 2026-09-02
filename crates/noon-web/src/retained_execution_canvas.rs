@@ -215,7 +215,7 @@ mod wasm {
                         )
                     })?;
                 self.preparer
-                    .prepare_family_with_changes(
+                    .prepare_family_animation_with_changes(
                         &self.device,
                         &self.queue,
                         &family_frame,
