@@ -93,6 +93,7 @@ async function load(source, loopDurationSeconds) {
 async function advanceOneFrame(frameIndex, time) {
   const deterministicDelta = engine.tickDeltaJson(time * 1000);
   await presentDelta(deterministicDelta);
+  let diagnostic = null;
 
   if (host !== null) {
     host.advanceTo(time);
@@ -109,9 +110,25 @@ async function advanceOneFrame(frameIndex, time) {
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
     await presentDelta(hostDelta);
+    const diagnosticJson = renderer.takeHostUpdaterDiagnosticJson();
+    diagnostic = diagnosticJson === undefined || diagnosticJson === null
+      ? null
+      : JSON.parse(diagnosticJson);
   }
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
+  return diagnostic;
+}
+
+function setHostUpdaterDiagnosticObject(objectId) {
+  if (renderer === null) {
+    throw new Error("host raster scene has not been loaded");
+  }
+  const normalized = Number(objectId);
+  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+    throw new RangeError("host updater diagnostic object must be a non-negative integer");
+  }
+  renderer.setHostUpdaterDiagnosticObject(normalized);
 }
 
 function normalizeFrameTimes(frameTimes, targetFrame) {
@@ -156,8 +173,9 @@ async function renderThrough(frameIndex, frameTimes) {
     throw new RangeError("host raster playback cannot move backwards");
   }
 
+  let diagnostic = null;
   for (let frame = currentFrameIndex + 1; frame <= targetFrame; frame += 1) {
-    await advanceOneFrame(frame, activeFrameTimes[frame]);
+    diagnostic = await advanceOneFrame(frame, activeFrameTimes[frame]);
   }
   await waitForPaint();
 
@@ -178,11 +196,13 @@ async function renderThrough(frameIndex, frameTimes) {
     geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     authoredDuration,
     frameIndex: currentFrameIndex,
+    diagnostic,
   };
 }
 
 window.noonHostRaster = {
   ready: () => readyPromise,
   load,
+  setHostUpdaterDiagnosticObject,
   renderThrough,
 };

@@ -464,6 +464,15 @@ impl ExecutionFrameMirror {
         self.slot_indices.get(&slot).copied()
     }
 
+    /// Returns the stable transport slot currently projected to a frame row.
+    ///
+    /// This is intentionally a read-only diagnostic seam: renderer-side
+    /// instrumentation must be able to tie a packed instance back to the
+    /// execution identity without deriving identity from a dense index.
+    pub fn slot_for_frame_index(&self, frame_index: usize) -> Option<TransportSlotId> {
+        self.slots.get(frame_index).copied()
+    }
+
     pub fn live_object_count(&self) -> usize {
         self.slot_indices.len()
     }
