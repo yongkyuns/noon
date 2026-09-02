@@ -12,7 +12,7 @@ import {
   requestedExampleId,
 } from "./example-gallery.js";
 
-const canvas = document.querySelector("#scene");
+let canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
 const sceneButton = document.querySelector("#replace-scene");
@@ -326,7 +326,6 @@ const selectedTags = document.createElement("div");
 selectedTags.className = "selected-tags";
 selectedExampleStrip.append(selectedCopy, selectedTags);
 workspace.before(selectedExampleStrip);
-
 const resetButton = document.createElement("button");
 resetButton.type = "button";
 resetButton.className = "secondary-button reset-example";
@@ -347,6 +346,7 @@ let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
 let runtimeStartPromise = null;
+let runtimePreparation = null;
 let playerNeedsRestart = false;
 let busyDepth = 0;
 let galleryPage = 0;
@@ -444,7 +444,58 @@ function ensureAuthoringClient() {
   return authoringClient;
 }
 
+function adoptRuntimeCanvas(candidate) {
+  if (canvas !== candidate.canvas) {
+    canvas = candidate.canvas;
+  }
+}
+
+function createRuntimeClient() {
+  let candidate = null;
+  candidate = new AuthoringExecutionClient(canvas, {
+    onError(error) {
+      if (player !== candidate) return;
+      playerNeedsRestart = true;
+      showError(error);
+    },
+    onRecoverableError(error) {
+      showRecoverableSceneError(error);
+    },
+  });
+  return candidate;
+}
+
+function ensureRuntimePreparation() {
+  if (player !== null) return null;
+  if (runtimePreparation !== null) return runtimePreparation;
+
+  const candidate = createRuntimeClient();
+  const ready = candidate.prepare();
+  const preparation = { candidate, ready };
+  runtimePreparation = preparation;
+  status.dataset.runtimeStartup = "preparing-on-run";
+  status.dataset.executionTopology = "preparing-render-owner";
+
+  ready.then(
+    () => {
+      if (runtimePreparation === preparation) {
+        status.dataset.runtimeStartup = "prepared-on-run";
+        status.dataset.executionTopology = "prepared-render-owner";
+      }
+    },
+    (error) => {
+      adoptRuntimeCanvas(candidate);
+      if (runtimePreparation === preparation) {
+        runtimePreparation = null;
+      }
+      console.warn("Execution runtime preparation failed", error);
+    },
+  );
+  return preparation;
+}
+
 async function ensureRuntimeReady({
+  preparation = null,
   sceneJson,
   sceneSpecJson,
   startRetained,
@@ -456,10 +507,6 @@ async function ensureRuntimeReady({
   if (player !== null) return null;
 
   const task = (async () => {
-    setRuntimeStatus("Starting execution runtime…", "running");
-    patchStatus.value = "Starting GPU execution runtime…";
-    patchStatus.dataset.state = "running";
-
     if (startRetained && callbacks !== null && callbacks !== undefined) {
       throw new Error(
         "retained authoring with Python host callbacks is not supported yet; " +
@@ -467,16 +514,17 @@ async function ensureRuntimeReady({
       );
     }
 
-    const nextPlayer = new AuthoringExecutionClient(canvas, {
-      onError(error) {
-        playerNeedsRestart = true;
-        showError(error);
-      },
-      onRecoverableError(error) {
-        showRecoverableSceneError(error);
-      },
-    });
+    const prepared = preparation ?? ensureRuntimePreparation();
+    if (prepared === null) {
+      throw new Error("execution runtime preparation is unavailable");
+    }
+    const nextPlayer = prepared.candidate;
     try {
+      await prepared.ready;
+      setRuntimeStatus("Starting authored execution engine…", "running");
+      patchStatus.value = "Starting authored GPU execution engine…";
+      patchStatus.dataset.state = "running";
+
       const ready = startRetained
         ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
             loopDurationSeconds,
@@ -489,6 +537,9 @@ async function ensureRuntimeReady({
       const initialState = await nextPlayer.state();
 
       player = nextPlayer;
+      if (runtimePreparation === prepared) {
+        runtimePreparation = null;
+      }
       playerNeedsRestart = false;
       rendererBackend = ready.render.backend;
       status.dataset.rendererBackend = rendererBackend;
@@ -518,7 +569,11 @@ async function ensureRuntimeReady({
         mode: nextPlayer.mode,
       };
     } catch (error) {
+      if (runtimePreparation === prepared) {
+        runtimePreparation = null;
+      }
       nextPlayer.terminate();
+      adoptRuntimeCanvas(nextPlayer);
       if (player === nextPlayer) {
         player = null;
         playbackControls?.destroy();
@@ -687,6 +742,7 @@ async function runScene() {
     try {
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
+      const preparation = player === null ? ensureRuntimePreparation() : null;
       const client = ensureAuthoringClient();
       status.dataset.authoringWarmup = "started";
       let authored;
@@ -740,6 +796,7 @@ async function runScene() {
       let result;
       if (player === null) {
         result = await ensureRuntimeReady({
+          preparation,
           sceneJson,
           sceneSpecJson,
           startRetained,
@@ -1056,6 +1113,9 @@ try {
       playbackControls = null;
       authoringClient?.terminate();
       authoringClient = null;
+      const preparation = runtimePreparation;
+      runtimePreparation = null;
+      preparation?.candidate.terminate();
       player?.terminate();
       player = null;
     },
