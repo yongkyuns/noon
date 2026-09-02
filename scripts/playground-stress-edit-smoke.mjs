@@ -164,40 +164,51 @@ try {
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
   assert.match(source, /rows = 20/);
-  const editedSource = source.replace("rows = 20", "rows = 5");
-  assert.notEqual(editedSource, source);
+  let editedSource = source;
+  for (const rows of [5, 7, 20]) {
+    const nextSource = editedSource.replace(/rows = \d+/, `rows = ${rows}`);
+    assert.notEqual(nextSource, editedSource);
 
-  // Use the real CodeMirror input path so the hidden textarea/draft bridge is exercised.
-  await editor.click();
-  await page.keyboard.press("Control+A");
-  await page.keyboard.insertText(editedSource);
-  await page.waitForFunction(
-    (expected) => document.querySelector("#python-scene-source")?.value === expected,
-    editedSource,
-    { timeout: 15_000 },
-  );
-  diagnostics.snapshots.edited = await snapshot(page);
-  assert.ok(
-    Math.abs(diagnostics.snapshots.edited.editorHeight - diagnostics.snapshots.loaded.editorHeight) <= 2,
-    "editing the long source must not grow the editor pane",
-  );
+    // Use the real CodeMirror input path on every edit so identity stabilization is
+    // exercised across consecutive authoring results, not just one structural rerun.
+    await editor.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.insertText(nextSource);
+    await page.waitForFunction(
+      (expected) => document.querySelector("#python-scene-source")?.value === expected,
+      nextSource,
+      { timeout: 15_000 },
+    );
+    diagnostics.snapshots[`rows${rows}Edited`] = await snapshot(page);
+    assert.ok(
+      Math.abs(
+        diagnostics.snapshots[`rows${rows}Edited`].editorHeight -
+          diagnostics.snapshots.loaded.editorHeight,
+      ) <= 2,
+      "editing the long source must not grow the editor pane",
+    );
 
-  diagnostics.snapshots.rerun = await runAndWait(page);
-  assert.equal(diagnostics.snapshots.rerun.executionMode, "retained");
-  assert.match(diagnostics.snapshots.rerun.patchText, /Scene rebuilt atomically/);
+    diagnostics.snapshots[`rows${rows}Rerun`] = await runAndWait(page);
+    assert.equal(diagnostics.snapshots[`rows${rows}Rerun`].executionMode, "retained");
+    assert.match(
+      diagnostics.snapshots[`rows${rows}Rerun`].patchText,
+      /Scene rebuilt atomically/,
+    );
+    editedSource = nextSource;
+  }
 
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.deepEqual(
     diagnostics.consoleErrors,
     [],
-    `valid structural stress edit/rerun emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
+    `valid repeated structural stress edits emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground structural stress edit ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, rows=5 rerun applied`,
+    `playground repeated structural stress edits ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, rows=5 -> 7 -> 20 applied`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
