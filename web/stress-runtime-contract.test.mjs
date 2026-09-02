@@ -24,16 +24,23 @@ assert.equal(
   canonical.replace("from manim import *", "from noon import *"),
   "stress source must remain import-only Manim compatible",
 );
-assert.match(noon, /self\.play\(FadeIn\(title\), FadeIn\(subtitle\), run_time=0\.4\)/);
-assert.match(noon, /self\.play\(\*\[Create\(shape\) for shape in shapes\], run_time=0\.6\)/);
+assert.match(noon, /rows = 20/);
+assert.match(noon, /cols = 30/);
+assert.match(noon, /shape_count = rows \* cols/);
+assert.match(noon, /self\.play\(FadeIn\(title\), FadeIn\(subtitle\), run_time=0\.25\)/);
+assert.match(noon, /self\.play\(\*\[Create\(shape\) for shape in shapes\], run_time=0\.55\)/);
 assert.doesNotMatch(
   noon,
   /Create\(title\)/,
   "retained family Create cannot share the stress scene's mass mixed-animation play yet",
 );
-assert.match(noon, /shape\.animate\.rotate\(angle\)\.shift\(0\.11 \* direction\)\.set_color\(color\)/);
-assert.match(noon, /self\.play\(title\.animate\.rotate\(PI \/ 18\), run_time=0\.2\)/);
-assert.match(noon, /title\.animate\.rotate\(-PI \/ 18\)/);
+assert.match(noon, /for shape, target in zip\(shapes, targets_a\)/);
+assert.match(noon, /for shape, target in zip\(shapes, targets_b\)/);
+assert.match(noon, /motion_a = \[\]/);
+assert.match(noon, /motion_b = \[\]/);
+assert.match(noon, /leaving = shapes\[::3\]/);
+assert.match(noon, /title\.animate\.rotate\(PI \/ 24\)/);
+assert.match(noon, /title\.animate\.rotate\(-PI \/ 12\)/);
 assert.doesNotMatch(
   noon,
   /(?:title|subtitle)\.animate[^\n]*set_color/,
@@ -55,8 +62,9 @@ assert.match(
   "contract should track the retained family mixed-play capability boundary",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
-assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 110/);
-assert.match(browserSmoke, /expectedObjectCount: 74/);
+assert.match(browserSmoke, /stressResult\.document\.objects\.length !== 800/);
+assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 802/);
+assert.match(browserSmoke, /expectedObjectCount: 602/);
 assert.match(browserSmoke, /waitForRenderedState/);
 assert.match(browserSmoke, /seekTime: 2\.8/);
 
