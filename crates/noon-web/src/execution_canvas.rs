@@ -438,7 +438,10 @@ mod wasm {
         target: ObjectId,
     ) -> Option<HostUpdaterDiagnostic> {
         let frame = mirror.frame()?;
-        let frame_index = frame.objects.iter().position(|object| object.id == target)?;
+        let frame_index = frame
+            .objects
+            .iter()
+            .position(|object| object.id == target)?;
         let committed_object = &frame.objects[frame_index];
         let execution = DiagnosticExecution {
             session: mirror.session(),
@@ -586,7 +589,10 @@ mod wasm {
         if changes.is_all() {
             return "all";
         }
-        if changes.removed_indices().binary_search(&frame_index).is_ok()
+        if changes
+            .removed_indices()
+            .binary_search(&frame_index)
+            .is_ok()
             || !frame.is_present(frame_index)
         {
             return "removed";
@@ -609,7 +615,11 @@ mod wasm {
         Option<Transform2D>,
         Option<[Vec2; 2]>,
     ) {
-        let Some(index) = prepared.line_ids.iter().position(|object| *object == target) else {
+        let Some(index) = prepared
+            .line_ids
+            .iter()
+            .position(|object| *object == target)
+        else {
             return (None, None, None, None);
         };
         let Some(instance) = prepared.lines.get(index).copied() else {
