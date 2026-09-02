@@ -136,7 +136,8 @@
       .workspace {
         display: grid;
         grid-template-columns: minmax(24rem, 1fr) minmax(0, 1.15fr);
-        min-height: 38rem;
+        height: 38rem;
+        min-height: 0;
         overflow: hidden;
         border: 1px solid var(--border);
         border-radius: 1rem;
@@ -151,7 +152,9 @@
 
       .editor-pane {
         display: flex;
-        min-height: 38rem;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
         flex-direction: column;
         border-right: 1px solid var(--border);
         background: var(--panel-strong);
@@ -221,6 +224,7 @@
         display: flex;
         min-height: 0;
         flex: 1;
+        overflow: hidden;
       }
 
       .editor-panel {
@@ -274,7 +278,8 @@
 
       .preview-pane {
         display: flex;
-        min-height: 38rem;
+        height: 100%;
+        min-height: 0;
         flex-direction: column;
         background:
           radial-gradient(circle at 50% 42%, rgb(62 70 100 / 16%), transparent 22rem),
@@ -330,17 +335,21 @@
 
       @media (max-width: 68rem) {
         .workspace {
+          height: auto;
+          min-height: 0;
           grid-template-columns: 1fr;
         }
 
         .editor-pane {
-          min-height: 31rem;
+          height: 31rem;
+          min-height: 0;
           border-right: 0;
           border-bottom: 1px solid var(--border);
         }
 
         .preview-pane {
-          min-height: 30rem;
+          height: 30rem;
+          min-height: 0;
         }
       }
 
@@ -386,6 +395,7 @@
         }
 
         .preview-pane {
+          height: 25rem;
           min-height: 25rem;
         }
 
@@ -474,6 +484,7 @@
       </section>
     </main>
 
+    <script type="module" src="./python-editor-bootstrap.js"></script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>
