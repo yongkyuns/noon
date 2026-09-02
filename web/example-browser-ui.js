@@ -295,6 +295,8 @@ function installStyles(documentLike) {
       min-height: 0;
       flex: 1;
       overflow: auto;
+      align-content: start;
+      grid-auto-rows: max-content;
       grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
       overscroll-behavior: contain;
     }
