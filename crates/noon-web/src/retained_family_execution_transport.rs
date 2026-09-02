@@ -55,9 +55,7 @@ impl RetainedFamilyExecutionObjectState {
 
     fn validate_plan_identity(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
         if self.state.family_animation.is_none() && self.family_plan_index.is_some() {
-            return Err(RetainedFamilyExecutionTransportError::PlanIndexWithoutState(
-                self.object,
-            ));
+            return Err(RetainedFamilyExecutionTransportError::PlanIndexWithoutState(self.object));
         }
         Ok(())
     }
@@ -323,9 +321,9 @@ impl InstalledRetainedFamilyExecutionState {
         match self.plans.as_slice() {
             [] => Ok(None),
             [plan] => Ok(Some(plan)),
-            plans => Err(RetainedFamilyExecutionTransportError::MultiplePlansUnsupported(
-                plans.len(),
-            )),
+            plans => {
+                Err(RetainedFamilyExecutionTransportError::MultiplePlansUnsupported(plans.len()))
+            }
         }
     }
 
@@ -384,10 +382,12 @@ fn validated_state_updates(
                     },
                 )?;
                 if plan.leaf_for_object(entry.object).is_none() {
-                    return Err(RetainedFamilyExecutionTransportError::PlanDoesNotOwnObject {
-                        object: entry.object,
-                        plan_index,
-                    });
+                    return Err(
+                        RetainedFamilyExecutionTransportError::PlanDoesNotOwnObject {
+                            object: entry.object,
+                            plan_index,
+                        },
+                    );
                 }
             } else if state.is_some() {
                 return Err(RetainedFamilyExecutionTransportError::StateWithoutPlan(
@@ -552,7 +552,7 @@ mod tests {
             sequence,
             snapshot,
             time: 0.0,
-            camera: noon_core::Camera2DState::default(),
+            camera: Camera2DState::default(),
             objects: vec![RetainedTransportObjectState {
                 slot: TransportSlotId {
                     slot: 0,
@@ -655,7 +655,10 @@ mod tests {
             .apply(&incremental, &retained_frame, &TextResourceArena::new())
             .unwrap();
         assert_eq!(
-            installed.frame(&retained_frame).unwrap().family_animation(0),
+            installed
+                .frame(&retained_frame)
+                .unwrap()
+                .family_animation(0),
             None
         );
         assert_eq!(
