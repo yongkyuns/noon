@@ -248,6 +248,19 @@ pub struct UploadStats {
     pub buffer_reallocations: usize,
 }
 
+/// One actual `Queue::write_buffer` operation performed by an instrumented upload.
+///
+/// This is opt-in diagnostic data. Normal rendering keeps the existing compact
+/// `UploadStats` path and does not allocate a write trace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UploadWrite {
+    pub buffer: &'static str,
+    pub instance_range: std::ops::Range<usize>,
+    pub byte_offset: u64,
+    pub byte_length: usize,
+    pub payload_hash: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DrawStats {
     pub draw_calls: usize,
@@ -547,6 +560,30 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedFrame<'_>,
     ) -> UploadStats {
+        self.upload_inner(device, queue, prepared, None)
+    }
+
+    /// Upload a frame while recording the exact CPU-to-GPU write operations.
+    ///
+    /// The trace is intentionally opt-in for diagnostics such as the WebGL
+    /// host-updater reproducer; production callers continue to use `upload`.
+    pub fn upload_with_trace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+        writes: &mut Vec<UploadWrite>,
+    ) -> UploadStats {
+        self.upload_inner(device, queue, prepared, Some(writes))
+    }
+
+    fn upload_inner(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+        mut writes: Option<&mut Vec<UploadWrite>>,
+    ) -> UploadStats {
         let circle_bytes = std::mem::size_of_val(prepared.circles);
         let rectangle_bytes = std::mem::size_of_val(prepared.rectangles);
         let line_bytes = std::mem::size_of_val(prepared.lines);
@@ -644,48 +681,64 @@ impl GpuRenderer {
             prepared.circles,
             prepared.circle_dirty_ranges,
             circle_reallocated,
+            "circle",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.rectangle_buffer,
             prepared.rectangles,
             prepared.rectangle_dirty_ranges,
             rectangle_reallocated,
+            "rectangle",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.line_buffer,
             prepared.lines,
             prepared.line_dirty_ranges,
             line_reallocated,
+            "line",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.path_vertex_buffer,
             prepared.path_vertices,
             prepared.path_vertex_dirty_ranges,
             path_vertex_reallocated,
+            "path_vertex",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.path_index_buffer,
             prepared.path_indices,
             prepared.path_index_dirty_ranges,
             path_index_reallocated,
+            "path_index",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.path_instance_buffer,
             prepared.paths,
             prepared.path_dirty_ranges,
             path_instance_reallocated,
+            "path_instance",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.mega_path_index_buffer,
             prepared.mega_path_indices,
             prepared.mega_path_index_dirty_ranges,
             mega_path_index_reallocated,
+            "mega_path_index",
+            &mut writes,
         ) + upload_dirty(
             queue,
             &self.mega_path_vertex_instance_buffer,
             prepared.mega_path_vertex_instances,
             prepared.mega_path_instance_dirty_ranges,
             mega_path_vertex_instance_reallocated,
+            "mega_path_vertex_instance",
+            &mut writes,
         );
 
         UploadStats {
@@ -1257,12 +1310,15 @@ fn upload_dirty<T: Pod>(
     instances: &[T],
     dirty_ranges: &[std::ops::Range<usize>],
     force_full_upload: bool,
+    buffer_name: &'static str,
+    writes: &mut Option<&mut Vec<UploadWrite>>,
 ) -> usize {
     if instances.is_empty() {
         return 0;
     }
     if force_full_upload {
         let bytes = bytemuck::cast_slice(instances);
+        record_upload_write(writes, buffer_name, 0..instances.len(), 0, bytes);
         queue.write_buffer(buffer, 0, bytes);
         return bytes.len();
     }
@@ -1271,10 +1327,41 @@ fn upload_dirty<T: Pod>(
     let mut bytes_uploaded = 0;
     for range in dirty_ranges {
         let bytes = bytemuck::cast_slice(&instances[range.clone()]);
-        queue.write_buffer(buffer, (range.start * stride) as wgpu::BufferAddress, bytes);
+        let byte_offset = (range.start * stride) as wgpu::BufferAddress;
+        record_upload_write(writes, buffer_name, range.clone(), byte_offset, bytes);
+        queue.write_buffer(buffer, byte_offset, bytes);
         bytes_uploaded += bytes.len();
     }
     bytes_uploaded
+}
+
+fn record_upload_write(
+    writes: &mut Option<&mut Vec<UploadWrite>>,
+    buffer: &'static str,
+    instance_range: std::ops::Range<usize>,
+    byte_offset: wgpu::BufferAddress,
+    bytes: &[u8],
+) {
+    if let Some(writes) = writes.as_deref_mut() {
+        writes.push(UploadWrite {
+            buffer,
+            instance_range,
+            byte_offset,
+            byte_length: bytes.len(),
+            payload_hash: payload_hash(bytes),
+        });
+    }
+}
+
+fn payload_hash(bytes: &[u8]) -> u64 {
+    // FNV-1a is sufficient here: this is a compact diagnostic fingerprint, not
+    // a security primitive or a content-addressing identity.
+    let mut hash = 0xcbf29ce484222325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[cfg(test)]

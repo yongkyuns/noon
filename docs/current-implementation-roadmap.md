@@ -56,7 +56,7 @@ The architecture reset has delivered the core contracts needed for broad feature
 
 ### Important bookkeeping mismatch
 
-`compat/manim-v0.21.0.json` still classifies several plotting classes such as `Axes`, `NumberLine`, `NumberPlane`, `ComplexPlane`, `PolarPlane`, `ParametricFunction`, `FunctionGraph`, and `ImplicitFunction` as blocked, while significant or nearly complete implementations exist in merged/current branches and PRs.
+The compatibility policy has been reconciled against current `master`: retained `Text`, `Typst`, and `MathTypst` facades with executable browser evidence are recorded as partial until exact-output gates pass, while plotting classes such as `Axes`, `NumberLine`, `NumberPlane`, `ComplexPlane`, `PolarPlane`, `ParametricFunction`, `FunctionGraph`, and `ImplicitFunction` are recorded as missing because no plotting facade is exported on this ref. Historical plotting branches and PRs are not current-master evidence.
 
 Therefore the compatibility manifest must not be treated as the implementation backlog until it is reconciled with executable evidence.
 

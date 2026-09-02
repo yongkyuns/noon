@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   classifyPrRisk,
+  requiresHostUpdaterDiagnostic,
   requiresRetainedExecutionSmoke,
 } from "./pr-risk-classifier.mjs";
 
@@ -60,4 +61,18 @@ test("classifier normalizes diff-style paths and de-duplicates triggers", () => 
     "",
   ]);
   assert.deepEqual(risk.retainedExecutionPaths, ["web/authoring-render-worker.js"]);
+});
+
+test("host-updater changes escalate the backend diagnostic harness", () => {
+  assert.equal(requiresHostUpdaterDiagnostic("./scripts/manim-host-updater-diagnostics.mjs"), true);
+  assert.equal(requiresHostUpdaterDiagnostic("crates/noon-render-wgpu/src/gpu_geometry.rs"), true);
+  assert.equal(requiresHostUpdaterDiagnostic("web/main.js"), false);
+
+  const risk = classifyPrRisk([
+    "./scripts/manim-host-updater-diagnostics.mjs",
+    "scripts/manim-host-updater-diagnostics.mjs",
+    "web/main.js",
+  ]);
+  assert.equal(risk.hostUpdaterDiagnostics, true);
+  assert.deepEqual(risk.hostUpdaterDiagnosticPaths, ["scripts/manim-host-updater-diagnostics.mjs"]);
 });

@@ -6,10 +6,12 @@
 
 #![forbid(unsafe_code)]
 
+mod graph_topology;
 mod patch;
 mod reactive;
 mod timeline;
 
+pub use graph_topology::*;
 pub use patch::*;
 pub use reactive::*;
 pub use timeline::*;
