@@ -406,6 +406,7 @@ fn variation_identity(settings: &[FontVariationSetting]) -> String {
     }
     identity
 }
+
 fn fingerprint_u64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
