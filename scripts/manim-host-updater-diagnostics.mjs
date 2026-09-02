@@ -5,8 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import pngjs from "pngjs";
+
+import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
 
 const { chromium } = playwright;
+const { PNG } = pngjs;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_MANIM_HOST_DIAGNOSTICS_PORT ?? "4194");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -14,6 +18,12 @@ const targetObject = 2;
 const targetFrame = 90;
 const targetTime = 3.0;
 const frameTimes = Array.from({ length: targetFrame + 1 }, (_, index) => index / 30);
+const rasterTolerances = {
+  backgroundDistance: 32,
+  neighborRadius: 1,
+  maxMismatchFraction: 0.02,
+  maxBoundsDelta: 2,
+};
 const source = await readFile(
   path.join(repoRoot, "web/python/examples/manim_host_updater_mixed_primitive.py"),
   "utf8",
@@ -135,9 +145,10 @@ function assertDiagnostic(diagnostic, backend) {
   assert.equal(diagnostic.draw_plan.submission_membership, true);
   assert.ok(
     diagnostic.draw_plan.batches.some(
-      (batch) => batch.primitive === "line"
-        && batch.instance_range.start <= lineInstanceIndex
-        && batch.instance_range.end > lineInstanceIndex,
+      (batch) =>
+        batch.primitive === "line" &&
+        batch.instance_range.start <= lineInstanceIndex &&
+        batch.instance_range.end > lineInstanceIndex,
     ),
     `${backend}: target is absent from draw plan`,
   );
@@ -177,7 +188,8 @@ async function runBackend(browser, backend) {
     assertNear(result.time, targetTime, `${backend}: logical frame time`);
     assertDiagnostic(result.diagnostic, backend);
     assert.deepEqual(errors, [], `${backend}: browser errors`);
-    return result.diagnostic;
+    const screenshot = await page.locator("#scene").screenshot();
+    return { diagnostic: result.diagnostic, screenshot };
   } finally {
     await page.close();
   }
@@ -191,26 +203,50 @@ try {
     headless: true,
     args: browserArgs("webgl"),
   });
-  const webglDiagnostic = await runBackend(browser, "webgl");
+  const webgl = await runBackend(browser, "webgl");
   await browser.close();
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
     args: browserArgs("webgpu"),
   });
-  const webgpuDiagnostic = await runBackend(browser, "webgpu");
+  const webgpu = await runBackend(browser, "webgpu");
 
   for (const field of ["committed", "prepared", "upload", "draw_plan"]) {
     assert.deepEqual(
-      webglDiagnostic[field],
-      webgpuDiagnostic[field],
+      webgl.diagnostic[field],
+      webgpu.diagnostic[field],
       `WebGL2/WebGPU ${field} diagnostic state diverged`,
     );
   }
-  assert.deepEqual(webglDiagnostic.present_call.submit_called, webgpuDiagnostic.present_call.submit_called);
-  assert.deepEqual(webglDiagnostic.present_call.present_called, webgpuDiagnostic.present_call.present_called);
+  assert.deepEqual(
+    webgl.diagnostic.present_call.submit_called,
+    webgpu.diagnostic.present_call.submit_called,
+  );
+  assert.deepEqual(
+    webgl.diagnostic.present_call.present_called,
+    webgpu.diagnostic.present_call.present_called,
+  );
+
+  const rasterComparison = compareForegroundCoverage(
+    PNG.sync.read(webgpu.screenshot),
+    PNG.sync.read(webgl.screenshot),
+    rasterTolerances,
+  );
+  assert.equal(
+    rasterComparison.pass,
+    true,
+    `WebGL2/WebGPU frame-90 foreground coverage diverged: ` +
+      `${(rasterComparison.mismatchFraction * 100).toFixed(3)}% unmatched foreground, ` +
+      `${rasterComparison.boundsDelta}px bounds delta`,
+  );
   console.log(
-    "✓ RotationUpdater frame 90 / t=3.0s: committed, prepared, uploaded, drawn, and presented state agree on WebGL2 and WebGPU",
+    `✓ RotationUpdater frame 90 raster parity: ` +
+      `${(rasterComparison.mismatchFraction * 100).toFixed(3)}% unmatched foreground, ` +
+      `${rasterComparison.boundsDelta}px bounds delta`,
+  );
+  console.log(
+    "✓ RotationUpdater frame 90 / t=3.0s: committed, prepared, uploaded, drawn, presented, and raster-visible state agree on WebGL2 and WebGPU",
   );
 } finally {
   await browser?.close();
