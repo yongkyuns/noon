@@ -1,23 +1,28 @@
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_WRITE_LONG_FAMILY_THRESHOLD: u32 = 15;
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_WRITE_SHORT_DURATION: f64 = 1.0;
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_WRITE_LONG_DURATION: f64 = 2.0;
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_WRITE_MAX_LAG_RATIO: f64 = 0.2;
+#[cfg(any(target_arch = "wasm32", test))]
 const MANIM_WRITE_LAG_NUMERATOR: f64 = 4.0;
 
 /// Resolve ManimCE v0.21 Write's family-length-dependent defaults without exposing
 /// retained member identity to a frontend adapter.
+#[cfg(any(target_arch = "wasm32", test))]
 fn write_duration(member_count: u32, override_duration: Option<f64>) -> f64 {
-    override_duration.unwrap_or_else(|| {
-        if member_count < MANIM_WRITE_LONG_FAMILY_THRESHOLD {
-            MANIM_WRITE_SHORT_DURATION
-        } else {
-            MANIM_WRITE_LONG_DURATION
-        }
+    override_duration.unwrap_or(if member_count < MANIM_WRITE_LONG_FAMILY_THRESHOLD {
+        MANIM_WRITE_SHORT_DURATION
+    } else {
+        MANIM_WRITE_LONG_DURATION
     })
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 fn write_lag_ratio(member_count: u32, override_lag_ratio: Option<f64>) -> f64 {
-    override_lag_ratio.unwrap_or_else(|| {
+    override_lag_ratio.unwrap_or({
         let denominator = f64::from(member_count.max(1));
         (MANIM_WRITE_LAG_NUMERATOR / denominator).min(MANIM_WRITE_MAX_LAG_RATIO)
     })
