@@ -181,11 +181,19 @@ async function start() {
   player.resize(canvas.width, canvas.height);
   player.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
 
-  window.noonSmoke.loadScene = (sceneJson) => {
+  window.noonSmoke.loadScene = (sceneJson, strategy = "reconcile") => {
     if (typeof sceneJson !== "string") {
       throw new TypeError("sceneJson must be a string");
     }
-    const incremental = player.reconcileScene(sceneJson);
+    if (strategy !== "reconcile" && strategy !== "replace") {
+      throw new TypeError("scene load strategy must be reconcile or replace");
+    }
+    const incremental = strategy === "reconcile";
+    if (incremental) {
+      player.reconcileScene(sceneJson);
+    } else {
+      player.replaceScene(sceneJson);
+    }
     incrementalTime = null;
     state.revision += 1;
     state.error = null;

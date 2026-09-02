@@ -276,8 +276,8 @@ async function verifyBackend(backend, documents) {
         const frameTimes = logicalFrameTimes(fixture.id);
 
         const [loadedDirect, loadedIncremental] = await Promise.all([
-          directPage.evaluate((json) => window.noonSmoke.loadScene(json), sceneJson),
-          incrementalPage.evaluate((json) => window.noonSmoke.loadScene(json), sceneJson),
+          directPage.evaluate((json) => window.noonSmoke.loadScene(json, "replace"), sceneJson),
+          incrementalPage.evaluate((json) => window.noonSmoke.loadScene(json, "replace"), sceneJson),
         ]);
         assert.equal(
           loadedDirect.objectCount,

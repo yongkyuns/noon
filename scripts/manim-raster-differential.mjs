@@ -307,7 +307,7 @@ async function captureDeterministicFixture(
   fixtureDir,
 ) {
   const loaded = await page.evaluate(
-    (json) => window.noonSmoke.loadScene(json),
+    (json) => window.noonSmoke.loadScene(json, "replace"),
     JSON.stringify(authored.document),
   );
   assert.equal(loaded.objectCount, authored.document.objects.length, `${fixture.id}: loaded object count`);
