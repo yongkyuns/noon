@@ -1,0 +1,285 @@
+use noon_core::FamilyAnimationMode;
+
+/// Failure while selecting and realizing one active retained family operation.
+///
+/// The renderer chooses the operation once from the runtime state attached to the
+/// immutable family plan. Browser/WASM callers stay operation-agnostic, and every
+/// concrete preparation path keeps its own content-specific validation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RetainedFamilyAnimationPrepareError {
+    Retained(RetainedPrepareError),
+    Reveal(RetainedFamilyPrepareError),
+    DrawBorderThenFill(RetainedFamilyDrawBorderPrepareError),
+    InconsistentModes {
+        first_object: ObjectId,
+        first_mode: FamilyAnimationMode,
+        object: ObjectId,
+        mode: FamilyAnimationMode,
+    },
+}
+
+impl std::fmt::Display for RetainedFamilyAnimationPrepareError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Retained(error) => error.fmt(formatter),
+            Self::Reveal(error) => error.fmt(formatter),
+            Self::DrawBorderThenFill(error) => error.fmt(formatter),
+            Self::InconsistentModes {
+                first_object,
+                first_mode,
+                object,
+                mode,
+            } => write!(
+                formatter,
+                "retained family plan resolved inconsistent active modes: object {} is {first_mode:?}, object {} is {mode:?}",
+                first_object.get(),
+                object.get()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RetainedFamilyAnimationPrepareError {}
+
+impl From<RetainedPrepareError> for RetainedFamilyAnimationPrepareError {
+    fn from(value: RetainedPrepareError) -> Self {
+        Self::Retained(value)
+    }
+}
+
+impl From<RetainedFamilyPrepareError> for RetainedFamilyAnimationPrepareError {
+    fn from(value: RetainedFamilyPrepareError) -> Self {
+        Self::Reveal(value)
+    }
+}
+
+impl From<RetainedFamilyDrawBorderPrepareError> for RetainedFamilyAnimationPrepareError {
+    fn from(value: RetainedFamilyDrawBorderPrepareError) -> Self {
+        Self::DrawBorderThenFill(value)
+    }
+}
+
+impl RetainedFramePreparer {
+    /// Prepare one retained family frame without exposing operation selection to the caller.
+    ///
+    /// Outside an active family interval there is no family state to realize, so this
+    /// deliberately falls through to ordinary retained preparation. During an active
+    /// interval every planned leaf must agree on one operation mode; a mixed mode fails
+    /// closed rather than rendering different semantics for members of one global plan.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_family_animation<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedFamilyFrame<'_>,
+        plan: &RetainedFamilyAnimationPlan,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
+        let changes = FrameChanges::all();
+        self.prepare_family_animation_with_changes(
+            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_family_animation_with_changes<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedFamilyFrame<'_>,
+        plan: &RetainedFamilyAnimationPlan,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
+        match active_family_mode(frame, plan)? {
+            Some(FamilyAnimationMode::Reveal) => self
+                .prepare_family_with_changes(
+                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                )
+                .map_err(Into::into),
+            Some(FamilyAnimationMode::DrawBorderThenFill) => self
+                .prepare_family_draw_border_then_fill_with_changes(
+                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                )
+                .map_err(Into::into),
+            None => self
+                .prepare_with_changes(
+                    device,
+                    queue,
+                    frame.retained,
+                    changes,
+                    texts,
+                    fonts,
+                    geometries,
+                    metrics,
+                )
+                .map_err(Into::into),
+        }
+    }
+}
+
+fn active_family_mode(
+    frame: &RetainedFamilyFrame<'_>,
+    plan: &RetainedFamilyAnimationPlan,
+) -> Result<Option<FamilyAnimationMode>, RetainedFamilyAnimationPrepareError> {
+    let mut selected: Option<(ObjectId, FamilyAnimationMode)> = None;
+
+    for (object_index, object) in frame.retained.objects.iter().enumerate() {
+        if plan.leaf_for_object(object.id).is_none() {
+            continue;
+        }
+        let Some(state) = frame.family_animation(object_index) else {
+            continue;
+        };
+        match selected {
+            None => selected = Some((object.id, state.mode)),
+            Some((_, mode)) if mode == state.mode => {}
+            Some((first_object, first_mode)) => {
+                return Err(RetainedFamilyAnimationPrepareError::InconsistentModes {
+                    first_object,
+                    first_mode,
+                    object: object.id,
+                    mode: state.mode,
+                });
+            }
+        }
+    }
+
+    Ok(selected.map(|(_, mode)| mode))
+}
+
+#[cfg(test)]
+mod operation_selection_tests {
+    use noon_core::{
+        FamilyAnimationState, GeometryRef, ObjectContentRef, RateFunction,
+        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore, Style,
+        TextResourceArena, Transform2D,
+    };
+    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+
+    use super::*;
+
+    fn state(mode: FamilyAnimationMode) -> FamilyAnimationState {
+        FamilyAnimationState {
+            mode,
+            overall_progress: 0.5,
+            lag_ratio: 0.0,
+            rate_function: RateFunction::Linear,
+            reverse_rate_function: false,
+            reverse_member_order: false,
+        }
+    }
+
+    fn fixture() -> (
+        RetainedFamilyAnimationPlan,
+        RetainedFrameState,
+        Vec<Option<FamilyAnimationState>>,
+    ) {
+        let mut semantics = SemanticStore::new();
+        let first = semantics.insert_authoring_object();
+        let second = semantics.insert_authoring_object();
+        let family = semantics.insert_family();
+        semantics.add_member(family, first).unwrap();
+        semantics.add_member(family, second).unwrap();
+
+        let first_object =
+            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
+        let second_object =
+            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let texts = TextResourceArena::new();
+        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, family).unwrap();
+        builder.accept_leaf(first, &first_object, &texts).unwrap();
+        builder.accept_leaf(second, &second_object, &texts).unwrap();
+        let plan = builder.finish().unwrap();
+
+        let frame = RetainedFrameState {
+            time: 1.0,
+            objects: vec![
+                RetainedFrameObjectState {
+                    id: ObjectId::new(10),
+                    content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                    appearance: 1.0,
+                },
+                RetainedFrameObjectState {
+                    id: ObjectId::new(11),
+                    content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                    appearance: 1.0,
+                },
+                RetainedFrameObjectState {
+                    id: ObjectId::new(99),
+                    content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                    appearance: 1.0,
+                },
+            ],
+            presences: vec![true, true, true],
+            reveals: vec![1.0, 1.0, 1.0],
+            morphs: vec![0.0, 0.0, 0.0],
+            render_geometries: vec![None, None, None],
+        };
+        (
+            plan,
+            frame,
+            vec![
+                Some(state(FamilyAnimationMode::Reveal)),
+                Some(state(FamilyAnimationMode::Reveal)),
+                Some(state(FamilyAnimationMode::DrawBorderThenFill)),
+            ],
+        )
+    }
+
+    #[test]
+    fn operation_selection_uses_only_active_members_of_the_plan() {
+        let (plan, retained, states) = fixture();
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        assert_eq!(
+            active_family_mode(&frame, &plan).unwrap(),
+            Some(FamilyAnimationMode::Reveal)
+        );
+    }
+
+    #[test]
+    fn operation_selection_falls_back_when_family_interval_is_inactive() {
+        let (plan, retained, mut states) = fixture();
+        states[0] = None;
+        states[1] = None;
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        assert_eq!(active_family_mode(&frame, &plan).unwrap(), None);
+    }
+
+    #[test]
+    fn one_global_plan_cannot_mix_active_operation_modes() {
+        let (plan, retained, mut states) = fixture();
+        states[1] = Some(state(FamilyAnimationMode::DrawBorderThenFill));
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        assert_eq!(
+            active_family_mode(&frame, &plan).unwrap_err(),
+            RetainedFamilyAnimationPrepareError::InconsistentModes {
+                first_object: ObjectId::new(10),
+                first_mode: FamilyAnimationMode::Reveal,
+                object: ObjectId::new(11),
+                mode: FamilyAnimationMode::DrawBorderThenFill,
+            }
+        );
+    }
+}
