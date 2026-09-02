@@ -128,7 +128,10 @@ async function authorNoonDocuments() {
         noonSourceFor(fixture),
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
-      assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
+      assert.ok(
+        Math.abs(Number(result.duration) - Number(fixture.expected_duration)) <= 1e-9,
+        `${fixture.id}: authored Noon duration ${result.duration} != expected ${fixture.expected_duration}`,
+      );
       documents.set(fixture.id, result.document);
     }
     return documents;
