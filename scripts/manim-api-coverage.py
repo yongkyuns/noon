@@ -51,6 +51,30 @@ def _public_mapping_keys(node: ast.AST) -> set[str]:
     return _dict_string_keys(node)
 
 
+def _loop_registers_public_name(node: ast.For) -> bool:
+    """Require a mapping loop to append its name into the public export list."""
+
+    if not isinstance(node.target, ast.Tuple):
+        return False
+    target_names = {item.id for item in node.target.elts if isinstance(item, ast.Name)}
+    if not target_names:
+        return False
+    for child in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+        if not isinstance(child, ast.Call) or not isinstance(child.func, ast.Attribute):
+            continue
+        if child.func.attr != "append" or len(child.args) != 1:
+            continue
+        receiver = ast.unparse(child.func.value)
+        argument = child.args[0]
+        if (
+            (receiver.endswith(".__all__") or receiver == "__all__")
+            and isinstance(argument, ast.Name)
+            and argument.id in target_names
+        ):
+            return True
+    return False
+
+
 def noon_public_exports() -> set[str]:
     """Statically recover the runtime ``noon.__all__`` construction.
 
@@ -79,6 +103,7 @@ def noon_public_exports() -> set[str]:
                     isinstance(target, ast.Tuple)
                     and len(target.elts) == 2
                     and all(isinstance(item, ast.Name) for item in target.elts)
+                    and _loop_registers_public_name(node)
                 ):
                     exports.update(_public_mapping_keys(node.iter))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):

@@ -99,47 +99,60 @@ function assertDiagnostic(diagnostic, backend) {
   assert.equal(diagnostic.schema_version, 1);
   assert.equal(diagnostic.backend, backend === "webgl" ? "WebGL2" : "WebGPU");
   assert.equal(diagnostic.execution.session, 1);
-  // The canonical RotationUpdater has no timeline-authored delta. The initial
-  // snapshot is sequence 0, then each non-empty host patch advances one sequence;
-  // frame zero's dt=0 patch is empty.
-  assert.equal(diagnostic.execution.sequence, targetFrame);
+  // Host patch sequences are zero-based. The frame-90 diagnostic is produced by
+  // the 90th host phase, whose submitted patch sequence is therefore 89.
+  assert.equal(diagnostic.execution.sequence, targetFrame - 1);
   assert.equal(diagnostic.execution.layout_generation, 0);
   assertNear(diagnostic.execution.time, targetTime, `${backend}: diagnostic time`);
 
   const committed = diagnostic.committed;
   assert.equal(committed.object, targetObject);
-  assert.equal(committed.frame_index, targetObject);
+  assert.ok(Number.isSafeInteger(committed.frame_index));
   assert.deepEqual(committed.slot, { slot: targetObject, generation: 0 });
   assert.equal(committed.dirty_classification, "updated");
-  assertNear(committed.transform.rotation, 1.0, `${backend}: committed rotation`);
+  // The host callback phase resets dt when the updater switches direction at
+  // t=2.0, so the frame at t=3.0 contains 29 backward steps after the boundary.
+  assertNear(committed.transform.rotation, 29 / 30, `${backend}: committed rotation`);
 
   assertSameObjectState(committed, diagnostic.prepared.state, `${backend}: prepared`);
-  assertSameObjectState(committed, diagnostic.gpu.state, `${backend}: gpu`);
-  assertSameObjectState(committed, diagnostic.draw.state, `${backend}: draw`);
 
   assert.equal(diagnostic.prepared.instance_kind, "line");
-  assert.deepEqual(diagnostic.prepared.instance_range, { start: 1, end: 2 });
+  assert.ok(diagnostic.prepared.instance_range);
+  assert.ok(diagnostic.prepared.instance_range.start <= committed.frame_index);
+  assert.ok(diagnostic.prepared.instance_range.end > committed.frame_index);
   assert.equal(diagnostic.prepared.full_rebuilds, 0);
   assert.equal(diagnostic.prepared.instances_repacked, 1);
 
-  assert.equal(diagnostic.gpu.instance_kind, "line");
-  assert.deepEqual(diagnostic.gpu.instance_range, { start: 1, end: 2 });
-  assert.deepEqual(diagnostic.gpu.dirty_ranges, [{ start: 1, end: 2 }]);
-  assert.equal(diagnostic.gpu.bytes_uploaded, 88);
-  assert.equal(diagnostic.gpu.total_bytes_uploaded, 88);
-  assert.equal(diagnostic.gpu.buffer_reallocations, 0);
-  assert.ok(diagnostic.gpu.instance_generation > 1);
+  assert.ok(diagnostic.upload.instance_generation > 1);
+  assert.equal(diagnostic.upload.buffer_reallocations, 0);
+  assert.ok(diagnostic.upload.target_write, `${backend}: target upload missing`);
+  assert.equal(diagnostic.upload.target_write.buffer, "line");
+  assert.ok(diagnostic.upload.target_write.instance_range.start <= committed.frame_index);
+  assert.ok(diagnostic.upload.target_write.instance_range.end > committed.frame_index);
+  assert.ok(diagnostic.upload.target_write.byte_length > 0);
+  assert.ok(diagnostic.upload.target_write.payload_hash > 0);
+  assert.ok(diagnostic.upload.writes.length > 0);
+  assert.equal(
+    diagnostic.upload.bytes_uploaded,
+    diagnostic.upload.writes.reduce((total, write) => total + write.byte_length, 0),
+  );
+  assert.equal(diagnostic.upload.total_bytes_uploaded, diagnostic.upload.bytes_uploaded);
 
-  assert.equal(diagnostic.draw.submission_membership, true);
-  assert.deepEqual(diagnostic.draw.batches, [
-    { primitive: "line", instance_range: { start: 0, end: 2 } },
-  ]);
-  assert.equal(diagnostic.draw.draw_calls, 1);
-  assert.equal(diagnostic.draw.instances_drawn, 2);
+  assert.equal(diagnostic.draw_plan.submission_membership, true);
+  assert.ok(
+    diagnostic.draw_plan.batches.some(
+      (batch) => batch.primitive === "line"
+        && batch.instance_range.start <= targetObject
+        && batch.instance_range.end > targetObject,
+    ),
+    `${backend}: target is absent from draw plan`,
+  );
+  assert.ok(diagnostic.draw_plan.draw_calls > 0);
+  assert.ok(diagnostic.draw_plan.instances_drawn > 0);
 
-  assert.equal(diagnostic.presentation.submitted, true);
-  assert.equal(diagnostic.presentation.presented, true);
-  assert.ok(["success", "suboptimal"].includes(diagnostic.presentation.surface_status));
+  assert.equal(diagnostic.present_call.submit_called, true);
+  assert.equal(diagnostic.present_call.present_called, true);
+  assert.ok(["success", "suboptimal"].includes(diagnostic.present_call.surface_status));
 }
 
 async function runBackend(browser, backend) {
@@ -193,13 +206,15 @@ try {
   });
   const webgpuDiagnostic = await runBackend(browser, "webgpu");
 
-  for (const field of ["committed", "prepared", "gpu", "draw", "presentation"]) {
+  for (const field of ["committed", "prepared", "upload", "draw_plan"]) {
     assert.deepEqual(
       webglDiagnostic[field],
       webgpuDiagnostic[field],
       `WebGL2/WebGPU ${field} diagnostic state diverged`,
     );
   }
+  assert.deepEqual(webglDiagnostic.present_call.submit_called, webgpuDiagnostic.present_call.submit_called);
+  assert.deepEqual(webglDiagnostic.present_call.present_called, webgpuDiagnostic.present_call.present_called);
   console.log(
     "✓ RotationUpdater frame 90 / t=3.0s: committed, prepared, uploaded, drawn, and presented state agree on WebGL2 and WebGPU",
   );

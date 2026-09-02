@@ -77,6 +77,16 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())
 
+    def test_static_export_audit_ignores_internal_mapping_loops(self) -> None:
+        tree = coverage.ast.parse(
+            "for name, value in {'Internal': object()}.items():\n"
+            "    setattr(module, name, value)\n"
+        )
+        loop = tree.body[0]
+        self.assertIsInstance(loop, coverage.ast.For)
+        self.assertEqual(coverage._public_mapping_keys(loop.iter), {"Internal"})
+        self.assertFalse(coverage._loop_registers_public_name(loop))
+
 
 if __name__ == "__main__":
     unittest.main()

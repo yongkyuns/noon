@@ -96,6 +96,10 @@ async function advanceOneFrame(frameIndex, time) {
   let diagnostic = null;
 
   if (host !== null) {
+    // A deterministic render may have produced a diagnostic for the same
+    // renderer. Clear it before the host phase so a no-op host patch cannot
+    // accidentally consume that older record as its own observation.
+    renderer.takeHostUpdaterDiagnosticJson();
     host.advanceTo(time);
     const frame = JSON.parse(host.callbackFrameJson());
     if (Math.abs(Number(frame.time) - Number(time)) > 1e-9) {
@@ -109,11 +113,13 @@ async function advanceOneFrame(frameIndex, time) {
     host.commitPatchBatch(batchJson);
 
     const hostDelta = engine.applyHostPatchBatchDeltaJson(batchJson);
-    await presentDelta(hostDelta);
-    const diagnosticJson = renderer.takeHostUpdaterDiagnosticJson();
-    diagnostic = diagnosticJson === undefined || diagnosticJson === null
-      ? null
-      : JSON.parse(diagnosticJson);
+    const hostPresented = await presentDelta(hostDelta);
+    if (hostPresented) {
+      const diagnosticJson = renderer.takeHostUpdaterDiagnosticJson();
+      diagnostic = diagnosticJson === undefined || diagnosticJson === null
+        ? null
+        : JSON.parse(diagnosticJson);
+    }
   }
   currentFrameIndex = frameIndex;
   currentLogicalTime = time;
@@ -128,7 +134,7 @@ function setHostUpdaterDiagnosticObject(objectId) {
   if (!Number.isSafeInteger(normalized) || normalized < 0) {
     throw new RangeError("host updater diagnostic object must be a non-negative integer");
   }
-  renderer.setHostUpdaterDiagnosticObject(normalized);
+  renderer.setHostUpdaterDiagnosticObject(BigInt(normalized));
 }
 
 function normalizeFrameTimes(frameTimes, targetFrame) {

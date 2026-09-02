@@ -1,4 +1,4 @@
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(test)]
 const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
 
 #[cfg(target_arch = "wasm32")]
@@ -15,8 +15,8 @@ mod wasm {
 
     use noon_core::{GeometryRef, ObjectId, Transform2D, Vec2};
     use noon_render_wgpu::{
-        Camera2D, DrawStats, FramePreparer, GpuRenderer, LineInstance, PackedTransform,
-        PreparedFrame, RenderPrimitive, UploadStats,
+        Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
+        RenderPrimitive, UploadStats, UploadWrite,
     };
     use noon_runtime::{FrameChanges, FrameObjectState};
     use serde::Serialize;
@@ -28,7 +28,7 @@ mod wasm {
         ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
     };
 
-    use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
+    use super::MANIM_DEFAULT_CLEAR_COLOR;
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -82,12 +82,19 @@ mod wasm {
     }
 
     #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticGpuState {
-        state: DiagnosticObjectState,
-        instance_kind: Option<&'static str>,
-        instance_range: Option<DiagnosticRange>,
+    struct DiagnosticUploadWrite {
+        buffer: &'static str,
+        instance_range: DiagnosticRange,
+        byte_offset: u64,
+        byte_length: usize,
+        payload_hash: u64,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    struct DiagnosticUploadState {
+        target_write: Option<DiagnosticUploadWrite>,
+        writes: Vec<DiagnosticUploadWrite>,
         instance_generation: u64,
-        dirty_ranges: Vec<DiagnosticRange>,
         bytes_uploaded: usize,
         total_bytes_uploaded: usize,
         buffer_reallocations: usize,
@@ -100,7 +107,7 @@ mod wasm {
     }
 
     #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticDrawState {
+    struct DiagnosticDrawPlan {
         state: DiagnosticObjectState,
         submission_membership: bool,
         batches: Vec<DiagnosticDrawBatch>,
@@ -109,10 +116,10 @@ mod wasm {
     }
 
     #[derive(Clone, Debug, Serialize)]
-    struct DiagnosticPresentationState {
+    struct DiagnosticPresentationCall {
         surface_status: &'static str,
-        submitted: bool,
-        presented: bool,
+        submit_called: bool,
+        present_called: bool,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -122,9 +129,9 @@ mod wasm {
         execution: DiagnosticExecution,
         committed: DiagnosticObjectState,
         prepared: DiagnosticPreparedState,
-        gpu: DiagnosticGpuState,
-        draw: DiagnosticDrawState,
-        presentation: DiagnosticPresentationState,
+        upload: DiagnosticUploadState,
+        draw_plan: DiagnosticDrawPlan,
+        present_call: DiagnosticPresentationCall,
     }
 
     struct InitializedGpu {
@@ -300,7 +307,17 @@ mod wasm {
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
             let prepared = self.preparer.prepare_incremental(frame, &changes);
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
+            let mut upload_writes = Vec::new();
+            let upload = if self.host_updater_diagnostic_object.is_some() {
+                self.renderer.upload_with_trace(
+                    &self.device,
+                    &self.queue,
+                    &prepared,
+                    &mut upload_writes,
+                )
+            } else {
+                self.renderer.upload(&self.device, &self.queue, &prepared)
+            };
             self.last_bytes_uploaded = upload.bytes_uploaded;
             self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
 
@@ -326,6 +343,7 @@ mod wasm {
                     &changes,
                     &prepared,
                     upload,
+                    &upload_writes,
                     draw,
                     self.gpu_instance_generation,
                     surface_status,
@@ -430,6 +448,7 @@ mod wasm {
         changes: &FrameChanges,
         prepared: &PreparedFrame<'_>,
         upload: UploadStats,
+        upload_writes: &[UploadWrite],
         draw: DrawStats,
         instance_generation: u64,
         surface_status: &'static str,
@@ -477,35 +496,20 @@ mod wasm {
             instances_repacked: prepared.stats.instances_repacked,
         };
 
-        let dirty_ranges = prepared
-            .line_dirty_ranges
+        let writes = upload_writes
             .iter()
-            .map(DiagnosticRange::from)
+            .map(diagnostic_upload_write)
             .collect::<Vec<_>>();
-        let line_bytes_uploaded = if dirty_ranges.is_empty() {
-            0
-        } else {
-            dirty_ranges
-                .iter()
-                .map(|range| range.end.saturating_sub(range.start))
-                .sum::<usize>()
-                .saturating_mul(std::mem::size_of::<LineInstance>())
-        };
-        let gpu = DiagnosticGpuState {
-            state: diagnostic_object_state(
-                frame,
-                mirror,
-                changes,
-                frame_index,
-                target,
-                prepared_transform.unwrap_or(committed_object.transform),
-                prepared_endpoints,
-            ),
-            instance_kind,
-            instance_range,
+        let target_write = upload_writes
+            .iter()
+            .filter(|write| write.buffer == "line")
+            .find(|write| write.instance_range.contains(&frame_index))
+            .map(diagnostic_upload_write);
+        let upload = DiagnosticUploadState {
+            target_write,
+            writes,
             instance_generation,
-            dirty_ranges,
-            bytes_uploaded: line_bytes_uploaded,
+            bytes_uploaded: upload_writes.iter().map(|write| write.byte_length).sum(),
             total_bytes_uploaded: upload.bytes_uploaded,
             buffer_reallocations: upload.buffer_reallocations,
         };
@@ -530,7 +534,7 @@ mod wasm {
                 });
             }
         }
-        let draw_state = DiagnosticDrawState {
+        let draw_plan = DiagnosticDrawPlan {
             state: diagnostic_object_state(
                 frame,
                 mirror,
@@ -552,14 +556,27 @@ mod wasm {
             execution,
             committed,
             prepared: prepared_state,
-            gpu,
-            draw: draw_state,
-            presentation: DiagnosticPresentationState {
+            upload,
+            draw_plan,
+            present_call: DiagnosticPresentationCall {
                 surface_status,
-                submitted,
-                presented,
+                submit_called: submitted,
+                present_called: presented,
             },
         })
+    }
+
+    fn diagnostic_upload_write(write: &UploadWrite) -> DiagnosticUploadWrite {
+        DiagnosticUploadWrite {
+            buffer: write.buffer,
+            instance_range: DiagnosticRange {
+                start: write.instance_range.start,
+                end: write.instance_range.end,
+            },
+            byte_offset: write.byte_offset,
+            byte_length: write.byte_length,
+            payload_hash: write.payload_hash,
+        }
     }
 
     fn diagnostic_object_state(

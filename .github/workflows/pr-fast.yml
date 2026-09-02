@@ -237,6 +237,18 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check host-updater diagnostics on WebGL and WebGPU
+        if: steps.browser-risk.outputs.host_updater_diagnostics == 'true'
+        id: host-updater-diagnostics
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/manim-host-updater-diagnostics.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Summarize browser timing
         if: always()
         env:
@@ -247,6 +259,7 @@ jobs:
           RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
+          HOST_UPDATER_SECONDS: ${{ steps.host-updater-diagnostics.outputs.seconds }}
         run: |
           total=""
           if [[ "$START_EPOCH" =~ ^[0-9]+$ ]]; then
@@ -276,6 +289,7 @@ jobs:
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
             echo "| Canonical retained execution | $retained_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
+            echo "| Host-updater diagnostics | $(display_seconds "$HOST_UPDATER_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
             echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."

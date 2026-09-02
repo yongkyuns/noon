@@ -104,16 +104,17 @@ impl EdgeKey {
 
 /// Renderer-independent retained graph topology.
 ///
-/// The public slices preserve insertion order for deterministic semantic-family
-/// and painter-order lowering. Per-vertex incident indexes make dependency
-/// lookup proportional to the selected vertex's degree rather than the total
-/// graph size.
-#[derive(Clone, Debug, Default)]
+/// Live iteration preserves insertion order for deterministic semantic-family
+/// and painter-order lowering. Tombstoned slots keep unrelated topology
+/// identities stable during local removal. Per-vertex incident indexes make
+/// dependency lookup proportional to the selected vertex's degree rather than
+/// the total graph size.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphTopology {
     next_vertex_id: u64,
     next_edge_id: u64,
-    vertices: Vec<GraphVertexId>,
-    edges: Vec<GraphEdge>,
+    vertices: Vec<Option<GraphVertexId>>,
+    edges: Vec<Option<GraphEdge>>,
     vertex_positions: HashMap<GraphVertexId, usize>,
     edge_positions: HashMap<GraphEdgeId, usize>,
     edge_keys: HashMap<EdgeKey, GraphEdgeId>,
@@ -129,12 +130,12 @@ impl GraphTopology {
         Self::default()
     }
 
-    pub fn vertices(&self) -> &[GraphVertexId] {
-        &self.vertices
+    pub fn vertices(&self) -> impl Iterator<Item = GraphVertexId> + '_ {
+        self.vertices.iter().flatten().copied()
     }
 
-    pub fn edges(&self) -> &[GraphEdge] {
-        &self.edges
+    pub fn edges(&self) -> impl Iterator<Item = GraphEdge> + '_ {
+        self.edges.iter().flatten().copied()
     }
 
     pub fn contains_vertex(&self, id: GraphVertexId) -> bool {
@@ -146,7 +147,9 @@ impl GraphTopology {
     }
 
     pub fn edge(&self, id: GraphEdgeId) -> Option<GraphEdge> {
-        self.edge_positions.get(&id).map(|&index| self.edges[index])
+        self.edge_positions
+            .get(&id)
+            .and_then(|&index| self.edges[index])
     }
 
     pub fn add_vertex(&mut self) -> GraphVertexId {
@@ -156,7 +159,7 @@ impl GraphTopology {
             .checked_add(1)
             .expect("Noon graph vertex ID space exhausted");
         self.vertex_positions.insert(id, self.vertices.len());
-        self.vertices.push(id);
+        self.vertices.push(Some(id));
         self.incident_edges.insert(id, Vec::new());
         id
     }
@@ -195,7 +198,7 @@ impl GraphTopology {
         // The endpoint entries were validated above, so these inserts cannot
         // fail and preserve the operation's all-or-nothing contract.
         self.edge_positions.insert(id, self.edges.len());
-        self.edges.push(edge);
+        self.edges.push(Some(edge));
         self.edge_keys.insert(key, id);
         self.incident_edges
             .get_mut(&start)
@@ -230,14 +233,13 @@ impl GraphTopology {
             .expect("preflighted graph edge remains indexed");
 
         self.edge_positions.remove(&id);
-        self.edges.remove(index);
+        self.edges[index] = None;
         self.edge_keys
             .remove(&EdgeKey::new(edge.start, edge.end, edge.directed));
         self.remove_incident_reference(edge.start, id);
         if edge.end != edge.start {
             self.remove_incident_reference(edge.end, id);
         }
-        self.reindex_edges_from(index);
         Ok(edge)
     }
 
@@ -278,10 +280,7 @@ impl GraphTopology {
         }
         self.incident_edges.remove(&id);
         self.vertex_positions.remove(&id);
-        self.vertices.remove(vertex_index);
-        for (position, vertex) in self.vertices.iter().copied().enumerate().skip(vertex_index) {
-            self.vertex_positions.insert(vertex, position);
-        }
+        self.vertices[vertex_index] = None;
         Ok(removed_edges)
     }
 
@@ -298,7 +297,7 @@ impl GraphTopology {
             .edge_positions
             .get(&id)
             .ok_or(GraphTopologyError::UnknownEdge(id))?;
-        let edge = self.edges[index];
+        let edge = self.edges[index].ok_or(GraphTopologyError::UnknownEdge(id))?;
         if self
             .edge_keys
             .get(&EdgeKey::new(edge.start, edge.end, edge.directed))
@@ -328,12 +327,6 @@ impl GraphTopology {
             .position(|candidate| *candidate == edge)
             .expect("preflighted incident edge remains indexed");
         edges.remove(index);
-    }
-
-    fn reindex_edges_from(&mut self, start: usize) {
-        for (index, edge) in self.edges.iter().copied().enumerate().skip(start) {
-            self.edge_positions.insert(edge.id, index);
-        }
     }
 }
 
@@ -398,8 +391,8 @@ mod tests {
             topology.add_edge(a, unknown, false),
             Err(GraphTopologyError::UnknownVertex(unknown))
         );
-        assert_eq!(topology.vertices(), &[a]);
-        assert!(topology.edges().is_empty());
+        assert_eq!(topology.vertices().collect::<Vec<_>>(), vec![a]);
+        assert_eq!(topology.edges().count(), 0);
         assert!(topology.incident_edges(a).unwrap().is_empty());
     }
 
@@ -417,14 +410,20 @@ mod tests {
             topology.remove_vertex(GraphVertexId::new(99)),
             Err(GraphTopologyError::UnknownVertex(GraphVertexId::new(99)))
         );
-        assert_eq!(topology.vertices(), before.vertices());
-        assert_eq!(topology.edges(), before.edges());
+        assert_eq!(
+            topology.vertices().collect::<Vec<_>>(),
+            before.vertices().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            topology.edges().collect::<Vec<_>>(),
+            before.edges().collect::<Vec<_>>()
+        );
 
         let expected_removed = topology.edge(ab).unwrap();
         assert_eq!(topology.remove_vertex(a).unwrap(), vec![expected_removed]);
         assert_eq!(
-            topology.edges(),
-            &[GraphEdge {
+            topology.edges().collect::<Vec<_>>(),
+            vec![GraphEdge {
                 id: bc,
                 start: b,
                 end: c,
@@ -435,6 +434,58 @@ mod tests {
         let cd = topology.add_edge(c, d, false).unwrap();
         assert!(d.get() > c.get());
         assert!(cd.get() > bc.get());
+    }
+
+    #[test]
+    fn edge_removal_preserves_unrelated_slots_and_readding_gets_new_id() {
+        let mut topology = GraphTopology::new();
+        let a = topology.add_vertex();
+        let b = topology.add_vertex();
+        let c = topology.add_vertex();
+        let ab = topology.add_edge(a, b, false).unwrap();
+        let bc = topology.add_edge(b, c, false).unwrap();
+
+        assert_eq!(topology.remove_edge(ab).unwrap().id, ab);
+        assert_eq!(topology.edge(bc).unwrap().id, bc);
+        let replacement = topology.add_edge(a, b, false).unwrap();
+        assert!(replacement.get() > bc.get());
+        assert_eq!(
+            topology.edges().collect::<Vec<_>>(),
+            vec![
+                topology.edge(bc).unwrap(),
+                topology.edge(replacement).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_removals_are_state_equivalent_no_ops() {
+        let mut topology = GraphTopology::new();
+        let vertex = topology.add_vertex();
+        let before = topology.clone();
+
+        assert_eq!(
+            topology.remove_edge(GraphEdgeId::new(99)),
+            Err(GraphTopologyError::UnknownEdge(GraphEdgeId::new(99)))
+        );
+        assert_eq!(topology, before);
+        assert_eq!(
+            topology.remove_vertex(GraphVertexId::new(99)),
+            Err(GraphTopologyError::UnknownVertex(GraphVertexId::new(99)))
+        );
+        assert_eq!(topology, before);
+        assert!(topology.contains_vertex(vertex));
+    }
+
+    #[test]
+    fn self_loop_removal_updates_one_incident_index() {
+        let mut topology = GraphTopology::new();
+        let vertex = topology.add_vertex();
+        let loop_edge = topology.add_edge(vertex, vertex, false).unwrap();
+        assert_eq!(topology.incident_edges(vertex).unwrap(), &[loop_edge]);
+        topology.remove_edge(loop_edge).unwrap();
+        assert!(topology.incident_edges(vertex).unwrap().is_empty());
+        assert!(!topology.contains_edge(loop_edge));
     }
 
     #[test]
@@ -463,7 +514,7 @@ mod tests {
             for edge in topology.edges() {
                 assert!(topology.contains_vertex(edge.start));
                 assert!(topology.contains_vertex(edge.end));
-                assert_eq!(topology.edge(edge.id), Some(*edge));
+                assert_eq!(topology.edge(edge.id), Some(edge));
                 assert!(topology
                     .incident_edges(edge.start)
                     .unwrap()
@@ -476,9 +527,9 @@ mod tests {
                 }
             }
             for vertex in topology.vertices() {
-                for edge_id in topology.incident_edges(*vertex).unwrap() {
+                for edge_id in topology.incident_edges(vertex).unwrap() {
                     let edge = topology.edge(*edge_id).unwrap();
-                    assert!(edge.start == *vertex || edge.end == *vertex);
+                    assert!(edge.start == vertex || edge.end == vertex);
                 }
             }
         }
