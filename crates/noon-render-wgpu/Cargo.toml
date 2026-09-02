@@ -38,3 +38,4 @@ wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"
 
 [dev-dependencies]
 noon-compile = { path = "../noon-compile" }
+noon-typst = { path = "../noon-typst" }

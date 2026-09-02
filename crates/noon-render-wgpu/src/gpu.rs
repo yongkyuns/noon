@@ -20,3 +20,7 @@ pub use retained_family_reveal::*;
 #[path = "gpu/retained_family_draw_border_then_fill.rs"]
 mod retained_family_draw_border_then_fill;
 pub use retained_family_draw_border_then_fill::*;
+
+#[path = "gpu/retained_family_reveal_scene.rs"]
+mod retained_family_reveal_scene;
+pub use retained_family_reveal_scene::*;

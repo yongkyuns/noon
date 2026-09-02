@@ -52,6 +52,8 @@ fn failed_scratch_rebuild_cannot_be_reused_by_empty_changes() {
         RetainedFrameIncrementalStats {
             scratch_rebuilds: 1,
             scratch_reuses: 0,
+            text_snapshot_copies: 1,
+            mixed_order_rebuilds: 1,
         }
     );
 
@@ -91,6 +93,8 @@ fn failed_scratch_rebuild_cannot_be_reused_by_empty_changes() {
         RetainedFrameIncrementalStats {
             scratch_rebuilds: 1,
             scratch_reuses: 0,
+            text_snapshot_copies: 1,
+            mixed_order_rebuilds: 1,
         }
     );
 }

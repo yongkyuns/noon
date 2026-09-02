@@ -211,6 +211,7 @@ impl NativeTextCompiler {
                     line.start.saturating_add(cluster.source.start),
                     line.start.saturating_add(cluster.source.end),
                 );
+                let shaped_cluster_ordinal = cluster_ordinal;
                 for glyph in cluster.glyphs {
                     let origin = Vec2::new(cursor_x + glyph.x, glyph.y);
                     let advance = Vec2::new(glyph.advance, 0.0);
@@ -219,7 +220,7 @@ impl NativeTextCompiler {
                         glyph_id: u32::from(glyph.id),
                         cluster: TextClusterIdentity {
                             source_span,
-                            cluster_ordinal,
+                            cluster_ordinal: shaped_cluster_ordinal,
                             semantic_key: None,
                         },
                         origin,
@@ -231,8 +232,8 @@ impl NativeTextCompiler {
                             Vec2::new(origin.x.max(right), metrics.ascent),
                         ),
                     });
-                    cluster_ordinal = cluster_ordinal.saturating_add(1);
                 }
+                cluster_ordinal = cluster_ordinal.saturating_add(1);
                 cursor_x += cluster.advance();
             });
 
@@ -417,6 +418,8 @@ fn fingerprint_u64(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn bundled_font() -> NativeFontFace {
@@ -472,6 +475,42 @@ mod tests {
             assert!("café".is_char_boundary(glyph.cluster.source_span.start as usize));
             assert!("café".is_char_boundary(glyph.cluster.source_span.end as usize));
         }
+    }
+
+    #[test]
+    fn glyphs_from_one_shaped_cluster_share_one_cluster_ordinal() {
+        let source = "q\u{0301}b";
+        let font = bundled_font();
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_plain(source, &font, &NativeTextOptions::new(24.0))
+            .unwrap();
+
+        let mut by_span = BTreeMap::<TextSourceSpan, Vec<u32>>::new();
+        for glyph in artifact.resource.runs[0].glyphs.iter() {
+            by_span
+                .entry(glyph.cluster.source_span)
+                .or_default()
+                .push(glyph.cluster.cluster_ordinal);
+        }
+        let multi_glyph_cluster = by_span
+            .values()
+            .find(|ordinals| ordinals.len() > 1)
+            .expect("combining-mark fixture must shape at least one multi-glyph cluster");
+        assert!(multi_glyph_cluster
+            .iter()
+            .all(|ordinal| *ordinal == multi_glyph_cluster[0]));
+
+        let mut first_ordinals = by_span
+            .values()
+            .map(|ordinals| ordinals[0])
+            .collect::<Vec<_>>();
+        first_ordinals.sort_unstable();
+        first_ordinals.dedup();
+        assert_eq!(
+            first_ordinals,
+            (0..first_ordinals.len() as u32).collect::<Vec<_>>()
+        );
     }
 
     #[test]

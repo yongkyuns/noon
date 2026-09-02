@@ -105,6 +105,7 @@ export class ExecutionWorkerClient {
     this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
     const { width, height } = this.#prepareCanvasDimensions();
     const transferredCanvas = this.#canvas;
+    const generation = this.#lifecycleGeneration;
 
     let canvasTransferred = false;
     try {
@@ -132,10 +133,12 @@ export class ExecutionWorkerClient {
       this.#fatalOwner = null;
       return { render, transportMode };
     } catch (error) {
-      this.#rollbackFailedStart(
-        error,
-        canvasTransferred && this.#canvas === transferredCanvas,
-      );
+      if (generation === this.#lifecycleGeneration) {
+        this.#rollbackFailedStart(
+          error,
+          canvasTransferred && this.#canvas === transferredCanvas,
+        );
+      }
       throw error;
     }
   }
