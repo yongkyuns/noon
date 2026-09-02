@@ -174,7 +174,12 @@ function enhanceGallery(documentLike, gallery, topbar, workspace) {
     if (event.key !== "Tab") return;
     const focusable = [...gallery.querySelectorAll(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
-    )].filter((element) => element instanceof HTMLElement && !element.hidden);
+    )].filter(
+      (element) =>
+        element instanceof HTMLElement &&
+        !element.hidden &&
+        element.getClientRects().length > 0,
+    );
     if (focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -188,9 +193,9 @@ function enhanceGallery(documentLike, gallery, topbar, workspace) {
   });
 
   globalThis.__noonExampleBrowser = {
-    open: openBrowser,
-    close: closeBrowser,
-    get open() {
+    show: openBrowser,
+    hide: closeBrowser,
+    get isOpen() {
       return !layer.hidden;
     },
   };
