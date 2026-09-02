@@ -22,6 +22,8 @@ const retainedExecutionRustPaths = new Set([
 
 const renderModeSwitchPaths = new Set([
   "scripts/authoring-render-mode-switch-smoke.mjs",
+  // Policy changes must exercise the oracle they decide whether to run.
+  "scripts/pr-risk-classifier.mjs",
   "web/authoring-execution-client.js",
   "web/authoring-render-worker.js",
   "web/execution-engine-worker.js",
