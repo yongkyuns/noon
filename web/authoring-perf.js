@@ -1,6 +1,10 @@
 import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
+import {
+  stableCameraSweepTargets,
+  summarizeStableCameraProfile,
+} from "./authoring-perf-scenarios.js";
 import { summarizeSamples } from "./frame-metrics.js";
 import { SceneIdentityMap } from "./scene-identity.js";
 
@@ -8,6 +12,7 @@ const parameters = new URLSearchParams(location.search);
 const objectCount = positiveInteger("objects", 1_000);
 const samples = positiveInteger("samples", 5);
 const scrubSamples = positiveInteger("scrubs", 20);
+const cameraSamples = positiveInteger("camera_samples", 30);
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const output = document.querySelector("#json");
@@ -40,6 +45,9 @@ try {
   status.value = `Scrub/seek profile · ${scrubSamples} samples…`;
   const scrubs = profileScrubs(scrubSamples);
 
+  status.value = `Stable camera profile · ${cameraSamples} samples…`;
+  const cameraSweep = profileStableCamera(cameraSamples);
+
   const report = {
     schemaVersion: 1,
     benchmark: "Noon interactive authoring time-to-visible profile",
@@ -55,20 +63,24 @@ try {
       objects: objectCount,
       warmSamples: samples,
       scrubSamples,
+      cameraSamples,
       source: "python/examples/authoring_perf_scene.py",
       localEdit: "one stable-identity circle changes fill color",
+      stableCamera: "camera center moves while visible draw topology remains unchanged",
     },
     cold,
     warmUnchanged: summarizeOperations(unchanged),
     oneObjectEdit: summarizeOperations(localEdit),
     scrub: summarizeScrubs(scrubs),
+    stableCamera: summarizeStableCameraProfile(cameraSweep),
   };
 
   window.__NOON_AUTHORING_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
   status.value =
     `Complete · unchanged visible p95 ${format(report.warmUnchanged.timeToVisibleMs?.p95)} ms · ` +
-    `one-object edit p95 ${format(report.oneObjectEdit.timeToVisibleMs?.p95)} ms`;
+    `one-object edit p95 ${format(report.oneObjectEdit.timeToVisibleMs?.p95)} ms · ` +
+    `camera encode/submit p95 ${format(report.stableCamera.encodeSubmitMs?.p95)} ms`;
   status.dataset.state = "complete";
   console.log("NOON_AUTHORING_PERF", report);
 } catch (error) {
@@ -207,6 +219,38 @@ function profileScrubs(count) {
       frame: frameSnapshot(elapsed),
     });
   }
+  return results;
+}
+
+function profileStableCamera(count) {
+  const results = [];
+  const normalHeight = cameraHeight(objectCount);
+  const benchmarkHeight = normalHeight * 1.2;
+  const targets = stableCameraSweepTargets(count, benchmarkHeight);
+
+  player.resetClock();
+  player.setCamera(0, 0, benchmarkHeight);
+  if (!player.renderFrame(0)) {
+    throw new Error("camera benchmark bootstrap frame was not presented");
+  }
+
+  for (const target of targets) {
+    const started = performance.now();
+    player.setCamera(target.x, target.y, benchmarkHeight);
+    const presented = player.renderFrame(0);
+    const elapsed = performance.now() - started;
+    if (!presented) {
+      throw new Error("camera update did not present a frame");
+    }
+    results.push({
+      center: [target.x, target.y],
+      timeToVisibleMs: elapsed,
+      frame: frameSnapshot(elapsed),
+    });
+  }
+
+  player.setCamera(0, 0, normalHeight);
+  player.renderFrame(0);
   return results;
 }
 
