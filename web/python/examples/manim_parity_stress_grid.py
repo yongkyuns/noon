@@ -3,7 +3,7 @@ from noon import *
 
 class MixedObjectParityStress(Scene):
     def construct(self):
-        # Keep every animation on Manim's 30 FPS frame grid so the logical
+        # Keep every animation on the 30 FPS frame grid so the logical
         # duration remains the five seconds declared by the parity manifest.
         frame = 1 / 30
         rows = 20
