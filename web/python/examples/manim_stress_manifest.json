@@ -1,0 +1,41 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "kind": "custom-parity-workload"
+  },
+  "policy": "Ready stress workloads are ordinary ManimCE v0.21-compatible scenes. Their browser source must match the canonical Manim source byte-for-byte after replacing exactly `from manim import *` with `from noon import *`; they are not represented as upstream Manim documentation examples.",
+  "entries": [
+    {
+      "id": "manim-parity-stress-grid",
+      "title": "Mixed Object Parity Stress",
+      "summary": "A 72-shape Manim-compatible stress scene combining retained Text, mass Create, square/circle morphs, chained rotation/translation/color animation, and lifecycle FadeIn/FadeOut transitions.",
+      "status": "ready",
+      "path": "python/examples/manim_parity_stress_grid.py",
+      "category": "stress",
+      "features": [
+        "72 shapes",
+        "Text",
+        "Create",
+        "Transform",
+        "animate",
+        "rotation",
+        "color",
+        "FadeIn",
+        "FadeOut",
+        "retained-text",
+        "stress",
+        "pixel-parity",
+        "time-parity"
+      ],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "mixed-object-parity-stress",
+      "parity_source": "parity/manim-v0.21/stress-examples/mixed_object_parity_stress.py",
+      "thumbnail": "thumbnails/manim/parity-stress-grid.svg",
+      "thumbnail_alt": "Dense multicolor grid of squares and circles under a MANIM PARITY STRESS title",
+      "thumbnail_time": 2.8,
+      "order": 5
+    }
+  ]
+}
