@@ -97,8 +97,18 @@ assert.match(
 );
 assert.match(
   pagesWorkflow,
-  /concurrency:\s*\n\s*group: pages\s*\n\s*cancel-in-progress: true/,
-  "superseded playground deployments must be cancelled",
+  /concurrency:\s*\n\s*group: pages[\s\S]*?cancel-in-progress: false/,
+  "playground deployments must queue instead of starving an in-flight production release",
+);
+assert.match(
+  pagesWorkflow,
+  /name: Stamp deployed revision[\s\S]*?GITHUB_SHA[\s\S]*?web\/build-info\.json/,
+  "the Pages artifact must carry the exact source revision",
+);
+assert.match(
+  pagesWorkflow,
+  /name: Verify deployed revision[\s\S]*?EXPECTED_SHA: \$\{\{ github\.sha \}\}[\s\S]*?build-info\.json/,
+  "the deployment must verify the public Pages site serves the expected revision",
 );
 
 console.log("✓ deferred playground runtime keeps recoverable scene errors outside fatal recovery");
