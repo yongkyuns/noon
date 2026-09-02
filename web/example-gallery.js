@@ -1,6 +1,10 @@
 const MANIM_REUSE = "source-equivalent-manim-v0.21";
+const MANIM_PARITY_REUSE = "manim-compatible-parity-v0.21";
+const READY_REUSE = new Set([MANIM_REUSE, MANIM_PARITY_REUSE]);
 const READY_PARITY = new Set(["candidate", "parity-qualified"]);
 const THUMBNAIL_FALLBACK_MARKER = "noonThumbnailFallbackInstalled";
+const DEFAULT_GALLERY_MANIFEST = "./python/examples/manim_tutorial_manifest.json";
+const STRESS_GALLERY_MANIFEST = "./python/examples/manim_stress_manifest.json";
 
 if (typeof document !== "undefined") {
   installGalleryThumbnailFallback(document);
@@ -25,9 +29,9 @@ export function normalizeGalleryManifest(manifest) {
     if (entry.status !== "ready") {
       continue;
     }
-    if (entry.reuse !== MANIM_REUSE) {
+    if (!READY_REUSE.has(entry.reuse)) {
       throw new Error(
-        `${entry.id}: runnable gallery examples must be source-equivalent ManimCE v0.21 scenes`,
+        `${entry.id}: runnable gallery examples must be source-equivalent ManimCE v0.21 scenes or custom Manim-compatible parity workloads`,
       );
     }
     if (!READY_PARITY.has(entry.parity_status)) {
@@ -51,6 +55,7 @@ export function normalizeGalleryManifest(manifest) {
       category: entry.category ?? "manim",
       features: [...entry.features],
       upstream: entry.upstream ?? null,
+      reuse: entry.reuse,
       parityStatus: entry.parity_status,
       parityFixture: entry.parity_fixture ?? null,
       thumbnail: `./${entry.thumbnail}`,
@@ -67,18 +72,40 @@ export function normalizeGalleryManifest(manifest) {
   };
 }
 
+async function fetchGalleryManifest(url, fetchImpl) {
+  const response = await fetchImpl(url);
+  if (!response.ok) {
+    throw new Error(`Unable to load Manim example manifest ${url}: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function loadGalleryManifest(
-  url = "./python/examples/manim_tutorial_manifest.json",
+  url = DEFAULT_GALLERY_MANIFEST,
   fetchImpl = globalThis.fetch,
 ) {
   if (typeof fetchImpl !== "function") {
     throw new TypeError("loadGalleryManifest requires fetch");
   }
-  const response = await fetchImpl(url);
-  if (!response.ok) {
-    throw new Error(`Unable to load Manim example manifest: HTTP ${response.status}`);
+
+  const manifest = await fetchGalleryManifest(url, fetchImpl);
+  if (url !== DEFAULT_GALLERY_MANIFEST) {
+    return normalizeGalleryManifest(manifest);
   }
-  return normalizeGalleryManifest(await response.json());
+
+  const stressManifest = await fetchGalleryManifest(STRESS_GALLERY_MANIFEST, fetchImpl);
+  const referenceVersion = manifest.reference?.version ?? null;
+  const stressVersion = stressManifest.reference?.version ?? null;
+  if (stressVersion !== referenceVersion) {
+    throw new Error(
+      `Manim stress manifest version ${stressVersion ?? "unknown"} does not match gallery version ${referenceVersion ?? "unknown"}`,
+    );
+  }
+
+  return normalizeGalleryManifest({
+    ...manifest,
+    entries: [...manifest.entries, ...stressManifest.entries],
+  });
 }
 
 export function galleryCategories(examples) {

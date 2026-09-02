@@ -309,6 +309,18 @@
       "id": "moving-camera-center",
       "scene": "MovingCameraCenter",
       "expected_duration": 2.6
+    },
+    {
+      "id": "mixed-object-parity-stress",
+      "scene": "MixedObjectParityStress",
+      "source": "parity/manim-v0.21/stress-examples/mixed_object_parity_stress.py",
+      "expected_duration": 5.0,
+      "stress": true,
+      "raster_tolerance": {
+        "max_bounds_delta_px": null,
+        "max_differing_ratio": 0.12,
+        "max_mean_absolute_channel_error": 8.0
+      }
     }
   ],
   "sample_fractions": [
