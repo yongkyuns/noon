@@ -40,9 +40,19 @@ class RetainedFamilyUnwriteSmoke(Scene):
         self.add(text)
         self.play(Unwrite(text))
 `;
+      const sequentialFamilySource = `
+from noon import *
+
+class RetainedSequentialFamilySmoke(Scene):
+    def construct(self):
+        text = Text("AB")
+        self.play(Write(text), run_time=1.0, rate_func=linear)
+        self.play(Unwrite(text), run_time=1.0, rate_func=linear)
+`;
 
       let readyPromise = null;
       let writeResult = null;
+      let sequentialResult = null;
       let writeRenderResult = null;
 
       function oneFamilyRequest(result, label) {
@@ -70,9 +80,33 @@ class RetainedFamilyUnwriteSmoke(Scene):
         return request;
       }
 
+      function sequentialFamilyRequests(result) {
+        if (result.kind !== "scene_document") {
+          throw new Error(`sequential family smoke returned ${result.kind}`);
+        }
+        const retained = result.retainedDocument;
+        if (!retained || retained.objects.length !== 1) {
+          throw new Error("sequential family smoke expected one retained Text object");
+        }
+        if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 2) {
+          throw new Error("sequential family smoke did not author two retained family requests");
+        }
+        const requests = result.sceneSpec?.family_animations;
+        if (!Array.isArray(requests) || requests.length !== 2) {
+          throw new Error("sequential family smoke did not reach two canonical family requests");
+        }
+        const serialized = JSON.stringify(requests);
+        for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
+          if (serialized.includes(forbidden)) {
+            throw new Error(`sequential family requests leaked ${forbidden}`);
+          }
+        }
+        return requests;
+      }
+
       async function renderWriteMidpoint() {
-        if (writeResult == null) {
-          throw new Error("family Write authoring result is unavailable");
+        if (sequentialResult == null) {
+          throw new Error("sequential family authoring result is unavailable");
         }
 
         const canvas = document.querySelector("#retained-write-smoke");
@@ -84,37 +118,51 @@ class RetainedFamilyUnwriteSmoke(Scene):
         });
         try {
           const readyState = await execution.startRetainedCanonical(
-            JSON.stringify(writeResult.sceneSpec),
+            JSON.stringify(sequentialResult.sceneSpec),
             {
-              loopDurationSeconds: 1.0,
+              loopDurationSeconds: 2.0,
               transportMode: "transferable",
             },
           );
           await execution.pause();
           await execution.seek(0.5);
           await new Promise((resolve) => setTimeout(resolve, 120));
-          const metrics = await execution.metrics();
-          if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-            throw new Error("family Write midpoint did not run through canonical retained execution");
+          const first = await execution.metrics();
+          if (!first.metrics.ready || !first.metrics.retained || !first.engineMetrics.canonical) {
+            throw new Error("first family request did not run through canonical retained execution");
           }
-          if (metrics.metrics.objectCount !== 1) {
-            throw new Error(`family Write renderer expected one object, got ${metrics.metrics.objectCount}`);
+          if (first.metrics.objectCount !== 1) {
+            throw new Error(`first family request expected one object, got ${first.metrics.objectCount}`);
           }
-          if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
-            throw new Error("family Write midpoint did not produce a presented retained render frame");
+          if (first.metrics.presentedFrames < 1 || first.metrics.drawCalls < 1 || first.metrics.instancesDrawn < 1) {
+            throw new Error("first family request did not produce a retained render frame");
           }
-          if (Math.abs(Number(metrics.engineMetrics.time) - 0.5) > 1e-6) {
-            throw new Error(`family Write deterministic seek drifted to ${metrics.engineMetrics.time}`);
+          if (Math.abs(Number(first.engineMetrics.time) - 0.5) > 1e-6) {
+            throw new Error(`first family request deterministic seek drifted to ${first.engineMetrics.time}`);
+          }
+
+          const presentedAfterFirst = first.metrics.presentedFrames;
+          await execution.seek(1.5);
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          const second = await execution.metrics();
+          if (second.metrics.objectCount !== 1) {
+            throw new Error(`second family request expected one object, got ${second.metrics.objectCount}`);
+          }
+          if (second.metrics.presentedFrames <= presentedAfterFirst || second.metrics.drawCalls < 1 || second.metrics.instancesDrawn < 1) {
+            throw new Error("second family request did not switch plans and present a retained frame");
+          }
+          if (Math.abs(Number(second.engineMetrics.time) - 1.5) > 1e-6) {
+            throw new Error(`second family request deterministic seek drifted to ${second.engineMetrics.time}`);
           }
           if (errors.length !== 0) {
-            throw new Error(`family Write retained execution reported errors: ${errors.join("; ")}`);
+            throw new Error(`sequential family retained execution reported errors: ${errors.join("; ")}`);
           }
           return {
-            backend: metrics.metrics.backend,
-            presentedFrames: metrics.metrics.presentedFrames,
-            drawCalls: metrics.metrics.drawCalls,
-            instancesDrawn: metrics.metrics.instancesDrawn,
-            engineTime: metrics.engineMetrics.time,
+            backend: second.metrics.backend,
+            presentedFrames: second.metrics.presentedFrames,
+            drawCalls: second.metrics.drawCalls,
+            instancesDrawn: second.metrics.instancesDrawn,
+            engineTime: second.engineMetrics.time,
             readyState,
           };
         } finally {
@@ -170,11 +218,35 @@ class RetainedFamilyUnwriteSmoke(Scene):
               throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
             }
 
-            // Reuse this already-loaded browser/Pyodide smoke for one real execution
-            // frame. A midpoint seek forces DrawBorderThenFill through the canonical
-            // family runtime and retained renderer instead of only checking authoring JSON.
+            sequentialResult = await client.run(sequentialFamilySource);
+            const sequential = sequentialFamilyRequests(sequentialResult);
+            if (Math.abs(Number(sequential[0].spec.start_time) - 0.0) > 1e-12 || Math.abs(Number(sequential[0].spec.duration) - 1.0) > 1e-12) {
+              throw new Error("sequential Write did not retain its [0, 1] canonical interval");
+            }
+            if (Math.abs(Number(sequential[1].spec.start_time) - 1.0) > 1e-12 || Math.abs(Number(sequential[1].spec.duration) - 1.0) > 1e-12) {
+              throw new Error("sequential Unwrite did not retain its [1, 2] canonical interval");
+            }
+            if (sequential[0].spec.reverse_rate_function || sequential[0].spec.reverse_member_order) {
+              throw new Error("sequential Write unexpectedly reversed rate or member order");
+            }
+            if (!sequential[1].spec.reverse_rate_function || !sequential[1].spec.reverse_member_order) {
+              throw new Error("sequential Unwrite did not retain reverse rate/member semantics");
+            }
+            if (Math.abs(Number(sequentialResult.duration) - 2.0) > 1e-12) {
+              throw new Error(`sequential family scene cursor drifted to ${sequentialResult.duration}`);
+            }
+
+            // One worker execution crosses the exact touching boundary and renders both
+            // immutable plans. This catches browser-side plan-selection regressions that
+            // authoring-only JSON and native Rust tests cannot see.
             writeRenderResult = await renderWriteMidpoint();
-            return { create, write: writeResult, unwrite, writeRender: writeRenderResult };
+            return {
+              create,
+              write: writeResult,
+              unwrite,
+              sequential: sequentialResult,
+              writeRender: writeRenderResult,
+            };
           })();
         }
         return readyPromise;
