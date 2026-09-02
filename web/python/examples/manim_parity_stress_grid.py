@@ -74,7 +74,7 @@ class MixedObjectParityStress(Scene):
                 targets.append(target)
 
         self.play(
-            Create(title),
+            FadeIn(title),
             FadeIn(subtitle),
             *[Create(shape) for shape in shapes],
             run_time=1.0,
