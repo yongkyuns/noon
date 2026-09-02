@@ -300,6 +300,25 @@ class SharedRateFunctions(Scene):
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
 `;
 
+const concurrentFamilySource = `
+from noon import *
+
+class ConcurrentRetainedFamilies(Scene):
+    def construct(self):
+        short = Text("AB")
+        long = Text("ABCDEFGHIJKLMNOPQRST")
+        self.play(Write(short), Write(long), rate_func=linear)
+`;
+
+const overlappingFamilySource = `
+from noon import *
+
+class OverlappingRetainedFamilies(Scene):
+    def construct(self):
+        text = Text("AB")
+        self.play(Write(text), Unwrite(text), rate_func=linear)
+`;
+
 let browser = null;
 try {
   await waitForServer();
@@ -466,6 +485,108 @@ try {
     "known Python callables should lower directly to shared Rust semantic IDs",
   );
 
+  const concurrent = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    concurrentFamilySource,
+  );
+  assert.equal(concurrent.kind, "scene_document");
+  assert.equal(concurrent.retainedDocument.objects.length, 2);
+  assert.equal(concurrent.retainedDocument.family_animations.length, 2);
+  assert.equal(concurrent.sceneSpec.family_animations.length, 2);
+  assert.equal(concurrent.duration, 2, "Scene.play duration must be the maximum child duration");
+  const concurrentRequests = concurrent.sceneSpec.family_animations;
+  assert.deepEqual(
+    concurrentRequests.map((request) => request.spec.start_time),
+    [0, 0],
+    "concurrent family requests must share the play start time",
+  );
+  assert.deepEqual(
+    concurrentRequests.map((request) => request.spec.duration),
+    [1, 2],
+    "each Write must retain its independently Rust-derived default duration",
+  );
+  assert.ok(
+    concurrentRequests.every((request) => request.spec.mode === "draw_border_then_fill"),
+  );
+  const concurrentSerialized = JSON.stringify(concurrentRequests);
+  for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
+    assert.equal(concurrentSerialized.includes(forbidden), false, `concurrent requests leaked ${forbidden}`);
+  }
+
+  const concurrentRender = await page.evaluate(async (sceneSpec) => {
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.appendChild(canvas);
+    const errors = [];
+    const execution = new ExecutionWorkerClient(canvas, {
+      onError(error, owner) {
+        errors.push(`${owner}: ${error}`);
+      },
+    });
+    async function renderedAt(time) {
+      await execution.seek(time);
+      let latest = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        latest = await execution.metrics();
+        if (errors.length !== 0) throw new Error(errors.join("; "));
+        if (
+          Math.abs(Number(latest.metrics.time) - time) <= 1e-6 &&
+          latest.metrics.objectCount === 2 &&
+          latest.metrics.presentedFrames >= 1
+        ) {
+          return latest;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`concurrent family render did not converge at t=${time}: ${JSON.stringify(latest)}`);
+    }
+    try {
+      await execution.startRetainedCanonical(JSON.stringify(sceneSpec), {
+        loopDurationSeconds: 2,
+        transportMode: "transferable",
+      });
+      await execution.pause();
+      const first = await renderedAt(0.5);
+      const presented = first.metrics.presentedFrames;
+      const second = await renderedAt(1.5);
+      if (!first.engineMetrics.canonical || !second.engineMetrics.canonical) {
+        throw new Error("concurrent family render bypassed canonical retained execution");
+      }
+      if (second.metrics.presentedFrames <= presented) {
+        throw new Error("second concurrent-family seek did not present a new frame");
+      }
+      return {
+        firstTime: first.metrics.time,
+        secondTime: second.metrics.time,
+        objectCount: second.metrics.objectCount,
+        presentedFrames: second.metrics.presentedFrames,
+      };
+    } finally {
+      execution.terminate();
+      canvas.remove();
+    }
+  }, concurrent.sceneSpec);
+  assert.equal(concurrentRender.firstTime, 0.5);
+  assert.equal(concurrentRender.secondTime, 1.5);
+  assert.equal(concurrentRender.objectCount, 2);
+
+  let overlapError = null;
+  try {
+    await page.evaluate(
+      (pythonSource) => window.noonManimCompat.run(pythonSource),
+      overlappingFamilySource,
+    );
+  } catch (error) {
+    overlapError = String(error);
+  }
+  assert.match(
+    overlapError ?? "",
+    /disjoint family leaves/,
+    "same-leaf concurrent family ownership must fail before lifecycle mutation",
+  );
+
   let zError = null;
   try {
     await page.evaluate(
@@ -479,7 +600,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
