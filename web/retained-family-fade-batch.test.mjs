@@ -17,7 +17,20 @@ test("retained family fades are represented as ordered leaf batches", () => {
   );
 });
 
-test("mixed family fade batches reuse the existing retained leaf scheduler", () => {
+test("standalone family fades preserve one source animation instead of constructing child fades", () => {
+  const passthrough = batchSource
+    .split("def _standalone_batch_passthrough(")[1]
+    .split("def _animation_plan(")[0];
+  assert.match(passthrough, /batch = _family_fade_batch\(animation\)/);
+  assert.match(passthrough, /return batch\.family, list\(batch\.leaves\), \[animation\]/);
+  assert.doesNotMatch(batchSource, /type\(animation\)\(/);
+  assert.match(
+    batchSource,
+    /_retained\._retained_family_fade_expansion = _standalone_batch_passthrough/,
+  );
+});
+
+test("standalone and mixed family fade batches reuse the existing retained leaf scheduler", () => {
   const schedule = batchSource.split("def _schedule_plan(")[1].split("def _scene_play(")[0];
   assert.match(schedule, /_ORIGINAL_SCHEDULE_PLAN\(/);
   assert.match(schedule, /_RetainedBatchLeafAnimation\(source\)/);
