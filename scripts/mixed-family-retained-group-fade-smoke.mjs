@@ -94,7 +94,11 @@ class MixedRetainedGroupFadeSameLeaf(Scene):
         assert peer._object is None
         assert peer._retained_object_id is None
         self.play(FadeIn(labels), run_time=0.25, rate_func=linear)
+        assert labels in self._compat_top_level
+        assert shared not in self._compat_top_level
+        assert peer not in self._compat_top_level
         self.play(FadeOut(labels), run_time=0.25, rate_func=linear)
+        assert labels not in self._compat_top_level
 `;
 
 const rollbackSource = `
@@ -344,7 +348,7 @@ try {
     [],
     `browser errors while testing retained family fade batches:\n${errors.join("\n")}`,
   );
-  console.log("Mixed retained family Group/VGroup fade batch smoke passed, including standalone FadeOut and edit -> rerun rebuild.");
+  console.log("Mixed retained family Group/VGroup fade batch smoke passed, including standalone FadeOut membership cleanup and edit -> rerun rebuild.");
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
