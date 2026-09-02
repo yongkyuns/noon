@@ -447,7 +447,10 @@ impl RetainedExecutionFrameMirror {
     }
 }
 
-fn incremental_content_identity_matches(current: &ObjectContentRef, next: &ObjectContentRef) -> bool {
+fn incremental_content_identity_matches(
+    current: &ObjectContentRef,
+    next: &ObjectContentRef,
+) -> bool {
     match (current, next) {
         (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
         (ObjectContentRef::Text(current), ObjectContentRef::Text(next)) => current == next,
@@ -624,8 +627,7 @@ mod tests {
 
         let mut updated = frame.clone();
         updated.time = 0.5;
-        updated.objects[0].content =
-            ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 1.0));
+        updated.objects[0].content = ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 1.0));
         let delta = encoder
             .encode_incremental(
                 &updated,
