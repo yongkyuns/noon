@@ -6,6 +6,7 @@ import initNoonWeb, {
   canonicalRetainedSceneSpecJson,
   manimAnnularSectorSnapshotJson,
   manimAnnulusSnapshotJson,
+  manimDashedLineSnapshotJson,
   manimDotSnapshotJson,
   manimElbowSnapshotJson,
   manimRoundedRectangleSnapshotJson,
@@ -67,6 +68,8 @@ async function initializePyodide() {
     authoringStore.createMobject(manimSectorSnapshotJson(...args));
   self.noonCreateAuthoringAnnulusHandle = (...args) =>
     authoringStore.createMobject(manimAnnulusSnapshotJson(...args));
+  self.noonCreateAuthoringDashedLineHandle = (...args) =>
+    authoringStore.createMobject(manimDashedLineSnapshotJson(...args));
   self.noonCreateAuthoringUnderlineHandle = (targetHandle, buff) =>
     authoringStore.createMobject(manimUnderlineSnapshotJson(targetHandle.snapshotJson(), buff));
   self.noonCreateAuthoringCircleHandle = (radius) => authoringStore.createManimCircle(radius);
@@ -108,6 +111,8 @@ import _manim_semantic_handles
 _manim_semantic_handles.install()
 import _manim_shared_geometry
 _manim_shared_geometry.install()
+import _manim_dashed_line
+_manim_dashed_line.install()
 import _manim_animate
 import _manim_rotate
 _manim_rotate.install()
