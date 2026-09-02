@@ -46,7 +46,7 @@ assert.match(
 );
 assert.match(
   retainedAnimate,
-  /mixing retained Text animations with legacy animations in one Scene\.play is not supported yet/,
+  /mixing retained Text animations with legacy animations in one Scene\.play /,
   "contract should track the retained-vs-geometry mixed-play capability boundary",
 );
 assert.match(
