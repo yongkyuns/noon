@@ -1,10 +1,10 @@
 """Batch retained Group/VGroup fades across one source-level animation.
 
 The ordinary retained Text scheduler remains the sole owner of leaf lifecycle and
-property-track semantics. This adapter only classifies a source-level retained family
-fade into ordered leaves, then lets the existing leaf scheduler consume each leaf under
-the outer family-animation transaction. No public child FadeIn/FadeOut animations are
-created for mixed family/property plays.
+property-track semantics. This adapter classifies a source-level retained family fade
+into ordered leaves, then lets the existing leaf scheduler consume each leaf under the
+same retained batch plan for standalone and mixed family/property plays. It never
+materializes per-leaf public FadeIn/FadeOut animations.
 """
 
 from __future__ import annotations
@@ -100,25 +100,15 @@ def _family_fade_batch(animation: object) -> _RetainedFamilyFadeBatch | None:
     return _RetainedFamilyFadeBatch(target, retained, operation)
 
 
-def _legacy_expansion_from_batch(
+def _standalone_batch_passthrough(
     animation: object,
 ) -> tuple[_compat.Group, list[_typst._RetainedTextMobject], list[object]] | None:
-    """Keep standalone retained Scene.play behavior on the shared batch classifier."""
+    """Keep the source animation intact while the retained Scene.play hook classifies its family."""
 
     batch = _family_fade_batch(animation)
     if batch is None:
         return None
-
-    animation_args = _options.builder_args(animation)
-    children: list[object] = []
-    for index, member in enumerate(batch.leaves):
-        child = type(animation)(
-            member,
-            None if animation.key is None else f"{animation.key}.{index}",
-        )
-        object.__setattr__(child, "anim_args", copy.deepcopy(animation_args))
-        children.append(child)
-    return batch.family, list(batch.leaves), children
+    return batch.family, list(batch.leaves), [animation]
 
 
 def _animation_plan(animation: object) -> list[dict[str, Any]] | None:
@@ -272,7 +262,7 @@ def install() -> None:
     _ORIGINAL_SCHEDULE_PLAN = _retained._schedule_retained_plan
     _ORIGINAL_SCENE_PLAY = _compat.Scene.play
 
-    _retained._retained_family_fade_expansion = _legacy_expansion_from_batch
+    _retained._retained_family_fade_expansion = _standalone_batch_passthrough
     _retained._retained_animation_plan = _animation_plan
     _retained._retained_animation_source = _animation_source
     _retained._schedule_retained_plan = _schedule_plan
