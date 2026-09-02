@@ -4,9 +4,7 @@ use noon_core::{
     RetainedFamilyAnimationPlan,
 };
 
-use crate::{
-    EvaluationError, FrameChanges, RetainedFrameState, RetainedPlannedFamilyFrame,
-};
+use crate::{EvaluationError, FrameChanges, RetainedPlannedFamilyFrame};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PlannedFamilyInterval {
@@ -225,14 +223,7 @@ impl RetainedFamilyPlanSetSceneInstance {
         )
     }
 
-    fn update_family_state(
-        &mut self,
-        time: f64,
-    ) -> Result<(), RetainedFamilyPlanSetRuntimeError> {
-        if !time.is_finite() {
-            return Err(EvaluationError::InvalidTime(time).into());
-        }
-
+    fn update_family_state(&mut self, time: f64) -> Result<(), RetainedFamilyPlanSetRuntimeError> {
         let animation_states = self
             .specs
             .iter()
@@ -247,8 +238,7 @@ impl RetainedFamilyPlanSetSceneInstance {
                 .map(|index| schedule[index])
                 .filter(|interval| time <= interval.end_time);
             let next_plan_index = selected.map(|interval| interval.plan_index);
-            let next_state = next_plan_index
-                .and_then(|index| animation_states[index as usize]);
+            let next_state = next_plan_index.and_then(|index| animation_states[index as usize]);
 
             if self.states[object_index] != next_state
                 || self.plan_indices[object_index] != next_plan_index
@@ -309,10 +299,14 @@ mod tests {
 
     #[test]
     fn sequential_same_object_selects_exact_plan_and_next_wins_touching_boundary() {
-        let object = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
+        let object =
+            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
         let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
         let animations = vec![
-            (plan_for(object.clone()), spec(0.0, 1.0, FamilyAnimationMode::Reveal)),
+            (
+                plan_for(object.clone()),
+                spec(0.0, 1.0, FamilyAnimationMode::Reveal),
+            ),
             (
                 plan_for(object),
                 spec(1.0, 1.0, FamilyAnimationMode::DrawBorderThenFill),
@@ -322,7 +316,10 @@ mod tests {
 
         let first = runtime.seek(0.5).unwrap();
         assert_eq!(first.family_plan_index(0), Some(0));
-        assert_eq!(first.family_animation(0).unwrap().mode, FamilyAnimationMode::Reveal);
+        assert_eq!(
+            first.family_animation(0).unwrap().mode,
+            FamilyAnimationMode::Reveal
+        );
 
         let boundary = runtime.seek(1.0).unwrap();
         assert_eq!(boundary.family_plan_index(0), Some(1));
@@ -338,13 +335,20 @@ mod tests {
 
     #[test]
     fn overlapping_same_object_fails_before_playback() {
-        let object = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
+        let object =
+            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
         let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
         let error = RetainedFamilyPlanSetSceneInstance::new(
             compiled,
             vec![
-                (plan_for(object.clone()), spec(0.0, 1.0, FamilyAnimationMode::Reveal)),
-                (plan_for(object), spec(0.5, 1.0, FamilyAnimationMode::Reveal)),
+                (
+                    plan_for(object.clone()),
+                    spec(0.0, 1.0, FamilyAnimationMode::Reveal),
+                ),
+                (
+                    plan_for(object),
+                    spec(0.5, 1.0, FamilyAnimationMode::Reveal),
+                ),
             ],
         )
         .unwrap_err();
@@ -358,12 +362,17 @@ mod tests {
     #[test]
     fn concurrent_disjoint_plans_can_use_different_modes() {
         let first = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let second = RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(2.0));
-        let compiled = RetainedCompiledScene::compile(&[first.clone(), second.clone()], &[]).unwrap();
+        let second =
+            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(2.0));
+        let compiled =
+            RetainedCompiledScene::compile(&[first.clone(), second.clone()], &[]).unwrap();
         let mut runtime = RetainedFamilyPlanSetSceneInstance::new(
             compiled,
             vec![
-                (plan_for(first), spec(0.0, 2.0, FamilyAnimationMode::Reveal)),
+                (
+                    plan_for(first),
+                    spec(0.0, 2.0, FamilyAnimationMode::Reveal),
+                ),
                 (
                     plan_for(second),
                     spec(0.0, 2.0, FamilyAnimationMode::DrawBorderThenFill),
@@ -374,7 +383,10 @@ mod tests {
         let frame = runtime.seek(1.0).unwrap();
         assert_eq!(frame.family_plan_index(0), Some(0));
         assert_eq!(frame.family_plan_index(1), Some(1));
-        assert_eq!(frame.family_animation(0).unwrap().mode, FamilyAnimationMode::Reveal);
+        assert_eq!(
+            frame.family_animation(0).unwrap().mode,
+            FamilyAnimationMode::Reveal
+        );
         assert_eq!(
             frame.family_animation(1).unwrap().mode,
             FamilyAnimationMode::DrawBorderThenFill
@@ -383,13 +395,21 @@ mod tests {
 
     #[test]
     fn direct_seek_matches_forward_playback_for_state_and_plan_identity() {
-        let object = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
+        let object =
+            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
         let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
         let animations = vec![
-            (plan_for(object.clone()), spec(0.0, 1.0, FamilyAnimationMode::Reveal)),
-            (plan_for(object), spec(1.0, 1.0, FamilyAnimationMode::Reveal)),
+            (
+                plan_for(object.clone()),
+                spec(0.0, 1.0, FamilyAnimationMode::Reveal),
+            ),
+            (
+                plan_for(object),
+                spec(1.0, 1.0, FamilyAnimationMode::Reveal),
+            ),
         ];
-        let mut forward = RetainedFamilyPlanSetSceneInstance::new(compiled.clone(), animations.clone()).unwrap();
+        let mut forward =
+            RetainedFamilyPlanSetSceneInstance::new(compiled.clone(), animations.clone()).unwrap();
         forward.advance_to(0.5).unwrap();
         let forward_frame = forward.advance_to(1.5).unwrap();
         let forward_state = forward_frame.family_animation(0);
