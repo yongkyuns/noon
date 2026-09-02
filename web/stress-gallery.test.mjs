@@ -16,6 +16,7 @@ assert.equal(stress.reuse, "manim-compatible-parity-v0.21");
 assert.equal(stress.parityStatus, "candidate");
 assert.equal(stress.parityFixture, "mixed-object-parity-stress");
 assert.equal(stress.category, "stress");
+assert.equal(stress.order, 15, "stress workload should sit directly behind the default example");
 assert.ok(stress.features.includes("Text"));
 assert.ok(stress.features.includes("Transform"));
 assert.ok(stress.features.includes("FadeIn"));
