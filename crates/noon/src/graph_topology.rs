@@ -273,7 +273,10 @@ mod tests {
         let bc = topology.add_edge(b, c, false).unwrap();
 
         let removed = topology.remove_vertex(a).unwrap();
-        assert_eq!(removed.iter().map(|edge| edge.id).collect::<Vec<_>>(), vec![ab]);
+        assert_eq!(
+            removed.iter().map(|edge| edge.id).collect::<Vec<_>>(),
+            vec![ab]
+        );
         assert_eq!(topology.vertices(), &[b, c]);
         assert_eq!(
             topology.edges(),
