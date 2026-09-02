@@ -106,13 +106,20 @@ test("canonical SceneSpec result validation rejects duplicate identity and inval
   );
 });
 
-test("Python worker canonicalizes retained output through the Rust WASM bridge", async () => {
-  const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
-  assert.match(source, /canonicalRetainedSceneSpecJson/);
-  assert.match(source, /result\.scene_spec\s*=\s*JSON\.parse/);
-  assert.match(
-    source,
-    /canonicalRetainedSceneSpecJson\(JSON\.stringify\(result\.document\), retainedDocumentJson\)/,
-  );
-  assert.doesNotMatch(source, /retained_document\.objects\.length/);
+test("Scene producer owns canonical SceneSpec finalization through the Rust WASM bridge", async () => {
+  const [workerSource, pythonSource] = await Promise.all([
+    readFile(new URL("./python-worker.source.js", import.meta.url), "utf8"),
+    readFile(new URL("./python/noon.py", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(workerSource, /self\.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson/);
+  assert.match(workerSource, /__noon_scene_spec = __noon_result\.to_scene_spec\(\)/);
+  assert.match(workerSource, /"scene_spec": __noon_scene_spec/);
+  assert.doesNotMatch(workerSource, /result\.scene_spec\s*=/);
+  assert.doesNotMatch(workerSource, /validateRetainedAuthoringDocumentJson/);
+
+  assert.match(pythonSource, /def to_scene_spec\(self\)/);
+  assert.match(pythonSource, /from js import noonCanonicalSceneSpecJson as canonicalize/);
+  assert.match(pythonSource, /retained_document = getattr\(self, "retained_document", None\)/);
+  assert.match(pythonSource, /canonicalize\(legacy_json, retained_json\)/);
 });

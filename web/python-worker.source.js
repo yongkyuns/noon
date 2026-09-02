@@ -16,7 +16,6 @@ import initNoonWeb, {
   resolveLifecyclePlan,
   resolveUniformCompositionSchedule,
   validatePresenceTransition,
-  validateRetainedAuthoringDocumentJson,
 } from "./pkg/noon_web.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
@@ -85,6 +84,7 @@ async function initializePyodide() {
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
+  self.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson;
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
     pyodide.FS.writeFile(descriptor.runtimePath, compatibilityModules[index].source, {
@@ -111,8 +111,8 @@ _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
-# Retained text must wrap the final lifecycle-aware Scene.add implementation so
-# it is intercepted before any legacy geometry binding occurs.
+# Retained Text specializes content binding below the lifecycle-owned Scene.add path;
+# it must not replace or intercept scene membership semantics.
 import _manim_typst
 _manim_typst.install()
 # Install retained animation before later Scene.play adapters capture their
@@ -353,23 +353,28 @@ else:
 
 if isinstance(__noon_result, Scene):
     __noon_kind = "scene_document"
+    __noon_scene_spec = __noon_result.to_scene_spec()
+    __noon_document = __noon_result.to_document()
+    __noon_retained = __noon_result.retained_document()
     __noon_duration = float(__noon_result.time)
     __noon_identities = __noon_result.identity_document()
     __noon_callbacks = _manim_updaters.register_scene(__noon_result)
-    __noon_retained = __noon_result.retained_document()
 elif isinstance(__noon_result, PatchBatch):
     __noon_kind = "patch_batch"
+    __noon_scene_spec = None
+    __noon_document = __noon_result.to_document()
+    __noon_retained = None
     __noon_duration = None
     __noon_identities = None
     __noon_callbacks = None
-    __noon_retained = None
 else:
     raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")
 json.dumps(
     {
         "kind": __noon_kind,
-        "document": __noon_result.to_document(),
+        "document": __noon_document,
         "retained_document": __noon_retained,
+        "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
         "identities": __noon_identities,
         "callbacks": __noon_callbacks,
@@ -380,15 +385,7 @@ json.dumps(
 `,
       { globals },
     );
-    const result = JSON.parse(resultJson);
-    if (result.retained_document !== null) {
-      const retainedDocumentJson = JSON.stringify(result.retained_document);
-      validateRetainedAuthoringDocumentJson(retainedDocumentJson);
-      result.scene_spec = JSON.parse(
-        canonicalRetainedSceneSpecJson(JSON.stringify(result.document), retainedDocumentJson),
-      );
-    }
-    return JSON.stringify(result);
+    return resultJson;
   } finally {
     globals.destroy();
   }
