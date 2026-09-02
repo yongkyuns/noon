@@ -502,6 +502,27 @@ mod draw_border_tests {
         }
     }
 
+    fn test_run() -> GlyphRun {
+        GlyphRun {
+            font: FontFaceIdentity {
+                family: Arc::from("Test"),
+                face_key: Arc::from("test-face"),
+                face_index: 0,
+                variation_key: Arc::from(""),
+            },
+            variations: Arc::from([]),
+            font_size: 24.0,
+            direction: TextDirection::LeftToRight,
+            fill: None,
+            stroke: None,
+            transform: TextAffineTransform::IDENTITY,
+            glyphs: Arc::from([
+                glyph(TextSourceSpan::new(0, 1), 1, 0.0),
+                glyph(TextSourceSpan::new(1, 2), 2, 1.0),
+            ]),
+        }
+    }
+
     fn text_fixture(
         progress: f32,
     ) -> (
@@ -513,24 +534,7 @@ mod draw_border_tests {
         let resource = TextResource {
             source: Arc::from("AB"),
             kind: TextSourceKind::Plain,
-            runs: Arc::from([GlyphRun {
-                font: FontFaceIdentity {
-                    family: Arc::from("Test"),
-                    face_key: Arc::from("test-face"),
-                    face_index: 0,
-                    variation_key: Arc::from(""),
-                },
-                variations: Arc::from([]),
-                font_size: 24.0,
-                direction: TextDirection::LeftToRight,
-                fill: None,
-                stroke: None,
-                transform: TextAffineTransform::IDENTITY,
-                glyphs: Arc::from([
-                    glyph(TextSourceSpan::new(0, 1), 1, 0.0),
-                    glyph(TextSourceSpan::new(1, 2), 2, 1.0),
-                ]),
-            }]),
+            runs: Arc::from([test_run()]),
             vector_items: Arc::from([]),
             render_items: Arc::from([TextRenderItem::GlyphRun(0)]),
             parts: Arc::from([]),
@@ -630,12 +634,9 @@ mod draw_border_tests {
 
     #[test]
     fn outline_phase_uses_manim_default_border_presentation() {
-        let run = &text_fixture(0.0).3.get(TextResourceHandle {
-            id: noon_core::TextResourceId::new(0),
-            version: 0,
-        }).unwrap().runs[0];
+        let run = test_run();
         let style = draw_border_glyph_style(
-            run,
+            &run,
             Style::default(),
             RetainedDrawBorderThenFillPhase::Outline { reveal: 0.5 },
         );
@@ -649,14 +650,9 @@ mod draw_border_tests {
 
     #[test]
     fn fill_phase_interpolates_outline_into_final_text_style() {
-        let resource = text_fixture(0.0).3;
-        let handle = TextResourceHandle {
-            id: noon_core::TextResourceId::new(0),
-            version: 0,
-        };
-        let run = &resource.get(handle).unwrap().runs[0];
+        let run = test_run();
         let style = draw_border_glyph_style(
-            run,
+            &run,
             Style::default(),
             RetainedDrawBorderThenFillPhase::Fill { progress: 0.5 },
         );
