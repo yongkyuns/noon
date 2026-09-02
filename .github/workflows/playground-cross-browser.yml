@@ -13,6 +13,7 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-example-browser-smoke.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -104,6 +105,12 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Test examples browser presentation
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
+        run: node scripts/playground-example-browser-smoke.mjs
       - name: Test public playground workflow
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
