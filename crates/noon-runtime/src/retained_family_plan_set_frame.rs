@@ -41,7 +41,8 @@ impl RetainedPlannedFamilyFrame<'_> {
         &self,
         plans: &'plan [RetainedFamilyAnimationPlan],
         object_index: usize,
-    ) -> Result<Option<RetainedFamilyAnimationLeafFrame<'plan>>, RetainedPlannedFamilyFrameError> {
+    ) -> Result<Option<RetainedFamilyAnimationLeafFrame<'plan>>, RetainedPlannedFamilyFrameError>
+    {
         if self.family_animations.len() != self.retained.objects.len()
             || self.family_plan_indices.len() != self.retained.objects.len()
         {
