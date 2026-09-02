@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - fix/ios-examples-sheet-repro
     paths:
       - ".github/workflows/playground-cross-browser.yml"
       - "Cargo.toml"
