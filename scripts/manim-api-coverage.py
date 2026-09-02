@@ -42,6 +42,15 @@ def _dict_string_keys(node: ast.AST) -> set[str]:
     return result
 
 
+def _public_mapping_keys(node: ast.AST) -> set[str]:
+    """Recover keys from a literal public mapping or its ``.items()`` view."""
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr == "items" and not node.args and not node.keywords:
+            return _dict_string_keys(node.func.value)
+    return _dict_string_keys(node)
+
+
 def noon_public_exports() -> set[str]:
     """Statically recover the runtime ``noon.__all__`` construction.
 
@@ -60,7 +69,18 @@ def noon_public_exports() -> set[str]:
                     if isinstance(target, ast.Name) and target.id == "__all__":
                         exports.update(_literal_strings(node.value))
                     if isinstance(target, ast.Name) and target.id == "public":
-                        exports.update(_dict_string_keys(node.value))
+                        exports.update(_public_mapping_keys(node.value))
+            if isinstance(node, ast.For):
+                # Some adapters register a small public mapping directly in a
+                # ``for name, value in {...}.items()`` loop rather than assigning
+                # it to ``public`` first (notably retained Write/Unwrite).
+                target = node.target
+                if (
+                    isinstance(target, ast.Tuple)
+                    and len(target.elts) == 2
+                    and all(isinstance(item, ast.Name) for item in target.elts)
+                ):
+                    exports.update(_public_mapping_keys(node.iter))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if node.func.attr == "append" and len(node.args) == 1:
                     arg = node.args[0]
@@ -155,8 +175,29 @@ def validate_tutorial_examples(entries: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
-def validate(policy: dict[str, Any], manim: Any, rows: dict[str, dict[str, Any]]) -> list[str]:
+def browser_evidence_for(
+    name: str, tutorial_examples: list[dict[str, Any]]
+) -> list[str]:
+    """Return ready tutorial IDs that exercise a public symbol by feature name."""
+
+    return sorted(
+        entry["id"]
+        for entry in tutorial_examples
+        if entry.get("status") == "ready"
+        and isinstance(entry.get("id"), str)
+        and isinstance(entry.get("features"), list)
+        and name in entry["features"]
+    )
+
+
+def validate(
+    policy: dict[str, Any],
+    manim: Any,
+    rows: dict[str, dict[str, Any]],
+    tutorial_examples: list[dict[str, Any]] | None = None,
+) -> list[str]:
     errors: list[str] = []
+    tutorial_examples = tutorial_examples or []
     expected_version = policy["reference"]["version"]
     actual_version = str(getattr(manim, "__version__", ""))
     if actual_version != expected_version:
@@ -175,6 +216,15 @@ def validate(policy: dict[str, Any], manim: Any, rows: dict[str, dict[str, Any]]
             errors.append(f"{name}: invalid resolved status {row['status']!r}")
         if row["status"] in {"supported", "partial"} and not row["noon_exported"]:
             errors.append(f"{name}: marked {row['status']} but is absent from Noon's public namespace")
+        browser_evidence = browser_evidence_for(name, tutorial_examples)
+        row["browser_evidence"] = browser_evidence
+        if row["status"] == "supported" and not row.get("evidence"):
+            errors.append(f"{name}: supported classifications require executable evidence")
+        if row["status"] == "blocked" and row["noon_exported"] and browser_evidence:
+            errors.append(
+                f"{name}: exported facade has ready browser evidence but remains blocked "
+                f"({', '.join(browser_evidence)})"
+            )
     return errors
 
 
@@ -266,7 +316,7 @@ def main() -> int:
     names = manim_public_exports(manim)
     rows = {name: classify(name, getattr(manim, name), noon_exports, policy) for name in names}
     tutorial_examples = load_tutorial_examples()
-    errors = validate(policy, manim, rows)
+    errors = validate(policy, manim, rows, tutorial_examples)
     errors.extend(validate_tutorial_examples(tutorial_examples))
 
     payload = {

@@ -9,7 +9,7 @@ API presence, behavioral parity, executable example coverage, and exact observab
 - `parity/manim-v0.21/manifest.json` defines the canonical source-equivalent Manim raster + timeline corpus and the pixel/time comparison policy.
 - `web/python/examples/manim_tutorial_manifest.json`, when present, is the single source for tutorial/example coverage. The API report validates and summarizes that same manifest rather than maintaining a second example list.
 
-The API classification policy lives in `compat/manim-v0.21.0.json`. Module-level rules make large known gaps such as text/math, plotting, graph networks, and 3D explicit, while individual overrides record supported or partially supported public symbols and high-value issue ownership.
+The API classification policy lives in `compat/manim-v0.21.0.json`. The report audits the current `web/python` public export construction and joins it with ready entries in the executable tutorial manifest. `missing` means the symbol is not exported on the audited ref; `blocked` is reserved for an identified architecture dependency; `deferred` is used for deliberate non-goals such as the current 3D target. Individual overrides record supported or partially supported public symbols and high-value issue ownership.
 
 ## Exact-output promotion rule
 
@@ -39,7 +39,7 @@ CI also writes `manim-v0.21-api-coverage.md` as a workflow artifact. The report 
 
 ## Updating compatibility
 
-A parity PR that exposes a new Manim-compatible public symbol should update `compat/manim-v0.21.0.json` and add behavioral evidence when applicable. Exporting a name alone does not prove compatibility: unreviewed Noon exports resolve to `partial` rather than being automatically promoted to `supported`.
+A parity PR that exposes a new Manim-compatible public symbol should update `compat/manim-v0.21.0.json` and add behavioral evidence when applicable. Exporting a name alone does not prove compatibility: unreviewed Noon exports resolve to `partial` rather than being automatically promoted to `supported`. `supported` entries must name executable evidence, and the report fails if an exported symbol with a ready browser fixture is explicitly left `blocked`.
 
 A parity PR that unlocks a tutorial or gallery example should update `web/python/examples/manim_tutorial_manifest.json` rather than adding a duplicate coverage list. Ready entries require an executable fixture plus upstream provenance/reuse metadata; blocked and deferred entries require an issue dependency. Source-equivalent parity examples must additionally link a canonical `parity_fixture` and carry their independent `parity_status`.
 
