@@ -12,6 +12,7 @@ on:
       - "scripts/playground-authoring-error-recovery-smoke.mjs"
       - "scripts/playground-stress-edit-smoke.mjs"
       - "scripts/mixed-family-retained-text-smoke.mjs"
+      - "scripts/mixed-family-retained-group-fade-smoke.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -22,6 +23,7 @@ on:
       - "scripts/playground-authoring-error-recovery-smoke.mjs"
       - "scripts/playground-stress-edit-smoke.mjs"
       - "scripts/mixed-family-retained-text-smoke.mjs"
+      - "scripts/mixed-family-retained-group-fade-smoke.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -90,6 +92,8 @@ jobs:
         run: node scripts/playground-stress-edit-smoke.mjs
       - name: Test mixed retained family edit and rerun
         run: node scripts/mixed-family-retained-text-smoke.mjs
+      - name: Test mixed retained family Group fade edit and rerun
+        run: node scripts/mixed-family-retained-group-fade-smoke.mjs
       - name: Upload authoring recovery diagnostics
         if: always()
         uses: actions/upload-artifact@v4

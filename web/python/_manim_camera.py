@@ -8,6 +8,7 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_family_creation as _family_creation
 import _manim_phase_b as _phase_b
+import _manim_retained_family_fade_batch as _retained_family_fade_batch
 
 
 class _CameraFrame(_compat.Rectangle):
@@ -55,9 +56,10 @@ def install() -> None:
     """Install final authoring wrappers and expose the moving-camera name."""
 
     # Camera is the final compatibility module installed by the browser bootstrap.
-    # Install semantic-family creation animations here so Create/Uncreate/Write/Unwrite
-    # wrap every earlier Scene.play layer and delegate unrelated animations unchanged.
+    # Install semantic-family creation first, then the retained family-fade batch
+    # coordinator above that transaction so it can reuse the existing leaf scheduler.
     _family_creation.install()
+    _retained_family_fade_batch.install()
     _base.MovingCameraScene = MovingCameraScene
     if "MovingCameraScene" not in _base.__all__:
         _base.__all__.append("MovingCameraScene")
