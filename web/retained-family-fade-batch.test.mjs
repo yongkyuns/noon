@@ -11,7 +11,10 @@ test("retained family fades are represented as ordered leaf batches", () => {
   assert.match(batchSource, /self\.leaves = tuple\(leaves\)/);
   assert.match(batchSource, /_compat\._leaf_mobjects\(target\)/);
   assert.match(batchSource, /len\(retained\) != len\(leaves\)/);
-  assert.match(batchSource, /family fade lag_ratio requires shared retained family scheduling/);
+  assert.match(
+    batchSource,
+    /retained Text Group\/VGroup fade lag_ratio requires shared retained family scheduling/,
+  );
 });
 
 test("mixed family fade batches reuse the existing retained leaf scheduler", () => {
