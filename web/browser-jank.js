@@ -1,3 +1,23 @@
+function clipEntryToWindow(entry, measurementStartMs, measurementEndMs) {
+  const startTime = Number(entry.startTime);
+  const duration = Number(entry.duration);
+  if (!Number.isFinite(startTime) || !Number.isFinite(duration) || duration <= 0) {
+    return null;
+  }
+
+  const endTime = startTime + duration;
+  const clippedStart = Math.max(startTime, measurementStartMs);
+  const clippedEnd = Math.min(endTime, measurementEndMs);
+  if (!(clippedEnd > clippedStart)) {
+    return null;
+  }
+
+  return {
+    startTime: clippedStart,
+    duration: clippedEnd - clippedStart,
+  };
+}
+
 export class BrowserJankMonitor {
   #entries = [];
   #observer = null;
@@ -13,10 +33,12 @@ export class BrowserJankMonitor {
     }
     this.#observer = new PerformanceObserverClass((list) => {
       for (const entry of list.getEntries()) {
-        this.#entries.push({
-          startTime: Number(entry.startTime),
-          duration: Number(entry.duration),
-        });
+        const startTime = Number(entry.startTime);
+        const duration = Number(entry.duration);
+        if (!Number.isFinite(startTime) || !Number.isFinite(duration) || duration <= 0) {
+          continue;
+        }
+        this.#entries.push({ startTime, duration });
       }
     });
     this.#supported = true;
@@ -40,13 +62,17 @@ export class BrowserJankMonitor {
   }
 
   summary(measurementStartMs = -Infinity, measurementEndMs = Infinity) {
-    const entries = this.#entries.filter(
-      ({ startTime }) => startTime >= measurementStartMs && startTime <= measurementEndMs,
-    );
     if (!this.#supported) {
       return { supported: false };
     }
-    const durations = entries.map(({ duration }) => duration).filter(Number.isFinite);
+    if (!(measurementEndMs >= measurementStartMs)) {
+      throw new RangeError("measurementEndMs must be greater than or equal to measurementStartMs");
+    }
+
+    const entries = this.#entries
+      .map((entry) => clipEntryToWindow(entry, measurementStartMs, measurementEndMs))
+      .filter((entry) => entry !== null);
+    const durations = entries.map(({ duration }) => duration);
     return {
       supported: true,
       count: durations.length,
