@@ -1,0 +1,93 @@
+name: Temporary #367 Scene producer refactor
+
+on:
+  push:
+    branches:
+      - tmp/367-scene-producer
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-check:
+    if: github.event.head_commit.message == 'Apply producer ownership slice'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/367-scene-producer
+      - name: Apply deterministic source refactor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "web/python/noon.py",
+              '''"""Public Noon authoring API.\n\nThe public surface favors Manim-like semantic vocabulary while the internal\n``_noon_ir`` module remains a thin emitter for Noon's single SceneDocument IR.\nNo separate authoring document or frontend-specific scene model is introduced.\n"""''',
+              '''"""Public Noon authoring API.\n\nThe public surface favors Manim-like semantic vocabulary while ``SceneSpec`` is the\ncanonical mixed-content producer contract. Legacy geometry and retained-text documents\nremain bounded compatibility projections while #367 retires the split authoring path.\n"""''',
+          )
+          replace_once(
+              "web/python/noon.py",
+              "import copy\nimport math\n",
+              "import copy\nimport json\nimport math\n",
+          )
+          replace_once(
+              "web/python/noon.py",
+              '''class Scene(_ir.Scene):\n    """High-level scene facade that still emits the canonical SceneDocument."""\n\n    def __init__(self) -> None:\n        super().__init__()\n        self._cursor = 0.0\n\n    @property\n    def time(self) -> float:\n        return self._cursor\n''',
+              '''class Scene(_ir.Scene):\n    """High-level scene facade whose authoritative mixed output is ``SceneSpec``."""\n\n    def __init__(self) -> None:\n        super().__init__()\n        self._cursor = 0.0\n\n    @property\n    def time(self) -> float:\n        return self._cursor\n\n    def to_scene_spec(self) -> dict[str, Any]:\n        """Finalize this authored scene through Rust's canonical mixed-scene adapter.\n\n        Content adapters may still maintain legacy projections during #367 migration,\n        but callers consume one validated ``SceneSpec``. The Rust adapter remains the\n        authority for geometry/text ordering, text source lowering, retained tracks,\n        and family-animation transport.\n        """\n        try:\n            from js import noonCanonicalSceneSpecJson as canonicalize\n        except ImportError as error:\n            raise RuntimeError(\n                "canonical SceneSpec finalization requires the Noon browser Rust bridge"\n            ) from error\n\n        retained_document = getattr(self, "retained_document", None)\n        if retained_document is None:\n            raise RuntimeError(\n                "canonical SceneSpec finalization requires retained authoring compatibility"\n            )\n        legacy_json = json.dumps(\n            self.to_document(), separators=(",", ":"), allow_nan=False\n        )\n        retained_json = json.dumps(\n            retained_document(), separators=(",", ":"), allow_nan=False\n        )\n        return json.loads(str(canonicalize(legacy_json, retained_json)))\n''',
+          )
+
+          replace_once(
+              "web/python-worker.source.js",
+              "  validatePresenceTransition,\n  validateRetainedAuthoringDocumentJson,\n",
+              "  validatePresenceTransition,\n",
+          )
+          replace_once(
+              "web/python-worker.source.js",
+              "  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;\n",
+              "  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;\n  self.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson;\n",
+          )
+          replace_once(
+              "web/python-worker.source.js",
+              '''import _manim_lifecycle\n# Retained text must wrap the final lifecycle-aware Scene.add implementation so\n# it is intercepted before any legacy geometry binding occurs.\nimport _manim_typst\n''',
+              '''import _manim_lifecycle\n# Retained Text specializes content binding below the lifecycle-owned Scene.add path;\n# it must not replace or intercept scene membership semantics.\nimport _manim_typst\n''',
+          )
+          replace_once(
+              "web/python-worker.source.js",
+              '''if isinstance(__noon_result, Scene):\n    __noon_kind = "scene_document"\n    __noon_duration = float(__noon_result.time)\n    __noon_identities = __noon_result.identity_document()\n    __noon_callbacks = _manim_updaters.register_scene(__noon_result)\n    __noon_retained = __noon_result.retained_document()\nelif isinstance(__noon_result, PatchBatch):\n    __noon_kind = "patch_batch"\n    __noon_duration = None\n    __noon_identities = None\n    __noon_callbacks = None\n    __noon_retained = None\nelse:\n    raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")\njson.dumps(\n    {\n        "kind": __noon_kind,\n        "document": __noon_result.to_document(),\n        "retained_document": __noon_retained,\n        "duration": __noon_duration,\n        "identities": __noon_identities,\n        "callbacks": __noon_callbacks,\n    },\n''',
+              '''if isinstance(__noon_result, Scene):\n    __noon_kind = "scene_document"\n    __noon_scene_spec = __noon_result.to_scene_spec()\n    __noon_document = __noon_result.to_document()\n    __noon_retained = __noon_result.retained_document()\n    __noon_duration = float(__noon_result.time)\n    __noon_identities = __noon_result.identity_document()\n    __noon_callbacks = _manim_updaters.register_scene(__noon_result)\nelif isinstance(__noon_result, PatchBatch):\n    __noon_kind = "patch_batch"\n    __noon_scene_spec = None\n    __noon_document = __noon_result.to_document()\n    __noon_retained = None\n    __noon_duration = None\n    __noon_identities = None\n    __noon_callbacks = None\nelse:\n    raise TypeError("Python authoring result must be a noon.Scene or noon.PatchBatch")\njson.dumps(\n    {\n        "kind": __noon_kind,\n        "document": __noon_document,\n        "retained_document": __noon_retained,\n        "scene_spec": __noon_scene_spec,\n        "duration": __noon_duration,\n        "identities": __noon_identities,\n        "callbacks": __noon_callbacks,\n    },\n''',
+          )
+          replace_once(
+              "web/python-worker.source.js",
+              '''    const result = JSON.parse(resultJson);\n    if (result.retained_document !== null) {\n      const retainedDocumentJson = JSON.stringify(result.retained_document);\n      validateRetainedAuthoringDocumentJson(retainedDocumentJson);\n      result.scene_spec = JSON.parse(\n        canonicalRetainedSceneSpecJson(JSON.stringify(result.document), retainedDocumentJson),\n      );\n    }\n    return JSON.stringify(result);\n''',
+              '''    return resultJson;\n''',
+          )
+
+          replace_once(
+              "web/authoring-scene-spec-result.test.mjs",
+              '''test("Python worker canonicalizes retained output through the Rust WASM bridge", async () => {\n  const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");\n  assert.match(source, /canonicalRetainedSceneSpecJson/);\n  assert.match(source, /result\\.scene_spec\\s*=\\s*JSON\\.parse/);\n  assert.match(\n    source,\n    /canonicalRetainedSceneSpecJson\\(JSON\\.stringify\\(result\\.document\\), retainedDocumentJson\\)/,\n  );\n  assert.doesNotMatch(source, /retained_document\\.objects\\.length/);\n});\n''',
+              '''test("Scene producer owns canonical SceneSpec finalization through the Rust WASM bridge", async () => {\n  const [workerSource, pythonSource] = await Promise.all([\n    readFile(new URL("./python-worker.source.js", import.meta.url), "utf8"),\n    readFile(new URL("./python/noon.py", import.meta.url), "utf8"),\n  ]);\n\n  assert.match(workerSource, /self\\.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson/);\n  assert.match(workerSource, /__noon_scene_spec = __noon_result\\.to_scene_spec\\(\\)/);\n  assert.match(workerSource, /"scene_spec": __noon_scene_spec/);\n  assert.doesNotMatch(workerSource, /result\\.scene_spec\\s*=/);\n  assert.doesNotMatch(workerSource, /validateRetainedAuthoringDocumentJson/);\n\n  assert.match(pythonSource, /def to_scene_spec\\(self\\)/);\n  assert.match(pythonSource, /from js import noonCanonicalSceneSpecJson as canonicalize/);\n  assert.match(pythonSource, /retained_document = getattr\\(self, "retained_document", None\\)/);\n  assert.match(pythonSource, /canonicalize\\(legacy_json, retained_json\\)/);\n});\n''',
+          )
+          PY
+      - name: Build generated authoring assets
+        run: node scripts/build-python-worker.mjs
+      - name: Run focused producer checks
+        run: |
+          node --test web/authoring-scene-spec-result.test.mjs
+          node --test web/python-compat-bundle.test.mjs
+          git diff --check
+      - name: Commit source changes
+        run: |
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add web/python/noon.py web/python-worker.source.js web/authoring-scene-spec-result.test.mjs
+          git commit -m "Make Scene own canonical SceneSpec production"
+          git push origin HEAD:tmp/367-scene-producer
