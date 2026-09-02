@@ -7,6 +7,7 @@
   </head>
   <body>
     <canvas id="retained-write-smoke" width="640" height="360"></canvas>
+    <canvas id="retained-stress-smoke" width="640" height="360"></canvas>
     <script type="module">
       import init, { semanticFrameJson } from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
@@ -44,6 +45,8 @@ class RetainedFamilyUnwriteSmoke(Scene):
       let readyPromise = null;
       let writeResult = null;
       let writeRenderResult = null;
+      let stressResult = null;
+      let stressRenderResult = null;
 
       function oneFamilyRequest(result, label) {
         if (result.kind !== "scene_document") {
@@ -70,12 +73,46 @@ class RetainedFamilyUnwriteSmoke(Scene):
         return request;
       }
 
-      async function renderWriteMidpoint() {
-        if (writeResult == null) {
-          throw new Error("family Write authoring result is unavailable");
+      async function waitForRenderedState(
+        execution,
+        { label, seekTime, expectedObjectCount, errors },
+      ) {
+        let latest = null;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          latest = await execution.metrics();
+          if (errors.length !== 0) {
+            throw new Error(`${label} retained execution reported errors: ${errors.join("; ")}`);
+          }
+          const renderTime = Number(latest.metrics.time);
+          if (
+            Math.abs(renderTime - seekTime) <= 1e-6 &&
+            latest.metrics.objectCount === expectedObjectCount
+          ) {
+            return latest;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const renderTime = latest == null ? "unavailable" : latest.metrics.time;
+        const objectCount = latest == null ? "unavailable" : latest.metrics.objectCount;
+        throw new Error(
+          `${label} renderer did not converge to t=${seekTime} with ${expectedObjectCount} visible objects; ` +
+            `last state was t=${renderTime}, objects=${objectCount}`,
+        );
+      }
+
+      async function renderCanonicalMidpoint({
+        result,
+        canvasSelector,
+        label,
+        loopDurationSeconds,
+        seekTime,
+        expectedObjectCount,
+      }) {
+        if (result == null) {
+          throw new Error(`${label} authoring result is unavailable`);
         }
 
-        const canvas = document.querySelector("#retained-write-smoke");
+        const canvas = document.querySelector(canvasSelector);
         const errors = [];
         const execution = new ExecutionWorkerClient(canvas, {
           onError(error, owner) {
@@ -84,30 +121,28 @@ class RetainedFamilyUnwriteSmoke(Scene):
         });
         try {
           const readyState = await execution.startRetainedCanonical(
-            JSON.stringify(writeResult.sceneSpec),
+            JSON.stringify(result.sceneSpec),
             {
-              loopDurationSeconds: 1.0,
+              loopDurationSeconds,
               transportMode: "transferable",
             },
           );
           await execution.pause();
-          await execution.seek(0.5);
-          await new Promise((resolve) => setTimeout(resolve, 120));
-          const metrics = await execution.metrics();
+          await execution.seek(seekTime);
+          const metrics = await waitForRenderedState(execution, {
+            label,
+            seekTime,
+            expectedObjectCount,
+            errors,
+          });
           if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-            throw new Error("family Write midpoint did not run through canonical retained execution");
-          }
-          if (metrics.metrics.objectCount !== 1) {
-            throw new Error(`family Write renderer expected one object, got ${metrics.metrics.objectCount}`);
+            throw new Error(`${label} midpoint did not run through canonical retained execution`);
           }
           if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
-            throw new Error("family Write midpoint did not produce a presented retained render frame");
+            throw new Error(`${label} midpoint did not produce a presented retained render frame`);
           }
-          if (Math.abs(Number(metrics.engineMetrics.time) - 0.5) > 1e-6) {
-            throw new Error(`family Write deterministic seek drifted to ${metrics.engineMetrics.time}`);
-          }
-          if (errors.length !== 0) {
-            throw new Error(`family Write retained execution reported errors: ${errors.join("; ")}`);
+          if (Math.abs(Number(metrics.engineMetrics.time) - seekTime) > 1e-6) {
+            throw new Error(`${label} deterministic seek drifted to ${metrics.engineMetrics.time}`);
           }
           return {
             backend: metrics.metrics.backend,
@@ -115,6 +150,8 @@ class RetainedFamilyUnwriteSmoke(Scene):
             drawCalls: metrics.metrics.drawCalls,
             instancesDrawn: metrics.metrics.instancesDrawn,
             engineTime: metrics.engineMetrics.time,
+            renderTime: metrics.metrics.time,
+            objectCount: metrics.metrics.objectCount,
             readyState,
           };
         } finally {
@@ -170,11 +207,64 @@ class RetainedFamilyUnwriteSmoke(Scene):
               throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
             }
 
-            // Reuse this already-loaded browser/Pyodide smoke for one real execution
-            // frame. A midpoint seek forces DrawBorderThenFill through the canonical
-            // family runtime and retained renderer instead of only checking authoring JSON.
-            writeRenderResult = await renderWriteMidpoint();
-            return { create, write: writeResult, unwrite, writeRender: writeRenderResult };
+            writeRenderResult = await renderCanonicalMidpoint({
+              result: writeResult,
+              canvasSelector: "#retained-write-smoke",
+              label: "family Write",
+              loopDurationSeconds: 1.0,
+              seekTime: 0.5,
+              expectedObjectCount: 1,
+            });
+
+            const stressResponse = await fetch("./python/examples/manim_parity_stress_grid.py");
+            if (!stressResponse.ok) {
+              throw new Error(`stress source fetch failed with HTTP ${stressResponse.status}`);
+            }
+            const stressSource = await stressResponse.text();
+            stressResult = await client.run(stressSource);
+            if (stressResult.kind !== "scene_document") {
+              throw new Error(`stress smoke returned ${stressResult.kind}`);
+            }
+            if (Math.abs(Number(stressResult.duration) - 5.0) > 1e-12) {
+              throw new Error(`stress scene duration drifted to ${stressResult.duration}`);
+            }
+            if (!stressResult.sceneSpec) {
+              throw new Error("stress scene did not produce canonical SceneSpec");
+            }
+            if (stressResult.document.objects.length !== 108) {
+              throw new Error(
+                `stress scene expected 108 geometry objects, got ${stressResult.document.objects.length}`,
+              );
+            }
+            if (stressResult.retainedDocument?.objects?.length !== 2) {
+              throw new Error(
+                `stress scene expected two retained Text objects, got ${stressResult.retainedDocument?.objects?.length}`,
+              );
+            }
+            if (stressResult.sceneSpec.objects.length !== 110) {
+              throw new Error(
+                `stress canonical SceneSpec expected 110 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
+              );
+            }
+            stressRenderResult = await renderCanonicalMidpoint({
+              result: stressResult,
+              canvasSelector: "#retained-stress-smoke",
+              label: "mixed-object parity stress",
+              loopDurationSeconds: 5.0,
+              seekTime: 2.8,
+              // At t=2.8 the 72 original shapes and two retained Text objects are
+              // present. The 36 pulse circles are authored but do not enter until 3.6s.
+              expectedObjectCount: 74,
+            });
+
+            return {
+              create,
+              write: writeResult,
+              unwrite,
+              writeRender: writeRenderResult,
+              stress: stressResult,
+              stressRender: stressRenderResult,
+            };
           })();
         }
         return readyPromise;
@@ -185,6 +275,10 @@ class RetainedFamilyUnwriteSmoke(Scene):
         renderRetainedWriteMidpoint: async () => {
           await ready();
           return writeRenderResult;
+        },
+        renderStressMidpoint: async () => {
+          await ready();
+          return stressRenderResult;
         },
         run: (source) => client.run(source),
         semanticFrame: (sceneJson, time) => JSON.parse(semanticFrameJson(sceneJson, time)),
