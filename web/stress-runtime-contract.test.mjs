@@ -24,7 +24,7 @@ assert.equal(
   canonical.replace("from manim import *", "from noon import *"),
   "stress source must remain import-only source compatible",
 );
-assert.match(noon, /class DynamicLoadStress\(Scene\)/);
+assert.match(noon, /class MixedObjectParityStress\(Scene\)/);
 assert.match(noon, /rows = 20/);
 assert.match(noon, /cols = 30/);
 assert.match(noon, /shape_count = rows \* cols/);
@@ -64,12 +64,12 @@ assert.match(
   "contract should track the retained family mixed-play capability boundary",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
-assert.match(browserSmoke, /stressResult\.duration\) - 6\.06/);
+assert.match(browserSmoke, /stressResult\.duration\) - 5\.0/);
 assert.match(browserSmoke, /stressResult\.document\.objects\.length !== 800/);
 assert.match(browserSmoke, /stressResult\.retainedDocument\?\.objects\?\.length !== 26/);
 assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 826/);
 assert.match(browserSmoke, /expectedObjectCount: 626/);
 assert.match(browserSmoke, /waitForRenderedState/);
-assert.match(browserSmoke, /seekTime: 3\.6/);
+assert.match(browserSmoke, /seekTime: 3\.0/);
 
 console.log("✓ stress runtime capability and browser-execution contract");
