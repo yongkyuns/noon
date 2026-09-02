@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Noon Playground: author mathematical animation in Python and run it in a persistent Rust/WASM GPU runtime with WebGPU and WebGL2 fallback."
+      content="Noon Playground: author mathematical animation in Python and preview it in the browser."
     />
     <link rel="icon" href="data:," />
-    <title>Noon Playground · Python + GPU</title>
+    <title>Noon Playground</title>
     <style>
       :root {
         color-scheme: dark;
@@ -35,12 +35,16 @@
         box-sizing: border-box;
       }
 
+      [hidden] {
+        display: none !important;
+      }
+
       body {
         min-height: 100vh;
         margin: 0;
         background:
-          radial-gradient(circle at 14% -10%, rgb(83 68 178 / 25%), transparent 32rem),
-          radial-gradient(circle at 88% 6%, rgb(35 113 143 / 16%), transparent 28rem),
+          radial-gradient(circle at 14% -10%, rgb(83 68 178 / 22%), transparent 32rem),
+          radial-gradient(circle at 88% 6%, rgb(35 113 143 / 14%), transparent 28rem),
           #07090f;
       }
 
@@ -50,7 +54,8 @@
       }
 
       button:focus-visible,
-      textarea:focus-visible {
+      textarea:focus-visible,
+      a:focus-visible {
         outline: 2px solid var(--accent-strong);
         outline-offset: 2px;
       }
@@ -58,83 +63,74 @@
       .shell {
         width: min(100% - 2rem, 92rem);
         margin: 0 auto;
-        padding: 1.4rem 0 2.5rem;
+        padding: 1rem 0 2rem;
       }
 
       .topbar {
         display: flex;
+        min-height: 3rem;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 1.1rem;
+        margin-bottom: 0.75rem;
       }
 
       .brand {
         display: flex;
+        min-width: 0;
         align-items: center;
-        gap: 0.8rem;
+        gap: 0.65rem;
       }
 
       .mark {
         display: grid;
-        width: 2.25rem;
-        height: 2.25rem;
+        width: 2rem;
+        height: 2rem;
+        flex: none;
         place-items: center;
         border: 1px solid #514691;
-        border-radius: 0.75rem;
+        border-radius: 0.65rem;
         background: linear-gradient(145deg, #2a2351, #171426);
         color: #d7d0ff;
         font-weight: 800;
         letter-spacing: -0.08em;
       }
 
-      h1,
-      h2,
-      p {
-        margin: 0;
-      }
-
       h1 {
-        font-size: 1.05rem;
+        margin: 0;
+        overflow: hidden;
+        font-size: 1rem;
         letter-spacing: -0.02em;
-      }
-
-      .subtitle {
-        margin-top: 0.16rem;
-        color: var(--muted);
-        font-size: 0.78rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .runtime-status {
         display: flex;
-        align-items: center;
-        gap: 0.5rem;
         min-width: 0;
-        padding: 0.5rem 0.72rem;
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        background: rgb(8 11 18 / 72%);
-        color: #bdc7da;
-        font: 0.76rem ui-monospace, SFMono-Regular, Menlo, monospace;
+        align-items: center;
+        gap: 0.42rem;
+        padding: 0.35rem 0.5rem;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.72rem;
       }
 
       .status-dot {
-        width: 0.48rem;
-        height: 0.48rem;
+        width: 0.42rem;
+        height: 0.42rem;
         flex: none;
         border-radius: 50%;
         background: #71809c;
-        box-shadow: 0 0 0 0.2rem rgb(113 128 156 / 10%);
       }
 
       .runtime-status[data-state="running"] .status-dot {
         background: var(--success);
-        box-shadow: 0 0 0 0.2rem rgb(117 215 176 / 12%);
       }
 
       .runtime-status[data-state="error"] .status-dot {
         background: var(--danger);
-        box-shadow: 0 0 0 0.2rem rgb(255 143 157 / 12%);
       }
 
       .workspace {
@@ -143,9 +139,9 @@
         min-height: 38rem;
         overflow: hidden;
         border: 1px solid var(--border);
-        border-radius: 1.1rem;
+        border-radius: 1rem;
         background: rgb(7 10 16 / 78%);
-        box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 30%);
+        box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 28%);
       }
 
       .editor-pane,
@@ -161,9 +157,10 @@
         background: var(--panel-strong);
       }
 
-      .pane-toolbar {
+      .pane-toolbar,
+      .preview-head {
         display: flex;
-        min-height: 3.1rem;
+        min-height: 3rem;
         align-items: center;
         justify-content: space-between;
         gap: 0.8rem;
@@ -171,39 +168,26 @@
         border-bottom: 1px solid var(--border);
       }
 
-      .tabs,
+      .file-label,
+      .preview-title {
+        color: #d5dbea;
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
       .actions {
         display: flex;
         align-items: center;
         gap: 0.38rem;
       }
 
-      .tab,
       .secondary-button,
       .primary-button {
         appearance: none;
-        border-radius: 0.58rem;
-        cursor: pointer;
-      }
-
-      .tab {
-        border: 0;
-        padding: 0.46rem 0.62rem;
-        background: transparent;
-        color: var(--muted);
-        font-size: 0.78rem;
-        font-weight: 650;
-      }
-
-      .tab[aria-selected="true"] {
-        background: #1c2332;
-        color: #f3f5fb;
-      }
-
-      .secondary-button,
-      .primary-button {
         border: 1px solid var(--border-strong);
-        padding: 0.48rem 0.68rem;
+        border-radius: 0.58rem;
+        padding: 0.46rem 0.68rem;
+        cursor: pointer;
         font-size: 0.76rem;
         font-weight: 700;
       }
@@ -232,20 +216,15 @@
         opacity: 0.48;
       }
 
-      .editor-stack {
-        position: relative;
+      .editor-stack,
+      .editor-panel {
         display: flex;
         min-height: 0;
         flex: 1;
       }
 
       .editor-panel {
-        display: none;
         width: 100%;
-      }
-
-      .editor-panel[data-active="true"] {
-        display: flex;
         flex-direction: column;
       }
 
@@ -269,14 +248,12 @@
 
       .editor-footer {
         display: flex;
-        min-height: 2.65rem;
+        min-height: 2.35rem;
         align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        padding: 0.58rem 0.8rem;
+        padding: 0.48rem 0.8rem;
         border-top: 1px solid var(--border);
         color: var(--muted-2);
-        font-size: 0.72rem;
+        font-size: 0.7rem;
       }
 
       #patch-status {
@@ -295,11 +272,6 @@
         color: var(--danger);
       }
 
-      .shortcut {
-        flex: none;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-
       .preview-pane {
         display: flex;
         min-height: 38rem;
@@ -307,36 +279,6 @@
         background:
           radial-gradient(circle at 50% 42%, rgb(62 70 100 / 16%), transparent 22rem),
           #090c13;
-      }
-
-      .preview-head {
-        display: flex;
-        min-height: 3.1rem;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        padding: 0 0.9rem;
-        border-bottom: 1px solid var(--border);
-      }
-
-      .preview-title {
-        color: #d5dbea;
-        font-size: 0.78rem;
-        font-weight: 700;
-      }
-
-      .badges {
-        display: flex;
-        gap: 0.38rem;
-      }
-
-      .badge {
-        padding: 0.25rem 0.45rem;
-        border: 1px solid #2c3850;
-        border-radius: 999px;
-        background: #111722;
-        color: #8f9db5;
-        font: 0.66rem ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
       .canvas-wrap {
@@ -373,39 +315,17 @@
         box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
       }
 
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        border-top: 1px solid var(--border);
-        background: rgb(10 13 21 / 86%);
-      }
-
-      .metric {
-        min-width: 0;
-        padding: 0.72rem 0.85rem 0.78rem;
-        border-right: 1px solid var(--border);
-      }
-
-      .metric:last-child {
-        border-right: 0;
-      }
-
-      .metric-label {
-        display: block;
-        margin-bottom: 0.22rem;
-        color: var(--muted-2);
-        font-size: 0.66rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-      }
-
-      .metric-value {
-        display: block;
-        overflow: hidden;
-        color: #dce3f1;
-        font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      /*
+       * These surfaces are still produced/updated by the current runtime JS for
+       * diagnostics and compatibility, but they are deliberately not part of
+       * the default public playground chrome. Follow-up #880 work removes the
+       * legacy DOM hooks once the UI/runtime state split is complete.
+       */
+      .selected-example,
+      .badges,
+      .metrics,
+      .shortcut {
+        display: none !important;
       }
 
       @media (max-width: 68rem) {
@@ -427,36 +347,35 @@
       @media (max-width: 44rem) {
         .shell {
           width: min(100% - 1rem, 92rem);
-          padding-top: 0.75rem;
+          padding-top: 0.6rem;
         }
 
         .topbar {
-          align-items: flex-start;
-          flex-direction: column;
+          min-height: 2.6rem;
+          margin-bottom: 0.55rem;
         }
 
         .runtime-status {
-          max-width: 100%;
+          max-width: 48%;
+          overflow: hidden;
+        }
+
+        #status-text {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .workspace {
-          border-radius: 0.85rem;
+          border-radius: 0.8rem;
         }
 
         .pane-toolbar {
-          min-height: auto;
-          align-items: stretch;
-          flex-direction: column;
-          padding: 0.62rem;
-        }
-
-        .tabs,
-        .actions {
-          justify-content: space-between;
+          padding: 0 0.6rem;
         }
 
         .actions button {
-          flex: 1;
+          min-width: 4.5rem;
         }
 
         textarea {
@@ -470,29 +389,12 @@
           min-height: 25rem;
         }
 
-        .badges {
-          display: none;
-        }
-
         .canvas-wrap {
           padding: 0.55rem;
         }
 
         .canvas-frame::before {
           padding-top: 75%;
-        }
-
-        .metrics,
-        .perf-metrics {
-          grid-template-columns: repeat(2, 1fr);
-        }
-
-        .metric:nth-child(2) {
-          border-right: 0;
-        }
-
-        .metric:nth-child(-n + 2) {
-          border-bottom: 1px solid var(--border);
         }
       }
     </style>
@@ -502,66 +404,30 @@
       <header class="topbar">
         <div class="brand">
           <div class="mark" aria-hidden="true">N</div>
-          <div>
-            <h1>Noon Playground</h1>
-            <p class="subtitle">Write Python. Keep the animation loop in Rust + GPU.</p>
-          </div>
+          <h1>Noon Playground</h1>
         </div>
         <output id="status" class="runtime-status" aria-live="polite">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="status-text">Starting GPU renderer…</span>
+          <span id="status-text">Loading…</span>
         </output>
       </header>
 
       <section class="workspace" aria-label="Noon interactive playground">
         <section class="editor-pane" aria-label="Python editor">
           <div class="pane-toolbar">
-            <div class="tabs" role="tablist" aria-label="Python source type">
-              <button
-                id="scene-tab"
-                class="tab"
-                type="button"
-                role="tab"
-                aria-selected="true"
-                aria-controls="scene-editor-panel"
-              >
-                scene.py
-              </button>
-              <button
-                id="patch-tab"
-                class="tab"
-                type="button"
-                role="tab"
-                aria-selected="false"
-                aria-controls="patch-editor-panel"
-              >
-                patch.py
-              </button>
-            </div>
+            <span class="file-label">main.py</span>
             <div class="actions">
-              <button id="apply-patch" class="secondary-button" type="button" disabled>
-                Apply patch
-              </button>
               <button id="replace-scene" class="primary-button" type="button" disabled>
-                Run scene
+                Run
               </button>
             </div>
           </div>
 
           <div class="editor-stack">
-            <div id="scene-editor-panel" class="editor-panel" data-active="true" role="tabpanel">
+            <div id="scene-editor-panel" class="editor-panel">
               <textarea
                 id="python-scene-source"
                 aria-label="Python scene source"
-                autocomplete="off"
-                autocorrect="off"
-                spellcheck="false"
-              ></textarea>
-            </div>
-            <div id="patch-editor-panel" class="editor-panel" data-active="false" role="tabpanel">
-              <textarea
-                id="python-source"
-                aria-label="Python patch source"
                 autocomplete="off"
                 autocorrect="off"
                 spellcheck="false"
@@ -571,45 +437,41 @@
 
           <footer class="editor-footer">
             <output id="patch-status" aria-live="polite">Loading Python examples…</output>
-            <span class="shortcut">⌘/Ctrl + Enter</span>
           </footer>
+
+          <!--
+            Temporary internal compatibility hooks for main.js. They are not public UI.
+            Remove with the #880 JS/state cleanup once patch-era references are deleted.
+          -->
+          <div hidden aria-hidden="true">
+            <button id="scene-tab" type="button"></button>
+            <button id="patch-tab" type="button"></button>
+            <button id="apply-patch" type="button" disabled></button>
+            <div id="patch-editor-panel">
+              <textarea id="python-source" aria-label="Internal Python patch source"></textarea>
+            </div>
+          </div>
         </section>
 
-        <section class="preview-pane" aria-label="GPU preview">
+        <section class="preview-pane" aria-label="Animation preview">
           <div class="preview-head">
-            <span class="preview-title">Live preview</span>
-            <div class="badges" aria-label="Runtime technologies">
-              <span class="badge">Pyodide worker</span>
-              <span class="badge">Rust/WASM</span>
-              <span class="badge">WebGPU / WebGL2</span>
-            </div>
+            <span class="preview-title">Preview</span>
           </div>
           <div class="canvas-wrap">
             <div class="canvas-frame">
               <canvas id="scene" aria-label="Animated Noon scene"></canvas>
             </div>
           </div>
-          <div class="metrics" aria-label="Runtime metrics">
-            <div class="metric">
-              <span class="metric-label">Objects</span>
-              <output id="metric-objects" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Draw calls</span>
-              <output id="metric-draws" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">GPU upload</span>
-              <output id="metric-upload" class="metric-value">—</output>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Playhead</span>
-              <output id="metric-time" class="metric-value">—</output>
-            </div>
+
+          <!-- Runtime metrics remain available to the current JS but are not default chrome. -->
+          <div class="metrics" hidden aria-hidden="true">
+            <output id="metric-objects">—</output>
+            <output id="metric-draws">—</output>
+            <output id="metric-upload">—</output>
+            <output id="metric-time">—</output>
           </div>
         </section>
       </section>
-
     </main>
 
     <script type="module" src="./main.js"></script>
