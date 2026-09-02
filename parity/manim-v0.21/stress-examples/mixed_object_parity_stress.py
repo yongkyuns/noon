@@ -144,7 +144,8 @@ class MixedObjectParityStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_color(color)
                 )
-            self.play(*wave_motion, run_time=0.08)
+            if wave_motion:
+                self.play(*wave_motion, run_time=0.08)
 
         label_specs = []
         for index in range(len(labels)):
@@ -261,4 +262,5 @@ class MixedObjectParityStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_color(color)
                 )
-            self.play(*wave_motion, run_time=0.09)
+            if wave_motion:
+                self.play(*wave_motion, run_time=0.09)
