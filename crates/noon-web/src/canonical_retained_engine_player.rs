@@ -73,35 +73,25 @@ impl CanonicalRetainedEnginePlayer {
         loop_duration_seconds: f64,
         session: u32,
     ) -> Result<Self, CanonicalRetainedEnginePlayerError> {
-        let family_animation_count = scene_spec.family_animations.len();
-        if family_animation_count > 1 {
-            return Err(
-                CanonicalRetainedEnginePlayerError::MultipleFamilyAnimationsUnsupported(
-                    family_animation_count,
-                ),
-            );
-        }
-
+        let has_family_animations = !scene_spec.family_animations.is_empty();
         let scene_spec_json = scene_spec.to_json()?;
-        let player = if family_animation_count == 0 {
+        let player = if !has_family_animations {
             let mixed = MixedRetainedAuthoringScene::from_scene_spec(scene_spec)?;
             CanonicalRetainedExecutionPlayer::Ordinary(RetainedAuthoringPlayer::new(
                 mixed, session,
             )?)
         } else {
             let lowered = CanonicalRetainedFamilyAnimationScene::from_scene_spec(scene_spec)?;
-            let (scene, tracks, camera_object, mut animations) = lowered.into_parts();
-            let animation = animations
-                .pop()
-                .expect("one canonical family request must lower to one animation");
-            debug_assert!(animations.is_empty());
-            let (plan, spec) = animation.into_parts();
+            let (scene, tracks, camera_object, animations) = lowered.into_parts();
+            let animations = animations
+                .into_iter()
+                .map(|animation| animation.into_parts())
+                .collect();
             CanonicalRetainedExecutionPlayer::Family(
-                RetainedFamilyExecutionPlayer::new_with_tracks(
+                RetainedFamilyExecutionPlayer::new_many_with_tracks(
                     scene,
                     &tracks,
-                    plan,
-                    spec,
+                    animations,
                     camera_object,
                     session,
                 )?,
@@ -192,7 +182,6 @@ pub enum CanonicalRetainedEnginePlayerError {
     Player(RetainedAuthoringPlayerError),
     FamilyScene(CanonicalRetainedFamilyAnimationSceneError),
     FamilyPlayer(RetainedFamilyExecutionPlayerError),
-    MultipleFamilyAnimationsUnsupported(usize),
     MissingInitialSnapshot,
     Clock(ClockError),
     Json(serde_json::Error),
@@ -206,13 +195,8 @@ impl std::fmt::Display for CanonicalRetainedEnginePlayerError {
             Self::Player(error) => error.fmt(formatter),
             Self::FamilyScene(error) => error.fmt(formatter),
             Self::FamilyPlayer(error) => error.fmt(formatter),
-            Self::MultipleFamilyAnimationsUnsupported(count) => write!(
-                formatter,
-                "canonical retained execution currently supports at most one family animation; received {count}"
-            ),
-            Self::MissingInitialSnapshot => {
-                formatter.write_str("canonical retained execution did not emit its initial snapshot")
-            }
+            Self::MissingInitialSnapshot => formatter
+                .write_str("canonical retained execution did not emit its initial snapshot"),
             Self::Clock(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
         }
@@ -435,6 +419,29 @@ mod tests {
         (scene_spec, text_id, circle_id)
     }
 
+    fn append_family_request(
+        scene_spec: &mut SceneSpec,
+        start_time: f64,
+        duration: f64,
+        mode: FamilyAnimationMode,
+    ) {
+        let first = &scene_spec.family_animations[0];
+        let spec = FamilyAnimationSpec::new(
+            mode,
+            start_time,
+            duration,
+            first.spec().lag_ratio,
+            RateFunction::Linear,
+            false,
+            false,
+        )
+        .unwrap();
+        scene_spec.family_animations.push(
+            FamilyAnimationRequest::new(first.target(), first.bindings().to_vec(), spec).unwrap(),
+        );
+        scene_spec.validate().unwrap();
+    }
+
     fn assert_family_midpoint(
         mirror: &InstalledRetainedExecutionMirror,
         text_id: ObjectId,
@@ -444,11 +451,6 @@ mod tests {
         assert_eq!(plan.leaves()[0].span().object, text_id);
         assert_eq!(plan.leaves()[1].span().object, circle_id);
 
-        // Canonical painter/materialization order is intentionally Circle -> Text for
-        // this fixture, while semantic family order is Text -> Circle. Renderer family
-        // lookup takes a retained runtime object slot, so resolve those slots by stable
-        // ObjectId rather than accidentally treating semantic-plan indices as painter
-        // indices. This directly proves the two ordering domains stay independent.
         let retained = mirror.frame().unwrap();
         let text_index = retained
             .objects
@@ -618,15 +620,63 @@ mod tests {
     }
 
     #[test]
-    fn canonical_engine_rejects_multiple_family_animations_explicitly() {
+    fn canonical_engine_runs_sequential_family_requests_with_exact_plan_identity() {
+        let (mut scene_spec, text_id, circle_id) = family_scene_spec();
+        append_family_request(&mut scene_spec, 3.0, 1.0, FamilyAnimationMode::Reveal);
+        let mut engine = CanonicalRetainedEnginePlayer::new(scene_spec, 5.0, 71).unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(engine.resource_bundle_bytes())
+                .unwrap();
+
+        let initial = engine.initial_delta_json().unwrap();
+        let initial_delta: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        assert_eq!(initial_delta.family_plans.len(), 2);
+        mirror.apply_json(&initial).unwrap();
+        assert_eq!(mirror.family_plans().len(), 2);
+
+        let first = engine
+            .seek_delta_json(2.0)
+            .unwrap()
+            .expect("first family request state");
+        mirror.apply_json(&first).unwrap();
+        let retained = mirror.frame().unwrap();
+        let text_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == text_id)
+            .unwrap();
+        let circle_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == circle_id)
+            .unwrap();
+        let first_frame = mirror.planned_family_frame().unwrap().unwrap();
+        assert_eq!(first_frame.family_plan_index(text_index), Some(0));
+        assert_eq!(first_frame.family_plan_index(circle_index), Some(0));
+
+        let second = engine
+            .seek_delta_json(3.5)
+            .unwrap()
+            .expect("second family request state");
+        mirror.apply_json(&second).unwrap();
+        let second_frame = mirror.planned_family_frame().unwrap().unwrap();
+        assert_eq!(second_frame.family_plan_index(text_index), Some(1));
+        assert_eq!(second_frame.family_plan_index(circle_index), Some(1));
+    }
+
+    #[test]
+    fn canonical_engine_rejects_overlapping_family_ownership_on_same_object() {
         let (mut scene_spec, _, _) = family_scene_spec();
-        scene_spec
-            .family_animations
-            .push(scene_spec.family_animations[0].clone());
-        let error = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 71).unwrap_err();
+        append_family_request(&mut scene_spec, 2.5, 1.0, FamilyAnimationMode::Reveal);
+        let error = CanonicalRetainedEnginePlayer::new(scene_spec, 4.0, 72).unwrap_err();
         assert!(matches!(
             error,
-            CanonicalRetainedEnginePlayerError::MultipleFamilyAnimationsUnsupported(2)
+            CanonicalRetainedEnginePlayerError::FamilyPlayer(
+                RetainedFamilyExecutionPlayerError::Runtime(
+                    noon_runtime::RetainedFamilyPlanSetRuntimeError::OverlappingAnimations { .. }
+                )
+            )
         ));
     }
 

@@ -7,6 +7,7 @@ mod retained_text {
         include!("gpu/retained_family_prepare.rs");
         include!("gpu/retained_family_draw_border_prepare.rs");
         include!("gpu/retained_family_animation_prepare.rs");
+        include!("gpu/retained_family_plan_set_prepare.rs");
     }
     pub use family_prepare::*;
 }

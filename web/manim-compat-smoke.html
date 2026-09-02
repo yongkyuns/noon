@@ -41,9 +41,19 @@ class RetainedFamilyUnwriteSmoke(Scene):
         self.add(text)
         self.play(Unwrite(text))
 `;
+      const sequentialFamilySource = `
+from noon import *
+
+class RetainedSequentialFamilySmoke(Scene):
+    def construct(self):
+        text = Text("AB")
+        self.play(Write(text), run_time=1.0, rate_func=linear)
+        self.play(Unwrite(text), run_time=1.0, rate_func=linear)
+`;
 
       let readyPromise = null;
       let writeResult = null;
+      let sequentialResult = null;
       let writeRenderResult = null;
       let stressResult = null;
       let stressRenderResult = null;
@@ -73,6 +83,30 @@ class RetainedFamilyUnwriteSmoke(Scene):
         return request;
       }
 
+      function sequentialFamilyRequests(result) {
+        if (result.kind !== "scene_document") {
+          throw new Error(`sequential family smoke returned ${result.kind}`);
+        }
+        const retained = result.retainedDocument;
+        if (!retained || retained.objects.length !== 1) {
+          throw new Error("sequential family smoke expected one retained Text object");
+        }
+        if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 2) {
+          throw new Error("sequential family smoke did not author two retained family requests");
+        }
+        const requests = result.sceneSpec?.family_animations;
+        if (!Array.isArray(requests) || requests.length !== 2) {
+          throw new Error("sequential family smoke did not reach two canonical family requests");
+        }
+        const serialized = JSON.stringify(requests);
+        for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
+          if (serialized.includes(forbidden)) {
+            throw new Error(`sequential family requests leaked ${forbidden}`);
+          }
+        }
+        return requests;
+      }
+
       async function waitForRenderedState(
         execution,
         { label, seekTime, expectedObjectCount, errors },
@@ -98,6 +132,18 @@ class RetainedFamilyUnwriteSmoke(Scene):
           `${label} renderer did not converge to t=${seekTime} with ${expectedObjectCount} visible objects; ` +
             `last state was t=${renderTime}, objects=${objectCount}`,
         );
+      }
+
+      function assertCanonicalRenderedState(metrics, label, seekTime) {
+        if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
+          throw new Error(`${label} did not run through canonical retained execution`);
+        }
+        if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
+          throw new Error(`${label} did not produce a presented retained render frame`);
+        }
+        if (Math.abs(Number(metrics.engineMetrics.time) - seekTime) > 1e-6) {
+          throw new Error(`${label} deterministic seek drifted to ${metrics.engineMetrics.time}`);
+        }
       }
 
       async function renderCanonicalMidpoint({
@@ -135,15 +181,7 @@ class RetainedFamilyUnwriteSmoke(Scene):
             expectedObjectCount,
             errors,
           });
-          if (!metrics.metrics.ready || !metrics.metrics.retained || !metrics.engineMetrics.canonical) {
-            throw new Error(`${label} midpoint did not run through canonical retained execution`);
-          }
-          if (metrics.metrics.presentedFrames < 1 || metrics.metrics.drawCalls < 1 || metrics.metrics.instancesDrawn < 1) {
-            throw new Error(`${label} midpoint did not produce a presented retained render frame`);
-          }
-          if (Math.abs(Number(metrics.engineMetrics.time) - seekTime) > 1e-6) {
-            throw new Error(`${label} deterministic seek drifted to ${metrics.engineMetrics.time}`);
-          }
+          assertCanonicalRenderedState(metrics, `${label} midpoint`, seekTime);
           return {
             backend: metrics.metrics.backend,
             presentedFrames: metrics.metrics.presentedFrames,
@@ -152,6 +190,65 @@ class RetainedFamilyUnwriteSmoke(Scene):
             engineTime: metrics.engineMetrics.time,
             renderTime: metrics.metrics.time,
             objectCount: metrics.metrics.objectCount,
+            readyState,
+          };
+        } finally {
+          execution.terminate();
+        }
+      }
+
+      async function renderSequentialFamilySwitch() {
+        if (sequentialResult == null) {
+          throw new Error("sequential family authoring result is unavailable");
+        }
+
+        const canvas = document.querySelector("#retained-write-smoke");
+        const errors = [];
+        const execution = new ExecutionWorkerClient(canvas, {
+          onError(error, owner) {
+            errors.push(`${owner}: ${error}`);
+          },
+        });
+        try {
+          const readyState = await execution.startRetainedCanonical(
+            JSON.stringify(sequentialResult.sceneSpec),
+            {
+              loopDurationSeconds: 2.0,
+              transportMode: "transferable",
+            },
+          );
+          await execution.pause();
+
+          await execution.seek(0.5);
+          const first = await waitForRenderedState(execution, {
+            label: "sequential family first plan",
+            seekTime: 0.5,
+            expectedObjectCount: 1,
+            errors,
+          });
+          assertCanonicalRenderedState(first, "sequential family first plan", 0.5);
+          const presentedAfterFirst = first.metrics.presentedFrames;
+
+          await execution.seek(1.5);
+          const second = await waitForRenderedState(execution, {
+            label: "sequential family second plan",
+            seekTime: 1.5,
+            expectedObjectCount: 1,
+            errors,
+          });
+          assertCanonicalRenderedState(second, "sequential family second plan", 1.5);
+          if (second.metrics.presentedFrames <= presentedAfterFirst) {
+            throw new Error("sequential family second plan did not present a new retained frame");
+          }
+
+          return {
+            backend: second.metrics.backend,
+            presentedFrames: second.metrics.presentedFrames,
+            drawCalls: second.metrics.drawCalls,
+            instancesDrawn: second.metrics.instancesDrawn,
+            engineTime: second.engineMetrics.time,
+            renderTime: second.metrics.time,
+            objectCount: second.metrics.objectCount,
             readyState,
           };
         } finally {
@@ -207,14 +304,26 @@ class RetainedFamilyUnwriteSmoke(Scene):
               throw new Error("default Unwrite must reverse both per-member rate and semantic member order");
             }
 
-            writeRenderResult = await renderCanonicalMidpoint({
-              result: writeResult,
-              canvasSelector: "#retained-write-smoke",
-              label: "family Write",
-              loopDurationSeconds: 1.0,
-              seekTime: 0.5,
-              expectedObjectCount: 1,
-            });
+            sequentialResult = await client.run(sequentialFamilySource);
+            const sequential = sequentialFamilyRequests(sequentialResult);
+            if (Math.abs(Number(sequential[0].spec.start_time) - 0.0) > 1e-12 || Math.abs(Number(sequential[0].spec.duration) - 1.0) > 1e-12) {
+              throw new Error("sequential Write did not retain its [0, 1] canonical interval");
+            }
+            if (Math.abs(Number(sequential[1].spec.start_time) - 1.0) > 1e-12 || Math.abs(Number(sequential[1].spec.duration) - 1.0) > 1e-12) {
+              throw new Error("sequential Unwrite did not retain its [1, 2] canonical interval");
+            }
+            if (sequential[0].spec.reverse_rate_function || sequential[0].spec.reverse_member_order) {
+              throw new Error("sequential Write unexpectedly reversed rate or member order");
+            }
+            if (!sequential[1].spec.reverse_rate_function || !sequential[1].spec.reverse_member_order) {
+              throw new Error("sequential Unwrite did not retain reverse rate/member semantics");
+            }
+            if (Math.abs(Number(sequentialResult.duration) - 2.0) > 1e-12) {
+              throw new Error(`sequential family scene cursor drifted to ${sequentialResult.duration}`);
+            }
+
+            // One canonical worker crosses the touching boundary and renders both plans.
+            writeRenderResult = await renderSequentialFamilySwitch();
 
             const stressResponse = await fetch("./python/examples/manim_parity_stress_grid.py");
             if (!stressResponse.ok) {
@@ -261,6 +370,7 @@ class RetainedFamilyUnwriteSmoke(Scene):
               create,
               write: writeResult,
               unwrite,
+              sequential: sequentialResult,
               writeRender: writeRenderResult,
               stress: stressResult,
               stressRender: stressRenderResult,

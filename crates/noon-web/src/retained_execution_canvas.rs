@@ -190,9 +190,6 @@ mod wasm {
                         self.surface.configure(&self.device, &self.config);
                         return Ok(false);
                     }
-                    // The device error callback owns validation diagnostics. Keep
-                    // the retained frame pending so a recoverable validation can
-                    // be reported once and presentation retried unchanged.
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
@@ -203,31 +200,8 @@ mod wasm {
                 self.config.height as f32 / camera.world_size.y,
             ))
             .map_err(js_error)?;
-            let family_plan = self.mirror.family_plan().map_err(js_error)?;
-            let prepared = if let Some(plan) = family_plan {
-                let family_frame = self
-                    .mirror
-                    .family_frame()
-                    .map_err(js_error)?
-                    .ok_or_else(|| {
-                        js_message(
-                            "retained family execution has a plan without an evaluated family frame",
-                        )
-                    })?;
-                self.preparer
-                    .prepare_family_animation_with_changes(
-                        &self.device,
-                        &self.queue,
-                        &family_frame,
-                        plan,
-                        &self.pending_changes,
-                        resources.texts(),
-                        resources.fonts(),
-                        resources.geometries(),
-                        metrics,
-                    )
-                    .map_err(js_error)?
-            } else {
+            let plans = self.mirror.family_plans();
+            let prepared = if plans.is_empty() {
                 let frame = self.mirror.frame().ok_or_else(|| {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
@@ -236,6 +210,29 @@ mod wasm {
                         &self.device,
                         &self.queue,
                         frame,
+                        &self.pending_changes,
+                        resources.texts(),
+                        resources.fonts(),
+                        resources.geometries(),
+                        metrics,
+                    )
+                    .map_err(js_error)?
+            } else {
+                let family_frame = self
+                    .mirror
+                    .planned_family_frame()
+                    .map_err(js_error)?
+                    .ok_or_else(|| {
+                        js_message(
+                            "retained family execution has plans without an evaluated family frame",
+                        )
+                    })?;
+                self.preparer
+                    .prepare_family_plan_set_with_changes(
+                        &self.device,
+                        &self.queue,
+                        &family_frame,
+                        plans,
                         &self.pending_changes,
                         resources.texts(),
                         resources.fonts(),

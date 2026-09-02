@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceArena};
-use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedFrameState};
+use noon_runtime::{
+    FrameChanges, RetainedFamilyFrame, RetainedFrameState, RetainedPlannedFamilyFrame,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,18 +11,24 @@ use crate::{
     RetainedFamilyTransportState,
 };
 
+type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
+
 /// Sparse per-object family scheduler state carried alongside an ordinary retained delta.
 ///
-/// An entry with `family_animation: None` is meaningful on incrementals: it clears a
-/// previously active family animation after its interval ends.
+/// `family_plan_index` identifies the immutable snapshot-installed plan that owns an
+/// active state. It is omitted for inactive states and remains optional on decode so
+/// pre-multi-plan single-family snapshots remain readable.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedFamilyExecutionObjectState {
     pub object: ObjectId,
     #[serde(flatten)]
     pub state: RetainedFamilyTransportState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_plan_index: Option<u32>,
 }
 
 impl RetainedFamilyExecutionObjectState {
+    /// Compatibility constructor for the original single-plan transport shape.
     pub fn new(
         object: ObjectId,
         family_animation: Option<FamilyAnimationState>,
@@ -28,15 +36,38 @@ impl RetainedFamilyExecutionObjectState {
         Ok(Self {
             object,
             state: RetainedFamilyTransportState::new(family_animation)?,
+            family_plan_index: None,
         })
+    }
+
+    /// Construct an explicitly planned state for plural family execution.
+    pub fn planned(
+        object: ObjectId,
+        family_animation: Option<FamilyAnimationState>,
+        family_plan_index: Option<u32>,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        let result = Self {
+            object,
+            state: RetainedFamilyTransportState::new(family_animation)?,
+            family_plan_index,
+        };
+        result.validate_plan_identity()?;
+        Ok(result)
+    }
+
+    fn validate_plan_identity(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if self.state.family_animation.is_none() && self.family_plan_index.is_some() {
+            return Err(RetainedFamilyExecutionTransportError::PlanIndexWithoutState(self.object));
+        }
+        Ok(())
     }
 }
 
 /// Additive family-animation envelope over the stable retained execution transport.
 ///
-/// Serde flattening preserves the existing retained v1 JSON shape. Family-aware
-/// producers add only sparse evaluated scheduler state and snapshot-only immutable
-/// plan descriptors; glyph IDs and renderer payloads remain renderer-local.
+/// Family-aware producers add sparse evaluated scheduler state plus snapshot-only
+/// immutable plan descriptors. Plan indices refer only to this snapshot plan vector;
+/// glyph IDs and renderer payloads remain renderer-local.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedFamilyExecutionDeltaEnvelope {
     #[serde(flatten)]
@@ -48,6 +79,7 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
+    /// Compatibility snapshot for one family plan.
     pub fn snapshot(
         retained: RetainedExecutionDeltaEnvelope,
         frame: &RetainedFamilyFrame<'_>,
@@ -68,6 +100,31 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         Ok(envelope)
     }
 
+    /// Snapshot with explicit active-plan ownership for plural family execution.
+    pub fn planned_snapshot(
+        retained: RetainedExecutionDeltaEnvelope,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        if !retained.snapshot {
+            return Err(RetainedFamilyExecutionTransportError::ExpectedSnapshot);
+        }
+        let envelope = Self {
+            family_states: planned_family_states_for_indices(
+                frame,
+                0..frame.retained.objects.len(),
+            )?,
+            family_plans: plans
+                .iter()
+                .map(RetainedFamilyPlanTransport::from_plan)
+                .collect(),
+            retained,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    /// Compatibility incremental for one family plan.
     pub fn incremental(
         retained: RetainedExecutionDeltaEnvelope,
         frame: &RetainedFamilyFrame<'_>,
@@ -78,6 +135,27 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         }
         let envelope = Self {
             family_states: family_states_for_indices(
+                frame,
+                changes.object_indices().iter().copied(),
+            )?,
+            family_plans: Vec::new(),
+            retained,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    /// Sparse plural-family incremental. Plan identity is sent only for changed objects.
+    pub fn planned_incremental(
+        retained: RetainedExecutionDeltaEnvelope,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        changes: &FrameChanges,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        if retained.snapshot {
+            return Err(RetainedFamilyExecutionTransportError::ExpectedIncremental);
+        }
+        let envelope = Self {
+            family_states: planned_family_states_for_indices(
                 frame,
                 changes.object_indices().iter().copied(),
             )?,
@@ -101,6 +179,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 ));
             }
             entry.state.validate()?;
+            entry.validate_plan_identity()?;
         }
         for plan in &self.family_plans {
             plan.validate()?;
@@ -127,6 +206,30 @@ fn family_states_for_indices(
         .collect()
 }
 
+fn planned_family_states_for_indices(
+    frame: &RetainedPlannedFamilyFrame<'_>,
+    indices: impl IntoIterator<Item = usize>,
+) -> Result<Vec<RetainedFamilyExecutionObjectState>, RetainedFamilyExecutionTransportError> {
+    if frame.family_animations.len() != frame.retained.objects.len()
+        || frame.family_plan_indices.len() != frame.retained.objects.len()
+    {
+        return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
+    }
+    indices
+        .into_iter()
+        .map(|index| {
+            let object = frame.retained.objects.get(index).ok_or(
+                RetainedFamilyExecutionTransportError::InvalidObjectIndex(index),
+            )?;
+            RetainedFamilyExecutionObjectState::planned(
+                object.id,
+                frame.family_animation(index),
+                frame.family_plan_index(index),
+            )
+        })
+        .collect()
+}
+
 /// Renderer-side family state paired with a resolved retained execution frame.
 ///
 /// Snapshots replace plans/state only after the complete replacement validates.
@@ -134,6 +237,7 @@ fn family_states_for_indices(
 #[derive(Clone, Debug, Default)]
 pub struct InstalledRetainedFamilyExecutionState {
     states: Vec<Option<FamilyAnimationState>>,
+    plan_indices: Vec<Option<u32>>,
     plans: Vec<RetainedFamilyAnimationPlan>,
     initialized: bool,
 }
@@ -154,10 +258,15 @@ impl InstalledRetainedFamilyExecutionState {
                 .map(|plan| plan.install(frame, texts))
                 .collect::<Result<Vec<_>, _>>()?;
             let mut states = vec![None; frame.objects.len()];
-            for (index, state) in validated_state_updates(frame, &plans, &delta.family_states)? {
+            let mut plan_indices = vec![None; frame.objects.len()];
+            for (index, state, plan_index) in
+                validated_state_updates(frame, &plans, &delta.family_states)?
+            {
                 states[index] = state;
+                plan_indices[index] = plan_index;
             }
             self.states = states;
+            self.plan_indices = plan_indices;
             self.plans = plans;
             self.initialized = true;
             return Ok(());
@@ -166,13 +275,16 @@ impl InstalledRetainedFamilyExecutionState {
         if !self.initialized {
             return Err(RetainedFamilyExecutionTransportError::IncrementalBeforeSnapshot);
         }
-        if self.states.len() != frame.objects.len() {
+        if self.states.len() != frame.objects.len()
+            || self.plan_indices.len() != frame.objects.len()
+        {
             return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
         }
 
         let updates = validated_state_updates(frame, &self.plans, &delta.family_states)?;
-        for (index, state) in updates {
+        for (index, state, plan_index) in updates {
             self.states[index] = state;
+            self.plan_indices[index] = plan_index;
         }
         Ok(())
     }
@@ -181,15 +293,22 @@ impl InstalledRetainedFamilyExecutionState {
         &'a self,
         retained: &'a RetainedFrameState,
     ) -> Result<RetainedFamilyFrame<'a>, RetainedFamilyExecutionTransportError> {
-        if !self.initialized {
-            return Err(RetainedFamilyExecutionTransportError::MissingSnapshot);
-        }
-        if self.states.len() != retained.objects.len() {
-            return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
-        }
+        self.validate_frame_shape(retained)?;
         Ok(RetainedFamilyFrame {
             retained,
             family_animations: &self.states,
+        })
+    }
+
+    pub fn planned_frame<'a>(
+        &'a self,
+        retained: &'a RetainedFrameState,
+    ) -> Result<RetainedPlannedFamilyFrame<'a>, RetainedFamilyExecutionTransportError> {
+        self.validate_frame_shape(retained)?;
+        Ok(RetainedPlannedFamilyFrame {
+            retained,
+            family_animations: &self.states,
+            family_plan_indices: &self.plan_indices,
         })
     }
 
@@ -197,6 +316,7 @@ impl InstalledRetainedFamilyExecutionState {
         &self.plans
     }
 
+    /// Legacy convenience for callers that deliberately operate on one plan only.
     pub fn single_plan(
         &self,
     ) -> Result<Option<&RetainedFamilyAnimationPlan>, RetainedFamilyExecutionTransportError> {
@@ -208,13 +328,28 @@ impl InstalledRetainedFamilyExecutionState {
             }
         }
     }
+
+    fn validate_frame_shape(
+        &self,
+        retained: &RetainedFrameState,
+    ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if !self.initialized {
+            return Err(RetainedFamilyExecutionTransportError::MissingSnapshot);
+        }
+        if self.states.len() != retained.objects.len()
+            || self.plan_indices.len() != retained.objects.len()
+        {
+            return Err(RetainedFamilyExecutionTransportError::FrameShapeMismatch);
+        }
+        Ok(())
+    }
 }
 
 fn validated_state_updates(
     frame: &RetainedFrameState,
     plans: &[RetainedFamilyAnimationPlan],
     entries: &[RetainedFamilyExecutionObjectState],
-) -> Result<Vec<(usize, Option<FamilyAnimationState>)>, RetainedFamilyExecutionTransportError> {
+) -> Result<Vec<ValidatedFamilyStateUpdate>, RetainedFamilyExecutionTransportError> {
     entries
         .iter()
         .map(|entry| {
@@ -225,16 +360,40 @@ fn validated_state_updates(
                 .ok_or(RetainedFamilyExecutionTransportError::UnknownObject(
                     entry.object,
                 ))?;
-            if entry.state.family_animation.is_some()
-                && !plans
-                    .iter()
-                    .any(|plan| plan.leaf_for_object(entry.object).is_some())
-            {
+            let state = entry.state.family_animation;
+            let plan_index = match (state, entry.family_plan_index) {
+                (None, _) => None,
+                (Some(_), Some(plan_index)) => Some(plan_index),
+                (Some(_), None) if plans.len() == 1 => Some(0),
+                (Some(_), None) => {
+                    return Err(RetainedFamilyExecutionTransportError::MissingPlanIndex(
+                        entry.object,
+                    ));
+                }
+            };
+
+            if let Some(plan_index) = plan_index {
+                let plan = plans.get(plan_index as usize).ok_or(
+                    RetainedFamilyExecutionTransportError::InvalidPlanIndex {
+                        object: entry.object,
+                        plan_index,
+                        plan_count: plans.len(),
+                    },
+                )?;
+                if plan.leaf_for_object(entry.object).is_none() {
+                    return Err(
+                        RetainedFamilyExecutionTransportError::PlanDoesNotOwnObject {
+                            object: entry.object,
+                            plan_index,
+                        },
+                    );
+                }
+            } else if state.is_some() {
                 return Err(RetainedFamilyExecutionTransportError::StateWithoutPlan(
                     entry.object,
                 ));
             }
-            Ok((index, entry.state.family_animation))
+            Ok((index, state, plan_index))
         })
         .collect()
 }
@@ -252,6 +411,17 @@ pub enum RetainedFamilyExecutionTransportError {
     DuplicateStateObject(ObjectId),
     UnknownObject(ObjectId),
     StateWithoutPlan(ObjectId),
+    PlanIndexWithoutState(ObjectId),
+    MissingPlanIndex(ObjectId),
+    InvalidPlanIndex {
+        object: ObjectId,
+        plan_index: u32,
+        plan_count: usize,
+    },
+    PlanDoesNotOwnObject {
+        object: ObjectId,
+        plan_index: u32,
+    },
     MultiplePlansUnsupported(usize),
 }
 
@@ -291,9 +461,33 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
                 "retained family state for object {} has no installed member plan",
                 object.get()
             ),
+            Self::PlanIndexWithoutState(object) => write!(
+                formatter,
+                "retained family object {} has a plan index without an active state",
+                object.get()
+            ),
+            Self::MissingPlanIndex(object) => write!(
+                formatter,
+                "active retained family state for object {} does not identify an installed plan",
+                object.get()
+            ),
+            Self::InvalidPlanIndex {
+                object,
+                plan_index,
+                plan_count,
+            } => write!(
+                formatter,
+                "retained family object {} references plan index {plan_index}, but only {plan_count} plans are installed",
+                object.get()
+            ),
+            Self::PlanDoesNotOwnObject { object, plan_index } => write!(
+                formatter,
+                "retained family plan {plan_index} does not own object {}",
+                object.get()
+            ),
             Self::MultiplePlansUnsupported(count) => write!(
                 formatter,
-                "retained family renderer currently requires one active plan, got {count}"
+                "single-plan compatibility helper received {count} retained family plans"
             ),
         }
     }
@@ -436,6 +630,14 @@ mod tests {
                 .family_animation(0),
             Some(family_state(0.5))
         );
+        assert_eq!(
+            installed
+                .planned_frame(&retained_frame)
+                .unwrap()
+                .family_plan_index(0),
+            Some(0),
+            "legacy single-plan state receives deterministic compatibility index zero",
+        );
 
         let cleared = [None];
         let cleared_frame = RetainedFamilyFrame {
@@ -457,6 +659,59 @@ mod tests {
                 .unwrap()
                 .family_animation(0),
             None
+        );
+        assert_eq!(
+            installed
+                .planned_frame(&retained_frame)
+                .unwrap()
+                .family_plan_index(0),
+            None
+        );
+    }
+
+    #[test]
+    fn plural_state_requires_and_validates_exact_plan_identity() {
+        let retained_frame = frame();
+        let plan = geometry_plan();
+        let snapshot = RetainedFamilyExecutionDeltaEnvelope {
+            retained: retained(true, 0),
+            family_states: vec![RetainedFamilyExecutionObjectState::planned(
+                ObjectId::new(7),
+                Some(family_state(0.5)),
+                Some(1),
+            )
+            .unwrap()],
+            family_plans: vec![
+                RetainedFamilyPlanTransport::from_plan(&plan),
+                RetainedFamilyPlanTransport::from_plan(&plan),
+            ],
+        };
+        let mut installed = InstalledRetainedFamilyExecutionState::default();
+        installed
+            .apply(&snapshot, &retained_frame, &TextResourceArena::new())
+            .unwrap();
+        assert_eq!(
+            installed
+                .planned_frame(&retained_frame)
+                .unwrap()
+                .family_plan_index(0),
+            Some(1)
+        );
+
+        let missing = RetainedFamilyExecutionDeltaEnvelope {
+            retained: retained(false, 1),
+            family_states: vec![RetainedFamilyExecutionObjectState::new(
+                ObjectId::new(7),
+                Some(family_state(0.25)),
+            )
+            .unwrap()],
+            family_plans: Vec::new(),
+        };
+        assert_eq!(
+            installed
+                .apply(&missing, &retained_frame, &TextResourceArena::new())
+                .unwrap_err(),
+            RetainedFamilyExecutionTransportError::MissingPlanIndex(ObjectId::new(7))
         );
     }
 
@@ -493,7 +748,7 @@ mod tests {
             installed
                 .apply(&bad, &frame(), &TextResourceArena::new())
                 .unwrap_err(),
-            RetainedFamilyExecutionTransportError::StateWithoutPlan(ObjectId::new(7))
+            RetainedFamilyExecutionTransportError::MissingPlanIndex(ObjectId::new(7))
         );
     }
 
@@ -522,7 +777,7 @@ mod tests {
             installed
                 .apply(&invalid, &retained_frame, &TextResourceArena::new())
                 .unwrap_err(),
-            RetainedFamilyExecutionTransportError::StateWithoutPlan(ObjectId::new(7))
+            RetainedFamilyExecutionTransportError::MissingPlanIndex(ObjectId::new(7))
         );
         assert!(installed.single_plan().unwrap().is_some());
         assert_eq!(

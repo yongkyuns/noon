@@ -335,10 +335,8 @@ def _request_list(scene: _compat.Scene) -> list[dict[str, Any]]:
     if requests is None:
         requests = []
         scene._retained_family_animations = requests
-    if requests:
-        raise NotImplementedError(
-            "canonical retained execution currently supports one family animation request per scene"
-        )
+    # Preserve source play order. Rust owns plural-plan validation, including rejecting
+    # time-overlapping ownership of the same retained object before playback starts.
     return requests
 
 

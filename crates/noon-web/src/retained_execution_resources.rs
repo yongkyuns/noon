@@ -1,5 +1,7 @@
 use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
-use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedFrameState};
+use noon_runtime::{
+    FrameChanges, RetainedFamilyFrame, RetainedFrameState, RetainedPlannedFamilyFrame,
+};
 
 use crate::{
     InstalledRetainedFamilyExecutionState, InstalledRetainedResources,
@@ -52,6 +54,23 @@ impl InstalledRetainedExecutionMirror {
             .as_ref()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
         Ok(Some(self.family.frame(frame)?))
+    }
+
+    pub fn planned_family_frame(
+        &self,
+    ) -> Result<Option<RetainedPlannedFamilyFrame<'_>>, InstalledExecutionError> {
+        if self.family.plans().is_empty() {
+            return Ok(None);
+        }
+        let frame = self
+            .resolved
+            .as_ref()
+            .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+        Ok(Some(self.family.planned_frame(frame)?))
+    }
+
+    pub fn family_plans(&self) -> &[RetainedFamilyAnimationPlan] {
+        self.family.plans()
     }
 
     pub fn family_plan(
@@ -419,9 +438,18 @@ mod tests {
         assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
         assert!(changes.is_all());
         assert!(mirror.family_plan().unwrap().is_some());
+        assert_eq!(mirror.family_plans().len(), 1);
         assert_eq!(
             mirror.family_frame().unwrap().unwrap().family_animation(0),
             Some(family_state(0.5))
+        );
+        assert_eq!(
+            mirror
+                .planned_family_frame()
+                .unwrap()
+                .unwrap()
+                .family_plan_index(0),
+            Some(0)
         );
     }
 

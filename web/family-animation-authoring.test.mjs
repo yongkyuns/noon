@@ -31,6 +31,17 @@ test("retained family creation-animation module is valid Python and bundled", ()
   assert.match(pythonSource, /bindRetainedNativeText/);
 });
 
+test("Python appends family requests without owning the scene-wide scheduler limit", () => {
+  assert.doesNotMatch(
+    pythonSource,
+    /supports one family animation request per scene/,
+  );
+  assert.match(
+    pythonSource,
+    /Rust owns plural-plan validation/,
+  );
+});
+
 test("Python does not serialize semantic family order or retained resource identity", () => {
   for (const forbidden of [
     "memberSlot(",

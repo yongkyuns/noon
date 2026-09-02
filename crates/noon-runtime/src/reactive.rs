@@ -28,6 +28,14 @@ pub use retained_text_family::*;
 mod retained_family_plan_frame;
 pub use retained_family_plan_frame::*;
 
+#[path = "retained_family_plan_set_frame.rs"]
+mod retained_family_plan_set_frame;
+pub use retained_family_plan_set_frame::*;
+
 #[path = "retained_family_plan_runtime.rs"]
 mod retained_family_plan_runtime;
 pub use retained_family_plan_runtime::*;
+
+#[path = "retained_family_plan_set_runtime.rs"]
+mod retained_family_plan_set_runtime;
+pub use retained_family_plan_set_runtime::*;

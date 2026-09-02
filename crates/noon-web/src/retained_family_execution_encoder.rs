@@ -1,5 +1,5 @@
 use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
-use noon_runtime::{FrameChanges, RetainedFamilyFrame};
+use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use crate::{
     RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
@@ -36,6 +36,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
         )?)
     }
 
+    pub fn encode_planned_snapshot(
+        &mut self,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        camera: Camera2DState,
+    ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
+        let retained = self.retained.encode_snapshot(frame.retained, camera)?;
+        Ok(RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(
+            retained, frame, plans,
+        )?)
+    }
+
     /// Encode one sparse family-aware retained update.
     ///
     /// `plans` are normally used only by the initial snapshot. They are supplied here
@@ -60,6 +72,29 @@ impl RetainedFamilyExecutionDeltaEncoder {
             RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?
         } else {
             RetainedFamilyExecutionDeltaEnvelope::incremental(retained, frame, changes)?
+        };
+        Ok(Some(envelope))
+    }
+
+    pub fn encode_planned_incremental(
+        &mut self,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        camera: Camera2DState,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
+    {
+        let Some(retained) = self
+            .retained
+            .encode_incremental(frame.retained, changes, camera)?
+        else {
+            return Ok(None);
+        };
+
+        let envelope = if retained.snapshot {
+            RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?
+        } else {
+            RetainedFamilyExecutionDeltaEnvelope::planned_incremental(retained, frame, changes)?
         };
         Ok(Some(envelope))
     }
@@ -197,6 +232,39 @@ mod tests {
         assert!(incremental.family_plans.is_empty());
         assert_eq!(incremental.family_states.len(), 1);
         assert_eq!(incremental.family_states[0].object, ObjectId::new(11));
+    }
+
+    #[test]
+    fn planned_encoder_carries_sparse_plan_identity() {
+        let (plan, frame, states) = fixture();
+        let plan_indices = [Some(0), Some(0)];
+        let family = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &plan_indices,
+        };
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(19);
+        let snapshot = encoder
+            .encode_planned_snapshot(
+                &family,
+                std::slice::from_ref(&plan),
+                Camera2DState::default(),
+            )
+            .unwrap();
+        assert_eq!(snapshot.family_states[0].family_plan_index, Some(0));
+        assert_eq!(snapshot.family_states[1].family_plan_index, Some(0));
+
+        let incremental = encoder
+            .encode_planned_incremental(
+                &family,
+                std::slice::from_ref(&plan),
+                &FrameChanges::objects(vec![1]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(incremental.family_states.len(), 1);
+        assert_eq!(incremental.family_states[0].family_plan_index, Some(0));
     }
 
     #[test]
