@@ -3,6 +3,9 @@ from manim import *
 
 class MixedObjectParityStress(Scene):
     def construct(self):
+        # Keep every animation on Manim's 30 FPS frame grid so the logical
+        # duration remains the five seconds declared by the parity manifest.
+        frame = 1 / 30
         rows = 20
         cols = 30
         palette = [BLUE, TEAL, GREEN, YELLOW, ORANGE, RED, PINK, PURPLE]
@@ -113,16 +116,16 @@ class MixedObjectParityStress(Scene):
             FadeIn(title),
             FadeIn(subtitle),
             *[FadeIn(label) for label in labels],
-            run_time=0.35,
+            run_time=11 * frame,
         )
-        self.play(*[Create(shape) for shape in shapes], run_time=0.55)
+        self.play(*[Create(shape) for shape in shapes], run_time=17 * frame)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_a)
             ],
-            run_time=0.55,
+            run_time=16 * frame,
         )
 
         for wave in range(6):
@@ -145,7 +148,7 @@ class MixedObjectParityStress(Scene):
                     .set_color(color)
                 )
             if wave_motion:
-                self.play(*wave_motion, run_time=0.08)
+                self.play(*wave_motion, run_time=2 * frame)
 
         label_specs = []
         for index in range(len(labels)):
@@ -168,14 +171,14 @@ class MixedObjectParityStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_opacity(opacity)
                 )
-            self.play(*text_motion, run_time=0.06)
+            self.play(*text_motion, run_time=2 * frame)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_b)
             ],
-            run_time=0.55,
+            run_time=16 * frame,
         )
 
         turbulence = []
@@ -193,7 +196,7 @@ class MixedObjectParityStress(Scene):
                 .shift(dx * RIGHT + dy * UP)
                 .set_color(color)
             )
-        self.play(*turbulence, run_time=0.45)
+        self.play(*turbulence, run_time=13 * frame)
 
         for wave in range(4):
             text_motion = []
@@ -207,7 +210,7 @@ class MixedObjectParityStress(Scene):
                     .shift(-dx * RIGHT - dy * UP)
                     .set_opacity(1.0)
                 )
-            self.play(*text_motion, run_time=0.06)
+            self.play(*text_motion, run_time=2 * frame)
 
         leaving = shapes[::3]
         pulses = [
@@ -240,7 +243,7 @@ class MixedObjectParityStress(Scene):
         self.play(
             *[FadeIn(shape, scale=0.25) for shape in leaving],
             *[FadeOut(pulse, scale=2.0) for pulse in pulses],
-            run_time=0.45,
+            run_time=13 * frame,
         )
 
         for wave in range(6):
@@ -263,4 +266,4 @@ class MixedObjectParityStress(Scene):
                     .set_color(color)
                 )
             if wave_motion:
-                self.play(*wave_motion, run_time=0.09)
+                self.play(*wave_motion, run_time=3 * frame)
