@@ -286,6 +286,9 @@ export function validateSceneDocument(scene) {
   if (!Array.isArray(scene.tracks)) {
     throw new Error("Python Scene tracks must be an array");
   }
+
+  validateDefinitionIds("object", scene.objects);
+  validateDefinitionIds("track", scene.tracks);
   return scene;
 }
 
@@ -480,6 +483,23 @@ export function validateCallbackSession(callbacks, scene) {
     }
   }
   return callbacks;
+}
+
+function validateDefinitionIds(kind, definitions) {
+  const ids = new Set();
+  for (const definition of definitions) {
+    if (
+      !isRecord(definition) ||
+      !Number.isSafeInteger(definition.id) ||
+      definition.id < 0
+    ) {
+      throw new Error(`Python Scene has an invalid ${kind} ID`);
+    }
+    if (ids.has(definition.id)) {
+      throw new Error(`Python Scene has duplicate ${kind} IDs`);
+    }
+    ids.add(definition.id);
+  }
 }
 
 function validateIdentityEntries(kind, entries, definitions) {
