@@ -153,12 +153,13 @@ try {
   diagnostics.snapshots.baseline = await runAndWait(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "retained");
+  assert.equal(diagnostics.snapshots.baseline.objectCount, "626");
 
   const source = await page.evaluate(
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
-  assert.match(source, /NOON DYNAMIC LOAD/);
-  const editedSource = source.replace("NOON DYNAMIC LOAD", "NOON EDITED LOAD");
+  assert.match(source, /rows = 20/);
+  const editedSource = source.replace("rows = 20", "rows = 5");
   assert.notEqual(editedSource, source);
 
   // Use the real CodeMirror input path so the hidden textarea/draft bridge is exercised.
@@ -179,20 +180,25 @@ try {
   diagnostics.snapshots.rerun = await runAndWait(page);
   assert.equal(diagnostics.snapshots.rerun.executionMode, "retained");
   assert.match(diagnostics.snapshots.rerun.patchText, /Scene rebuilt atomically/);
+  assert.equal(
+    diagnostics.snapshots.rerun.objectCount,
+    "176",
+    "rows=5 must rebuild to 150 geometry + 26 retained text objects",
+  );
 
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.deepEqual(
     diagnostics.consoleErrors,
     [],
-    `valid stress edit/rerun emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
+    `valid structural stress edit/rerun emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground stress edit ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, ` +
-      `${diagnostics.snapshots.rerun.objectCount} objects after retained rerun`,
+    `playground structural stress edit ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, ` +
+      `${diagnostics.snapshots.rerun.objectCount} objects after rows=5 retained rerun`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
