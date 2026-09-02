@@ -481,17 +481,12 @@ async function ensureRuntimeReady({
         ? await nextPlayer.startRetainedCanonical(sceneSpecJson, {
             loopDurationSeconds,
           })
-        : await nextPlayer.start(sceneJson, { loopDurationSeconds });
-      let initialState;
-      if (!startRetained && callbacks !== null && callbacks !== undefined) {
-        initialState = await nextPlayer.reconcileScene(sceneJson, {
-          callbacks,
-          authoringClient: client,
-          loopDurationSeconds,
-        });
-      } else {
-        initialState = await nextPlayer.state();
-      }
+        : await nextPlayer.start(sceneJson, {
+            loopDurationSeconds,
+            callbacks,
+            authoringClient: client,
+          });
+      const initialState = await nextPlayer.state();
 
       player = nextPlayer;
       playerNeedsRestart = false;
