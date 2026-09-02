@@ -6,6 +6,11 @@ on:
       - master
     paths-ignore:
       - "crates/**/tests/**"
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - "crates/**/tests/**"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate raster workflow trigger policy
+        run: node scripts/manim-raster-workflow-policy.test.mjs
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
       - name: Set up Python
