@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use noon_core::{
-    FamilyAnimationRequest, ObjectId, ObjectSnapshot, Style, TrackDefinition, Vec2,
-};
+use noon_core::{FamilyAnimationRequest, ObjectId, ObjectSnapshot, Style, TrackDefinition, Vec2};
 use noon_ir::{ObjectSpec, ObjectSpecContent, SceneSpec, TextSpec};
 
 use crate::{
@@ -24,11 +22,7 @@ pub struct CanonicalAuthoringSceneContext {
 }
 
 impl CanonicalAuthoringSceneContext {
-    pub fn bind_geometry(
-        &mut self,
-        id: ObjectId,
-        snapshot: ObjectSnapshot,
-    ) -> Result<(), String> {
+    pub fn bind_geometry(&mut self, id: ObjectId, snapshot: ObjectSnapshot) -> Result<(), String> {
         let mut object = ObjectSpec::geometry(id, snapshot.geometry);
         object.transform = snapshot.transform;
         object.style = snapshot.style;
@@ -45,7 +39,10 @@ impl CanonicalAuthoringSceneContext {
             &self.objects[position].content,
             ObjectSpecContent::Geometry(_)
         ) {
-            return Err(format!("canonical object {} is not geometry-backed", id.get()));
+            return Err(format!(
+                "canonical object {} is not geometry-backed",
+                id.get()
+            ));
         }
         let mut object = ObjectSpec::geometry(id, snapshot.geometry);
         object.transform = snapshot.transform;
@@ -148,9 +145,7 @@ impl CanonicalAuthoringSceneContext {
 fn retained_scale_factor(text: &RetainedTextAuthoringSpec) -> Vec2 {
     let factor = match &text.backend {
         RetainedTextBackendSpec::Native { .. } => noon::NATIVE_POINT_TO_SCENE_SCALE,
-        RetainedTextBackendSpec::Typst { .. } => {
-            text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT
-        }
+        RetainedTextBackendSpec::Typst { .. } => text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT,
     };
     Vec2::new(factor, factor)
 }
@@ -225,7 +220,11 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = bindGeometry)]
-        pub fn bind_geometry(&mut self, object_id: &str, snapshot_json: &str) -> Result<(), JsValue> {
+        pub fn bind_geometry(
+            &mut self,
+            object_id: &str,
+            snapshot_json: &str,
+        ) -> Result<(), JsValue> {
             let id = parse_object_id("object ID", object_id)?;
             let snapshot = parse_json::<ObjectSnapshot>("geometry snapshot", snapshot_json)?;
             self.inner.bind_geometry(id, snapshot).map_err(js_error)
@@ -324,7 +323,9 @@ mod tests {
                 ObjectSnapshot::new(GeometryRef::circle(0.5)),
             )
             .unwrap();
-        context.bind_text(ObjectId::new(1), native_text("A")).unwrap();
+        context
+            .bind_text(ObjectId::new(1), native_text("A"))
+            .unwrap();
         context
             .bind_geometry(
                 ObjectId::new(2),
@@ -354,10 +355,7 @@ mod tests {
         let mut context = CanonicalAuthoringSceneContext::default();
         let first = ObjectId::new(0);
         context
-            .bind_geometry(
-                first,
-                ObjectSnapshot::new(GeometryRef::circle(0.5)),
-            )
+            .bind_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.5)))
             .unwrap();
         let checkpoint = context.checkpoint();
         context
@@ -383,10 +381,7 @@ mod tests {
             .unwrap();
         assert_eq!(spec.objects.len(), 2);
         assert_eq!(spec.objects[0].id, first);
-        assert_eq!(
-            spec.objects[0].transform.translation,
-            Vec2::new(2.0, -1.0)
-        );
+        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
         assert_eq!(spec.camera_object, Some(first));
     }
 
