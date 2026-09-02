@@ -93,15 +93,15 @@ class MixedObjectParityStress(Scene):
                 targets_a.append(target_a)
                 targets_b.append(target_b)
 
-        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.30)
-        self.play(*[Create(shape) for shape in shapes], run_time=0.70)
+        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.25)
+        self.play(*[Create(shape) for shape in shapes], run_time=0.55)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_a)
             ],
-            run_time=0.90,
+            run_time=0.75,
         )
 
         motion_a = []
@@ -116,14 +116,14 @@ class MixedObjectParityStress(Scene):
                 .shift(0.035 * x_direction + 0.025 * y_direction)
                 .set_color(color)
             )
-        self.play(*motion_a, title.animate.rotate(PI / 24), run_time=0.85)
+        self.play(*motion_a, title.animate.rotate(PI / 24), run_time=0.65)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_b)
             ],
-            run_time=0.90,
+            run_time=0.75,
         )
 
         motion_b = []
@@ -138,7 +138,7 @@ class MixedObjectParityStress(Scene):
                 .shift(0.055 * x_direction + 0.035 * y_direction)
                 .set_color(color)
             )
-        self.play(*motion_b, title.animate.rotate(-PI / 12), run_time=0.85)
+        self.play(*motion_b, title.animate.rotate(-PI / 12), run_time=0.65)
 
         leaving = shapes[::3]
         pulses = [
@@ -151,20 +151,20 @@ class MixedObjectParityStress(Scene):
             for shape in leaving
         ]
 
-        self.play(FadeOut(subtitle), run_time=0.15)
+        self.play(FadeOut(subtitle), run_time=0.10)
         self.play(
             *[FadeOut(shape, scale=0.25) for shape in leaving],
             *[FadeIn(pulse, scale=0.15) for pulse in pulses],
-            run_time=0.55,
+            run_time=0.50,
         )
 
         self.play(
             FadeIn(subtitle),
             title.animate.rotate(PI / 24),
-            run_time=0.15,
+            run_time=0.10,
         )
         self.play(
             *[FadeIn(shape, scale=0.25) for shape in leaving],
             *[FadeOut(pulse, scale=2.0) for pulse in pulses],
-            run_time=0.55,
+            run_time=0.70,
         )
