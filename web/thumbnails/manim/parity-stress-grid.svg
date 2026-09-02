@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Mixed Object Parity Stress</title>
+  <desc id="desc">Dense multicolor squares and circles representing the Manim parity stress scene.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080b12"/>
+      <stop offset="1" stop-color="#151024"/>
+    </linearGradient>
+    <pattern id="tiles" width="80" height="56" patternUnits="userSpaceOnUse">
+      <rect x="7" y="8" width="24" height="24" rx="3" fill="#58c4dd" fill-opacity=".82" stroke="#9cdceb" stroke-width="2"/>
+      <circle cx="59" cy="20" r="13" fill="#83c167" fill-opacity=".82" stroke="#a6cf8c" stroke-width="2"/>
+      <circle cx="19" cy="49" r="12" fill="#d147bd" fill-opacity=".82" stroke="#dc75cd" stroke-width="2"/>
+      <rect x="47" y="37" width="24" height="24" rx="3" transform="rotate(45 59 49)" fill="#f7d96f" fill-opacity=".82" stroke="#ffea94" stroke-width="2"/>
+    </pattern>
+    <radialGradient id="glow" cx="50%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#8e7cff" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#8e7cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <rect width="640" height="360" fill="url(#glow)"/>
+  <text x="320" y="53" text-anchor="middle" fill="#f1f4fb" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28" font-weight="700">MANIM PARITY STRESS</text>
+  <text x="320" y="78" text-anchor="middle" fill="#9aa7be" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">72 shapes · morph · rotate · color · text · lifecycle</text>
+  <rect x="47" y="101" width="546" height="213" rx="14" fill="#0c111b" stroke="#27334b"/>
+  <rect x="58" y="112" width="524" height="191" rx="8" fill="url(#tiles)"/>
+  <path d="M58 208 H582" stroke="#8e7cff" stroke-opacity=".28" stroke-width="2" stroke-dasharray="6 7"/>
+  <text x="320" y="339" text-anchor="middle" fill="#7f8ca5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">same scene body in ManimCE 0.21 and Noon</text>
+</svg>
