@@ -1,5 +1,3 @@
-use noon_core::FamilyAnimationError;
-
 const MANIM_WRITE_LONG_FAMILY_THRESHOLD: u32 = 15;
 const MANIM_WRITE_SHORT_DURATION: f64 = 1.0;
 const MANIM_WRITE_LONG_DURATION: f64 = 2.0;
@@ -28,8 +26,9 @@ fn write_lag_ratio(member_count: u32, override_lag_ratio: Option<f64>) -> f64 {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::{
-        plain_text_animation_members, FamilyAnimationLeafBinding, FamilyAnimationMode,
-        FamilyAnimationRequest, FamilyAnimationSpec, ObjectId, RateFunction, SemanticNodeId,
+        plain_text_animation_members, FamilyAnimationError, FamilyAnimationLeafBinding,
+        FamilyAnimationMode, FamilyAnimationRequest, FamilyAnimationSpec, ObjectId, RateFunction,
+        SemanticNodeId,
     };
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
@@ -39,7 +38,7 @@ mod wasm {
         WasmAuthoringMobjectHandle, WasmRetainedNativeTextAuthoringHandle,
     };
 
-    use super::{write_duration, write_lag_ratio, FamilyAnimationError};
+    use super::{write_duration, write_lag_ratio};
 
     const MAX_JS_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
@@ -243,9 +242,8 @@ mod wasm {
                 self.reverse_member_order,
             )
             .map_err(js_error)?;
-            let request =
-                FamilyAnimationRequest::new(self.target, self.bindings.clone(), spec)
-                    .map_err(js_error)?;
+            let request = FamilyAnimationRequest::new(self.target, self.bindings.clone(), spec)
+                .map_err(js_error)?;
             serde_json::to_string(&FamilyWriteRequestResult {
                 request,
                 run_time,
