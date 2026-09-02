@@ -1,4 +1,5 @@
 import initNoonWeb, {
+  CanonicalAuthoringSceneContext,
   RetainedNativeTextAuthoringHandle,
   RetainedTypstAuthoringHandle,
   WasmAuthoringStore,
@@ -48,6 +49,8 @@ async function initializePyodide() {
   ]);
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const authoringStore = new WasmAuthoringStore();
+  self.noonCreateCanonicalAuthoringSceneContext = () =>
+    new CanonicalAuthoringSceneContext();
   self.noonCreateAuthoringMobjectHandle = (snapshotJson) =>
     authoringStore.createMobject(snapshotJson);
   self.noonCreateAuthoringDotHandle = (pointX, pointY, radius) =>
@@ -135,6 +138,10 @@ import _manim_updaters
 _manim_updaters.install()
 import _manim_camera
 _manim_camera.install()
+# Final production SceneSpec ownership: after all content/lifecycle adapters have
+# installed, bind their events into one per-scene Rust canonical authoring context.
+import _manim_canonical_scene
+_manim_canonical_scene.install()
 `);
   return pyodide;
 }
