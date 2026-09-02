@@ -6,6 +6,7 @@ import { test } from "node:test";
 const pythonPath = "web/python/_manim_family_creation.py";
 const pythonSource = readFileSync(pythonPath, "utf8");
 const ordinaryPythonSource = readFileSync("web/python/_manim_animate.py", "utf8");
+const retainedPythonSource = readFileSync("web/python/_manim_retained_animate.py", "utf8");
 const moduleManifest = readFileSync("web/python-compat-modules.js", "utf8");
 const genericRustBridge = readFileSync(
   "crates/noon-web/src/family_animation_authoring.rs",
@@ -43,33 +44,44 @@ test("Python appends family requests without owning the scene-wide scheduler lim
   );
 });
 
-test("one Scene.play composes disjoint retained families with ordinary geometry", () => {
+test("one Scene.play composes disjoint family, retained Text, and geometry animation domains", () => {
   assert.doesNotMatch(
     pythonSource,
     /must currently be the only animation in Scene\.play/,
   );
   assert.doesNotMatch(
     pythonSource,
-    /family animations cannot currently be mixed with[\s\S]*ordinary animations/,
+    /retained Text property animations in the same Scene\.play still require/,
   );
-  assert.match(pythonSource, /retained family animations can mix with ordinary geometry animations/);
-  assert.match(pythonSource, /must target disjoint family leaves/);
-  assert.match(pythonSource, /family and ordinary animations must target[\s\S]*disjoint scene leaves/);
-  assert.match(pythonSource, /Bind in exact source order/);
+  assert.match(pythonSource, /_retained_ordinary_plan/);
+  assert.match(pythonSource, /_retained\._schedule_retained_plan/);
   assert.match(pythonSource, /_prepare_aligned_animation_binding/);
   assert.match(pythonSource, /_schedule_aligned_bound_animations/);
   assert.match(pythonSource, /_commit_semantic_targets/);
-  assert.match(pythonSource, /base_start \+ actual_run_time/);
+  assert.match(pythonSource, /must target disjoint family leaves/);
+  assert.match(pythonSource, /family and ordinary animations must target[\s\S]*disjoint scene leaves/);
+  assert.match(pythonSource, /one source-ordered transaction/);
+  assert.match(pythonSource, /retained_ordinary_end/);
   assert.match(pythonSource, /play_end = max\(/);
 });
 
-test("ordinary play exposes bind/schedule/commit phases for one outer transaction", () => {
+test("mixed family play reuses the retained property scheduler instead of duplicating it", () => {
+  assert.match(retainedPythonSource, /def _schedule_retained_plan\(/);
+  assert.match(pythonSource, /_retained\._retained_animation_plan\(animation\)/);
+  assert.match(pythonSource, /_retained\._schedule_retained_plan\(/);
+  assert.doesNotMatch(pythonSource, /def _append_vec2_track\(/);
+  assert.doesNotMatch(pythonSource, /def _append_scalar_track\(/);
+  assert.match(pythonSource, /checkpoint = self\._authoring_checkpoint\(\)/);
+  assert.match(pythonSource, /self\._restore_authoring_checkpoint\(checkpoint\)/);
+  assert.match(pythonSource, /source\._object/);
+  assert.match(pythonSource, /member\._object = old_object/);
+});
+
+test("ordinary geometry still exposes bind/schedule/commit phases for the outer transaction", () => {
   assert.match(ordinaryPythonSource, /def _prepare_aligned_animation_binding\(/);
   assert.match(ordinaryPythonSource, /def _schedule_aligned_bound_animations\(/);
   assert.match(ordinaryPythonSource, /without committing semantic targets/);
   assert.match(ordinaryPythonSource, /def _commit_semantic_targets\(/);
-  assert.match(pythonSource, /checkpoint = self\._authoring_checkpoint\(\)/);
-  assert.match(pythonSource, /self\._restore_authoring_checkpoint\(checkpoint\)/);
 
   const scheduleIndex = pythonSource.lastIndexOf("_schedule_aligned_bound_animations(");
   const commitIndex = pythonSource.lastIndexOf("_commit_semantic_targets(");
