@@ -13,12 +13,22 @@ const retainedAnimate = await readFile(
   new URL("./python/_manim_retained_animate.py", import.meta.url),
   "utf8",
 );
+const familyCreation = await readFile(
+  new URL("./python/_manim_family_creation.py", import.meta.url),
+  "utf8",
+);
 const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.meta.url), "utf8");
 
 assert.equal(
   noon,
   canonical.replace("from manim import *", "from noon import *"),
   "stress source must remain import-only Manim compatible",
+);
+assert.match(noon, /FadeIn\(title\)/);
+assert.doesNotMatch(
+  noon,
+  /Create\(title\)/,
+  "retained family Create cannot share the stress scene's mass mixed-animation play yet",
 );
 assert.match(noon, /shape\.animate\.rotate\(angle\)\.shift\(0\.11 \* direction\)\.set_color\(color\)/);
 assert.match(noon, /title\.animate\.rotate\(PI \/ 18\)/);
@@ -32,6 +42,11 @@ assert.match(
   retainedAnimate,
   /position, rotation, opacity, and uniform scale animations are supported/,
   "contract should track the retained Text animation capability boundary",
+);
+assert.match(
+  familyCreation,
+  /canonical retained family creation animation must currently be the only animation in Scene\.play/,
+  "contract should track the retained family mixed-play capability boundary",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
 assert.match(browserSmoke, /expectedObjectCount: 110/);
