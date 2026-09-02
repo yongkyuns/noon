@@ -431,7 +431,7 @@ impl RetainedExecutionFrameMirror {
                 ));
             }
             let content: ObjectContentRef = object.content.clone().into();
-            if current.content != content {
+            if !incremental_content_identity_matches(&current.content, &content) {
                 return Err(RetainedExecutionTransportError::ContentIdentityChanged(
                     object.slot,
                 ));
@@ -444,6 +444,14 @@ impl RetainedExecutionFrameMirror {
             changed.push(index);
         }
         Ok(FrameChanges::objects(changed))
+    }
+}
+
+fn incremental_content_identity_matches(current: &ObjectContentRef, next: &ObjectContentRef) -> bool {
+    match (current, next) {
+        (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
+        (ObjectContentRef::Text(current), ObjectContentRef::Text(next)) => current == next,
+        _ => false,
     }
 }
 
@@ -605,6 +613,34 @@ mod tests {
     }
 
     #[test]
+    fn incremental_geometry_content_update_preserves_slot_identity() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(8);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        mirror.apply(initial).unwrap();
+
+        let mut updated = frame.clone();
+        updated.time = 0.5;
+        updated.objects[0].content =
+            ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 1.0));
+        let delta = encoder
+            .encode_incremental(
+                &updated,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.frame().unwrap(), &updated);
+    }
+
+    #[test]
     fn incremental_transform_keeps_text_content_identity() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(9);
@@ -634,6 +670,35 @@ mod tests {
         let (_, changes) = mirror.apply(delta).unwrap();
         assert_eq!(changes.object_indices(), &[1]);
         assert_eq!(mirror.frame().unwrap(), &updated);
+    }
+
+    #[test]
+    fn incremental_text_resource_change_requires_snapshot() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(10);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        mirror.apply(initial).unwrap();
+
+        let mut changed = frame.clone();
+        changed.objects[1].content = ObjectContentRef::Text(TextResourceHandle {
+            id: TextResourceId::new(8),
+            version: 1,
+        });
+        let delta = encoder
+            .encode_incremental(
+                &changed,
+                &FrameChanges::objects(vec![1]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            mirror.apply(delta),
+            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
+        ));
     }
 
     #[test]
