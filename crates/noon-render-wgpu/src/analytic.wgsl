@@ -43,6 +43,7 @@ struct VertexOutput {
     @location(4) metrics: vec2<f32>,
     @location(5) flags: vec2<f32>,
     @location(6) object_scale: vec2<f32>,
+    @location(7) line_stroke_enabled: f32,
 };
 
 fn rotate_vector(local: vec2<f32>, rotation: f32) -> vec2<f32> {
@@ -132,6 +133,7 @@ fn make_output(input: VertexInput, local: vec2<f32>) -> VertexOutput {
     output.metrics = input.metrics;
     output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
     output.object_scale = input.scale;
+    output.line_stroke_enabled = 0.0;
     return output;
 }
 
@@ -236,6 +238,7 @@ fn vs_line(input: LineVertexInput) -> VertexOutput {
     output.stroke = input.stroke;
     output.metrics = input.metrics;
     output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
+    output.line_stroke_enabled = select(0.0, 1.0, stroke_is_enabled(input.flags));
     return output;
 }
 
@@ -330,7 +333,7 @@ fn styled_shape_color(
 
 fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
     let coverage = inside_coverage(signed_distance);
-    if (u32(input.flags.y) & 1u) != 0u {
+    if input.line_stroke_enabled >= 0.5 {
         return covered_color(input.stroke, input.metrics.y, coverage);
     }
     if input.flags.x > 0.5 {
