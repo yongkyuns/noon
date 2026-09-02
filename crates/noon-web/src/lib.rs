@@ -24,6 +24,7 @@ mod manim_dashed_line_bridge;
 mod manim_elbow_bridge;
 mod manim_geometry_bridge;
 mod manim_path_query_bridge;
+mod manim_scale_bridge;
 mod manim_sector_bridge;
 mod manim_shape_matcher_bridge;
 #[cfg(any(target_arch = "wasm32", test))]
