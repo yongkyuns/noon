@@ -12,6 +12,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_geometry.py", runtimePath: "/tmp/_manim_geometry.py", label: "Noon Manim geometry layer" },
   { sourcePath: "python/_manim_shared_geometry.py", runtimePath: "/tmp/_manim_shared_geometry.py", label: "Noon shared Rust geometry adapter" },
   { sourcePath: "python/_manim_axes.py", runtimePath: "/tmp/_manim_axes.py", label: "Noon shared Axes adapter" },
+  { sourcePath: "python/_manim_implicit.py", runtimePath: "/tmp/_manim_implicit.py", label: "Noon retained implicit-function adapter" },
   { sourcePath: "python/_manim_number_line.py", runtimePath: "/tmp/_manim_number_line.py", label: "Noon shared NumberLine adapter" },
   { sourcePath: "python/_manim_number_plane.py", runtimePath: "/tmp/_manim_number_plane.py", label: "Noon shared NumberPlane adapter" },
   { sourcePath: "python/_manim_polar_plane.py", runtimePath: "/tmp/_manim_polar_plane.py", label: "Noon shared PolarPlane adapter" },
