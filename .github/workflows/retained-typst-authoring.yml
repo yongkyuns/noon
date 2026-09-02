@@ -12,6 +12,15 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/manim-typst-authoring-smoke.mjs"
       - ".github/workflows/retained-typst-authoring.yml"
+  pull_request:
+    paths:
+      - "crates/noon-web/src/retained_authoring.rs"
+      - "web/python-worker.source.js"
+      - "web/python-compat-modules.js"
+      - "web/python/_manim_typst.py"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/manim-typst-authoring-smoke.mjs"
+      - ".github/workflows/retained-typst-authoring.yml"
   workflow_dispatch:
 
 permissions:
