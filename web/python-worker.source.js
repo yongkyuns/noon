@@ -6,6 +6,7 @@ import initNoonWeb, {
   manimAnnulusSnapshotJson,
   manimDotSnapshotJson,
   manimElbowSnapshotJson,
+  manimImplicitFunctionSnapshotJson,
   manimRoundedRectangleSnapshotJson,
   manimSectorSnapshotJson,
   manimTriangleSnapshotJson,
@@ -58,6 +59,8 @@ async function initializePyodide() {
     authoringStore.createAxesPlotPlan(requestJson);
   self.noonCreateParametricFunctionPlan = (requestJson) =>
     authoringStore.createParametricFunctionPlan(requestJson);
+  self.noonImplicitFunctionSnapshotJson = (requestJson, callback) =>
+    manimImplicitFunctionSnapshotJson(requestJson, callback);
   self.noonCreateNumberPlaneGridPlan = (requestJson) =>
     authoringStore.createNumberPlaneGridPlan(requestJson);
   self.noonCreatePolarPlaneGridPlan = (requestJson) =>
@@ -120,6 +123,8 @@ import _manim_shared_geometry
 _manim_shared_geometry.install()
 import _manim_axes
 _manim_axes.install()
+import _manim_implicit
+_manim_implicit.install()
 import _manim_number_plane
 _manim_number_plane.install()
 import _manim_polar_plane
