@@ -116,7 +116,8 @@ class MixedObjectParityStress(Scene):
                 .shift(0.035 * x_direction + 0.025 * y_direction)
                 .set_color(color)
             )
-        self.play(*motion_a, title.animate.rotate(PI / 24), run_time=0.65)
+        self.play(*motion_a, run_time=0.55)
+        self.play(title.animate.rotate(PI / 24), run_time=0.10)
 
         self.play(
             *[
@@ -138,7 +139,8 @@ class MixedObjectParityStress(Scene):
                 .shift(0.055 * x_direction + 0.035 * y_direction)
                 .set_color(color)
             )
-        self.play(*motion_b, title.animate.rotate(-PI / 12), run_time=0.65)
+        self.play(*motion_b, run_time=0.55)
+        self.play(title.animate.rotate(-PI / 12), run_time=0.10)
 
         leaving = shapes[::3]
         pulses = [
@@ -158,13 +160,10 @@ class MixedObjectParityStress(Scene):
             run_time=0.50,
         )
 
-        self.play(
-            FadeIn(subtitle),
-            title.animate.rotate(PI / 24),
-            run_time=0.10,
-        )
+        self.play(title.animate.rotate(PI / 24), run_time=0.10)
+        self.play(FadeIn(subtitle), run_time=0.10)
         self.play(
             *[FadeIn(shape, scale=0.25) for shape in leaving],
             *[FadeOut(pulse, scale=2.0) for pulse in pulses],
-            run_time=0.70,
+            run_time=0.60,
         )
