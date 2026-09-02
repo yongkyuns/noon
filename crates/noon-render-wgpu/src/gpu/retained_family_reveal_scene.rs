@@ -101,7 +101,8 @@ impl<'content> RetainedFamilyRevealSceneFrame<'_, '_, 'content> {
             .leaf_frame_for_object(state, object)
             .map_err(RetainedFamilyRevealSceneError::Evaluation)?;
         Ok(Some(
-            retained_family_reveal_members(frame).map_err(RetainedFamilyRevealSceneError::Reveal)?,
+            retained_family_reveal_members(frame)
+                .map_err(RetainedFamilyRevealSceneError::Reveal)?,
         ))
     }
 }
@@ -191,7 +192,10 @@ mod tests {
         ];
         let frame = scene.frame(&states).unwrap();
 
-        assert!(frame.members_for_object(ObjectId::new(99)).unwrap().is_none());
+        assert!(frame
+            .members_for_object(ObjectId::new(99))
+            .unwrap()
+            .is_none());
         let first_members = frame
             .members_for_object(ObjectId::new(10))
             .unwrap()
@@ -259,9 +263,7 @@ mod tests {
         assert!(matches!(
             frame.members_for_object(ObjectId::new(10)),
             Err(RetainedFamilyRevealSceneError::Reveal(
-                RetainedFamilyRevealError::UnsupportedMode(
-                    FamilyAnimationMode::DrawBorderThenFill
-                )
+                RetainedFamilyRevealError::UnsupportedMode(FamilyAnimationMode::DrawBorderThenFill)
             ))
         ));
     }

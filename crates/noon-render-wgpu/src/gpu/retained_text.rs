@@ -69,12 +69,15 @@ pub struct RetainedPrepareStats {
 /// Cumulative counters for retained mixed-frame preparation locality.
 ///
 /// A scratch reuse means the semantic object/text/vector/outline walk was skipped.
-/// Mixed-order rebuilding and text snapshot copies remain separate follow-up costs
-/// and are intentionally not hidden by this counter.
+/// Text snapshot copies and mixed-order rebuilds are counted separately so a
+/// transform/opacity-only text update can prove that both parent-level scans stay
+/// out of the frame loop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedFrameIncrementalStats {
     pub scratch_rebuilds: u64,
     pub scratch_reuses: u64,
+    pub text_snapshot_copies: u64,
+    pub mixed_order_rebuilds: u64,
 }
 
 pub struct PreparedRetainedTextSnapshot<'a> {
@@ -84,6 +87,9 @@ pub struct PreparedRetainedTextSnapshot<'a> {
     pub items: &'a [PreparedTextItem],
     pub stats: RetainedTextPrepareStats,
     pub atlas: &'a GpuGlyphAtlas,
+    pub partial_upload: bool,
+    pub dirty_mask_ranges: &'a [std::ops::Range<u32>],
+    pub dirty_color_ranges: &'a [std::ops::Range<u32>],
 }
 
 impl PreparedRetainedTextSnapshot<'_> {
@@ -546,6 +552,9 @@ pub struct RetainedFramePreparer {
     snapshot_color_quads: Vec<GlyphQuadInstance>,
     snapshot_text_items: Vec<PreparedTextItem>,
     snapshot_text_stats: RetainedTextPrepareStats,
+    text_item_ranges: Vec<std::ops::Range<usize>>,
+    dirty_mask_ranges: Vec<std::ops::Range<u32>>,
+    dirty_color_ranges: Vec<std::ops::Range<u32>>,
     snapshot_prepare_stats: RetainedPrepareStats,
     snapshot_metrics: Option<TextDeviceMetrics>,
     prepared_generation_ready: bool,
@@ -576,6 +585,9 @@ impl Default for RetainedFramePreparer {
             snapshot_color_quads: Vec::new(),
             snapshot_text_items: Vec::new(),
             snapshot_text_stats: RetainedTextPrepareStats::default(),
+            text_item_ranges: Vec::new(),
+            dirty_mask_ranges: Vec::new(),
+            dirty_color_ranges: Vec::new(),
             snapshot_prepare_stats: RetainedPrepareStats::default(),
             snapshot_metrics: None,
             prepared_generation_ready: false,
@@ -641,10 +653,24 @@ impl RetainedFramePreparer {
         geometries: &GeometryResourceArena,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        let text_can_update_locally = if changes.is_empty() {
+            false
+        } else {
+            self.text.can_update_objects_locally(frame, changes, texts, metrics)?
+                && self.changes_are_fast_text_only(frame, changes)
+        };
         let scratch_reused =
-            self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+            self.prepare_scratch_with_changes(
+                frame,
+                changes,
+                text_can_update_locally,
+                texts,
+                fonts,
+                geometries,
+            )?;
 
         if scratch_reused
+            && changes.is_empty()
             && self.prepared_generation_ready
             && self.snapshot_metrics == Some(metrics)
         {
@@ -654,15 +680,13 @@ impl RetainedFramePreparer {
             // Invalidate the parent generation first so any future fallible change in
             // that contract cannot expose stale snapshots.
             self.prepared_generation_ready = false;
-            {
-                let prepared = self
-                    .text
-                    .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
-                debug_assert_eq!(prepared.mask_quads.len(), self.snapshot_mask_quads.len());
-                debug_assert_eq!(prepared.color_quads.len(), self.snapshot_color_quads.len());
-                debug_assert_eq!(prepared.items.len(), self.snapshot_text_items.len());
-                debug_assert_eq!(prepared.stats, self.snapshot_text_stats);
-            }
+            let prepared = self
+                .text
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+            debug_assert_eq!(prepared.mask_quads.len(), self.snapshot_mask_quads.len());
+            debug_assert_eq!(prepared.color_quads.len(), self.snapshot_color_quads.len());
+            debug_assert_eq!(prepared.items.len(), self.snapshot_text_items.len());
+            debug_assert_eq!(prepared.stats, self.snapshot_text_stats);
 
             let no_changes = FrameChanges::default();
             let geometry = self
@@ -677,6 +701,54 @@ impl RetainedFramePreparer {
                 items: &self.snapshot_text_items,
                 stats: self.snapshot_text_stats,
                 atlas: self.text.atlas(),
+                partial_upload: false,
+                dirty_mask_ranges: &self.dirty_mask_ranges,
+                dirty_color_ranges: &self.dirty_color_ranges,
+            };
+            return Ok(PreparedRetainedGpuFrame {
+                geometry,
+                text_generation: self.text_generation,
+                text,
+                render_items: &self.render_items,
+                stats: self.snapshot_prepare_stats,
+            });
+        }
+
+        if text_can_update_locally {
+            self.prepared_generation_ready = false;
+            let prepared = self
+                .text
+                .prepare_with_changes(device, queue, frame, changes, texts, fonts, metrics)?;
+            copy_local_text_snapshot_updates(
+                &mut self.snapshot_mask_quads,
+                &mut self.snapshot_color_quads,
+                &self.text_item_ranges,
+                prepared.items,
+                prepared.mask_quads,
+                prepared.color_quads,
+                changes,
+                &mut self.dirty_mask_ranges,
+                &mut self.dirty_color_ranges,
+            );
+            self.text_generation = self
+                .text_generation
+                .checked_add(1)
+                .expect("retained text generation counter exhausted");
+            let no_changes = FrameChanges::default();
+            let geometry = self
+                .geometry
+                .prepare_incremental(&self.scratch, &no_changes);
+            self.prepared_generation_ready = true;
+            let text = PreparedRetainedTextSnapshot {
+                time: frame.time,
+                mask_quads: &self.snapshot_mask_quads,
+                color_quads: &self.snapshot_color_quads,
+                items: &self.snapshot_text_items,
+                stats: self.snapshot_text_stats,
+                atlas: self.text.atlas(),
+                partial_upload: true,
+                dirty_mask_ranges: &self.dirty_mask_ranges,
+                dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
                 geometry,
@@ -708,7 +780,14 @@ impl RetainedFramePreparer {
             self.snapshot_text_items.clear();
             self.snapshot_text_items.extend_from_slice(prepared.items);
             self.snapshot_text_stats = prepared.stats;
+            self.text_item_ranges = text_item_ranges(prepared.items, frame.objects.len());
         }
+        self.dirty_mask_ranges.clear();
+        self.dirty_color_ranges.clear();
+        self.incremental_stats.text_snapshot_copies = self
+            .incremental_stats
+            .text_snapshot_copies
+            .saturating_add(1);
         self.text_generation = self
             .text_generation
             .checked_add(1)
@@ -728,6 +807,10 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        self.incremental_stats.mixed_order_rebuilds = self
+            .incremental_stats
+            .mixed_order_rebuilds
+            .saturating_add(1);
         let glyph_batches = self
             .render_items
             .iter()
@@ -753,6 +836,9 @@ impl RetainedFramePreparer {
             items: &self.snapshot_text_items,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
+            partial_upload: false,
+            dirty_mask_ranges: &self.dirty_mask_ranges,
+            dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
             geometry,
@@ -767,12 +853,13 @@ impl RetainedFramePreparer {
         &mut self,
         frame: &RetainedFrameState,
         changes: &FrameChanges,
+        text_only_local: bool,
         texts: &TextResourceArena,
         fonts: &FontResourceArena,
         geometries: &GeometryResourceArena,
     ) -> Result<bool, RetainedPrepareError> {
         if self.scratch_ready
-            && changes.is_empty()
+            && (changes.is_empty() || text_only_local)
             && frame.objects.len() == self.scratch_object_count
         {
             self.scratch.time = frame.time;
@@ -791,6 +878,28 @@ impl RetainedFramePreparer {
         self.incremental_stats.scratch_rebuilds =
             self.incremental_stats.scratch_rebuilds.saturating_add(1);
         Ok(false)
+    }
+
+    fn changes_are_fast_text_only(
+        &self,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+    ) -> bool {
+        if changes.is_all() || changes.is_structural() || changes.is_empty() {
+            return false;
+        }
+        changes.object_indices().iter().all(|&index| {
+            let Some(object) = frame.objects.get(index) else {
+                return false;
+            };
+            if !frame.is_present(index) || !matches!(&object.content, ObjectContentRef::Text(_)) {
+                return false;
+            }
+            self.sources.iter().filter(|source| match source {
+                SourceItem::FastGlyphRun { object_id, .. } => *object_id == object.id,
+                SourceItem::Geometry { object_id, .. } => *object_id == object.id,
+            }).all(|source| matches!(source, SourceItem::FastGlyphRun { .. }))
+        })
     }
 
     fn build_scratch_frame(
@@ -1026,6 +1135,80 @@ impl RetainedFramePreparer {
         }
         Ok(())
     }
+}
+
+fn text_item_ranges(
+    items: &[PreparedTextItem],
+    object_count: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = vec![0..0; object_count];
+    for (item_index, item) in items.iter().enumerate() {
+        let object_index = item.object_index() as usize;
+        let Some(range) = ranges.get_mut(object_index) else {
+            continue;
+        };
+        if range.start == range.end {
+            range.start = item_index;
+        }
+        range.end = item_index + 1;
+    }
+    ranges
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_local_text_snapshot_updates(
+    mask_destination: &mut [GlyphQuadInstance],
+    color_destination: &mut [GlyphQuadInstance],
+    item_ranges: &[std::ops::Range<usize>],
+    items: &[PreparedTextItem],
+    mask_source: &[GlyphQuadInstance],
+    color_source: &[GlyphQuadInstance],
+    changes: &FrameChanges,
+    dirty_mask_ranges: &mut Vec<std::ops::Range<u32>>,
+    dirty_color_ranges: &mut Vec<std::ops::Range<u32>>,
+) {
+    dirty_mask_ranges.clear();
+    dirty_color_ranges.clear();
+    for &object_index in changes.object_indices() {
+        let Some(item_range) = item_ranges.get(object_index) else {
+            continue;
+        };
+        for item in &items[item_range.clone()] {
+            let PreparedTextItem::GlyphBatch {
+                plane,
+                instance_range,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            let start = instance_range.start as usize;
+            let end = instance_range.end as usize;
+            match plane {
+                noon_text_atlas::GlyphAtlasPlane::Mask => {
+                    mask_destination[start..end].copy_from_slice(&mask_source[start..end]);
+                    push_coalesced_range(dirty_mask_ranges, instance_range.clone());
+                }
+                noon_text_atlas::GlyphAtlasPlane::Color => {
+                    color_destination[start..end].copy_from_slice(&color_source[start..end]);
+                    push_coalesced_range(dirty_color_ranges, instance_range.clone());
+                }
+            }
+        }
+    }
+}
+
+fn push_coalesced_range(ranges: &mut Vec<std::ops::Range<u32>>, range: std::ops::Range<u32>) {
+    if range.start == range.end {
+        return;
+    }
+    if let Some(previous) = ranges.last_mut() {
+        if range.start <= previous.end {
+            previous.end = previous.end.max(range.end);
+            return;
+        }
+    }
+    ranges.push(range);
 }
 
 fn geometry_kind(geometry: &GeometryRef) -> ScratchGeometryKind {
@@ -1378,10 +1561,20 @@ impl GpuRenderer {
             prepared.text_generation,
         ) {
             let text_frame = prepared.text.as_prepared_frame();
-            let uploaded =
+            let uploaded = if prepared.text.partial_upload {
+                text_state.glyphs.upload_ranges(
+                    device,
+                    queue,
+                    &text_frame,
+                    prepared.text.atlas,
+                    prepared.text.dirty_mask_ranges,
+                    prepared.text.dirty_color_ranges,
+                )
+            } else {
                 text_state
                     .glyphs
-                    .upload(device, queue, &text_frame, prepared.text.atlas);
+                    .upload(device, queue, &text_frame, prepared.text.atlas)
+            };
             text_state.last_uploaded_generation = Some(prepared.text_generation);
             uploaded
         } else {
@@ -1723,6 +1916,8 @@ mod tests {
             RetainedFrameIncrementalStats {
                 scratch_rebuilds: 1,
                 scratch_reuses: 0,
+                text_snapshot_copies: 1,
+                mixed_order_rebuilds: 1,
             }
         );
         let outline_stats = preparer.outline_cache_stats();
@@ -1754,6 +1949,8 @@ mod tests {
             RetainedFrameIncrementalStats {
                 scratch_rebuilds: 1,
                 scratch_reuses: 1,
+                text_snapshot_copies: 1,
+                mixed_order_rebuilds: 1,
             }
         );
         assert_eq!(preparer.outline_cache_stats(), outline_stats);
