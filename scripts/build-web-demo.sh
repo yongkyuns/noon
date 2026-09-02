@@ -51,6 +51,7 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
   node --check scripts/cross-language-parity.mjs
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-axes-smoke.mjs
+  node --check scripts/manim-implicit-function-smoke.mjs
   node --check scripts/manim-namespace-smoke.mjs
   node --check scripts/manim-plot-example-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
@@ -78,6 +79,7 @@ if [[ "${NOON_SKIP_WEB_PREFLIGHT:-0}" != "1" ]]; then
     web/python/_manim_phase_b.py \
     web/python/_manim_shared_geometry.py \
     web/python/_manim_axes.py \
+    web/python/_manim_implicit.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
     web/python/_manim_rotate.py \
