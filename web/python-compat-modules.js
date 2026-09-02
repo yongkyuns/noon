@@ -22,4 +22,5 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_reactive.py", runtimePath: "/tmp/_manim_reactive.py", label: "Noon reactive compatibility layer" },
   { sourcePath: "python/_manim_updaters.py", runtimePath: "/tmp/_manim_updaters.py", label: "Noon Manim updater layer" },
   { sourcePath: "python/_manim_camera.py", runtimePath: "/tmp/_manim_camera.py", label: "Noon Manim moving-camera adapter" },
+  { sourcePath: "python/_manim_canonical_scene.py", runtimePath: "/tmp/_manim_canonical_scene.py", label: "Noon canonical SceneSpec authoring context" },
 ].map((module) => Object.freeze(module)));
