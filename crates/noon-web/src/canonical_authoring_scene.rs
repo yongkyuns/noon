@@ -212,7 +212,7 @@ mod wasm {
         inner: CanonicalAuthoringSceneContext,
     }
 
-    #[wasm_bindgen(js_class = CanonicalAuthoringSceneContext)]
+    #[wasm_bindgen]
     impl WasmCanonicalAuthoringSceneContext {
         #[wasm_bindgen(constructor)]
         pub fn new() -> Self {
@@ -258,9 +258,7 @@ mod wasm {
         }
 
         pub fn restore(&mut self, checkpoint: u32) -> Result<(), JsValue> {
-            self.inner
-                .restore(checkpoint as usize)
-                .map_err(js_error)
+            self.inner.restore(checkpoint as usize).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = sceneSpecJson)]
@@ -318,7 +316,10 @@ mod tests {
     fn mixed_bind_events_define_the_canonical_object_stream_directly() {
         let mut context = CanonicalAuthoringSceneContext::default();
         context
-            .bind_geometry(ObjectId::new(0), ObjectSnapshot::new(GeometryRef::circle(0.5)))
+            .bind_geometry(
+                ObjectId::new(0),
+                ObjectSnapshot::new(GeometryRef::circle(0.5)),
+            )
             .unwrap();
         context.bind_text(ObjectId::new(1), native_text("A")).unwrap();
         context
@@ -332,7 +333,10 @@ mod tests {
             .finalize(Vec::new(), Vec::new(), Vec::new(), None)
             .unwrap();
         assert_eq!(
-            spec.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+            spec.objects
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
             vec![ObjectId::new(0), ObjectId::new(1), ObjectId::new(2)]
         );
         let ObjectSpecContent::Text(text) = &spec.objects[1].content else {
@@ -347,10 +351,15 @@ mod tests {
         let mut context = CanonicalAuthoringSceneContext::default();
         let first = ObjectId::new(0);
         context
-            .bind_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.5)))
+            .bind_geometry(
+                first,
+                ObjectSnapshot::new(GeometryRef::circle(0.5)),
+            )
             .unwrap();
         let checkpoint = context.checkpoint();
-        context.bind_text(ObjectId::new(1), native_text("temporary")).unwrap();
+        context
+            .bind_text(ObjectId::new(1), native_text("temporary"))
+            .unwrap();
         context.restore(checkpoint).unwrap();
 
         let mut replacement = ObjectSnapshot::new(GeometryRef::circle(1.0));
@@ -371,7 +380,10 @@ mod tests {
             .unwrap();
         assert_eq!(spec.objects.len(), 2);
         assert_eq!(spec.objects[0].id, first);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
+        assert_eq!(
+            spec.objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
         assert_eq!(spec.camera_object, Some(first));
     }
 
