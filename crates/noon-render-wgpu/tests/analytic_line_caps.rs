@@ -80,7 +80,9 @@ fn analytic_shader_has_distinct_round_butt_and_square_cap_sdfs() {
 fn analytic_line_fragment_passes_stroke_enablement_as_a_scalar_varying() {
     let shader = include_str!("../src/analytic.wgsl");
     assert!(shader.contains("@location(7) line_stroke_enabled: f32"));
-    assert!(shader.contains("output.line_stroke_enabled = select(0.0, 1.0, stroke_is_enabled(input.flags));"));
+    assert!(shader.contains(
+        "output.line_stroke_enabled = select(0.0, 1.0, stroke_is_enabled(input.flags));"
+    ));
     let styled_line_color = shader
         .split_once("fn styled_line_color")
         .and_then(|(_, remainder)| remainder.split_once("fn rectangle_signed_distance"))
