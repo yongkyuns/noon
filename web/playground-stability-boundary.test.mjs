@@ -66,17 +66,37 @@ assert.match(
   "retained to legacy authoring must switch the persistent execution owner in place",
 );
 
-const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady(");
-const runtimeReadyEnd = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
-assert.ok(
-  runtimeReadyStart >= 0 && runtimeReadyEnd > runtimeReadyStart,
-  "playground must keep an explicit on-demand runtime boundary",
+assert.match(
+  main,
+  /let canvas = document\.querySelector\("#scene"\);/,
+  "playground must be able to adopt a replacement DOM canvas after prepared-owner rollback",
 );
-const runtimeReadyBody = main.slice(runtimeReadyStart, runtimeReadyEnd);
-const playgroundConstruction = runtimeReadyBody.match(
-  /const nextPlayer = new AuthoringExecutionClient\(canvas, \{([\s\S]*?)\n\s*\}\);/,
+const createRuntimeStart = main.indexOf("function createRuntimeClient()");
+const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady(", preparationStart);
+assert.ok(
+  createRuntimeStart >= 0 && preparationStart > createRuntimeStart && runtimeReadyStart > preparationStart,
+  "playground must separate client construction, mode-free preparation, and authored startup",
+);
+const createRuntimeBody = main.slice(createRuntimeStart, preparationStart);
+const preparationBody = main.slice(preparationStart, runtimeReadyStart);
+const playgroundConstruction = createRuntimeBody.match(
+  /candidate = new AuthoringExecutionClient\(canvas, \{([\s\S]*?)\n\s*\}\);/,
 )?.[1];
-assert.ok(playgroundConstruction, "deferred runtime must configure its authoring execution client");
+assert.ok(playgroundConstruction, "deferred runtime must configure its authoring execution client once");
+const fatalHandler = playgroundConstruction.match(
+  /onError\(error\) \{([\s\S]*?)\n\s*\}/,
+)?.[1];
+assert.match(
+  fatalHandler ?? "",
+  /if \(player !== candidate\) return;/,
+  "fatal callbacks from an unpublished preparation must not mark a nonexistent player for restart",
+);
+assert.match(
+  fatalHandler ?? "",
+  /playerNeedsRestart = true;/,
+  "fatal callbacks from the published player must still request worker restart",
+);
 assert.match(
   playgroundConstruction,
   /onRecoverableError\(error\) \{\s*showRecoverableSceneError\(error\);\s*\}/,
@@ -89,6 +109,21 @@ assert.doesNotMatch(
   recoverableHandler ?? "",
   /playerNeedsRestart\s*=\s*true/,
   "recoverable scene errors must not request worker restart",
+);
+assert.match(
+  preparationBody,
+  /if \(runtimePreparation !== null\) return runtimePreparation;/,
+  "a prepared unpublished owner must survive Python/stale retries instead of spawning duplicate owners",
+);
+assert.match(
+  preparationBody,
+  /adoptRuntimeCanvas\(candidate\);[\s\S]*runtimePreparation = null;/,
+  "failed render preparation must adopt the fresh replacement canvas before allowing retry",
+);
+assert.doesNotMatch(
+  preparationBody,
+  /showError\(error\)/,
+  "an unpublished preparation failure must not race Python authoring to publish a fatal UI state",
 );
 assert.match(
   main,
@@ -111,4 +146,6 @@ assert.match(
   "the deployment must verify the public Pages site serves the expected revision",
 );
 
-console.log("✓ deferred playground runtime keeps recoverable scene errors outside fatal recovery");
+console.log(
+  "✓ overlapped playground preparation preserves unpublished ownership, canvas recovery, and recoverable scene-error boundaries",
+);
