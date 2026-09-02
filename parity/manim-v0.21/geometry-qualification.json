@@ -1,0 +1,12 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "renderer": "cairo",
+    "tracking_issue": "#401"
+  },
+  "qualified": [
+    {"symbol": "Dot", "fixture": "dot-ellipse-parity"},
+    {"symbol": "Ellipse", "fixture": "dot-ellipse-parity"}
+  ]
+}
