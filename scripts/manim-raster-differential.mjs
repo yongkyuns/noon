@@ -208,6 +208,14 @@ function noonSourceFor(fixture) {
   return `${adapted}\n\nresult = ${fixture.scene}()\nresult.setup()\ntry:\n    result.construct()\nfinally:\n    result.tear_down()\n`;
 }
 
+function assertDurationMatches(actual, expected, fixtureId) {
+  const delta = Math.abs(Number(actual) - Number(expected));
+  assert.ok(
+    Number.isFinite(delta) && delta <= 1e-9,
+    `${fixtureId}: authored Noon duration ${actual} != expected ${expected}`,
+  );
+}
+
 async function authorNoonScenes() {
   const browser = await chromium.launch({
     channel: "chromium",
@@ -227,7 +235,7 @@ async function authorNoonScenes() {
       );
       assert.equal(result.kind, "scene_document", `${fixture.id}: Noon authoring result kind`);
       assert.ok(result.document.objects.length > 0, `${fixture.id}: Noon scene has no objects`);
-      assert.equal(result.duration, fixture.expected_duration, `${fixture.id}: authored Noon duration`);
+      assertDurationMatches(result.duration, fixture.expected_duration, fixture.id);
       scenes.set(fixture.id, {
         document: result.document,
         duration: Number(result.duration),
