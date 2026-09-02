@@ -94,6 +94,7 @@ class MixedRetainedGroupFadeSameLeaf(Scene):
         assert peer._object is None
         assert peer._retained_object_id is None
         self.play(FadeIn(labels), run_time=0.25, rate_func=linear)
+        self.play(FadeOut(labels), run_time=0.25, rate_func=linear)
 `;
 
 const rollbackSource = `
@@ -183,6 +184,31 @@ function assertFadeTracks(result, objectIndexes) {
   }
 }
 
+function assertFadeOutTracks(result, objectIndexes) {
+  const presence = tracksFor(result, "presence");
+  const appearance = tracksFor(result, "appearance");
+  for (const object of objectIndexes) {
+    assert.ok(
+      presence.some(
+        (track) =>
+          track.object === object &&
+          track.values.bool?.from === true &&
+          track.values.bool?.to === false,
+      ),
+      `missing FadeOut presence track for retained object ${object}`,
+    );
+    assert.ok(
+      appearance.some(
+        (track) =>
+          track.object === object &&
+          track.values.scalar?.from === 1 &&
+          track.values.scalar?.to === 0,
+      ),
+      `missing FadeOut appearance track for retained object ${object}`,
+    );
+  }
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -232,6 +258,7 @@ try {
   assert.deepEqual(retainedSources(sameLeaf), ["SHARED", "PEER"]);
   assert.equal((sameLeaf.sceneSpec.family_animations ?? []).length, 0);
   assertFadeTracks(sameLeaf, [0, 1]);
+  assertFadeOutTracks(sameLeaf, [0, 1]);
 
   const rollback = await page.evaluate(
     (source) => window.noonManimCompat.run(source),
@@ -317,7 +344,7 @@ try {
     [],
     `browser errors while testing retained family fade batches:\n${errors.join("\n")}`,
   );
-  console.log("Mixed retained family Group/VGroup fade batch smoke passed, including edit -> rerun rebuild.");
+  console.log("Mixed retained family Group/VGroup fade batch smoke passed, including standalone FadeOut and edit -> rerun rebuild.");
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
