@@ -92,6 +92,9 @@ include!("reactive_impl.rs");
 mod compute_ir;
 pub use compute_ir::*;
 
+mod native_input_runtime;
+pub use native_input_runtime::*;
+
 mod native_inputs;
 pub use native_inputs::*;
 
