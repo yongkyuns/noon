@@ -31,6 +31,7 @@
         "FadeIn",
         "FadeOut",
         "200 lifecycle churn",
+        "600 shapes",
         "stress",
         "pixel-parity",
         "time-parity"
@@ -41,7 +42,7 @@
       "parity_source": "parity/manim-v0.21/stress-examples/mixed_object_parity_stress.py",
       "thumbnail": "thumbnails/manim/parity-stress-grid.svg",
       "thumbnail_alt": "Dense dynamic grid of hundreds of colorful shapes with telemetry-style text streams around the edges",
-      "thumbnail_time": 3.6,
+      "thumbnail_time": 3.0,
       "order": 15
     }
   ]
