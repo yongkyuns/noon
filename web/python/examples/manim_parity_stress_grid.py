@@ -1,7 +1,7 @@
 from noon import *
 
 
-class MixedObjectParityStress(Scene):
+class DynamicLoadStress(Scene):
     def construct(self):
         rows = 20
         cols = 30
@@ -10,17 +10,33 @@ class MixedObjectParityStress(Scene):
 
         shape_count = rows * cols
         title = Text(
-            "MANIM PARITY STRESS",
+            "NOON DYNAMIC LOAD",
             font=font,
             font_size=30,
             color=WHITE,
         ).shift(3.45 * UP)
         subtitle = Text(
-            f"{shape_count} shapes | 200 churn | repeated morph + motion + color",
+            f"{shape_count} GEOMETRY  ·  24 TEXT STREAMS  ·  STAGGERED TRANSFORMS",
             font=font,
-            font_size=14,
+            font_size=13,
             color=GRAY,
         ).shift(3.02 * UP)
+
+        labels = []
+        for index in range(24):
+            slot = index % 12
+            side = -1 if index < 12 else 1
+            label = Text(
+                f"S{index:02d} {((index * 73 + 19) % 997):03d}",
+                font=font,
+                font_size=9,
+                color=palette[(index * 3 + 2) % len(palette)],
+            )
+            label.shift(
+                (6.32 * side) * RIGHT
+                + (2.58 - slot * 0.47) * UP
+            )
+            labels.append(label)
 
         shapes = []
         targets_a = []
@@ -93,7 +109,12 @@ class MixedObjectParityStress(Scene):
                 targets_a.append(target_a)
                 targets_b.append(target_b)
 
-        self.play(FadeIn(title), FadeIn(subtitle), run_time=0.25)
+        self.play(
+            FadeIn(title),
+            FadeIn(subtitle),
+            *[FadeIn(label) for label in labels],
+            run_time=0.35,
+        )
         self.play(*[Create(shape) for shape in shapes], run_time=0.55)
 
         self.play(
@@ -101,46 +122,91 @@ class MixedObjectParityStress(Scene):
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_a)
             ],
-            run_time=0.75,
+            run_time=0.65,
         )
 
-        motion_a = []
-        for index, shape in enumerate(shapes):
-            row = index // cols
-            angle = PI / 3 if index % 2 == 0 else -PI / 3
-            x_direction = RIGHT if row % 2 == 0 else LEFT
-            y_direction = UP if index % 3 == 0 else DOWN
-            color = palette[(index + 5) % len(palette)]
-            motion_a.append(
-                shape.animate.rotate(angle)
-                .shift(0.035 * x_direction + 0.025 * y_direction)
-                .set_color(color)
-            )
-        self.play(*motion_a, run_time=0.55)
-        self.play(title.animate.rotate(PI / 24), run_time=0.10)
+        for wave in range(6):
+            wave_motion = []
+            for index, shape in enumerate(shapes):
+                row = index // cols
+                col = index % cols
+                bucket = (index * 37 + row * 11 + col * 7) % 6
+                if bucket != wave:
+                    continue
+                scale_factor = 0.84 + 0.04 * ((index * 13 + row) % 9)
+                angle = (((index * 19 + col) % 11) - 5) * (PI / 36)
+                dx = (((index * 17 + row) % 9) - 4) * 0.027
+                dy = (((index * 29 + col) % 7) - 3) * 0.023
+                color = palette[(index + wave + 3) % len(palette)]
+                wave_motion.append(
+                    shape.animate.scale(scale_factor)
+                    .rotate(angle)
+                    .shift(dx * RIGHT + dy * UP)
+                    .set_color(color)
+                )
+            self.play(*wave_motion, run_time=0.12)
+
+        label_specs = []
+        for index in range(len(labels)):
+            factor = 0.90 + 0.04 * ((index * 5 + 1) % 6)
+            angle = (((index * 7) % 9) - 4) * (PI / 72)
+            dx = (((index * 11) % 5) - 2) * 0.045
+            dy = (((index * 13) % 5) - 2) * 0.025
+            opacity = 0.62 + 0.09 * (index % 5)
+            label_specs.append((factor, angle, dx, dy, opacity))
+
+        for wave in range(4):
+            text_motion = []
+            for index, label in enumerate(labels):
+                if index % 4 != wave:
+                    continue
+                factor, angle, dx, dy, opacity = label_specs[index]
+                text_motion.append(
+                    label.animate.scale(factor)
+                    .rotate(angle)
+                    .shift(dx * RIGHT + dy * UP)
+                    .set_opacity(opacity)
+                )
+            self.play(*text_motion, run_time=0.08)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_b)
             ],
-            run_time=0.75,
+            run_time=0.65,
         )
 
-        motion_b = []
+        turbulence = []
         for index, shape in enumerate(shapes):
             row = index // cols
-            angle = -PI / 2 if index % 2 == 0 else PI / 2
-            x_direction = LEFT if row % 2 == 0 else RIGHT
-            y_direction = DOWN if index % 3 == 0 else UP
-            color = palette[(index + 1) % len(palette)]
-            motion_b.append(
-                shape.animate.rotate(angle)
-                .shift(0.055 * x_direction + 0.035 * y_direction)
+            col = index % cols
+            factor = 0.92 + 0.02 * ((index * 7 + col) % 9)
+            angle = (PI / 3) if (index + row) % 2 == 0 else (-PI / 3)
+            dx = (((index * 23 + col) % 7) - 3) * 0.022
+            dy = (((index * 31 + row) % 7) - 3) * 0.020
+            color = palette[(index * 5 + 1) % len(palette)]
+            turbulence.append(
+                shape.animate.scale(factor)
+                .rotate(angle)
+                .shift(dx * RIGHT + dy * UP)
                 .set_color(color)
             )
-        self.play(*motion_b, run_time=0.55)
-        self.play(title.animate.rotate(-PI / 12), run_time=0.10)
+        self.play(*turbulence, run_time=0.55)
+
+        for wave in range(4):
+            text_motion = []
+            for index, label in enumerate(labels):
+                if index % 4 != wave:
+                    continue
+                factor, angle, dx, dy, _ = label_specs[index]
+                text_motion.append(
+                    label.animate.scale(1.0 / factor)
+                    .rotate(-angle)
+                    .shift(-dx * RIGHT - dy * UP)
+                    .set_opacity(1.0)
+                )
+            self.play(*text_motion, run_time=0.08)
 
         leaving = shapes[::3]
         pulses = [
@@ -152,18 +218,47 @@ class MixedObjectParityStress(Scene):
             ).move_to(shape.get_center())
             for shape in leaving
         ]
+        blinking_labels = labels[::3]
 
-        self.play(FadeOut(subtitle), run_time=0.10)
+        self.play(
+            FadeOut(subtitle),
+            *[FadeOut(label) for label in blinking_labels],
+            run_time=0.15,
+        )
         self.play(
             *[FadeOut(shape, scale=0.25) for shape in leaving],
             *[FadeIn(pulse, scale=0.15) for pulse in pulses],
             run_time=0.50,
         )
 
-        self.play(title.animate.rotate(PI / 24), run_time=0.10)
-        self.play(FadeIn(subtitle), run_time=0.10)
+        self.play(
+            FadeIn(subtitle),
+            *[FadeIn(label) for label in blinking_labels],
+            run_time=0.15,
+        )
         self.play(
             *[FadeIn(shape, scale=0.25) for shape in leaving],
             *[FadeOut(pulse, scale=2.0) for pulse in pulses],
-            run_time=0.60,
+            run_time=0.55,
         )
+
+        for wave in range(6):
+            wave_motion = []
+            for index, shape in enumerate(shapes):
+                row = index // cols
+                col = index % cols
+                bucket = (index * 17 + row * 5 + col * 13) % 6
+                if bucket != wave:
+                    continue
+                scale_factor = 0.90 + 0.025 * ((index * 11 + col) % 9)
+                angle = (((index * 5 + row) % 13) - 6) * (PI / 48)
+                dx = (((index * 41 + col) % 11) - 5) * 0.020
+                dy = (((index * 43 + row) % 9) - 4) * 0.018
+                color = palette[(index + 2 * wave + 5) % len(palette)]
+                wave_motion.append(
+                    shape.animate.scale(scale_factor)
+                    .rotate(angle)
+                    .shift(dx * RIGHT + dy * UP)
+                    .set_color(color)
+                )
+            self.play(*wave_motion, run_time=0.10)
