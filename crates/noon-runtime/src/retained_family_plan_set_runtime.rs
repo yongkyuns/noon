@@ -369,10 +369,7 @@ mod tests {
         let mut runtime = RetainedFamilyPlanSetSceneInstance::new(
             compiled,
             vec![
-                (
-                    plan_for(first),
-                    spec(0.0, 2.0, FamilyAnimationMode::Reveal),
-                ),
+                (plan_for(first), spec(0.0, 2.0, FamilyAnimationMode::Reveal)),
                 (
                     plan_for(second),
                     spec(0.0, 2.0, FamilyAnimationMode::DrawBorderThenFill),
