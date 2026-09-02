@@ -15,13 +15,13 @@ use crate::{
 /// be projected for compatibility, but they are not inputs to canonical SceneSpec
 /// production.
 #[derive(Clone, Debug, Default)]
-pub struct CanonicalAuthoringSceneContext {
+pub struct CanonicalAuthoringScene {
     objects: Vec<ObjectSpec>,
     positions: BTreeMap<ObjectId, usize>,
     retained_scale_factors: BTreeMap<ObjectId, Vec2>,
 }
 
-impl CanonicalAuthoringSceneContext {
+impl CanonicalAuthoringScene {
     pub fn bind_geometry(&mut self, id: ObjectId, snapshot: ObjectSnapshot) -> Result<(), String> {
         let mut object = ObjectSpec::geometry(id, snapshot.geometry);
         object.transform = snapshot.transform;
@@ -205,17 +205,17 @@ mod wasm {
             .map_err(|error| js_error(format!("invalid {label} {value:?}: {error}")))
     }
 
-    #[wasm_bindgen(js_name = CanonicalAuthoringSceneContext)]
-    pub struct WasmCanonicalAuthoringSceneContext {
-        inner: CanonicalAuthoringSceneContext,
+    #[wasm_bindgen]
+    pub struct CanonicalAuthoringSceneContext {
+        inner: CanonicalAuthoringScene,
     }
 
     #[wasm_bindgen]
-    impl WasmCanonicalAuthoringSceneContext {
+    impl CanonicalAuthoringSceneContext {
         #[wasm_bindgen(constructor)]
         pub fn new() -> Self {
             Self {
-                inner: CanonicalAuthoringSceneContext::default(),
+                inner: CanonicalAuthoringScene::default(),
             }
         }
 
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn mixed_bind_events_define_the_canonical_object_stream_directly() {
-        let mut context = CanonicalAuthoringSceneContext::default();
+        let mut context = CanonicalAuthoringScene::default();
         context
             .bind_geometry(
                 ObjectId::new(0),
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn updates_preserve_slots_and_checkpoint_restore_reclaims_failed_binds() {
-        let mut context = CanonicalAuthoringSceneContext::default();
+        let mut context = CanonicalAuthoringScene::default();
         let first = ObjectId::new(0);
         context
             .bind_geometry(first, ObjectSnapshot::new(GeometryRef::circle(0.5)))
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn content_domain_cannot_change_after_binding() {
-        let mut context = CanonicalAuthoringSceneContext::default();
+        let mut context = CanonicalAuthoringScene::default();
         let id = ObjectId::new(7);
         context.bind_text(id, native_text("stable")).unwrap();
         let error = context
