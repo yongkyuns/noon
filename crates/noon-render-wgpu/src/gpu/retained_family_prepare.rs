@@ -151,6 +151,10 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        self.incremental_stats.mixed_order_rebuilds = self
+            .incremental_stats
+            .mixed_order_rebuilds
+            .saturating_add(1);
         let glyph_batches = self
             .render_items
             .iter()
@@ -182,6 +186,9 @@ impl RetainedFramePreparer {
             items: &self.snapshot_text_items,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
+            partial_upload_base_generation: None,
+            dirty_mask_ranges: &self.dirty_mask_ranges,
+            dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
             geometry,

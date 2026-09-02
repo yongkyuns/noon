@@ -416,6 +416,22 @@ impl RetainedTextQuadPreparer {
         Ok(true)
     }
 
+    /// Report whether the current frame can update only existing text object records.
+    ///
+    /// This is exposed to the mixed renderer so it can avoid rebuilding its separate
+    /// geometry scratch frame before invoking the already-local text update path.
+    /// Prepared outline/vector items still require their owning mixed scratch records
+    /// to be updated by the caller; this method only describes the text quad state.
+    pub fn can_update_objects_locally(
+        &self,
+        frame: &RetainedFrameState,
+        changes: &FrameChanges,
+        texts: &TextResourceArena,
+        metrics: TextDeviceMetrics,
+    ) -> Result<bool, TextPrepareError> {
+        self.can_update_objects(frame, changes, texts, metrics)
+    }
+
     fn update_objects(
         &mut self,
         frame: &RetainedFrameState,
