@@ -13,6 +13,7 @@ mod execution_transport;
 mod execution_visibility;
 mod family_animation_authoring;
 mod family_bounds;
+mod family_write_authoring;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
 mod host_player;
@@ -65,6 +66,8 @@ pub use execution_visibility::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_animation_authoring::*;
 pub use family_bounds::*;
+#[cfg(target_arch = "wasm32")]
+pub use family_write_authoring::*;
 pub use host_player::*;
 pub use legacy::*;
 pub use lifecycle::*;
