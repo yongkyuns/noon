@@ -336,6 +336,23 @@ def _record_wrapper_state(
         states.setdefault(id(value), (value, value._scene, value._object))
 
 
+def _record_animation_wrapper_state(
+    animation: object,
+    states: dict[int, tuple[_base.Mobject, object, object]],
+) -> None:
+    """Capture wrappers that ordinary play binding may mutate.
+
+    Mixed family/ordinary play reuses this exact ownership boundary so one outer
+    transaction can restore wrappers without reimplementing the ordinary scheduler.
+    """
+
+    source = _builder_source(animation)
+    if source is not None:
+        _record_wrapper_state(source, states)
+    if isinstance(animation, (_base.Create, _base.Uncreate, _base.FadeIn, _base.FadeOut)):
+        _record_wrapper_state(animation.target, states)
+
+
 def _bind_for_animation(
     scene: _compat.Scene,
     value: object,
@@ -368,6 +385,35 @@ def _bind_for_animation(
             )
 
     scene._register_top_level(value)
+
+
+def _prepare_aligned_animation_binding(
+    scene: _compat.Scene,
+    animation: object,
+    *,
+    start_time: float,
+) -> None:
+    """Bind one ordinary animation without scheduling or committing target state."""
+
+    source = _builder_source(animation)
+    if source is not None:
+        _bind_for_animation(scene, source, start_time=start_time)
+    elif isinstance(animation, _base.Uncreate):
+        _bind_for_animation(scene, animation.target, start_time=start_time)
+    elif isinstance(animation, (_base.Create, _base.FadeIn)):
+        scene._bind_introducer_target(animation.target)
+    elif isinstance(animation, _base.FadeOut):
+        _bind_for_animation(scene, animation.target, start_time=start_time)
+
+
+def _prepare_aligned_bindings(
+    scene: _compat.Scene,
+    animations: tuple[object, ...] | list[object],
+    *,
+    start_time: float,
+) -> None:
+    for animation in animations:
+        _prepare_aligned_animation_binding(scene, animation, start_time=start_time)
 
 
 def _uncreate_track_settings(easing: str, reverse_rate_function: bool) -> tuple[str, bool]:
@@ -591,6 +637,104 @@ def _schedule_fade_endpoint_transform(
     scene._scheduled_transform_ends[obj.id] = start_time + duration
 
 
+def _schedule_aligned_bound_animations(
+    scene: _compat.Scene,
+    animations: tuple[object, ...] | list[object],
+    *,
+    base_start: float,
+    play_run_time: float | None,
+    play_easing: str | None,
+    play_rate_func: object | None,
+    play_lag_ratio: float | None,
+) -> tuple[float, dict[int, tuple[_base.Mobject, _base.Mobject]]]:
+    """Schedule already-bound ordinary animations without committing semantic targets.
+
+    Keeping semantic-handle commit outside this phase lets a higher-level mixed play
+    transaction include retained family requests without leaving partially advanced
+    authoring handles if any sibling animation fails.
+    """
+
+    max_end = base_start
+    semantic_targets: dict[int, tuple[_base.Mobject, _base.Mobject]] = {}
+    for animation in animations:
+        builder_args = _options.builder_args(animation)
+        resolved = _options.resolve(
+            builder_args=builder_args,
+            default_lag_ratio=_default_lag_ratio(animation),
+            play_run_time=play_run_time,
+            play_easing=play_easing,
+            play_rate_func=play_rate_func,
+            play_lag_ratio=play_lag_ratio,
+        )
+
+        fade_snapshots = _fade_endpoint_snapshots(
+            scene, animation, start_time=base_start
+        )
+        schedule = _expanded_schedule(
+            scene,
+            animation,
+            start_time=base_start,
+            run_time=resolved.run_time,
+            easing=resolved.rate_func,
+            lag_ratio=resolved.lag_ratio,
+        )
+        for lowered, child_start, child_duration, child_easing in schedule:
+            if isinstance(animation, (FadeIn, FadeOut)) and isinstance(
+                lowered, (_base.FadeIn, _base.FadeOut)
+            ):
+                member = lowered.target
+                faded_snapshot = fade_snapshots.get(id(member))
+                if faded_snapshot is not None:
+                    _schedule_fade_endpoint_transform(
+                        scene,
+                        animation,
+                        member,
+                        faded_snapshot,
+                        duration=child_duration,
+                        start_time=child_start,
+                        easing=child_easing,
+                        key=lowered.key,
+                    )
+
+            if isinstance(lowered, _base.Uncreate):
+                child_easing, track_reverse = _uncreate_track_settings(
+                    child_easing, lowered.reverse_rate_function
+                )
+                lowered = type(lowered)(
+                    lowered.target,
+                    lowered.key,
+                    reverse_rate_function=track_reverse,
+                    remover=lowered.remover,
+                )
+
+            if isinstance(lowered, _base.Transform):
+                source = lowered.source
+                target = lowered.target
+                if isinstance(source, _base.Mobject) and isinstance(target, _base.Mobject):
+                    semantic_targets[id(source)] = (source, target)
+
+            # `noon.Scene` has already been replaced by the compatibility class
+            # during install, so use the original captured facade explicitly to
+            # avoid recursively re-entering this compatibility scheduler.
+            _compat._BaseScene.play(
+                scene,
+                lowered,
+                run_time=child_duration,
+                start_time=child_start,
+                easing=child_easing,
+            )
+        max_end = max(max_end, base_start + resolved.run_time)
+
+    return max_end, semantic_targets
+
+
+def _commit_semantic_targets(
+    semantic_targets: dict[int, tuple[_base.Mobject, _base.Mobject]],
+) -> None:
+    for source, target in semantic_targets.values():
+        _semantic_handles.commit_transform_target(source, target)
+
+
 def _aligned_scene_play(
     self: _compat.Scene,
     *animations: Any,
@@ -627,100 +771,21 @@ def _aligned_scene_play(
     top_level_before = list(self._compat_top_level)
     wrapper_states: dict[int, tuple[_base.Mobject, object, object]] = {}
     for animation in animations:
-        source = _builder_source(animation)
-        if source is not None:
-            _record_wrapper_state(source, wrapper_states)
-        if isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut)):
-            _record_wrapper_state(animation.target, wrapper_states)
+        _record_animation_wrapper_state(animation, wrapper_states)
 
-    max_end = base_start
-    semantic_targets: dict[int, tuple[_base.Mobject, _base.Mobject]] = {}
     try:
-        # Introducing animations bind their target; method animations and FadeOut
-        # match Manim's normal Scene.play behavior by implicitly adding their mobject.
-        for animation in animations:
-            source = _builder_source(animation)
-            if source is not None:
-                _bind_for_animation(self, source, start_time=base_start)
-            elif isinstance(animation, _base.Uncreate):
-                _bind_for_animation(self, animation.target, start_time=base_start)
-            elif isinstance(animation, (_base.Create, _base.FadeIn)):
-                self._bind_introducer_target(animation.target)
-            elif isinstance(animation, _base.FadeOut):
-                _bind_for_animation(self, animation.target, start_time=base_start)
-
-        for animation in animations:
-            builder_args = _options.builder_args(animation)
-            resolved = _options.resolve(
-                builder_args=builder_args,
-                default_lag_ratio=_default_lag_ratio(animation),
-                play_run_time=play_run_time,
-                play_easing=easing,
-                play_rate_func=rate_func,
-                play_lag_ratio=lag_ratio,
-            )
-
-            fade_snapshots = _fade_endpoint_snapshots(
-                self, animation, start_time=base_start
-            )
-            schedule = _expanded_schedule(
-                self,
-                animation,
-                start_time=base_start,
-                run_time=resolved.run_time,
-                easing=resolved.rate_func,
-                lag_ratio=resolved.lag_ratio,
-            )
-            for lowered, child_start, child_duration, child_easing in schedule:
-                if isinstance(animation, (FadeIn, FadeOut)) and isinstance(
-                    lowered, (_base.FadeIn, _base.FadeOut)
-                ):
-                    member = lowered.target
-                    faded_snapshot = fade_snapshots.get(id(member))
-                    if faded_snapshot is not None:
-                        _schedule_fade_endpoint_transform(
-                            self,
-                            animation,
-                            member,
-                            faded_snapshot,
-                            duration=child_duration,
-                            start_time=child_start,
-                            easing=child_easing,
-                            key=lowered.key,
-                        )
-
-                if isinstance(lowered, _base.Uncreate):
-                    child_easing, track_reverse = _uncreate_track_settings(
-                        child_easing, lowered.reverse_rate_function
-                    )
-                    lowered = type(lowered)(
-                        lowered.target,
-                        lowered.key,
-                        reverse_rate_function=track_reverse,
-                        remover=lowered.remover,
-                    )
-
-                if isinstance(lowered, _base.Transform):
-                    source = lowered.source
-                    target = lowered.target
-                    if isinstance(source, _base.Mobject) and isinstance(target, _base.Mobject):
-                        semantic_targets[id(source)] = (source, target)
-
-                # `noon.Scene` has already been replaced by the compatibility class
-                # during install, so use the original captured facade explicitly to
-                # avoid recursively re-entering this compatibility scheduler.
-                _compat._BaseScene.play(
-                    self,
-                    lowered,
-                    run_time=child_duration,
-                    start_time=child_start,
-                    easing=child_easing,
-                )
-            max_end = max(max_end, base_start + resolved.run_time)
-
+        _prepare_aligned_bindings(self, list(animations), start_time=base_start)
+        max_end, semantic_targets = _schedule_aligned_bound_animations(
+            self,
+            list(animations),
+            base_start=base_start,
+            play_run_time=play_run_time,
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+        )
         self._cursor = max(cursor_before, max_end)
-        for source, target in semantic_targets.values():
-            _semantic_handles.commit_transform_target(source, target)
+        _commit_semantic_targets(semantic_targets)
         return self
     except Exception:
         self._restore_authoring_checkpoint(checkpoint)

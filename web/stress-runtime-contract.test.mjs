@@ -56,22 +56,32 @@ assert.match(
 assert.match(
   retainedAnimate,
   /mixing retained Text animations with legacy animations in one Scene\.play /,
-  "contract should track the retained-vs-geometry mixed-play capability boundary",
+  "contract should track the retained-vs-geometry property-animation mixed-play boundary",
 );
 assert.doesNotMatch(
   familyCreation,
   /must currently be the only animation in Scene\.play/,
   "disjoint retained family animations should no longer be artificially single-animation-only",
 );
+assert.doesNotMatch(
+  familyCreation,
+  /family animations cannot currently be mixed with[\s\S]*ordinary animations/,
+  "retained family animations should compose with ordinary geometry animations",
+);
 assert.match(
   familyCreation,
-  /cannot currently be mixed with[\s\S]*ordinary animations in the same Scene\.play/,
-  "contract should retain the family-vs-ordinary mixed-play capability boundary",
+  /retained family animations can mix with ordinary geometry animations/,
+  "contract should retain the narrower retained-property-track composition boundary",
 );
 assert.match(
   familyCreation,
   /concurrent retained family animations must target disjoint family leaves/,
   "contract should reject ambiguous same-leaf concurrent family ownership",
+);
+assert.match(
+  familyCreation,
+  /concurrent retained family and ordinary animations must target[\s\S]*disjoint scene leaves/,
+  "contract should reject family-vs-ordinary same-leaf ownership",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
 assert.match(browserSmoke, /stressResult\.duration\) - 5\.0/);
