@@ -18,7 +18,9 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - name: Apply architecture slice
-        run: python3 scripts/_tmp-367-canonical-scene-context.py
+        run: |
+          python3 scripts/_tmp-367-fix-driver.py
+          python3 scripts/_tmp-367-canonical-scene-context.py
       - name: Format and build generated authoring assets
         run: |
           cargo fmt --all
@@ -36,6 +38,8 @@ jobs:
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -A
-          git reset .github/workflows/_tmp-367-canonical-scene-context.yml scripts/_tmp-367-canonical-scene-context.py
+          git reset .github/workflows/_tmp-367-canonical-scene-context.yml \
+            scripts/_tmp-367-canonical-scene-context.py \
+            scripts/_tmp-367-fix-driver.py
           git commit -m "Own mixed scene objects in one Rust authoring context"
           git push origin HEAD:tmp/367-canonical-scene-context
