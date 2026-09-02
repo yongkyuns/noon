@@ -406,7 +406,6 @@ fn variation_identity(settings: &[FontVariationSetting]) -> String {
     }
     identity
 }
-
 fn fingerprint_u64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
@@ -479,7 +478,7 @@ mod tests {
 
     #[test]
     fn glyphs_from_one_shaped_cluster_share_one_cluster_ordinal() {
-        let source = "a\u{0301}b";
+        let source = "q\u{0301}b";
         let font = bundled_font();
         let mut compiler = NativeTextCompiler::new();
         let artifact = compiler
@@ -507,7 +506,10 @@ mod tests {
             .collect::<Vec<_>>();
         first_ordinals.sort_unstable();
         first_ordinals.dedup();
-        assert_eq!(first_ordinals, (0..first_ordinals.len() as u32).collect::<Vec<_>>());
+        assert_eq!(
+            first_ordinals,
+            (0..first_ordinals.len() as u32).collect::<Vec<_>>()
+        );
     }
 
     #[test]
