@@ -86,7 +86,6 @@ async function enhancePythonEditors() {
     const host = document.createElement("div");
     host.className = "python-code-editor";
     textarea.before(host);
-    textarea.hidden = true;
 
     const view = new EditorView({
       doc: textarea.value,
@@ -101,6 +100,14 @@ async function enhancePythonEditors() {
         EditorView.lineWrapping,
       ],
     });
+
+    // Only hide the native fallback after CodeMirror has been constructed
+    // successfully. `index.html` gives all textareas `display: block`, which can
+    // override the HTML `hidden` presentational hint in author CSS. Set an
+    // explicit inline display value as well so the enhanced editor never leaves
+    // a second plain-text copy stacked underneath it.
+    textarea.hidden = true;
+    textarea.style.display = "none";
 
     // Keep the hidden textarea as the stable integration surface for the
     // playground. Programmatic .value writes are projected into CodeMirror,
@@ -146,6 +153,7 @@ async function enhancePythonEditors() {
     }
     .python-code-editor .cm-editor { height: 100%; }
     .python-code-editor .cm-focused { outline: 2px solid #aa9cff; outline-offset: -2px; }
+    .python-code-editor + textarea[hidden] { display: none !important; }
     @media (max-width: 44rem) {
       .python-code-editor { min-height: 25rem; }
       .python-code-editor .cm-editor { font-size: 0.76rem; }

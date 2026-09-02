@@ -26,6 +26,8 @@ class ManimStressExampleTests(unittest.TestCase):
         self.assertEqual(entry["reuse"], "manim-compatible-parity-v0.21")
         self.assertEqual(entry["parity_status"], "candidate")
         self.assertEqual(entry["parity_fixture"], "mixed-object-parity-stress")
+        self.assertIn("600 shapes", entry["features"])
+        self.assertIn("200 lifecycle churn", entry["features"])
 
         demo_path = WEB_ROOT / entry["path"]
         canonical_path = REPO_ROOT / entry["parity_source"]
@@ -49,8 +51,11 @@ class ManimStressExampleTests(unittest.TestCase):
             "FadeOut(",
         ):
             self.assertIn(token, canonical_source)
-        self.assertIn("rows = 6", canonical_source)
-        self.assertIn("cols = 12", canonical_source)
+        self.assertIn("rows = 20", canonical_source)
+        self.assertIn("cols = 30", canonical_source)
+        self.assertIn("targets_a = []", canonical_source)
+        self.assertIn("targets_b = []", canonical_source)
+        self.assertIn("leaving = shapes[::3]", canonical_source)
         self.assertNotIn("VectorPath", canonical_source)
         self.assertNotIn("context", canonical_source)
         self.assertNotIn("result =", canonical_source)

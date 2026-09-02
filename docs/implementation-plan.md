@@ -1,5 +1,7 @@
 # Noon implementation plan
 
+> **Current roadmap:** This document records the original milestone-oriented implementation sequence. For the current repository state, active priorities, remaining feature work, dependencies, and acceptance criteria, use [`docs/current-implementation-roadmap.md`](current-implementation-roadmap.md).
+
 This document turns the architecture in `docs/architecture-plan.md` into an executable, CI-gated delivery plan.
 
 ## Delivery rule
