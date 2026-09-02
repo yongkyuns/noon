@@ -191,13 +191,11 @@ try {
     const workspace = document.querySelector(".workspace");
     const editor = document.querySelector(".editor-pane");
     const preview = document.querySelector(".preview-pane");
-    const selected = document.querySelector(".selected-example");
     const workspaceRect = workspace.getBoundingClientRect();
     const editorRect = editor.getBoundingClientRect();
     const previewRect = preview.getBoundingClientRect();
     return {
-      selectedOutsideWorkspace: selected !== null && !workspace.contains(selected),
-      selectedImmediatelyBeforeWorkspace: selected?.nextElementSibling === workspace,
+      selectedExampleCount: document.querySelectorAll(".selected-example").length,
       obsoletePanels: document.querySelectorAll(
         ".below, .info-panel, .pipeline, .api-list, .perf-metrics",
       ).length,
@@ -210,14 +208,9 @@ try {
     };
   });
   assert.equal(
-    presentationContract.selectedOutsideWorkspace,
-    true,
-    "selected-example context must not offset only the editor pane",
-  );
-  assert.equal(
-    presentationContract.selectedImmediatelyBeforeWorkspace,
-    true,
-    "selected-example context must sit directly above the shared source/preview workspace",
+    presentationContract.selectedExampleCount,
+    0,
+    "selected-example strip must stay removed from the simplified playground chrome",
   );
   assert.equal(
     presentationContract.obsoletePanels,
