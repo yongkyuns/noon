@@ -55,7 +55,9 @@ assert.match(
   "contract should track the retained family mixed-play capability boundary",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
-assert.match(browserSmoke, /expectedObjectCount: 110/);
+assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 110/);
+assert.match(browserSmoke, /expectedObjectCount: 74/);
+assert.match(browserSmoke, /waitForRenderedState/);
 assert.match(browserSmoke, /seekTime: 2\.8/);
 
 console.log("✓ stress runtime capability and browser-execution contract");
