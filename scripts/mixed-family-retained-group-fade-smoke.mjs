@@ -230,7 +230,7 @@ try {
     sameLeafSource,
   );
   assert.deepEqual(retainedSources(sameLeaf), ["SHARED", "PEER"]);
-  assert.equal(sameLeaf.sceneSpec.family_animations.length, 0);
+  assert.equal((sameLeaf.sceneSpec.family_animations ?? []).length, 0);
   assertFadeTracks(sameLeaf, [0, 1]);
 
   const rollback = await page.evaluate(
@@ -247,7 +247,7 @@ try {
     lagFailureSource,
   );
   assert.equal(lagFailure.sceneSpec.objects.length, 0);
-  assert.equal(lagFailure.sceneSpec.family_animations.length, 0);
+  assert.equal((lagFailure.sceneSpec.family_animations ?? []).length, 0);
 
   // Reconcile the two source versions through one persistent execution owner. The
   // retained object set must replace 3 -> 4 rather than accumulate the first run.
