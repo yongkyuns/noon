@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # Production deployments must finish even when master is moving quickly.
+  # New pushes queue behind the in-flight deployment instead of starving Pages.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -57,6 +59,9 @@ jobs:
       - name: Build and validate playground
         run: bash scripts/build-web-demo.sh
 
+      - name: Stamp deployed revision
+        run: printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
@@ -76,3 +81,24 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Verify deployed revision
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          url="${PAGE_URL%/}/build-info.json?sha=${EXPECTED_SHA}"
+          for attempt in {1..20}; do
+            body="$(curl --fail --silent --show-error \
+              -H 'Cache-Control: no-cache' \
+              "$url" 2>/dev/null || true)"
+            if [[ "$body" == *"\"commit\":\"${EXPECTED_SHA}\""* ]]; then
+              echo "Verified live playground revision ${EXPECTED_SHA}"
+              exit 0
+            fi
+            echo "Waiting for Pages to serve ${EXPECTED_SHA} (attempt ${attempt}/20)"
+            sleep 5
+          done
+          echo "Pages never served expected revision ${EXPECTED_SHA}" >&2
+          exit 1
