@@ -93,6 +93,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate workflow policies
+        run: node scripts/manim-raster-workflow-policy.test.mjs
+
       - name: Run web preflight
         run: bash scripts/build-web-demo.sh
 

@@ -9,8 +9,6 @@ on:
   pull_request:
     branches:
       - master
-    paths-ignore:
-      - "crates/**/tests/**"
   workflow_dispatch:
 
 permissions:
@@ -21,8 +19,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: Decide canonical raster gate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.classify.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch always runs the canonical raster oracle."
+            exit 0
+          fi
+
+          compare_sha="$BEFORE_SHA"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            compare_sha="$BASE_SHA"
+          fi
+          if ! git cat-file -e "${compare_sha}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$compare_sha"
+          fi
+
+          changed_paths="$(git diff --name-only "$compare_sha" "$HEAD_SHA")"
+          printf '%s\n' "$changed_paths"
+          run=false
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              crates/*/tests/*)
+                ;;
+              *)
+                run=true
+                break
+                ;;
+            esac
+          done <<< "$changed_paths"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [[ "$run" == true ]]; then
+            echo "Canonical raster changes are in scope."
+          else
+            echo "Only crate integration-test paths changed; canonical raster oracle is not needed."
+          fi
+
   raster:
-    name: ManimCE 0.21.0 raster oracle
+    name: Canonical Manim raster differential
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -34,8 +89,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Validate raster workflow trigger policy
-        run: node scripts/manim-raster-workflow-policy.test.mjs
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
       - name: Set up Python
@@ -129,3 +182,33 @@ jobs:
           path: manim-raster-artifacts
           if-no-files-found: error
           retention-days: 14
+
+  raster-gate:
+    name: ManimCE 0.21.0 raster oracle
+    needs:
+      - scope
+      - raster
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report canonical raster gate result
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          SHOULD_RUN: ${{ needs.scope.outputs.run }}
+          RASTER_RESULT: ${{ needs.raster.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SCOPE_RESULT" != "success" ]]; then
+            echo "Raster scope classification failed."
+            exit 1
+          fi
+          if [[ "$SHOULD_RUN" == "true" && "$RASTER_RESULT" != "success" ]]; then
+            echo "Canonical raster differential failed."
+            exit 1
+          fi
+          if [[ "$SHOULD_RUN" == "true" ]]; then
+            echo "Canonical raster differential passed."
+          else
+            echo "Canonical raster differential skipped: only crate integration-test paths changed."
+          fi
