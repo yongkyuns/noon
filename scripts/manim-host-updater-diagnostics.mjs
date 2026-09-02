@@ -10,23 +10,15 @@ const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_MANIM_HOST_DIAGNOSTICS_PORT ?? "4194");
 const baseUrl = `http://127.0.0.1:${port}`;
-const targetObject = 1;
+const targetObject = 2;
 const targetFrame = 90;
 const targetTime = 3.0;
 const frameTimes = Array.from({ length: targetFrame + 1 }, (_, index) => index / 30);
 const source = await readFile(
-  path.join(repoRoot, "web/python/examples/manim_gallery_rotation_updater.py"),
+  path.join(repoRoot, "web/python/examples/manim_host_updater_mixed_primitive.py"),
   "utf8",
 );
-const authoredSource = `${source}
-
-result = RotationUpdater()
-result.setup()
-try:
-    result.construct()
-finally:
-    result.tear_down()
-`;
+const authoredSource = source;
 
 function browserArgs(backend) {
   if (backend === "webgpu") {
@@ -117,9 +109,11 @@ function assertDiagnostic(diagnostic, backend) {
   assertSameObjectState(committed, diagnostic.prepared.state, `${backend}: prepared`);
 
   assert.equal(diagnostic.prepared.instance_kind, "line");
+  const lineInstanceIndex = diagnostic.prepared.instance_index;
+  assert.ok(Number.isSafeInteger(lineInstanceIndex));
   assert.ok(diagnostic.prepared.instance_range);
-  assert.ok(diagnostic.prepared.instance_range.start <= committed.frame_index);
-  assert.ok(diagnostic.prepared.instance_range.end > committed.frame_index);
+  assert.ok(diagnostic.prepared.instance_range.start <= lineInstanceIndex);
+  assert.ok(diagnostic.prepared.instance_range.end > lineInstanceIndex);
   assert.equal(diagnostic.prepared.full_rebuilds, 0);
   assert.equal(diagnostic.prepared.instances_repacked, 1);
 
@@ -127,8 +121,8 @@ function assertDiagnostic(diagnostic, backend) {
   assert.equal(diagnostic.upload.buffer_reallocations, 0);
   assert.ok(diagnostic.upload.target_write, `${backend}: target upload missing`);
   assert.equal(diagnostic.upload.target_write.buffer, "line");
-  assert.ok(diagnostic.upload.target_write.instance_range.start <= committed.frame_index);
-  assert.ok(diagnostic.upload.target_write.instance_range.end > committed.frame_index);
+  assert.ok(diagnostic.upload.target_write.instance_range.start <= lineInstanceIndex);
+  assert.ok(diagnostic.upload.target_write.instance_range.end > lineInstanceIndex);
   assert.ok(diagnostic.upload.target_write.byte_length > 0);
   assert.ok(diagnostic.upload.target_write.payload_hash > 0);
   assert.ok(diagnostic.upload.writes.length > 0);
@@ -142,8 +136,8 @@ function assertDiagnostic(diagnostic, backend) {
   assert.ok(
     diagnostic.draw_plan.batches.some(
       (batch) => batch.primitive === "line"
-        && batch.instance_range.start <= targetObject
-        && batch.instance_range.end > targetObject,
+        && batch.instance_range.start <= lineInstanceIndex
+        && batch.instance_range.end > lineInstanceIndex,
     ),
     `${backend}: target is absent from draw plan`,
   );
@@ -171,7 +165,7 @@ async function runBackend(browser, backend) {
       { pythonSource: authoredSource, duration: 4.5 },
     );
     assert.equal(loaded.rendererBackend, backend === "webgl" ? "WebGL2" : "WebGPU");
-    assert.equal(loaded.objectCount, 2);
+    assert.equal(loaded.objectCount, 3);
     await page.evaluate((objectId) => {
       window.noonHostRaster.setHostUpdaterDiagnosticObject(objectId);
     }, targetObject);

@@ -76,6 +76,7 @@ mod wasm {
     struct DiagnosticPreparedState {
         state: DiagnosticObjectState,
         instance_kind: Option<&'static str>,
+        instance_index: Option<usize>,
         instance_range: Option<DiagnosticRange>,
         full_rebuilds: usize,
         instances_repacked: usize,
@@ -478,7 +479,7 @@ mod wasm {
             world_endpoints(committed_object),
         );
 
-        let (instance_kind, instance_range, prepared_transform, prepared_endpoints) =
+        let (instance_kind, instance_index, instance_range, prepared_transform, prepared_endpoints) =
             prepared_line_state(prepared, target);
         let prepared_state = DiagnosticPreparedState {
             state: diagnostic_object_state(
@@ -491,6 +492,7 @@ mod wasm {
                 prepared_endpoints,
             ),
             instance_kind,
+            instance_index,
             instance_range,
             full_rebuilds: prepared.stats.full_rebuilds,
             instances_repacked: prepared.stats.instances_repacked,
@@ -500,11 +502,13 @@ mod wasm {
             .iter()
             .map(diagnostic_upload_write)
             .collect::<Vec<_>>();
-        let target_write = upload_writes
-            .iter()
-            .filter(|write| write.buffer == "line")
-            .find(|write| write.instance_range.contains(&frame_index))
-            .map(diagnostic_upload_write);
+        let target_write = instance_index.and_then(|instance_index| {
+            upload_writes
+                .iter()
+                .filter(|write| write.buffer == "line")
+                .find(|write| write.instance_range.contains(&instance_index))
+                .map(diagnostic_upload_write)
+        });
         let upload = DiagnosticUploadState {
             target_write,
             writes,
@@ -519,11 +523,9 @@ mod wasm {
             let RenderPrimitive::Line = batch.primitive else {
                 continue;
             };
-            let contains_target = batch
-                .instance_range
-                .clone()
-                .filter_map(|index| prepared.line_ids.get(index as usize))
-                .any(|object| *object == target);
+            let contains_target = instance_index
+                .map(|index| batch.instance_range.contains(&(index as u32)))
+                .unwrap_or(false);
             if contains_target {
                 batches.push(DiagnosticDrawBatch {
                     primitive: "line",
@@ -628,6 +630,7 @@ mod wasm {
         target: ObjectId,
     ) -> (
         Option<&'static str>,
+        Option<usize>,
         Option<DiagnosticRange>,
         Option<Transform2D>,
         Option<[Vec2; 2]>,
@@ -637,10 +640,10 @@ mod wasm {
             .iter()
             .position(|object| *object == target)
         else {
-            return (None, None, None, None);
+            return (None, None, None, None, None);
         };
         let Some(instance) = prepared.lines.get(index).copied() else {
-            return (Some("line"), None, None, None);
+            return (Some("line"), Some(index), None, None, None);
         };
         let transform = transform_from_packed(instance.transform);
         let endpoints = [
@@ -649,6 +652,7 @@ mod wasm {
         ];
         (
             Some("line"),
+            Some(index),
             Some(DiagnosticRange {
                 start: index,
                 end: index.saturating_add(1),
