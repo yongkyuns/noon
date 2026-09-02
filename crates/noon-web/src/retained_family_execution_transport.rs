@@ -11,6 +11,8 @@ use crate::{
     RetainedFamilyTransportState,
 };
 
+type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
+
 /// Sparse per-object family scheduler state carried alongside an ordinary retained delta.
 ///
 /// `family_plan_index` identifies the immutable snapshot-installed plan that owns an
@@ -347,10 +349,7 @@ fn validated_state_updates(
     frame: &RetainedFrameState,
     plans: &[RetainedFamilyAnimationPlan],
     entries: &[RetainedFamilyExecutionObjectState],
-) -> Result<
-    Vec<(usize, Option<FamilyAnimationState>, Option<u32>)>,
-    RetainedFamilyExecutionTransportError,
-> {
+) -> Result<Vec<ValidatedFamilyStateUpdate>, RetainedFamilyExecutionTransportError> {
     entries
         .iter()
         .map(|entry| {
