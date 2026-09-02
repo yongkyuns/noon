@@ -43,6 +43,24 @@ const hostUpdaterDiagnosticPaths = new Set([
   "web/manim-raster-host.js",
 ]);
 
+const rendererCriticalPrefixes = Object.freeze([
+  "crates/noon-render-wgpu/",
+  "crates/noon-text-render-wgpu/",
+  "crates/noon-web/",
+]);
+
+const rendererCriticalFiles = new Set([
+  ".github/workflows/pr-fast.yml",
+  "scripts/browser-smoke.mjs",
+  // Classifier policy changes must exercise the WebGL oracle they decide whether to run.
+  "scripts/pr-risk-classifier.mjs",
+  "web/authoring-render-worker.js",
+  "web/browser-smoke.html",
+  "web/browser-smoke.js",
+  "web/execution-render-worker.js",
+  "web/render-gpu-diagnostics.js",
+]);
+
 function normalizeRepositoryPath(path) {
   return path.trim().replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -69,11 +87,19 @@ export function requiresHostUpdaterDiagnostic(path) {
   return hostUpdaterDiagnosticPaths.has(normalized);
 }
 
+export function requiresRendererCriticalWebglSmoke(path) {
+  const normalized = normalizeRepositoryPath(path);
+  if (normalized === "") return false;
+  if (rendererCriticalFiles.has(normalized)) return true;
+  return rendererCriticalPrefixes.some((prefix) => normalized.startsWith(prefix));
+}
+
 export function classifyPrRisk(paths) {
   const normalizedPaths = [...new Set(paths.map(normalizeRepositoryPath).filter(Boolean))];
   const retainedExecutionPaths = normalizedPaths.filter(requiresRetainedExecutionSmoke).sort();
   const renderModeSwitchPathsChanged = normalizedPaths.filter(requiresRenderModeSwitchSmoke).sort();
   const hostUpdaterDiagnosticPathsChanged = normalizedPaths.filter(requiresHostUpdaterDiagnostic).sort();
+  const rendererCriticalPaths = normalizedPaths.filter(requiresRendererCriticalWebglSmoke).sort();
 
   return Object.freeze({
     retainedExecution: retainedExecutionPaths.length > 0,
@@ -82,6 +108,8 @@ export function classifyPrRisk(paths) {
     renderModeSwitchPaths: Object.freeze(renderModeSwitchPathsChanged),
     hostUpdaterDiagnostics: hostUpdaterDiagnosticPathsChanged.length > 0,
     hostUpdaterDiagnosticPaths: Object.freeze(hostUpdaterDiagnosticPathsChanged),
+    rendererCritical: rendererCriticalPaths.length > 0,
+    rendererCriticalPaths: Object.freeze(rendererCriticalPaths),
   });
 }
 
@@ -91,6 +119,8 @@ function runCli() {
   process.stdout.write(`retained_execution=${risk.retainedExecution}\n`);
   process.stdout.write(`render_mode_switch=${risk.renderModeSwitch}\n`);
   process.stdout.write(`host_updater_diagnostics=${risk.hostUpdaterDiagnostics}\n`);
+  process.stdout.write(`renderer_critical=${risk.rendererCritical}\n`);
+  process.stdout.write(`renderer_critical_paths=${risk.rendererCriticalPaths.join(",")}\n`);
 
   const retainedDetail = risk.retainedExecution
     ? risk.retainedExecutionPaths.join(", ")
@@ -101,9 +131,13 @@ function runCli() {
   const hostUpdaterDetail = risk.hostUpdaterDiagnostics
     ? risk.hostUpdaterDiagnosticPaths.join(", ")
     : "none";
+  const rendererDetail = risk.rendererCritical
+    ? risk.rendererCriticalPaths.join(", ")
+    : "none";
   process.stderr.write(`retained execution risk paths: ${retainedDetail}\n`);
   process.stderr.write(`render mode-switch risk paths: ${modeSwitchDetail}\n`);
   process.stderr.write(`host-updater diagnostic risk paths: ${hostUpdaterDetail}\n`);
+  process.stderr.write(`renderer-critical WebGL risk paths: ${rendererDetail}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

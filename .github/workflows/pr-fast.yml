@@ -249,6 +249,21 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check WebGL rendering for renderer-critical changes
+        if: steps.browser-risk.outputs.renderer_critical == 'true'
+        id: webgl-smoke
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgl
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/browser-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Check host-updater diagnostics on WebGL and WebGPU
         if: steps.browser-risk.outputs.host_updater_diagnostics == 'true'
         id: host-updater-diagnostics
@@ -273,6 +288,9 @@ jobs:
           MODE_SWITCH_REQUIRED: ${{ steps.browser-risk.outputs.render_mode_switch }}
           MODE_SWITCH_SECONDS: ${{ steps.render-mode-switch.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
+          WEBGL_SECONDS: ${{ steps.webgl-smoke.outputs.seconds }}
+          RENDERER_CRITICAL: ${{ steps.browser-risk.outputs.renderer_critical }}
+          RENDERER_CRITICAL_PATHS: ${{ steps.browser-risk.outputs.renderer_critical_paths }}
           HOST_UPDATER_SECONDS: ${{ steps.host-updater-diagnostics.outputs.seconds }}
         run: |
           total=""
@@ -298,6 +316,11 @@ jobs:
             mode_switch_duration="$(display_seconds "$MODE_SWITCH_SECONDS")"
           fi
 
+          webgl_duration="skipped"
+          if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+            webgl_duration="$(display_seconds "$WEBGL_SECONDS")"
+          fi
+
           {
             echo "### Browser fast checks timing"
             echo
@@ -309,15 +332,24 @@ jobs:
             echo "| Canonical retained execution | $retained_duration |"
             echo "| Persistent render mode switching | $mode_switch_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
+            echo "| WebGL renderer-risk smoke | $webgl_duration |"
             echo "| Host-updater diagnostics | $(display_seconds "$HOST_UPDATER_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
             echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."
             echo "Render mode-switch escalation required: ${MODE_SWITCH_REQUIRED:-unknown}."
+            echo "Renderer-critical WebGL escalation required: ${RENDERER_CRITICAL:-unknown}."
+            if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+              echo "Renderer-critical paths: ${RENDERER_CRITICAL_PATHS:-unknown}."
+            fi
             echo
             echo "The measured browser path starts before checkout and ends after the renderer smoke. Hosted-runner queue time and post-job cleanup are intentionally excluded."
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$total" =~ ^[0-9]+$ ]] && (( total >= 110 )); then
-            echo "::warning title=PR Fast Gate timing::Browser fast path reached ${total}s, leaving less than 10s of margin against the 120s target."
+            if [[ "$RENDERER_CRITICAL" == "true" ]]; then
+              echo "::notice title=PR Fast Gate timing::Renderer-critical escalation extended the browser path to ${total}s; low-risk PRs retain the 120s target."
+            else
+              echo "::warning title=PR Fast Gate timing::Browser fast path reached ${total}s, leaving less than 10s of margin against the 120s target."
+            fi
           fi
