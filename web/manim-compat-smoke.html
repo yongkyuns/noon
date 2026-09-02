@@ -231,9 +231,9 @@ class RetainedFamilyUnwriteSmoke(Scene):
             if (!stressResult.sceneSpec) {
               throw new Error("stress scene did not produce canonical SceneSpec");
             }
-            if (stressResult.document.objects.length !== 108) {
+            if (stressResult.document.objects.length !== 800) {
               throw new Error(
-                `stress scene expected 108 geometry objects, got ${stressResult.document.objects.length}`,
+                `stress scene expected 800 geometry objects, got ${stressResult.document.objects.length}`,
               );
             }
             if (stressResult.retainedDocument?.objects?.length !== 2) {
@@ -241,9 +241,9 @@ class RetainedFamilyUnwriteSmoke(Scene):
                 `stress scene expected two retained Text objects, got ${stressResult.retainedDocument?.objects?.length}`,
               );
             }
-            if (stressResult.sceneSpec.objects.length !== 110) {
+            if (stressResult.sceneSpec.objects.length !== 802) {
               throw new Error(
-                `stress canonical SceneSpec expected 110 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
+                `stress canonical SceneSpec expected 802 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
               );
             }
             stressRenderResult = await renderCanonicalMidpoint({
@@ -252,9 +252,9 @@ class RetainedFamilyUnwriteSmoke(Scene):
               label: "mixed-object parity stress",
               loopDurationSeconds: 5.0,
               seekTime: 2.8,
-              // At t=2.8 the 72 original shapes and two retained Text objects are
-              // present. The 36 pulse circles are authored but do not enter until 3.6s.
-              expectedObjectCount: 74,
+              // At t=2.8 all 600 primary shapes and both retained Text objects are
+              // present. The 200 pulse circles are authored but do not enter until 3.7s.
+              expectedObjectCount: 602,
             });
 
             return {

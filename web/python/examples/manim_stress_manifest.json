@@ -9,17 +9,20 @@
     {
       "id": "manim-parity-stress-grid",
       "title": "Mixed Object Parity Stress",
-      "summary": "A 72-shape Manim-compatible stress scene combining retained Text, mass Create, square/circle morphs, chained rotation/translation/color animation, and lifecycle FadeIn/FadeOut transitions.",
+      "summary": "A 600-shape Manim-compatible stress scene with two full-grid geometry morph waves, two simultaneous rotation/translation/color waves, retained Text, and 200-object lifecycle churn.",
       "status": "ready",
       "path": "python/examples/manim_parity_stress_grid.py",
       "category": "stress",
       "features": [
-        "72 shapes",
+        "600 shapes",
+        "200 lifecycle churn",
         "Text",
         "Create",
         "Transform",
+        "repeated Transform",
         "animate",
         "rotation",
+        "translation",
         "color",
         "FadeIn",
         "FadeOut",
@@ -33,7 +36,7 @@
       "parity_fixture": "mixed-object-parity-stress",
       "parity_source": "parity/manim-v0.21/stress-examples/mixed_object_parity_stress.py",
       "thumbnail": "thumbnails/manim/parity-stress-grid.svg",
-      "thumbnail_alt": "Dense multicolor grid of squares and circles under a MANIM PARITY STRESS title",
+      "thumbnail_alt": "Dense multicolor grid of hundreds of squares and circles under a MANIM PARITY STRESS title",
       "thumbnail_time": 2.8,
       "order": 15
     }
