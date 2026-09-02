@@ -1,0 +1,669 @@
+name: Temporary
+on:
+  push:
+    branches: [tmp/367-canonical-scene-context]
+permissions:
+  contents: write
+jobs:
+  apply-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/367-canonical-scene-context
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Apply architecture slice
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, found {count}")
+              p.write_text(text.replace(old, new))
+
+          Path("crates/noon-web/src/canonical_scene_authoring.rs").write_text(r'''use std::collections::BTreeMap;
+
+use noon_core::{FamilyAnimationRequest, ObjectId, ObjectSnapshot, TrackDefinition, Vec2};
+use noon_ir::{ObjectSpec, ObjectSpecContent, SceneSpec, SceneSpecError};
+
+use crate::{
+    materialize_retained_tracks, retained_text_object_spec, retained_text_scale_factor,
+    RetainedTextAuthoringSpec, RetainedTrackAuthoringSpec, RetainedTrackMaterializationError,
+};
+
+/// Per-scene canonical mixed-content authoring state.
+///
+/// Object registration order is the painter order. Frontends report individual
+/// binding events with their already-final scene-global ObjectIds; they never build
+/// a second cross-content ordering table or text-specific identity namespace.
+#[derive(Clone, Debug, Default)]
+pub struct CanonicalSceneAuthoringContext {
+    objects: Vec<ObjectSpec>,
+    positions: BTreeMap<ObjectId, usize>,
+    retained_scale_factors: BTreeMap<ObjectId, Vec2>,
+}
+
+impl CanonicalSceneAuthoringContext {
+    pub fn object_count(&self) -> usize {
+        self.objects.len()
+    }
+
+    pub fn bind_geometry(
+        &mut self,
+        id: ObjectId,
+        snapshot: ObjectSnapshot,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        self.bind_object(
+            ObjectSpec {
+                id,
+                content: ObjectSpecContent::Geometry(snapshot.geometry),
+                transform: snapshot.transform,
+                style: snapshot.style,
+            },
+            None,
+        )
+    }
+
+    pub fn update_geometry(
+        &mut self,
+        id: ObjectId,
+        snapshot: ObjectSnapshot,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        self.update_object(
+            ObjectSpec {
+                id,
+                content: ObjectSpecContent::Geometry(snapshot.geometry),
+                transform: snapshot.transform,
+                style: snapshot.style,
+            },
+            None,
+        )
+    }
+
+    pub fn bind_retained_text(
+        &mut self,
+        id: ObjectId,
+        text: RetainedTextAuthoringSpec,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        let scale = retained_text_scale_factor(&text);
+        self.bind_object(retained_text_object_spec(id, text), Some(scale))
+    }
+
+    pub fn update_retained_text(
+        &mut self,
+        id: ObjectId,
+        text: RetainedTextAuthoringSpec,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        let scale = retained_text_scale_factor(&text);
+        self.update_object(retained_text_object_spec(id, text), Some(scale))
+    }
+
+    pub fn restore_object_count(
+        &mut self,
+        object_count: usize,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        if object_count > self.objects.len() {
+            return Err(CanonicalSceneAuthoringError::InvalidCheckpoint {
+                requested: object_count,
+                current: self.objects.len(),
+            });
+        }
+        self.objects.truncate(object_count);
+        self.positions.clear();
+        for (index, object) in self.objects.iter().enumerate() {
+            self.positions.insert(object.id, index);
+        }
+        self.retained_scale_factors
+            .retain(|object, _| self.positions.contains_key(object));
+        Ok(())
+    }
+
+    pub fn scene_spec(
+        &self,
+        legacy_tracks: Vec<TrackDefinition>,
+        retained_tracks: Vec<RetainedTrackAuthoringSpec>,
+        family_animations: Vec<FamilyAnimationRequest>,
+        camera_object: Option<ObjectId>,
+    ) -> Result<SceneSpec, CanonicalSceneAuthoringError> {
+        let tracks = materialize_retained_tracks(
+            &legacy_tracks,
+            retained_tracks,
+            &self.retained_scale_factors,
+        )?;
+        let mut spec = SceneSpec::new(self.objects.clone(), tracks)?;
+        spec.family_animations = family_animations;
+        spec.camera_object = camera_object;
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    fn bind_object(
+        &mut self,
+        object: ObjectSpec,
+        retained_scale_factor: Option<Vec2>,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        if self.positions.contains_key(&object.id) {
+            return Err(CanonicalSceneAuthoringError::DuplicateObject(object.id));
+        }
+        let id = object.id;
+        self.positions.insert(id, self.objects.len());
+        self.objects.push(object);
+        if let Some(scale) = retained_scale_factor {
+            self.retained_scale_factors.insert(id, scale);
+        }
+        Ok(())
+    }
+
+    fn update_object(
+        &mut self,
+        object: ObjectSpec,
+        retained_scale_factor: Option<Vec2>,
+    ) -> Result<(), CanonicalSceneAuthoringError> {
+        let Some(&position) = self.positions.get(&object.id) else {
+            return Err(CanonicalSceneAuthoringError::UnknownObject(object.id));
+        };
+        let existing = &self.objects[position];
+        if std::mem::discriminant(&existing.content) != std::mem::discriminant(&object.content) {
+            return Err(CanonicalSceneAuthoringError::ContentKindChanged(object.id));
+        }
+        let id = object.id;
+        self.objects[position] = object;
+        match retained_scale_factor {
+            Some(scale) => {
+                self.retained_scale_factors.insert(id, scale);
+            }
+            None => {
+                self.retained_scale_factors.remove(&id);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum CanonicalSceneAuthoringError {
+    DuplicateObject(ObjectId),
+    UnknownObject(ObjectId),
+    ContentKindChanged(ObjectId),
+    InvalidCheckpoint { requested: usize, current: usize },
+    TrackMaterialization(RetainedTrackMaterializationError),
+    SceneSpec(SceneSpecError),
+    Json(serde_json::Error),
+}
+
+impl std::fmt::Display for CanonicalSceneAuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateObject(object) => {
+                write!(formatter, "canonical scene object {} is already bound", object.get())
+            }
+            Self::UnknownObject(object) => {
+                write!(formatter, "canonical scene object {} is not bound", object.get())
+            }
+            Self::ContentKindChanged(object) => write!(
+                formatter,
+                "canonical scene object {} cannot change content kind after binding",
+                object.get()
+            ),
+            Self::InvalidCheckpoint { requested, current } => write!(
+                formatter,
+                "canonical scene checkpoint {requested} exceeds current object count {current}"
+            ),
+            Self::TrackMaterialization(error) => error.fmt(formatter),
+            Self::SceneSpec(error) => error.fmt(formatter),
+            Self::Json(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for CanonicalSceneAuthoringError {}
+
+impl From<RetainedTrackMaterializationError> for CanonicalSceneAuthoringError {
+    fn from(value: RetainedTrackMaterializationError) -> Self {
+        Self::TrackMaterialization(value)
+    }
+}
+
+impl From<SceneSpecError> for CanonicalSceneAuthoringError {
+    fn from(value: SceneSpecError) -> Self {
+        Self::SceneSpec(value)
+    }
+}
+
+impl From<serde_json::Error> for CanonicalSceneAuthoringError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use super::*;
+    use wasm_bindgen::prelude::*;
+
+    const MAX_JS_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+    fn js_error(error: impl std::fmt::Display) -> JsValue {
+        JsValue::from_str(&error.to_string())
+    }
+
+    fn object_id(value: f64, label: &str) -> Result<ObjectId, JsValue> {
+        if !value.is_finite() || value < 0.0 || value > MAX_JS_SAFE_INTEGER || value.fract() != 0.0
+        {
+            return Err(JsValue::from_str(&format!(
+                "{label} must be a non-negative JavaScript-safe integer"
+            )));
+        }
+        Ok(ObjectId::new(value as u64))
+    }
+
+    #[wasm_bindgen(js_name = CanonicalSceneAuthoringContext)]
+    pub struct WasmCanonicalSceneAuthoringContext {
+        inner: CanonicalSceneAuthoringContext,
+    }
+
+    #[wasm_bindgen(js_class = CanonicalSceneAuthoringContext)]
+    impl WasmCanonicalSceneAuthoringContext {
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> Self {
+            Self {
+                inner: CanonicalSceneAuthoringContext::default(),
+            }
+        }
+
+        #[wasm_bindgen(getter, js_name = objectCount)]
+        pub fn object_count(&self) -> usize {
+            self.inner.object_count()
+        }
+
+        #[wasm_bindgen(js_name = bindGeometrySnapshotJson)]
+        pub fn bind_geometry_snapshot_json(
+            &mut self,
+            id: f64,
+            snapshot_json: &str,
+        ) -> Result<(), JsValue> {
+            let snapshot: ObjectSnapshot = serde_json::from_str(snapshot_json).map_err(js_error)?;
+            self.inner
+                .bind_geometry(object_id(id, "geometry object ID")?, snapshot)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = updateGeometrySnapshotJson)]
+        pub fn update_geometry_snapshot_json(
+            &mut self,
+            id: f64,
+            snapshot_json: &str,
+        ) -> Result<(), JsValue> {
+            let snapshot: ObjectSnapshot = serde_json::from_str(snapshot_json).map_err(js_error)?;
+            self.inner
+                .update_geometry(object_id(id, "geometry object ID")?, snapshot)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = bindRetainedTextSpecJson)]
+        pub fn bind_retained_text_spec_json(
+            &mut self,
+            id: f64,
+            spec_json: &str,
+        ) -> Result<(), JsValue> {
+            let text: RetainedTextAuthoringSpec = serde_json::from_str(spec_json).map_err(js_error)?;
+            text.validate().map_err(js_error)?;
+            self.inner
+                .bind_retained_text(object_id(id, "retained text object ID")?, text)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = updateRetainedTextSpecJson)]
+        pub fn update_retained_text_spec_json(
+            &mut self,
+            id: f64,
+            spec_json: &str,
+        ) -> Result<(), JsValue> {
+            let text: RetainedTextAuthoringSpec = serde_json::from_str(spec_json).map_err(js_error)?;
+            text.validate().map_err(js_error)?;
+            self.inner
+                .update_retained_text(object_id(id, "retained text object ID")?, text)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = restoreObjectCount)]
+        pub fn restore_object_count(&mut self, object_count: usize) -> Result<(), JsValue> {
+            self.inner
+                .restore_object_count(object_count)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = sceneSpecJson)]
+        pub fn scene_spec_json(
+            &self,
+            legacy_tracks_json: &str,
+            retained_tracks_json: &str,
+            family_animations_json: &str,
+            camera_object: Option<f64>,
+        ) -> Result<String, JsValue> {
+            let legacy_tracks: Vec<TrackDefinition> =
+                serde_json::from_str(legacy_tracks_json).map_err(js_error)?;
+            let retained_tracks: Vec<RetainedTrackAuthoringSpec> =
+                serde_json::from_str(retained_tracks_json).map_err(js_error)?;
+            let family_animations: Vec<FamilyAnimationRequest> =
+                serde_json::from_str(family_animations_json).map_err(js_error)?;
+            let camera_object = camera_object
+                .map(|value| object_id(value, "camera object ID"))
+                .transpose()?;
+            self.inner
+                .scene_spec(
+                    legacy_tracks,
+                    retained_tracks,
+                    family_animations,
+                    camera_object,
+                )
+                .and_then(|spec| spec.to_json().map_err(CanonicalSceneAuthoringError::from))
+                .map_err(js_error)
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm::*;
+
+#[cfg(test)]
+mod tests {
+    use noon_core::{
+        FamilyAnimationLeafBinding, FamilyAnimationMode, FamilyAnimationSpec, GeometryRef,
+        ObjectId, ObjectSnapshot, Property, RateFunction, SemanticNodeId, Style, TrackTiming,
+        TrackValues, Transform2D, Vec2,
+    };
+    use noon_ir::{ObjectSpecContent, TextSpecKind};
+
+    use super::*;
+
+    fn snapshot(geometry: GeometryRef) -> ObjectSnapshot {
+        ObjectSnapshot {
+            geometry,
+            transform: Transform2D::default(),
+            style: Style::default(),
+        }
+    }
+
+    fn text(source: &str) -> RetainedTextAuthoringSpec {
+        RetainedTextAuthoringSpec::native(
+            source,
+            noon::DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+            48.0,
+            -1.0,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn mixed_binding_order_is_the_canonical_painter_order() {
+        let mut context = CanonicalSceneAuthoringContext::default();
+        context
+            .bind_geometry(ObjectId::new(0), snapshot(GeometryRef::circle(0.5)))
+            .unwrap();
+        context.bind_retained_text(ObjectId::new(1), text("A")).unwrap();
+        context
+            .bind_geometry(
+                ObjectId::new(2),
+                snapshot(GeometryRef::rectangle(1.0, 1.0)),
+            )
+            .unwrap();
+
+        let spec = context.scene_spec(Vec::new(), Vec::new(), Vec::new(), None).unwrap();
+        assert_eq!(
+            spec.objects.iter().map(|object| object.id).collect::<Vec<_>>(),
+            vec![ObjectId::new(0), ObjectId::new(1), ObjectId::new(2)]
+        );
+        assert!(matches!(
+            spec.objects[0].content,
+            ObjectSpecContent::Geometry(_)
+        ));
+        let ObjectSpecContent::Text(text) = &spec.objects[1].content else {
+            panic!("middle object must be source-level text");
+        };
+        assert_eq!(text.kind, TextSpecKind::Plain);
+        assert_eq!(text.source, "A");
+        assert!(matches!(
+            spec.objects[2].content,
+            ObjectSpecContent::Geometry(_)
+        ));
+    }
+
+    #[test]
+    fn updates_preserve_order_and_content_kind() {
+        let mut context = CanonicalSceneAuthoringContext::default();
+        context
+            .bind_geometry(ObjectId::new(0), snapshot(GeometryRef::circle(0.5)))
+            .unwrap();
+        context.bind_retained_text(ObjectId::new(1), text("A")).unwrap();
+        let mut updated_text = text("A");
+        updated_text.move_to(Vec2::new(2.0, -1.0)).unwrap();
+        context
+            .update_retained_text(ObjectId::new(1), updated_text)
+            .unwrap();
+        context
+            .update_geometry(
+                ObjectId::new(0),
+                snapshot(GeometryRef::rectangle(2.0, 1.0)),
+            )
+            .unwrap();
+        let spec = context.scene_spec(Vec::new(), Vec::new(), Vec::new(), None).unwrap();
+        assert_eq!(spec.objects[0].id, ObjectId::new(0));
+        assert_eq!(spec.objects[1].id, ObjectId::new(1));
+        assert_eq!(spec.objects[1].transform.translation, Vec2::new(2.0, -1.0));
+        assert!(context
+            .update_retained_text(ObjectId::new(0), text("wrong kind"))
+            .is_err());
+    }
+
+    #[test]
+    fn duplicate_unknown_and_invalid_checkpoint_fail_closed() {
+        let mut context = CanonicalSceneAuthoringContext::default();
+        context
+            .bind_geometry(ObjectId::new(0), snapshot(GeometryRef::circle(0.5)))
+            .unwrap();
+        assert!(context
+            .bind_geometry(ObjectId::new(0), snapshot(GeometryRef::circle(1.0)))
+            .is_err());
+        assert!(context
+            .update_geometry(ObjectId::new(9), snapshot(GeometryRef::circle(1.0)))
+            .is_err());
+        assert!(context.restore_object_count(2).is_err());
+        context.restore_object_count(0).unwrap();
+        assert_eq!(context.object_count(), 0);
+    }
+
+    #[test]
+    fn retained_scale_tracks_reuse_existing_rust_normalization() {
+        let mut context = CanonicalSceneAuthoringContext::default();
+        let object = ObjectId::new(0);
+        context.bind_retained_text(object, text("Scale")).unwrap();
+        let retained_track = RetainedTrackAuthoringSpec::new(
+            object,
+            Property::Scale,
+            TrackValues::Vec2 {
+                from: Vec2::ONE,
+                to: Vec2::ZERO,
+            },
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        let spec = context
+            .scene_spec(Vec::new(), vec![retained_track], Vec::new(), None)
+            .unwrap();
+        assert_eq!(
+            spec.tracks[0].values,
+            TrackValues::Vec2 {
+                from: Vec2::new(
+                    noon::NATIVE_POINT_TO_SCENE_SCALE,
+                    noon::NATIVE_POINT_TO_SCENE_SCALE,
+                ),
+                to: Vec2::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn family_animation_and_camera_share_the_same_object_domain() {
+        let mut context = CanonicalSceneAuthoringContext::default();
+        let camera = ObjectId::new(0);
+        let text_object = ObjectId::new(1);
+        context
+            .bind_geometry(camera, snapshot(GeometryRef::rectangle(14.0, 8.0)))
+            .unwrap();
+        context.bind_retained_text(text_object, text("AB")).unwrap();
+        let target = SemanticNodeId::new(10, 0);
+        let leaf = SemanticNodeId::new(11, 0);
+        let animation = FamilyAnimationRequest::new(
+            target,
+            vec![FamilyAnimationLeafBinding::new(leaf, text_object)],
+            FamilyAnimationSpec::new(
+                FamilyAnimationMode::Reveal,
+                0.0,
+                1.0,
+                1.0,
+                RateFunction::Smooth,
+                false,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let spec = context
+            .scene_spec(Vec::new(), Vec::new(), vec![animation.clone()], Some(camera))
+            .unwrap();
+        assert_eq!(spec.camera_object, Some(camera));
+        assert_eq!(spec.family_animations, vec![animation]);
+    }
+}
+''')
+
+          replace("crates/noon-web/src/lib.rs", "mod canonical_retained_engine_player;\n", "mod canonical_retained_engine_player;\nmod canonical_scene_authoring;\n")
+          replace("crates/noon-web/src/lib.rs", "pub use canonical_retained_engine_player::*;\n", "pub use canonical_retained_engine_player::*;\npub use canonical_scene_authoring::*;\n")
+
+          replace(
+              "crates/noon-web/src/retained_authoring_scene_spec.rs",
+              '''fn ordered_text_object(\n    object: RetainedAuthoringTextObject,\n) -> Result<OrderedTextObjectSpec, SceneSpecError> {\n    let RetainedAuthoringTextObject {\n        object: id,\n        order,\n        text,\n    } = object;\n    let RetainedTextAuthoringSpec {\n        source,\n        backend,\n        font_size,\n        transform,\n        color,\n        opacity,\n    } = text;\n\n    let text = match backend {\n        RetainedTextBackendSpec::Native {\n            font_family,\n            line_spacing,\n        } => TextSpec::native_plain(source, font_family, font_size, line_spacing),\n        RetainedTextBackendSpec::Typst { math: false } => TextSpec::typst(source, font_size),\n        RetainedTextBackendSpec::Typst { math: true } => TextSpec::math_typst(source, font_size),\n    };\n    let mut object = ObjectSpec::text(id, text);\n    object.transform = transform;\n    object.style = Style {\n        fill: Some(color),\n        stroke: None,\n        stroke_width: 0.0,\n        opacity,\n        ..Style::default()\n    };\n    OrderedTextObjectSpec::new(order, object)\n}\n\nfn retained_scale_factors(objects: &[RetainedAuthoringTextObject]) -> BTreeMap<ObjectId, Vec2> {\n    objects\n        .iter()\n        .map(|object| {\n            let factor = match &object.text.backend {\n                RetainedTextBackendSpec::Native { .. } => noon::NATIVE_POINT_TO_SCENE_SCALE,\n                RetainedTextBackendSpec::Typst { .. } => {\n                    object.text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT\n                }\n            };\n            (object.object, Vec2::new(factor, factor))\n        })\n        .collect()\n}\n''',
+              '''fn ordered_text_object(\n    object: RetainedAuthoringTextObject,\n) -> Result<OrderedTextObjectSpec, SceneSpecError> {\n    let RetainedAuthoringTextObject {\n        object: id,\n        order,\n        text,\n    } = object;\n    OrderedTextObjectSpec::new(order, retained_text_object_spec(id, text))\n}\n\npub(crate) fn retained_text_object_spec(\n    id: ObjectId,\n    text: RetainedTextAuthoringSpec,\n) -> ObjectSpec {\n    let RetainedTextAuthoringSpec {\n        source,\n        backend,\n        font_size,\n        transform,\n        color,\n        opacity,\n    } = text;\n    let text = match backend {\n        RetainedTextBackendSpec::Native {\n            font_family,\n            line_spacing,\n        } => TextSpec::native_plain(source, font_family, font_size, line_spacing),\n        RetainedTextBackendSpec::Typst { math: false } => TextSpec::typst(source, font_size),\n        RetainedTextBackendSpec::Typst { math: true } => TextSpec::math_typst(source, font_size),\n    };\n    let mut object = ObjectSpec::text(id, text);\n    object.transform = transform;\n    object.style = Style {\n        fill: Some(color),\n        stroke: None,\n        stroke_width: 0.0,\n        opacity,\n        ..Style::default()\n    };\n    object\n}\n\npub(crate) fn retained_text_scale_factor(text: &RetainedTextAuthoringSpec) -> Vec2 {\n    let factor = match &text.backend {\n        RetainedTextBackendSpec::Native { .. } => noon::NATIVE_POINT_TO_SCENE_SCALE,\n        RetainedTextBackendSpec::Typst { .. } => {\n            text.font_size * noon::SCALE_FACTOR_PER_FONT_POINT\n        }\n    };\n    Vec2::new(factor, factor)\n}\n\nfn retained_scale_factors(objects: &[RetainedAuthoringTextObject]) -> BTreeMap<ObjectId, Vec2> {\n    objects\n        .iter()\n        .map(|object| (object.object, retained_text_scale_factor(&object.text)))\n        .collect()\n}\n''',
+          )
+
+          replace(
+              "web/python/_noon_ir.py",
+              '''    def _authoring_checkpoint(self) -> tuple[Any, ...]:\n        return (\n            len(self._objects),\n            len(self._tracks),\n            self._next_object_id,\n            self._next_painter_order,\n            dict(self._object_keys),\n            dict(self._object_positions),\n            dict(self._track_keys),\n            dict(self._scheduled_transform_targets),\n            dict(self._scheduled_transform_ends),\n            dict(self._scheduled_fade_ends),\n        )\n''',
+              '''    def _authoring_checkpoint(self) -> tuple[Any, ...]:\n        canonical_checkpoint = getattr(self, "_canonical_authoring_checkpoint", lambda: None)()\n        return (\n            len(self._objects),\n            len(self._tracks),\n            self._next_object_id,\n            self._next_painter_order,\n            dict(self._object_keys),\n            dict(self._object_positions),\n            dict(self._track_keys),\n            dict(self._scheduled_transform_targets),\n            dict(self._scheduled_transform_ends),\n            dict(self._scheduled_fade_ends),\n            canonical_checkpoint,\n        )\n''',
+          )
+          replace("web/python/_noon_ir.py", '''            scheduled_transform_ends,\n            scheduled_fade_ends,\n        ) = checkpoint\n''', '''            scheduled_transform_ends,\n            scheduled_fade_ends,\n            canonical_checkpoint,\n        ) = checkpoint\n''')
+          replace("web/python/_noon_ir.py", '''        self._scheduled_transform_targets = scheduled_transform_targets\n        self._scheduled_transform_ends = scheduled_transform_ends\n        self._scheduled_fade_ends = scheduled_fade_ends\n''', '''        self._scheduled_transform_targets = scheduled_transform_targets\n        self._scheduled_transform_ends = scheduled_transform_ends\n        self._scheduled_fade_ends = scheduled_fade_ends\n        restore_canonical = getattr(self, "_restore_canonical_authoring_checkpoint", None)\n        if restore_canonical is not None and canonical_checkpoint is not None:\n            restore_canonical(canonical_checkpoint)\n''')
+          replace(
+              "web/python/_noon_ir.py",
+              '''    def _append_snapshot(\n        self, snapshot: dict[str, Any], key: str | None\n    ) -> Object:\n        obj, _ = self._allocate_object(key)\n        stored = copy.deepcopy(snapshot)\n        stored["id"] = obj.id\n        self._object_positions[obj.id] = len(self._objects)\n        self._objects.append(stored)\n        return obj\n''',
+              '''    def _append_snapshot(\n        self, snapshot: dict[str, Any], key: str | None\n    ) -> Object:\n        next_object_id = self._next_object_id\n        next_painter_order = self._next_painter_order\n        obj, _ = self._allocate_object(key)\n        stored = copy.deepcopy(snapshot)\n        bind_canonical = getattr(self, "_canonical_bind_geometry_snapshot", None)\n        try:\n            if bind_canonical is not None:\n                bind_canonical(obj, stored)\n        except Exception:\n            self._next_object_id = next_object_id\n            self._next_painter_order = next_painter_order\n            self._object_keys.pop(obj.id, None)\n            raise\n        stored["id"] = obj.id\n        self._object_positions[obj.id] = len(self._objects)\n        self._objects.append(stored)\n        return obj\n''',
+          )
+
+          replace("web/python/noon.py", '''    def __init__(self) -> None:\n        super().__init__()\n        self._cursor = 0.0\n''', '''    def __init__(self) -> None:\n        super().__init__()\n        self._cursor = 0.0\n        self._camera_object_id: int | None = None\n        try:\n            from js import noonCreateCanonicalSceneAuthoringContext as create_context\n        except ImportError:\n            self._canonical_authoring = None\n        else:\n            self._canonical_authoring = create_context()\n''')
+          replace(
+              "web/python/noon.py",
+              '''    def to_scene_spec(self) -> dict[str, Any]:\n        """Finalize this authored scene through Rust's canonical mixed-scene adapter.\n\n        Content adapters may still maintain legacy projections during #367 migration,\n        but callers consume one validated ``SceneSpec``. The Rust adapter remains the\n        authority for geometry/text ordering, text source lowering, retained tracks,\n        and family-animation transport.\n        """\n        try:\n            from js import noonCanonicalSceneSpecJson as canonicalize\n        except ImportError as error:\n            raise RuntimeError(\n                "canonical SceneSpec finalization requires the Noon browser Rust bridge"\n            ) from error\n\n        retained_document = getattr(self, "retained_document", None)\n        if retained_document is None:\n            raise RuntimeError(\n                "canonical SceneSpec finalization requires retained authoring compatibility"\n            )\n        legacy_json = json.dumps(\n            self.to_document(), separators=(",", ":"), allow_nan=False\n        )\n        retained_json = json.dumps(\n            retained_document(), separators=(",", ":"), allow_nan=False\n        )\n        return json.loads(str(canonicalize(legacy_json, retained_json)))\n''',
+              '''    def _canonical_authoring_checkpoint(self) -> int | None:\n        if self._canonical_authoring is None:\n            return None\n        return int(self._canonical_authoring.objectCount)\n\n    def _restore_canonical_authoring_checkpoint(self, object_count: int) -> None:\n        if self._canonical_authoring is not None:\n            self._canonical_authoring.restoreObjectCount(int(object_count))\n\n    @staticmethod\n    def _canonical_geometry_snapshot_json(snapshot: dict[str, Any]) -> str:\n        return json.dumps(\n            {\n                "geometry": snapshot["geometry"],\n                "transform": snapshot["transform"],\n                "style": snapshot["style"],\n            },\n            separators=(",", ":"),\n            allow_nan=False,\n        )\n\n    def _canonical_bind_geometry_snapshot(\n        self, obj: _ir.Object, snapshot: dict[str, Any]\n    ) -> None:\n        if self._canonical_authoring is not None:\n            self._canonical_authoring.bindGeometrySnapshotJson(\n                float(obj.id), self._canonical_geometry_snapshot_json(snapshot)\n            )\n\n    def _canonical_update_geometry_snapshot(\n        self, obj: _ir.Object, snapshot: dict[str, Any]\n    ) -> None:\n        if self._canonical_authoring is not None:\n            self._canonical_authoring.updateGeometrySnapshotJson(\n                float(obj.id), self._canonical_geometry_snapshot_json(snapshot)\n            )\n\n    def _canonical_bind_retained_text_spec(\n        self, obj: _ir.Object, spec_json: str\n    ) -> None:\n        if self._canonical_authoring is not None:\n            self._canonical_authoring.bindRetainedTextSpecJson(float(obj.id), spec_json)\n\n    def _canonical_update_retained_text_spec(\n        self, obj: _ir.Object, spec: dict[str, Any]\n    ) -> None:\n        if self._canonical_authoring is not None:\n            self._canonical_authoring.updateRetainedTextSpecJson(\n                float(obj.id),\n                json.dumps(spec, separators=(",", ":"), allow_nan=False),\n            )\n\n    def to_scene_spec(self) -> dict[str, Any]:\n        """Finalize directly from the Rust-owned canonical mixed object stream."""\n        if self._canonical_authoring is None:\n            raise RuntimeError(\n                "canonical SceneSpec finalization requires the Noon browser Rust bridge"\n            )\n        prepare = getattr(self, "_prepare_canonical_scene_spec", None)\n        if prepare is not None:\n            prepare()\n        legacy_tracks = json.dumps(\n            self._tracks, separators=(",", ":"), allow_nan=False\n        )\n        retained_tracks = json.dumps(\n            getattr(self, "_retained_animation_tracks", []),\n            separators=(",", ":"),\n            allow_nan=False,\n        )\n        family_animations = json.dumps(\n            getattr(self, "_retained_family_animations", []),\n            separators=(",", ":"),\n            allow_nan=False,\n        )\n        camera = None if self._camera_object_id is None else float(self._camera_object_id)\n        return json.loads(\n            str(\n                self._canonical_authoring.sceneSpecJson(\n                    legacy_tracks, retained_tracks, family_animations, camera\n                )\n            )\n        )\n''',
+          )
+          replace("web/python/noon.py", '''        stored["geometry"] = copy.deepcopy(raw.geometry)\n        stored["transform"] = copy.deepcopy(raw.transform)\n        stored["style"] = copy.deepcopy(raw.style)\n''', '''        stored["geometry"] = copy.deepcopy(raw.geometry)\n        stored["transform"] = copy.deepcopy(raw.transform)\n        stored["style"] = copy.deepcopy(raw.style)\n        self._canonical_update_geometry_snapshot(obj, stored)\n''')
+
+          replace("web/python/_manim_typst.py", '''    def _bind_to_scene(\n        self, scene: _compat.Scene, *, key: str | None = None\n    ) -> _base._ir.Object:\n        _ensure_scene_state(scene)\n        obj, order = scene._allocate_object(key)\n        self._bind_retained(scene, obj, order)\n        scene._retained_text_objects.append(self)\n        return obj\n''', '''    def _bind_to_scene(\n        self, scene: _compat.Scene, *, key: str | None = None\n    ) -> _base._ir.Object:\n        _ensure_scene_state(scene)\n        checkpoint = scene._authoring_checkpoint()\n        try:\n            obj, order = scene._allocate_object(key)\n            scene._canonical_bind_retained_text_spec(obj, str(self._retained_handle.specJson()))\n            self._bind_retained(scene, obj, order)\n            scene._retained_text_objects.append(self)\n            return obj\n        except Exception:\n            scene._restore_authoring_checkpoint(checkpoint)\n            raise\n''')
+
+          replace("web/python/_manim_retained_state.py", '''        source._retained_timeline_base_spec = copy.deepcopy(current)\n        _update_state_from_spec(state, current)\n        source._retained_observed_spec = copy.deepcopy(current)\n        source._retained_observed_revision = current_revision\n        return\n''', '''        source._retained_timeline_base_spec = copy.deepcopy(current)\n        _update_state_from_spec(state, current)\n        assert source._object is not None\n        scene._canonical_update_retained_text_spec(source._object, current)\n        source._retained_observed_spec = copy.deepcopy(current)\n        source._retained_observed_revision = current_revision\n        return\n''')
+          replace("web/python/_manim_retained_state.py", '''def _sync_all(scene: _compat.Scene) -> None:\n    at_time = float(scene._cursor)\n    for source in _bound_sources(scene):\n        _sync_source(scene, source, at_time)\n\n\ndef _apply_method_operations(\n''', '''def _sync_all(scene: _compat.Scene) -> None:\n    at_time = float(scene._cursor)\n    for source in _bound_sources(scene):\n        _sync_source(scene, source, at_time)\n\n\ndef _prepare_canonical_scene_spec(self: _compat.Scene) -> None:\n    _sync_all(self)\n    _freeze_bound_sources(self)\n\n\ndef _apply_method_operations(\n''')
+          replace("web/python/_manim_retained_state.py", '''    _compat.Scene.wait = _scene_wait\n    _compat.Scene.retained_document = _retained_document\n''', '''    _compat.Scene.wait = _scene_wait\n    _compat.Scene.retained_document = _retained_document\n    _compat.Scene._prepare_canonical_scene_spec = _prepare_canonical_scene_spec\n''')
+
+          replace("web/python/_manim_semantic_handles.py", '''    transform["scale"]["x"] = float(handle.wireScaleX)\n    transform["scale"]["y"] = float(handle.wireScaleY)\n    transform["rotation"] = float(handle.wireRotation)\n''', '''    transform["scale"]["x"] = float(handle.wireScaleX)\n    transform["scale"]["y"] = float(handle.wireScaleY)\n    transform["rotation"] = float(handle.wireRotation)\n    scene._canonical_update_geometry_snapshot(obj, scene._objects[obj.id])\n''')
+          replace("web/python/_manim_semantic_handles.py", '''    style["stroke"] = _wire_color(handle, "Stroke")\n    style["stroke_width"] = float(handle.wireStrokeWidth)\n    style["opacity"] = float(handle.wireObjectOpacity)\n''', '''    style["stroke"] = _wire_color(handle, "Stroke")\n    style["stroke_width"] = float(handle.wireStrokeWidth)\n    style["opacity"] = float(handle.wireObjectOpacity)\n    scene._canonical_update_geometry_snapshot(obj, scene._objects[obj.id])\n''')
+
+          replace("web/python/_manim_camera.py", '''        _phase_b._bind_raw(self, frame)\n        self.camera = _MovingCamera(frame)\n''', '''        _phase_b._bind_raw(self, frame)\n        self.camera = _MovingCamera(frame)\n        self._camera_object_id = frame.id\n''')
+
+          replace("web/python-worker.source.js", '''  WasmAuthoringStore,\n  canonicalRetainedSceneSpecJson,\n''', '''  WasmAuthoringStore,\n  CanonicalSceneAuthoringContext,\n''')
+          replace("web/python-worker.source.js", '''  self.noonCreateAuthoringFamilyMemberHandle = () =>\n    authoringStore.createFamilyMember();\n''', '''  self.noonCreateAuthoringFamilyMemberHandle = () =>\n    authoringStore.createFamilyMember();\n  self.noonCreateCanonicalSceneAuthoringContext = () =>\n    new CanonicalSceneAuthoringContext();\n''')
+          worker = Path("web/python-worker.source.js")
+          text = worker.read_text()
+          old_bridge = '''  self.noonCanonicalSceneSpecJson = canonicalRetainedSceneSpecJson;\n'''
+          if old_bridge not in text:
+              raise SystemExit("worker: canonicalizer bridge anchor missing")
+          worker.write_text(text.replace(old_bridge, ""))
+
+          Path("web/canonical-scene-authoring-context.test.mjs").write_text(r'''import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const [noonSource, irSource, textSource, workerSource] = await Promise.all([
+  readFile(new URL("./python/noon.py", import.meta.url), "utf8"),
+  readFile(new URL("./python/_noon_ir.py", import.meta.url), "utf8"),
+  readFile(new URL("./python/_manim_typst.py", import.meta.url), "utf8"),
+  readFile(new URL("./python-worker.source.js", import.meta.url), "utf8"),
+]);
+
+test("SceneSpec production uses the per-scene canonical authoring context", () => {
+  assert.match(noonSource, /noonCreateCanonicalSceneAuthoringContext/);
+  assert.match(noonSource, /\.sceneSpecJson\(/);
+  const method = noonSource.slice(
+    noonSource.indexOf("    def to_scene_spec"),
+    noonSource.indexOf("    def _raw_object"),
+  );
+  assert.doesNotMatch(method, /retained_document/);
+  assert.doesNotMatch(method, /to_document\(/);
+  assert.doesNotMatch(method, /noonCanonicalSceneSpecJson/);
+});
+
+test("geometry and Text register individual binding events without replacing Scene.add", () => {
+  assert.match(irSource, /_canonical_bind_geometry_snapshot/);
+  assert.match(textSource, /_canonical_bind_retained_text_spec/);
+  assert.doesNotMatch(textSource, /Scene\.add\s*=/);
+});
+
+test("worker exposes a context constructor instead of a split-scene canonicalizer", () => {
+  assert.match(workerSource, /CanonicalSceneAuthoringContext/);
+  assert.match(workerSource, /noonCreateCanonicalSceneAuthoringContext/);
+  assert.doesNotMatch(workerSource, /noonCanonicalSceneSpecJson\s*=/);
+});
+''')
+          PY
+      - name: Format and build generated authoring assets
+        shell: bash
+        run: |
+          cargo fmt --all
+          node scripts/build-python-worker.mjs
+      - name: Run focused checks
+        shell: bash
+        run: |
+          cargo test -p noon-web canonical_scene_authoring
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          node --test web/canonical-scene-authoring-context.test.mjs
+          node --test web/python-compat-bundle.test.mjs
+          node --test web/authoring-scene-spec-result.test.mjs
+          git diff --check
+      - name: Commit source changes
+        shell: bash
+        run: |
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-web/src/canonical_scene_authoring.rs \
+            crates/noon-web/src/lib.rs \
+            crates/noon-web/src/retained_authoring_scene_spec.rs \
+            web/python/_noon_ir.py \
+            web/python/noon.py \
+            web/python/_manim_typst.py \
+            web/python/_manim_retained_state.py \
+            web/python/_manim_semantic_handles.py \
+            web/python/_manim_camera.py \
+            web/python-worker.source.js \
+            web/python-worker.js \
+            web/python/compat-bundle.json \
+            web/canonical-scene-authoring-context.test.mjs
+          git add -f web/python/compat-bundle.*.json 2>/dev/null || true
+          git commit -m "Own mixed scene objects in one Rust authoring context"
+          git push origin HEAD:tmp/367-canonical-scene-context
