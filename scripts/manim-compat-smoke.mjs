@@ -276,7 +276,6 @@ class UncreateLifecycle(Scene):
         kept = Circle(radius=0.25, color=PINK)
         forward = Square(side_length=0.4, color=GREEN)
         self.add(first, kept, forward)
-
         self.play(Uncreate(first), run_time=2.0, rate_func=rush_into)
         assert first not in self.mobjects
 
@@ -317,6 +316,33 @@ class OverlappingRetainedFamilies(Scene):
     def construct(self):
         text = Text("AB")
         self.play(Write(text), Unwrite(text), rate_func=linear)
+`;
+
+const mixedFamilyOrdinarySource = `
+from noon import *
+
+class MixedFamilyOrdinary(Scene):
+    def construct(self):
+        circle = Circle(radius=0.28, color=BLUE).shift(LEFT)
+        text = Text("AB")
+        self.play(circle.animate.shift(RIGHT), Write(text), rate_func=linear)
+`;
+
+const mixedFamilyOrdinaryEditedSource = `
+from noon import *
+
+class MixedFamilyOrdinaryEdited(Scene):
+    def construct(self):
+        text = Text("EDITED")
+        square = Square(side_length=0.5, color=PINK).shift(LEFT)
+        circle = Circle(radius=0.22, color=GREEN).shift(RIGHT)
+        self.play(
+            Write(text),
+            square.animate.shift(UP),
+            circle.animate.shift(LEFT),
+            run_time=1.5,
+            rate_func=linear,
+        )
 `;
 
 let browser = null;
@@ -572,6 +598,124 @@ try {
   assert.equal(concurrentRender.secondTime, 1.5);
   assert.equal(concurrentRender.objectCount, 2);
 
+  const mixedFirst = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    mixedFamilyOrdinarySource,
+  );
+  assert.equal(mixedFirst.kind, "scene_document");
+  assert.equal(mixedFirst.document.objects.length, 1);
+  assert.equal(mixedFirst.retainedDocument.objects.length, 1);
+  assert.equal(mixedFirst.sceneSpec.objects.length, 2);
+  assert.equal(mixedFirst.sceneSpec.family_animations.length, 1);
+  assert.equal(
+    mixedFirst.document.tracks.filter((track) => track.property === "transform").length,
+    1,
+  );
+  assert.equal(mixedFirst.duration, 1);
+  assert.equal(mixedFirst.sceneSpec.family_animations[0].spec.start_time, 0);
+  assert.equal(mixedFirst.sceneSpec.family_animations[0].spec.duration, 1);
+
+  // Reuse the same Pyodide authoring worker for a source edit. The second Scene must
+  // own a fresh Rust canonical authoring context rather than accumulating the first.
+  const mixedEdited = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.run(pythonSource),
+    mixedFamilyOrdinaryEditedSource,
+  );
+  assert.equal(mixedEdited.kind, "scene_document");
+  assert.equal(mixedEdited.document.objects.length, 2);
+  assert.equal(mixedEdited.retainedDocument.objects.length, 1);
+  assert.equal(mixedEdited.sceneSpec.objects.length, 3);
+  assert.equal(mixedEdited.sceneSpec.family_animations.length, 1, "edited rerun must replace family requests");
+  assert.equal(
+    mixedEdited.document.tracks.filter((track) => track.property === "transform").length,
+    2,
+  );
+  assert.equal(mixedEdited.duration, 1.5);
+  assert.equal(mixedEdited.sceneSpec.family_animations[0].spec.start_time, 0);
+  assert.equal(mixedEdited.sceneSpec.family_animations[0].spec.duration, 1.5);
+
+  const mixedRerunRender = await page.evaluate(async ({ first, edited }) => {
+    const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.appendChild(canvas);
+    const errors = [];
+    const execution = new AuthoringExecutionClient(canvas, {
+      onError(error, owner) {
+        errors.push(`${owner}: ${error}`);
+      },
+    });
+
+    async function renderedAt(time, expectedObjectCount) {
+      await execution.seek(time);
+      let latest = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        latest = await execution.metrics();
+        if (errors.length !== 0) throw new Error(errors.join("; "));
+        if (
+          Math.abs(Number(latest.metrics.time) - time) <= 1e-6 &&
+          latest.metrics.objectCount === expectedObjectCount &&
+          latest.metrics.presentedFrames >= 1
+        ) {
+          return latest;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(
+        `mixed edit/rerun render did not converge at t=${time}: ${JSON.stringify(latest)}`,
+      );
+    }
+
+    try {
+      await execution.startRetainedCanonical(JSON.stringify(first.sceneSpec), {
+        loopDurationSeconds: first.duration,
+        transportMode: "transferable",
+      });
+      await execution.pause();
+      const firstReport = await renderedAt(0.5, 2);
+      if (!firstReport.engineMetrics.canonical) {
+        throw new Error("first mixed scene bypassed canonical retained execution");
+      }
+
+      const reconcile = await execution.reconcileScene(JSON.stringify(edited.document), {
+        sceneSpecJson: JSON.stringify(edited.sceneSpec),
+        loopDurationSeconds: edited.duration,
+      });
+      if (!reconcile.rebuilt || reconcile.mode !== "retained") {
+        throw new Error(`edited mixed scene did not rebuild retained execution: ${JSON.stringify(reconcile)}`);
+      }
+      if (execution.canvas !== canvas) {
+        throw new Error("retained edit/rerun replaced the persistent authoring canvas");
+      }
+
+      await execution.pause();
+      const editedReport = await renderedAt(0.75, 3);
+      if (!editedReport.engineMetrics.canonical) {
+        throw new Error("edited mixed scene bypassed canonical retained execution");
+      }
+      return {
+        firstObjectCount: firstReport.metrics.objectCount,
+        editedObjectCount: editedReport.metrics.objectCount,
+        firstTime: firstReport.metrics.time,
+        editedTime: editedReport.metrics.time,
+        rebuilt: reconcile.rebuilt,
+        mode: reconcile.mode,
+      };
+    } finally {
+      execution.terminate();
+      canvas.remove();
+    }
+  }, { first: mixedFirst, edited: mixedEdited });
+  assert.deepEqual(mixedRerunRender, {
+    firstObjectCount: 2,
+    editedObjectCount: 3,
+    firstTime: 0.5,
+    editedTime: 0.75,
+    rebuilt: true,
+    mode: "retained",
+  });
+
   let overlapError = null;
   try {
     await page.evaluate(
@@ -600,7 +744,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent retained-family play, mixed family/ordinary play with retained edit-rerun rebuild, independent fill/stroke opacity, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();
