@@ -195,9 +195,8 @@ impl std::fmt::Display for CanonicalRetainedEnginePlayerError {
             Self::Player(error) => error.fmt(formatter),
             Self::FamilyScene(error) => error.fmt(formatter),
             Self::FamilyPlayer(error) => error.fmt(formatter),
-            Self::MissingInitialSnapshot => {
-                formatter.write_str("canonical retained execution did not emit its initial snapshot")
-            }
+            Self::MissingInitialSnapshot => formatter
+                .write_str("canonical retained execution did not emit its initial snapshot"),
             Self::Clock(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
         }
@@ -642,8 +641,16 @@ mod tests {
             .expect("first family request state");
         mirror.apply_json(&first).unwrap();
         let retained = mirror.frame().unwrap();
-        let text_index = retained.objects.iter().position(|object| object.id == text_id).unwrap();
-        let circle_index = retained.objects.iter().position(|object| object.id == circle_id).unwrap();
+        let text_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == text_id)
+            .unwrap();
+        let circle_index = retained
+            .objects
+            .iter()
+            .position(|object| object.id == circle_id)
+            .unwrap();
         let first_frame = mirror.planned_family_frame().unwrap().unwrap();
         assert_eq!(first_frame.family_plan_index(text_index), Some(0));
         assert_eq!(first_frame.family_plan_index(circle_index), Some(0));
