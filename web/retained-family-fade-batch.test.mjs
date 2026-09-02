@@ -31,7 +31,7 @@ test("standalone family fades preserve one source animation instead of construct
 });
 
 test("standalone and mixed family fade batches reuse the existing retained leaf scheduler", () => {
-  const schedule = batchSource.split("def _schedule_plan(")[1].split("def _scene_play(")[0];
+  const schedule = batchSource.split("def _schedule_plan(")[1].split("def _restore_family_membership(")[0];
   assert.match(schedule, /_ORIGINAL_SCHEDULE_PLAN\(/);
   assert.match(schedule, /_RetainedBatchLeafAnimation\(source\)/);
   assert.doesNotMatch(schedule, /_schedule_retained_fade\(/);
@@ -39,9 +39,19 @@ test("standalone and mixed family fade batches reuse the existing retained leaf 
   assert.doesNotMatch(schedule, /type\(animation\)\(/);
 });
 
+test("source-level family membership follows FadeIn introducer and FadeOut remover lifecycle", () => {
+  const membership = batchSource
+    .split("def _restore_family_membership(")[1]
+    .split("def _scene_play(")[0];
+  assert.match(membership, /batch\[0\]\["kind"\] == "fade_in"/);
+  assert.match(membership, /_normalize_retained_family_top_level\(/);
+  assert.match(membership, /batch\[0\]\["kind"\] == "fade_out"/);
+  assert.match(membership, /value for value in scene\._compat_top_level if id\(value\) not in removed/);
+});
+
 test("batch wrapper snapshots every retained leaf and restores source-level family membership", () => {
   assert.match(batchSource, /for batch in batches\s+for source in batch\.leaves/);
-  assert.match(batchSource, /_normalize_retained_family_top_level/);
+  assert.match(batchSource, /_restore_family_membership\(self, batches, top_level_before\)/);
   assert.match(batchSource, /source\._object = old_object/);
   assert.match(batchSource, /source\._retained_object_id = old_object_id/);
   assert.match(batchSource, /source\._retained_order = old_order/);
