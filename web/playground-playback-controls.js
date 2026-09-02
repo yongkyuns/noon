@@ -1,5 +1,9 @@
 const STYLE_ID = "noon-playground-playback-controls-style";
 
+if (typeof document !== "undefined") {
+  ensurePlaybackSlot();
+}
+
 export class PlaygroundPlaybackControls {
   #player;
   #onError;
@@ -35,9 +39,14 @@ export class PlaygroundPlaybackControls {
 
     installStyles();
 
-    this.#root = document.createElement("section");
+    this.#root = previewPane.querySelector(".playback-slot");
+    if (!(this.#root instanceof HTMLElement)) {
+      this.#root = document.createElement("section");
+      previewPane.append(this.#root);
+    }
     this.#root.className = "playback-controls";
     this.#root.setAttribute("aria-label", "Animation playback controls");
+    this.#root.replaceChildren();
 
     this.#playButton = document.createElement("button");
     this.#playButton.type = "button";
@@ -46,16 +55,14 @@ export class PlaygroundPlaybackControls {
 
     this.#restartButton = document.createElement("button");
     this.#restartButton.type = "button";
-    this.#restartButton.className = "playback-button";
-    this.#restartButton.textContent = "Restart";
+    this.#restartButton.className = "playback-button playback-restart";
+    this.#restartButton.textContent = "↺";
     this.#restartButton.setAttribute("aria-label", "Restart animation from the beginning");
+    this.#restartButton.title = "Restart";
     this.#restartButton.addEventListener("click", this.#handleRestart);
 
     const timeline = document.createElement("label");
     timeline.className = "playback-timeline";
-    const timelineLabel = document.createElement("span");
-    timelineLabel.className = "playback-label";
-    timelineLabel.textContent = "Timeline";
 
     this.#scrubber = document.createElement("input");
     this.#scrubber.type = "range";
@@ -64,7 +71,7 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.step = "0.001";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
-    timeline.append(timelineLabel, this.#scrubber);
+    timeline.append(this.#scrubber);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
@@ -72,12 +79,6 @@ export class PlaygroundPlaybackControls {
     this.#timeOutput.setAttribute("aria-label", "Animation time");
 
     this.#root.append(this.#playButton, this.#restartButton, timeline, this.#timeOutput);
-    const metrics = previewPane.querySelector(".metrics");
-    if (metrics !== null) {
-      previewPane.insertBefore(this.#root, metrics);
-    } else {
-      previewPane.append(this.#root);
-    }
     this.#render();
   }
 
@@ -135,7 +136,7 @@ export class PlaygroundPlaybackControls {
     this.#playButton.removeEventListener("click", this.#handleToggle);
     this.#restartButton.removeEventListener("click", this.#handleRestart);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
-    this.#root.remove();
+    renderPlaybackPlaceholder(this.#root);
   }
 
   #handleToggle = () => {
@@ -227,9 +228,9 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.value = String(clampedTime);
     this.#scrubber.setAttribute(
       "aria-valuetext",
-      `${formatTime(clampedTime)} of ${formatTime(this.#durationSeconds)}`,
+      `${formatTime(clampedTime)} seconds of ${formatTime(this.#durationSeconds)} seconds`,
     );
-    this.#timeOutput.value = `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)}`;
+    this.#timeOutput.value = `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)} s`;
   }
 
   #renderDisabled() {
@@ -243,33 +244,90 @@ export class PlaygroundPlaybackControls {
   }
 }
 
+function ensurePlaybackSlot() {
+  installStyles();
+  const previewPane = document.querySelector(".preview-pane");
+  if (!(previewPane instanceof HTMLElement)) return null;
+  const existing = previewPane.querySelector(".playback-slot, .playback-controls");
+  if (existing instanceof HTMLElement) return existing;
+  const root = document.createElement("section");
+  renderPlaybackPlaceholder(root);
+  previewPane.append(root);
+  return root;
+}
+
+function renderPlaybackPlaceholder(root) {
+  root.className = "playback-slot";
+  root.removeAttribute("aria-busy");
+  root.removeAttribute("data-busy");
+  root.removeAttribute("data-playing");
+  root.setAttribute("aria-label", "Animation playback controls");
+
+  const playButton = document.createElement("button");
+  playButton.type = "button";
+  playButton.className = "playback-button playback-toggle";
+  playButton.textContent = "Play";
+  playButton.disabled = true;
+  playButton.setAttribute("aria-label", "Run the example to enable playback");
+
+  const restartButton = document.createElement("button");
+  restartButton.type = "button";
+  restartButton.className = "playback-button playback-restart";
+  restartButton.textContent = "↺";
+  restartButton.disabled = true;
+  restartButton.setAttribute("aria-label", "Run the example to enable restart");
+  restartButton.title = "Restart";
+
+  const timeline = document.createElement("label");
+  timeline.className = "playback-timeline";
+  const scrubber = document.createElement("input");
+  scrubber.type = "range";
+  scrubber.className = "playback-scrubber";
+  scrubber.min = "0";
+  scrubber.max = "1";
+  scrubber.value = "0";
+  scrubber.disabled = true;
+  scrubber.setAttribute("aria-label", "Animation playhead unavailable until Run");
+  timeline.append(scrubber);
+
+  const timeOutput = document.createElement("output");
+  timeOutput.className = "playback-time";
+  timeOutput.setAttribute("aria-live", "off");
+  timeOutput.setAttribute("aria-label", "Animation time unavailable until Run");
+  timeOutput.value = "0.00 / —";
+
+  root.replaceChildren(playButton, restartButton, timeline, timeOutput);
+}
+
 function installStyles() {
   if (document.getElementById(STYLE_ID) !== null) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
+    .playback-slot,
     .playback-controls {
       display: grid;
-      grid-template-columns: auto auto minmax(8rem, 1fr) auto;
+      grid-template-columns: auto auto minmax(4rem, 1fr) auto;
       align-items: center;
-      gap: 0.55rem;
-      min-height: 3.15rem;
-      padding: 0.55rem 0.85rem;
+      gap: 0.45rem;
+      min-height: 3rem;
+      padding: 0.5rem 0.75rem;
       border-top: 1px solid var(--border);
       background: rgb(9 12 19 / 94%);
     }
     .playback-button {
       appearance: none;
-      min-width: 4.5rem;
       border: 1px solid var(--border-strong);
       border-radius: 0.55rem;
-      padding: 0.42rem 0.6rem;
+      padding: 0.4rem 0.56rem;
       background: #171d2a;
       color: #d9deeb;
       cursor: pointer;
-      font-size: 0.72rem;
+      font-size: 0.7rem;
       font-weight: 700;
     }
+    .playback-toggle { min-width: 4.1rem; }
+    .playback-restart { min-width: 2.25rem; }
     .playback-button:hover:not(:disabled) { background: #20283a; }
     .playback-button:focus-visible,
     .playback-scrubber:focus-visible {
@@ -277,17 +335,8 @@ function installStyles() {
       outline-offset: 2px;
     }
     .playback-timeline {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      align-items: center;
-      gap: 0.5rem;
+      display: block;
       min-width: 0;
-    }
-    .playback-label {
-      color: var(--muted-2);
-      font-size: 0.66rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
     }
     .playback-scrubber {
       width: 100%;
@@ -296,29 +345,40 @@ function installStyles() {
       cursor: pointer;
     }
     .playback-time {
-      min-width: 7.2rem;
+      min-width: 6.2rem;
       color: #b9c3d6;
-      font: 0.7rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      font: 0.68rem ui-monospace, SFMono-Regular, Menlo, monospace;
       text-align: right;
       white-space: nowrap;
     }
+    .playback-slot button:disabled,
+    .playback-slot input:disabled,
     .playback-controls button:disabled,
     .playback-controls input:disabled {
+      cursor: default;
+      opacity: 0.42;
+    }
+    .playback-controls[data-busy="true"] button:disabled,
+    .playback-controls[data-busy="true"] input:disabled {
       cursor: wait;
-      opacity: 0.48;
     }
     @media (max-width: 44rem) {
+      .playback-slot,
       .playback-controls {
-        grid-template-columns: 1fr 1fr;
-        gap: 0.45rem;
-        padding: 0.55rem;
+        grid-template-columns: auto auto minmax(3rem, 1fr) auto;
+        gap: 0.32rem;
+        min-height: 2.75rem;
+        padding: 0.42rem 0.5rem;
       }
-      .playback-button { width: 100%; }
-      .playback-timeline { grid-column: 1 / -1; }
+      .playback-button {
+        padding: 0.36rem 0.45rem;
+        font-size: 0.66rem;
+      }
+      .playback-toggle { min-width: 3.6rem; }
+      .playback-restart { min-width: 2rem; }
       .playback-time {
-        grid-column: 1 / -1;
-        min-width: 0;
-        text-align: center;
+        min-width: 5.25rem;
+        font-size: 0.62rem;
       }
     }
   `;
@@ -326,7 +386,7 @@ function installStyles() {
 }
 
 function formatTime(seconds) {
-  return `${seconds.toFixed(2)} s`;
+  return seconds.toFixed(2);
 }
 
 function validateDuration(durationSeconds) {
