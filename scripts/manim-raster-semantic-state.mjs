@@ -218,7 +218,10 @@ try {
         noonSourceFor(fixture),
       );
       assert.equal(authored.kind, "scene_document", `${fixture.id}: Noon semantic authoring result`);
-      assert.equal(authored.duration, fixture.expected_duration, `${fixture.id}: Noon semantic duration`);
+      assert.ok(
+        Math.abs(Number(authored.duration) - Number(fixture.expected_duration)) <= 1e-9,
+        `${fixture.id}: Noon semantic duration ${authored.duration} != expected ${fixture.expected_duration}`,
+      );
       const sceneJson = JSON.stringify(authored.document);
       const manimFixture = semanticByFixture.get(fixture.id);
       assert.ok(manimFixture, `${fixture.id}: missing Manim semantic fixture`);
