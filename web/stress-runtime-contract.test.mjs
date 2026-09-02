@@ -22,29 +22,31 @@ const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.
 assert.equal(
   noon,
   canonical.replace("from manim import *", "from noon import *"),
-  "stress source must remain import-only Manim compatible",
+  "stress source must remain import-only source compatible",
 );
+assert.match(noon, /class DynamicLoadStress\(Scene\)/);
 assert.match(noon, /rows = 20/);
 assert.match(noon, /cols = 30/);
 assert.match(noon, /shape_count = rows \* cols/);
-assert.match(noon, /self\.play\(FadeIn\(title\), FadeIn\(subtitle\), run_time=0\.25\)/);
-assert.match(noon, /self\.play\(\*\[Create\(shape\) for shape in shapes\], run_time=0\.55\)/);
-assert.doesNotMatch(
-  noon,
-  /Create\(title\)/,
-  "retained family Create cannot share the stress scene's mass mixed-animation play yet",
-);
-assert.match(noon, /for shape, target in zip\(shapes, targets_a\)/);
-assert.match(noon, /for shape, target in zip\(shapes, targets_b\)/);
-assert.match(noon, /motion_a = \[\]/);
-assert.match(noon, /motion_b = \[\]/);
+assert.match(noon, /for index in range\(24\)/);
+assert.match(noon, /\*\[FadeIn\(label\) for label in labels\]/);
+assert.match(noon, /for wave in range\(6\)/);
+assert.match(noon, /bucket = \(index \* 37 \+ row \* 11 \+ col \* 7\) % 6/);
+assert.match(noon, /shape\.animate\.scale\(scale_factor\)/);
+assert.match(noon, /\.rotate\(angle\)/);
+assert.match(noon, /\.shift\(dx \* RIGHT \+ dy \* UP\)/);
+assert.match(noon, /\.set_color\(color\)/);
+assert.match(noon, /label\.animate\.scale\(factor\)/);
+assert.match(noon, /\.set_opacity\(opacity\)/);
+assert.match(noon, /\.set_opacity\(1\.0\)/);
+assert.match(noon, /turbulence = \[\]/);
 assert.match(noon, /leaving = shapes\[::3\]/);
-assert.match(noon, /title\.animate\.rotate\(PI \/ 24\)/);
-assert.match(noon, /title\.animate\.rotate\(-PI \/ 12\)/);
+assert.match(noon, /blinking_labels = labels\[::3\]/);
+assert.doesNotMatch(noon, /MANIM/i, "public stress scene copy must not expose compatibility branding");
 assert.doesNotMatch(
   noon,
-  /(?:title|subtitle)\.animate[^\n]*set_color/,
-  "public stress scene must not claim retained Text color animation before a color track exists",
+  /(?:title|subtitle|label)\.animate[^\n]*set_color/,
+  "retained Text color animation must not be claimed before a color track exists",
 );
 assert.match(
   retainedAnimate,
@@ -62,10 +64,12 @@ assert.match(
   "contract should track the retained family mixed-play capability boundary",
 );
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
+assert.match(browserSmoke, /stressResult\.duration\) - 6\.06/);
 assert.match(browserSmoke, /stressResult\.document\.objects\.length !== 800/);
-assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 802/);
-assert.match(browserSmoke, /expectedObjectCount: 602/);
+assert.match(browserSmoke, /stressResult\.retainedDocument\?\.objects\?\.length !== 26/);
+assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 826/);
+assert.match(browserSmoke, /expectedObjectCount: 626/);
 assert.match(browserSmoke, /waitForRenderedState/);
-assert.match(browserSmoke, /seekTime: 2\.8/);
+assert.match(browserSmoke, /seekTime: 3\.6/);
 
 console.log("✓ stress runtime capability and browser-execution contract");
