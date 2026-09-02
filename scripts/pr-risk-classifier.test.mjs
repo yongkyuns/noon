@@ -25,6 +25,7 @@ const retainedRuntimeChanges = [
 ];
 
 const renderModeSwitchChanges = [
+  "scripts/pr-risk-classifier.mjs",
   "web/authoring-execution-client.js",
   "web/authoring-render-worker.js",
   "web/execution-engine-worker.js",
@@ -38,7 +39,6 @@ const renderModeSwitchChanges = [
 const ordinaryChanges = [
   ".github/workflows/pr-fast.yml",
   "docs/ci.md",
-  "scripts/pr-risk-classifier.mjs",
   "web/main.js",
   "web/playground-gallery.js",
   "crates/noon-geometry/src/lib.rs",
@@ -57,7 +57,7 @@ test("retained engine, shared render, and Rust ownership boundaries escalate", (
   }
 });
 
-test("render-owner and engine transition boundaries escalate the mode-switch smoke", () => {
+test("render-owner, transition, and risk-policy changes escalate the mode-switch smoke", () => {
   const risk = classifyPrRisk(renderModeSwitchChanges);
   assert.equal(risk.renderModeSwitch, true);
   assert.deepEqual(risk.renderModeSwitchPaths, renderModeSwitchChanges.slice().sort());
