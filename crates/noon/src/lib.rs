@@ -12,6 +12,7 @@ mod camera_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
 mod geometry_authoring;
+mod graph_topology;
 mod legacy;
 mod line_matcher_authoring;
 mod polygram_authoring;
@@ -28,6 +29,7 @@ pub use camera_authoring::*;
 pub use dashed_line_authoring::*;
 pub use elbow_authoring::*;
 pub use geometry_authoring::*;
+pub use graph_topology::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
 pub use polygram_authoring::*;
@@ -44,11 +46,12 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        GeometryAuthoringError, LineMatcherAuthoringError, LoweredRetainedFamilyAnimation,
-        MathTypst, MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
-        ReactiveTimelineScene, RegularPolygon, RegularPolygram,
-        RetainedFamilyAnimationLoweringError, RetainedFamilyAnimationLoweringSession,
-        RetainedMobject, RetainedScene, RoundedRectangle, RoundedRectangleAuthoringError, Sector,
+        GeometryAuthoringError, GraphEdge, GraphEdgeId, GraphTopologyError, GraphVertexId,
+        LineMatcherAuthoringError, LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene,
+        Polygon, Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene,
+        RegularPolygon, RegularPolygram, RetainedFamilyAnimationLoweringError,
+        RetainedFamilyAnimationLoweringSession, RetainedGraphTopology, RetainedMobject,
+        RetainedScene, RoundedRectangle, RoundedRectangleAuthoringError, Sector,
         ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError, Triangle,
         Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
         DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO,
