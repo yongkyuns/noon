@@ -76,6 +76,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-reference-coverage.test.mjs
   node --test scripts/manim-reference-classification-lock.test.mjs
   node --test scripts/pr-risk-classifier.test.mjs
+  node --test scripts/retained-typst-workflow-policy.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"
