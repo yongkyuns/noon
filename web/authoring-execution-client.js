@@ -75,6 +75,8 @@ export class AuthoringExecutionClient {
       loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS,
       transportMode = undefined,
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      callbacks = null,
+      authoringClient = null,
     } = {},
   ) {
     if (this.#player !== null || this.#transition !== null) {
@@ -91,6 +93,9 @@ export class AuthoringExecutionClient {
       options.transportMode = transportMode;
     }
     const ready = await this.#startMode(AUTHORING_EXECUTION_LEGACY, sceneJson, options);
+    if (callbacks !== null && callbacks !== undefined) {
+      await this.#player.configureHostCallbacks(callbacks, authoringClient);
+    }
     this.#transportMode = ready.transportMode;
     return ready;
   }
