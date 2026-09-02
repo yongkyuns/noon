@@ -30,8 +30,8 @@ const metricTime = document.querySelector("#metric-time");
 const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
 
-// The public demo is a Manim compatibility surface. Noon-native patch templates and
-// implementation/stress examples remain repository fixtures, but are not user-facing examples.
+// The public demo is a source-compatible Python authoring surface. Noon-native patch
+// templates and implementation fixtures remain repository assets, not user-facing examples.
 patchButton.hidden = true;
 patchTab.hidden = true;
 patchPanel.hidden = true;
@@ -258,23 +258,23 @@ document.head.append(galleryStyle);
 const galleryManifest = await loadGalleryManifest();
 const SCENE_EXAMPLES = galleryManifest.examples;
 if (SCENE_EXAMPLES.length === 0) {
-  throw new Error("No source-equivalent ManimCE examples are ready for the gallery");
+  throw new Error("No runnable examples are ready for the gallery");
 }
 
 const gallerySection = document.createElement("section");
 gallerySection.className = "example-gallery";
-gallerySection.setAttribute("aria-label", "Manim compatible scene examples");
+gallerySection.setAttribute("aria-label", "Animation scene examples");
 const galleryHead = document.createElement("div");
 galleryHead.className = "gallery-head";
 const galleryTitle = document.createElement("div");
 galleryTitle.className = "gallery-title";
-galleryTitle.innerHTML = `<strong>ManimCE examples</strong><span>Source-equivalent v${galleryManifest.reference?.version ?? "0.21.0"} scenes</span>`;
+galleryTitle.innerHTML = `<strong>Examples</strong><span>Python-authored animation scenes</span>`;
 const galleryControls = document.createElement("div");
 galleryControls.className = "gallery-controls";
 const gallerySearch = document.createElement("input");
 gallerySearch.type = "search";
 gallerySearch.placeholder = "Search examples";
-gallerySearch.setAttribute("aria-label", "Search Manim examples");
+gallerySearch.setAttribute("aria-label", "Search examples");
 const categorySelect = document.createElement("select");
 categorySelect.setAttribute("aria-label", "Filter examples by category");
 categorySelect.append(new Option("All categories", "all"));
@@ -632,7 +632,7 @@ function renderGallery({ keepSelectedVisible = false } = {}) {
   if (visible.length === 0) {
     const empty = document.createElement("div");
     empty.className = "gallery-empty";
-    empty.textContent = "No Manim examples match these filters.";
+    empty.textContent = "No examples match these filters.";
     galleryGrid.append(empty);
     return;
   }
@@ -817,7 +817,7 @@ async function selectExample(
 ) {
   const example = SCENE_EXAMPLES.find((candidate) => candidate.id === id);
   if (!example) {
-    throw new Error(`Unknown Manim example ${id}`);
+    throw new Error(`Unknown example ${id}`);
   }
 
   const requestToken = generations.beginSelectionRequest(id);
@@ -915,7 +915,7 @@ resetButton.addEventListener("click", async () => {
   canonicalSource = await loadDemoAuthoringSource(example.path);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
-  patchStatus.value = `${example.title} reset to canonical Manim source`;
+  patchStatus.value = `${example.title} reset to canonical source`;
   patchStatus.dataset.state = "ready";
 });
 sceneSourceEditor.addEventListener(
