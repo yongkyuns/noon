@@ -225,7 +225,7 @@ class RetainedFamilyUnwriteSmoke(Scene):
             if (stressResult.kind !== "scene_document") {
               throw new Error(`stress smoke returned ${stressResult.kind}`);
             }
-            if (Math.abs(Number(stressResult.duration) - 5.0) > 1e-12) {
+            if (Math.abs(Number(stressResult.duration) - 6.06) > 1e-12) {
               throw new Error(`stress scene duration drifted to ${stressResult.duration}`);
             }
             if (!stressResult.sceneSpec) {
@@ -236,25 +236,25 @@ class RetainedFamilyUnwriteSmoke(Scene):
                 `stress scene expected 800 geometry objects, got ${stressResult.document.objects.length}`,
               );
             }
-            if (stressResult.retainedDocument?.objects?.length !== 2) {
+            if (stressResult.retainedDocument?.objects?.length !== 26) {
               throw new Error(
-                `stress scene expected two retained Text objects, got ${stressResult.retainedDocument?.objects?.length}`,
+                `stress scene expected 26 retained Text objects, got ${stressResult.retainedDocument?.objects?.length}`,
               );
             }
-            if (stressResult.sceneSpec.objects.length !== 802) {
+            if (stressResult.sceneSpec.objects.length !== 826) {
               throw new Error(
-                `stress canonical SceneSpec expected 802 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
+                `stress canonical SceneSpec expected 826 mixed objects, got ${stressResult.sceneSpec.objects.length}`,
               );
             }
             stressRenderResult = await renderCanonicalMidpoint({
               result: stressResult,
               canvasSelector: "#retained-stress-smoke",
-              label: "mixed-object parity stress",
-              loopDurationSeconds: 5.0,
-              seekTime: 2.8,
-              // At t=2.8 all 600 primary shapes and both retained Text objects are
-              // present. The 200 pulse circles are authored but do not enter until 3.7s.
-              expectedObjectCount: 602,
+              label: "dynamic load stress",
+              loopDurationSeconds: 6.06,
+              seekTime: 3.6,
+              // At t=3.6 all 600 primary shapes and all 26 retained Text objects
+              // are present. The 200 pulse circles are authored but enter later.
+              expectedObjectCount: 626,
             });
 
             return {
