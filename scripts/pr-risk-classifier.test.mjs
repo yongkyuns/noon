@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyPrRisk,
   requiresHostUpdaterDiagnostic,
+  requiresRenderModeSwitchSmoke,
   requiresRetainedExecutionSmoke,
 } from "./pr-risk-classifier.mjs";
 
@@ -24,13 +25,22 @@ const retainedRuntimeChanges = [
   "crates/noon-web/src/lib.rs",
 ];
 
-const ordinaryChanges = [
-  ".github/workflows/pr-fast.yml",
-  "docs/ci.md",
+const renderModeSwitchChanges = [
   "scripts/pr-risk-classifier.mjs",
+  "web/authoring-execution-client.js",
+  "web/authoring-render-worker.js",
+  "web/execution-engine-worker.js",
+  "web/execution-render-worker.js",
+  "web/execution-transport.js",
+  "web/execution-worker-client.js",
+  "web/execution-worker-smoke.html",
+  "web/retained-execution-engine-worker.js",
+];
+
+const ordinaryChanges = [
+  "docs/ci.md",
   "web/main.js",
   "web/playground-gallery.js",
-  "web/execution-engine-worker.js",
   "crates/noon-geometry/src/lib.rs",
   "crates/noon-web/src/manim_geometry_bridge.rs",
 ];
@@ -47,10 +57,23 @@ test("retained engine, shared render, and Rust ownership boundaries escalate", (
   }
 });
 
-test("ordinary CI, docs, demo, legacy engine, geometry, and Manim bridge changes stay fast", () => {
+test("render-owner, transition, and risk-policy changes escalate the mode-switch smoke", () => {
+  const risk = classifyPrRisk(renderModeSwitchChanges);
+  assert.equal(risk.renderModeSwitch, true);
+  assert.deepEqual(risk.renderModeSwitchPaths, renderModeSwitchChanges.slice().sort());
+  for (const path of renderModeSwitchChanges) {
+    assert.equal(requiresRenderModeSwitchSmoke(path), true, path);
+  }
+});
+
+test("ordinary docs, demo, geometry, and Manim bridge changes stay on the base fast path", () => {
   const risk = classifyPrRisk(ordinaryChanges);
   assert.equal(risk.retainedExecution, false);
   assert.deepEqual(risk.retainedExecutionPaths, []);
+  assert.equal(risk.renderModeSwitch, false);
+  assert.deepEqual(risk.renderModeSwitchPaths, []);
+  assert.equal(risk.hostUpdaterDiagnostics, false);
+  assert.deepEqual(risk.hostUpdaterDiagnosticPaths, []);
 });
 
 test("classifier normalizes diff-style paths and de-duplicates triggers", () => {
@@ -61,6 +84,7 @@ test("classifier normalizes diff-style paths and de-duplicates triggers", () => 
     "",
   ]);
   assert.deepEqual(risk.retainedExecutionPaths, ["web/authoring-render-worker.js"]);
+  assert.deepEqual(risk.renderModeSwitchPaths, ["web/authoring-render-worker.js"]);
 });
 
 test("host-updater changes escalate the backend diagnostic harness", () => {
