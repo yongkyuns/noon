@@ -15,6 +15,10 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const counts = integerList(process.env.NOON_AUTHORING_PERF_COUNTS ?? "1000,10000,100000");
 const samples = positiveInteger(process.env.NOON_AUTHORING_PERF_SAMPLES ?? "3", "samples");
 const scrubs = positiveInteger(process.env.NOON_AUTHORING_PERF_SCRUBS ?? "20", "scrubs");
+const cameraSamples = positiveInteger(
+  process.env.NOON_AUTHORING_PERF_CAMERA_SAMPLES ?? "30",
+  "camera samples",
+);
 const backend = process.env.NOON_AUTHORING_PERF_BACKEND ?? "webgpu";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
 const artifactPath = path.resolve(
@@ -54,6 +58,7 @@ try {
       objects: String(objects),
       samples: String(samples),
       scrubs: String(scrubs),
+      camera_samples: String(cameraSamples),
     });
     process.stdout.write(`Authoring ${backend} ${objects.toLocaleString()} objects… `);
     await page.goto(`${baseUrl}/web/authoring-perf.html?${query}`, { waitUntil: "load" });
@@ -69,12 +74,14 @@ try {
     }
     const report = await page.evaluate(() => window.__NOON_AUTHORING_PERF__);
     assert.equal(report.workload.objects, objects);
+    assert.equal(report.workload.cameraSamples, cameraSamples);
     cases.push(report);
     console.log(
       `cold ${format(report.cold.timeToVisibleMs)} ms, ` +
         `unchanged p95 ${format(report.warmUnchanged.timeToVisibleMs?.p95)} ms, ` +
         `local edit p95 ${format(report.oneObjectEdit.timeToVisibleMs?.p95)} ms, ` +
-        `scrub p95 ${format(report.scrub.timeToVisibleMs?.p95)} ms`,
+        `scrub p95 ${format(report.scrub.timeToVisibleMs?.p95)} ms, ` +
+        `camera encode/submit p95 ${format(report.stableCamera.encodeSubmitMs?.p95)} ms`,
     );
     await page.close();
   }
@@ -93,7 +100,7 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, counts, samples, scrubs },
+    configuration: { backend, counts, samples, scrubs, cameraSamples },
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
