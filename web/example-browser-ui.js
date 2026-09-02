@@ -298,6 +298,10 @@ function installStyles(documentLike) {
       grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
       overscroll-behavior: contain;
     }
+    .example-browser-layer .example-card {
+      content-visibility: visible;
+      contain-intrinsic-size: none;
+    }
     .example-browser-layer .example-parity { display: none; }
     .example-browser-layer .example-card-meta { justify-content: flex-start; }
     .example-browser-layer .gallery-pager { flex: none; }
