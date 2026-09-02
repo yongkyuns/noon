@@ -1,5 +1,5 @@
 use noon_core::{
-    FamilyAnimationState, RetainedFamilyAnimationPlan, RetainedFamilyLeafFrame,
+    FamilyAnimationState, RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan,
 };
 
 use crate::{RetainedFamilyFrame, RetainedFamilyFramePlanError, RetainedFrameState};
@@ -24,7 +24,10 @@ impl RetainedPlannedFamilyFrame<'_> {
     }
 
     pub fn family_plan_index(&self, object_index: usize) -> Option<u32> {
-        self.family_plan_indices.get(object_index).copied().flatten()
+        self.family_plan_indices
+            .get(object_index)
+            .copied()
+            .flatten()
     }
 
     pub fn as_family_frame(&self) -> RetainedFamilyFrame<'_> {
@@ -38,7 +41,7 @@ impl RetainedPlannedFamilyFrame<'_> {
         &self,
         plans: &[RetainedFamilyAnimationPlan],
         object_index: usize,
-    ) -> Result<Option<RetainedFamilyLeafFrame>, RetainedPlannedFamilyFrameError> {
+    ) -> Result<Option<RetainedFamilyAnimationLeafFrame<'_>>, RetainedPlannedFamilyFrameError> {
         if self.family_animations.len() != self.retained.objects.len()
             || self.family_plan_indices.len() != self.retained.objects.len()
         {
@@ -50,9 +53,9 @@ impl RetainedPlannedFamilyFrame<'_> {
         let object = self.retained.objects.get(object_index).ok_or(
             RetainedPlannedFamilyFrameError::InvalidObjectIndex(object_index),
         )?;
-        let plan_index = self.family_plan_index(object_index).ok_or(
-            RetainedPlannedFamilyFrameError::MissingPlanIndex(object.id),
-        )?;
+        let plan_index = self
+            .family_plan_index(object_index)
+            .ok_or(RetainedPlannedFamilyFrameError::MissingPlanIndex(object.id))?;
         let plan = plans.get(plan_index as usize).ok_or(
             RetainedPlannedFamilyFrameError::InvalidPlanIndex {
                 object: object.id,
@@ -67,7 +70,12 @@ impl RetainedPlannedFamilyFrame<'_> {
             });
         }
         plan.leaf_frame_for_object(state, object.id)
-            .map_err(RetainedPlannedFamilyFrameError::Plan)
+            .map(Some)
+            .map_err(|error| {
+                RetainedPlannedFamilyFrameError::Plan(RetainedFamilyFramePlanError::Evaluation(
+                    error,
+                ))
+            })
     }
 }
 
