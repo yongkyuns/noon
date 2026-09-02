@@ -76,6 +76,7 @@ fn line_instance_vertex_layout_matches_packed_cpu_abi() {
 #[test]
 fn line_instance_partial_upload_stride_is_four_byte_aligned() {
     let stride = size_of::<LineInstance>();
+    let second_line_offset = stride;
 
     assert_eq!(
         stride, 88,
@@ -83,8 +84,7 @@ fn line_instance_partial_upload_stride_is_four_byte_aligned() {
     );
     assert_eq!(stride % wgpu::COPY_BUFFER_ALIGNMENT as usize, 0);
     assert_eq!(
-        stride * 1,
-        88,
+        second_line_offset, 88,
         "the second packed line starts at the frame-90 diagnostic offset"
     );
 }
