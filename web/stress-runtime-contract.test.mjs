@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const canonical = await readFile(
+  new URL("../parity/manim-v0.21/stress-examples/mixed_object_parity_stress.py", import.meta.url),
+  "utf8",
+);
+const noon = await readFile(
+  new URL("./python/examples/manim_parity_stress_grid.py", import.meta.url),
+  "utf8",
+);
+const retainedAnimate = await readFile(
+  new URL("./python/_manim_retained_animate.py", import.meta.url),
+  "utf8",
+);
+const browserSmoke = await readFile(new URL("./manim-compat-smoke.html", import.meta.url), "utf8");
+
+assert.equal(
+  noon,
+  canonical.replace("from manim import *", "from noon import *"),
+  "stress source must remain import-only Manim compatible",
+);
+assert.match(noon, /shape\.animate\.rotate\(angle\)\.shift\(0\.11 \* direction\)\.set_color\(color\)/);
+assert.match(noon, /title\.animate\.rotate\(PI \/ 18\)/);
+assert.match(noon, /title\.animate\.rotate\(-PI \/ 18\)/);
+assert.doesNotMatch(
+  noon,
+  /(?:title|subtitle)\.animate[^\n]*set_color/,
+  "public stress scene must not claim retained Text color animation before a color track exists",
+);
+assert.match(
+  retainedAnimate,
+  /position, rotation, opacity, and uniform scale animations are supported/,
+  "contract should track the retained Text animation capability boundary",
+);
+assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
+assert.match(browserSmoke, /expectedObjectCount: 110/);
+assert.match(browserSmoke, /seekTime: 2\.8/);
+
+console.log("✓ stress runtime capability and browser-execution contract");
