@@ -191,6 +191,8 @@ jobs:
 
       - name: Check deterministic playback
         id: deterministic-replay
+        env:
+          NOON_DETERMINISM_MORPH_STRESS_COUNT: "96"
         run: |
           SECONDS=0
           set +e

@@ -1,17 +1,24 @@
 use noon_web::ScenePlayer;
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-#[test]
-fn every_playground_scene_executes_and_compiles() {
+fn generate_playground_scenes(extra_args: &[&str]) -> (PathBuf, String) {
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output_dir =
-        std::env::temp_dir().join(format!("noon-playground-scenes-{}", std::process::id()));
+    let output_dir = std::env::temp_dir().join(format!(
+        "noon-playground-scenes-{}-{}",
+        std::process::id(),
+        extra_args.join("-").replace("--", "")
+    ));
     let _ = fs::remove_dir_all(&output_dir);
     fs::create_dir_all(&output_dir).expect("temporary playground scene directory is writable");
 
     let output = Command::new("python3")
         .arg(repository_root.join("web/python/playground_examples.py"))
         .arg(&output_dir)
+        .args(extra_args)
         .current_dir(&repository_root)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         // Exercise the manifest producer under a hostile inherited encoding.
@@ -28,6 +35,10 @@ fn every_playground_scene_executes_and_compiles() {
     }
 
     let manifest = String::from_utf8(output.stdout).expect("playground manifest is UTF-8");
+    (output_dir, manifest)
+}
+
+fn assert_manifest_compiles(output_dir: &Path, manifest: &str) {
     let registered = manifest
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -57,5 +68,21 @@ fn every_playground_scene_executes_and_compiles() {
         compiled, registered,
         "every registered playground scene was compiled"
     );
-    fs::remove_dir_all(&output_dir).expect("temporary playground scene directory is removable");
+    fs::remove_dir_all(output_dir).expect("temporary playground scene directory is removable");
+}
+
+#[test]
+fn every_playground_scene_executes_and_compiles() {
+    let (output_dir, manifest) = generate_playground_scenes(&[]);
+    assert_manifest_compiles(&output_dir, &manifest);
+}
+
+#[test]
+fn compact_morph_stress_scene_executes_and_compiles() {
+    let (output_dir, manifest) = generate_playground_scenes(&["--morph-stress-count", "96"]);
+    assert!(
+        manifest.contains("Morph stress · 1,000"),
+        "compact generation keeps the canonical gallery corpus"
+    );
+    assert_manifest_compiles(&output_dir, &manifest);
 }
