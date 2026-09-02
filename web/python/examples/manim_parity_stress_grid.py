@@ -1,7 +1,7 @@
 from noon import *
 
 
-class DynamicLoadStress(Scene):
+class MixedObjectParityStress(Scene):
     def construct(self):
         rows = 20
         cols = 30
@@ -122,7 +122,7 @@ class DynamicLoadStress(Scene):
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_a)
             ],
-            run_time=0.65,
+            run_time=0.55,
         )
 
         for wave in range(6):
@@ -144,7 +144,7 @@ class DynamicLoadStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_color(color)
                 )
-            self.play(*wave_motion, run_time=0.12)
+            self.play(*wave_motion, run_time=0.08)
 
         label_specs = []
         for index in range(len(labels)):
@@ -167,14 +167,14 @@ class DynamicLoadStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_opacity(opacity)
                 )
-            self.play(*text_motion, run_time=0.08)
+            self.play(*text_motion, run_time=0.06)
 
         self.play(
             *[
                 Transform(shape, target)
                 for shape, target in zip(shapes, targets_b)
             ],
-            run_time=0.65,
+            run_time=0.55,
         )
 
         turbulence = []
@@ -192,7 +192,7 @@ class DynamicLoadStress(Scene):
                 .shift(dx * RIGHT + dy * UP)
                 .set_color(color)
             )
-        self.play(*turbulence, run_time=0.55)
+        self.play(*turbulence, run_time=0.45)
 
         for wave in range(4):
             text_motion = []
@@ -206,7 +206,7 @@ class DynamicLoadStress(Scene):
                     .shift(-dx * RIGHT - dy * UP)
                     .set_opacity(1.0)
                 )
-            self.play(*text_motion, run_time=0.08)
+            self.play(*text_motion, run_time=0.06)
 
         leaving = shapes[::3]
         pulses = [
@@ -223,23 +223,23 @@ class DynamicLoadStress(Scene):
         self.play(
             FadeOut(subtitle),
             *[FadeOut(label) for label in blinking_labels],
-            run_time=0.15,
+            run_time=0.10,
         )
         self.play(
             *[FadeOut(shape, scale=0.25) for shape in leaving],
             *[FadeIn(pulse, scale=0.15) for pulse in pulses],
-            run_time=0.50,
+            run_time=0.40,
         )
 
         self.play(
             FadeIn(subtitle),
             *[FadeIn(label) for label in blinking_labels],
-            run_time=0.15,
+            run_time=0.10,
         )
         self.play(
             *[FadeIn(shape, scale=0.25) for shape in leaving],
             *[FadeOut(pulse, scale=2.0) for pulse in pulses],
-            run_time=0.55,
+            run_time=0.45,
         )
 
         for wave in range(6):
@@ -261,4 +261,4 @@ class DynamicLoadStress(Scene):
                     .shift(dx * RIGHT + dy * UP)
                     .set_color(color)
                 )
-            self.play(*wave_motion, run_time=0.10)
+            self.play(*wave_motion, run_time=0.09)
