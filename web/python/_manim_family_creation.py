@@ -152,6 +152,56 @@ def _family_candidate(animation: object):
     return target, family, leaves, synthetic
 
 
+def _value_contains_retained_text(value: object) -> bool:
+    if isinstance(value, _typst._RetainedTextMobject):
+        return True
+    if isinstance(value, _compat.Group):
+        return any(
+            isinstance(member, _typst._RetainedTextMobject)
+            for member in _compat._leaf_mobjects(value)
+        )
+    return False
+
+
+def _ordinary_requires_retained_scheduler(animation: object) -> bool:
+    """Keep retained Text property-track composition on its existing scheduler."""
+
+    values = (
+        _animate._builder_source(animation),
+        getattr(animation, "source", None),
+        getattr(animation, "target", None),
+    )
+    return any(_value_contains_retained_text(value) for value in values if value is not None)
+
+
+def _ordinary_scene_leaves(animation: object) -> list[_base.Mobject]:
+    """Return source-level scene leaves an ordinary animation may bind or mutate."""
+
+    roots: list[object] = []
+    builder_source = _animate._builder_source(animation)
+    if builder_source is not None:
+        roots.append(builder_source)
+    else:
+        source = getattr(animation, "source", None)
+        if source is not None:
+            roots.append(source)
+    if isinstance(animation, (_animate.Create, _animate.Uncreate, _animate.FadeIn, _animate.FadeOut)):
+        roots.append(animation.target)
+    elif isinstance(animation, (_animate.ReplacementTransform, _animate.TransformFromCopy)):
+        roots.append(animation.target)
+
+    result: list[_base.Mobject] = []
+    seen: set[int] = set()
+    for root in roots:
+        if not isinstance(root, (_base.Mobject, _compat.Group)):
+            continue
+        for member in _compat._leaf_mobjects(root):
+            if isinstance(member, _base.Mobject) and id(member) not in seen:
+                seen.add(id(member))
+                result.append(member)
+    return result
+
+
 def _geometry_lifecycle(
     scene: _compat.Scene,
     member: _base.Mobject,
@@ -492,11 +542,6 @@ def _family_scene_play(
             lag_ratio=lag_ratio,
             **kwargs,
         )
-    if family_count != len(animations):
-        raise NotImplementedError(
-            "canonical retained family animations cannot currently be mixed with "
-            "ordinary animations in the same Scene.play"
-        )
     if duration is not None and run_time is not None:
         raise ValueError("use either duration or run_time, not both")
     if easing is not None and rate_func is not None:
@@ -505,9 +550,22 @@ def _family_scene_play(
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
 
-    family_candidates = [candidate for candidate in candidates if candidate is not None]
+    ordinary_animations = [
+        animation
+        for animation, candidate in zip(animations, candidates, strict=True)
+        if candidate is None
+    ]
+    if any(_ordinary_requires_retained_scheduler(animation) for animation in ordinary_animations):
+        raise NotImplementedError(
+            "retained family animations can mix with ordinary geometry animations, but "
+            "retained Text property animations in the same Scene.play still require "
+            "unified retained-track scheduling"
+        )
+
     leaf_owners: dict[int, int] = {}
-    for animation_index, candidate in enumerate(family_candidates):
+    for animation_index, candidate in enumerate(candidates):
+        if candidate is None:
+            continue
         _target, _family, leaves, _synthetic = candidate
         for member in leaves:
             previous = leaf_owners.get(id(member))
@@ -517,6 +575,20 @@ def _family_scene_play(
                     f"animations {previous} and {animation_index} share one target"
                 )
             leaf_owners[id(member)] = animation_index
+
+    for animation_index, (animation, candidate) in enumerate(
+        zip(animations, candidates, strict=True)
+    ):
+        if candidate is not None:
+            continue
+        for member in _ordinary_scene_leaves(animation):
+            family_owner = leaf_owners.get(id(member))
+            if family_owner is not None:
+                raise ValueError(
+                    "concurrent retained family and ordinary animations must target "
+                    "disjoint scene leaves; "
+                    f"animations {family_owner} and {animation_index} share one target"
+                )
 
     play_run_time = run_time if run_time is not None else duration
     if play_run_time is not None:
@@ -546,7 +618,10 @@ def _family_scene_play(
     retained_states: dict[
         int, tuple[_typst._RetainedTextMobject, object, object, object]
     ] = {}
-    for candidate in family_candidates:
+    for animation, candidate in zip(animations, candidates, strict=True):
+        if candidate is None:
+            _animate._record_animation_wrapper_state(animation, geometry_states)
+            continue
         _target, _family, leaves, _synthetic = candidate
         for member in leaves:
             if _native_text(member):
@@ -561,7 +636,18 @@ def _family_scene_play(
 
     try:
         completed: list[tuple[object, object, list[tuple[_base.Mobject, object]], float]] = []
-        for animation, candidate in zip(animations, family_candidates, strict=True):
+        bound_ordinary: list[object] = []
+
+        # Bind in exact source order so canonical object/painter order is independent
+        # of whether one sibling uses family realization or ordinary geometry tracks.
+        for animation, candidate in zip(animations, candidates, strict=True):
+            if candidate is None:
+                _animate._prepare_aligned_animation_binding(
+                    self, animation, start_time=base_start
+                )
+                bound_ordinary.append(animation)
+                continue
+
             target, family, leaves, _synthetic = candidate
             lifecycle_plans = _begin_family_lifecycle(
                 self,
@@ -636,10 +722,29 @@ def _family_scene_play(
                 end_time=end_time,
             )
 
-        play_end = max(end_time for _animation, _target, _plans, end_time in completed)
+        ordinary_end, semantic_targets = _animate._schedule_aligned_bound_animations(
+            self,
+            bound_ordinary,
+            base_start=base_start,
+            play_run_time=play_run_time,
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=play_lag_ratio,
+        )
+        play_end = max(
+            [ordinary_end]
+            + [end_time for _animation, _target, _plans, end_time in completed]
+        )
         self._cursor = max(cursor_before, play_end)
+
+        # This is deliberately the final authoring mutation. No family/runtime work
+        # follows a semantic-handle commit, so a failed sibling cannot leak target
+        # state into a subsequent source edit/rerun.
+        _animate._commit_semantic_targets(semantic_targets)
         return self
     except Exception:
+        # #882's Scene checkpoint also restores the Rust-owned canonical authoring
+        # context, so an edit/rerun never inherits objects or requests from a failed play.
         self._restore_authoring_checkpoint(checkpoint)
         self._cursor = cursor_before
         self._compat_top_level = top_level_before
