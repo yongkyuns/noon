@@ -18,7 +18,7 @@ class MixedObjectParityStress(Scene):
             "72 shapes | morph | rotate | color | text | lifecycle",
             font=font,
             font_size=17,
-            color=GRAY_B,
+            color=GRAY,
         ).shift(2.72 * UP)
 
         shapes = []
