@@ -486,9 +486,12 @@ test("exposes fatal Python worker termination to recovery owners", async () => {
 
   const resultPromise = client.run("result = scene");
   await Promise.resolve();
-  worker.emit("error", { message: "worker crashed" });
+  worker.emit("error", {
+    message: "worker crashed",
+    error: { stack: "Error: worker crashed\n    at initializePyodide (python-worker.js:42:7)" },
+  });
 
-  await assert.rejects(resultPromise, /worker crashed/);
+  await assert.rejects(resultPromise, /initializePyodide \(python-worker\.js:42:7\)/);
   assert.equal(client.terminated, true);
   assert.equal(worker.terminated, true);
   await assert.rejects(client.run("result = retry"), /terminated/);
