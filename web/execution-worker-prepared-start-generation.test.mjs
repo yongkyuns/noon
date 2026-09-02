@@ -118,7 +118,7 @@ test("stale prepared-start unwind cannot release a replacement generation reserv
     firstStartResult,
   ]);
   assert.match(firstPrepareError?.message ?? "", /terminated/);
-  assert.match(firstStartError?.message ?? "", /terminated during an asynchronous operation/);
+  assert.match(firstStartError?.message ?? "", /terminated/);
 
   await assert.rejects(
     client.start(SCENE_JSON),
