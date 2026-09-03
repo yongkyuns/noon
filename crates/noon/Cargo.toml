@@ -12,6 +12,3 @@ noon-text-native = { path = "../noon-text-native" }
 noon-typst = { path = "../noon-typst" }
 swash = "=0.2.10"
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
-
-[dev-dependencies]
-noon-ir = { path = "../noon-ir" }
