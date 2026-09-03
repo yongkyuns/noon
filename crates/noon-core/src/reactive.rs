@@ -28,6 +28,9 @@ pub use lifecycle::*;
 mod semantic_store;
 pub use semantic_store::*;
 
+mod semantic_scene_operations;
+pub use semantic_scene_operations::*;
+
 #[path = "semantic_family.rs"]
 mod semantic_family;
 
