@@ -199,15 +199,29 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
   deleted_legacy_web_surface_found=1
 fi
 
+deleted_manual_profiler_paths=(
+  'web/gpu-profile.html'
+  'web/gpu-profile.js'
+  'web/morph-profile.html'
+  'web/morph-profile.js'
+)
+for path in "${deleted_manual_profiler_paths[@]}"; do
+  if [[ -e "$path" ]]; then
+    printf 'architecture ratchet: deleted legacy manual profiler returned: %s\n' "$path" >&2
+    deleted_legacy_web_surface_found=1
+  fi
+done
+
 if (( deleted_legacy_web_surface_found != 0 )); then
   cat >&2 <<'EOF'
 
-The browser package/smoke boundaries and duplicate playback clock were cleaned by
-#1003, #1005, and follow-up A4 migration. Those completed boundaries must not
-regain the NoonCanvasPlayer/demoSceneJson frontend, and noon-web must keep one
-PlaybackClock definition in crates/noon-web/src/clock.rs. Legacy performance tools
-that still use the old frontend remain separate A4 deletion debt; do not spread
-that debt back into cleaned product or validation paths. See #959/A4 and #961/A6.8.
+The browser package/smoke boundaries, duplicate playback clock, and manual legacy
+profiler pages were cleaned by #1003, #1005, and follow-up A4 migration. Those
+completed boundaries must not regain the NoonCanvasPlayer/demoSceneJson frontend,
+noon-web must keep one PlaybackClock definition in crates/noon-web/src/clock.rs,
+and deleted manual profiler pages must stay absent. The remaining workflow-backed
+performance pages are separate A4 deletion debt; do not spread that debt back into
+cleaned product or validation paths. See #959/A4 and #961/A6.8.
 EOF
 fi
 
