@@ -210,6 +210,13 @@ impl SemanticNode {
         &self.kind
     }
 
+    pub(crate) fn semantic_signal_state_mut(&mut self) -> Option<&mut SemanticSignalState> {
+        match &mut self.kind {
+            SemanticNodeKind::Signal(state) => Some(state),
+            _ => None,
+        }
+    }
+
     pub fn object(&self) -> Option<&ObjectDefinition> {
         match &self.kind {
             SemanticNodeKind::Object(object) => Some(object),
