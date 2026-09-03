@@ -5,9 +5,6 @@ edition = "2021"
 license = "MIT"
 description = "Retained atlas-backed text quad preparation for Noon"
 
-[lib]
-path = "src/root.rs"
-
 [features]
 default = ["native", "ci-noop"]
 native = [
