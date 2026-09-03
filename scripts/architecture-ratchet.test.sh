@@ -6,7 +6,7 @@ RATCHET="$ROOT/scripts/architecture-ratchet.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
+mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/web" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
 cp "$RATCHET" "$TMP/scripts/architecture-ratchet.sh"
 
 cd "$TMP"
@@ -61,7 +61,10 @@ use crate::ScenePlayer;
 EOF
 done
 
-git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src
+# Model the canonical playback clock left after #1005 removed its legacy duplicate.
+printf 'pub struct PlaybackClock;\n' > crates/noon-web/src/clock.rs
+
+git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src web
 git commit -qm "baseline with semantic authority, known A5 debt, and normalized islands"
 BASE="$(git rev-parse HEAD)"
 
@@ -80,7 +83,9 @@ expect_rejected() {
 
 reset_to_base() {
   git reset -q --hard "$BASE"
-  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs
+  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
+  rm -f web/deleted_frontend_regression.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
+  rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
 reset_to_base
@@ -201,6 +206,54 @@ git add src/scene_player_spread_probe.rs
 git commit -qm "unrelated change after ScenePlayer spread"
 if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted ScenePlayer consumer outside migration allowlist" >&2
+  exit 1
+fi
+
+# Prove the deleted #1003 browser frontend cannot return in a pre-existing base.
+# This is a full-tree absence check, not a current-diff keyword check.
+reset_to_base
+cat > web/deleted_frontend_regression.js <<'EOF'
+export class NoonCanvasPlayer {}
+export function demoSceneJson() { return "{}"; }
+EOF
+git add web/deleted_frontend_regression.js
+git commit -qm "model deleted browser frontend returning"
+DELETED_FRONTEND_REGRESSION_BASE="$(git rev-parse HEAD)"
+printf 'pub fn unrelated_after_deleted_frontend() {}\n' > src/deleted_legacy_web_probe.rs
+git add src/deleted_legacy_web_probe.rs
+git commit -qm "unrelated change after deleted frontend regression"
+if bash scripts/architecture-ratchet.sh "$DELETED_FRONTEND_REGRESSION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted deleted NoonCanvasPlayer/demoSceneJson surface" >&2
+  exit 1
+fi
+
+# Prove playback clock ownership remains singular after #1005.
+reset_to_base
+printf 'pub struct PlaybackClock;\n' > crates/noon-web/src/duplicate_clock.rs
+git add crates/noon-web/src/duplicate_clock.rs
+git commit -qm "model duplicate playback clock"
+DUPLICATE_CLOCK_REGRESSION_BASE="$(git rev-parse HEAD)"
+printf 'pub fn unrelated_after_duplicate_clock() {}\n' > src/duplicate_clock_probe.rs
+git add src/duplicate_clock_probe.rs
+git commit -qm "unrelated change after duplicate clock regression"
+if bash scripts/architecture-ratchet.sh "$DUPLICATE_CLOCK_REGRESSION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted duplicate PlaybackClock authority" >&2
+  exit 1
+fi
+
+# Prove the exact deleted legacy clock module path cannot be recreated even if it
+# does not itself declare another PlaybackClock yet.
+reset_to_base
+mkdir -p crates/noon-web/src/legacy
+printf 'pub fn stale_clock_module() {}\n' > crates/noon-web/src/legacy/clock.rs
+git add crates/noon-web/src/legacy/clock.rs
+git commit -qm "model deleted legacy clock path returning"
+LEGACY_CLOCK_REGRESSION_BASE="$(git rev-parse HEAD)"
+printf 'pub fn unrelated_after_legacy_clock() {}\n' > src/legacy_clock_probe.rs
+git add src/legacy_clock_probe.rs
+git commit -qm "unrelated change after legacy clock regression"
+if bash scripts/architecture-ratchet.sh "$LEGACY_CLOCK_REGRESSION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted deleted legacy clock module path" >&2
   exit 1
 fi
 
