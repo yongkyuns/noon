@@ -2,16 +2,16 @@ use std::collections::HashSet;
 
 use super::{
     SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSceneOperationError,
-    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
-    SemanticStore,
+    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
+    SemanticSignalValueKind, SemanticStore,
 };
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
-/// Signal values and object properties share the same transaction so frontends,
-/// editors, and host integrations cannot invent subsystem-specific patch paths.
-/// Dependency-expression rewiring remains authored declaration topology rather
-/// than being conflated with a value/property update.
+/// Signal values, object properties, and authored reactive subscriptions share
+/// the same transaction so frontends, editors, and host integrations cannot
+/// invent subsystem-specific patch paths. Dependency-expression rewiring remains
+/// authored declaration topology rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
     SetSignal {
@@ -23,13 +23,18 @@ pub enum SemanticMutation {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
+    ChangeSubscription {
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+        signal: Option<SemanticNodeId>,
+    },
 }
 
 impl SemanticMutation {
     pub const fn target(&self) -> SemanticNodeId {
         match self {
             Self::SetSignal { signal, .. } => *signal,
-            Self::SetProperty { object, .. } => *object,
+            Self::SetProperty { object, .. } | Self::ChangeSubscription { object, .. } => *object,
         }
     }
 
@@ -42,6 +47,12 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             },
+            Self::ChangeSubscription {
+                object, property, ..
+            } => SemanticMutationKey::Subscription {
+                object: *object,
+                property: *property,
+            },
         }
     }
 }
@@ -50,6 +61,10 @@ impl SemanticMutation {
 enum SemanticMutationKey {
     Signal(SemanticNodeId),
     ObjectProperty {
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+    },
+    Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
@@ -66,6 +81,10 @@ pub enum SemanticMutationImpact {
         signal: SemanticNodeId,
     },
     ObjectProperty {
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+    },
+    Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
@@ -114,6 +133,25 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Change the authored signal driver for one object property.
+    ///
+    /// `Some(signal)` binds or rebinds the property and `None` removes its
+    /// authored driver. Rebinding is one semantic mutation rather than a visible
+    /// remove/add pair, so the existing declaration position is preserved.
+    pub fn change_subscription(
+        &mut self,
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+        signal: Option<SemanticNodeId>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ChangeSubscription {
+            object,
+            property,
+            signal,
+        });
+        self
+    }
+
     pub fn mutations(&self) -> &[SemanticMutation] {
         &self.mutations
     }
@@ -125,9 +163,9 @@ impl SemanticMutationTransaction {
     /// Preflight the complete transaction, then commit every changed mutation.
     ///
     /// No semantic slot is written until all mutations have passed generation,
-    /// target-kind, value-kind, finite-value, and duplicate-mutation validation.
-    /// Once preflight succeeds, commit cannot observe external scene changes
-    /// because the transaction owns `&mut SemanticStore` for the duration.
+    /// target-kind, value-kind, finite-value, subscription, and duplicate-mutation
+    /// validation. Once preflight succeeds, commit cannot observe external scene
+    /// changes because the transaction owns `&mut SemanticStore` for the duration.
     pub fn apply(
         self,
         store: &mut SemanticStore,
@@ -161,6 +199,15 @@ impl SemanticMutationTransaction {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectProperty { object, property });
                 }
+                SemanticMutation::ChangeSubscription {
+                    object,
+                    property,
+                    signal,
+                } => {
+                    set_object_subscription(store, object, property, signal);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::Subscription { object, property });
+                }
             }
         }
         store.set_last_mutation_writes(written_slots.len());
@@ -184,6 +231,13 @@ impl SemanticMutationTransaction {
                     }
                     SemanticMutationKey::ObjectProperty { object, property } => {
                         SemanticMutationTransactionError::DuplicateProperty {
+                            index,
+                            object,
+                            property,
+                        }
+                    }
+                    SemanticMutationKey::Subscription { object, property } => {
+                        SemanticMutationTransactionError::DuplicateSubscription {
                             index,
                             object,
                             property,
@@ -251,6 +305,48 @@ impl SemanticMutationTransaction {
                         });
                     }
                     changed.push(object_property_value(state, *property) != *value);
+                }
+                SemanticMutation::ChangeSubscription {
+                    object,
+                    property,
+                    signal,
+                } => {
+                    let state = store
+                        .semantic_object_state_checked(*object)
+                        .map_err(|error| SemanticMutationTransactionError::Object {
+                            index,
+                            error,
+                        })?;
+                    let existing = state
+                        .signal_bindings()
+                        .iter()
+                        .find(|binding| binding.property() == *property)
+                        .map(|binding| binding.signal());
+
+                    if let Some(signal) = signal {
+                        let actual = store.semantic_signal_value_kind(*signal).map_err(|error| {
+                            SemanticMutationTransactionError::Signal { index, error }
+                        })?;
+                        let expected = property.value_kind();
+                        if actual != expected {
+                            return Err(
+                                SemanticMutationTransactionError::SubscriptionTypeMismatch {
+                                    index,
+                                    object: *object,
+                                    property: *property,
+                                    signal: *signal,
+                                    expected,
+                                    actual,
+                                },
+                            );
+                        }
+                        changed.push(existing != Some(*signal));
+                    } else {
+                        // Unbinding is intentionally keyed only by object/property.
+                        // It must be able to remove a generation-safe stale source
+                        // declaration left by the current low-level RemoveNode seam.
+                        changed.push(existing.is_some());
+                    }
                 }
             }
         }
@@ -325,6 +421,35 @@ fn set_object_property(
     }
 }
 
+fn set_object_subscription(
+    store: &mut SemanticStore,
+    object: SemanticNodeId,
+    property: SemanticObjectProperty,
+    signal: Option<SemanticNodeId>,
+) {
+    let bindings = store
+        .node_mut(object)
+        .and_then(|node| node.semantic_object_state_mut())
+        .expect("preflighted semantic object must remain valid while transaction owns the store")
+        .signal_bindings_mut();
+    let position = bindings
+        .iter()
+        .position(|binding| binding.property() == property);
+
+    match (position, signal) {
+        (Some(position), Some(signal)) => {
+            bindings[position] = SemanticSignalBinding::new(signal, property);
+        }
+        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (Some(position), None) => {
+            bindings.remove(position);
+        }
+        (None, None) => {
+            unreachable!("unchanged missing subscription is filtered during transaction preflight")
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemanticMutationTransactionResult {
     impacts: Vec<SemanticMutationImpact>,
@@ -343,6 +468,11 @@ pub enum SemanticMutationTransactionError {
         target: SemanticNodeId,
     },
     DuplicateProperty {
+        index: usize,
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+    },
+    DuplicateSubscription {
         index: usize,
         object: SemanticNodeId,
         property: SemanticObjectProperty,
@@ -377,6 +507,14 @@ pub enum SemanticMutationTransactionError {
         expected: SemanticSignalValueKind,
         actual: SemanticSignalValueKind,
     },
+    SubscriptionTypeMismatch {
+        index: usize,
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+        signal: SemanticNodeId,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
 }
 
 impl std::fmt::Display for SemanticMutationTransactionError {
@@ -395,6 +533,17 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats property {:?} on object {}:{}",
+                property,
+                object.slot(),
+                object.generation()
+            ),
+            Self::DuplicateSubscription {
+                index,
+                object,
+                property,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats subscription for property {:?} on object {}:{}",
                 property,
                 object.slot(),
                 object.generation()
@@ -442,6 +591,22 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot set property {:?} on object {}:{} of kind {expected} to {actual}",
+                property,
+                object.slot(),
+                object.generation()
+            ),
+            Self::SubscriptionTypeMismatch {
+                index,
+                object,
+                property,
+                signal,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot bind {actual} signal {}:{} to property {:?} on object {}:{} requiring {expected}",
+                signal.slot(),
+                signal.generation(),
                 property,
                 object.slot(),
                 object.generation()
@@ -894,3 +1059,6 @@ mod tests {
         assert_eq!(result.impacts().len(), 2);
     }
 }
+
+#[cfg(test)]
+mod subscription_tests;
