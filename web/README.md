@@ -67,10 +67,6 @@ The worker loads Pyodide `314.0.5` from the official jsDelivr distribution, so P
 
 The worker protocol carries Pyodide's already-encoded result JSON across the thread boundary and parses it once on the main thread. This avoids structured-cloning a large JavaScript object graph. Run `node web/scene-pipeline-perf.mjs` to benchmark transfer, parsing, validation, identity stabilization, diffing, and serialization independently at 1k/10k/100k objects.
 
-## Profiling
-
-For real-browser renderer profiling, open <http://localhost:8080/gpu-profile.html?objects=100000&warmup=30&frames=180>. The page reports synchronous CPU submission time, WebGPU render-pass timestamps when supported, and `requestAnimationFrame` cadence separately. Its static fixed-resolution circle grid measures instance/draw scaling rather than worst-case overdraw; full methodology and the dated baseline are in `docs/performance.md`.
-
 ## Vector paths
 
 Generic paths are semantic command streams and remain distinct from analytic circle/rectangle/line fast paths. The Rust and Python APIs support move, line, quadratic, cubic, and close commands:
