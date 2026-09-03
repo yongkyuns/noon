@@ -41,6 +41,9 @@ pub use semantic_signals::*;
 mod semantic_bindings;
 pub use semantic_bindings::*;
 
+mod semantic_animations;
+pub use semantic_animations::*;
+
 #[path = "semantic_family.rs"]
 mod semantic_family;
 
