@@ -12,6 +12,7 @@ const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
   ["architecture-ratchets.yml", "architecture"],
+  ["layer-dependency-ratchet.yml", "architecture"],
   ["compiler-cache-seed.yml", "cache-seed"],
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
