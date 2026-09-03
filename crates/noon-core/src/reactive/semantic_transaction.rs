@@ -1,16 +1,20 @@
 use std::collections::HashSet;
 
 use super::{
-    SemanticNodeId, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
+    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
+    SemanticObjectState, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
+    SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
+    SemanticStoreError,
 };
+
+mod family_edges;
+use family_edges::FamilyEdgePreflight;
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
-/// Signal values, object properties, authored content, and reactive subscriptions
-/// share the same transaction so frontends, editors, and host integrations cannot
-/// invent subsystem-specific patch paths. Dependency-expression rewiring remains
+/// Signal values, object properties, authored content, family membership, and reactive
+/// subscriptions share the same transaction so frontends, editors, and host integrations
+/// cannot invent subsystem-specific patch paths. Dependency-expression rewiring remains
 /// authored declaration topology rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
@@ -32,6 +36,14 @@ pub enum SemanticMutation {
         property: SemanticObjectProperty,
         signal: Option<SemanticNodeId>,
     },
+    AddMember {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
+    RemoveMember {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
 }
 
 impl SemanticMutation {
@@ -41,6 +53,7 @@ impl SemanticMutation {
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ChangeSubscription { object, .. } => *object,
+            Self::AddMember { family, .. } | Self::RemoveMember { family, .. } => *family,
         }
     }
 
@@ -60,6 +73,12 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             },
+            Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
+                SemanticMutationKey::FamilyEdge {
+                    family: *family,
+                    member: *member,
+                }
+            }
         }
     }
 }
@@ -75,6 +94,10 @@ enum SemanticMutationKey {
     Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
+    },
+    FamilyEdge {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
     },
 }
 
@@ -98,6 +121,14 @@ pub enum SemanticMutationImpact {
     Subscription {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
+    },
+    FamilyMemberAdded {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
+    FamilyMemberRemoved {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
     },
 }
 
@@ -179,6 +210,20 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Add one direct ordered family edge through the authoritative transaction.
+    pub fn add_member(&mut self, family: SemanticNodeId, member: SemanticNodeId) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::AddMember { family, member });
+        self
+    }
+
+    /// Remove one direct ordered family edge through the authoritative transaction.
+    pub fn remove_member(&mut self, family: SemanticNodeId, member: SemanticNodeId) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::RemoveMember { family, member });
+        self
+    }
+
     pub fn mutations(&self) -> &[SemanticMutation] {
         &self.mutations
     }
@@ -190,8 +235,8 @@ impl SemanticMutationTransaction {
     /// Preflight the complete transaction, then commit every changed mutation.
     ///
     /// No semantic slot is written until all mutations have passed generation,
-    /// target-kind, value-kind, finite-value, content, subscription, and
-    /// duplicate-mutation validation. Once preflight succeeds, commit cannot
+    /// target-kind, value-kind, finite-value, content, subscription, family-edge,
+    /// and duplicate-mutation validation. Once preflight succeeds, commit cannot
     /// observe external scene changes because the transaction owns
     /// `&mut SemanticStore` for the duration.
     pub fn apply(
@@ -241,6 +286,23 @@ impl SemanticMutationTransaction {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::Subscription { object, property });
                 }
+                SemanticMutation::AddMember { family, member } => {
+                    store.add_member(family, member).expect(
+                        "preflighted family add must remain valid while transaction owns the semantic store",
+                    );
+                    written_slots.insert(family);
+                    written_slots.insert(member);
+                    impacts.push(SemanticMutationImpact::FamilyMemberAdded { family, member });
+                }
+                SemanticMutation::RemoveMember { family, member } => {
+                    let removed = store.remove_member(family, member).expect(
+                        "preflighted family removal must remain valid while transaction owns the semantic store",
+                    );
+                    debug_assert!(removed);
+                    written_slots.insert(family);
+                    written_slots.insert(member);
+                    impacts.push(SemanticMutationImpact::FamilyMemberRemoved { family, member });
+                }
             }
         }
         store.set_last_mutation_writes(written_slots.len());
@@ -254,6 +316,7 @@ impl SemanticMutationTransaction {
     ) -> Result<Vec<bool>, SemanticMutationTransactionError> {
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut changed = Vec::with_capacity(self.mutations.len());
+        let mut family_edges = FamilyEdgePreflight::default();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
             let key = mutation.key();
@@ -277,6 +340,13 @@ impl SemanticMutationTransaction {
                             index,
                             object,
                             property,
+                        }
+                    }
+                    SemanticMutationKey::FamilyEdge { family, member } => {
+                        SemanticMutationTransactionError::DuplicateFamilyEdge {
+                            index,
+                            family,
+                            member,
                         }
                     }
                 });
@@ -393,6 +463,16 @@ impl SemanticMutationTransaction {
                         // declaration left by the current low-level RemoveNode seam.
                         changed.push(existing.is_some());
                     }
+                }
+                SemanticMutation::AddMember { family, member } => {
+                    changed.push(family_edges.add(store, *family, *member).map_err(|error| {
+                        SemanticMutationTransactionError::Family { index, error }
+                    })?);
+                }
+                SemanticMutation::RemoveMember { family, member } => {
+                    changed.push(family_edges.remove(store, *family, *member).map_err(
+                        |error| SemanticMutationTransactionError::Family { index, error },
+                    )?);
                 }
             }
         }
@@ -539,6 +619,11 @@ pub enum SemanticMutationTransactionError {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    DuplicateFamilyEdge {
+        index: usize,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
     Signal {
         index: usize,
         error: SemanticSignalError,
@@ -554,6 +639,10 @@ pub enum SemanticMutationTransactionError {
         actual: SemanticSignalValueKind,
     },
     Object {
+        index: usize,
+        error: SemanticSceneOperationError,
+    },
+    Family {
         index: usize,
         error: SemanticSceneOperationError,
     },
@@ -616,6 +705,18 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::DuplicateFamilyEdge {
+                index,
+                family,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats family edge {}:{} -> {}:{}",
+                family.slot(),
+                family.generation(),
+                member.slot(),
+                member.generation()
+            ),
             Self::Signal { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
@@ -637,6 +738,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 signal.generation()
             ),
             Self::Object { index, error } => {
+                write!(formatter, "semantic transaction mutation {index}: {error}")
+            }
+            Self::Family { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
             Self::NonFinitePropertyValue {
@@ -1133,3 +1237,6 @@ mod content_tests;
 
 #[cfg(test)]
 mod subscription_tests;
+
+#[cfg(test)]
+mod family_edge_tests;
