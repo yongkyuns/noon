@@ -115,7 +115,9 @@ impl std::fmt::Display for SemanticSignalError {
                 id.slot(),
                 id.generation()
             ),
-            Self::NonFiniteValue => formatter.write_str("semantic signal contains a non-finite value"),
+            Self::NonFiniteValue => {
+                formatter.write_str("semantic signal contains a non-finite value")
+            }
         }
     }
 }
