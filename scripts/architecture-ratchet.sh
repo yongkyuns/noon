@@ -57,7 +57,7 @@ fi
 
 module_indirection_found=0
 path_matches="$(git grep -nE '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*=' -- '*.rs' || true)"
-include_matches="$(git grep -nE '(^|[^[:alnum:]_])include![[:space:]]*\(' -- '*.rs' || true)"
+include_matches="$(git grep -nE '(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)' -- '*.rs' || true)"
 
 if [[ -n "$path_matches" ]]; then
   printf 'architecture ratchet: hidden Rust module ownership via #[path] is forbidden:\n%s\n' "$path_matches" >&2
