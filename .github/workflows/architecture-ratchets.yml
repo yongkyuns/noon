@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   migration-growth:
-    name: Migration architecture does not grow
+    name: Architecture constraints do not regress
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,9 +25,12 @@ jobs:
           fetch-depth: 0
 
       - name: Validate guardrail scripts
-        run: bash -n scripts/check.sh scripts/architecture-ratchet.sh
+        run: bash -n scripts/check.sh scripts/architecture-ratchet.sh scripts/architecture-ratchet.test.sh
 
-      - name: Reject new migration-era architecture references
+      - name: Exercise architecture guardrails
+        run: bash scripts/architecture-ratchet.test.sh
+
+      - name: Reject architecture regressions
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
