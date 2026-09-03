@@ -38,6 +38,9 @@ mod semantic_declarations;
 mod semantic_signals;
 pub use semantic_signals::*;
 
+mod semantic_bindings;
+pub use semantic_bindings::*;
+
 #[path = "semantic_family.rs"]
 mod semantic_family;
 

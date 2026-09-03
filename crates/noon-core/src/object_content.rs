@@ -1,5 +1,8 @@
 use crate::{GeometryRef, ObjectDefinition, ObjectId, Style, TextResourceHandle, Transform2D};
-use crate::{SemanticPresentation, SemanticStyle, SemanticTransform2_5D, StoredGeometry};
+use crate::{
+    SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
+    SemanticTransform2_5D, StoredGeometry,
+};
 
 /// Target authored content carried by one semantic object.
 ///
@@ -42,12 +45,68 @@ impl From<TextResourceHandle> for SemanticObjectContent {
     }
 }
 
+/// Stable authored object properties that may be driven by native-reactive signals.
+///
+/// These names describe semantic state, not execution slots or legacy timeline
+/// properties. `z_index` is intentionally absent until integer signal/conversion
+/// semantics are defined; content/paint replacement also remains a separate
+/// mutation class rather than being forced into the scalar/vector signal model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticObjectProperty {
+    Translation,
+    Scale,
+    RotationZ,
+    FillOpacity,
+    StrokeOpacity,
+    StrokeWidth,
+    ObjectOpacity,
+}
+
+impl SemanticObjectProperty {
+    pub const fn value_kind(self) -> SemanticSignalValueKind {
+        match self {
+            Self::Translation | Self::Scale => SemanticSignalValueKind::Vec3,
+            Self::RotationZ
+            | Self::FillOpacity
+            | Self::StrokeOpacity
+            | Self::StrokeWidth
+            | Self::ObjectOpacity => SemanticSignalValueKind::Scalar,
+        }
+    }
+}
+
+/// One authored native-reactive binding from a semantic signal to an object property.
+///
+/// The target object owns this declaration. Signal identity uses the same
+/// scene-global generational [`SemanticNodeId`] as every semantic entity; lowering
+/// may derive execution slots later but those are not authored identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticSignalBinding {
+    signal: SemanticNodeId,
+    property: SemanticObjectProperty,
+}
+
+impl SemanticSignalBinding {
+    pub(crate) const fn new(signal: SemanticNodeId, property: SemanticObjectProperty) -> Self {
+        Self { signal, property }
+    }
+
+    pub const fn signal(self) -> SemanticNodeId {
+        self.signal
+    }
+
+    pub const fn property(self) -> SemanticObjectProperty {
+        self.property
+    }
+}
+
 /// One target authored presentation payload for a semantic object.
 ///
 /// Identity and family/lifecycle relationships belong to `SemanticNode`; immutable
 /// heavy content belongs to the existing resource arenas. This value owns the
 /// mutable authored content reference, high-precision transform, semantic style,
-/// and painter metadata that frontends must share.
+/// painter metadata, and typed native-reactive property bindings that frontends
+/// must share.
 ///
 /// Bounds are intentionally absent. Layout-accurate and conservative bounds are
 /// derived from content + transform + style (and may be cached as disposable
@@ -58,6 +117,7 @@ pub struct SemanticObjectState {
     pub transform: SemanticTransform2_5D,
     pub style: SemanticStyle,
     presentation: SemanticPresentation,
+    signal_bindings: Vec<SemanticSignalBinding>,
 }
 
 impl SemanticObjectState {
@@ -67,6 +127,7 @@ impl SemanticObjectState {
             transform: SemanticTransform2_5D::default(),
             style: SemanticStyle::default(),
             presentation: SemanticPresentation::default(),
+            signal_bindings: Vec::new(),
         }
     }
 
@@ -84,6 +145,14 @@ impl SemanticObjectState {
 
     pub const fn insertion_order(&self) -> u64 {
         self.presentation.insertion_order
+    }
+
+    pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {
+        &self.signal_bindings
+    }
+
+    pub(crate) fn signal_bindings_mut(&mut self) -> &mut Vec<SemanticSignalBinding> {
+        &mut self.signal_bindings
     }
 
     /// Assign the stable painter-order tie break at semantic-store insertion.
@@ -195,6 +264,26 @@ mod tests {
         assert_eq!(state.style.object_opacity, 0.4);
         assert_eq!(state.z_index(), 7);
         assert_eq!(state.insertion_order(), 0);
+        assert!(state.signal_bindings().is_empty());
+    }
+
+    #[test]
+    fn semantic_binding_properties_have_explicit_signal_value_kinds() {
+        for property in [
+            SemanticObjectProperty::Translation,
+            SemanticObjectProperty::Scale,
+        ] {
+            assert_eq!(property.value_kind(), SemanticSignalValueKind::Vec3);
+        }
+        for property in [
+            SemanticObjectProperty::RotationZ,
+            SemanticObjectProperty::FillOpacity,
+            SemanticObjectProperty::StrokeOpacity,
+            SemanticObjectProperty::StrokeWidth,
+            SemanticObjectProperty::ObjectOpacity,
+        ] {
+            assert_eq!(property.value_kind(), SemanticSignalValueKind::Scalar);
+        }
     }
 
     #[test]
