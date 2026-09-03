@@ -719,10 +719,16 @@ mod tests {
         assert_eq!(store.node(b).unwrap().id(), b);
 
         assert!(!store.attach_to_scene(b).unwrap());
-        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
         let detached = store.insert_authoring_object();
         assert!(!store.detach_from_scene(detached).unwrap());
-        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
     }
 
     #[test]
@@ -900,7 +906,9 @@ mod tests {
 
         store.remove_node(first).unwrap();
         assert_eq!(store.node_for_source(&source), None);
-        store.set_source_identity(second, Some(source.clone())).unwrap();
+        store
+            .set_source_identity(second, Some(source.clone()))
+            .unwrap();
         assert_eq!(store.node_for_source(&source), Some(second));
     }
 
