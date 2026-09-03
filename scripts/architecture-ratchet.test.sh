@@ -6,7 +6,7 @@ RATCHET="$ROOT/scripts/architecture-ratchet.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src"
+mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
 cp "$RATCHET" "$TMP/scripts/architecture-ratchet.sh"
 
 cd "$TMP"
@@ -47,8 +47,12 @@ mod runtime;
 EOF
 printf 'pub fn runtime() {}\n' > crates/noon-runtime/src/runtime.rs
 
-git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src
-git commit -qm "baseline with semantic authority, known A5 debt, and normalized runtime"
+# These web tools were detached from the migration player by #991 and #994.
+printf 'pub fn deterministic_replay() {}\n' > crates/noon-web/src/determinism.rs
+printf 'pub fn semantic_snapshot() {}\n' > crates/noon-web/src/semantic_snapshot.rs
+
+git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src
+git commit -qm "baseline with semantic authority, known A5 debt, and normalized islands"
 BASE="$(git rev-parse HEAD)"
 
 printf 'pub fn visible_module_tree() {}\n' > src/visible.rs
@@ -66,7 +70,7 @@ expect_rejected() {
 
 reset_to_base() {
   git reset -q --hard "$BASE"
-  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs
+  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs
 }
 
 reset_to_base
@@ -146,6 +150,29 @@ git add src/runtime_structural_probe.rs
 git commit -qm "unrelated change after runtime regression"
 if bash scripts/architecture-ratchet.sh "$RUNTIME_REGRESSION_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted pre-existing noon-runtime module indirection" >&2
+  exit 1
+fi
+
+# Prove the completed A4.6 tool cutovers are structural, not just growth-ratcheted.
+# Put migration-player dependencies into the comparison base itself, then make an
+# unrelated later commit. The full-tree guard must still reject both tool paths.
+reset_to_base
+cat > crates/noon-web/src/determinism.rs <<'EOF'
+use crate::ScenePlayer;
+pub fn deterministic_replay() {}
+EOF
+cat > crates/noon-web/src/semantic_snapshot.rs <<'EOF'
+use crate::PlayerError;
+pub fn semantic_snapshot() {}
+EOF
+git add crates/noon-web/src
+git commit -qm "model regressed web tool player baseline"
+WEB_TOOL_REGRESSION_BASE="$(git rev-parse HEAD)"
+printf 'pub fn unrelated_after_web_tool_regression() {}\n' > src/web_tool_structural_probe.rs
+git add src/web_tool_structural_probe.rs
+git commit -qm "unrelated change after web tool regression"
+if bash scripts/architecture-ratchet.sh "$WEB_TOOL_REGRESSION_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted pre-existing web tool migration-player dependency" >&2
   exit 1
 fi
 
