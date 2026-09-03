@@ -185,10 +185,7 @@ impl SemanticStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        GeometryRef, ObjectDefinition, ObjectId, SemanticMutationStats, SemanticNodeResidency,
-        SourceIdentity, StoredGeometry,
-    };
+    use crate::{SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry};
 
     fn state(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -356,29 +353,23 @@ mod tests {
     }
 
     #[test]
-    fn shared_family_membership_rejects_migration_only_nodes() {
+    fn shared_family_membership_rejects_state_less_authoring_nodes() {
         let mut store = SemanticStore::new();
         let family = store.insert_family();
         let identity_only = store.insert_authoring_object();
-        let legacy = store.insert_object(ObjectDefinition::new(
-            ObjectId::new(7),
-            GeometryRef::circle(1.0),
-        ));
 
-        for member in [identity_only, legacy] {
-            assert_eq!(
-                store.add_semantic_family_member(family, member),
-                Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
-                    member
-                ))
-            );
-            assert_eq!(
-                store.remove_semantic_family_member(family, member),
-                Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
-                    member
-                ))
-            );
-        }
+        assert_eq!(
+            store.add_semantic_family_member(family, identity_only),
+            Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
+                identity_only
+            ))
+        );
+        assert_eq!(
+            store.remove_semantic_family_member(family, identity_only),
+            Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
+                identity_only
+            ))
+        );
         assert!(store
             .semantic_family_members_checked(family)
             .unwrap()
