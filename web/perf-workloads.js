@@ -20,6 +20,45 @@ export function buildAnalyticScene({ count, layout = "fit", aspect = 16 / 9 } = 
   return buildOverdraw(count);
 }
 
+export function installIncrementalPositionDriver(document, durationSeconds, distance = 8) {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new RangeError("incremental driver duration must be positive and finite");
+  }
+  if (!Number.isFinite(distance) || distance === 0) {
+    throw new RangeError("incremental driver distance must be finite and non-zero");
+  }
+  if (!Array.isArray(document?.objects) || document.objects.length === 0) {
+    throw new Error("performance workload must contain at least one object");
+  }
+  if (!Array.isArray(document.tracks) || document.tracks.length !== 0) {
+    throw new Error("analytic performance workload must start without animation tracks");
+  }
+
+  const object = document.objects[0];
+  const from = object.transform?.translation;
+  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) {
+    throw new Error("performance driver object must have a finite translation");
+  }
+  const to = { x: from.x + distance, y: from.y };
+  document.tracks.push({
+    id: 0,
+    object: object.id,
+    property: "position",
+    values: {
+      vec2: {
+        from: { x: from.x, y: from.y },
+        to,
+      },
+    },
+    timing: {
+      start_time: 0,
+      duration: durationSeconds,
+      easing: "linear",
+    },
+  });
+  return { object: object.id, from: { x: from.x, y: from.y }, to, durationSeconds };
+}
+
 function buildFitGrid(count, aspect) {
   const columns = Math.ceil(Math.sqrt(count * aspect));
   const rows = Math.ceil(count / columns);
