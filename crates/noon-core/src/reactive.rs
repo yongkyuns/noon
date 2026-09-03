@@ -34,7 +34,6 @@ pub use semantic_scene_operations::*;
 mod semantic_scene_restructure;
 
 mod semantic_declarations;
-pub use semantic_declarations::*;
 
 #[path = "semantic_family.rs"]
 mod semantic_family;
