@@ -21,27 +21,30 @@ EOF
   found=1
 fi
 
-mapfile -t rust_sources < <(git ls-files "$source_root" | grep -E '\.rs$' || true)
-if (( ${#rust_sources[@]} == 0 )); then
-  echo "renderer host-boundary ratchet: no tracked Rust sources found under $source_root" >&2
-  exit 2
-fi
-
 # wgpu device/queue/texture-view/encoder types are renderer machinery. Surface
 # creation/configuration/acquisition/presentation is platform-host lifecycle and must
 # remain outside this crate.
 forbidden_source_api='winit::|web_sys::|js_sys::|wasm_bindgen::|wgpu::Surface([^A-Za-z0-9_]|$)|wgpu::SurfaceConfiguration([^A-Za-z0-9_]|$)|wgpu::SurfaceTexture([^A-Za-z0-9_]|$)|create_surface[[:space:]]*\(|get_current_texture[[:space:]]*\('
 
-if grep -En "$forbidden_source_api" "${rust_sources[@]}"; then
-  cat >&2 <<'EOF'
-renderer host-boundary ratchet: noon-render-wgpu contains platform surface/window/browser lifecycle code.
-Keep surface creation/configuration/frame acquisition/presentation in the native or web host and pass
-renderer-owned GPU inputs through typed Rust APIs instead.
-EOF
-  found=1
+source_count=0
+while IFS= read -r source; do
+  source_count=$((source_count + 1))
+  if grep -En "$forbidden_source_api" "$source"; then
+    found=1
+  fi
+done < <(git ls-files "$source_root" | grep -E '\.rs$' || true)
+
+if (( source_count == 0 )); then
+  echo "renderer host-boundary ratchet: no tracked Rust sources found under $source_root" >&2
+  exit 2
 fi
 
 if (( found != 0 )); then
+  cat >&2 <<'EOF'
+renderer host-boundary ratchet failed.
+Keep window/browser/surface creation, configuration, frame acquisition and presentation in the
+native or web platform host, and pass renderer-owned GPU inputs through typed Rust APIs instead.
+EOF
   exit 1
 fi
 
