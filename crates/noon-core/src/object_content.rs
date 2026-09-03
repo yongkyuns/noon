@@ -57,7 +57,7 @@ pub struct SemanticObjectState {
     pub content: SemanticObjectContent,
     pub transform: SemanticTransform2_5D,
     pub style: SemanticStyle,
-    pub presentation: SemanticPresentation,
+    presentation: SemanticPresentation,
 }
 
 impl SemanticObjectState {
@@ -68,6 +68,30 @@ impl SemanticObjectState {
             style: SemanticStyle::default(),
             presentation: SemanticPresentation::default(),
         }
+    }
+
+    pub const fn presentation(&self) -> SemanticPresentation {
+        self.presentation
+    }
+
+    pub const fn z_index(&self) -> i32 {
+        self.presentation.z_index
+    }
+
+    pub fn set_z_index(&mut self, z_index: i32) {
+        self.presentation.z_index = z_index;
+    }
+
+    pub const fn insertion_order(&self) -> u64 {
+        self.presentation.insertion_order
+    }
+
+    /// Assign the stable painter-order tie break at semantic-store insertion.
+    ///
+    /// Frontends may author `z_index`, but insertion order belongs to the scene
+    /// authority so independent wrappers cannot manufacture conflicting order.
+    pub(crate) fn assign_insertion_order(&mut self, insertion_order: u64) {
+        self.presentation.insertion_order = insertion_order;
     }
 }
 
@@ -160,7 +184,7 @@ mod tests {
         state.transform.translation = SemanticVec3::new(0.7, -0.3, 4.5);
         state.transform.scale = SemanticVec3::new(1.25, 0.5, 2.0);
         state.style.object_opacity = 0.4;
-        state.presentation.z_index = 7;
+        state.set_z_index(7);
 
         assert_eq!(
             state.content.geometry(),
@@ -169,7 +193,8 @@ mod tests {
         assert_eq!(state.transform.translation.z, 4.5);
         assert_eq!(state.transform.scale.z, 2.0);
         assert_eq!(state.style.object_opacity, 0.4);
-        assert_eq!(state.presentation.z_index, 7);
+        assert_eq!(state.z_index(), 7);
+        assert_eq!(state.insertion_order(), 0);
     }
 
     #[test]
@@ -215,7 +240,7 @@ mod tests {
         state.transform.translation = SemanticVec3::new(1000.25, -2000.5, 3.0);
         state.style.stroke_width = 12.5;
         state.style.object_opacity = 0.25;
-        state.presentation.z_index = -3;
+        state.set_z_index(-3);
 
         assert_eq!(state.content, before);
         assert_eq!(
