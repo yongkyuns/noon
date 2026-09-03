@@ -290,10 +290,12 @@ impl SemanticStore {
             return Ok(false);
         }
 
+        self.unregister_semantic_references_for_owner(id);
         self.node_mut(id)
             .and_then(|node| node.semantic_signal_state_mut())
             .expect("semantic signal existence validated before mutation")
             .source = source;
+        self.register_semantic_references_for_owner(id);
         self.set_last_mutation_writes(1);
         Ok(true)
     }

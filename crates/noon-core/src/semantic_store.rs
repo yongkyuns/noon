@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
+mod semantic_references;
+use semantic_references::SemanticIncomingReference;
+pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
+
 /// Stable semantic identity independent of execution/render dense indices.
 ///
 /// Reusing a vacant slot increments its generation, so stale handles never
@@ -324,6 +328,7 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     object_nodes: HashMap<ObjectId, SemanticNodeId>,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
+    incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
     last_mutation: SemanticMutationStats,
 }
 
@@ -369,6 +374,7 @@ impl SemanticStore {
         self.node_mut(id)
             .expect("newly inserted semantic node exists")
             .object_state = Some(state);
+        self.register_semantic_references_for_owner(id);
         id
     }
 
@@ -386,14 +392,18 @@ impl SemanticStore {
         &mut self,
         state: SemanticSignalState,
     ) -> SemanticNodeId {
-        self.insert_kind(SemanticNodeKind::Signal(state))
+        let id = self.insert_kind(SemanticNodeKind::Signal(state));
+        self.register_semantic_references_for_owner(id);
+        id
     }
 
     pub(crate) fn insert_semantic_animation_state(
         &mut self,
         state: SemanticAnimationState,
     ) -> SemanticNodeId {
-        self.insert_kind(SemanticNodeKind::Animation(state))
+        let id = self.insert_kind(SemanticNodeKind::Animation(state));
+        self.register_semantic_references_for_owner(id);
+        id
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
@@ -845,6 +855,7 @@ impl SemanticStore {
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
             .clone();
+        self.unregister_semantic_references_for_owner(id);
 
         let mut writes = 0;
         if node.is_scene_owned() {
@@ -871,6 +882,7 @@ impl SemanticStore {
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
+        self.incoming_references.remove(&id);
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
