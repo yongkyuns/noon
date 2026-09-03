@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use noon_compile::{RetainedCompileError, RetainedCompiledScene};
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,
-    RetainedObjectDefinition, SceneDefinition, Style, TextResource, TextResourceArena,
-    TextResourceValidationError, TextSourceKind, TrackDefinition, Transform2D, Vec2, WHITE,
+    validate_object_definition, Color, FontResourceArena, FontResourceError, GeometryResource,
+    GeometryResourceArena, ObjectDefinition, ObjectId, RetainedObjectDefinition, SceneDefinition,
+    Style, TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind,
+    TrackDefinition, Transform2D, Vec2, WHITE,
 };
 use noon_text_native::{
     NativeFontFace, NativeTextCompiler, NativeTextError, NativeTextOptions,
@@ -392,6 +393,7 @@ pub enum TextAuthoringError {
     DuplicateObject(ObjectId),
     InvalidPainterOrder { order: usize, object_count: usize },
     ObjectIdSpaceExhausted,
+    InvalidGeometryObject(noon_core::PatchError),
     NativeText(NativeTextError),
     Typst(TypstBackendError),
     Font(FontResourceError),
@@ -429,6 +431,7 @@ impl std::fmt::Display for TextAuthoringError {
             Self::ObjectIdSpaceExhausted => {
                 formatter.write_str("retained object ID space is exhausted")
             }
+            Self::InvalidGeometryObject(error) => error.fmt(formatter),
             Self::NativeText(error) => error.fmt(formatter),
             Self::Typst(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
@@ -510,6 +513,44 @@ impl RetainedScene {
             fonts: FontResourceArena::default(),
             next_object_id,
         })
+    }
+
+    /// Migration-only A4 bridge for inserting geometry without reconstructing a
+    /// legacy `SceneDefinition`. #959 owns deletion of this API together with the
+    /// retained migration object model once semantic lowering replaces this path.
+    #[doc(hidden)]
+    pub fn insert_migration_geometry_at(
+        &mut self,
+        order: usize,
+        id: ObjectId,
+        geometry: noon_core::GeometryRef,
+        transform: Transform2D,
+        style: Style,
+    ) -> Result<RetainedMobject, TextAuthoringError> {
+        if order > self.objects.len() {
+            return Err(TextAuthoringError::InvalidPainterOrder {
+                order,
+                object_count: self.objects.len(),
+            });
+        }
+        if self.objects.iter().any(|object| object.id == id) {
+            return Err(TextAuthoringError::DuplicateObject(id));
+        }
+        let next_object_id = self.next_object_id_after(id)?;
+        let candidate = ObjectDefinition {
+            id,
+            geometry: geometry.clone(),
+            transform,
+            style,
+        };
+        validate_object_definition(&candidate).map_err(TextAuthoringError::InvalidGeometryObject)?;
+
+        let mut object = RetainedObjectDefinition::geometry(id, geometry);
+        object.transform = transform;
+        object.style = style;
+        self.objects.insert(order, object);
+        self.next_object_id = next_object_id;
+        Ok(RetainedMobject { id })
     }
 
     pub fn add_text(&mut self, object: Text) -> Result<RetainedMobject, TextAuthoringError> {
