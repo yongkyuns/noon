@@ -84,7 +84,7 @@ expect_rejected() {
 reset_to_base() {
   git reset -q --hard "$BASE"
   rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
-  rm -f web/deleted_frontend_regression.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
+  rm -f web/browser-smoke.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
@@ -209,21 +209,21 @@ if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2
   exit 1
 fi
 
-# Prove the deleted #1003 browser frontend cannot return in a pre-existing base.
-# This is a full-tree absence check, not a current-diff keyword check.
+# Prove the cleaned #1003 primary browser smoke cannot regain the deleted frontend
+# even when the regression predates the current diff.
 reset_to_base
-cat > web/deleted_frontend_regression.js <<'EOF'
+cat > web/browser-smoke.js <<'EOF'
 export class NoonCanvasPlayer {}
 export function demoSceneJson() { return "{}"; }
 EOF
-git add web/deleted_frontend_regression.js
-git commit -qm "model deleted browser frontend returning"
+git add web/browser-smoke.js
+git commit -qm "model deleted primary browser frontend returning"
 DELETED_FRONTEND_REGRESSION_BASE="$(git rev-parse HEAD)"
 printf 'pub fn unrelated_after_deleted_frontend() {}\n' > src/deleted_legacy_web_probe.rs
 git add src/deleted_legacy_web_probe.rs
 git commit -qm "unrelated change after deleted frontend regression"
 if bash scripts/architecture-ratchet.sh "$DELETED_FRONTEND_REGRESSION_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted deleted NoonCanvasPlayer/demoSceneJson surface" >&2
+  echo "architecture ratchet test failed: accepted deleted primary NoonCanvasPlayer/demoSceneJson surface" >&2
   exit 1
 fi
 
