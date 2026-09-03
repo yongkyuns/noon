@@ -1,6 +1,4 @@
-use super::{
-    SemanticNodeId, SemanticNodeResidency, SemanticObjectState, SemanticStore, SemanticStoreError,
-};
+use super::{SemanticNodeId, SemanticObjectState, SemanticStore, SemanticStoreError};
 
 /// Failure from a shared Semantic Scene object operation.
 ///
@@ -99,7 +97,9 @@ impl SemanticStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SemanticMutationStats, SourceIdentity, StoredGeometry};
+    use crate::{
+        SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry,
+    };
 
     fn state(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -188,8 +188,9 @@ mod tests {
         let source = store.insert_semantic_object(authored);
         let family = store.insert_family();
         store.add_member(family, source).unwrap();
+        let source_identity = SourceIdentity::ExplicitKey("hero".into());
         store
-            .set_source_identity(source, Some(SourceIdentity::ExplicitKey("hero".into())))
+            .set_source_identity(source, Some(source_identity.clone()))
             .unwrap();
         store.attach_semantic_object(source).unwrap();
 
@@ -217,7 +218,7 @@ mod tests {
         assert_eq!(store.node(source).unwrap().parents(), &[family]);
         assert_eq!(
             store.node(source).unwrap().source_identity(),
-            Some(&SourceIdentity::ExplicitKey("hero".into()))
+            Some(&source_identity)
         );
     }
 }
