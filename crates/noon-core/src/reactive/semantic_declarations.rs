@@ -83,9 +83,7 @@ mod tests {
     use crate::{SemanticMutationStats, SemanticObjectState, StoredGeometry};
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
-        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-            radius,
-        }))
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
     }
 
     #[test]
@@ -196,10 +194,8 @@ mod tests {
             .add_semantic_updater(target, HostCallbackId::new(99))
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
-        assert!(targets
-            .iter()
-            .enumerate()
-            .all(|(index, id)| index == 5_000
-                || store.node(*id).unwrap().host_updaters().is_empty()));
+        assert!(targets.iter().enumerate().all(
+            |(index, id)| index == 5_000 || store.node(*id).unwrap().host_updaters().is_empty()
+        ));
     }
 }
