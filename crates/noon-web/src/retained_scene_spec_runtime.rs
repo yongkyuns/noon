@@ -1,8 +1,6 @@
 use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
 use noon_compile::RetainedCompiledScene;
-use noon_core::{
-    Color, ObjectDefinition, ObjectId, SceneDefinition, Style, TrackDefinition, Transform2D,
-};
+use noon_core::{Color, ObjectId, Style, TrackDefinition, Transform2D};
 use noon_ir::{ObjectSpec, ObjectSpecContent, SceneSpec, TextSpec, TextSpecKind, TextSpecOptions};
 
 use crate::retained_authoring_scene::MixedRetainedAuthoringError;
@@ -31,27 +29,11 @@ impl CanonicalRetainedAuthoringScene {
             ..
         } = spec;
 
-        // `RetainedScene` already owns the correct resource-backed text insertion
-        // APIs. Seed it with only the geometry subset, preserving relative geometry
-        // order, then insert text at its structural global painter slots.
-        let geometry_objects = objects
-            .iter()
-            .filter_map(|object| {
-                let ObjectSpecContent::Geometry(geometry) = &object.content else {
-                    return None;
-                };
-                Some(ObjectDefinition {
-                    id: object.id,
-                    geometry: geometry.clone(),
-                    transform: object.transform,
-                    style: object.style,
-                })
-            })
-            .collect::<Vec<_>>();
-        let geometry_scene = SceneDefinition::from_parts(geometry_objects, Vec::new())
-            .map_err(|error| invalid_scene_spec(error.to_string()))?;
-        let mut scene = RetainedScene::from_legacy(&geometry_scene)?;
-
+        // Keep the migration lowering typed and in-process after `SceneSpec` has
+        // already been consumed. Geometry and text enter the retained migration
+        // container in their single structural painter order; do not reconstruct a
+        // legacy `SceneDefinition` or `ObjectDefinition` on this production path.
+        let mut scene = RetainedScene::new();
         for (order, object) in objects.into_iter().enumerate() {
             let ObjectSpec {
                 id,
@@ -59,8 +41,15 @@ impl CanonicalRetainedAuthoringScene {
                 transform,
                 style,
             } = object;
-            if let ObjectSpecContent::Text(text) = content {
-                insert_text_object(&mut scene, order, id, text, transform, style)?;
+            match content {
+                ObjectSpecContent::Geometry(geometry) => {
+                    scene
+                        .insert_migration_geometry_at(order, id, geometry, transform, style)
+                        .map_err(|error| invalid_scene_spec(error.to_string()))?;
+                }
+                ObjectSpecContent::Text(text) => {
+                    insert_text_object(&mut scene, order, id, text, transform, style)?;
+                }
             }
         }
 
@@ -225,8 +214,8 @@ fn invalid_scene_spec(error: impl std::fmt::Display) -> MixedRetainedAuthoringEr
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Color, GeometryRef, ObjectContentRef, Property, RateFunction, TrackTiming, TrackValues,
-        Transform2D, Vec2,
+        Color, GeometryRef, ObjectContentRef, Property, RateFunction, SceneDefinition, TrackTiming,
+        TrackValues, Transform2D, Vec2,
     };
 
     use super::*;
@@ -312,6 +301,19 @@ mod tests {
             canonical.scene().objects()[1].content,
             ObjectContentRef::Text(_)
         ));
+    }
+
+    #[test]
+    fn canonical_lowering_rejects_non_finite_geometry_without_legacy_scene() {
+        let object = ObjectId::new(7);
+        let mut geometry = ObjectSpec::geometry(object, GeometryRef::circle(1.0));
+        geometry.transform.rotation = f32::NAN;
+        let spec = SceneSpec::new(vec![geometry], Vec::new()).unwrap();
+
+        let error = CanonicalRetainedAuthoringScene::from_scene_spec(spec).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("non-finite transform state"));
+        assert!(message.contains("7"));
     }
 
     #[test]
