@@ -562,6 +562,124 @@ impl SemanticStore {
         Ok(true)
     }
 
+    /// Replace one attached scene root with detached semantic nodes in place.
+    ///
+    /// This is a crate-private storage primitive for shared scene operations. It
+    /// preserves the old root's exact position and writes only that root, the
+    /// replacement nodes, and its immediate outside neighbors. Family links,
+    /// source identity, node identity, and authored object state are unchanged.
+    pub(crate) fn replace_scene_root_with_detached(
+        &mut self,
+        root: SemanticNodeId,
+        replacements: &[SemanticNodeId],
+    ) -> usize {
+        let membership = self
+            .node(root)
+            .expect("scene-root splice requires a live root")
+            .scene_membership;
+        let SemanticSceneMembership::Attached { previous, next } = membership else {
+            panic!("scene-root splice requires an attached root");
+        };
+
+        let mut seen = HashSet::with_capacity(replacements.len());
+        for replacement in replacements.iter().copied() {
+            assert_ne!(
+                replacement, root,
+                "scene-root splice cannot reinsert its root"
+            );
+            let node = self
+                .node(replacement)
+                .expect("scene-root splice replacement must be live");
+            assert!(
+                matches!(node.scene_membership, SemanticSceneMembership::Detached),
+                "scene-root splice replacement must be detached"
+            );
+            assert!(
+                seen.insert(replacement),
+                "scene-root splice replacements must be unique"
+            );
+        }
+
+        let first = replacements.first().copied();
+        let last = replacements.last().copied();
+
+        if let Some(previous_id) = previous {
+            let previous_node = self
+                .node_mut(previous_id)
+                .expect("scene previous link must reference a live semantic node");
+            match &mut previous_node.scene_membership {
+                SemanticSceneMembership::Attached {
+                    next: previous_next,
+                    ..
+                } => {
+                    *previous_next = first.or(next);
+                }
+                SemanticSceneMembership::Detached => {
+                    unreachable!("attached root cannot have a detached previous root")
+                }
+            }
+        } else {
+            debug_assert_eq!(self.scene_head, Some(root));
+            self.scene_head = first.or(next);
+        }
+
+        if let Some(next_id) = next {
+            let next_node = self
+                .node_mut(next_id)
+                .expect("scene next link must reference a live semantic node");
+            match &mut next_node.scene_membership {
+                SemanticSceneMembership::Attached {
+                    previous: next_previous,
+                    ..
+                } => {
+                    *next_previous = last.or(previous);
+                }
+                SemanticSceneMembership::Detached => {
+                    unreachable!("attached root cannot have a detached next root")
+                }
+            }
+        } else {
+            debug_assert_eq!(self.scene_tail, Some(root));
+            self.scene_tail = last.or(previous);
+        }
+
+        for (index, replacement) in replacements.iter().copied().enumerate() {
+            let replacement_previous = if index == 0 {
+                previous
+            } else {
+                Some(replacements[index - 1])
+            };
+            let replacement_next = if index + 1 == replacements.len() {
+                next
+            } else {
+                Some(replacements[index + 1])
+            };
+            self.node_mut(replacement)
+                .expect("scene-root splice replacement validated above")
+                .scene_membership = SemanticSceneMembership::Attached {
+                previous: replacement_previous,
+                next: replacement_next,
+            };
+        }
+
+        self.node_mut(root)
+            .expect("scene-root splice root validated above")
+            .scene_membership = SemanticSceneMembership::Detached;
+        self.scene_nodes = self.scene_nodes - 1 + replacements.len();
+        if self.scene_nodes == 0 {
+            debug_assert!(self.scene_head.is_none());
+            debug_assert!(self.scene_tail.is_none());
+        }
+
+        let slots_written =
+            1 + replacements.len() + (previous.is_some() as usize) + (next.is_some() as usize);
+        self.last_mutation = SemanticMutationStats {
+            slots_written,
+            cycle_nodes_visited: 0,
+        };
+        slots_written
+    }
+
     /// Iterate current top-level authored scene roots in deterministic authored order.
     pub fn scene_roots(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
         std::iter::successors(self.scene_head, move |id| {
@@ -755,6 +873,13 @@ impl SemanticStore {
 
     pub const fn last_mutation_stats(&self) -> SemanticMutationStats {
         self.last_mutation
+    }
+
+    pub(crate) fn set_last_mutation_writes(&mut self, slots_written: usize) {
+        self.last_mutation = SemanticMutationStats {
+            slots_written,
+            cycle_nodes_visited: 0,
+        };
     }
 }
 
