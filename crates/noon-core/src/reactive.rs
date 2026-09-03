@@ -38,6 +38,9 @@ pub use semantic_bindings::*;
 mod semantic_animations;
 pub use semantic_animations::*;
 
+mod semantic_transaction;
+pub use semantic_transaction::*;
+
 mod semantic_family;
 
 mod animation_member_plan;
