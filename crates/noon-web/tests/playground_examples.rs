@@ -1,4 +1,5 @@
-use noon_web::ScenePlayer;
+use noon_compile::CompiledScene;
+use noon_ir::decode_scene;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -50,8 +51,11 @@ fn assert_manifest_compiles(output_dir: &Path, manifest: &str) {
             .split_once('\t')
             .expect("playground manifest line contains a name and JSON path");
         match fs::read_to_string(document_path) {
-            Ok(document) => match ScenePlayer::from_scene_json(&document) {
-                Ok(_) => compiled += 1,
+            Ok(document) => match decode_scene(&document) {
+                Ok(definition) => match CompiledScene::compile(&definition) {
+                    Ok(_) => compiled += 1,
+                    Err(error) => failures.push(format!("{name}: {error}")),
+                },
                 Err(error) => failures.push(format!("{name}: {error}")),
             },
             Err(error) => failures.push(format!("{name}: failed to read document: {error}")),
