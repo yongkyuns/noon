@@ -33,7 +33,7 @@ impl SemanticStore {
                         collect(store, member, seen, leaves)?;
                     }
                 }
-                SemanticNodeKind::Signal(_) => {}
+                SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
             }
             Ok(())
         }
