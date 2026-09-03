@@ -1,0 +1,69 @@
+name: Roadmap task
+description: Define implementation work against the authoritative Noon architecture.
+title: "[Roadmap ] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `docs/architecture.md` and `AGENTS.md` before filing cross-cutting work. GitHub issues hold implementation detail; they do not define a second architecture.
+  - type: input
+    id: roadmap
+    attributes:
+      label: Roadmap owner
+      description: Parent roadmap issue and implementation case.
+      placeholder: "#953 / A1.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Architecture layer
+      options:
+        - Semantic Scene
+        - Execution Plan / compiler
+        - Runtime
+        - Renderer
+        - Rust public API / shared semantics
+        - Python frontend
+        - Browser / WASM integration
+        - Testing / tooling / CI
+        - Cross-layer (explain below)
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: State the target behavior, not the migration mechanism.
+    validations:
+      required: true
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Architecture invariants
+      description: Which architecture/locality/ownership invariants constrain this work?
+      placeholder: |
+        - one Semantic Scene authority
+        - Rust-native typed in-memory path
+        - local edit remains local
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Prefer executable/deterministic evidence over implementation-shaped prose.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and migration seams
+      description: List prerequisite issues and any temporary seam this work introduces. Name the issue that deletes each seam.
+      placeholder: "None"
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Handoff notes
+      description: Information an isolated agent needs to continue this task without conversation history.
