@@ -3,11 +3,21 @@ use super::{
     SemanticSceneOperationError, SemanticStore,
 };
 
+/// Ordered composition semantics authored before execution scheduling/lowering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAnimationCompositionKind {
+    /// Children share the same composition start; A1.6 resolves their durations.
+    Parallel,
+    /// Children execute in authored order; A1.6 resolves concrete intervals.
+    Sequence,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
-/// Targets are semantic identities. Execution tracks, runtime slots, retained
-/// object IDs, and transport IDs are deliberately absent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Targets and composition children are semantic identities. Execution tracks,
+/// runtime slots, retained object IDs, transport IDs, and resolved intervals are
+/// deliberately absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticAnimationIntent {
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
@@ -16,18 +26,43 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
     },
+    /// Compose existing semantic animation declarations in stable authored order.
+    ///
+    /// Children use the same scene-global animation identities as leaf animations;
+    /// this is not a second animation graph or scheduler. Concrete timing remains
+    /// an A1.6 lowering product.
+    Composition {
+        kind: SemanticAnimationCompositionKind,
+        children: Vec<SemanticNodeId>,
+    },
 }
 
 impl SemanticAnimationIntent {
-    pub const fn target(self) -> SemanticNodeId {
+    pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target, .. } => target,
+            Self::TransformTo { target, .. } => Some(*target),
+            Self::Composition { .. } => None,
         }
     }
 
-    pub const fn target_state(self) -> SemanticNodeId {
+    pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target_state, .. } => target_state,
+            Self::TransformTo { target_state, .. } => Some(*target_state),
+            Self::Composition { .. } => None,
+        }
+    }
+
+    pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
+        match self {
+            Self::TransformTo { .. } => None,
+            Self::Composition { kind, .. } => Some(*kind),
+        }
+    }
+
+    pub fn children(&self) -> &[SemanticNodeId] {
+        match self {
+            Self::TransformTo { .. } => &[],
+            Self::Composition { children, .. } => children,
         }
     }
 }
@@ -37,7 +72,7 @@ impl SemanticAnimationIntent {
 /// Options intentionally remain unresolved so frontend-local defaults and
 /// `Scene.play` overrides do not become a second animation authority. Lowering
 /// resolves defaults and may reject execution capabilities it cannot yet express.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticAnimationState {
     intent: SemanticAnimationIntent,
     options: AnimationOptions,
@@ -48,11 +83,11 @@ impl SemanticAnimationState {
         Self { intent, options }
     }
 
-    pub const fn intent(self) -> SemanticAnimationIntent {
-        self.intent
+    pub const fn intent(&self) -> &SemanticAnimationIntent {
+        &self.intent
     }
 
-    pub const fn options(self) -> AnimationOptions {
+    pub const fn options(&self) -> AnimationOptions {
         self.options
     }
 }
@@ -61,6 +96,7 @@ impl SemanticAnimationState {
 pub enum SemanticAnimationError {
     UnknownAnimation(SemanticNodeId),
     NotAnimation(SemanticNodeId),
+    EmptyComposition,
     Target(SemanticSceneOperationError),
     Options(AnimationOptionsError),
     SameTargetAndTargetState(SemanticNodeId),
@@ -81,6 +117,9 @@ impl std::fmt::Display for SemanticAnimationError {
                 id.slot(),
                 id.generation()
             ),
+            Self::EmptyComposition => {
+                formatter.write_str("semantic animation composition requires at least one child")
+            }
             Self::Target(error) => error.fmt(formatter),
             Self::Options(error) => error.fmt(formatter),
             Self::SameTargetAndTargetState(id) => write!(
@@ -160,6 +199,58 @@ impl SemanticStore {
         )
     }
 
+    /// Insert an ordered parallel composition using existing semantic animation IDs.
+    pub fn insert_semantic_parallel_animation(
+        &mut self,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            children,
+            options,
+        )
+    }
+
+    /// Insert an ordered strict-sequence composition using existing semantic animation IDs.
+    pub fn insert_semantic_sequence_animation(
+        &mut self,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_animation_composition(
+            SemanticAnimationCompositionKind::Sequence,
+            children,
+            options,
+        )
+    }
+
+    fn insert_semantic_animation_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        if children.is_empty() {
+            return Err(SemanticAnimationError::EmptyComposition);
+        }
+        validate_authored_animation_options(options)?;
+        for &child in children {
+            self.semantic_animation_state(child)?;
+        }
+
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Composition {
+                    kind,
+                    children: children.to_vec(),
+                },
+                options,
+            )),
+        )
+    }
+
     pub fn semantic_animation_state(
         &self,
         id: SemanticNodeId,
@@ -183,6 +274,14 @@ mod tests {
         store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
     }
 
+    fn transform(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
+        let target = object(store, radius);
+        let target_state = object(store, radius + 0.5);
+        store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap()
+    }
+
     #[test]
     fn transform_intent_uses_scene_global_semantic_identity() {
         let mut store = SemanticStore::new();
@@ -196,11 +295,11 @@ mod tests {
         let animation = store
             .insert_semantic_transform_animation(target, target_state, options)
             .unwrap();
-        let state = *store.semantic_animation_state(animation).unwrap();
+        let state = store.semantic_animation_state(animation).unwrap();
 
         assert_eq!(
             state.intent(),
-            SemanticAnimationIntent::TransformTo {
+            &SemanticAnimationIntent::TransformTo {
                 target,
                 target_state,
             }
@@ -226,6 +325,61 @@ mod tests {
             store.semantic_animation_state(animation).unwrap().options(),
             options
         );
+    }
+
+    #[test]
+    fn parallel_composition_preserves_child_order_and_unresolved_options() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let third = transform(&mut store, 3.0);
+        let options = AnimationOptions::new()
+            .run_time(4.0)
+            .rate_func(RateFunction::ThereAndBack)
+            .lag_ratio(0.25);
+
+        let composition = store
+            .insert_semantic_parallel_animation(&[second, first, third], options)
+            .unwrap();
+        let state = store.semantic_animation_state(composition).unwrap();
+
+        assert_eq!(
+            state.intent().composition_kind(),
+            Some(SemanticAnimationCompositionKind::Parallel)
+        );
+        assert_eq!(state.intent().children(), &[second, first, third]);
+        assert_eq!(state.options(), options);
+        assert!(!store.node(composition).unwrap().is_scene_owned());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn sequence_composition_can_nest_existing_compositions() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let parallel = store
+            .insert_semantic_parallel_animation(
+                &[first, second],
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+        let third = transform(&mut store, 3.0);
+
+        let sequence = store
+            .insert_semantic_sequence_animation(
+                &[parallel, third],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let state = store.semantic_animation_state(sequence).unwrap();
+
+        assert_eq!(
+            state.intent().composition_kind(),
+            Some(SemanticAnimationCompositionKind::Sequence)
+        );
+        assert_eq!(state.intent().children(), &[parallel, third]);
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
     }
 
     #[test]
@@ -260,6 +414,69 @@ mod tests {
         );
         assert_eq!(store.len(), before_len);
         assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn composition_validation_is_atomic_and_generation_safe() {
+        let mut store = SemanticStore::new();
+        let child = transform(&mut store, 1.0);
+        let not_animation = object(&mut store, 4.0);
+        let before_len = store.len();
+
+        assert_eq!(
+            store.insert_semantic_parallel_animation(&[], AnimationOptions::new()),
+            Err(SemanticAnimationError::EmptyComposition)
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_parallel_animation(
+                &[child, not_animation],
+                AnimationOptions::new(),
+            ),
+            Err(SemanticAnimationError::NotAnimation(not_animation))
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        store.remove_node(child).unwrap();
+        let replacement = object(&mut store, 5.0);
+        assert_eq!(child.slot(), replacement.slot());
+        assert_ne!(child.generation(), replacement.generation());
+        let before_stale_insert = store.len();
+
+        assert_eq!(
+            store.insert_semantic_sequence_animation(&[child], AnimationOptions::new()),
+            Err(SemanticAnimationError::UnknownAnimation(child))
+        );
+        assert_eq!(store.len(), before_stale_insert);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn deleted_composition_child_never_retargets_after_slot_reuse() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let composition = store
+            .insert_semantic_parallel_animation(&[first, second], AnimationOptions::new())
+            .unwrap();
+
+        store.remove_node(second).unwrap();
+        let replacement = object(&mut store, 8.0);
+        assert_eq!(second.slot(), replacement.slot());
+        assert_ne!(second.generation(), replacement.generation());
+
+        let intent = store
+            .semantic_animation_state(composition)
+            .unwrap()
+            .intent();
+        assert_eq!(intent.children(), &[first, second]);
+        assert_eq!(
+            store.semantic_animation_state(second),
+            Err(SemanticAnimationError::UnknownAnimation(second))
+        );
     }
 
     #[test]
@@ -302,9 +519,9 @@ mod tests {
         assert_ne!(target_state.generation(), replacement.generation());
 
         let intent = store.semantic_animation_state(animation).unwrap().intent();
-        assert_eq!(intent.target_state(), target_state);
+        assert_eq!(intent.target_state(), Some(target_state));
         assert!(matches!(
-            store.semantic_object_state_checked(intent.target_state()),
+            store.semantic_object_state_checked(intent.target_state().unwrap()),
             Err(SemanticSceneOperationError::UnknownNode(id)) if id == target_state
         ));
     }
@@ -334,11 +551,12 @@ mod tests {
         for index in 0..10_000 {
             object(&mut store, index as f32 + 1.0);
         }
-        let target = object(&mut store, 0.5);
-        let target_state = object(&mut store, 0.75);
+        let first = transform(&mut store, 0.5);
+        let second = transform(&mut store, 0.75);
+        let third = transform(&mut store, 1.0);
 
         store
-            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .insert_semantic_parallel_animation(&[first, second, third], AnimationOptions::new())
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
     }
