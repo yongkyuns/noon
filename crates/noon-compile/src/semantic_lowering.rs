@@ -93,11 +93,14 @@ impl SemanticExecutionIndex {
     /// Geometry and text remain represented by `SemanticObjectState`, including
     /// versioned resource handles, so this boundary does not regress target semantic
     /// content into legacy `GeometryRef`/retained compiler payloads.
+    ///
+    /// Validation completes before the index is mutated, so a stale/migration-only
+    /// visible leaf cannot leave a partially updated execution identity map.
     pub fn lower_scene<'a>(
         &mut self,
         store: &'a SemanticStore,
     ) -> Result<SemanticExecutionProjection<'a>, SemanticLoweringError> {
-        let mut objects = Vec::new();
+        let mut pending = Vec::new();
         let mut seen = HashSet::new();
 
         for root in store.scene_roots() {
@@ -111,14 +114,18 @@ impl SemanticExecutionIndex {
                     .ok_or(SemanticLoweringError::MissingSemanticObjectState(
                         semantic_id,
                     ))?;
-                let execution_id = self.ensure_object(semantic_id);
-                objects.push(SemanticExecutionObject {
-                    semantic_id,
-                    execution_id,
-                    state,
-                });
+                pending.push((semantic_id, state));
             }
         }
+
+        let objects = pending
+            .into_iter()
+            .map(|(semantic_id, state)| SemanticExecutionObject {
+                semantic_id,
+                execution_id: self.ensure_object(semantic_id),
+                state,
+            })
+            .collect();
 
         Ok(SemanticExecutionProjection { objects })
     }
@@ -376,10 +383,11 @@ mod tests {
     }
 
     #[test]
-    fn visible_migration_object_fails_instead_of_silently_losing_payload() {
+    fn lowering_failure_does_not_partially_update_identity_index() {
         use noon_core::{GeometryRef, ObjectDefinition};
 
         let mut store = SemanticStore::new();
+        attach(&mut store, circle(1.0));
         let legacy = store.insert_object(ObjectDefinition::new(
             ObjectId::new(99),
             GeometryRef::circle(1.0),
