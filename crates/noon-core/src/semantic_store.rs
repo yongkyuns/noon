@@ -79,7 +79,7 @@ struct FamilyMemberLink {
     next: Option<SemanticNodeId>,
 }
 
-/// Ordered family membership with local lookup/add/remove.
+/// Ordered family membership with local lookup/add/remove/reorder.
 ///
 /// The hash map is identity lookup only; deterministic semantic order follows
 /// the private previous/next links from `head` to `tail`.
@@ -146,6 +146,74 @@ impl OrderedFamilyMembers {
             debug_assert!(self.head.is_none());
             debug_assert!(self.tail.is_none());
         }
+        true
+    }
+
+    /// Move an existing member immediately before `before`, or to the tail when
+    /// `before` is `None`. All link lookup and rewiring is O(1).
+    fn move_before(&mut self, member: SemanticNodeId, before: Option<SemanticNodeId>) -> bool {
+        let link = *self
+            .links
+            .get(&member)
+            .expect("family reorder member must have a membership link");
+        if before == Some(member)
+            || before.is_some_and(|before| link.next == Some(before))
+            || (before.is_none() && self.tail == Some(member))
+        {
+            return false;
+        }
+
+        // Detach the member without changing membership identity.
+        if let Some(previous_id) = link.previous {
+            self.links
+                .get_mut(&previous_id)
+                .expect("family previous link must exist")
+                .next = link.next;
+        } else {
+            debug_assert_eq!(self.head, Some(member));
+            self.head = link.next;
+        }
+        if let Some(next_id) = link.next {
+            self.links
+                .get_mut(&next_id)
+                .expect("family next link must exist")
+                .previous = link.previous;
+        } else {
+            debug_assert_eq!(self.tail, Some(member));
+            self.tail = link.previous;
+        }
+
+        let (previous, next) = if let Some(before_id) = before {
+            let before_link = *self
+                .links
+                .get(&before_id)
+                .expect("family reorder anchor must have a membership link");
+            (before_link.previous, Some(before_id))
+        } else {
+            (self.tail, None)
+        };
+
+        if let Some(previous_id) = previous {
+            self.links
+                .get_mut(&previous_id)
+                .expect("family reorder previous link must exist")
+                .next = Some(member);
+        } else {
+            self.head = Some(member);
+        }
+        if let Some(next_id) = next {
+            self.links
+                .get_mut(&next_id)
+                .expect("family reorder next link must exist")
+                .previous = Some(member);
+        } else {
+            self.tail = Some(member);
+        }
+        *self
+            .links
+            .get_mut(&member)
+            .expect("family reorder member link must remain present") =
+            FamilyMemberLink { previous, next };
         true
     }
 
@@ -845,6 +913,58 @@ impl SemanticStore {
         Ok(true)
     }
 
+    /// Reorder one direct family member without changing membership or parent edges.
+    ///
+    /// `Some(anchor)` moves `member` immediately before the anchor. `None` moves
+    /// the member to the tail. Identity validation and link rewiring are O(1) and
+    /// only the family semantic slot is mutated.
+    pub fn reorder_member(
+        &mut self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
+    ) -> Result<bool, SemanticStoreError> {
+        if !matches!(
+            self.node(family).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Family)
+        ) {
+            return Err(SemanticStoreError::NotFamily(family));
+        }
+        if self.node(member).is_none() {
+            return Err(SemanticStoreError::UnknownNode(member));
+        }
+        let members = &self.node(family).expect("family validated above").members;
+        if !members.contains(member) {
+            return Err(SemanticStoreError::NotFamilyMember { family, member });
+        }
+        if let Some(anchor) = before {
+            if self.node(anchor).is_none() {
+                return Err(SemanticStoreError::UnknownNode(anchor));
+            }
+            if !members.contains(anchor) {
+                return Err(SemanticStoreError::NotFamilyMember {
+                    family,
+                    member: anchor,
+                });
+            }
+        }
+
+        let changed = self
+            .node_mut(family)
+            .expect("family validated above")
+            .members
+            .move_before(member, before);
+        self.last_mutation = if changed {
+            SemanticMutationStats {
+                slots_written: 1,
+                cycle_nodes_visited: 0,
+            }
+        } else {
+            SemanticMutationStats::default()
+        };
+        Ok(changed)
+    }
+
     /// Remove a node without renumbering any unrelated semantic identity.
     ///
     /// Attached root membership is removed locally first. Remaining work is
@@ -948,6 +1068,10 @@ impl SemanticStore {
 pub enum SemanticStoreError {
     UnknownNode(SemanticNodeId),
     NotFamily(SemanticNodeId),
+    NotFamilyMember {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
     FamilyCycle {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -969,6 +1093,14 @@ impl std::fmt::Display for SemanticStoreError {
                 "semantic node {}:{} is not a family",
                 id.slot(),
                 id.generation()
+            ),
+            Self::NotFamilyMember { family, member } => write!(
+                formatter,
+                "semantic node {}:{} is not a direct member of family {}:{}",
+                member.slot(),
+                member.generation(),
+                family.slot(),
+                family.generation()
             ),
             Self::FamilyCycle { family, member } => write!(
                 formatter,
@@ -1145,6 +1277,34 @@ mod tests {
         assert_eq!(store.last_mutation_stats().slots_written, 2);
         let ordered = store.node(family).unwrap().members();
         assert_eq!(ordered.last(), Some(&target));
+    }
+
+    #[test]
+    fn family_member_reorder_is_one_slot_local() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let members = (0..10_000)
+            .map(|_| store.insert_authoring_object())
+            .collect::<Vec<_>>();
+        for member in members.iter().copied() {
+            store.add_member(family, member).unwrap();
+        }
+        let target = members[5_000];
+        let anchor = members[10];
+        let parents_before = store.node(target).unwrap().parents().to_vec();
+
+        assert!(store.reorder_member(family, target, Some(anchor)).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(store.node(target).unwrap().parents(), parents_before);
+        let ordered = store.node(family).unwrap().members();
+        let anchor_index = ordered.iter().position(|id| *id == anchor).unwrap();
+        assert_eq!(ordered[anchor_index - 1], target);
+
+        assert!(!store.reorder_member(family, target, Some(anchor)).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+        assert!(store.reorder_member(family, target, None).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(store.node(family).unwrap().members().last(), Some(&target));
     }
 
     #[test]
