@@ -1,9 +1,9 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
-use noon_runtime::FrameState;
+use noon_compile::{CompileError, CompiledScene};
+use noon_ir::{decode_scene, IrError};
+use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
 use serde_json::{json, Value};
-
-use crate::{PlayerError, ScenePlayer};
 
 fn normalize_playhead(time: f64) -> f64 {
     const SCALE: f64 = 1_000_000_000_000.0;
@@ -57,23 +57,69 @@ fn normalized_frames_equal(left: &FrameState, right: &FrameState) -> bool {
         && left.render_geometries == right.render_geometries
 }
 
+#[derive(Debug)]
+pub enum ReplayRuntimeError {
+    Ir(IrError),
+    Compile(CompileError),
+    Evaluation(EvaluationError),
+}
+
+impl std::fmt::Display for ReplayRuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ir(error) => error.fmt(formatter),
+            Self::Compile(error) => error.fmt(formatter),
+            Self::Evaluation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ReplayRuntimeError {}
+
+impl From<IrError> for ReplayRuntimeError {
+    fn from(value: IrError) -> Self {
+        Self::Ir(value)
+    }
+}
+
+impl From<CompileError> for ReplayRuntimeError {
+    fn from(value: CompileError) -> Self {
+        Self::Compile(value)
+    }
+}
+
+impl From<EvaluationError> for ReplayRuntimeError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
+    }
+}
+
+fn runtime_from_scene_json(scene_json: &str) -> Result<SlottedSceneInstance, ReplayRuntimeError> {
+    let definition = decode_scene(scene_json)?;
+    let compiled = CompiledScene::compile(&definition)?;
+    Ok(SlottedSceneInstance::new(compiled))
+}
+
 /// Evaluate a scene by seeking directly to `time` and return its normalized frame.
-pub fn scene_snapshot_json(scene_json: &str, time: f64) -> Result<String, PlayerError> {
-    let mut player = ScenePlayer::from_scene_json(scene_json)?;
-    player.seek(time)?;
-    Ok(normalized_frame_json(player.frame()))
+pub fn scene_snapshot_json(scene_json: &str, time: f64) -> Result<String, ReplayRuntimeError> {
+    let mut runtime = runtime_from_scene_json(scene_json)?;
+    runtime.seek(time)?;
+    Ok(normalized_frame_json(runtime.frame()))
 }
 
 /// Evaluate a scene through the supplied playhead sequence and return the final frame.
 ///
 /// The sequence may move backward. This intentionally exercises the same
 /// `advance_to` rewind behavior used by interactive scrubbing.
-pub fn playback_snapshot_json(scene_json: &str, times: &[f64]) -> Result<String, PlayerError> {
-    let mut player = ScenePlayer::from_scene_json(scene_json)?;
+pub fn playback_snapshot_json(
+    scene_json: &str,
+    times: &[f64],
+) -> Result<String, ReplayRuntimeError> {
+    let mut runtime = runtime_from_scene_json(scene_json)?;
     for &time in times {
-        player.advance_to(time)?;
+        runtime.advance_to(time)?;
     }
-    Ok(normalized_frame_json(player.frame()))
+    Ok(normalized_frame_json(runtime.frame()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +139,7 @@ impl std::fmt::Display for ReplayVerificationMode {
 
 #[derive(Debug)]
 pub enum ReplayVerificationError {
-    Player(PlayerError),
+    Runtime(ReplayRuntimeError),
     InvalidForwardSampleCount(usize),
     NonFiniteTarget {
         index: usize,
@@ -112,7 +158,7 @@ pub enum ReplayVerificationError {
 impl std::fmt::Display for ReplayVerificationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Player(error) => error.fmt(formatter),
+            Self::Runtime(error) => error.fmt(formatter),
             Self::InvalidForwardSampleCount(count) => {
                 write!(
                     formatter,
@@ -141,9 +187,15 @@ impl std::fmt::Display for ReplayVerificationError {
 
 impl std::error::Error for ReplayVerificationError {}
 
-impl From<PlayerError> for ReplayVerificationError {
-    fn from(value: PlayerError) -> Self {
-        Self::Player(value)
+impl From<ReplayRuntimeError> for ReplayVerificationError {
+    fn from(value: ReplayRuntimeError) -> Self {
+        Self::Runtime(value)
+    }
+}
+
+impl From<EvaluationError> for ReplayVerificationError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Runtime(ReplayRuntimeError::Evaluation(value))
     }
 }
 
@@ -169,7 +221,7 @@ pub fn verify_scene_replay(
         }
     }
 
-    let mut direct = ScenePlayer::from_scene_json(scene_json)?;
+    let mut direct = runtime_from_scene_json(scene_json)?;
     let mut forward = direct.clone();
     let mut rewind = direct.clone();
     let denominator = (forward_sample_count - 1) as f64;
