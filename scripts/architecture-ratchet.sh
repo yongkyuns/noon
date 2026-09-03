@@ -22,7 +22,8 @@ fi
 range="${base}...HEAD"
 forbidden='SceneDefinition|SceneSpec|SceneDocument|ObjectDefinition|ObjectSnapshot|from_legacy|noon::legacy|_manim_canonical_scene|scene_document|noon-ir'
 
-found=0
+migration_found=0
+module_indirection_found=0
 current_file=""
 while IFS= read -r line; do
   case "$line" in
@@ -32,10 +33,24 @@ while IFS= read -r line; do
     +*)
       [[ "$line" == "+++ "* ]] && continue
       added="${line:1}"
+
       if printf '%s\n' "$added" | grep -Eq "$forbidden"; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
-        found=1
+        migration_found=1
       fi
+
+      case "$current_file" in
+        *.rs)
+          if printf '%s\n' "$added" | grep -Eq '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*='; then
+            printf 'architecture ratchet: new hidden Rust module ownership: %s: +%s\n' "$current_file" "$added" >&2
+            module_indirection_found=1
+          fi
+          if printf '%s\n' "$added" | grep -Eq '(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)'; then
+            printf 'architecture ratchet: new hidden Rust module ownership: %s: +%s\n' "$current_file" "$added" >&2
+            module_indirection_found=1
+          fi
+          ;;
+      esac
       ;;
   esac
 done < <(
@@ -44,7 +59,7 @@ done < <(
     'Cargo.toml' '*/Cargo.toml' 'crates/*/Cargo.toml'
 )
 
-if (( found != 0 )); then
+if (( migration_found != 0 )); then
   cat >&2 <<'EOF'
 
 New migration-era architecture references are not allowed to grow.
@@ -52,7 +67,20 @@ Delete/rewrite the dependency instead of spreading it. If a target architecture
 change genuinely requires one of these tokens, update docs/architecture.md and
 this ratchet explicitly in the same reviewed PR rather than bypassing the check.
 EOF
+fi
+
+if (( module_indirection_found != 0 )); then
+  cat >&2 <<'EOF'
+
+New Rust #[path] / include! module indirection is not allowed.
+Existing A5 migration debt is grandfathered only until its owning cleanup lands;
+do not move or duplicate it. Once an area is normalized, tighten this ratchet to
+make that absence structural. See #960/A5 and #961/A6.8.
+EOF
+fi
+
+if (( migration_found != 0 || module_indirection_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth ratchet passed"
+echo "architecture migration-growth and module-growth ratchets passed"
