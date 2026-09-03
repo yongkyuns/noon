@@ -15,6 +15,7 @@ Detailed subsystem documents may explain an implementation, test strategy, or co
 Noon is a high-performance animation and interactive graphics system with:
 
 - a first-class idiomatic Rust authoring API that can run end-to-end in a native Rust process;
+- the same Rust-authored scene semantics runnable as WASM in a browser without changing the engine architecture;
 - a built-in renderer/runtime shared by native and web targets;
 - Manim-compatible Python authoring for supported common 2D behavior as a wrapper over shared Rust semantics;
 - optional future JavaScript/TypeScript authoring as another wrapper over shared Rust semantics;
@@ -46,10 +47,42 @@ Runtime
 Renderer
     |
     v
-native surface / GPU
+native host / surface / GPU
 ```
 
 This path must not require Python, JavaScript, WASM, a browser runtime, JSON, serialization/deserialization, transport documents, or a host-language bridge between these layers.
+
+### Rust-on-web product invariant
+
+Rust authoring must also be able to target the browser directly by compiling the same shared engine path to WASM:
+
+```text
+Rust/WASM application
+    |
+    v
+idiomatic `noon` Rust API
+    |
+    v
+Semantic Scene
+    |
+    v
+Execution Plan
+    |
+    v
+Runtime
+    |
+    v
+Renderer
+    |
+    v
+web host / canvas / WebGPU or WebGL
+```
+
+When those layers live in one WASM execution context, every arrow above is a typed in-process Rust boundary. The scene must not be serialized to JSON, a scene document, an execution mirror, or another wire representation merely because the final surface is a browser canvas.
+
+JavaScript may bootstrap the WASM module and supply browser objects such as a canvas. That platform glue must not mediate the semantic, lowering, runtime, or renderer boundaries.
+
+A serialized transport is justified only when there is a real external or cross-context boundary, for example a separate Python/Pyodide worker communicating with an execution/render worker.
 
 Python and JavaScript/TypeScript are optional language adapters over the same Rust semantic operations. They are not required components of the Rust engine, runtime, or renderer.
 
@@ -97,9 +130,16 @@ Manim Community v0.21.x is the compatibility oracle for supported common 2D Pyth
                               +-----------------------+
                               |       Renderer        |
                               | retained GPU state    |
-                              +-----------------------+
-                                   /             \
-                              native surface      web surface
+                              +-----------+-----------+
+                                          |
+                         +----------------+----------------+
+                         |                                 |
+                         v                                 v
+              native platform host                browser/WASM host
+          window/event loop/surface            canvas/frame/input glue
+                         |                                 |
+                         v                                 v
+                  native surface                     web surface
 ```
 
 There are four engine layers and exactly one authority at each layer:
@@ -109,11 +149,13 @@ There are four engine layers and exactly one authority at each layer:
 3. **Runtime** — the current execution state.
 4. **Renderer** — a projection of runtime state into retained GPU resources and draw work.
 
+Platform hosts are integration shells around those layers. They own window/canvas/surface/event-loop/presentation mechanics, not semantic or runtime truth.
+
 The Rust public API is the first-class native authoring API for these layers. Python and future JS/TS adapt language syntax and host callbacks onto the same Rust semantic operations; they do not define separate engine layers.
 
 Serialization is not a fifth scene model. It is an optional codec around one of these representations for explicit external boundaries such as export/import, debugging, tests, persistence, or unavoidable cross-context transport.
 
-**Normal in-process engine boundaries are typed Rust boundaries.** `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> Renderer` must not serialize to JSON or any other wire representation as part of ordinary native authoring, lowering, execution, mutation, or rendering.
+**Normal in-process engine boundaries are typed Rust boundaries.** `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> Renderer` must not serialize to JSON or any other wire representation as part of ordinary native authoring, lowering, execution, mutation, or rendering. The same rule applies when the Rust engine is compiled to WASM and all layers execute in one browser context.
 
 ---
 
@@ -167,6 +209,8 @@ The idiomatic Rust API calls shared semantic operations directly and must suppor
 
 A native Rust application must be able to build and render a Noon scene without initializing any language host or serialization subsystem.
 
+A Rust application compiled to WASM must be able to build and render the same Noon scene semantics to a browser canvas without serializing between in-process engine layers. Browser bootstrap code is platform integration, not an authoring or engine dependency.
+
 ### Python may own
 
 - Manim-compatible class hierarchy and method signatures;
@@ -204,13 +248,27 @@ class Scene:
 
 The Rust public API calls the same semantic operations directly, without any wrapper or serialization hop.
 
+### Paired executable examples
+
+For significant supported common semantics, maintain equivalent executable Rust and Python examples.
+
+The examples have different jobs:
+
+- the Rust example is the direct first-class product proof;
+- the Python example proves the language wrapper reaches equivalent shared Rust semantics;
+- both should exercise the normal lowering/runtime/renderer path appropriate to their target;
+- target bootstrap may differ, but scene semantics should be equivalent and reusable;
+- cross-language qualification must not depend on serializing migration-era scene documents as the ordinary comparison mechanism.
+
+When a feature is supported in both Rust and Python, implementation is not complete merely because one frontend can demonstrate it.
+
 ---
 
 ## 5. Analysis and lowering
 
 The compiler lowers the Semantic Scene into an Execution Plan.
 
-For native Rust, this is an ordinary typed in-memory Rust transformation. The Semantic Scene is not serialized into a wire document and reparsed by the compiler.
+For Rust, whether native or WASM, this is an ordinary typed in-memory Rust transformation when the compiler and runtime live in the same execution context. The Semantic Scene is not serialized into a wire document and reparsed by the compiler.
 
 Lowering is allowed to discard authoring structure whenever doing so preserves observable behavior.
 
@@ -402,9 +460,37 @@ Text, Graph, 3D and interaction are features of the same scene/runtime architect
 
 ## 11. Browser topology
 
-The browser keeps arbitrary Python away from the render frame loop. This section describes a web integration topology only; it is not part of the native Rust execution path.
+The browser must support two distinct integration shapes without confusing them.
 
-Target shape:
+### Direct Rust/WASM authoring and execution
+
+For a Rust-authored application compiled to WASM, the preferred topology is one typed in-process Rust path:
+
+```text
+Rust/WASM application
+  idiomatic `noon` Rust API
+          |
+          v
+  Semantic Scene
+          |
+          v
+  Execution Plan
+          |
+          v
+  Runtime
+          |
+          v
+  retained renderer
+          |
+          v
+  browser canvas / WebGPU or WebGL
+```
+
+No transport representation exists between these layers merely because the target is the browser. JavaScript may load the WASM module, provide the canvas, and participate in browser-specific lifecycle glue, but it does not receive and re-send scene or runtime state between the Rust layers.
+
+### Host-language or multi-worker topology
+
+Arbitrary Python should stay away from the render frame loop. A browser integration with a separate Python/Pyodide authoring context may look like:
 
 ```text
 Python worker / authoring context
@@ -425,15 +511,17 @@ Exact worker placement is an integration decision, not a semantic boundary.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.
 
-JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
+JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed Rust authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
+
+A transport/mirror used for a real worker boundary must not become mandatory for a direct Rust/WASM scene executing in one context.
 
 ---
 
-## 12. Renderer contract
+## 12. Renderer and platform-host contract
 
 Renderers consume runtime/execution state; they do not own semantic truth.
 
-Required properties:
+Required renderer properties:
 
 - retained GPU residency;
 - stable resource generations;
@@ -443,7 +531,42 @@ Required properties:
 - no retessellation for transform/style-only changes;
 - WebGPU and supported fallback backends must agree semantically and visually within reviewed tolerances.
 
-The renderer is usable directly from the native Rust runtime and through web integration. Web integration does not own renderer semantics.
+`noon-render-wgpu` owns reusable retained GPU rendering. It may own renderer camera uniforms, GPU viewport dimensions, retained GPU resources, preparation/upload logic, command encoding, and renderer-local caches.
+
+It should not own platform/application lifecycle simply to make one target convenient. In particular, the reusable renderer is not the authority for:
+
+- native OS windows or browser DOM/canvas ownership;
+- application event loops;
+- realtime frame scheduling policy;
+- wgpu surface acquisition/recovery policy;
+- platform resize/event translation;
+- final queue submission/presentation ownership when those belong to the host shell.
+
+Platform integration shells provide those mechanics and reuse the same renderer:
+
+```text
+native host integration
+  window/event loop
+  wgpu instance/surface/device/queue/config
+  resize + input ingress
+  frame acquire/submit/present
+          |
+          v
+   noon runtime + noon-render-wgpu
+
+browser/WASM host (`noon-web`)
+  canvas/browser lifecycle
+  browser surface/device/queue/config
+  resize + input ingress
+  frame acquire/submit/present
+          |
+          v
+   noon runtime + noon-render-wgpu
+```
+
+Whether native host integration deserves a separate crate such as `noon-native` or remains a module is a dependency/compilation decision, not an architectural naming requirement.
+
+The renderer is usable directly from the native Rust runtime and through web integration. Neither platform host owns renderer semantics.
 
 Renderer-specific mirrors and caches are derived and disposable.
 
@@ -473,14 +596,21 @@ noon-runtime
 noon-render-wgpu
   retained GPU renderer usable by native and web integration
 
+native host integration
+  optional window/event-loop/surface integration for Rust-native applications
+  crate or module only if the dependency/compilation boundary justifies it
+
 noon-web
-  optional browser/WASM integration
+  optional browser/WASM canvas, surface, frame and browser-input integration
+  direct Rust/WASM execution must not require a serialized in-process mirror
 
 supporting crates such as geometry/text
   only where dependency or compilation isolation is genuinely useful
 ```
 
 The native Rust dependency path must not require `noon-web`, Pyodide, JavaScript, a browser runtime, or a serialization crate merely to move data between engine layers.
+
+The direct Rust/WASM dependency path may require browser/WASM integration crates at the platform edge, but it must not require serialization merely to move data between `noon`, compiler, runtime, and renderer layers in the same WASM context.
 
 Rules:
 
@@ -498,17 +628,20 @@ Rules:
 2. The Semantic Scene is the only authored scene authority.
 3. Rust authoring is a first-class direct API; Python/JS frontends contain handles/adapters, not scene engines.
 4. The native Rust path `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> Renderer` uses typed in-memory Rust data and requires no serialization, JSON, WASM, browser runtime, or language host.
-5. Execution and renderer identities never replace semantic identity.
-6. Mutations are atomic.
-7. Static regions are not invalidated by unrelated dynamic changes.
-8. Reactive evaluation visits only affected dependencies.
-9. Host callbacks observe coherent snapshots and commit mutations transactionally.
-10. No host interpreter is required when no host-dynamic behavior exists.
-11. Direct seek agrees with forward evaluation wherever semantics are deterministic.
-12. Offline and realtime rendering use the same semantic/runtime behavior.
-13. Unsupported compatibility behavior is explicit; silent approximation is not acceptable.
-14. Local changes remain local unless semantics genuinely require wider work.
-15. Serialization is used only at explicit external/cross-context boundaries and never dictates the in-memory engine architecture.
+5. A Rust-authored scene compiled to WASM uses the same typed in-process engine boundaries when the layers share one WASM execution context; the browser target alone is not justification for a scene/runtime serialization hop.
+6. Execution and renderer identities never replace semantic identity.
+7. Mutations are atomic.
+8. Static regions are not invalidated by unrelated dynamic changes.
+9. Reactive evaluation visits only affected dependencies.
+10. Host callbacks observe coherent snapshots and commit mutations transactionally.
+11. No host interpreter is required when no host-dynamic behavior exists.
+12. Direct seek agrees with forward evaluation wherever semantics are deterministic.
+13. Offline and realtime rendering use the same semantic/runtime behavior.
+14. Unsupported compatibility behavior is explicit; silent approximation is not acceptable.
+15. Local changes remain local unless semantics genuinely require wider work.
+16. Serialization is used only at explicit external/cross-context boundaries and never dictates the in-memory engine architecture.
+17. Platform hosts own platform lifecycle only; they do not become semantic, scheduling, or renderer authorities.
+18. Supported common semantics implemented for both Rust and Python are demonstrable through equivalent executable examples reaching the shared engine behavior.
 
 ---
 
@@ -528,16 +661,21 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 - make the only architectural boundary `Semantic Scene -> Execution Plan`;
 - make that boundary a direct typed in-memory Rust API, not serialization through a scene/wire document.
 
-**Done when:** no normal authoring path requires `SceneDefinition`, `SceneSpec`, retained sidecars or another scene-shaped structure as a second authority, and native Rust lowering requires no serialized intermediate.
+**Done when:** no normal authoring path requires `SceneDefinition`, `SceneSpec`, retained sidecars or another scene-shaped structure as a second authority, and Rust lowering requires no serialized intermediate when the layers execute in one context.
 
-### A2. Replace Rust legacy authoring
+### A2. Replace Rust legacy authoring and prove both Rust targets
 
 - move `Scene`, `Mobject`, shapes, layout, `.animate`, lifecycle and composition onto the authoritative Semantic Scene;
 - keep the complete Rust authoring -> lowering -> runtime -> renderer path inside Rust with typed in-memory data;
+- provide a supported native Rust host/viewer path that owns window/surface/event-loop/presentation integration outside `noon-render-wgpu`;
+- provide a direct Rust/WASM -> browser-canvas path that keeps the in-process engine boundaries typed and does not route through execution JSON/mirrors;
+- establish representative Rust scene code that can exercise the same semantics on native and browser targets with only target-host/bootstrap differences;
 - delete `noon::legacy` and compatibility aliases;
 - update internal users directly rather than adding adapters.
 
-**Done when:** the public Rust API has one implementation path, no legacy authoring module, and a native Rust application can author and render without Python, JavaScript, WASM, browser infrastructure, JSON, or serialization bridges.
+Detailed execution-host work is tracked by #969.
+
+**Done when:** the public Rust API has one implementation path, no legacy authoring module, a native Rust application can author and render without Python, JavaScript, WASM, browser infrastructure, JSON, or serialization bridges, and a Rust/WASM application can author and render to a browser canvas without a serialized hop between in-process engine layers.
 
 ### A3. Make Python a thin facade
 
@@ -554,18 +692,20 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 - delete legacy/mixed/semantic transport models that only exist for migration;
 - remove `from_legacy*` paths and compatibility validators;
 - delete `noon-ir` unless a real independent versioned interchange consumer exists;
-- keep only explicit debug/export/transport codecs that serialize authoritative data without becoming authority themselves.
+- keep only explicit debug/export/transport codecs that serialize authoritative data without becoming authority themselves;
+- ensure a worker transport needed by a genuine cross-context browser topology is optional and does not sit in the direct Rust/WASM in-process path.
 
-**Done when:** repository-wide search finds no migration scene model or production legacy wire path, and the normal native Rust authoring/execution pipeline performs no serialization between engine layers.
+**Done when:** repository-wide search finds no migration scene model or production legacy wire path, and normal Rust authoring/execution performs no serialization between in-process engine layers on either native or direct Rust/WASM web targets.
 
 ### A5. Normalize modules and crates
 
 - reorganize `noon-core` and `noon-runtime` so filesystem/module ownership matches the architecture;
 - remove `#[path]`/`include!` structures used to hide unrelated domains;
 - split oversized modules by responsibility;
-- consolidate text/render/helper crates that lack a real independent dependency boundary.
+- consolidate text/render/helper crates that lack a real independent dependency boundary;
+- keep platform-host integration separate from renderer semantic ownership and create a native-host crate only if its dependencies/compilation boundary justify one.
 
-**Done when:** a contributor can locate semantic, compile, runtime and renderer ownership from the workspace/module tree without knowing migration history.
+**Done when:** a contributor can locate semantic, compile, runtime, renderer and platform-host ownership from the workspace/module tree without knowing migration history.
 
 ### A6. Ratchet the architecture
 
@@ -574,11 +714,22 @@ Add structural CI/tests that prevent reintroduction of:
 - Python-owned scene/timeline engines;
 - legacy scene types in normal authoring;
 - serialized JSON/wire intermediates inside the native Rust engine path;
+- serialized JSON/wire intermediates inside a direct single-context Rust/WASM engine path;
+- platform hosts becoming semantic/runtime authorities;
+- `noon-render-wgpu` becoming a window/event-loop application shell;
 - multiple semantic ID allocators;
 - renderer-owned semantic state;
 - local operations that fall back to full-scene work.
 
-**Phase A exit:** one semantic scene, one typed in-memory lowering boundary, one runtime, a fully Rust-native authoring/rendering path, thin optional frontends, and no migration architecture.
+Add executable exit evidence for:
+
+- one representative Rust scene rendering in a native OS window through the typed engine path;
+- equivalent Rust semantics compiled to WASM rendering to a browser canvas through the typed engine path;
+- paired representative Rust/Python examples reaching equivalent shared semantics without relying on migration scene-document serialization.
+
+Detailed execution-host and paired-example exit work is tracked by #969.
+
+**Phase A exit:** one semantic scene, one typed in-memory lowering boundary, one runtime, a fully Rust-native authoring/rendering path, a direct typed Rust/WASM web path, thin optional language frontends, platform hosts that own only platform lifecycle, and no migration architecture.
 
 ---
 
@@ -596,9 +747,9 @@ Order:
 6. Graph/DiGraph using shared family/topology/dependency semantics;
 7. SVG/images, braces, matrices, tables and moving-camera features.
 
-Every supported Python feature must use shared semantic behavior and add representative ManimCE differential evidence.
+Every supported Python feature must use shared semantic behavior and add representative ManimCE differential evidence. Significant common features supported by both public frontends should land with equivalent executable Rust and Python examples; the Rust example is the direct product proof and the Python example is wrapper/parity proof.
 
-**Phase B exit:** representative common 2D Manim scenes require only the intended import/browser adaptation and run through the same semantic/runtime path from Python and Rust.
+**Phase B exit:** representative common 2D Manim scenes require only the intended language/browser adaptation and run through the same semantic/runtime path from Python and Rust, with representative paired examples usable on the supported Rust execution targets.
 
 ---
 
@@ -612,7 +763,7 @@ Every supported Python feature must use shared semantic behavior and add represe
 - add editor/session state above semantic identity (selection, hover, drag, undo grouping);
 - implement hot reload by reconciling stable source/semantic identities and preserving compatible runtime/resource state.
 
-**Phase C exit:** common interaction works without Python; arbitrary Python callbacks are bounded and explicit; local edits stay local through execution and rendering.
+**Phase C exit:** common interaction works without Python; arbitrary Python callbacks are bounded and explicit; local edits stay local through execution and rendering on both platform hosts.
 
 ---
 
@@ -637,9 +788,11 @@ Architecture is enforced with executable evidence, not screenshots alone.
 
 Required categories:
 
-- native Rust authoring -> lowering -> runtime -> renderer smoke tests with no Python/JS/browser/serialization initialization;
-- structural checks that the native Rust engine path contains no JSON/wire round-trip between architecture layers;
+- native Rust authoring -> lowering -> runtime -> renderer -> native-host smoke tests with no Python/JS/browser/serialization initialization;
+- direct Rust/WASM authoring -> lowering -> runtime -> renderer -> browser-canvas smoke tests with no JSON/wire round-trip between in-process engine layers;
+- structural checks that native and direct single-context Rust/WASM engine paths contain no JSON/wire round-trip between architecture layers;
 - Rust/Python semantic parity for equivalent authoring;
+- paired executable Rust/Python examples for representative supported common semantics;
 - ManimCE v0.21 semantic/raster/timing differential tests for supported APIs;
 - direct-seek versus forward-playback tests;
 - mutation atomicity/rollback tests;
@@ -647,6 +800,7 @@ Required categories:
 - mixed large-static + small-dynamic performance tests;
 - host callback batching/isolation tests;
 - renderer dirty-range/residency/culling tests;
+- native host resize/frame/present smoke tests;
 - WebGPU/WebGL backend equivalence for supported surfaces;
 - browser interactive smoke tests;
 - structural architecture tests from Phase A6.
@@ -666,6 +820,8 @@ Before adding an abstraction, crate, scene representation or compatibility layer
 5. Is the new crate/module boundary required by dependency/compilation/reuse, or merely conceptual organization?
 6. Can obsolete code be deleted instead of adapted?
 7. Does this introduce serialization or a transport representation where a typed in-process Rust boundary should exist?
+8. If transport is proposed for the browser, is there a real cross-worker/cross-context boundary, or are all layers already in one WASM context?
+9. Is platform lifecycle being kept in a host shell instead of turning the reusable renderer into an application framework?
 
 For this greenfield project, deletion is preferred over compatibility scaffolding.
 
@@ -677,7 +833,9 @@ For this greenfield project, deletion is preferred over compatibility scaffoldin
 - multiple authoring scene models;
 - a Python animation/scheduling engine beside Rust;
 - requiring Python, JavaScript, WASM, a browser, JSON, or serialization for native Rust authoring/execution/rendering;
+- forcing a Rust-authored WASM scene through JSON, a scene document, an execution mirror, or JavaScript mediation when the engine layers share one WASM context;
 - using serialized wire documents as ordinary in-process boundaries between Semantic Scene, Execution Plan, Runtime, and Renderer;
+- making `noon-render-wgpu` own native/browser application event-loop or window/canvas lifecycle merely for convenience;
 - a renderer-specific semantic scene;
 - separate architectures for text, Graph, interaction or 3D;
 - serializable wire structures dictating the in-memory semantic design;
