@@ -403,14 +403,20 @@ mod tests {
             .set_semantic_signal_source(target, source.clone())
             .unwrap());
         assert_eq!(store.node(target).unwrap().id(), target);
-        assert_eq!(store.semantic_signal_state(target).unwrap().source(), &source);
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &source
+        );
         assert_eq!(store.len(), before_len);
         assert_eq!(store.last_mutation_stats().slots_written, 1);
 
         assert!(!store
             .set_semantic_signal_source(target, source.clone())
             .unwrap());
-        assert_eq!(store.semantic_signal_state(target).unwrap().source(), &source);
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &source
+        );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
 
@@ -456,7 +462,11 @@ mod tests {
             .insert_semantic_derived_signal(SemanticSignalExpr::signal(stale))
             .unwrap();
         let target = store.insert_semantic_input_signal(5.0_f64).unwrap();
-        let target_before = store.semantic_signal_state(target).unwrap().source().clone();
+        let target_before = store
+            .semantic_signal_state(target)
+            .unwrap()
+            .source()
+            .clone();
         store.remove_node(stale).unwrap();
 
         assert_eq!(
