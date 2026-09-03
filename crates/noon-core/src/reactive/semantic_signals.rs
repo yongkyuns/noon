@@ -1,6 +1,28 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use super::{SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticVec3};
+
+/// Stable authored value kind of a semantic signal.
+///
+/// This is semantic vocabulary, not the execution-layer `ValueKind`. Lowering may
+/// specialize `Vec3` or scalar precision for a target runtime without changing the
+/// authored signal contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticSignalValueKind {
+    Bool,
+    Scalar,
+    Vec3,
+}
+
+impl std::fmt::Display for SemanticSignalValueKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Bool => "bool",
+            Self::Scalar => "scalar",
+            Self::Vec3 => "vec3",
+        })
+    }
+}
 
 /// High-precision authored value carried by a semantic signal.
 ///
@@ -14,6 +36,14 @@ pub enum SemanticSignalValue {
 }
 
 impl SemanticSignalValue {
+    pub const fn value_kind(&self) -> SemanticSignalValueKind {
+        match self {
+            Self::Bool(_) => SemanticSignalValueKind::Bool,
+            Self::Scalar(_) => SemanticSignalValueKind::Scalar,
+            Self::Vec3(_) => SemanticSignalValueKind::Vec3,
+        }
+    }
+
     pub fn is_finite(&self) -> bool {
         match self {
             Self::Bool(_) => true,
@@ -83,15 +113,23 @@ pub enum SemanticSignalSource {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticSignalState {
     source: SemanticSignalSource,
+    value_kind: SemanticSignalValueKind,
 }
 
 impl SemanticSignalState {
-    pub const fn new(source: SemanticSignalSource) -> Self {
-        Self { source }
+    pub(crate) const fn new(
+        source: SemanticSignalSource,
+        value_kind: SemanticSignalValueKind,
+    ) -> Self {
+        Self { source, value_kind }
     }
 
     pub const fn source(&self) -> &SemanticSignalSource {
         &self.source
+    }
+
+    pub const fn value_kind(&self) -> SemanticSignalValueKind {
+        self.value_kind
     }
 }
 
@@ -101,6 +139,20 @@ pub enum SemanticSignalError {
     NotSignal(SemanticNodeId),
     NonFiniteValue,
     DependencyCycle(SemanticNodeId),
+    InvalidUnaryExpression {
+        operation: &'static str,
+        operand: SemanticSignalValueKind,
+    },
+    InvalidBinaryExpression {
+        operation: &'static str,
+        lhs: SemanticSignalValueKind,
+        rhs: SemanticSignalValueKind,
+    },
+    SourceTypeMismatch {
+        signal: SemanticNodeId,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
 }
 
 impl std::fmt::Display for SemanticSignalError {
@@ -127,6 +179,28 @@ impl std::fmt::Display for SemanticSignalError {
                 id.slot(),
                 id.generation()
             ),
+            Self::InvalidUnaryExpression { operation, operand } => write!(
+                formatter,
+                "semantic signal operation {operation} does not accept {operand}"
+            ),
+            Self::InvalidBinaryExpression {
+                operation,
+                lhs,
+                rhs,
+            } => write!(
+                formatter,
+                "semantic signal operation {operation} does not accept {lhs} and {rhs}"
+            ),
+            Self::SourceTypeMismatch {
+                signal,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "semantic signal {}:{} has stable kind {expected}, but replacement source is {actual}",
+                signal.slot(),
+                signal.generation()
+            ),
         }
     }
 }
@@ -141,26 +215,28 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
         let value = value.into();
-        validate_value(&value)?;
+        let value_kind = validate_value(&value)?;
         Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
             SemanticSignalSource::Input(value),
+            value_kind,
         )))
     }
 
     /// Insert one authored derived signal after validating its referenced closure.
     ///
     /// A new signal cannot reference its not-yet-allocated identity, so creation
-    /// cannot introduce a cycle. Walking the existing dependency closure still
-    /// rejects stale or non-signal references inherited through another signal.
+    /// cannot introduce a cycle. Walking the existing dependency closure rejects
+    /// stale/non-signal references and infers one stable semantic result kind.
     pub fn insert_semantic_derived_signal(
         &mut self,
         expression: SemanticSignalExpr,
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
-        let mut visited = HashSet::new();
-        validate_expression_closure(self, &expression, None, &mut visited)?;
+        let mut cache = HashMap::new();
+        let value_kind = infer_expression_kind(self, &expression, None, &mut cache)?;
         Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
             SemanticSignalSource::Derived(expression),
+            value_kind,
         )))
     }
 
@@ -177,22 +253,39 @@ impl SemanticStore {
         }
     }
 
-    /// Replace one signal's authored source while preserving semantic identity.
+    /// Return the stable authored value kind of one semantic signal in O(1).
+    pub fn semantic_signal_value_kind(
+        &self,
+        id: SemanticNodeId,
+    ) -> Result<SemanticSignalValueKind, SemanticSignalError> {
+        Ok(self.semantic_signal_state(id)?.value_kind())
+    }
+
+    /// Replace one signal's authored source while preserving semantic identity and kind.
     ///
     /// Validation completes before the target node is written. Work is proportional
     /// to the new source's dependency closure; unrelated scene nodes are not scanned.
     /// A successful replacement writes exactly the target signal slot, while an
-    /// invalid or identical replacement writes no semantic slots.
+    /// invalid, kind-changing, or identical replacement writes no semantic slots.
     pub fn set_semantic_signal_source(
         &mut self,
         id: SemanticNodeId,
         source: SemanticSignalSource,
     ) -> Result<bool, SemanticSignalError> {
         self.set_last_mutation_writes(0);
-        let previous = self.semantic_signal_state(id)?.source().clone();
+        let state = self.semantic_signal_state(id)?;
+        let previous = state.source().clone();
+        let expected = state.value_kind();
 
-        let mut visited = HashSet::new();
-        validate_source_closure(self, &source, Some(id), &mut visited)?;
+        let mut cache = HashMap::new();
+        let actual = infer_source_kind(self, &source, Some(id), &mut cache)?;
+        if actual != expected {
+            return Err(SemanticSignalError::SourceTypeMismatch {
+                signal: id,
+                expected,
+                actual,
+            });
+        }
         if previous == source {
             return Ok(false);
         }
@@ -206,67 +299,146 @@ impl SemanticStore {
     }
 }
 
-fn validate_value(value: &SemanticSignalValue) -> Result<(), SemanticSignalError> {
+fn validate_value(
+    value: &SemanticSignalValue,
+) -> Result<SemanticSignalValueKind, SemanticSignalError> {
     if value.is_finite() {
-        Ok(())
+        Ok(value.value_kind())
     } else {
         Err(SemanticSignalError::NonFiniteValue)
     }
 }
 
-fn validate_source_closure(
+fn infer_source_kind(
     store: &SemanticStore,
     source: &SemanticSignalSource,
     cycle_target: Option<SemanticNodeId>,
-    visited: &mut HashSet<SemanticNodeId>,
-) -> Result<(), SemanticSignalError> {
+    cache: &mut HashMap<SemanticNodeId, SemanticSignalValueKind>,
+) -> Result<SemanticSignalValueKind, SemanticSignalError> {
     match source {
         SemanticSignalSource::Input(value) => validate_value(value),
         SemanticSignalSource::Derived(expression) => {
-            validate_expression_closure(store, expression, cycle_target, visited)
+            infer_expression_kind(store, expression, cycle_target, cache)
         }
     }
 }
 
-fn validate_expression_closure(
+fn infer_expression_kind(
     store: &SemanticStore,
     expression: &SemanticSignalExpr,
     cycle_target: Option<SemanticNodeId>,
-    visited: &mut HashSet<SemanticNodeId>,
-) -> Result<(), SemanticSignalError> {
+    cache: &mut HashMap<SemanticNodeId, SemanticSignalValueKind>,
+) -> Result<SemanticSignalValueKind, SemanticSignalError> {
     match expression {
         SemanticSignalExpr::Constant(value) => validate_value(value),
         SemanticSignalExpr::Signal(id) => {
-            validate_signal_dependency(store, *id, cycle_target, visited)
+            infer_signal_dependency_kind(store, *id, cycle_target, cache)
         }
-        SemanticSignalExpr::Add(lhs, rhs)
-        | SemanticSignalExpr::Sub(lhs, rhs)
-        | SemanticSignalExpr::Mul(lhs, rhs) => {
-            validate_expression_closure(store, lhs, cycle_target, visited)?;
-            validate_expression_closure(store, rhs, cycle_target, visited)
+        SemanticSignalExpr::Add(lhs, rhs) => {
+            let lhs = infer_expression_kind(store, lhs, cycle_target, cache)?;
+            let rhs = infer_expression_kind(store, rhs, cycle_target, cache)?;
+            match (lhs, rhs) {
+                (SemanticSignalValueKind::Scalar, SemanticSignalValueKind::Scalar) => {
+                    Ok(SemanticSignalValueKind::Scalar)
+                }
+                (SemanticSignalValueKind::Vec3, SemanticSignalValueKind::Vec3) => {
+                    Ok(SemanticSignalValueKind::Vec3)
+                }
+                _ => Err(SemanticSignalError::InvalidBinaryExpression {
+                    operation: "add",
+                    lhs,
+                    rhs,
+                }),
+            }
         }
-        SemanticSignalExpr::Neg(value)
-        | SemanticSignalExpr::Sin(value)
-        | SemanticSignalExpr::Cos(value) => {
-            validate_expression_closure(store, value, cycle_target, visited)
+        SemanticSignalExpr::Sub(lhs, rhs) => {
+            let lhs = infer_expression_kind(store, lhs, cycle_target, cache)?;
+            let rhs = infer_expression_kind(store, rhs, cycle_target, cache)?;
+            match (lhs, rhs) {
+                (SemanticSignalValueKind::Scalar, SemanticSignalValueKind::Scalar) => {
+                    Ok(SemanticSignalValueKind::Scalar)
+                }
+                (SemanticSignalValueKind::Vec3, SemanticSignalValueKind::Vec3) => {
+                    Ok(SemanticSignalValueKind::Vec3)
+                }
+                _ => Err(SemanticSignalError::InvalidBinaryExpression {
+                    operation: "sub",
+                    lhs,
+                    rhs,
+                }),
+            }
+        }
+        SemanticSignalExpr::Mul(lhs, rhs) => {
+            let lhs = infer_expression_kind(store, lhs, cycle_target, cache)?;
+            let rhs = infer_expression_kind(store, rhs, cycle_target, cache)?;
+            match (lhs, rhs) {
+                (SemanticSignalValueKind::Scalar, SemanticSignalValueKind::Scalar) => {
+                    Ok(SemanticSignalValueKind::Scalar)
+                }
+                (SemanticSignalValueKind::Scalar, SemanticSignalValueKind::Vec3)
+                | (SemanticSignalValueKind::Vec3, SemanticSignalValueKind::Scalar) => {
+                    Ok(SemanticSignalValueKind::Vec3)
+                }
+                _ => Err(SemanticSignalError::InvalidBinaryExpression {
+                    operation: "mul",
+                    lhs,
+                    rhs,
+                }),
+            }
+        }
+        SemanticSignalExpr::Neg(value) => {
+            let operand = infer_expression_kind(store, value, cycle_target, cache)?;
+            match operand {
+                SemanticSignalValueKind::Scalar | SemanticSignalValueKind::Vec3 => Ok(operand),
+                SemanticSignalValueKind::Bool => {
+                    Err(SemanticSignalError::InvalidUnaryExpression {
+                        operation: "neg",
+                        operand,
+                    })
+                }
+            }
+        }
+        SemanticSignalExpr::Sin(value) => {
+            infer_scalar_unary_kind(store, value, cycle_target, cache, "sin")
+        }
+        SemanticSignalExpr::Cos(value) => {
+            infer_scalar_unary_kind(store, value, cycle_target, cache, "cos")
         }
     }
 }
 
-fn validate_signal_dependency(
+fn infer_scalar_unary_kind(
+    store: &SemanticStore,
+    expression: &SemanticSignalExpr,
+    cycle_target: Option<SemanticNodeId>,
+    cache: &mut HashMap<SemanticNodeId, SemanticSignalValueKind>,
+    operation: &'static str,
+) -> Result<SemanticSignalValueKind, SemanticSignalError> {
+    let operand = infer_expression_kind(store, expression, cycle_target, cache)?;
+    if operand == SemanticSignalValueKind::Scalar {
+        Ok(SemanticSignalValueKind::Scalar)
+    } else {
+        Err(SemanticSignalError::InvalidUnaryExpression { operation, operand })
+    }
+}
+
+fn infer_signal_dependency_kind(
     store: &SemanticStore,
     id: SemanticNodeId,
     cycle_target: Option<SemanticNodeId>,
-    visited: &mut HashSet<SemanticNodeId>,
-) -> Result<(), SemanticSignalError> {
+    cache: &mut HashMap<SemanticNodeId, SemanticSignalValueKind>,
+) -> Result<SemanticSignalValueKind, SemanticSignalError> {
     if cycle_target == Some(id) {
         return Err(SemanticSignalError::DependencyCycle(id));
     }
-    if !visited.insert(id) {
-        return Ok(());
+    if let Some(value_kind) = cache.get(&id).copied() {
+        return Ok(value_kind);
     }
     let state = store.semantic_signal_state(id)?;
-    validate_source_closure(store, state.source(), cycle_target, visited)
+    let value_kind = infer_source_kind(store, state.source(), cycle_target, cache)?;
+    debug_assert_eq!(value_kind, state.value_kind());
+    cache.insert(id, value_kind);
+    Ok(value_kind)
 }
 
 #[cfg(test)]
@@ -289,6 +461,10 @@ mod tests {
             store.semantic_signal_state(signal).unwrap().source(),
             SemanticSignalSource::Input(SemanticSignalValue::Scalar(value)) if *value == 1.25
         ));
+        assert_eq!(
+            store.semantic_signal_value_kind(signal).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
         assert_eq!(store.last_mutation_stats().slots_written, 1);
         assert_eq!(store.scene_root_count(), 0);
     }
@@ -308,7 +484,135 @@ mod tests {
             store.semantic_signal_state(derived).unwrap().source(),
             SemanticSignalSource::Derived(_)
         ));
+        assert_eq!(
+            store.semantic_signal_value_kind(derived).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
         assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn semantic_expression_kinds_match_the_native_reactive_operator_contract() {
+        let mut store = SemanticStore::new();
+        let scalar = store.insert_semantic_input_signal(2.0_f64).unwrap();
+        let vector = store
+            .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
+            .unwrap();
+        let boolean = store.insert_semantic_input_signal(true).unwrap();
+
+        assert_eq!(
+            store.semantic_signal_value_kind(boolean).unwrap(),
+            SemanticSignalValueKind::Bool
+        );
+
+        let vector_sum = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(vector)),
+                Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
+                    SemanticVec3::new(4.0, 5.0, 6.0),
+                ))),
+            ))
+            .unwrap();
+        assert_eq!(
+            store.semantic_signal_value_kind(vector_sum).unwrap(),
+            SemanticSignalValueKind::Vec3
+        );
+
+        let scaled = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Mul(
+                Box::new(SemanticSignalExpr::signal(scalar)),
+                Box::new(SemanticSignalExpr::signal(vector)),
+            ))
+            .unwrap();
+        assert_eq!(
+            store.semantic_signal_value_kind(scaled).unwrap(),
+            SemanticSignalValueKind::Vec3
+        );
+
+        let negated = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Neg(Box::new(
+                SemanticSignalExpr::signal(vector),
+            )))
+            .unwrap();
+        assert_eq!(
+            store.semantic_signal_value_kind(negated).unwrap(),
+            SemanticSignalValueKind::Vec3
+        );
+
+        let sine = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Sin(Box::new(
+                SemanticSignalExpr::signal(scalar),
+            )))
+            .unwrap();
+        assert_eq!(
+            store.semantic_signal_value_kind(sine).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
+    }
+
+    #[test]
+    fn invalid_semantic_expression_kinds_are_rejected_before_insertion() {
+        let mut store = SemanticStore::new();
+        let scalar = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let vector = store
+            .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
+            .unwrap();
+        let boolean = store.insert_semantic_input_signal(true).unwrap();
+        let before = store.len();
+
+        assert_eq!(
+            store.insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(boolean)),
+                Box::new(SemanticSignalExpr::signal(boolean)),
+            )),
+            Err(SemanticSignalError::InvalidBinaryExpression {
+                operation: "add",
+                lhs: SemanticSignalValueKind::Bool,
+                rhs: SemanticSignalValueKind::Bool,
+            })
+        );
+        assert_eq!(store.len(), before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(scalar)),
+                Box::new(SemanticSignalExpr::signal(vector)),
+            )),
+            Err(SemanticSignalError::InvalidBinaryExpression {
+                operation: "add",
+                lhs: SemanticSignalValueKind::Scalar,
+                rhs: SemanticSignalValueKind::Vec3,
+            })
+        );
+        assert_eq!(store.len(), before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_derived_signal(SemanticSignalExpr::Mul(
+                Box::new(SemanticSignalExpr::signal(vector)),
+                Box::new(SemanticSignalExpr::signal(vector)),
+            )),
+            Err(SemanticSignalError::InvalidBinaryExpression {
+                operation: "mul",
+                lhs: SemanticSignalValueKind::Vec3,
+                rhs: SemanticSignalValueKind::Vec3,
+            })
+        );
+        assert_eq!(store.len(), before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_derived_signal(SemanticSignalExpr::Sin(Box::new(
+                SemanticSignalExpr::signal(vector),
+            ))),
+            Err(SemanticSignalError::InvalidUnaryExpression {
+                operation: "sin",
+                operand: SemanticSignalValueKind::Vec3,
+            })
+        );
+        assert_eq!(store.len(), before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
 
     #[test]
@@ -377,16 +681,19 @@ mod tests {
         assert_eq!(store.last_mutation_stats().slots_written, 1);
 
         let derived = store
-            .insert_semantic_derived_signal(SemanticSignalExpr::Sin(Box::new(
+            .insert_semantic_derived_signal(SemanticSignalExpr::Neg(Box::new(
                 SemanticSignalExpr::signal(input),
             )))
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
-        assert!(store.semantic_signal_state(derived).is_ok());
+        assert_eq!(
+            store.semantic_signal_value_kind(derived).unwrap(),
+            SemanticSignalValueKind::Vec3
+        );
     }
 
     #[test]
-    fn signal_source_replacement_preserves_identity_and_one_slot_locality() {
+    fn signal_source_replacement_preserves_identity_kind_and_one_slot_locality() {
         let mut store = SemanticStore::new();
         for index in 0..10_000 {
             object(&mut store, index as f32 + 1.0);
@@ -407,6 +714,10 @@ mod tests {
             store.semantic_signal_state(target).unwrap().source(),
             &source
         );
+        assert_eq!(
+            store.semantic_signal_value_kind(target).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
         assert_eq!(store.len(), before_len);
         assert_eq!(store.last_mutation_stats().slots_written, 1);
 
@@ -418,6 +729,60 @@ mod tests {
             &source
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn signal_source_replacement_cannot_change_the_signal_value_kind() {
+        let mut store = SemanticStore::new();
+        let target = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let vector = store
+            .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
+            .unwrap();
+        let before = store.semantic_signal_state(target).unwrap().source().clone();
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(vector)),
+            ),
+            Err(SemanticSignalError::SourceTypeMismatch {
+                signal: target,
+                expected: SemanticSignalValueKind::Scalar,
+                actual: SemanticSignalValueKind::Vec3,
+            })
+        );
+        assert_eq!(store.semantic_signal_state(target).unwrap().source(), &before);
+        assert_eq!(
+            store.semantic_signal_value_kind(target).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn stable_signal_kind_allows_recovery_from_a_stale_dependency() {
+        let mut store = SemanticStore::new();
+        let dependency = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let target = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(dependency))
+            .unwrap();
+        store.remove_node(dependency).unwrap();
+
+        assert_eq!(
+            store.semantic_signal_value_kind(target).unwrap(),
+            SemanticSignalValueKind::Scalar
+        );
+        assert!(store
+            .set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Input(SemanticSignalValue::Scalar(7.0)),
+            )
+            .unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert!(matches!(
+            store.semantic_signal_state(target).unwrap().source(),
+            SemanticSignalSource::Input(SemanticSignalValue::Scalar(value)) if *value == 7.0
+        ));
     }
 
     #[test]
