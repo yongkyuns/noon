@@ -69,7 +69,9 @@ fn target_node_checked(
     let is_target = match node.kind() {
         SemanticNodeKind::Family => true,
         SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
-        SemanticNodeKind::Object(_) | SemanticNodeKind::Signal(_) => false,
+        SemanticNodeKind::Object(_)
+        | SemanticNodeKind::Signal(_)
+        | SemanticNodeKind::Animation(_) => false,
     };
     if !is_target {
         return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(id));
