@@ -132,7 +132,10 @@ impl SemanticNode {
     }
 
     pub const fn is_scene_owned(&self) -> bool {
-        matches!(self.scene_membership, SemanticSceneMembership::Attached { .. })
+        matches!(
+            self.scene_membership,
+            SemanticSceneMembership::Attached { .. }
+        )
     }
 
     const fn scene_next(&self) -> Option<SemanticNodeId> {
