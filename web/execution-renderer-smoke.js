@@ -1,7 +1,7 @@
 import init, {
+  AuthoringSceneCore,
   EngineScenePlayer,
   ExecutionCanvasRenderer,
-  demoSceneJson,
 } from "./pkg/noon_web.js";
 
 const state = {
@@ -14,7 +14,8 @@ window.noonExecutionRendererSmoke = state;
 
 async function start() {
   await init();
-  const engine = new EngineScenePlayer(demoSceneJson(), 4.0, 1);
+  const bootstrap = new AuthoringSceneCore();
+  const engine = new EngineScenePlayer(bootstrap.sceneJson(), 4.0, 1);
   const initialDelta = engine.initialDeltaJson();
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await ExecutionCanvasRenderer.create(canvas, initialDelta);

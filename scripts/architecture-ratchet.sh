@@ -164,6 +164,7 @@ deleted_legacy_web_references="$(
     -- \
     'crates/noon-web/src' \
     'web/browser-smoke.js' \
+    'web/execution-renderer-smoke.js' \
     'scripts/check-web-package.mjs' \
     'scripts/browser-smoke.mjs' || true
 )"
@@ -201,12 +202,12 @@ fi
 if (( deleted_legacy_web_surface_found != 0 )); then
   cat >&2 <<'EOF'
 
-The browser package/primary smoke boundary and duplicate playback clock were
-cleaned by #1003 and #1005. Those completed boundaries must not regain the
-NoonCanvasPlayer/demoSceneJson frontend, and noon-web must keep one PlaybackClock
-definition in crates/noon-web/src/clock.rs. Legacy performance tools that still
-use the old frontend remain separate A4 deletion debt; do not spread that debt
-back into cleaned product or validation paths. See #959/A4 and #961/A6.8.
+The browser package/smoke boundaries and duplicate playback clock were cleaned by
+#1003, #1005, and follow-up A4 migration. Those completed boundaries must not
+regain the NoonCanvasPlayer/demoSceneJson frontend, and noon-web must keep one
+PlaybackClock definition in crates/noon-web/src/clock.rs. Legacy performance tools
+that still use the old frontend remain separate A4 deletion debt; do not spread
+that debt back into cleaned product or validation paths. See #959/A4 and #961/A6.8.
 EOF
 fi
 
