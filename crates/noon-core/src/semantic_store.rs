@@ -137,7 +137,7 @@ impl OrderedFamilyMembers {
             debug_assert_eq!(self.tail, Some(member));
             self.tail = link.previous;
         }
-        if self.links.is_empty() {
+        if self.is_empty() {
             debug_assert!(self.head.is_none());
             debug_assert!(self.tail.is_none());
         }
