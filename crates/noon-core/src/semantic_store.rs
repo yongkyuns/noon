@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
+use crate::SemanticObjectState;
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -163,8 +164,9 @@ impl OrderedFamilyMembers {
 pub enum SemanticNodeKind {
     /// Compatibility payload while `SceneDefinition` consumers migrate.
     Object(ObjectDefinition),
-    /// Stable frontend object identity whose mutable authoring payload lives in a
-    /// shared frontend handle rather than the legacy SceneDefinition object shape.
+    /// Semantic object identity. Target objects carry `SemanticObjectState`
+    /// directly on the node. State-less instances exist only for the temporary
+    /// frontend identity seam and are owned for migration by #61/#959.
     AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
     Family,
@@ -174,6 +176,11 @@ pub enum SemanticNodeKind {
 pub struct SemanticNode {
     id: SemanticNodeId,
     kind: SemanticNodeKind,
+    /// Authoritative authored object payload for target semantic objects.
+    ///
+    /// `None` is valid for families, legacy compatibility objects, and the
+    /// temporary state-less frontend identity seam only.
+    object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
     scene_membership: SemanticSceneMembership,
     /// Families containing this node. Multiple parents are intentional and
@@ -209,6 +216,14 @@ impl SemanticNode {
             SemanticNodeKind::Object(object) => Some(object),
             SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
         }
+    }
+
+    pub fn semantic_object_state(&self) -> Option<&SemanticObjectState> {
+        self.object_state.as_ref()
+    }
+
+    pub fn semantic_object_state_mut(&mut self) -> Option<&mut SemanticObjectState> {
+        self.object_state.as_mut()
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {
@@ -276,6 +291,7 @@ pub struct SemanticStore {
     scene_head: Option<SemanticNodeId>,
     scene_tail: Option<SemanticNodeId>,
     scene_nodes: usize,
+    next_insertion_order: u64,
     object_nodes: HashMap<ObjectId, SemanticNodeId>,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     last_mutation: SemanticMutationStats,
@@ -309,6 +325,25 @@ impl SemanticStore {
         id
     }
 
+    /// Insert a target semantic object whose authored payload is owned directly by
+    /// the authoritative node. Stable painter insertion order is assigned here so
+    /// frontends cannot manufacture conflicting tie-break values.
+    pub fn insert_semantic_object(&mut self, mut state: SemanticObjectState) -> SemanticNodeId {
+        let insertion_order = self.next_insertion_order;
+        self.next_insertion_order = self
+            .next_insertion_order
+            .checked_add(1)
+            .expect("Noon semantic insertion-order space exhausted");
+        state.assign_insertion_order(insertion_order);
+        let id = self.insert_kind(SemanticNodeKind::AuthoringObject);
+        self.node_mut(id)
+            .expect("newly inserted semantic node exists")
+            .object_state = Some(state);
+        id
+    }
+
+    /// Temporary identity-only frontend seam. New target object authoring should
+    /// use `insert_semantic_object`; #61/#959 own migration/removal of this path.
     pub fn insert_authoring_object(&mut self) -> SemanticNodeId {
         self.insert_kind(SemanticNodeKind::AuthoringObject)
     }
@@ -336,6 +371,7 @@ impl SemanticStore {
         self.slots[slot_index as usize].node = Some(SemanticNode {
             id,
             kind,
+            object_state: None,
             source_identity: None,
             scene_membership: SemanticSceneMembership::Detached,
             parents: Vec::new(),
