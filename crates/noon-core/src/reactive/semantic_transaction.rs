@@ -14,13 +14,18 @@ use animation_addition::{commit_add_animation, preflight_add_animation};
 mod family_edges;
 use family_edges::FamilyEdgePreflight;
 
+mod node_addition;
+pub use node_addition::SemanticNodeCreation;
+use node_addition::{commit_add_node, preflight_add_node};
+
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
-/// Signal values, object properties, authored content, family membership/order,
-/// reactive subscriptions, animation declarations, and structural deletion share
-/// the same transaction so frontends, editors, and host integrations cannot invent
-/// subsystem-specific patch paths. Dependency-expression rewiring remains authored
-/// declaration topology rather than being conflated with a value update.
+/// Signal values, object properties, authored content, scene-node allocation,
+/// family membership/order, reactive subscriptions, animation declarations, and
+/// structural deletion share the same transaction so frontends, editors, and host
+/// integrations cannot invent subsystem-specific patch paths. Dependency-expression
+/// rewiring remains authored declaration topology rather than being conflated with a
+/// value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
     SetSignal {
@@ -54,6 +59,9 @@ pub enum SemanticMutation {
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
     },
+    AddNode {
+        creation: SemanticNodeCreation,
+    },
     AddAnimation {
         state: SemanticAnimationState,
     },
@@ -70,7 +78,7 @@ impl SemanticMutation {
     ///
     /// Allocation mutations do not have an identity until commit and therefore
     /// return `None`. This keeps creation out of the existing-target conflict key
-    /// space and leaves room for `AddNode` to use the same allocation semantics.
+    /// space without reserving or manufacturing semantic identity before preflight.
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::SetSignal { signal, .. } => Some(*signal),
@@ -80,7 +88,7 @@ impl SemanticMutation {
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => Some(*family),
-            Self::AddAnimation { .. } => None,
+            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
             Self::RemoveAnimation { animation } => Some(*animation),
             Self::RemoveNode { node } => Some(*node),
         }
@@ -114,7 +122,7 @@ impl SemanticMutation {
                 family: *family,
                 member: *member,
             }),
-            Self::AddAnimation { .. } => None,
+            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
             Self::RemoveAnimation { animation } => {
                 Some(SemanticMutationKey::NodeRemoval(*animation))
             }
@@ -180,6 +188,9 @@ pub enum SemanticMutationImpact {
         family: SemanticNodeId,
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
+    },
+    NodeAdded {
+        node: SemanticNodeId,
     },
     AnimationAdded {
         animation: SemanticNodeId,
@@ -287,6 +298,20 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Allocate one new detached semantic scene node after complete transaction
+    /// preflight.
+    ///
+    /// Object/family creation uses the same scene-global generational allocator as
+    /// all other semantic entities. The real identity is reported by `NodeAdded`;
+    /// no provisional semantic ID is reserved before commit. Optional source
+    /// identity is assigned atomically after terminal removals, allowing hot-reload
+    /// replacement to transfer one stable source key from an old node to its new
+    /// identity without creating a second identity model.
+    pub fn add_node(&mut self, creation: SemanticNodeCreation) -> &mut Self {
+        self.mutations.push(SemanticMutation::AddNode { creation });
+        self
+    }
+
     /// Add one authored animation declaration after complete transaction preflight.
     ///
     /// The declaration references existing scene-global semantic identities. The
@@ -343,6 +368,7 @@ impl SemanticMutationTransaction {
 
         let mut impacts = Vec::with_capacity(self.mutations.len());
         let mut written_slots = HashSet::with_capacity(self.mutations.len());
+        let mut pending_source_assignments = Vec::new();
         for (mutation, changed) in self.mutations.into_iter().zip(preflight) {
             if !changed {
                 continue;
@@ -416,6 +442,14 @@ impl SemanticMutationTransaction {
                         before,
                     });
                 }
+                SemanticMutation::AddNode { creation } => {
+                    let (node, source_identity) = commit_add_node(store, creation);
+                    written_slots.insert(node);
+                    if let Some(source_identity) = source_identity {
+                        pending_source_assignments.push((node, source_identity));
+                    }
+                    impacts.push(SemanticMutationImpact::NodeAdded { node });
+                }
                 SemanticMutation::AddAnimation { state } => {
                     let animation = commit_add_animation(store, &state);
                     written_slots.insert(animation);
@@ -449,6 +483,12 @@ impl SemanticMutationTransaction {
                     }
                 }
             }
+        }
+
+        for (node, source_identity) in pending_source_assignments {
+            store
+                .set_source_identity(node, Some(source_identity))
+                .expect("preflighted source identity must be available after terminal removals");
         }
         store.set_last_mutation_writes(written_slots.len());
 
@@ -494,6 +534,7 @@ impl SemanticMutationTransaction {
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut changed = Vec::with_capacity(self.mutations.len());
         let mut family_edges = FamilyEdgePreflight::default();
+        let mut pending_sources = HashSet::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
             if !matches!(
@@ -744,6 +785,16 @@ impl SemanticMutationTransaction {
                             })?,
                     );
                 }
+                SemanticMutation::AddNode { creation } => {
+                    preflight_add_node(
+                        store,
+                        creation,
+                        &removed_nodes,
+                        &mut pending_sources,
+                        index,
+                    )?;
+                    changed.push(true);
+                }
                 SemanticMutation::AddAnimation { state } => {
                     preflight_add_animation(store, state, &removed_nodes, index)?;
                     changed.push(true);
@@ -944,9 +995,22 @@ pub enum SemanticMutationTransactionError {
         family: SemanticNodeId,
         node: SemanticNodeId,
     },
+    NodeCreationUsesRemovedNode {
+        index: usize,
+        node: SemanticNodeId,
+    },
     AnimationUsesRemovedNode {
         index: usize,
         node: SemanticNodeId,
+    },
+    InvalidNodeObjectState {
+        index: usize,
+    },
+    NodeCreationBindingTypeMismatch {
+        index: usize,
+        signal: SemanticNodeId,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
     },
     Signal {
         index: usize,
@@ -1139,11 +1203,32 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
+            Self::NodeCreationUsesRemovedNode { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add a node referencing semantic node {}:{} because that node is removed by the same transaction",
+                node.slot(),
+                node.generation()
+            ),
             Self::AnimationUsesRemovedNode { index, node } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot add an animation referencing node {}:{} because that node is removed by the same transaction",
                 node.slot(),
                 node.generation()
+            ),
+            Self::InvalidNodeObjectState { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add an object with non-finite authored transform/style values"
+            ),
+            Self::NodeCreationBindingTypeMismatch {
+                index,
+                signal,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add an object binding {actual} signal {}:{} to a property requiring {expected}",
+                signal.slot(),
+                signal.generation()
             ),
             Self::Signal { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
@@ -1269,6 +1354,9 @@ mod family_edge_tests;
 
 #[cfg(test)]
 mod reorder_member_tests;
+
+#[cfg(test)]
+mod add_node_tests;
 
 #[cfg(test)]
 mod add_animation_tests;
