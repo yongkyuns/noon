@@ -30,7 +30,7 @@ impl SemanticStore {
                 }
                 SemanticNodeKind::Family => {
                     for member in node.members() {
-                        collect(store, *member, seen, leaves)?;
+                        collect(store, member, seen, leaves)?;
                     }
                 }
             }
