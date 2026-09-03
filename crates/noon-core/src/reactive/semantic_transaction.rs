@@ -226,9 +226,12 @@ impl SemanticMutationTransaction {
                     property,
                     value,
                 } => {
-                    let state = store.semantic_object_state_checked(*object).map_err(|error| {
-                        SemanticMutationTransactionError::Object { index, error }
-                    })?;
+                    let state = store
+                        .semantic_object_state_checked(*object)
+                        .map_err(|error| SemanticMutationTransactionError::Object {
+                            index,
+                            error,
+                        })?;
                     if !value.is_finite() {
                         return Err(SemanticMutationTransactionError::NonFinitePropertyValue {
                             index,
@@ -261,14 +264,22 @@ fn object_property_value(
     property: SemanticObjectProperty,
 ) -> SemanticSignalValue {
     match property {
-        SemanticObjectProperty::Translation => SemanticSignalValue::Vec3(state.transform.translation),
+        SemanticObjectProperty::Translation => {
+            SemanticSignalValue::Vec3(state.transform.translation)
+        }
         SemanticObjectProperty::Scale => SemanticSignalValue::Vec3(state.transform.scale),
-        SemanticObjectProperty::RotationZ => SemanticSignalValue::Scalar(state.transform.rotation_z),
-        SemanticObjectProperty::FillOpacity => SemanticSignalValue::Scalar(state.style.fill_opacity),
+        SemanticObjectProperty::RotationZ => {
+            SemanticSignalValue::Scalar(state.transform.rotation_z)
+        }
+        SemanticObjectProperty::FillOpacity => {
+            SemanticSignalValue::Scalar(state.style.fill_opacity)
+        }
         SemanticObjectProperty::StrokeOpacity => {
             SemanticSignalValue::Scalar(state.style.stroke_opacity)
         }
-        SemanticObjectProperty::StrokeWidth => SemanticSignalValue::Scalar(state.style.stroke_width),
+        SemanticObjectProperty::StrokeWidth => {
+            SemanticSignalValue::Scalar(state.style.stroke_width)
+        }
         SemanticObjectProperty::ObjectOpacity => {
             SemanticSignalValue::Scalar(state.style.object_opacity)
         }
@@ -308,7 +319,9 @@ fn set_object_property(
         (SemanticObjectProperty::ObjectOpacity, SemanticSignalValue::Scalar(value)) => {
             state.style.object_opacity = value;
         }
-        _ => unreachable!("semantic property value kind was validated during transaction preflight"),
+        _ => {
+            unreachable!("semantic property value kind was validated during transaction preflight")
+        }
     }
 }
 
@@ -465,7 +478,10 @@ mod tests {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     ) -> SemanticSignalValue {
-        object_property_value(store.semantic_object_state_checked(object).unwrap(), property)
+        object_property_value(
+            store.semantic_object_state_checked(object).unwrap(),
+            property,
+        )
     }
 
     #[test]
@@ -511,11 +527,7 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction
             .set_signal(signal, 3.0_f64)
-            .set_property(
-                target,
-                SemanticObjectProperty::Translation,
-                translation,
-            )
+            .set_property(target, SemanticObjectProperty::Translation, translation)
             .set_property(target, SemanticObjectProperty::ObjectOpacity, 0.4_f64);
 
         let result = transaction.apply(&mut store).unwrap();
@@ -579,11 +591,8 @@ mod tests {
         let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
         let target = object(&mut store, 2.0);
         let signal_before = input_value(&store, signal);
-        let translation_before = property_value(
-            &store,
-            target,
-            SemanticObjectProperty::Translation,
-        );
+        let translation_before =
+            property_value(&store, target, SemanticObjectProperty::Translation);
         let mut transaction = SemanticMutationTransaction::new();
         transaction
             .set_signal(signal, 5.0_f64)
@@ -647,9 +656,11 @@ mod tests {
         assert_ne!(stale.generation(), replacement.generation());
         let signal_before = input_value(&store, signal);
         let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(signal, 2.0_f64)
-            .set_property(stale, SemanticObjectProperty::RotationZ, 0.5_f64);
+        transaction.set_signal(signal, 2.0_f64).set_property(
+            stale,
+            SemanticObjectProperty::RotationZ,
+            0.5_f64,
+        );
 
         assert_eq!(
             transaction.apply(&mut store),
