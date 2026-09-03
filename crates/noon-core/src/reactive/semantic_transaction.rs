@@ -230,7 +230,8 @@ mod tests {
     }
 
     fn input_value(store: &SemanticStore, signal: SemanticNodeId) -> SemanticSignalValue {
-        let SemanticSignalSource::Input(value) = store.semantic_signal_state(signal).unwrap().source()
+        let SemanticSignalSource::Input(value) =
+            store.semantic_signal_state(signal).unwrap().source()
         else {
             panic!("expected input signal")
         };
@@ -252,7 +253,10 @@ mod tests {
 
         let result = transaction.apply(&mut store).unwrap();
 
-        assert_eq!(input_value(&store, scalar), SemanticSignalValue::Scalar(2.5));
+        assert_eq!(
+            input_value(&store, scalar),
+            SemanticSignalValue::Scalar(2.5)
+        );
         assert_eq!(
             input_value(&store, vector),
             SemanticSignalValue::Vec3(SemanticVec3::new(4.0, 5.0, 6.0))
