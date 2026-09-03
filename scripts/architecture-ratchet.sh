@@ -138,9 +138,7 @@ while IFS= read -r reference; do
   reference_file="${reference%%:*}"
   case "$reference_file" in
     crates/noon-web/src/legacy.rs|\
-    crates/noon-web/src/execution_transport.rs|\
-    crates/noon-web/src/execution_visibility.rs|\
-    crates/noon-web/src/spatial_query.rs)
+    crates/noon-web/src/execution_transport.rs)
       ;;
     *.rs)
       printf 'architecture ratchet: ScenePlayer consumer outside migration allowlist: %s\n' "$reference" >&2
@@ -154,8 +152,8 @@ if (( scene_player_consumer_spread_found != 0 )); then
 
 ScenePlayer is a shrinking migration authority. New noon-web Rust modules must not
 consume it. The temporary allowlist is limited to its definition plus the live
-execution transport, visibility, and spatial-query seams; remove entries as those
-callers migrate rather than adding consumers. See #959/A4 and #961/A6.8.
+execution transport seam; remove entries as that caller migrates rather than
+adding consumers. See #959/A4 and #961/A6.8.
 EOF
 fi
 
