@@ -97,9 +97,7 @@ impl SemanticStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry,
-    };
+    use crate::{SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry};
 
     fn state(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -203,7 +201,10 @@ mod tests {
         assert_eq!(copied_state.transform, source_state.transform);
         assert_eq!(copied_state.style, source_state.style);
         assert_eq!(copied_state.z_index(), source_state.z_index());
-        assert_ne!(copied_state.insertion_order(), source_state.insertion_order());
+        assert_ne!(
+            copied_state.insertion_order(),
+            source_state.insertion_order()
+        );
         assert_eq!(
             store.node(copy).unwrap().residency(),
             SemanticNodeResidency::Detached
