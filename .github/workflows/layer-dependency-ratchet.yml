@@ -1,0 +1,32 @@
+name: Layer Dependency Ratchet
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: layer-dependency-ratchet-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  architecture-layering:
+    name: Engine dependency direction stays one-way
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ratchet scripts
+        run: bash -n scripts/layer-dependency-ratchet.sh scripts/layer-dependency-ratchet.test.sh
+
+      - name: Prove ratchet catches forbidden edges
+        run: bash scripts/layer-dependency-ratchet.test.sh
+
+      - name: Enforce architecture layer dependencies
+        run: bash scripts/layer-dependency-ratchet.sh
