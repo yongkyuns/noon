@@ -1,4 +1,6 @@
-include!("reactive_impl.rs");
+mod runtime;
+pub use runtime::{ReactiveRuntimeStats, SceneBuildError};
+pub(crate) use runtime::ReactiveRuntime;
 
 mod host_callbacks;
 pub use host_callbacks::*;
@@ -16,26 +18,20 @@ mod timeline_scheduler;
 pub use timeline_scheduler::*;
 
 // Retained objects reuse the same deterministic scheduler until frame storage is unified.
-#[path = "retained.rs"]
 mod retained_runtime;
 pub use retained_runtime::*;
 
-#[path = "retained_text_family.rs"]
 mod retained_text_family;
 pub use retained_text_family::*;
 
-#[path = "retained_family_plan_frame.rs"]
 mod retained_family_plan_frame;
 pub use retained_family_plan_frame::*;
 
-#[path = "retained_family_plan_set_frame.rs"]
 mod retained_family_plan_set_frame;
 pub use retained_family_plan_set_frame::*;
 
-#[path = "retained_family_plan_runtime.rs"]
 mod retained_family_plan_runtime;
 pub use retained_family_plan_runtime::*;
 
-#[path = "retained_family_plan_set_runtime.rs"]
 mod retained_family_plan_set_runtime;
 pub use retained_family_plan_set_runtime::*;
