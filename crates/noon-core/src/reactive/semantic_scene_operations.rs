@@ -1,14 +1,19 @@
-use super::{SemanticNodeId, SemanticObjectState, SemanticStore, SemanticStoreError};
+use super::{
+    SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticObjectState, SemanticStore,
+    SemanticStoreError,
+};
 
-/// Failure from a shared Semantic Scene object operation.
+/// Failure from a shared Semantic Scene authoring operation.
 ///
-/// These operations accept only target semantic objects: legacy compatibility
-/// objects, families, and the temporary state-less frontend identity seam are not
-/// valid substitutes for a node-owned [`SemanticObjectState`].
+/// Target operations deliberately reject migration-only legacy objects and the
+/// temporary state-less frontend identity seam instead of allowing them to become
+/// peer semantic authorities.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticSceneOperationError {
     UnknownNode(SemanticNodeId),
     NotSemanticObject(SemanticNodeId),
+    NotSemanticFamily(SemanticNodeId),
+    NotSemanticAuthoringNode(SemanticNodeId),
     Store(SemanticStoreError),
 }
 
@@ -24,6 +29,18 @@ impl std::fmt::Display for SemanticSceneOperationError {
             Self::NotSemanticObject(id) => write!(
                 formatter,
                 "semantic node {}:{} does not own target semantic object state",
+                id.slot(),
+                id.generation()
+            ),
+            Self::NotSemanticFamily(id) => write!(
+                formatter,
+                "semantic node {}:{} is not a target semantic family",
+                id.slot(),
+                id.generation()
+            ),
+            Self::NotSemanticAuthoringNode(id) => write!(
+                formatter,
+                "semantic node {}:{} is not a target semantic object or family",
                 id.slot(),
                 id.generation()
             ),
@@ -54,6 +71,37 @@ impl SemanticStore {
             .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
         node.semantic_object_state()
             .ok_or(SemanticSceneOperationError::NotSemanticObject(id))
+    }
+
+    fn semantic_family_checked(
+        &self,
+        id: SemanticNodeId,
+    ) -> Result<&SemanticNode, SemanticSceneOperationError> {
+        let node = self
+            .node(id)
+            .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family) {
+            return Err(SemanticSceneOperationError::NotSemanticFamily(id));
+        }
+        Ok(node)
+    }
+
+    fn semantic_authoring_node_checked(
+        &self,
+        id: SemanticNodeId,
+    ) -> Result<&SemanticNode, SemanticSceneOperationError> {
+        let node = self
+            .node(id)
+            .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
+        let is_target = match node.kind() {
+            SemanticNodeKind::Family => true,
+            SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
+            SemanticNodeKind::Object(_) => false,
+        };
+        if !is_target {
+            return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(id));
+        }
+        Ok(node)
     }
 
     /// Add a target semantic object to authored top-level scene membership.
@@ -92,12 +140,55 @@ impl SemanticStore {
         let state = self.semantic_object_state_checked(id)?.clone();
         Ok(self.insert_semantic_object(state))
     }
+
+    /// Snapshot one target semantic family's direct members in authoritative order.
+    ///
+    /// This is a query allocation only; the mutable source of truth remains the
+    /// store's ordered family links.
+    pub fn semantic_family_members_checked(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(self.semantic_family_checked(family)?.members())
+    }
+
+    /// Append one target semantic object or family to a target family.
+    ///
+    /// Multi-parent aliasing remains valid. Duplicate membership is idempotent,
+    /// and cycle detection/order/locality are delegated to the authoritative store
+    /// primitive rather than repeated in a frontend facade.
+    pub fn add_semantic_family_member(
+        &mut self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<(), SemanticSceneOperationError> {
+        self.semantic_family_checked(family)?;
+        self.semantic_authoring_node_checked(member)?;
+        self.add_member(family, member).map_err(Into::into)
+    }
+
+    /// Remove one direct target semantic family edge.
+    ///
+    /// Removing an alias from one family does not affect any other parent, scene
+    /// residency, source identity, or node-owned object state.
+    pub fn remove_semantic_family_member(
+        &mut self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticSceneOperationError> {
+        self.semantic_family_checked(family)?;
+        self.semantic_authoring_node_checked(member)?;
+        self.remove_member(family, member).map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry};
+    use crate::{
+        GeometryRef, ObjectDefinition, ObjectId, SemanticMutationStats, SemanticNodeResidency,
+        SourceIdentity, StoredGeometry,
+    };
 
     fn state(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -221,5 +312,126 @@ mod tests {
             store.node(source).unwrap().source_identity(),
             Some(&source_identity)
         );
+    }
+
+    #[test]
+    fn shared_family_membership_preserves_order_and_aliases() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_semantic_object(state(1.0));
+        let second = store.insert_semantic_object(state(2.0));
+        let primary = store.insert_family();
+        let alias = store.insert_family();
+
+        store.add_semantic_family_member(primary, first).unwrap();
+        store.add_semantic_family_member(primary, second).unwrap();
+        store.add_semantic_family_member(alias, first).unwrap();
+
+        assert_eq!(
+            store.semantic_family_members_checked(primary).unwrap(),
+            vec![first, second]
+        );
+        assert_eq!(
+            store.semantic_family_members_checked(alias).unwrap(),
+            vec![first]
+        );
+        assert_eq!(store.node(first).unwrap().parents(), &[primary, alias]);
+
+        store.add_semantic_family_member(primary, first).unwrap();
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
+
+        assert!(store
+            .remove_semantic_family_member(primary, first)
+            .unwrap());
+        assert_eq!(
+            store.semantic_family_members_checked(primary).unwrap(),
+            vec![second]
+        );
+        assert_eq!(store.node(first).unwrap().parents(), &[alias]);
+        assert!(!store
+            .remove_semantic_family_member(primary, first)
+            .unwrap());
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
+    }
+
+    #[test]
+    fn shared_family_membership_rejects_migration_only_nodes() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let identity_only = store.insert_authoring_object();
+        let legacy = store.insert_object(ObjectDefinition::new(
+            ObjectId::new(7),
+            GeometryRef::circle(1.0),
+        ));
+
+        for member in [identity_only, legacy] {
+            assert_eq!(
+                store.add_semantic_family_member(family, member),
+                Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
+                    member
+                ))
+            );
+            assert_eq!(
+                store.remove_semantic_family_member(family, member),
+                Err(SemanticSceneOperationError::NotSemanticAuthoringNode(
+                    member
+                ))
+            );
+        }
+        assert!(store
+            .semantic_family_members_checked(family)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn shared_family_operations_validate_family_identity_and_generation() {
+        let mut store = SemanticStore::new();
+        let object = store.insert_semantic_object(state(1.0));
+        assert_eq!(
+            store.semantic_family_members_checked(object),
+            Err(SemanticSceneOperationError::NotSemanticFamily(object))
+        );
+
+        let stale_family = store.insert_family();
+        store.remove_node(stale_family).unwrap();
+        let replacement = store.insert_family();
+        assert_eq!(stale_family.slot(), replacement.slot());
+        assert_ne!(stale_family.generation(), replacement.generation());
+        assert_eq!(
+            store.add_semantic_family_member(stale_family, object),
+            Err(SemanticSceneOperationError::UnknownNode(stale_family))
+        );
+    }
+
+    #[test]
+    fn shared_family_operations_preserve_cycle_rejection() {
+        let mut store = SemanticStore::new();
+        let outer = store.insert_family();
+        let inner = store.insert_family();
+
+        store.add_semantic_family_member(outer, inner).unwrap();
+        assert_eq!(
+            store.add_semantic_family_member(inner, outer),
+            Err(SemanticSceneOperationError::Store(
+                SemanticStoreError::FamilyCycle {
+                    family: inner,
+                    member: outer,
+                }
+            ))
+        );
+        assert_eq!(
+            store.semantic_family_members_checked(outer).unwrap(),
+            vec![inner]
+        );
+        assert!(store
+            .semantic_family_members_checked(inner)
+            .unwrap()
+            .is_empty());
     }
 }
