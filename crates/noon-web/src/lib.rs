@@ -52,7 +52,6 @@ mod retained_scene_spec_runtime;
 mod retained_text_family_transport;
 mod retained_typst_canvas;
 mod semantic_snapshot;
-mod spatial_query;
 
 pub use authoring_facade::*;
 pub use authoring_mobject::*;
