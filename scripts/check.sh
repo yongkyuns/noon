@@ -8,10 +8,10 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/check.sh [fast|full|rust|fmt-lint|test|web]
 
-  fast      Format/check/clippy plus workspace library tests.
+  fast      Architecture checks, format/check/clippy plus workspace library tests.
   full      Full Rust gate plus the browser build/validation entrypoint.
-  rust      Format/check/clippy plus all workspace tests.
-  fmt-lint  Format/check/clippy only.
+  rust      Architecture checks, format/check/clippy plus all workspace tests.
+  fmt-lint  Architecture checks plus format/check/clippy only.
   test      All workspace tests only.
   web       Browser build/validation only.
 
@@ -20,7 +20,12 @@ golden, differential, and platform-specific checks where appropriate.
 EOF
 }
 
+architecture_checks() {
+  bash scripts/renderer-host-boundary-ratchet.sh
+}
+
 fmt_lint() {
+  architecture_checks
   cargo fmt --all -- --check
   cargo check --workspace --all-targets --all-features
   cargo clippy --workspace --all-targets --all-features -- -D warnings
