@@ -390,12 +390,10 @@ fn infer_expression_kind(
             let operand = infer_expression_kind(store, value, cycle_target, cache)?;
             match operand {
                 SemanticSignalValueKind::Scalar | SemanticSignalValueKind::Vec3 => Ok(operand),
-                SemanticSignalValueKind::Bool => {
-                    Err(SemanticSignalError::InvalidUnaryExpression {
-                        operation: "neg",
-                        operand,
-                    })
-                }
+                SemanticSignalValueKind::Bool => Err(SemanticSignalError::InvalidUnaryExpression {
+                    operation: "neg",
+                    operand,
+                }),
             }
         }
         SemanticSignalExpr::Sin(value) => {
@@ -738,7 +736,11 @@ mod tests {
         let vector = store
             .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
             .unwrap();
-        let before = store.semantic_signal_state(target).unwrap().source().clone();
+        let before = store
+            .semantic_signal_state(target)
+            .unwrap()
+            .source()
+            .clone();
 
         assert_eq!(
             store.set_semantic_signal_source(
@@ -751,7 +753,10 @@ mod tests {
                 actual: SemanticSignalValueKind::Vec3,
             })
         );
-        assert_eq!(store.semantic_signal_state(target).unwrap().source(), &before);
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &before
+        );
         assert_eq!(
             store.semantic_signal_value_kind(target).unwrap(),
             SemanticSignalValueKind::Scalar
