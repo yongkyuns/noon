@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::SemanticObjectState;
+use crate::{HostCallbackId, SemanticObjectState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 /// Stable semantic identity independent of execution/render dense indices.
@@ -189,6 +189,13 @@ pub struct SemanticNode {
     parents: Vec<SemanticNodeId>,
     /// Ordered direct family membership with O(1) identity removal and append.
     members: OrderedFamilyMembers,
+    /// Ordered authored host-updater registrations for this semantic node.
+    ///
+    /// `HostCallbackId` identifies host-owned callable code; the registration itself
+    /// belongs to the Semantic Scene and therefore follows this node across
+    /// detach/re-attach. Lowering decides how these declarations become runtime
+    /// callback slots.
+    host_updaters: Vec<HostCallbackId>,
 }
 
 impl SemanticNode {
@@ -260,6 +267,14 @@ impl SemanticNode {
 
     pub fn member_count(&self) -> usize {
         self.members.len()
+    }
+
+    pub fn host_updaters(&self) -> &[HostCallbackId] {
+        &self.host_updaters
+    }
+
+    pub(crate) fn host_updaters_mut(&mut self) -> &mut Vec<HostCallbackId> {
+        &mut self.host_updaters
     }
 }
 
@@ -372,6 +387,7 @@ impl SemanticStore {
             scene_membership: SemanticSceneMembership::Detached,
             parents: Vec::new(),
             members: OrderedFamilyMembers::default(),
+            host_updaters: Vec::new(),
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
