@@ -3,6 +3,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::{GeometryRef, ObjectId, Property, SceneDefinition, SignalId, ValueKind, Vec2};
 
+mod compute_ir;
+pub use compute_ir::*;
+
 /// A value that can participate in the native reactive graph.
 ///
 /// Object snapshots are intentionally excluded from this first reactive slice:
@@ -772,7 +775,10 @@ fn evaluate_expression(
     }
 }
 
-fn validate_reactive_value(signal: SignalId, value: &ReactiveValue) -> Result<(), ReactiveError> {
+pub(super) fn validate_reactive_value(
+    signal: SignalId,
+    value: &ReactiveValue,
+) -> Result<(), ReactiveError> {
     if value.is_finite() {
         Ok(())
     } else {

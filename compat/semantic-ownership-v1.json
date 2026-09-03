@@ -354,7 +354,7 @@
       "id": "reactive.deterministic-evaluation",
       "surface": "Reactive graph validation, evaluation, invalidation, and native input dispatch",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive_impl.rs", "symbol": "ReactiveProgram/ReactiveState"},
+      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/native_reactive.rs", "symbol": "ReactiveProgram/ReactiveState"},
       "adapters": [{"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "_to_document"}]
     }
   ]
