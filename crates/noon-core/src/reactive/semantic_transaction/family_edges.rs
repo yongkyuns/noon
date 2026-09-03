@@ -218,10 +218,7 @@ impl FamilyEdgePreflight {
     ) -> Result<bool, SemanticSceneOperationError> {
         validate_edge(store, family, member)?;
         if !self.contains(store, family, member) {
-            return Err(SemanticSceneOperationError::NotSemanticFamilyMember {
-                family,
-                member,
-            });
+            return Err(SemanticSceneOperationError::NotSemanticFamilyMember { family, member });
         }
         if let Some(anchor) = before {
             validate_edge(store, family, anchor)?;
