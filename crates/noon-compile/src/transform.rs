@@ -1,4 +1,4 @@
-use noon_core::{GeometryRef, ObjectSnapshot, Property, Style, TrackDefinition, TrackValues, VectorPath};
+use noon_core::{GeometryRef, Property, Style, TrackDefinition, TrackValues, VectorPath};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransformGeometryPlan {
@@ -86,7 +86,7 @@ pub(crate) fn compile_transform_geometry_plan(
             to_end: *to_end,
         },
         (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
-            compile_path_pair(from, to, source.clone(), target.clone())?
+            compile_path_pair(from.style, to.style, source.clone(), target.clone())?
         }
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
         | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {
@@ -94,7 +94,7 @@ pub(crate) fn compile_transform_geometry_plan(
                 .expect("closed analytic source geometry must convert to a path");
             let target = noon_geometry::canonical_outline_path(&to.geometry)
                 .expect("closed analytic target geometry must convert to a path");
-            compile_path_pair(from, to, source, target)?
+            compile_path_pair(from.style, to.style, source, target)?
         }
         _ => return Err(TransformCompileFailure::UnsupportedGeometry),
     };
@@ -109,15 +109,15 @@ fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
 }
 
 fn compile_path_pair(
-    from: &ObjectSnapshot,
-    to: &ObjectSnapshot,
+    from_style: Style,
+    to_style: Style,
     source: VectorPath,
     target: VectorPath,
 ) -> Result<TransformGeometryPlan, TransformCompileFailure> {
-    if path_style_requires_retessellation(from.style, to.style) {
+    if path_style_requires_retessellation(from_style, to_style) {
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
-    if from.style.fill.is_some()
+    if from_style.fill.is_some()
         && noon_geometry::plan_filled_morph(&source, &target, noon_geometry::MorphOptions::DEFAULT)
             .is_err()
     {
