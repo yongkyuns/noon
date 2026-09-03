@@ -127,12 +127,14 @@ impl ReactiveRuntime {
                 continue;
             }
             if let Some(old_targets) = self.targets_by_object.get_mut(old_index) {
-                if let Some(position) = old_targets.iter().position(|&index| index == target_index) {
+                if let Some(position) = old_targets.iter().position(|&index| index == target_index)
+                {
                     old_targets.swap_remove(position);
                 }
             }
             if self.targets_by_object.len() <= object_index {
-                self.targets_by_object.resize_with(object_index + 1, Vec::new);
+                self.targets_by_object
+                    .resize_with(object_index + 1, Vec::new);
             }
             self.targets[target_index].object_index = object_index;
             self.targets_by_object[object_index].push(target_index);
@@ -387,7 +389,10 @@ mod tests {
         let mut instance =
             SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         assert_eq!(instance.frame().objects[0].transform.scale, Vec2::ONE);
-        assert_eq!(instance.frame().objects[0].geometry, GeometryRef::circle(1.0));
+        assert_eq!(
+            instance.frame().objects[0].geometry,
+            GeometryRef::circle(1.0)
+        );
 
         instance
             .set_reactive_input(scale, Vec2::new(0.25, 2.0))
@@ -396,7 +401,10 @@ mod tests {
             instance.frame().objects[0].transform.scale,
             Vec2::new(0.25, 2.0)
         );
-        assert_eq!(instance.frame().objects[0].geometry, GeometryRef::circle(1.0));
+        assert_eq!(
+            instance.frame().objects[0].geometry,
+            GeometryRef::circle(1.0)
+        );
     }
 
     #[test]
@@ -512,7 +520,8 @@ mod tests {
         let visible = scene.add_input(true);
         scene.bind(visible, object, Property::Presence);
 
-        let mut instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         instance
             .apply_patch(&noon_core::ScenePatch::RemoveObject(object))
             .expect("remove must compile");
