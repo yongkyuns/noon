@@ -82,7 +82,8 @@ pub use resource_transaction::*;
 mod object_content;
 pub use object_content::*;
 
-include!("reactive_impl.rs");
+mod runtime;
+pub use runtime::*;
 
 mod compute_ir;
 pub use compute_ir::*;
