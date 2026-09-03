@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::SemanticObjectState;
-use crate::{ObjectDefinition, ObjectId, SceneDefinition};
+use crate::{ObjectDefinition, ObjectId, SceneDefinition, SemanticHostDeclarations};
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -290,6 +290,7 @@ pub struct SemanticStore {
     next_insertion_order: u64,
     object_nodes: HashMap<ObjectId, SemanticNodeId>,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
+    pub(crate) host_declarations: SemanticHostDeclarations,
     last_mutation: SemanticMutationStats,
 }
 
@@ -822,6 +823,7 @@ impl SemanticStore {
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
+        self.host_declarations.remove_node_subscription(id);
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
