@@ -2,9 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState,
-};
+use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 /// Stable semantic identity independent of execution/render dense indices.
