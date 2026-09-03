@@ -68,6 +68,97 @@ enum SemanticSceneMembership {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FamilyMemberLink {
+    previous: Option<SemanticNodeId>,
+    next: Option<SemanticNodeId>,
+}
+
+/// Ordered family membership with local lookup/add/remove.
+///
+/// The hash map is identity lookup only; deterministic semantic order follows
+/// the private previous/next links from `head` to `tail`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct OrderedFamilyMembers {
+    head: Option<SemanticNodeId>,
+    tail: Option<SemanticNodeId>,
+    links: HashMap<SemanticNodeId, FamilyMemberLink>,
+}
+
+impl OrderedFamilyMembers {
+    fn contains(&self, member: SemanticNodeId) -> bool {
+        self.links.contains_key(&member)
+    }
+
+    fn push(&mut self, member: SemanticNodeId) -> bool {
+        if self.contains(member) {
+            return false;
+        }
+        let previous = self.tail;
+        if let Some(previous_id) = previous {
+            self.links
+                .get_mut(&previous_id)
+                .expect("family tail must have a membership link")
+                .next = Some(member);
+        } else {
+            debug_assert!(self.head.is_none());
+            self.head = Some(member);
+        }
+        self.links.insert(
+            member,
+            FamilyMemberLink {
+                previous,
+                next: None,
+            },
+        );
+        self.tail = Some(member);
+        true
+    }
+
+    fn remove(&mut self, member: SemanticNodeId) -> bool {
+        let Some(link) = self.links.remove(&member) else {
+            return false;
+        };
+        if let Some(previous_id) = link.previous {
+            self.links
+                .get_mut(&previous_id)
+                .expect("family previous link must exist")
+                .next = link.next;
+        } else {
+            debug_assert_eq!(self.head, Some(member));
+            self.head = link.next;
+        }
+        if let Some(next_id) = link.next {
+            self.links
+                .get_mut(&next_id)
+                .expect("family next link must exist")
+                .previous = link.previous;
+        } else {
+            debug_assert_eq!(self.tail, Some(member));
+            self.tail = link.previous;
+        }
+        if self.links.is_empty() {
+            debug_assert!(self.head.is_none());
+            debug_assert!(self.tail.is_none());
+        }
+        true
+    }
+
+    fn iter(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        std::iter::successors(self.head, move |id| {
+            self.links.get(id).and_then(|link| link.next)
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.links.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.links.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticNodeKind {
     /// Compatibility payload while `SceneDefinition` consumers migrate.
@@ -86,11 +177,11 @@ pub struct SemanticNode {
     source_identity: Option<SourceIdentity>,
     scene_membership: SemanticSceneMembership,
     /// Families containing this node. Multiple parents are intentional and
-    /// preserve Manim-style aliasing/reference semantics.
+    /// preserve Manim-style aliasing/reference semantics. This list contains only
+    /// direct relationships, so scans are proportional to this node's own degree.
     parents: Vec<SemanticNodeId>,
-    /// Ordered family membership. Ordering is semantic/presentation relevant,
-    /// but does not imply ownership of the child's transform.
-    members: Vec<SemanticNodeId>,
+    /// Ordered direct family membership with O(1) identity removal and append.
+    members: OrderedFamilyMembers,
 }
 
 impl SemanticNode {
@@ -149,8 +240,15 @@ impl SemanticNode {
         &self.parents
     }
 
-    pub fn members(&self) -> &[SemanticNodeId] {
-        &self.members
+    /// Snapshot direct members in deterministic family order.
+    ///
+    /// The allocation is query-only; mutation storage remains linked and local.
+    pub fn members(&self) -> Vec<SemanticNodeId> {
+        self.members.iter().collect()
+    }
+
+    pub fn member_count(&self) -> usize {
+        self.members.len()
     }
 }
 
@@ -241,7 +339,7 @@ impl SemanticStore {
             source_identity: None,
             scene_membership: SemanticSceneMembership::Detached,
             parents: Vec::new(),
-            members: Vec::new(),
+            members: OrderedFamilyMembers::default(),
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -444,6 +542,9 @@ impl SemanticStore {
     }
 
     /// Add an ordered family edge. A member may belong to multiple families.
+    ///
+    /// Direct duplicate lookup and ordered append are O(1); cycle validation is
+    /// proportional to the affected reachable family subgraph.
     pub fn add_member(
         &mut self,
         family: SemanticNodeId,
@@ -465,7 +566,7 @@ impl SemanticStore {
             .node(family)
             .expect("family validated above")
             .members
-            .contains(&member)
+            .contains(member)
         {
             self.last_mutation = SemanticMutationStats::default();
             return Ok(());
@@ -480,10 +581,12 @@ impl SemanticStore {
             return Err(SemanticStoreError::FamilyCycle { family, member });
         }
 
-        self.node_mut(family)
+        let inserted = self
+            .node_mut(family)
             .expect("family validated above")
             .members
             .push(member);
+        debug_assert!(inserted);
         self.node_mut(member)
             .expect("member validated above")
             .parents
@@ -495,6 +598,7 @@ impl SemanticStore {
         Ok(())
     }
 
+    /// Remove one direct family edge without scanning unrelated siblings.
     pub fn remove_member(
         &mut self,
         family: SemanticNodeId,
@@ -509,15 +613,15 @@ impl SemanticStore {
         if self.node(member).is_none() {
             return Err(SemanticStoreError::UnknownNode(member));
         }
-        let family_members = &mut self
+        let removed = self
             .node_mut(family)
             .expect("family validated above")
-            .members;
-        let Some(position) = family_members.iter().position(|id| *id == member) else {
+            .members
+            .remove(member);
+        if !removed {
             self.last_mutation = SemanticMutationStats::default();
             return Ok(false);
-        };
-        family_members.remove(position);
+        }
         let parents = &mut self
             .node_mut(member)
             .expect("member validated above")
@@ -534,8 +638,9 @@ impl SemanticStore {
 
     /// Remove a node without renumbering any unrelated semantic identity.
     ///
-    /// Attached root membership is removed locally first. Remaining writes are
-    /// proportional to this node's direct family edges, never total scene size.
+    /// Attached root membership is removed locally first. Remaining work is
+    /// proportional to this node's direct parent/member relationships plus free-list
+    /// bookkeeping; family sibling lists are never scanned for this removal.
     pub fn remove_node(&mut self, id: SemanticNodeId) -> Result<SemanticNode, SemanticStoreError> {
         let node = self
             .node(id)
@@ -550,11 +655,12 @@ impl SemanticStore {
 
         for parent in node.parents.iter().copied() {
             if let Some(parent_node) = self.node_mut(parent) {
-                parent_node.members.retain(|member| *member != id);
+                let removed = parent_node.members.remove(id);
+                debug_assert!(removed);
                 writes += 1;
             }
         }
-        for member in node.members.iter().copied() {
+        for member in node.members.iter() {
             if let Some(member_node) = self.node_mut(member) {
                 member_node.parents.retain(|parent| *parent != id);
                 writes += 1;
@@ -597,7 +703,7 @@ impl SemanticStore {
                 return (true, visited);
             }
             if let Some(node) = self.node(current) {
-                stack.extend(node.members.iter().copied());
+                stack.extend(node.members.iter());
             }
         }
         (false, visited)
@@ -684,16 +790,15 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         store.add_member(alias, first).unwrap();
-        assert_eq!(store.node(family).unwrap().members(), &[first, second]);
+        assert_eq!(store.node(family).unwrap().members(), vec![first, second]);
         assert_eq!(store.node(first).unwrap().parents(), &[family, alias]);
 
-        // SemanticStore owns duplicate suppression and direct-member ordering.
         store.add_member(family, first).unwrap();
-        assert_eq!(store.node(family).unwrap().members(), &[first, second]);
+        assert_eq!(store.node(family).unwrap().members(), vec![first, second]);
         assert_eq!(store.node(first).unwrap().parents(), &[family, alias]);
 
         assert!(store.remove_member(family, first).unwrap());
-        assert_eq!(store.node(family).unwrap().members(), &[second]);
+        assert_eq!(store.node(family).unwrap().members(), vec![second]);
         assert_eq!(store.node(first).unwrap().parents(), &[alias]);
         assert!(!store.remove_member(family, first).unwrap());
     }
@@ -762,7 +867,7 @@ mod tests {
         assert!(store.detach_from_scene(child).unwrap());
         assert_eq!(store.node(child).unwrap().id(), child);
         assert_eq!(store.node(child).unwrap().parents(), &[family]);
-        assert_eq!(store.node(family).unwrap().members(), &[child]);
+        assert_eq!(store.node(family).unwrap().members(), vec![child]);
         assert_eq!(store.node_for_source(&source), Some(child));
 
         assert!(store.attach_to_scene(child).unwrap());
@@ -799,6 +904,48 @@ mod tests {
         assert_eq!(store.last_mutation_stats().slots_written, 3);
         assert!(store.attach_to_scene(target).unwrap());
         assert_eq!(store.last_mutation_stats().slots_written, 2);
+    }
+
+    #[test]
+    fn family_member_removal_does_not_scan_unrelated_siblings() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let members = (0..10_000)
+            .map(|_| store.insert_authoring_object())
+            .collect::<Vec<_>>();
+        for member in members.iter().copied() {
+            store.add_member(family, member).unwrap();
+        }
+        let target = members[5_000];
+
+        assert!(store.remove_member(family, target).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        assert_eq!(store.node(family).unwrap().member_count(), 9_999);
+        assert!(!store.node(family).unwrap().members().contains(&target));
+
+        store.add_member(family, target).unwrap();
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        let ordered = store.node(family).unwrap().members();
+        assert_eq!(ordered.last(), Some(&target));
+    }
+
+    #[test]
+    fn deleting_member_from_large_family_is_local() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let members = (0..10_000)
+            .map(|_| store.insert_authoring_object())
+            .collect::<Vec<_>>();
+        for member in members.iter().copied() {
+            store.add_member(family, member).unwrap();
+        }
+        let target = members[5_000];
+
+        store.remove_node(target).unwrap();
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        assert_eq!(store.node(family).unwrap().member_count(), 9_999);
+        assert!(store.node(target).is_none());
+        assert!(!store.node(family).unwrap().members().contains(&target));
     }
 
     #[test]
@@ -856,8 +1003,8 @@ mod tests {
             store.node(child).unwrap().parents(),
             &[first_family, second_family]
         );
-        assert_eq!(store.node(first_family).unwrap().members(), &[child]);
-        assert_eq!(store.node(second_family).unwrap().members(), &[child]);
+        assert_eq!(store.node(first_family).unwrap().members(), vec![child]);
+        assert_eq!(store.node(second_family).unwrap().members(), vec![child]);
 
         store.attach_to_scene(child).unwrap();
         store.detach_from_scene(child).unwrap();
@@ -879,6 +1026,21 @@ mod tests {
         store.remove_node(child).unwrap();
         assert!(store.node(first_family).unwrap().members().is_empty());
         assert!(store.node(second_family).unwrap().members().is_empty());
+        assert_eq!(store.last_mutation_stats().slots_written, 3);
+    }
+
+    #[test]
+    fn deleting_family_cleans_member_parent_edges_in_order() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let first = store.insert_authoring_object();
+        let second = store.insert_authoring_object();
+        store.add_member(family, first).unwrap();
+        store.add_member(family, second).unwrap();
+
+        store.remove_node(family).unwrap();
+        assert!(store.node(first).unwrap().parents().is_empty());
+        assert!(store.node(second).unwrap().parents().is_empty());
         assert_eq!(store.last_mutation_stats().slots_written, 3);
     }
 
