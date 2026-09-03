@@ -342,17 +342,13 @@ mod tests {
             SemanticMutationStats::default()
         );
 
-        assert!(store
-            .remove_semantic_family_member(primary, first)
-            .unwrap());
+        assert!(store.remove_semantic_family_member(primary, first).unwrap());
         assert_eq!(
             store.semantic_family_members_checked(primary).unwrap(),
             vec![second]
         );
         assert_eq!(store.node(first).unwrap().parents(), &[alias]);
-        assert!(!store
-            .remove_semantic_family_member(primary, first)
-            .unwrap());
+        assert!(!store.remove_semantic_family_member(primary, first).unwrap());
         assert_eq!(
             store.last_mutation_stats(),
             SemanticMutationStats::default()
