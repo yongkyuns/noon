@@ -1,6 +1,5 @@
 name: Roadmap task
 description: Define implementation work against the authoritative Noon architecture.
-title: "[Roadmap ] "
 body:
   - type: markdown
     attributes:
