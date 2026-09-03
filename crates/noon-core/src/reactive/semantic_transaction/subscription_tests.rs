@@ -23,11 +23,7 @@ fn mixed_value_property_and_subscription_changes_commit_together() {
     transaction
         .set_signal(signal, 0.75_f64)
         .set_property(target, SemanticObjectProperty::RotationZ, 0.5_f64)
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(signal),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(signal));
 
     let result = transaction.apply(&mut store).unwrap();
 
@@ -76,11 +72,7 @@ fn invalid_late_subscription_rolls_back_earlier_changes() {
     transaction
         .set_signal(scalar, 2.0_f64)
         .set_property(target, SemanticObjectProperty::RotationZ, 0.5_f64)
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(vector),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(vector));
 
     assert_eq!(
         transaction.apply(&mut store),
@@ -183,16 +175,8 @@ fn duplicate_subscription_is_rejected_but_base_property_change_is_independent() 
     let target = object(&mut store, 1.0);
     let mut duplicate = SemanticMutationTransaction::new();
     duplicate
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(first),
-        )
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(second),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(first))
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(second));
 
     assert_eq!(
         duplicate.apply(&mut store),
@@ -207,11 +191,7 @@ fn duplicate_subscription_is_rejected_but_base_property_change_is_independent() 
     let mut mixed = SemanticMutationTransaction::new();
     mixed
         .set_property(target, SemanticObjectProperty::ObjectOpacity, 0.4_f64)
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(first),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(first));
     let result = mixed.apply(&mut store).unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
@@ -227,11 +207,7 @@ fn stale_subscription_source_fails_closed_before_mutation() {
     assert_ne!(stale.generation(), replacement.generation());
     let target = object(&mut store, 1.0);
     let mut transaction = SemanticMutationTransaction::new();
-    transaction.change_subscription(
-        target,
-        SemanticObjectProperty::ObjectOpacity,
-        Some(stale),
-    );
+    transaction.change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(stale));
 
     assert_eq!(
         transaction.apply(&mut store),
@@ -258,16 +234,8 @@ fn multiple_subscription_changes_on_one_object_write_one_slot() {
     let target = object(&mut store, 0.5);
     let mut transaction = SemanticMutationTransaction::new();
     transaction
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(opacity),
-        )
-        .change_subscription(
-            target,
-            SemanticObjectProperty::StrokeWidth,
-            Some(width),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(opacity))
+        .change_subscription(target, SemanticObjectProperty::StrokeWidth, Some(width));
 
     let result = transaction.apply(&mut store).unwrap();
 
