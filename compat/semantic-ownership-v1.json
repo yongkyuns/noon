@@ -122,7 +122,7 @@
       "surface": "Vector-path and Manim-specialized geometry layout bounds",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_phase_b.py", "symbol": "_vector_path_world_bounds/_manim_layout_bounds"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_model.rs", "symbol": "semantic_path_bounds"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_model.rs", "symbol": "semantic_path_bounds"},
       "reason": "Python still evaluates vector-path extrema and Manim-specific control-hull bounds instead of querying one shared geometry model.",
       "replacement": "Represent compatibility bounds policy in Rust and expose the resulting layout bounds through semantic handles.",
       "migration_issue": "#61"
@@ -219,7 +219,7 @@
       "surface": "AnimationGroup/LaggedStart/LaggedStartMap/Succession",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_composition.py", "symbol": "_schedule_composition"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/composition.rs", "symbol": "CompositionSchedule/resolve_composition_schedule"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/composition.rs", "symbol": "CompositionSchedule/resolve_composition_schedule"},
       "reason": "Rust resolves child intervals, but Python still recursively flattens the composition tree and authors the resulting time-map steps.",
       "replacement": "Move composition tree lowering and time-map attachment to the shared Rust authoring facade; Python should retain only syntax adaptation.",
       "migration_issue": "#61"
@@ -228,7 +228,7 @@
       "id": "animation.options",
       "surface": "Animation and Scene.play timing/rate options",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/authoring.rs", "symbol": "resolve_animation_options"},
+      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/authoring.rs", "symbol": "resolve_animation_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_animation_options.py", "symbol": "resolve"}]
     },
     {
@@ -313,7 +313,7 @@
       "surface": "Scene.remove/replace/clear and top-level ordering",
       "classification": "python-semantic-duplicate",
       "owner": {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "Scene.remove/replace/clear"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/lifecycle.rs", "symbol": "LifecyclePlan/validate_presence_transition"},
+      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/lifecycle.rs", "symbol": "LifecyclePlan/validate_presence_transition"},
       "reason": "Python still chooses presence transitions and mutates top-level wrapper ordering for scene membership changes.",
       "replacement": "Author membership and presence changes through a stable shared scene handle, retaining only Python wrapper identity bookkeeping.",
       "migration_issue": "#61"
