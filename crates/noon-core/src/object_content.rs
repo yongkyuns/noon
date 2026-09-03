@@ -1,11 +1,81 @@
-use crate::{GeometryRef, ObjectDefinition, ObjectId, Style, TextResourceHandle, Transform2D};
+use crate::{
+    GeometryRef, ObjectDefinition, ObjectId, SemanticPresentation, SemanticStyle,
+    SemanticTransform2_5D, StoredGeometry, Style, TextResourceHandle, Transform2D,
+};
 
-/// Renderer-independent retained payload referenced by one semantic object.
+/// Target authored content carried by one semantic object.
 ///
-/// Geometry remains inline/reference-backed through `GeometryRef`; text and math
-/// reference immutable `TextResource` data by stable versioned handle. Keeping
-/// these as distinct variants prevents steady-state text from masquerading as
-/// placeholder geometry or eagerly expanding into per-glyph outlines.
+/// Cheap analytic geometry stays inline through [`StoredGeometry`]. Heavy geometry
+/// is represented only by the existing generation/version-safe resource handle,
+/// and text is represented by its existing immutable resource handle. This type
+/// deliberately contains no semantic node identity, legacy `ObjectId`, execution
+/// slot, frontend identity, or renderer identity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticObjectContent {
+    Geometry(StoredGeometry),
+    Text(TextResourceHandle),
+}
+
+impl SemanticObjectContent {
+    pub const fn geometry(self) -> Option<StoredGeometry> {
+        match self {
+            Self::Geometry(geometry) => Some(geometry),
+            Self::Text(_) => None,
+        }
+    }
+
+    pub const fn text(self) -> Option<TextResourceHandle> {
+        match self {
+            Self::Geometry(_) => None,
+            Self::Text(handle) => Some(handle),
+        }
+    }
+}
+
+impl From<StoredGeometry> for SemanticObjectContent {
+    fn from(value: StoredGeometry) -> Self {
+        Self::Geometry(value)
+    }
+}
+
+impl From<TextResourceHandle> for SemanticObjectContent {
+    fn from(value: TextResourceHandle) -> Self {
+        Self::Text(value)
+    }
+}
+
+/// One target authored presentation payload for a semantic object.
+///
+/// Identity and family/lifecycle relationships belong to `SemanticNode`; immutable
+/// heavy content belongs to the existing resource arenas. This value owns the
+/// mutable authored content reference, high-precision transform, semantic style,
+/// and painter metadata that frontends must share.
+///
+/// Bounds are intentionally absent. Layout-accurate and conservative bounds are
+/// derived from content + transform + style (and may be cached as disposable
+/// derived data), so they cannot drift into a second mutable authored truth.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticObjectState {
+    pub content: SemanticObjectContent,
+    pub transform: SemanticTransform2_5D,
+    pub style: SemanticStyle,
+    pub presentation: SemanticPresentation,
+}
+
+impl SemanticObjectState {
+    pub fn new(content: impl Into<SemanticObjectContent>) -> Self {
+        Self {
+            content: content.into(),
+            transform: SemanticTransform2_5D::default(),
+            style: SemanticStyle::default(),
+            presentation: SemanticPresentation::default(),
+        }
+    }
+}
+
+/// Migration-only retained payload used by compiler/frontend paths that still
+/// consume the pre-A1 object model. #959/A4 owns deletion of this compatibility
+/// shape after semantic-node and frontend callers move to [`SemanticObjectState`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectContentRef {
     Geometry(GeometryRef),
@@ -40,12 +110,9 @@ impl From<TextResourceHandle> for ObjectContentRef {
     }
 }
 
-/// General retained object input used by compiler paths that are not constrained
-/// by the legacy geometry-only `SceneDefinition` serialization contract.
-///
-/// This deliberately shares `ObjectId`, transform, and style semantics with legacy
-/// objects so geometry and text can eventually occupy one execution/painter-order
-/// domain without introducing fake geometry or a second identity space.
+/// Migration-only compiler input retained while pre-A1 callers still require
+/// legacy `ObjectId`, `Transform2D`, and `Style` values. #959/A4 owns deletion of
+/// this type; it is not a second target semantic object model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetainedObjectDefinition {
     pub id: ObjectId,
@@ -87,7 +154,78 @@ impl From<&ObjectDefinition> for RetainedObjectDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TextResourceId;
+    use crate::{GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
+
+    #[test]
+    fn semantic_object_state_uses_shared_high_precision_authoring_values() {
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
+        state.transform.translation = SemanticVec3::new(0.7, -0.3, 4.5);
+        state.transform.scale = SemanticVec3::new(1.25, 0.5, 2.0);
+        state.style.object_opacity = 0.4;
+        state.presentation.z_index = 7;
+
+        assert_eq!(
+            state.content.geometry(),
+            Some(StoredGeometry::Circle { radius: 2.0 })
+        );
+        assert_eq!(state.transform.translation.z, 4.5);
+        assert_eq!(state.transform.scale.z, 2.0);
+        assert_eq!(state.style.object_opacity, 0.4);
+        assert_eq!(state.presentation.z_index, 7);
+    }
+
+    #[test]
+    fn semantic_content_keeps_heavy_geometry_handle_backed() {
+        let mut arena = GeometryResourceArena::new();
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 2.0));
+        let handle = arena.insert_path(path);
+        let state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+
+        assert_eq!(
+            state.content.geometry(),
+            Some(StoredGeometry::Resource(handle))
+        );
+        assert_eq!(arena.len(), 1);
+        assert!(arena.get(handle).is_some());
+    }
+
+    #[test]
+    fn semantic_text_content_uses_existing_versioned_resource_identity() {
+        let handle = TextResourceHandle {
+            id: TextResourceId::new(11),
+            version: 4,
+        };
+        let state = SemanticObjectState::new(handle);
+
+        assert_eq!(state.content.text(), Some(handle));
+        assert_eq!(state.content.geometry(), None);
+    }
+
+    #[test]
+    fn transform_and_style_edits_do_not_change_content_identity() {
+        let mut arena = GeometryResourceArena::new();
+        let handle = arena.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+        );
+        let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+        let before = state.content;
+
+        state.transform.translation = SemanticVec3::new(1000.25, -2000.5, 3.0);
+        state.style.stroke_width = 12.5;
+        state.style.object_opacity = 0.25;
+        state.presentation.z_index = -3;
+
+        assert_eq!(state.content, before);
+        assert_eq!(
+            state.content.geometry(),
+            Some(StoredGeometry::Resource(handle))
+        );
+        assert_eq!(arena.len(), 1);
+    }
 
     #[test]
     fn legacy_geometry_converts_without_changing_semantics() {
@@ -104,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn text_object_keeps_only_the_versioned_resource_handle() {
+    fn legacy_text_object_keeps_only_the_versioned_resource_handle() {
         let handle = TextResourceHandle {
             id: TextResourceId::new(11),
             version: 4,
