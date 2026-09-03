@@ -2,11 +2,14 @@ use std::collections::HashSet;
 
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
-    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
-    SemanticObjectState, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
-    SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
-    SemanticStoreError,
+    SemanticAnimationState, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectState, SemanticSceneOperationError,
+    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
+    SemanticSignalValueKind, SemanticStore, SemanticStoreError,
 };
+
+mod animation_addition;
+use animation_addition::{commit_add_animation, preflight_add_animation};
 
 mod family_edges;
 use family_edges::FamilyEdgePreflight;
@@ -14,10 +17,10 @@ use family_edges::FamilyEdgePreflight;
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
 /// Signal values, object properties, authored content, family membership/order,
-/// reactive subscriptions, and structural deletion share the same transaction so
-/// frontends, editors, and host integrations cannot invent subsystem-specific
-/// patch paths. Dependency-expression rewiring remains authored declaration
-/// topology rather than being conflated with a value update.
+/// reactive subscriptions, animation declarations, and structural deletion share
+/// the same transaction so frontends, editors, and host integrations cannot invent
+/// subsystem-specific patch paths. Dependency-expression rewiring remains authored
+/// declaration topology rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
     SetSignal {
@@ -51,6 +54,9 @@ pub enum SemanticMutation {
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
     },
+    AddAnimation {
+        state: SemanticAnimationState,
+    },
     RemoveAnimation {
         animation: SemanticNodeId,
     },
@@ -60,48 +66,59 @@ pub enum SemanticMutation {
 }
 
 impl SemanticMutation {
-    pub const fn target(&self) -> SemanticNodeId {
+    /// Existing semantic identity directly targeted by this mutation.
+    ///
+    /// Allocation mutations do not have an identity until commit and therefore
+    /// return `None`. This keeps creation out of the existing-target conflict key
+    /// space and leaves room for `AddNode` to use the same allocation semantics.
+    pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::SetSignal { signal, .. } => *signal,
+            Self::SetSignal { signal, .. } => Some(*signal),
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
-            | Self::ChangeSubscription { object, .. } => *object,
+            | Self::ChangeSubscription { object, .. } => Some(*object),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
-            | Self::ReorderMember { family, .. } => *family,
-            Self::RemoveAnimation { animation } => *animation,
-            Self::RemoveNode { node } => *node,
+            | Self::ReorderMember { family, .. } => Some(*family),
+            Self::AddAnimation { .. } => None,
+            Self::RemoveAnimation { animation } => Some(*animation),
+            Self::RemoveNode { node } => Some(*node),
         }
     }
 
-    const fn key(&self) -> SemanticMutationKey {
+    const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
-            Self::SetSignal { signal, .. } => SemanticMutationKey::Signal(*signal),
+            Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
             Self::SetProperty {
                 object, property, ..
-            } => SemanticMutationKey::ObjectProperty {
+            } => Some(SemanticMutationKey::ObjectProperty {
                 object: *object,
                 property: *property,
-            },
-            Self::ReplaceContent { object, .. } => SemanticMutationKey::ObjectContent(*object),
+            }),
+            Self::ReplaceContent { object, .. } => {
+                Some(SemanticMutationKey::ObjectContent(*object))
+            }
             Self::ChangeSubscription {
                 object, property, ..
-            } => SemanticMutationKey::Subscription {
+            } => Some(SemanticMutationKey::Subscription {
                 object: *object,
                 property: *property,
-            },
+            }),
             Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
-                SemanticMutationKey::FamilyEdge {
+                Some(SemanticMutationKey::FamilyEdge {
                     family: *family,
                     member: *member,
-                }
+                })
             }
-            Self::ReorderMember { family, member, .. } => SemanticMutationKey::FamilyOrder {
+            Self::ReorderMember { family, member, .. } => Some(SemanticMutationKey::FamilyOrder {
                 family: *family,
                 member: *member,
-            },
-            Self::RemoveAnimation { animation } => SemanticMutationKey::NodeRemoval(*animation),
-            Self::RemoveNode { node } => SemanticMutationKey::NodeRemoval(*node),
+            }),
+            Self::AddAnimation { .. } => None,
+            Self::RemoveAnimation { animation } => {
+                Some(SemanticMutationKey::NodeRemoval(*animation))
+            }
+            Self::RemoveNode { node } => Some(SemanticMutationKey::NodeRemoval(*node)),
         }
     }
 }
@@ -163,6 +180,9 @@ pub enum SemanticMutationImpact {
         family: SemanticNodeId,
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
+    },
+    AnimationAdded {
+        animation: SemanticNodeId,
     },
     NodeRemoved {
         node: SemanticNodeId,
@@ -264,6 +284,17 @@ impl SemanticMutationTransaction {
             member,
             before,
         });
+        self
+    }
+
+    /// Add one authored animation declaration after complete transaction preflight.
+    ///
+    /// The declaration references existing scene-global semantic identities. The
+    /// newly allocated animation identity is reported by `AnimationAdded` in the
+    /// transaction result, rather than allocating semantic identity before commit.
+    pub fn add_animation(&mut self, state: SemanticAnimationState) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::AddAnimation { state });
         self
     }
 
@@ -385,6 +416,11 @@ impl SemanticMutationTransaction {
                         before,
                     });
                 }
+                SemanticMutation::AddAnimation { state } => {
+                    let animation = commit_add_animation(store, &state);
+                    written_slots.insert(animation);
+                    impacts.push(SemanticMutationImpact::AnimationAdded { animation });
+                }
                 SemanticMutation::RemoveAnimation { animation }
                 | SemanticMutation::RemoveNode { node: animation } => {
                     // An earlier explicit removal may have cascade-removed this
@@ -463,12 +499,15 @@ impl SemanticMutationTransaction {
             if !matches!(
                 mutation,
                 SemanticMutation::RemoveAnimation { .. } | SemanticMutation::RemoveNode { .. }
-            ) && removed_nodes.contains(&mutation.target())
-            {
-                return Err(SemanticMutationTransactionError::TargetRemoved {
-                    index,
-                    target: mutation.target(),
-                });
+            ) {
+                if let Some(target) = mutation.target() {
+                    if removed_nodes.contains(&target) {
+                        return Err(SemanticMutationTransactionError::TargetRemoved {
+                            index,
+                            target,
+                        });
+                    }
+                }
             }
             if let SemanticMutation::ChangeSubscription {
                 object,
@@ -528,47 +567,48 @@ impl SemanticMutationTransaction {
                 }
             }
 
-            let key = mutation.key();
-            if !targets.insert(key) {
-                return Err(match key {
-                    SemanticMutationKey::Signal(target) => {
-                        SemanticMutationTransactionError::DuplicateTarget { index, target }
-                    }
-                    SemanticMutationKey::ObjectProperty { object, property } => {
-                        SemanticMutationTransactionError::DuplicateProperty {
-                            index,
-                            object,
-                            property,
+            if let Some(key) = mutation.key() {
+                if !targets.insert(key) {
+                    return Err(match key {
+                        SemanticMutationKey::Signal(target) => {
+                            SemanticMutationTransactionError::DuplicateTarget { index, target }
                         }
-                    }
-                    SemanticMutationKey::ObjectContent(object) => {
-                        SemanticMutationTransactionError::DuplicateContent { index, object }
-                    }
-                    SemanticMutationKey::Subscription { object, property } => {
-                        SemanticMutationTransactionError::DuplicateSubscription {
-                            index,
-                            object,
-                            property,
+                        SemanticMutationKey::ObjectProperty { object, property } => {
+                            SemanticMutationTransactionError::DuplicateProperty {
+                                index,
+                                object,
+                                property,
+                            }
                         }
-                    }
-                    SemanticMutationKey::FamilyEdge { family, member } => {
-                        SemanticMutationTransactionError::DuplicateFamilyEdge {
-                            index,
-                            family,
-                            member,
+                        SemanticMutationKey::ObjectContent(object) => {
+                            SemanticMutationTransactionError::DuplicateContent { index, object }
                         }
-                    }
-                    SemanticMutationKey::FamilyOrder { family, member } => {
-                        SemanticMutationTransactionError::DuplicateFamilyOrder {
-                            index,
-                            family,
-                            member,
+                        SemanticMutationKey::Subscription { object, property } => {
+                            SemanticMutationTransactionError::DuplicateSubscription {
+                                index,
+                                object,
+                                property,
+                            }
                         }
-                    }
-                    SemanticMutationKey::NodeRemoval(node) => {
-                        SemanticMutationTransactionError::DuplicateNodeRemoval { index, node }
-                    }
-                });
+                        SemanticMutationKey::FamilyEdge { family, member } => {
+                            SemanticMutationTransactionError::DuplicateFamilyEdge {
+                                index,
+                                family,
+                                member,
+                            }
+                        }
+                        SemanticMutationKey::FamilyOrder { family, member } => {
+                            SemanticMutationTransactionError::DuplicateFamilyOrder {
+                                index,
+                                family,
+                                member,
+                            }
+                        }
+                        SemanticMutationKey::NodeRemoval(node) => {
+                            SemanticMutationTransactionError::DuplicateNodeRemoval { index, node }
+                        }
+                    });
+                }
             }
 
             match mutation {
@@ -703,6 +743,10 @@ impl SemanticMutationTransaction {
                                 error,
                             })?,
                     );
+                }
+                SemanticMutation::AddAnimation { state } => {
+                    preflight_add_animation(store, state, &removed_nodes, index)?;
+                    changed.push(true);
                 }
                 SemanticMutation::RemoveAnimation { .. } => {
                     changed.push(true);
@@ -900,6 +944,10 @@ pub enum SemanticMutationTransactionError {
         family: SemanticNodeId,
         node: SemanticNodeId,
     },
+    AnimationUsesRemovedNode {
+        index: usize,
+        node: SemanticNodeId,
+    },
     Signal {
         index: usize,
         error: SemanticSignalError,
@@ -922,6 +970,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         error: SemanticSceneOperationError,
     },
+    AnimationTarget {
+        index: usize,
+        error: SemanticSceneOperationError,
+    },
     UnknownAnimation {
         index: usize,
         animation: SemanticNodeId,
@@ -929,6 +981,22 @@ pub enum SemanticMutationTransactionError {
     NotAnimation {
         index: usize,
         animation: SemanticNodeId,
+    },
+    EmptyAnimationComposition {
+        index: usize,
+    },
+    SameAnimationTargetAndTargetState {
+        index: usize,
+        node: SemanticNodeId,
+    },
+    InvalidAnimationRunTime {
+        index: usize,
+    },
+    InvalidAnimationLagRatio {
+        index: usize,
+    },
+    InvalidAnimationPathArc {
+        index: usize,
     },
     NonFinitePropertyValue {
         index: usize,
@@ -1071,6 +1139,12 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 node.slot(),
                 node.generation()
             ),
+            Self::AnimationUsesRemovedNode { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add an animation referencing node {}:{} because that node is removed by the same transaction",
+                node.slot(),
+                node.generation()
+            ),
             Self::Signal { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
@@ -1094,6 +1168,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::Object { index, error } | Self::Family { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
+            Self::AnimationTarget { index, error } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add animation: {error}"
+            ),
             Self::UnknownAnimation { index, animation } => write!(
                 formatter,
                 "semantic transaction mutation {index}: unknown semantic animation {}:{}",
@@ -1105,6 +1183,28 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 "semantic transaction mutation {index}: semantic node {}:{} is not an animation",
                 animation.slot(),
                 animation.generation()
+            ),
+            Self::EmptyAnimationComposition { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add an empty animation composition"
+            ),
+            Self::SameAnimationTargetAndTargetState { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add animation with identical target and target-state node {}:{}",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidAnimationRunTime { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add animation with non-finite or non-positive run_time"
+            ),
+            Self::InvalidAnimationLagRatio { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add animation with non-finite or negative lag_ratio"
+            ),
+            Self::InvalidAnimationPathArc { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add animation with non-finite path_arc"
             ),
             Self::NonFinitePropertyValue {
                 index,
@@ -1169,6 +1269,9 @@ mod family_edge_tests;
 
 #[cfg(test)]
 mod reorder_member_tests;
+
+#[cfg(test)]
+mod add_animation_tests;
 
 #[cfg(test)]
 mod remove_animation_tests;
