@@ -22,9 +22,9 @@ impl SemanticStore {
         &mut self,
         ids: &[SemanticNodeId],
     ) -> Result<(), SemanticSceneOperationError> {
+        self.set_last_mutation_writes(0);
         let explicit = validated_unique_nodes(self, ids)?;
         if explicit.is_empty() {
-            self.set_last_mutation_writes(0);
             return Ok(());
         }
 
@@ -57,11 +57,11 @@ impl SemanticStore {
         &mut self,
         ids: &[SemanticNodeId],
     ) -> Result<(), SemanticSceneOperationError> {
+        self.set_last_mutation_writes(0);
         let remove_set = validated_unique_nodes(self, ids)?
             .into_iter()
             .collect::<HashSet<_>>();
         if remove_set.is_empty() {
-            self.set_last_mutation_writes(0);
             return Ok(());
         }
 
@@ -132,6 +132,7 @@ fn affected_ancestor_closure(
 ) -> Result<(HashSet<SemanticNodeId>, Vec<SemanticNodeId>), SemanticSceneOperationError> {
     let mut affected = HashSet::new();
     let mut root_set = HashSet::new();
+    let mut roots = Vec::new();
     let mut stack = remove_set.iter().copied().collect::<Vec<_>>();
 
     while let Some(id) = stack.pop() {
@@ -139,25 +140,12 @@ fn affected_ancestor_closure(
             continue;
         }
         let node = target_node_checked(store, id)?;
-        if node.is_scene_owned() {
-            root_set.insert(id);
+        if node.is_scene_owned() && root_set.insert(id) {
+            roots.push(id);
         }
         stack.extend(node.parents().iter().copied());
     }
 
-    // Cross-root aliases require one deterministic first occurrence. The linked
-    // authored root list is the ordering authority, so NodeId allocation order is
-    // never used as a proxy for current scene order. Most operations affect at most
-    // one root and avoid this scan entirely.
-    let roots = if root_set.len() <= 1 {
-        root_set.iter().copied().collect::<Vec<_>>()
-    } else {
-        store
-            .scene_roots()
-            .filter(|id| root_set.contains(id))
-            .collect::<Vec<_>>()
-    };
-    debug_assert_eq!(roots.len(), root_set.len());
     Ok((affected, roots))
 }
 
@@ -166,10 +154,12 @@ fn plan_scene_restructure(
     remove_set: &HashSet<SemanticNodeId>,
 ) -> Result<Vec<SceneRootProjection>, SemanticSceneOperationError> {
     let (affected, affected_roots) = affected_ancestor_closure(store, remove_set)?;
-    let mut promoted = HashSet::new();
     let mut plans = Vec::with_capacity(affected_roots.len());
 
     for root in affected_roots {
+        // First-occurrence de-duplication within one semantic root follows that
+        // root's authoritative family order and requires no unrelated scene scan.
+        let mut promoted = HashSet::new();
         let mut replacements = Vec::new();
         collect_root_replacements(
             store,
@@ -182,6 +172,28 @@ fn plan_scene_restructure(
         )?;
         plans.push(SceneRootProjection { root, replacements });
     }
+
+    // A node promoted from multiple attached roots needs the relative authored
+    // order of those roots to choose the globally first occurrence. The current
+    // intrusive root list has no local comparison primitive, and walking it would
+    // make a tiny edit O(total scene roots). Reject before commit instead. A future
+    // local order-maintenance primitive can remove this temporary restriction.
+    let mut globally_promoted = HashSet::new();
+    let mut conflict = None;
+    for plan in &plans {
+        for replacement in plan.replacements.iter().copied() {
+            if !globally_promoted.insert(replacement) {
+                conflict = Some(match conflict {
+                    Some(current) => current.min(replacement),
+                    None => replacement,
+                });
+            }
+        }
+    }
+    if let Some(alias) = conflict {
+        return Err(SemanticSceneOperationError::AmbiguousCrossRootAlias(alias));
+    }
+
     Ok(plans)
 }
 
@@ -232,7 +244,7 @@ fn collect_root_replacements(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SemanticNodeResidency, SemanticObjectState, StoredGeometry};
+    use crate::{SemanticMutationStats, SemanticNodeResidency, SemanticObjectState, StoredGeometry};
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
         store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
@@ -323,6 +335,7 @@ mod tests {
                 identity_only
             ))
         );
+        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
         assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![existing]);
         assert_eq!(
             store.node(valid).unwrap().residency(),
@@ -331,11 +344,51 @@ mod tests {
     }
 
     #[test]
-    fn cross_root_alias_dedup_uses_current_scene_order_not_node_id_order() {
+    fn disjoint_multi_root_restructure_stays_local_with_many_unrelated_roots() {
+        let mut store = SemanticStore::new();
+        let removed_left = object(&mut store, 1.0);
+        let survivor_left = object(&mut store, 2.0);
+        let removed_right = object(&mut store, 3.0);
+        let survivor_right = object(&mut store, 4.0);
+        let left_family = store.insert_family();
+        let right_family = store.insert_family();
+
+        store
+            .add_semantic_family_member(left_family, removed_left)
+            .unwrap();
+        store
+            .add_semantic_family_member(left_family, survivor_left)
+            .unwrap();
+        store
+            .add_semantic_family_member(right_family, removed_right)
+            .unwrap();
+        store
+            .add_semantic_family_member(right_family, survivor_right)
+            .unwrap();
+
+        store.attach_to_scene(left_family).unwrap();
+        for index in 0..10_000 {
+            let unrelated = object(&mut store, 10.0 + index as f32);
+            store.attach_semantic_object(unrelated).unwrap();
+        }
+        store.attach_to_scene(right_family).unwrap();
+
+        store
+            .remove_semantic_scene_nodes(&[removed_left, removed_right])
+            .unwrap();
+
+        assert_eq!(store.scene_root_count(), 10_002);
+        let roots = store.scene_roots().collect::<Vec<_>>();
+        assert_eq!(roots.first(), Some(&survivor_left));
+        assert_eq!(roots.last(), Some(&survivor_right));
+        assert_eq!(store.last_mutation_stats().slots_written, 6);
+    }
+
+    #[test]
+    fn cross_root_alias_conflict_fails_atomically_without_scene_order_scan() {
         let mut store = SemanticStore::new();
         let removed = object(&mut store, 1.0);
         let shared = object(&mut store, 2.0);
-        let tail = object(&mut store, 3.0);
         let older_family = store.insert_family();
         let newer_family = store.insert_family();
 
@@ -344,22 +397,32 @@ mod tests {
             store.add_semantic_family_member(family, shared).unwrap();
         }
 
-        // Storage primitives can represent aliased family roots. Re-attach the
-        // lower-NodeId family last so current authored root order intentionally
-        // disagrees with allocation order.
         store.attach_to_scene(older_family).unwrap();
+        for index in 0..10_000 {
+            let unrelated = object(&mut store, 10.0 + index as f32);
+            store.attach_semantic_object(unrelated).unwrap();
+        }
         store.attach_to_scene(newer_family).unwrap();
-        store.attach_semantic_object(tail).unwrap();
-        store.detach_from_scene(older_family).unwrap();
-        store.attach_to_scene(older_family).unwrap();
-        assert!(older_family < newer_family);
+        let before = store.scene_roots().collect::<Vec<_>>();
+
         assert_eq!(
-            store.scene_roots().collect::<Vec<_>>(),
-            vec![newer_family, tail, older_family]
+            store.remove_semantic_scene_nodes(&[removed]),
+            Err(SemanticSceneOperationError::AmbiguousCrossRootAlias(shared))
         );
 
-        store.remove_semantic_scene_nodes(&[removed]).unwrap();
-
-        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![shared, tail]);
+        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), before);
+        assert_eq!(
+            store.node(older_family).unwrap().residency(),
+            SemanticNodeResidency::SceneOwned
+        );
+        assert_eq!(
+            store.node(newer_family).unwrap().residency(),
+            SemanticNodeResidency::SceneOwned
+        );
+        assert_eq!(
+            store.node(shared).unwrap().residency(),
+            SemanticNodeResidency::Detached
+        );
     }
 }
