@@ -360,9 +360,6 @@ mod tests {
 
         store.remove_semantic_scene_nodes(&[removed]).unwrap();
 
-        assert_eq!(
-            store.scene_roots().collect::<Vec<_>>(),
-            vec![shared, tail]
-        );
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![shared, tail]);
     }
 }
