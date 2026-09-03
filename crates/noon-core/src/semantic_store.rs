@@ -42,6 +42,22 @@ pub enum SourceIdentity {
     },
 }
 
+/// Authoritative top-level scene membership for one semantic node.
+///
+/// The attached variant carries the node's intrusive ordered-root links, so
+/// membership and authored top-level ordering cannot drift into separate truths.
+/// Detached nodes remain valid semantic objects and retain source/family identity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticNodeResidency {
+    #[default]
+    Detached,
+    SceneOwned {
+        previous: Option<SemanticNodeId>,
+        next: Option<SemanticNodeId>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticNodeKind {
     /// Compatibility payload while `SceneDefinition` consumers migrate.
@@ -58,6 +74,7 @@ pub struct SemanticNode {
     id: SemanticNodeId,
     kind: SemanticNodeKind,
     source_identity: Option<SourceIdentity>,
+    residency: SemanticNodeResidency,
     /// Families containing this node. Multiple parents are intentional and
     /// preserve Manim-style aliasing/reference semantics.
     parents: Vec<SemanticNodeId>,
@@ -97,6 +114,28 @@ impl SemanticNode {
         self.source_identity.as_ref()
     }
 
+    pub const fn residency(&self) -> SemanticNodeResidency {
+        self.residency
+    }
+
+    pub const fn is_scene_owned(&self) -> bool {
+        matches!(self.residency, SemanticNodeResidency::SceneOwned { .. })
+    }
+
+    pub const fn scene_previous(&self) -> Option<SemanticNodeId> {
+        match self.residency {
+            SemanticNodeResidency::Detached => None,
+            SemanticNodeResidency::SceneOwned { previous, .. } => previous,
+        }
+    }
+
+    pub const fn scene_next(&self) -> Option<SemanticNodeId> {
+        match self.residency {
+            SemanticNodeResidency::Detached => None,
+            SemanticNodeResidency::SceneOwned { next, .. } => next,
+        }
+    }
+
     pub fn parents(&self) -> &[SemanticNodeId] {
         &self.parents
     }
@@ -115,8 +154,8 @@ struct SemanticSlot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SemanticMutationStats {
-    /// Direct slots changed by the most recent operation. This excludes nodes
-    /// visited only for cycle validation.
+    /// Direct semantic slots changed by the most recent operation. This excludes
+    /// store-level head/tail/count metadata and nodes visited only for validation.
     pub slots_written: usize,
     /// Nodes inspected while validating a family cycle.
     pub cycle_nodes_visited: usize,
@@ -127,6 +166,9 @@ pub struct SemanticStore {
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
+    scene_head: Option<SemanticNodeId>,
+    scene_tail: Option<SemanticNodeId>,
+    scene_nodes: usize,
     object_nodes: HashMap<ObjectId, SemanticNodeId>,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     last_mutation: SemanticMutationStats,
@@ -138,10 +180,17 @@ impl SemanticStore {
     }
 
     /// Compatibility adapter for the current flat scene model.
+    ///
+    /// This adapter is migration-only and is owned for deletion by #959/A4.
+    /// Objects are attached in legacy authored order so current callers remain
+    /// coherent while the authoritative semantic authoring path replaces it.
     pub fn from_scene_definition(scene: &SceneDefinition) -> Self {
         let mut store = Self::new();
         for object in scene.objects() {
-            store.insert_object(object.clone());
+            let id = store.insert_object(object.clone());
+            store
+                .attach_to_scene(id)
+                .expect("newly inserted compatibility node exists");
         }
         store
     }
@@ -181,6 +230,7 @@ impl SemanticStore {
             id,
             kind,
             source_identity: None,
+            residency: SemanticNodeResidency::Detached,
             parents: Vec::new(),
             members: Vec::new(),
         });
@@ -252,6 +302,136 @@ impl SemanticStore {
             cycle_nodes_visited: 0,
         };
         Ok(())
+    }
+
+    /// Attach an existing semantic node as the last authored top-level scene root.
+    ///
+    /// Identity, source identity and family relationships are preserved. The
+    /// operation writes only this node and the former tail node, if any.
+    pub fn attach_to_scene(&mut self, id: SemanticNodeId) -> Result<bool, SemanticStoreError> {
+        let residency = self
+            .node(id)
+            .ok_or(SemanticStoreError::UnknownNode(id))?
+            .residency;
+        if !matches!(residency, SemanticNodeResidency::Detached) {
+            self.last_mutation = SemanticMutationStats::default();
+            return Ok(false);
+        }
+
+        let previous = self.scene_tail;
+        if let Some(previous_id) = previous {
+            let previous_node = self
+                .node_mut(previous_id)
+                .expect("scene tail must reference a live semantic node");
+            match &mut previous_node.residency {
+                SemanticNodeResidency::SceneOwned { next, .. } => {
+                    debug_assert!(next.is_none());
+                    *next = Some(id);
+                }
+                SemanticNodeResidency::Detached => {
+                    unreachable!("scene tail cannot reference a detached semantic node")
+                }
+            }
+        } else {
+            debug_assert!(self.scene_head.is_none());
+            self.scene_head = Some(id);
+        }
+
+        self.node_mut(id)
+            .expect("node existence validated above")
+            .residency = SemanticNodeResidency::SceneOwned {
+            previous,
+            next: None,
+        };
+        self.scene_tail = Some(id);
+        self.scene_nodes += 1;
+        self.last_mutation = SemanticMutationStats {
+            slots_written: 1 + (previous.is_some() as usize),
+            cycle_nodes_visited: 0,
+        };
+        Ok(true)
+    }
+
+    /// Detach an existing semantic node from authored top-level scene membership.
+    ///
+    /// The handle remains valid and can later be re-attached. Only the node and
+    /// its immediate root-order neighbors are written.
+    pub fn detach_from_scene(&mut self, id: SemanticNodeId) -> Result<bool, SemanticStoreError> {
+        let residency = self
+            .node(id)
+            .ok_or(SemanticStoreError::UnknownNode(id))?
+            .residency;
+        let SemanticNodeResidency::SceneOwned { previous, next } = residency else {
+            self.last_mutation = SemanticMutationStats::default();
+            return Ok(false);
+        };
+
+        if let Some(previous_id) = previous {
+            let previous_node = self
+                .node_mut(previous_id)
+                .expect("scene previous link must reference a live semantic node");
+            match &mut previous_node.residency {
+                SemanticNodeResidency::SceneOwned {
+                    next: previous_next,
+                    ..
+                } => {
+                    debug_assert_eq!(*previous_next, Some(id));
+                    *previous_next = next;
+                }
+                SemanticNodeResidency::Detached => {
+                    unreachable!("attached node cannot have a detached previous root")
+                }
+            }
+        } else {
+            debug_assert_eq!(self.scene_head, Some(id));
+            self.scene_head = next;
+        }
+
+        if let Some(next_id) = next {
+            let next_node = self
+                .node_mut(next_id)
+                .expect("scene next link must reference a live semantic node");
+            match &mut next_node.residency {
+                SemanticNodeResidency::SceneOwned {
+                    previous: next_previous,
+                    ..
+                } => {
+                    debug_assert_eq!(*next_previous, Some(id));
+                    *next_previous = previous;
+                }
+                SemanticNodeResidency::Detached => {
+                    unreachable!("attached node cannot have a detached next root")
+                }
+            }
+        } else {
+            debug_assert_eq!(self.scene_tail, Some(id));
+            self.scene_tail = previous;
+        }
+
+        self.node_mut(id)
+            .expect("node existence validated above")
+            .residency = SemanticNodeResidency::Detached;
+        self.scene_nodes -= 1;
+        if self.scene_nodes == 0 {
+            debug_assert!(self.scene_head.is_none());
+            debug_assert!(self.scene_tail.is_none());
+        }
+        self.last_mutation = SemanticMutationStats {
+            slots_written: 1 + (previous.is_some() as usize) + (next.is_some() as usize),
+            cycle_nodes_visited: 0,
+        };
+        Ok(true)
+    }
+
+    /// Iterate current top-level authored scene roots in deterministic painter order.
+    pub fn scene_roots(&self) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        std::iter::successors(self.scene_head, move |id| {
+            self.node(*id).and_then(SemanticNode::scene_next)
+        })
+    }
+
+    pub const fn scene_root_count(&self) -> usize {
+        self.scene_nodes
     }
 
     /// Add an ordered family edge. A member may belong to multiple families.
@@ -345,14 +525,20 @@ impl SemanticStore {
 
     /// Remove a node without renumbering any unrelated semantic identity.
     ///
-    /// Cost is proportional to this node's direct family edges, never the total
-    /// number of nodes in the store.
+    /// Attached root membership is removed locally first. Remaining cost is
+    /// proportional to this node's direct family edges, never total scene size.
     pub fn remove_node(&mut self, id: SemanticNodeId) -> Result<SemanticNode, SemanticStoreError> {
         let node = self
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
             .clone();
-        let mut writes = 1;
+
+        let mut writes = 0;
+        if node.is_scene_owned() {
+            self.detach_from_scene(id)?;
+            writes += self.last_mutation.slots_written;
+        }
+
         for parent in node.parents.iter().copied() {
             if let Some(parent_node) = self.node_mut(parent) {
                 parent_node.members.retain(|member| *member != id);
@@ -381,6 +567,7 @@ impl SemanticStore {
         slot.next_free = self.free_head;
         self.free_head = Some(id.slot);
         self.live_nodes -= 1;
+        writes += 1;
         self.last_mutation = SemanticMutationStats {
             slots_written: writes,
             cycle_nodes_visited: 0,
@@ -503,6 +690,71 @@ mod tests {
     }
 
     #[test]
+    fn scene_membership_order_is_authoritative_and_local() {
+        let mut store = SemanticStore::new();
+        let a = store.insert_authoring_object();
+        let b = store.insert_authoring_object();
+        let c = store.insert_authoring_object();
+
+        assert_eq!(store.scene_root_count(), 0);
+        assert!(store.scene_roots().next().is_none());
+
+        assert!(store.attach_to_scene(a).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert!(store.attach_to_scene(b).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        assert!(store.attach_to_scene(c).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![a, b, c]);
+
+        assert!(store.detach_from_scene(b).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 3);
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![a, c]);
+        assert_eq!(store.node(a).unwrap().scene_next(), Some(c));
+        assert_eq!(store.node(c).unwrap().scene_previous(), Some(a));
+
+        assert!(store.attach_to_scene(b).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![a, c, b]);
+        assert_eq!(store.node(b).unwrap().id(), b);
+
+        assert!(!store.attach_to_scene(b).unwrap());
+        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        let detached = store.insert_authoring_object();
+        assert!(!store.detach_from_scene(detached).unwrap());
+        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+    }
+
+    #[test]
+    fn detached_scene_lifecycle_preserves_semantic_identity_and_family_links() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let child = store.insert_authoring_object();
+        let source = SourceIdentity::ExplicitKey("child".into());
+        store
+            .set_source_identity(child, Some(source.clone()))
+            .unwrap();
+        store.add_member(family, child).unwrap();
+
+        assert_eq!(
+            store.node(child).unwrap().residency(),
+            SemanticNodeResidency::Detached
+        );
+        assert!(store.attach_to_scene(child).unwrap());
+        assert!(store.node(child).unwrap().is_scene_owned());
+
+        assert!(store.detach_from_scene(child).unwrap());
+        assert_eq!(store.node(child).unwrap().id(), child);
+        assert_eq!(store.node(child).unwrap().parents(), &[family]);
+        assert_eq!(store.node(family).unwrap().members(), &[child]);
+        assert_eq!(store.node_for_source(&source), Some(child));
+
+        assert!(store.attach_to_scene(child).unwrap());
+        assert_eq!(store.node(child).unwrap().id(), child);
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![child]);
+    }
+
+    #[test]
     fn deletion_does_not_renumber_unrelated_semantic_handles() {
         let mut store = SemanticStore::new();
         let ids = (0..100_000)
@@ -516,15 +768,66 @@ mod tests {
     }
 
     #[test]
-    fn reused_slot_invalidates_stale_generation() {
+    fn attach_detach_cost_does_not_scale_with_unrelated_nodes() {
+        let mut store = SemanticStore::new();
+        let roots = (0..10_000)
+            .map(|_| store.insert_authoring_object())
+            .collect::<Vec<_>>();
+        let target = roots[5_000];
+
+        store.attach_to_scene(roots[0]).unwrap();
+        store.attach_to_scene(target).unwrap();
+        store.attach_to_scene(roots[9_999]).unwrap();
+
+        assert!(store.detach_from_scene(target).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 3);
+        assert!(store.attach_to_scene(target).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
+    }
+
+    #[test]
+    fn reused_slot_invalidates_stale_generation_for_all_lifecycle_operations() {
         let mut store = SemanticStore::new();
         let first = store.insert_object(object(1));
+        store.attach_to_scene(first).unwrap();
         store.remove_node(first).unwrap();
         let second = store.insert_object(object(2));
+
         assert_eq!(first.slot(), second.slot());
         assert_ne!(first.generation(), second.generation());
         assert!(store.node(first).is_none());
         assert!(store.node(second).is_some());
+        assert!(matches!(
+            store.attach_to_scene(first),
+            Err(SemanticStoreError::UnknownNode(id)) if id == first
+        ));
+        assert!(matches!(
+            store.detach_from_scene(first),
+            Err(SemanticStoreError::UnknownNode(id)) if id == first
+        ));
+        assert!(matches!(
+            store.remove_node(first),
+            Err(SemanticStoreError::UnknownNode(id)) if id == first
+        ));
+    }
+
+    #[test]
+    fn deleting_attached_root_repairs_order_without_touching_unrelated_roots() {
+        let mut store = SemanticStore::new();
+        let a = store.insert_authoring_object();
+        let b = store.insert_authoring_object();
+        let c = store.insert_authoring_object();
+        store.attach_to_scene(a).unwrap();
+        store.attach_to_scene(b).unwrap();
+        store.attach_to_scene(c).unwrap();
+
+        store.remove_node(b).unwrap();
+        assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![a, c]);
+        assert_eq!(store.node(a).unwrap().scene_next(), Some(c));
+        assert_eq!(store.node(c).unwrap().scene_previous(), Some(a));
+        assert_eq!(store.scene_root_count(), 2);
+        assert_eq!(store.node(a).unwrap().id(), a);
+        assert_eq!(store.node(c).unwrap().id(), c);
     }
 
     #[test]
@@ -541,6 +844,28 @@ mod tests {
         );
         assert_eq!(store.node(first_family).unwrap().members(), &[child]);
         assert_eq!(store.node(second_family).unwrap().members(), &[child]);
+
+        store.attach_to_scene(child).unwrap();
+        store.detach_from_scene(child).unwrap();
+        assert_eq!(
+            store.node(child).unwrap().parents(),
+            &[first_family, second_family]
+        );
+    }
+
+    #[test]
+    fn deleting_node_cleans_direct_family_edges() {
+        let mut store = SemanticStore::new();
+        let first_family = store.insert_family();
+        let second_family = store.insert_family();
+        let child = store.insert_authoring_object();
+        store.add_member(first_family, child).unwrap();
+        store.add_member(second_family, child).unwrap();
+
+        store.remove_node(child).unwrap();
+        assert!(store.node(first_family).unwrap().members().is_empty());
+        assert!(store.node(second_family).unwrap().members().is_empty());
+        assert_eq!(store.last_mutation_stats().slots_written, 3);
     }
 
     #[test]
@@ -556,28 +881,44 @@ mod tests {
     }
 
     #[test]
-    fn source_identity_is_unique_and_stable() {
+    fn source_identity_is_unique_stable_and_released_on_delete() {
         let mut store = SemanticStore::new();
         let first = store.insert_object(object(1));
         let second = store.insert_object(object(2));
         let source = SourceIdentity::ExplicitKey("hero".into());
+
         store
             .set_source_identity(first, Some(source.clone()))
             .unwrap();
+        store.attach_to_scene(first).unwrap();
+        store.detach_from_scene(first).unwrap();
         assert_eq!(store.node_for_source(&source), Some(first));
         assert!(matches!(
-            store.set_source_identity(second, Some(source)),
+            store.set_source_identity(second, Some(source.clone())),
             Err(SemanticStoreError::DuplicateSourceIdentity(_))
         ));
+
+        store.remove_node(first).unwrap();
+        assert_eq!(store.node_for_source(&source), None);
+        store.set_source_identity(second, Some(source.clone())).unwrap();
+        assert_eq!(store.node_for_source(&source), Some(second));
     }
 
     #[test]
-    fn flat_scene_adapter_preserves_legacy_object_lookup() {
+    fn flat_scene_adapter_preserves_legacy_lookup_and_root_order() {
+        // Compatibility-only regression owned for deletion by #959/A4.
         let mut scene = SceneDefinition::new();
         let first = scene.add(GeometryRef::circle(1.0));
         let second = scene.add(GeometryRef::rectangle(2.0, 1.0));
         let store = SemanticStore::from_scene_definition(&scene);
-        assert!(store.node(store.node_for_object(first).unwrap()).is_some());
-        assert!(store.node(store.node_for_object(second).unwrap()).is_some());
+        let first_node = store.node_for_object(first).unwrap();
+        let second_node = store.node_for_object(second).unwrap();
+
+        assert!(store.node(first_node).unwrap().is_scene_owned());
+        assert!(store.node(second_node).unwrap().is_scene_owned());
+        assert_eq!(
+            store.scene_roots().collect::<Vec<_>>(),
+            vec![first_node, second_node]
+        );
     }
 }
