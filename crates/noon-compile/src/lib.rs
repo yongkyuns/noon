@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod semantic_lowering;
 mod transform;
 
 use std::cmp::Ordering;
@@ -15,6 +16,7 @@ use noon_core::{
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
+pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
