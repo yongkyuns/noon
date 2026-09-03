@@ -243,3 +243,68 @@ fn reorder_writes_one_slot_with_large_unrelated_scene() {
     assert_eq!(store.last_mutation_stats().slots_written, 1);
     assert_eq!(result.impacts().len(), 1);
 }
+
+#[test]
+fn earlier_reorder_can_make_later_distinct_reorder_a_commit_time_noop() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let first = object(&mut store, 1.0);
+    let second = object(&mut store, 2.0);
+    let third = object(&mut store, 3.0);
+    let fourth = object(&mut store, 4.0);
+    for member in [first, second, third, fourth] {
+        store.add_member(family, member).unwrap();
+    }
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction
+        .reorder_member(family, third, Some(first))
+        .reorder_member(family, second, Some(fourth));
+    let result = transaction.apply(&mut store).unwrap();
+
+    assert_eq!(
+        store.node(family).unwrap().members(),
+        vec![third, first, second, fourth]
+    );
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+    assert_eq!(
+        result.impacts(),
+        &[SemanticMutationImpact::FamilyMemberReordered {
+            family,
+            member: third,
+            before: Some(first),
+        }]
+    );
+}
+
+#[test]
+fn reorder_transaction_handles_ten_thousand_member_family() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let members = (0..10_000)
+        .map(|index| object(&mut store, index as f32 + 1.0))
+        .collect::<Vec<_>>();
+    for member in members.iter().copied() {
+        store.add_member(family, member).unwrap();
+    }
+    let target = members[5_000];
+    let anchor = members[10];
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.reorder_member(family, target, Some(anchor));
+    let result = transaction.apply(&mut store).unwrap();
+
+    let ordered = store.node(family).unwrap().members();
+    assert_eq!(ordered.len(), 10_000);
+    assert_eq!(ordered[10], target);
+    assert_eq!(ordered[11], anchor);
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+    assert_eq!(
+        result.impacts(),
+        &[SemanticMutationImpact::FamilyMemberReordered {
+            family,
+            member: target,
+            before: Some(anchor),
+        }]
+    );
+}

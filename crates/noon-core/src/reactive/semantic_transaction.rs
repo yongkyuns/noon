@@ -375,7 +375,9 @@ impl SemanticMutationTransaction {
                     let reordered = store.reorder_member(family, member, before).expect(
                         "preflighted family reorder must remain valid while transaction owns the semantic store",
                     );
-                    debug_assert!(reordered);
+                    if !reordered {
+                        continue;
+                    }
                     written_slots.insert(family);
                     impacts.push(SemanticMutationImpact::FamilyMemberReordered {
                         family,
