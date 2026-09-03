@@ -33,6 +33,7 @@ impl SemanticStore {
                         collect(store, member, seen, leaves)?;
                     }
                 }
+                SemanticNodeKind::Signal(_) => {}
             }
             Ok(())
         }

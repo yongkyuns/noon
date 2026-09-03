@@ -35,6 +35,9 @@ mod semantic_scene_restructure;
 
 mod semantic_declarations;
 
+mod semantic_signals;
+pub use semantic_signals::*;
+
 #[path = "semantic_family.rs"]
 mod semantic_family;
 

@@ -954,7 +954,7 @@ impl FrontendFamilyArrangePlan {
             let leaves = match node.kind() {
                 SemanticNodeKind::AuthoringObject => vec![id],
                 SemanticNodeKind::Family => semantic_family_leaf_ids(store, id)?,
-                SemanticNodeKind::Object(_) => {
+                SemanticNodeKind::Object(_) | SemanticNodeKind::Signal(_) => {
                     return Err(format!(
                         "family arrange member {id:?} is not an authoring object"
                     ));
@@ -1054,7 +1054,7 @@ fn semantic_family_leaf_ids(
                 }
                 Ok(())
             }
-            SemanticNodeKind::Object(_) => Err(format!(
+            SemanticNodeKind::Object(_) | SemanticNodeKind::Signal(_) => Err(format!(
                 "family layout member {node_id:?} is not an authoring object"
             )),
         }
