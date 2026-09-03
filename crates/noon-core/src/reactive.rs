@@ -33,6 +33,9 @@ pub use semantic_scene_operations::*;
 
 mod semantic_scene_restructure;
 
+mod semantic_host_declarations;
+pub use semantic_host_declarations::*;
+
 #[path = "semantic_family.rs"]
 mod semantic_family;
 
