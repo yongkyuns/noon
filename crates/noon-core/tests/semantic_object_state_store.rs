@@ -18,11 +18,7 @@ fn semantic_store_owns_object_state_and_assigns_insertion_order() {
     let second = store.insert_semantic_object(second_state);
 
     let first_state = store.node(first).unwrap().semantic_object_state().unwrap();
-    let second_state = store
-        .node(second)
-        .unwrap()
-        .semantic_object_state()
-        .unwrap();
+    let second_state = store.node(second).unwrap().semantic_object_state().unwrap();
 
     assert_eq!(first_state.z_index(), 7);
     assert_eq!(second_state.z_index(), -3);
@@ -40,9 +36,8 @@ fn semantic_state_survives_detach_readd_and_family_aliasing() {
     );
 
     let mut store = SemanticStore::new();
-    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(
-        geometry,
-    )));
+    let object =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(geometry)));
     let first_family = store.insert_family();
     let second_family = store.insert_family();
     store.add_member(first_family, object).unwrap();
@@ -72,12 +67,12 @@ fn semantic_state_mutation_is_local_and_preserves_content_identity() {
     );
 
     let mut store = SemanticStore::new();
-    let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(
-        geometry,
-    )));
-    let unrelated = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-        radius: 5.0,
-    }));
+    let object =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(geometry)));
+    let unrelated =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 5.0,
+        }));
     let unrelated_before = store
         .node(unrelated)
         .unwrap()
