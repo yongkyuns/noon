@@ -8,6 +8,8 @@ use super::{
 #[derive(Debug, Default)]
 pub(super) struct FamilyEdgePreflight {
     overrides: HashMap<(SemanticNodeId, SemanticNodeId), bool>,
+    pending_appends: HashMap<SemanticNodeId, Vec<SemanticNodeId>>,
+    orders: HashMap<SemanticNodeId, Vec<SemanticNodeId>>,
 }
 
 impl FamilyEdgePreflight {
@@ -27,6 +29,11 @@ impl FamilyEdgePreflight {
             ));
         }
         self.overrides.insert((family, member), true);
+        if let Some(order) = self.orders.get_mut(&family) {
+            order.push(member);
+        } else {
+            self.pending_appends.entry(family).or_default().push(member);
+        }
         Ok(true)
     }
 
@@ -40,8 +47,98 @@ impl FamilyEdgePreflight {
         let changed = self.contains(store, family, member);
         if changed {
             self.overrides.insert((family, member), false);
+            if let Some(order) = self.orders.get_mut(&family) {
+                order.retain(|candidate| *candidate != member);
+            }
         }
         Ok(changed)
+    }
+
+    pub(super) fn reorder(
+        &mut self,
+        store: &SemanticStore,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
+    ) -> Result<bool, SemanticSceneOperationError> {
+        validate_edge(store, family, member)?;
+        if !self.contains(store, family, member) {
+            return Err(SemanticSceneOperationError::Store(
+                SemanticStoreError::NotFamilyMember { family, member },
+            ));
+        }
+        if let Some(anchor) = before {
+            validate_edge(store, family, anchor)?;
+            if !self.contains(store, family, anchor) {
+                return Err(SemanticSceneOperationError::Store(
+                    SemanticStoreError::NotFamilyMember {
+                        family,
+                        member: anchor,
+                    },
+                ));
+            }
+        }
+        if before == Some(member) {
+            return Ok(false);
+        }
+
+        self.ensure_order(store, family);
+        let order = self
+            .orders
+            .get_mut(&family)
+            .expect("family order initialized above");
+        let member_index = order
+            .iter()
+            .position(|candidate| *candidate == member)
+            .expect("preflight membership and order must agree");
+        let already_positioned = match before {
+            Some(anchor) => order.get(member_index + 1) == Some(&anchor),
+            None => member_index + 1 == order.len(),
+        };
+        if already_positioned {
+            return Ok(false);
+        }
+
+        order.remove(member_index);
+        let insertion_index = match before {
+            Some(anchor) => order
+                .iter()
+                .position(|candidate| *candidate == anchor)
+                .expect("preflight anchor membership and order must agree"),
+            None => order.len(),
+        };
+        order.insert(insertion_index, member);
+        Ok(true)
+    }
+
+    fn ensure_order(&mut self, store: &SemanticStore, family: SemanticNodeId) {
+        if self.orders.contains_key(&family) {
+            return;
+        }
+        let mut order = store
+            .node(family)
+            .map(|node| node.members())
+            .unwrap_or_default();
+        order.retain(|member| {
+            self.overrides
+                .get(&(family, *member))
+                .copied()
+                .unwrap_or(true)
+        });
+        if let Some(appends) = self.pending_appends.remove(&family) {
+            for member in appends {
+                if self
+                    .overrides
+                    .get(&(family, member))
+                    .copied()
+                    .unwrap_or(false)
+                    && !order.contains(&member)
+                {
+                    order.push(member);
+                }
+            }
+        }
+        self.orders.insert(family, order);
     }
 
     fn contains(
@@ -81,6 +178,9 @@ impl FamilyEdgePreflight {
     }
 
     fn members(&self, store: &SemanticStore, family: SemanticNodeId) -> Vec<SemanticNodeId> {
+        if let Some(order) = self.orders.get(&family) {
+            return order.clone();
+        }
         let mut members = store
             .node(family)
             .map(|node| node.members())
@@ -91,9 +191,17 @@ impl FamilyEdgePreflight {
                 .copied()
                 .unwrap_or(true)
         });
-        for ((override_family, member), present) in &self.overrides {
-            if *override_family == family && *present && !members.contains(member) {
-                members.push(*member);
+        if let Some(appends) = self.pending_appends.get(&family) {
+            for member in appends {
+                if self
+                    .overrides
+                    .get(&(family, *member))
+                    .copied()
+                    .unwrap_or(false)
+                    && !members.contains(member)
+                {
+                    members.push(*member);
+                }
             }
         }
         members
