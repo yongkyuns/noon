@@ -6,7 +6,8 @@ use noon_runtime::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome, ScenePlayer};
+use crate::legacy::ScenePlayer;
+use crate::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome};
 
 pub const EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution";
 pub const EXECUTION_TRANSPORT_VERSION: u32 = 2;

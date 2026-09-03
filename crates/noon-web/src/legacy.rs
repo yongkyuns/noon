@@ -12,6 +12,10 @@ pub use clock::*;
 use noon_compile::{CompileError, CompilePatchError, CompiledScene};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[expect(
+    unused_imports,
+    reason = "preserve the pre-existing migration-type import line until this legacy kernel is deleted"
+)]
 use noon_core::{
     preflight_transaction, MutationTransaction, ObjectId, PatchError, Rect, SceneDefinition,
     ScenePatch, Vec2,
@@ -19,8 +23,7 @@ use noon_core::{
 use noon_ir::{decode_patch_batch, decode_scene, encode_scene, IrError};
 use noon_runtime::{
     EvaluationError, ExecutionCompactionError, ExecutionCompactionStats, ExecutionDelta,
-    ExecutionSlotId, ExecutionTransactionError, FrameChanges, FrameSlotId, FrameState,
-    RetiredSlotCompactionPolicy, SlottedSceneInstance,
+    ExecutionSlotId, ExecutionTransactionError, FrameChanges, FrameState, SlottedSceneInstance,
 };
 
 #[derive(Debug)]
@@ -103,19 +106,11 @@ impl From<EvaluationError> for PlayerError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PlayerTransactionStats {
-    pub mutations: usize,
-    pub semantic_scene_clones: usize,
-    pub runtime_rebuilds: usize,
-}
-
 #[derive(Clone, Debug)]
-pub struct ScenePlayer {
+pub(crate) struct ScenePlayer {
     definition: SceneDefinition,
     instance: SlottedSceneInstance,
     next_sequence: u64,
-    last_transaction_stats: PlayerTransactionStats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,12 +128,7 @@ impl ScenePlayer {
             definition,
             instance: SlottedSceneInstance::new(compiled),
             next_sequence: 0,
-            last_transaction_stats: PlayerTransactionStats::default(),
         })
-    }
-
-    pub fn seek(&mut self, time: f64) -> Result<&FrameState, PlayerError> {
-        Ok(self.instance.seek(time)?)
     }
 
     pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PlayerError> {
@@ -211,11 +201,6 @@ impl ScenePlayer {
                 .apply_patch(patch.clone())
                 .expect("semantic transaction was fully preflighted");
         }
-        self.last_transaction_stats = PlayerTransactionStats {
-            mutations: patches.len(),
-            semantic_scene_clones: 0,
-            runtime_rebuilds: 0,
-        };
         Ok(())
     }
 
@@ -242,36 +227,8 @@ impl ScenePlayer {
         self.instance.layout_generation()
     }
 
-    pub fn frame_slot_capacity(&self) -> usize {
-        self.instance.frame_slot_capacity()
-    }
-
-    pub fn retired_frame_slot_count(&self) -> usize {
-        self.instance.retired_frame_slot_count()
-    }
-
-    pub fn compaction_recommended(&self, policy: RetiredSlotCompactionPolicy) -> bool {
-        self.instance.compaction_recommended(policy)
-    }
-
-    pub fn frame_slot_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<FrameSlotId> {
-        self.instance.frame_slot_for_execution_slot(slot)
-    }
-
-    pub fn execution_slot_for_frame_slot(&self, slot: FrameSlotId) -> Option<ExecutionSlotId> {
-        self.instance.execution_slot_for_frame_slot(slot)
-    }
-
     pub const fn next_sequence(&self) -> u64 {
         self.next_sequence
-    }
-
-    pub const fn last_transaction_stats(&self) -> PlayerTransactionStats {
-        self.last_transaction_stats
-    }
-
-    pub fn last_execution_delta(&self) -> &ExecutionDelta {
-        self.instance.last_execution_delta()
     }
 
     pub(crate) fn take_execution_delta(&mut self) -> ExecutionDelta {
@@ -287,18 +244,6 @@ impl ScenePlayer {
 
     pub(crate) fn frame_index_for_execution_slot(&self, slot: ExecutionSlotId) -> Option<usize> {
         self.instance.frame_index_for_slot(slot)
-    }
-
-    pub fn object_count(&self) -> usize {
-        self.instance.live_object_count()
-    }
-
-    pub fn hit_test(&self, point: Vec2) -> noon_runtime::SpatialQueryResult {
-        self.instance.hit_test(point)
-    }
-
-    pub fn query_viewport(&self, bounds: Rect) -> noon_runtime::SpatialQueryResult {
-        self.instance.query_viewport(bounds)
     }
 
     pub(crate) fn live_frame_indices(&self) -> Vec<usize> {
@@ -435,15 +380,15 @@ mod tests {
     #[test]
     fn player_loads_and_seeks_without_reexecuting_frontend_code() {
         let mut player = player();
-        player.seek(3.25).expect("seek must succeed");
+        player.instance.seek(3.25).expect("seek must succeed");
         assert_eq!(player.frame().time, 3.25);
-        assert_eq!(player.object_count(), 1);
+        assert_eq!(player.instance.live_object_count(), 1);
     }
 
     #[test]
     fn ordered_patch_batch_preserves_playhead_and_advances_sequence() {
         let mut player = player();
-        player.seek(2.0).expect("seek must succeed");
+        player.instance.seek(2.0).expect("seek must succeed");
         let batch = PatchBatch::new(
             0,
             vec![ScenePatch::SetTransform {
@@ -471,7 +416,7 @@ mod tests {
     #[test]
     fn scene_replacement_preserves_playhead_and_restarts_patch_sequence() {
         let mut player = player();
-        player.seek(2.5).expect("seek must succeed");
+        player.instance.seek(2.5).expect("seek must succeed");
         let patch =
             encode_patch_batch(&PatchBatch::new(0, Vec::new())).expect("batch must serialize");
         player
@@ -488,14 +433,14 @@ mod tests {
             .expect("replacement must apply");
 
         assert_eq!(player.frame().time, 2.5);
-        assert_eq!(player.object_count(), 2);
+        assert_eq!(player.instance.live_object_count(), 2);
         assert_eq!(player.next_sequence(), 0);
     }
 
     #[test]
     fn invalid_scene_replacement_is_transactional() {
         let mut player = player();
-        player.seek(1.25).expect("seek must succeed");
+        player.instance.seek(1.25).expect("seek must succeed");
         let patch =
             encode_patch_batch(&PatchBatch::new(0, Vec::new())).expect("batch must serialize");
         player
@@ -517,7 +462,7 @@ mod tests {
     #[test]
     fn compatible_scene_reconciliation_applies_minimal_patch() {
         let mut player = player();
-        player.seek(1.5).expect("seek must succeed");
+        player.instance.seek(1.5).expect("seek must succeed");
         let mut desired = SceneDefinition::new();
         let object = desired.add(GeometryRef::circle(1.0));
         desired
@@ -540,7 +485,7 @@ mod tests {
     #[test]
     fn incompatible_geometry_reconciliation_falls_back_to_replacement() {
         let mut player = player();
-        player.seek(0.75).expect("seek must succeed");
+        player.instance.seek(0.75).expect("seek must succeed");
         let mut desired = SceneDefinition::new();
         desired.add(GeometryRef::rectangle(2.0, 1.0));
         let json = encode_scene(&desired).expect("scene must serialize");
@@ -641,7 +586,7 @@ mod tests {
     #[test]
     fn javascript_shaped_style_batch_applies_transactionally() {
         let mut player = player();
-        player.seek(1.75).expect("seek must succeed");
+        player.instance.seek(1.75).expect("seek must succeed");
         let json = r#"{
             "version": 1,
             "sequence": 0,
@@ -701,7 +646,7 @@ mod tests {
         let initial = grid_scene(18, 10);
         let json = encode_scene(&initial).expect("initial grid must serialize");
         let mut player = ScenePlayer::from_scene_json(&json).expect("grid must load");
-        player.seek(1.75).expect("seek must succeed");
+        player.instance.seek(1.75).expect("seek must succeed");
 
         let desired = grid_scene(20, 10);
         let json = encode_scene(&desired).expect("expanded grid must serialize");
@@ -716,7 +661,7 @@ mod tests {
             patch_count > 180,
             "grid edit should contain many semantic changes"
         );
-        assert_eq!(player.object_count(), 200);
+        assert_eq!(player.instance.live_object_count(), 200);
         assert_eq!(player.frame().time, 1.75);
         assert_eq!(player.next_sequence(), 0);
     }
@@ -724,7 +669,7 @@ mod tests {
     #[test]
     fn no_op_scene_rerun_remains_incremental_without_mutation() {
         let mut player = player();
-        player.seek(0.625).expect("seek must succeed");
+        player.instance.seek(0.625).expect("seek must succeed");
         let json = player.scene_json().expect("scene must serialize");
         assert_eq!(
             player
@@ -784,7 +729,7 @@ mod tests {
         let initial = transform_scene(1.0);
         let json = encode_scene(&initial).expect("scene must serialize");
         let mut player = ScenePlayer::from_scene_json(&json).expect("scene must load");
-        player.seek(0.5).expect("seek must succeed");
+        player.instance.seek(0.5).expect("seek must succeed");
 
         let desired = transform_scene(3.0);
         let json = encode_scene(&desired).expect("scene must serialize");
@@ -817,14 +762,12 @@ mod tests {
             .apply_patch_batch_json(&json)
             .expect("local removal succeeds");
 
-        assert_eq!(player.object_count(), 99_999);
+        assert_eq!(player.instance.live_object_count(), 99_999);
         assert_eq!(
             player.instance.slot_for_object(ObjectId::new(99_999)),
             Some(retained_before)
         );
-        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
-        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
-        assert_eq!(player.last_execution_delta().slots().len(), 1);
+        assert_eq!(player.instance.last_execution_delta().slots().len(), 1);
         let runtime = player.instance.scene_instance().last_patch_stats();
         assert_eq!(runtime.object_slots_retired, 1);
         assert_eq!(runtime.full_group_rebuilds, 0);
@@ -886,14 +829,17 @@ mod tests {
 
         let survivor_slot = player.execution_slot_for_frame_index(11).unwrap();
         let last_slot = player.execution_slot_for_frame_index(9_999).unwrap();
-        let stale_frame_slot = player.frame_slot_for_execution_slot(survivor_slot).unwrap();
+        let stale_frame_slot = player
+            .instance
+            .frame_slot_for_execution_slot(survivor_slot)
+            .unwrap();
 
         let batch = PatchBatch::new(0, vec![ScenePatch::RemoveObject(ids[10])]);
         player
             .apply_patch_batch_json(&encode_patch_batch(&batch).unwrap())
             .unwrap();
-        assert_eq!(player.frame_slot_capacity(), 10_000);
-        assert_eq!(player.retired_frame_slot_count(), 1);
+        assert_eq!(player.instance.frame_slot_capacity(), 10_000);
+        assert_eq!(player.instance.retired_frame_slot_count(), 1);
 
         let stats = player.compact_retired_slots().unwrap();
         assert_eq!(stats.frame_slots_before, 10_000);
@@ -903,9 +849,15 @@ mod tests {
         assert_eq!(player.layout_generation(), 1);
         assert_eq!(player.frame().time, 0.5);
         assert_eq!(player.frame().objects.len(), 9_999);
-        assert_eq!(player.execution_slot_for_frame_slot(stale_frame_slot), None);
         assert_eq!(
             player
+                .instance
+                .execution_slot_for_frame_slot(stale_frame_slot),
+            None
+        );
+        assert_eq!(
+            player
+                .instance
                 .frame_slot_for_execution_slot(survivor_slot)
                 .unwrap()
                 .index(),
@@ -913,6 +865,7 @@ mod tests {
         );
         assert_eq!(
             player
+                .instance
                 .frame_slot_for_execution_slot(last_slot)
                 .unwrap()
                 .index(),
