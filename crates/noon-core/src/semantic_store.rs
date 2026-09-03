@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 use crate::SemanticObjectState;
+use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -198,10 +198,6 @@ impl SemanticNode {
 
     pub fn kind(&self) -> &SemanticNodeKind {
         &self.kind
-    }
-
-    pub fn kind_mut(&mut self) -> &mut SemanticNodeKind {
-        &mut self.kind
     }
 
     pub fn object(&self) -> Option<&ObjectDefinition> {
