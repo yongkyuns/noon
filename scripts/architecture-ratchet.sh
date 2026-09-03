@@ -101,6 +101,31 @@ diff. Use ordinary Rust module layout instead. See #960/A5.2 and #961/A6.8.
 EOF
 fi
 
+normalized_web_tool_player_dependency_found=0
+normalized_web_tool_player_dependencies="$(
+  git grep -nE \
+    '(^|[^[:alnum:]_])(ScenePlayer|PlayerError)([^[:alnum:]_]|$)' \
+    -- \
+    'crates/noon-web/src/determinism.rs' \
+    'crates/noon-web/src/semantic_snapshot.rs' || true
+)"
+
+if [[ -n "$normalized_web_tool_player_dependencies" ]]; then
+  printf '%s\n' "$normalized_web_tool_player_dependencies" >&2
+  normalized_web_tool_player_dependency_found=1
+fi
+
+if (( normalized_web_tool_player_dependency_found != 0 )); then
+  cat >&2 <<'EOF'
+
+Deterministic replay and semantic snapshots were detached from the migration
+ScenePlayer authority by #991 and #994. Those explicit debug/export boundaries
+must stay compiler/runtime-owned and may not regain ScenePlayer or PlayerError
+dependencies, including dependencies that predate the current diff. See #959/A4.6
+and #961/A6.8.
+EOF
+fi
+
 identity_authority_found=0
 canonical_identity_file='crates/noon-core/src/semantic_store.rs'
 
@@ -142,8 +167,8 @@ creating a second identity/store definition elsewhere. See #961/A6.3.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || identity_authority_found != 0 )); then
+if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth, module-growth, normalized-runtime-module, and semantic-identity ratchets passed"
+echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, and semantic-identity ratchets passed"
