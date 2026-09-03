@@ -384,20 +384,15 @@ mod tests {
 
     #[test]
     fn lowering_failure_does_not_partially_update_identity_index() {
-        use noon_core::{GeometryRef, ObjectDefinition};
-
         let mut store = SemanticStore::new();
         attach(&mut store, circle(1.0));
-        let legacy = store.insert_object(ObjectDefinition::new(
-            ObjectId::new(99),
-            GeometryRef::circle(1.0),
-        ));
-        store.attach_to_scene(legacy).unwrap();
+        let state_less = store.insert_authoring_object();
+        store.attach_to_scene(state_less).unwrap();
 
         let mut index = SemanticExecutionIndex::new();
         assert_eq!(
             index.lower_scene(&store).unwrap_err(),
-            SemanticLoweringError::MissingSemanticObjectState(legacy)
+            SemanticLoweringError::MissingSemanticObjectState(state_less)
         );
         assert!(index.is_empty());
     }
