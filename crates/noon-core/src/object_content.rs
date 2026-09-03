@@ -1,7 +1,5 @@
-use crate::{
-    GeometryRef, ObjectDefinition, ObjectId, SemanticPresentation, SemanticStyle,
-    SemanticTransform2_5D, StoredGeometry, Style, TextResourceHandle, Transform2D,
-};
+use crate::{GeometryRef, ObjectDefinition, ObjectId, Style, TextResourceHandle, Transform2D};
+use crate::{SemanticPresentation, SemanticStyle, SemanticTransform2_5D, StoredGeometry};
 
 /// Target authored content carried by one semantic object.
 ///
