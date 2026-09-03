@@ -18,6 +18,7 @@ const exactFamilies = new Map([
   ["platform-release.yml", "platform-release"],
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
+  ["branch-cleanup-once.yml", "maintenance"],
 ]);
 
 function classifyWorkflow(name) {
