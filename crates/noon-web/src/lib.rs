@@ -18,7 +18,6 @@ mod family_write_authoring;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
 mod host_player;
-#[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
 mod manim_dashed_line_bridge;
