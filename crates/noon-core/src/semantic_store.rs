@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{HostCallbackId, SemanticObjectState, SemanticSignalState};
+use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 /// Stable semantic identity independent of execution/render dense indices.
@@ -173,6 +173,9 @@ pub enum SemanticNodeKind {
     /// Authored native-reactive signal using the same scene-global generational
     /// identity allocator as objects and families.
     Signal(SemanticSignalState),
+    /// Authored animation declaration using the same scene-global generational
+    /// identity allocator as every other semantic entity.
+    Animation(SemanticAnimationState),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,8 +184,8 @@ pub struct SemanticNode {
     kind: SemanticNodeKind,
     /// Authoritative authored object payload for target semantic objects.
     ///
-    /// `None` is valid for families, signals, legacy compatibility objects, and the
-    /// temporary state-less frontend identity seam only.
+    /// `None` is valid for families, signals, animations, legacy compatibility
+    /// objects, and the temporary state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
     scene_membership: SemanticSceneMembership,
@@ -222,7 +225,8 @@ impl SemanticNode {
             SemanticNodeKind::Object(object) => Some(object),
             SemanticNodeKind::AuthoringObject
             | SemanticNodeKind::Family
-            | SemanticNodeKind::Signal(_) => None,
+            | SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_) => None,
         }
     }
 
@@ -231,7 +235,8 @@ impl SemanticNode {
             SemanticNodeKind::Object(object) => Some(object),
             SemanticNodeKind::AuthoringObject
             | SemanticNodeKind::Family
-            | SemanticNodeKind::Signal(_) => None,
+            | SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_) => None,
         }
     }
 
@@ -382,6 +387,13 @@ impl SemanticStore {
         state: SemanticSignalState,
     ) -> SemanticNodeId {
         self.insert_kind(SemanticNodeKind::Signal(state))
+    }
+
+    pub(crate) fn insert_semantic_animation_state(
+        &mut self,
+        state: SemanticAnimationState,
+    ) -> SemanticNodeId {
+        self.insert_kind(SemanticNodeKind::Animation(state))
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
