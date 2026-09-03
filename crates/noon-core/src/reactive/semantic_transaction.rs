@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
     SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
     SemanticObjectState, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
@@ -12,10 +13,11 @@ use family_edges::FamilyEdgePreflight;
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
-/// Signal values, object properties, authored content, family membership, and reactive
-/// subscriptions share the same transaction so frontends, editors, and host integrations
-/// cannot invent subsystem-specific patch paths. Dependency-expression rewiring remains
-/// authored declaration topology rather than being conflated with a value update.
+/// Signal values, object properties, authored content, family membership,
+/// reactive subscriptions, and structural deletion share the same transaction so
+/// frontends, editors, and host integrations cannot invent subsystem-specific
+/// patch paths. Dependency-expression rewiring remains authored declaration
+/// topology rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
     SetSignal {
@@ -44,6 +46,9 @@ pub enum SemanticMutation {
         family: SemanticNodeId,
         member: SemanticNodeId,
     },
+    RemoveNode {
+        node: SemanticNodeId,
+    },
 }
 
 impl SemanticMutation {
@@ -54,6 +59,7 @@ impl SemanticMutation {
             | Self::ReplaceContent { object, .. }
             | Self::ChangeSubscription { object, .. } => *object,
             Self::AddMember { family, .. } | Self::RemoveMember { family, .. } => *family,
+            Self::RemoveNode { node } => *node,
         }
     }
 
@@ -79,6 +85,7 @@ impl SemanticMutation {
                     member: *member,
                 }
             }
+            Self::RemoveNode { node } => SemanticMutationKey::NodeRemoval(*node),
         }
     }
 }
@@ -99,13 +106,15 @@ enum SemanticMutationKey {
         family: SemanticNodeId,
         member: SemanticNodeId,
     },
+    NodeRemoval(SemanticNodeId),
 }
 
 /// Locality classification emitted by committed semantic mutations.
 ///
 /// Lowering/runtime consumers can use this without re-interpreting the mutation
-/// payload. Future A1.5 mutation kinds extend this enum rather than introducing
-/// frontend- or subsystem-specific patch classifications.
+/// payload. Structural cleanup emits impacts for every semantic declaration it
+/// actually invalidates; no frontend- or subsystem-specific patch classification
+/// is introduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
     SignalValue {
@@ -129,6 +138,9 @@ pub enum SemanticMutationImpact {
     FamilyMemberRemoved {
         family: SemanticNodeId,
         member: SemanticNodeId,
+    },
+    NodeRemoved {
+        node: SemanticNodeId,
     },
 }
 
@@ -156,11 +168,6 @@ impl SemanticMutationTransaction {
 
     /// Set one node-owned authored object property in the same atomic mutation
     /// vocabulary as signal values.
-    ///
-    /// `SemanticSignalValue` is reused here as the existing high-precision typed
-    /// scalar/vector/bool value vocabulary; property-kind validation rejects the
-    /// bool case for current object properties instead of creating a duplicate
-    /// property-value type.
     pub fn set_property(
         &mut self,
         object: SemanticNodeId,
@@ -176,9 +183,6 @@ impl SemanticMutationTransaction {
     }
 
     /// Replace only the authored content reference/value of one semantic object.
-    ///
-    /// Transform, style, painter metadata, signal bindings, identity, family
-    /// relationships, and scene lifecycle are intentionally left untouched.
     pub fn replace_content(
         &mut self,
         object: SemanticNodeId,
@@ -192,10 +196,6 @@ impl SemanticMutationTransaction {
     }
 
     /// Change the authored signal driver for one object property.
-    ///
-    /// `Some(signal)` binds or rebinds the property and `None` removes its
-    /// authored driver. Rebinding is one semantic mutation rather than a visible
-    /// remove/add pair, so the existing declaration position is preserved.
     pub fn change_subscription(
         &mut self,
         object: SemanticNodeId,
@@ -224,6 +224,19 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Delete one semantic identity and atomically clean declarations that cannot
+    /// remain valid without it.
+    ///
+    /// Signal bindings are unbound. Derived signals and animation declarations
+    /// that reference the removed identity are themselves removed, recursively.
+    /// Structural removals are terminal within a transaction: once the first
+    /// `RemoveNode` is authored, no later non-removal mutation is accepted. This
+    /// keeps complete preflight valid through commit without staging a second scene.
+    pub fn remove_node(&mut self, node: SemanticNodeId) -> &mut Self {
+        self.mutations.push(SemanticMutation::RemoveNode { node });
+        self
+    }
+
     pub fn mutations(&self) -> &[SemanticMutation] {
         &self.mutations
     }
@@ -233,12 +246,6 @@ impl SemanticMutationTransaction {
     }
 
     /// Preflight the complete transaction, then commit every changed mutation.
-    ///
-    /// No semantic slot is written until all mutations have passed generation,
-    /// target-kind, value-kind, finite-value, content, subscription, family-edge,
-    /// and duplicate-mutation validation. Once preflight succeeds, commit cannot
-    /// observe external scene changes because the transaction owns
-    /// `&mut SemanticStore` for the duration.
     pub fn apply(
         self,
         store: &mut SemanticStore,
@@ -303,6 +310,32 @@ impl SemanticMutationTransaction {
                     written_slots.insert(member);
                     impacts.push(SemanticMutationImpact::FamilyMemberRemoved { family, member });
                 }
+                SemanticMutation::RemoveNode { node } => {
+                    // An earlier explicit removal may have cascade-removed this
+                    // node already. Preflight proved the handle was live at the
+                    // transaction boundary; a cascade therefore satisfies this
+                    // later structural mutation without duplicate impacts.
+                    if store.node(node).is_none() {
+                        continue;
+                    }
+                    let outcome = store
+                        .remove_node_with_reverse_cleanup(node)
+                        .expect("preflighted node removal must remain valid while transaction owns the store");
+                    written_slots.extend(outcome.written_slots().iter().copied());
+                    for effect in outcome.effects() {
+                        match effect {
+                            SemanticRemoveNodeEffect::NodeRemoved(node) => {
+                                impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
+                            }
+                            SemanticRemoveNodeEffect::SubscriptionRemoved { object, property } => {
+                                impacts.push(SemanticMutationImpact::Subscription {
+                                    object: *object,
+                                    property: *property,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         store.set_last_mutation_writes(written_slots.len());
@@ -314,11 +347,66 @@ impl SemanticMutationTransaction {
         &self,
         store: &SemanticStore,
     ) -> Result<Vec<bool>, SemanticMutationTransactionError> {
+        let mut removed_nodes = HashSet::new();
+        let mut removal_started = false;
+        for (index, mutation) in self.mutations.iter().enumerate() {
+            match mutation {
+                SemanticMutation::RemoveNode { node } => {
+                    removal_started = true;
+                    removed_nodes.insert(*node);
+                }
+                _ if removal_started => {
+                    return Err(SemanticMutationTransactionError::MutationAfterRemove { index });
+                }
+                _ => {}
+            }
+        }
+        let removed_nodes = store.semantic_removal_closure(&removed_nodes);
+
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut changed = Vec::with_capacity(self.mutations.len());
         let mut family_edges = FamilyEdgePreflight::default();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
+            if !matches!(mutation, SemanticMutation::RemoveNode { .. })
+                && removed_nodes.contains(&mutation.target())
+            {
+                return Err(SemanticMutationTransactionError::TargetRemoved {
+                    index,
+                    target: mutation.target(),
+                });
+            }
+            if let SemanticMutation::ChangeSubscription {
+                object,
+                property,
+                signal: Some(signal),
+            } = mutation
+            {
+                if removed_nodes.contains(signal) {
+                    return Err(
+                        SemanticMutationTransactionError::SubscriptionUsesRemovedSignal {
+                            index,
+                            object: *object,
+                            property: *property,
+                            signal: *signal,
+                        },
+                    );
+                }
+            }
+            if let SemanticMutation::AddMember { family, member }
+            | SemanticMutation::RemoveMember { family, member } = mutation
+            {
+                if removed_nodes.contains(member) {
+                    return Err(
+                        SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                            index,
+                            family: *family,
+                            member: *member,
+                        },
+                    );
+                }
+            }
+
             let key = mutation.key();
             if !targets.insert(key) {
                 return Err(match key {
@@ -348,6 +436,9 @@ impl SemanticMutationTransaction {
                             family,
                             member,
                         }
+                    }
+                    SemanticMutationKey::NodeRemoval(node) => {
+                        SemanticMutationTransactionError::DuplicateNodeRemoval { index, node }
                     }
                 });
             }
@@ -458,9 +549,6 @@ impl SemanticMutationTransaction {
                         }
                         changed.push(existing != Some(*signal));
                     } else {
-                        // Unbinding is intentionally keyed only by object/property.
-                        // It must be able to remove a generation-safe stale source
-                        // declaration left by the current low-level RemoveNode seam.
                         changed.push(existing.is_some());
                     }
                 }
@@ -473,6 +561,15 @@ impl SemanticMutationTransaction {
                     changed.push(family_edges.remove(store, *family, *member).map_err(
                         |error| SemanticMutationTransactionError::Family { index, error },
                     )?);
+                }
+                SemanticMutation::RemoveNode { node } => {
+                    if store.node(*node).is_none() {
+                        return Err(SemanticMutationTransactionError::Node {
+                            index,
+                            error: SemanticStoreError::UnknownNode(*node),
+                        });
+                    }
+                    changed.push(true);
                 }
             }
         }
@@ -565,6 +662,7 @@ fn set_object_subscription(
     property: SemanticObjectProperty,
     signal: Option<SemanticNodeId>,
 ) {
+    store.unregister_semantic_references_for_owner(object);
     let bindings = store
         .node_mut(object)
         .and_then(|node| node.semantic_object_state_mut())
@@ -586,6 +684,7 @@ fn set_object_subscription(
             unreachable!("unchanged missing subscription is filtered during transaction preflight")
         }
     }
+    store.register_semantic_references_for_owner(object);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -620,6 +719,28 @@ pub enum SemanticMutationTransactionError {
         property: SemanticObjectProperty,
     },
     DuplicateFamilyEdge {
+        index: usize,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
+    DuplicateNodeRemoval {
+        index: usize,
+        node: SemanticNodeId,
+    },
+    MutationAfterRemove {
+        index: usize,
+    },
+    TargetRemoved {
+        index: usize,
+        target: SemanticNodeId,
+    },
+    SubscriptionUsesRemovedSignal {
+        index: usize,
+        object: SemanticNodeId,
+        property: SemanticObjectProperty,
+        signal: SemanticNodeId,
+    },
+    FamilyEdgeUsesRemovedNode {
         index: usize,
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -665,6 +786,10 @@ pub enum SemanticMutationTransactionError {
         signal: SemanticNodeId,
         expected: SemanticSignalValueKind,
         actual: SemanticSignalValueKind,
+    },
+    Node {
+        index: usize,
+        error: SemanticStoreError,
     },
 }
 
@@ -717,6 +842,48 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 member.slot(),
                 member.generation()
             ),
+            Self::DuplicateNodeRemoval { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats removal of node {}:{}",
+                node.slot(),
+                node.generation()
+            ),
+            Self::MutationAfterRemove { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} follows structural removal; RemoveNode mutations must be terminal"
+            ),
+            Self::TargetRemoved { index, target } => write!(
+                formatter,
+                "semantic transaction mutation {index} targets node {}:{} that is removed by the same transaction",
+                target.slot(),
+                target.generation()
+            ),
+            Self::SubscriptionUsesRemovedSignal {
+                index,
+                object,
+                property,
+                signal,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot bind signal {}:{} scheduled for removal to property {:?} on object {}:{}",
+                signal.slot(),
+                signal.generation(),
+                property,
+                object.slot(),
+                object.generation()
+            ),
+            Self::FamilyEdgeUsesRemovedNode {
+                index,
+                family,
+                member,
+            } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot change family edge {}:{} -> {}:{} because the member is removed by the same transaction",
+                family.slot(),
+                family.generation(),
+                member.slot(),
+                member.generation()
+            ),
             Self::Signal { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
@@ -737,10 +904,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 signal.slot(),
                 signal.generation()
             ),
-            Self::Object { index, error } => {
-                write!(formatter, "semantic transaction mutation {index}: {error}")
-            }
-            Self::Family { index, error } => {
+            Self::Object { index, error } | Self::Family { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
             Self::NonFinitePropertyValue {
@@ -783,6 +947,9 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::Node { index, error } => {
+                write!(formatter, "semantic transaction mutation {index}: {error}")
+            }
         }
     }
 }
@@ -790,447 +957,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
 impl std::error::Error for SemanticMutationTransactionError {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        SemanticObjectState, SemanticSignalBinding, SemanticSignalExpr, SemanticVec3,
-        StoredGeometry,
-    };
-
-    fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
-        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
-    }
-
-    fn input_value(store: &SemanticStore, signal: SemanticNodeId) -> SemanticSignalValue {
-        let SemanticSignalSource::Input(value) =
-            store.semantic_signal_state(signal).unwrap().source()
-        else {
-            panic!("expected input signal")
-        };
-        value.clone()
-    }
-
-    fn property_value(
-        store: &SemanticStore,
-        object: SemanticNodeId,
-        property: SemanticObjectProperty,
-    ) -> SemanticSignalValue {
-        object_property_value(
-            store.semantic_object_state_checked(object).unwrap(),
-            property,
-        )
-    }
-
-    #[test]
-    fn multiple_signal_values_commit_after_complete_preflight() {
-        let mut store = SemanticStore::new();
-        let scalar = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let vector = store
-            .insert_semantic_input_signal(SemanticVec3::new(1.0, 2.0, 3.0))
-            .unwrap();
-        let before_len = store.len();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(scalar, 2.5_f64)
-            .set_signal(vector, SemanticVec3::new(4.0, 5.0, 6.0));
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert_eq!(
-            input_value(&store, scalar),
-            SemanticSignalValue::Scalar(2.5)
-        );
-        assert_eq!(
-            input_value(&store, vector),
-            SemanticSignalValue::Vec3(SemanticVec3::new(4.0, 5.0, 6.0))
-        );
-        assert_eq!(store.len(), before_len);
-        assert_eq!(store.last_mutation_stats().slots_written, 2);
-        assert_eq!(
-            result.impacts(),
-            &[
-                SemanticMutationImpact::SignalValue { signal: scalar },
-                SemanticMutationImpact::SignalValue { signal: vector },
-            ]
-        );
-    }
-
-    #[test]
-    fn mixed_signal_and_properties_commit_atomically_and_count_unique_slots() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let target = object(&mut store, 2.0);
-        let translation = SemanticVec3::new(4.0, -2.0, 7.0);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(signal, 3.0_f64)
-            .set_property(target, SemanticObjectProperty::Translation, translation)
-            .set_property(target, SemanticObjectProperty::ObjectOpacity, 0.4_f64);
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert_eq!(
-            input_value(&store, signal),
-            SemanticSignalValue::Scalar(3.0)
-        );
-        assert_eq!(
-            property_value(&store, target, SemanticObjectProperty::Translation),
-            SemanticSignalValue::Vec3(translation)
-        );
-        assert_eq!(
-            property_value(&store, target, SemanticObjectProperty::ObjectOpacity),
-            SemanticSignalValue::Scalar(0.4)
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 2);
-        assert_eq!(
-            result.impacts(),
-            &[
-                SemanticMutationImpact::SignalValue { signal },
-                SemanticMutationImpact::ObjectProperty {
-                    object: target,
-                    property: SemanticObjectProperty::Translation,
-                },
-                SemanticMutationImpact::ObjectProperty {
-                    object: target,
-                    property: SemanticObjectProperty::ObjectOpacity,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn invalid_late_value_prevents_earlier_valid_mutation() {
-        let mut store = SemanticStore::new();
-        let first = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let second = store.insert_semantic_input_signal(2.0_f64).unwrap();
-        let first_before = input_value(&store, first);
-        let second_before = input_value(&store, second);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(first, 10.0_f64)
-            .set_signal(second, f64::NAN);
-
-        assert_eq!(
-            transaction.apply(&mut store),
-            Err(SemanticMutationTransactionError::Signal {
-                index: 1,
-                error: SemanticSignalError::NonFiniteValue,
-            })
-        );
-        assert_eq!(input_value(&store, first), first_before);
-        assert_eq!(input_value(&store, second), second_before);
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn invalid_late_property_prevents_earlier_signal_and_property_mutation() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let target = object(&mut store, 2.0);
-        let signal_before = input_value(&store, signal);
-        let translation_before =
-            property_value(&store, target, SemanticObjectProperty::Translation);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(signal, 5.0_f64)
-            .set_property(
-                target,
-                SemanticObjectProperty::Translation,
-                SemanticVec3::new(1.0, 2.0, 3.0),
-            )
-            .set_property(target, SemanticObjectProperty::StrokeWidth, f64::NAN);
-
-        assert_eq!(
-            transaction.apply(&mut store),
-            Err(SemanticMutationTransactionError::NonFinitePropertyValue {
-                index: 2,
-                object: target,
-                property: SemanticObjectProperty::StrokeWidth,
-            })
-        );
-        assert_eq!(input_value(&store, signal), signal_before);
-        assert_eq!(
-            property_value(&store, target, SemanticObjectProperty::Translation),
-            translation_before
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn stale_late_target_prevents_earlier_valid_mutation() {
-        let mut store = SemanticStore::new();
-        let first = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let stale = store.insert_semantic_input_signal(2.0_f64).unwrap();
-        store.remove_node(stale).unwrap();
-        let replacement = object(&mut store, 3.0);
-        assert_eq!(stale.slot(), replacement.slot());
-        assert_ne!(stale.generation(), replacement.generation());
-        let first_before = input_value(&store, first);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(first, 10.0_f64)
-            .set_signal(stale, 20.0_f64);
-
-        assert_eq!(
-            transaction.apply(&mut store),
-            Err(SemanticMutationTransactionError::Signal {
-                index: 1,
-                error: SemanticSignalError::UnknownSignal(stale),
-            })
-        );
-        assert_eq!(input_value(&store, first), first_before);
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn stale_property_target_prevents_earlier_valid_mutation() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let stale = object(&mut store, 2.0);
-        store.remove_node(stale).unwrap();
-        let replacement = object(&mut store, 3.0);
-        assert_eq!(stale.slot(), replacement.slot());
-        assert_ne!(stale.generation(), replacement.generation());
-        let signal_before = input_value(&store, signal);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_signal(signal, 2.0_f64).set_property(
-            stale,
-            SemanticObjectProperty::RotationZ,
-            0.5_f64,
-        );
-
-        assert_eq!(
-            transaction.apply(&mut store),
-            Err(SemanticMutationTransactionError::Object {
-                index: 1,
-                error: SemanticSceneOperationError::UnknownNode(stale),
-            })
-        );
-        assert_eq!(input_value(&store, signal), signal_before);
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn duplicate_target_is_rejected_before_mutation() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let before = input_value(&store, signal);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(signal, 2.0_f64)
-            .set_signal(signal, 3.0_f64);
-
-        assert_eq!(
-            transaction.apply(&mut store),
-            Err(SemanticMutationTransactionError::DuplicateTarget {
-                index: 1,
-                target: signal,
-            })
-        );
-        assert_eq!(input_value(&store, signal), before);
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn duplicate_property_is_rejected_but_distinct_properties_share_one_object() {
-        let mut store = SemanticStore::new();
-        let target = object(&mut store, 1.0);
-        let mut duplicate = SemanticMutationTransaction::new();
-        duplicate
-            .set_property(target, SemanticObjectProperty::RotationZ, 0.5_f64)
-            .set_property(target, SemanticObjectProperty::RotationZ, 1.0_f64);
-
-        assert_eq!(
-            duplicate.apply(&mut store),
-            Err(SemanticMutationTransactionError::DuplicateProperty {
-                index: 1,
-                object: target,
-                property: SemanticObjectProperty::RotationZ,
-            })
-        );
-        assert_eq!(
-            property_value(&store, target, SemanticObjectProperty::RotationZ),
-            SemanticSignalValue::Scalar(0.0)
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-
-        let mut distinct = SemanticMutationTransaction::new();
-        distinct
-            .set_property(target, SemanticObjectProperty::RotationZ, 0.5_f64)
-            .set_property(target, SemanticObjectProperty::StrokeWidth, 3.0_f64);
-        let result = distinct.apply(&mut store).unwrap();
-        assert_eq!(result.impacts().len(), 2);
-        assert_eq!(store.last_mutation_stats().slots_written, 1);
-    }
-
-    #[test]
-    fn type_mismatch_and_derived_signal_targets_fail_atomically() {
-        let mut store = SemanticStore::new();
-        let scalar = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let derived = store
-            .insert_semantic_derived_signal(SemanticSignalExpr::signal(scalar))
-            .unwrap();
-        let scalar_before = input_value(&store, scalar);
-
-        let mut mismatch = SemanticMutationTransaction::new();
-        mismatch.set_signal(scalar, SemanticVec3::new(1.0, 2.0, 3.0));
-        assert_eq!(
-            mismatch.apply(&mut store),
-            Err(SemanticMutationTransactionError::SignalTypeMismatch {
-                index: 0,
-                signal: scalar,
-                expected: SemanticSignalValueKind::Scalar,
-                actual: SemanticSignalValueKind::Vec3,
-            })
-        );
-        assert_eq!(input_value(&store, scalar), scalar_before);
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-
-        let mut derived_target = SemanticMutationTransaction::new();
-        derived_target.set_signal(derived, 4.0_f64);
-        assert_eq!(
-            derived_target.apply(&mut store),
-            Err(SemanticMutationTransactionError::NotInputSignal {
-                index: 0,
-                signal: derived,
-            })
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn property_type_and_target_kind_are_validated_before_mutation() {
-        let mut store = SemanticStore::new();
-        let target = object(&mut store, 1.0);
-        let family = store.insert_family();
-        let mut mismatch = SemanticMutationTransaction::new();
-        mismatch.set_property(target, SemanticObjectProperty::Scale, 2.0_f64);
-
-        assert_eq!(
-            mismatch.apply(&mut store),
-            Err(SemanticMutationTransactionError::PropertyTypeMismatch {
-                index: 0,
-                object: target,
-                property: SemanticObjectProperty::Scale,
-                expected: SemanticSignalValueKind::Vec3,
-                actual: SemanticSignalValueKind::Scalar,
-            })
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-
-        let mut wrong_target = SemanticMutationTransaction::new();
-        wrong_target.set_property(family, SemanticObjectProperty::RotationZ, 1.0_f64);
-        assert_eq!(
-            wrong_target.apply(&mut store),
-            Err(SemanticMutationTransactionError::Object {
-                index: 0,
-                error: SemanticSceneOperationError::NotSemanticObject(family),
-            })
-        );
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn unchanged_signal_is_a_noop_with_no_impact() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(true).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_signal(signal, true);
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert!(result.impacts().is_empty());
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-        assert_eq!(input_value(&store, signal), SemanticSignalValue::Bool(true));
-    }
-
-    #[test]
-    fn unchanged_property_is_a_noop_with_no_impact() {
-        let mut store = SemanticStore::new();
-        let target = object(&mut store, 1.0);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::Translation,
-            SemanticVec3::ZERO,
-        );
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert!(result.impacts().is_empty());
-        assert_eq!(store.last_mutation_stats().slots_written, 0);
-    }
-
-    #[test]
-    fn set_property_preserves_signal_binding_declarations() {
-        let mut store = SemanticStore::new();
-        let signal = store.insert_semantic_input_signal(0.5_f64).unwrap();
-        let target = object(&mut store, 1.0);
-        store
-            .bind_semantic_signal(signal, target, SemanticObjectProperty::ObjectOpacity)
-            .unwrap();
-        let binding = SemanticSignalBinding::new(signal, SemanticObjectProperty::ObjectOpacity);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_property(target, SemanticObjectProperty::ObjectOpacity, 0.25_f64);
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert_eq!(
-            property_value(&store, target, SemanticObjectProperty::ObjectOpacity),
-            SemanticSignalValue::Scalar(0.25)
-        );
-        assert_eq!(
-            store.semantic_object_signal_bindings(target).unwrap(),
-            &[binding]
-        );
-        assert_eq!(
-            result.impacts(),
-            &[SemanticMutationImpact::ObjectProperty {
-                object: target,
-                property: SemanticObjectProperty::ObjectOpacity,
-            }]
-        );
-    }
-
-    #[test]
-    fn transaction_writes_only_changed_signal_slots_with_large_unrelated_scene() {
-        let mut store = SemanticStore::new();
-        for index in 0..10_000 {
-            object(&mut store, index as f32 + 1.0);
-        }
-        let first = store.insert_semantic_input_signal(1.0_f64).unwrap();
-        let second = store.insert_semantic_input_signal(2.0_f64).unwrap();
-        let unchanged = store.insert_semantic_input_signal(3.0_f64).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_signal(first, 10.0_f64)
-            .set_signal(second, 20.0_f64)
-            .set_signal(unchanged, 3.0_f64);
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert_eq!(store.last_mutation_stats().slots_written, 2);
-        assert_eq!(result.impacts().len(), 2);
-    }
-
-    #[test]
-    fn property_transaction_writes_only_target_slot_with_large_unrelated_scene() {
-        let mut store = SemanticStore::new();
-        for index in 0..10_000 {
-            object(&mut store, index as f32 + 1.0);
-        }
-        let target = object(&mut store, 0.5);
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .set_property(target, SemanticObjectProperty::RotationZ, 0.75_f64)
-            .set_property(target, SemanticObjectProperty::StrokeWidth, 4.0_f64);
-
-        let result = transaction.apply(&mut store).unwrap();
-
-        assert_eq!(store.last_mutation_stats().slots_written, 1);
-        assert_eq!(result.impacts().len(), 2);
-    }
-}
+mod base_tests;
 
 #[cfg(test)]
 mod content_tests;
@@ -1240,3 +967,6 @@ mod subscription_tests;
 
 #[cfg(test)]
 mod family_edge_tests;
+
+#[cfg(test)]
+mod remove_node_tests;

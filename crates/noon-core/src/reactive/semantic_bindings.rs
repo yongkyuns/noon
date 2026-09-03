@@ -134,6 +134,7 @@ impl SemanticStore {
             .expect("semantic binding target validated before mutation")
             .signal_bindings_mut()
             .push(SemanticSignalBinding::new(signal, property));
+        self.register_semantic_references_for_owner(target);
         self.set_last_mutation_writes(1);
         Ok(true)
     }
@@ -150,19 +151,23 @@ impl SemanticStore {
         property: SemanticObjectProperty,
     ) -> Result<Option<SemanticSignalBinding>, SemanticSignalBindingError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
-        let bindings = self
-            .node_mut(target)
-            .and_then(|node| node.semantic_object_state_mut())
-            .expect("semantic binding target validated before mutation")
-            .signal_bindings_mut();
-        let Some(index) = bindings
+        let state = self.semantic_object_state_checked(target)?;
+        let Some(index) = state
+            .signal_bindings()
             .iter()
             .position(|binding| binding.property() == property)
         else {
             return Ok(None);
         };
-        let removed = bindings.remove(index);
+
+        self.unregister_semantic_references_for_owner(target);
+        let removed = self
+            .node_mut(target)
+            .and_then(|node| node.semantic_object_state_mut())
+            .expect("semantic binding target validated before mutation")
+            .signal_bindings_mut()
+            .remove(index);
+        self.register_semantic_references_for_owner(target);
         self.set_last_mutation_writes(1);
         Ok(Some(removed))
     }
