@@ -116,10 +116,7 @@ pub fn semantic_frame_value(frame: &FrameState) -> Value {
     })
 }
 
-pub fn semantic_frame_json(
-    scene_json: &str,
-    time: f64,
-) -> Result<String, SemanticSnapshotError> {
+pub fn semantic_frame_json(scene_json: &str, time: f64) -> Result<String, SemanticSnapshotError> {
     let definition = decode_scene(scene_json)?;
     let compiled = CompiledScene::compile(&definition)?;
     let mut runtime = SlottedSceneInstance::new(compiled);
