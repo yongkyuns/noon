@@ -51,6 +51,16 @@ printf 'pub fn runtime() {}\n' > crates/noon-runtime/src/runtime.rs
 printf 'pub fn deterministic_replay() {}\n' > crates/noon-web/src/determinism.rs
 printf 'pub fn semantic_snapshot() {}\n' > crates/noon-web/src/semantic_snapshot.rs
 
+# Model the deliberately shrinking ScenePlayer allowlist that remains during A4.
+cat > crates/noon-web/src/legacy.rs <<'EOF'
+pub struct ScenePlayer;
+EOF
+for consumer in execution_transport execution_visibility spatial_query; do
+  cat > "crates/noon-web/src/${consumer}.rs" <<'EOF'
+use crate::ScenePlayer;
+EOF
+done
+
 git add scripts/architecture-ratchet.sh src crates/noon-core/src/semantic_store.rs crates/noon-runtime/src crates/noon-web/src
 git commit -qm "baseline with semantic authority, known A5 debt, and normalized islands"
 BASE="$(git rev-parse HEAD)"
@@ -70,7 +80,7 @@ expect_rejected() {
 
 reset_to_base() {
   git reset -q --hard "$BASE"
-  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs
+  rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs
 }
 
 reset_to_base
@@ -173,6 +183,24 @@ git add src/web_tool_structural_probe.rs
 git commit -qm "unrelated change after web tool regression"
 if bash scripts/architecture-ratchet.sh "$WEB_TOOL_REGRESSION_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted pre-existing web tool migration-player dependency" >&2
+  exit 1
+fi
+
+# Prove ScenePlayer cannot spread to another noon-web Rust module. Put a new
+# consumer into the comparison base itself, then make an unrelated later commit;
+# the structural allowlist must still reject that repository state.
+reset_to_base
+cat > crates/noon-web/src/new_scene_player_consumer.rs <<'EOF'
+use crate::ScenePlayer;
+EOF
+git add crates/noon-web/src/new_scene_player_consumer.rs
+git commit -qm "model ScenePlayer consumer spread"
+SCENE_PLAYER_SPREAD_BASE="$(git rev-parse HEAD)"
+printf 'pub fn unrelated_after_scene_player_spread() {}\n' > src/scene_player_spread_probe.rs
+git add src/scene_player_spread_probe.rs
+git commit -qm "unrelated change after ScenePlayer spread"
+if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted ScenePlayer consumer outside migration allowlist" >&2
   exit 1
 fi
 
