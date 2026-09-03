@@ -157,6 +157,58 @@ adding consumers. See #959/A4 and #961/A6.8.
 EOF
 fi
 
+deleted_legacy_web_surface_found=0
+deleted_legacy_web_references="$(
+  git grep -nE \
+    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson)([^[:alnum:]_]|$)' \
+    -- \
+    'crates/noon-web/src' \
+    'web' \
+    'scripts/check-web-package.mjs' \
+    'scripts/browser-smoke.mjs' || true
+)"
+
+if [[ -n "$deleted_legacy_web_references" ]]; then
+  printf '%s\n' "$deleted_legacy_web_references" >&2
+  deleted_legacy_web_surface_found=1
+fi
+
+canonical_clock_file='crates/noon-web/src/clock.rs'
+playback_clock_defs="$(
+  git grep -nE \
+    '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+PlaybackClock([[:space:]{(;]|$)' \
+    -- 'crates/noon-web/src' || true
+)"
+playback_clock_count=0
+if [[ -n "$playback_clock_defs" ]]; then
+  playback_clock_count="$(printf '%s\n' "$playback_clock_defs" | wc -l | tr -d '[:space:]')"
+fi
+if [[ "$playback_clock_count" != "1" ]] || ! printf '%s\n' "$playback_clock_defs" | grep -q "^${canonical_clock_file}:"; then
+  printf 'architecture ratchet: PlaybackClock must exist exactly once in %s\n' "$canonical_clock_file" >&2
+  if [[ -n "$playback_clock_defs" ]]; then
+    printf '%s\n' "$playback_clock_defs" >&2
+  else
+    printf '(no matches)\n' >&2
+  fi
+  deleted_legacy_web_surface_found=1
+fi
+
+if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
+  printf 'architecture ratchet: deleted legacy playback clock returned: crates/noon-web/src/legacy/clock.rs\n' >&2
+  deleted_legacy_web_surface_found=1
+fi
+
+if (( deleted_legacy_web_surface_found != 0 )); then
+  cat >&2 <<'EOF'
+
+The duplicate legacy browser frontend and playback clock were deleted by #1003
+and #1005. NoonCanvasPlayer/demoSceneJson must stay absent, and noon-web must keep
+one PlaybackClock definition in crates/noon-web/src/clock.rs. Restore neither the
+old frontend nor a second clock while the residual ScenePlayer transport seam is
+being removed. See #959/A4 and #961/A6.8.
+EOF
+fi
+
 identity_authority_found=0
 canonical_identity_file='crates/noon-core/src/semantic_store.rs'
 
@@ -198,8 +250,8 @@ creating a second identity/store definition elsewhere. See #961/A6.3.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || identity_authority_found != 0 )); then
+if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || deleted_legacy_web_surface_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, ScenePlayer-consumer, and semantic-identity ratchets passed"
+echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, ScenePlayer-consumer, deleted-legacy-web-surface, and semantic-identity ratchets passed"
