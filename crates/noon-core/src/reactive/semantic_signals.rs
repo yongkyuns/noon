@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::{SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticVec3};
 
 /// High-precision authored value carried by a semantic signal.
@@ -98,6 +100,7 @@ pub enum SemanticSignalError {
     UnknownSignal(SemanticNodeId),
     NotSignal(SemanticNodeId),
     NonFiniteValue,
+    DependencyCycle(SemanticNodeId),
 }
 
 impl std::fmt::Display for SemanticSignalError {
@@ -118,6 +121,12 @@ impl std::fmt::Display for SemanticSignalError {
             Self::NonFiniteValue => {
                 formatter.write_str("semantic signal contains a non-finite value")
             }
+            Self::DependencyCycle(id) => write!(
+                formatter,
+                "semantic signal {}:{} source would create a dependency cycle",
+                id.slot(),
+                id.generation()
+            ),
         }
     }
 }
@@ -132,25 +141,24 @@ impl SemanticStore {
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
         let value = value.into();
-        if !value.is_finite() {
-            return Err(SemanticSignalError::NonFiniteValue);
-        }
+        validate_value(&value)?;
         Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
             SemanticSignalSource::Input(value),
         )))
     }
 
-    /// Insert one authored derived signal after validating only its referenced closure.
+    /// Insert one authored derived signal after validating its referenced closure.
     ///
-    /// Because a new signal cannot reference its not-yet-allocated identity, this
-    /// creation-only slice cannot introduce a cycle. Source replacement/cycle
-    /// validation belongs with the later semantic mutation transaction work.
+    /// A new signal cannot reference its not-yet-allocated identity, so creation
+    /// cannot introduce a cycle. Walking the existing dependency closure still
+    /// rejects stale or non-signal references inherited through another signal.
     pub fn insert_semantic_derived_signal(
         &mut self,
         expression: SemanticSignalExpr,
     ) -> Result<SemanticNodeId, SemanticSignalError> {
         self.set_last_mutation_writes(0);
-        validate_expression(self, &expression)?;
+        let mut visited = HashSet::new();
+        validate_expression_closure(self, &expression, None, &mut visited)?;
         Ok(self.insert_semantic_signal_state(SemanticSignalState::new(
             SemanticSignalSource::Derived(expression),
         )))
@@ -168,34 +176,97 @@ impl SemanticStore {
             _ => Err(SemanticSignalError::NotSignal(id)),
         }
     }
+
+    /// Replace one signal's authored source while preserving semantic identity.
+    ///
+    /// Validation completes before the target node is written. Work is proportional
+    /// to the new source's dependency closure; unrelated scene nodes are not scanned.
+    /// A successful replacement writes exactly the target signal slot, while an
+    /// invalid or identical replacement writes no semantic slots.
+    pub fn set_semantic_signal_source(
+        &mut self,
+        id: SemanticNodeId,
+        source: SemanticSignalSource,
+    ) -> Result<bool, SemanticSignalError> {
+        self.set_last_mutation_writes(0);
+        let previous = self.semantic_signal_state(id)?.source().clone();
+
+        let mut visited = HashSet::new();
+        validate_source_closure(self, &source, Some(id), &mut visited)?;
+        if previous == source {
+            return Ok(false);
+        }
+
+        self.node_mut(id)
+            .and_then(|node| node.semantic_signal_state_mut())
+            .expect("semantic signal existence validated before mutation")
+            .source = source;
+        self.set_last_mutation_writes(1);
+        Ok(true)
+    }
 }
 
-fn validate_expression(
+fn validate_value(value: &SemanticSignalValue) -> Result<(), SemanticSignalError> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(SemanticSignalError::NonFiniteValue)
+    }
+}
+
+fn validate_source_closure(
+    store: &SemanticStore,
+    source: &SemanticSignalSource,
+    cycle_target: Option<SemanticNodeId>,
+    visited: &mut HashSet<SemanticNodeId>,
+) -> Result<(), SemanticSignalError> {
+    match source {
+        SemanticSignalSource::Input(value) => validate_value(value),
+        SemanticSignalSource::Derived(expression) => {
+            validate_expression_closure(store, expression, cycle_target, visited)
+        }
+    }
+}
+
+fn validate_expression_closure(
     store: &SemanticStore,
     expression: &SemanticSignalExpr,
+    cycle_target: Option<SemanticNodeId>,
+    visited: &mut HashSet<SemanticNodeId>,
 ) -> Result<(), SemanticSignalError> {
     match expression {
-        SemanticSignalExpr::Constant(value) => {
-            if value.is_finite() {
-                Ok(())
-            } else {
-                Err(SemanticSignalError::NonFiniteValue)
-            }
-        }
+        SemanticSignalExpr::Constant(value) => validate_value(value),
         SemanticSignalExpr::Signal(id) => {
-            store.semantic_signal_state(*id)?;
-            Ok(())
+            validate_signal_dependency(store, *id, cycle_target, visited)
         }
         SemanticSignalExpr::Add(lhs, rhs)
         | SemanticSignalExpr::Sub(lhs, rhs)
         | SemanticSignalExpr::Mul(lhs, rhs) => {
-            validate_expression(store, lhs)?;
-            validate_expression(store, rhs)
+            validate_expression_closure(store, lhs, cycle_target, visited)?;
+            validate_expression_closure(store, rhs, cycle_target, visited)
         }
         SemanticSignalExpr::Neg(value)
         | SemanticSignalExpr::Sin(value)
-        | SemanticSignalExpr::Cos(value) => validate_expression(store, value),
+        | SemanticSignalExpr::Cos(value) => {
+            validate_expression_closure(store, value, cycle_target, visited)
+        }
     }
+}
+
+fn validate_signal_dependency(
+    store: &SemanticStore,
+    id: SemanticNodeId,
+    cycle_target: Option<SemanticNodeId>,
+    visited: &mut HashSet<SemanticNodeId>,
+) -> Result<(), SemanticSignalError> {
+    if cycle_target == Some(id) {
+        return Err(SemanticSignalError::DependencyCycle(id));
+    }
+    if !visited.insert(id) {
+        return Ok(());
+    }
+    let state = store.semantic_signal_state(id)?;
+    validate_source_closure(store, state.source(), cycle_target, visited)
 }
 
 #[cfg(test)]
@@ -266,6 +337,24 @@ mod tests {
     }
 
     #[test]
+    fn signal_creation_rejects_stale_transitive_dependency_closure() {
+        let mut store = SemanticStore::new();
+        let input = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let derived = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(input))
+            .unwrap();
+        store.remove_node(input).unwrap();
+
+        let before = store.len();
+        assert_eq!(
+            store.insert_semantic_derived_signal(SemanticSignalExpr::signal(derived)),
+            Err(SemanticSignalError::UnknownSignal(input))
+        );
+        assert_eq!(store.len(), before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
     fn non_finite_signal_values_are_rejected_without_mutation() {
         let mut store = SemanticStore::new();
         assert_eq!(
@@ -294,6 +383,131 @@ mod tests {
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
         assert!(store.semantic_signal_state(derived).is_ok());
+    }
+
+    #[test]
+    fn signal_source_replacement_preserves_identity_and_one_slot_locality() {
+        let mut store = SemanticStore::new();
+        for index in 0..10_000 {
+            object(&mut store, index as f32 + 1.0);
+        }
+        let dependency = store.insert_semantic_input_signal(2.0_f64).unwrap();
+        let target = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let source = SemanticSignalSource::Derived(SemanticSignalExpr::Add(
+            Box::new(SemanticSignalExpr::signal(dependency)),
+            Box::new(SemanticSignalExpr::scalar(3.0)),
+        ));
+        let before_len = store.len();
+
+        assert!(store
+            .set_semantic_signal_source(target, source.clone())
+            .unwrap());
+        assert_eq!(store.node(target).unwrap().id(), target);
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &source
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+
+        assert!(!store
+            .set_semantic_signal_source(target, source.clone())
+            .unwrap());
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &source
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn signal_source_replacement_rejects_direct_and_indirect_cycles_atomically() {
+        let mut store = SemanticStore::new();
+        let a = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let b = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(a))
+            .unwrap();
+        let c = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(b))
+            .unwrap();
+        let a_before = store.semantic_signal_state(a).unwrap().source().clone();
+        let b_before = store.semantic_signal_state(b).unwrap().source().clone();
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                a,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(c)),
+            ),
+            Err(SemanticSignalError::DependencyCycle(a))
+        );
+        assert_eq!(store.semantic_signal_state(a).unwrap().source(), &a_before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                b,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(b)),
+            ),
+            Err(SemanticSignalError::DependencyCycle(b))
+        );
+        assert_eq!(store.semantic_signal_state(b).unwrap().source(), &b_before);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn signal_source_replacement_rejects_invalid_dependency_closure_atomically() {
+        let mut store = SemanticStore::new();
+        let stale = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let transitive = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(stale))
+            .unwrap();
+        let target = store.insert_semantic_input_signal(5.0_f64).unwrap();
+        let target_before = store
+            .semantic_signal_state(target)
+            .unwrap()
+            .source()
+            .clone();
+        store.remove_node(stale).unwrap();
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(transitive)),
+            ),
+            Err(SemanticSignalError::UnknownSignal(stale))
+        );
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &target_before
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        let non_signal = object(&mut store, 2.0);
+        assert_eq!(
+            store.set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(non_signal)),
+            ),
+            Err(SemanticSignalError::NotSignal(non_signal))
+        );
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &target_before
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Input(SemanticSignalValue::Scalar(f64::NAN)),
+            ),
+            Err(SemanticSignalError::NonFiniteValue)
+        );
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &target_before
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
 
     #[test]
