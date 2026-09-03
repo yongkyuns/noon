@@ -179,7 +179,7 @@ fn plan_scene_restructure(
     // make a tiny edit O(total scene roots). Reject before commit instead. A future
     // local order-maintenance primitive can remove this temporary restriction.
     let mut globally_promoted = HashSet::new();
-    let mut conflict = None;
+    let mut conflict: Option<SemanticNodeId> = None;
     for plan in &plans {
         for replacement in plan.replacements.iter().copied() {
             if !globally_promoted.insert(replacement) {
@@ -244,7 +244,9 @@ fn collect_root_replacements(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SemanticMutationStats, SemanticNodeResidency, SemanticObjectState, StoredGeometry};
+    use crate::{
+        SemanticMutationStats, SemanticNodeResidency, SemanticObjectState, StoredGeometry,
+    };
 
     fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
         store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
@@ -335,7 +337,10 @@ mod tests {
                 identity_only
             ))
         );
-        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
         assert_eq!(store.scene_roots().collect::<Vec<_>>(), vec![existing]);
         assert_eq!(
             store.node(valid).unwrap().residency(),
@@ -410,7 +415,10 @@ mod tests {
             Err(SemanticSceneOperationError::AmbiguousCrossRootAlias(shared))
         );
 
-        assert_eq!(store.last_mutation_stats(), SemanticMutationStats::default());
+        assert_eq!(
+            store.last_mutation_stats(),
+            SemanticMutationStats::default()
+        );
         assert_eq!(store.scene_roots().collect::<Vec<_>>(), before);
         assert_eq!(
             store.node(older_family).unwrap().residency(),
