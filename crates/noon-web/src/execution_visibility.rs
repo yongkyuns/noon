@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 
-use noon_core::{Rect, Vec2};
 use noon_runtime::SpatialQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::{ExecutionFrameMirror, ScenePlayer, TransportSlotId};
+use crate::{ExecutionFrameMirror, TransportSlotId};
 
 pub const EXECUTION_VISIBILITY_CHANNEL: &str = "noon.execution.visibility";
 pub const EXECUTION_VISIBILITY_VERSION: u32 = 1;
@@ -259,35 +258,6 @@ impl ExecutionVisibilityEnvelope {
     }
 }
 
-impl ScenePlayer {
-    pub fn viewport_visibility(
-        &self,
-        min_x: f32,
-        min_y: f32,
-        max_x: f32,
-        max_y: f32,
-    ) -> ExecutionVisibilityEnvelope {
-        let bounds = Rect::new(Vec2::new(min_x, min_y), Vec2::new(max_x, max_y));
-        ExecutionVisibilityEnvelope::from_query(
-            self.frame().time,
-            self.layout_generation(),
-            self.object_count(),
-            self.query_viewport(bounds),
-        )
-    }
-
-    pub fn viewport_visibility_json(
-        &self,
-        min_x: f32,
-        min_y: f32,
-        max_x: f32,
-        max_y: f32,
-    ) -> Result<String, ExecutionVisibilityError> {
-        self.viewport_visibility(min_x, min_y, max_x, max_y)
-            .to_json()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use noon_core::{GeometryRef, SceneDefinition, Transform2D};
@@ -303,12 +273,17 @@ mod tests {
         encode_scene(&scene).unwrap()
     }
 
-    fn player_with_overlapping_objects() -> ScenePlayer {
-        ScenePlayer::from_scene_json(&overlapping_scene_json()).unwrap()
+    fn player_with_overlapping_objects() -> EngineScenePlayer {
+        EngineScenePlayer::new(&overlapping_scene_json(), 4.0, 17).unwrap()
+    }
+
+    fn visibility(player: &EngineScenePlayer) -> ExecutionVisibilityEnvelope {
+        ExecutionVisibilityEnvelope::from_json(&player.viewport_visibility_json(1.0).unwrap())
+            .unwrap()
     }
 
     fn mirror_with_overlapping_objects() -> ExecutionFrameMirror {
-        let mut engine = EngineScenePlayer::new(&overlapping_scene_json(), 4.0, 17).unwrap();
+        let mut engine = player_with_overlapping_objects();
         let mut mirror = ExecutionFrameMirror::default();
         let initial = engine.initial_delta_json().unwrap();
         mirror.apply_json(&initial).unwrap();
@@ -318,9 +293,10 @@ mod tests {
     #[test]
     fn visibility_envelope_preserves_retained_painter_order_and_metrics() {
         let mut player = player_with_overlapping_objects();
-        player.seek(1.25).unwrap();
+        player.initial_delta_json().unwrap();
+        player.seek_delta_json(1.25).unwrap();
 
-        let envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+        let envelope = visibility(&player);
 
         assert_eq!(envelope.time, 1.25);
         assert_eq!(envelope.layout_generation, 0);
@@ -336,10 +312,7 @@ mod tests {
     #[test]
     fn visibility_json_round_trip_keeps_generation_safe_identity() {
         let player = player_with_overlapping_objects();
-        let json = player
-            .viewport_visibility_json(-0.25, -0.25, 0.25, 0.25)
-            .unwrap();
-        let decoded = ExecutionVisibilityEnvelope::from_json(&json).unwrap();
+        let decoded = visibility(&player);
 
         assert_eq!(
             decoded.slots[0],
@@ -369,7 +342,7 @@ mod tests {
     fn visibility_resolves_to_ordered_mirror_rows_only_for_exact_frame() {
         let player = player_with_overlapping_objects();
         let mirror = mirror_with_overlapping_objects();
-        let envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+        let envelope = visibility(&player);
 
         assert_eq!(envelope.resolve_for_mirror(&mirror).unwrap(), vec![0, 1]);
     }
@@ -378,7 +351,7 @@ mod tests {
     fn visibility_rejects_stale_frame_and_slot_identity() {
         let player = player_with_overlapping_objects();
         let mirror = mirror_with_overlapping_objects();
-        let envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+        let envelope = visibility(&player);
 
         let mut stale_layout = envelope.clone();
         stale_layout.layout_generation += 1;
@@ -415,14 +388,16 @@ mod tests {
         for index in 0..10_000 {
             let object = scene.add(GeometryRef::circle(0.1));
             scene.object_mut(object).unwrap().transform = Transform2D {
-                translation: Vec2::new(index as f32 * 4.0, 0.0),
+                translation: noon_core::Vec2::new(index as f32 * 4.0, 0.0),
                 ..Transform2D::IDENTITY
             };
         }
         let json = encode_scene(&scene).unwrap();
-        let player = ScenePlayer::from_scene_json(&json).unwrap();
+        let player = EngineScenePlayer::new(&json, 4.0, 17).unwrap();
 
-        let envelope = player.viewport_visibility(-0.5, -0.5, 0.5, 0.5);
+        let envelope =
+            ExecutionVisibilityEnvelope::from_json(&player.viewport_visibility_json(0.1).unwrap())
+                .unwrap();
 
         assert_eq!(envelope.total_live, 10_000);
         assert_eq!(envelope.stats.full_scan_fallbacks, 0);
@@ -433,7 +408,7 @@ mod tests {
     #[test]
     fn malformed_visibility_metadata_is_rejected_transactionally() {
         let player = player_with_overlapping_objects();
-        let mut envelope = player.viewport_visibility(-0.25, -0.25, 0.25, 0.25);
+        let mut envelope = visibility(&player);
         envelope.stats.results += 1;
 
         assert!(matches!(

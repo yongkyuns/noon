@@ -55,7 +55,7 @@ printf 'pub fn semantic_snapshot() {}\n' > crates/noon-web/src/semantic_snapshot
 cat > crates/noon-web/src/legacy.rs <<'EOF'
 pub struct ScenePlayer;
 EOF
-for consumer in execution_transport execution_visibility spatial_query; do
+for consumer in execution_transport; do
   cat > "crates/noon-web/src/${consumer}.rs" <<'EOF'
 use crate::ScenePlayer;
 EOF

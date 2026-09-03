@@ -821,13 +821,13 @@ impl EngineScenePlayer {
         let bounds = camera
             .viewport_bounds(aspect)
             .ok_or(ExecutionTransportError::InvalidViewportAspect(aspect))?;
-        serde_json::to_string(&self.player.viewport_visibility(
-            bounds.min.x,
-            bounds.min.y,
-            bounds.max.x,
-            bounds.max.y,
-        ))
-        .map_err(ExecutionTransportError::from)
+        let envelope = crate::ExecutionVisibilityEnvelope::from_query(
+            self.player.frame().time,
+            self.player.layout_generation(),
+            self.player.object_count(),
+            self.player.query_viewport(bounds),
+        );
+        serde_json::to_string(&envelope).map_err(ExecutionTransportError::from)
     }
 
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), ExecutionTransportError> {
@@ -1197,7 +1197,6 @@ mod tests {
         let initial: ExecutionDeltaEnvelope =
             serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
         assert_eq!(initial.camera, Camera2DState::default());
-
         let delta_json = player.tick_delta_json(0.0).unwrap();
         assert!(delta_json.is_none());
         let delta_json = player.tick_delta_json(1_000.0).unwrap().unwrap();
