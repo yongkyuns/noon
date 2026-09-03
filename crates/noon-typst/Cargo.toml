@@ -9,6 +9,9 @@ description = "Typst text and math layout backend for Noon"
 noon-core = { path = "../noon-core" }
 typst-as-lib = { version = "=0.16.0", default-features = false }
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
+# Keep Typst's shared font/normalization dependency on the last known-good release.
+# tinyvec 1.13.0 fails to compile its alloc-backed TinyVec path under this workspace.
+tinyvec = { version = "=1.12.0", default-features = false }
 # Direct normalization consumes Typst's paged frame layout instead of retained SVG.
 typst-layout = "=0.15.1"
 typst-library = "=0.15.1"
