@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{HostCallbackId, SemanticObjectState};
+use crate::{HostCallbackId, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 /// Stable semantic identity independent of execution/render dense indices.
@@ -170,6 +170,9 @@ pub enum SemanticNodeKind {
     AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
     Family,
+    /// Authored native-reactive signal using the same scene-global generational
+    /// identity allocator as objects and families.
+    Signal(SemanticSignalState),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,7 +181,7 @@ pub struct SemanticNode {
     kind: SemanticNodeKind,
     /// Authoritative authored object payload for target semantic objects.
     ///
-    /// `None` is valid for families, legacy compatibility objects, and the
+    /// `None` is valid for families, signals, legacy compatibility objects, and the
     /// temporary state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
@@ -210,14 +213,18 @@ impl SemanticNode {
     pub fn object(&self) -> Option<&ObjectDefinition> {
         match &self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject
+            | SemanticNodeKind::Family
+            | SemanticNodeKind::Signal(_) => None,
         }
     }
 
     pub fn object_mut(&mut self) -> Option<&mut ObjectDefinition> {
         match &mut self.kind {
             SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => None,
+            SemanticNodeKind::AuthoringObject
+            | SemanticNodeKind::Family
+            | SemanticNodeKind::Signal(_) => None,
         }
     }
 
@@ -361,6 +368,13 @@ impl SemanticStore {
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
         self.insert_kind(SemanticNodeKind::Family)
+    }
+
+    pub(crate) fn insert_semantic_signal_state(
+        &mut self,
+        state: SemanticSignalState,
+    ) -> SemanticNodeId {
+        self.insert_kind(SemanticNodeKind::Signal(state))
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
