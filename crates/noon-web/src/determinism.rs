@@ -193,6 +193,12 @@ impl From<ReplayRuntimeError> for ReplayVerificationError {
     }
 }
 
+impl From<EvaluationError> for ReplayVerificationError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Runtime(ReplayRuntimeError::Evaluation(value))
+    }
+}
+
 /// Verify direct seek, incremental playback, and rewind equivalence for one scene.
 ///
 /// The scene is decoded and compiled once. Three persistent runtime instances then
