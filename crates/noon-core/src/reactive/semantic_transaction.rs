@@ -13,7 +13,7 @@ use family_edges::FamilyEdgePreflight;
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
-/// Signal values, object properties, authored content, family membership,
+/// Signal values, object properties, authored content, ordered family membership,
 /// reactive subscriptions, and structural deletion share the same transaction so
 /// frontends, editors, and host integrations cannot invent subsystem-specific
 /// patch paths. Dependency-expression rewiring remains authored declaration
@@ -46,6 +46,11 @@ pub enum SemanticMutation {
         family: SemanticNodeId,
         member: SemanticNodeId,
     },
+    ReorderMember {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
+    },
     RemoveNode {
         node: SemanticNodeId,
     },
@@ -58,7 +63,9 @@ impl SemanticMutation {
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ChangeSubscription { object, .. } => *object,
-            Self::AddMember { family, .. } | Self::RemoveMember { family, .. } => *family,
+            Self::AddMember { family, .. }
+            | Self::RemoveMember { family, .. }
+            | Self::ReorderMember { family, .. } => *family,
             Self::RemoveNode { node } => *node,
         }
     }
@@ -79,12 +86,12 @@ impl SemanticMutation {
                 object: *object,
                 property: *property,
             },
-            Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
-                SemanticMutationKey::FamilyEdge {
-                    family: *family,
-                    member: *member,
-                }
-            }
+            Self::AddMember { family, member }
+            | Self::RemoveMember { family, member }
+            | Self::ReorderMember { family, member, .. } => SemanticMutationKey::FamilyEdge {
+                family: *family,
+                member: *member,
+            },
             Self::RemoveNode { node } => SemanticMutationKey::NodeRemoval(*node),
         }
     }
@@ -138,6 +145,11 @@ pub enum SemanticMutationImpact {
     FamilyMemberRemoved {
         family: SemanticNodeId,
         member: SemanticNodeId,
+    },
+    FamilyMemberReordered {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
     },
     NodeRemoved {
         node: SemanticNodeId,
@@ -221,6 +233,22 @@ impl SemanticMutationTransaction {
     pub fn remove_member(&mut self, family: SemanticNodeId, member: SemanticNodeId) -> &mut Self {
         self.mutations
             .push(SemanticMutation::RemoveMember { family, member });
+        self
+    }
+
+    /// Move one direct family member immediately before another direct member, or
+    /// to the family tail when `before` is `None`.
+    pub fn reorder_member(
+        &mut self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ReorderMember {
+            family,
+            member,
+            before,
+        });
         self
     }
 
@@ -310,6 +338,22 @@ impl SemanticMutationTransaction {
                     written_slots.insert(member);
                     impacts.push(SemanticMutationImpact::FamilyMemberRemoved { family, member });
                 }
+                SemanticMutation::ReorderMember {
+                    family,
+                    member,
+                    before,
+                } => {
+                    let reordered = store
+                        .reorder_semantic_family_member(family, member, before)
+                        .expect("preflighted family reorder must remain valid while transaction owns the semantic store");
+                    debug_assert!(reordered);
+                    written_slots.insert(family);
+                    impacts.push(SemanticMutationImpact::FamilyMemberReordered {
+                        family,
+                        member,
+                        before,
+                    });
+                }
                 SemanticMutation::RemoveNode { node } => {
                     // An earlier explicit removal may have cascade-removed this
                     // node already. Preflight proved the handle was live at the
@@ -393,18 +437,46 @@ impl SemanticMutationTransaction {
                     );
                 }
             }
-            if let SemanticMutation::AddMember { family, member }
-            | SemanticMutation::RemoveMember { family, member } = mutation
-            {
-                if removed_nodes.contains(member) {
-                    return Err(
-                        SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
-                            index,
-                            family: *family,
-                            member: *member,
-                        },
-                    );
+            match mutation {
+                SemanticMutation::AddMember { family, member }
+                | SemanticMutation::RemoveMember { family, member } => {
+                    if removed_nodes.contains(member) {
+                        return Err(
+                            SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                                index,
+                                family: *family,
+                                member: *member,
+                            },
+                        );
+                    }
                 }
+                SemanticMutation::ReorderMember {
+                    family,
+                    member,
+                    before,
+                } => {
+                    if removed_nodes.contains(member) {
+                        return Err(
+                            SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                                index,
+                                family: *family,
+                                member: *member,
+                            },
+                        );
+                    }
+                    if let Some(anchor) = before {
+                        if removed_nodes.contains(anchor) {
+                            return Err(
+                                SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                                    index,
+                                    family: *family,
+                                    member: *anchor,
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
 
             let key = mutation.key();
@@ -561,6 +633,20 @@ impl SemanticMutationTransaction {
                     changed.push(family_edges.remove(store, *family, *member).map_err(
                         |error| SemanticMutationTransactionError::Family { index, error },
                     )?);
+                }
+                SemanticMutation::ReorderMember {
+                    family,
+                    member,
+                    before,
+                } => {
+                    changed.push(
+                        family_edges
+                            .reorder(store, *family, *member, *before)
+                            .map_err(|error| SemanticMutationTransactionError::Family {
+                                index,
+                                error,
+                            })?,
+                    );
                 }
                 SemanticMutation::RemoveNode { node } => {
                     if store.node(*node).is_none() {
@@ -967,6 +1053,9 @@ mod subscription_tests;
 
 #[cfg(test)]
 mod family_edge_tests;
+
+#[cfg(test)]
+mod family_reorder_tests;
 
 #[cfg(test)]
 mod remove_node_tests;

@@ -14,6 +14,10 @@ pub enum SemanticSceneOperationError {
     NotSemanticObject(SemanticNodeId),
     NotSemanticFamily(SemanticNodeId),
     NotSemanticAuthoringNode(SemanticNodeId),
+    NotSemanticFamilyMember {
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    },
     /// One local scene restructure would promote the same aliased node from
     /// multiple attached roots. Until the scene store exposes a local root-order
     /// comparison primitive, fail before commit rather than scan unrelated roots.
@@ -47,6 +51,14 @@ impl std::fmt::Display for SemanticSceneOperationError {
                 "semantic node {}:{} is not a target semantic object or family",
                 id.slot(),
                 id.generation()
+            ),
+            Self::NotSemanticFamilyMember { family, member } => write!(
+                formatter,
+                "semantic node {}:{} is not a direct member of family {}:{}",
+                member.slot(),
+                member.generation(),
+                family.slot(),
+                family.generation()
             ),
             Self::AmbiguousCrossRootAlias(id) => write!(
                 formatter,
@@ -201,6 +213,40 @@ impl SemanticStore {
         self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
         self.remove_member(family, member).map_err(Into::into)
+    }
+
+    /// Move one existing direct family member immediately before another direct
+    /// member, or to the authoritative tail when `before` is `None`.
+    ///
+    /// Identity-relative ordering avoids an index-shaped second order authority.
+    /// Validation is generation-safe and the successful write touches only the
+    /// family node's intrusive links; member parent relationships remain unchanged.
+    pub fn reorder_semantic_family_member(
+        &mut self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+        before: Option<SemanticNodeId>,
+    ) -> Result<bool, SemanticSceneOperationError> {
+        self.semantic_family_checked(family)?;
+        self.semantic_authoring_node_checked(member)?;
+        if !self.family_contains_member(family, member) {
+            self.set_last_mutation_writes(0);
+            return Err(SemanticSceneOperationError::NotSemanticFamilyMember {
+                family,
+                member,
+            });
+        }
+        if let Some(anchor) = before {
+            self.semantic_authoring_node_checked(anchor)?;
+            if !self.family_contains_member(family, anchor) {
+                self.set_last_mutation_writes(0);
+                return Err(SemanticSceneOperationError::NotSemanticFamilyMember {
+                    family,
+                    member: anchor,
+                });
+            }
+        }
+        Ok(self.reorder_member_local(family, member, before))
     }
 }
 
@@ -378,6 +424,69 @@ mod tests {
         assert_eq!(
             store.last_mutation_stats(),
             SemanticMutationStats::default()
+        );
+    }
+
+    #[test]
+    fn shared_family_reorder_uses_identity_relative_order_and_one_family_write() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let first = store.insert_semantic_object(state(1.0));
+        let second = store.insert_semantic_object(state(2.0));
+        let third = store.insert_semantic_object(state(3.0));
+        for member in [first, second, third] {
+            store.add_semantic_family_member(family, member).unwrap();
+        }
+
+        assert!(store
+            .reorder_semantic_family_member(family, third, Some(first))
+            .unwrap());
+        assert_eq!(
+            store.semantic_family_members_checked(family).unwrap(),
+            vec![third, first, second]
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert!(!store
+            .reorder_semantic_family_member(family, third, Some(first))
+            .unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+        assert!(store
+            .reorder_semantic_family_member(family, third, None)
+            .unwrap());
+        assert_eq!(
+            store.semantic_family_members_checked(family).unwrap(),
+            vec![first, second, third]
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn shared_family_reorder_rejects_missing_direct_members_before_write() {
+        let mut store = SemanticStore::new();
+        let family = store.insert_family();
+        let member = store.insert_semantic_object(state(1.0));
+        let anchor = store.insert_semantic_object(state(2.0));
+        store.add_semantic_family_member(family, member).unwrap();
+
+        assert_eq!(
+            store.reorder_semantic_family_member(family, anchor, Some(member)),
+            Err(SemanticSceneOperationError::NotSemanticFamilyMember {
+                family,
+                member: anchor,
+            })
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+        assert_eq!(
+            store.reorder_semantic_family_member(family, member, Some(anchor)),
+            Err(SemanticSceneOperationError::NotSemanticFamilyMember {
+                family,
+                member: anchor,
+            })
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+        assert_eq!(
+            store.semantic_family_members_checked(family).unwrap(),
+            vec![member]
         );
     }
 

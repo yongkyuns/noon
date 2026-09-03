@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
+mod family_reorder;
 mod semantic_references;
 use semantic_references::SemanticIncomingReference;
 pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
