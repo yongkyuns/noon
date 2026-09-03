@@ -2,10 +2,7 @@ use noon_core::{
     Easing, GeometryRef, ObjectSnapshot, SceneDefinition, Style, TrackTiming, Transform2D, Vec2,
 };
 use noon_ir::encode_scene;
-use noon_web::{
-    normalized_frame_json, playback_snapshot_json, scene_snapshot_json, verify_scene_replay,
-    ReconcileOutcome, ScenePlayer,
-};
+use noon_web::{playback_snapshot_json, scene_snapshot_json, verify_scene_replay};
 
 fn build_scene() -> SceneDefinition {
     let mut scene = SceneDefinition::new();
@@ -122,65 +119,21 @@ fn repeated_evaluation_is_stable_at_boundaries_and_extreme_valid_times() {
 }
 
 #[test]
-fn reconcile_and_full_replacement_match_fresh_compile_at_the_same_playhead() {
-    let base = build_scene();
-    let base_json = scene_json(&base);
-    let mut desired = base.clone();
-
-    let first = desired.objects()[0].id;
-    desired.object_mut(first).unwrap().transform = Transform2D {
-        translation: Vec2::new(5.0, -3.0),
-        rotation: -0.2,
-        scale: Vec2::new(1.2, 0.8),
+fn normalized_snapshot_omits_execution_bookkeeping_but_preserves_render_observables() {
+    let mut scene = build_scene();
+    let first = scene.objects()[0].id;
+    scene.object_mut(first).unwrap().transform = Transform2D {
+        translation: Vec2::new(0.5, -0.25),
+        rotation: 0.1,
+        scale: Vec2::new(1.1, 0.9),
     };
-    desired.object_mut(first).unwrap().style = Style {
-        opacity: 0.42,
-        stroke_width: 2.5,
+    scene.object_mut(first).unwrap().style = Style {
+        opacity: 0.9,
+        stroke_width: 1.25,
         stroke_width_mode: Default::default(),
         ..Style::default()
     };
-
-    let added = desired.add(GeometryRef::circle(0.25));
-    desired
-        .animate_position(
-            added,
-            Vec2::new(-1.0, 0.0),
-            Vec2::new(1.0, 2.0),
-            TrackTiming::new(0.4, 1.6, Easing::RushFrom),
-        )
-        .unwrap();
-    let desired_json = scene_json(&desired);
-
-    for playhead in [0.0, 0.5, 1.1, 2.2, 3.4] {
-        let expected = scene_snapshot_json(&desired_json, playhead).unwrap();
-
-        let mut reconciled = ScenePlayer::from_scene_json(&base_json).unwrap();
-        reconciled.seek(playhead).unwrap();
-        let outcome = reconciled.reconcile_scene_json(&desired_json).unwrap();
-        assert!(matches!(
-            outcome,
-            ReconcileOutcome::Incremental { .. } | ReconcileOutcome::Rebuilt { .. }
-        ));
-        assert_eq!(
-            normalized_frame_json(reconciled.frame()),
-            expected,
-            "reconcile diverged at playhead={playhead}"
-        );
-
-        let mut replaced = ScenePlayer::from_scene_json(&base_json).unwrap();
-        replaced.seek(playhead).unwrap();
-        replaced.replace_scene_json(&desired_json).unwrap();
-        assert_eq!(
-            normalized_frame_json(replaced.frame()),
-            expected,
-            "replacement diverged at playhead={playhead}"
-        );
-    }
-}
-
-#[test]
-fn normalized_snapshot_omits_execution_bookkeeping_but_preserves_render_observables() {
-    let json = scene_json(&build_scene());
+    let json = scene_json(&scene);
     let snapshot: serde_json::Value =
         serde_json::from_str(&scene_snapshot_json(&json, 1.2).unwrap())
             .expect("snapshot is valid JSON");

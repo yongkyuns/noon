@@ -38,6 +38,14 @@ jobs:
           bash scripts/architecture-ratchet.test.sh
           bash scripts/active-perf-frontend-ratchet.test.sh
 
+      - name: Keep ScenePlayer crate-private
+        run: |
+          if grep -En '^[[:space:]]*pub[[:space:]]+use[[:space:]]+legacy::(.*ScenePlayer|\*)' \
+            crates/noon-web/src/lib.rs; then
+            echo "ScenePlayer is a shrinking transport-only authority and must not be publicly re-exported" >&2
+            exit 1
+          fi
+
       - name: Reject architecture regressions
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
