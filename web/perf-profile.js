@@ -196,8 +196,8 @@ function presentSceneTime(sceneTime) {
   if (!renderer.applyDeltaJson(delta)) {
     throw new Error(`renderer rejected incremental performance delta at t=${sceneTime}`);
   }
-  // The synthetic SceneDefinition has no authored camera object. Keep the
-  // profiling viewport explicit after each transport delta updates mirror state.
+  // This synthetic workload has no authored camera object. Keep the profiling
+  // viewport explicit after each transport delta updates mirror state.
   renderer.setCamera(0, 0, workload.cameraHeight);
   drainGpuDiagnostics();
   const transportApplyMs = performance.now() - applyStarted;
