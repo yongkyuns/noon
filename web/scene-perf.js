@@ -1,8 +1,13 @@
-import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
+import init, { EngineScenePlayer, ExecutionCanvasRenderer } from "./pkg/noon_web.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
+import {
+  drainRendererGpuDiagnostics,
+  formatGpuDiagnostic,
+} from "./render-gpu-diagnostics.js";
 
+const LOOP_DURATION_SECONDS = 4;
 const parameters = new URLSearchParams(location.search);
 const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
 if (!sourcePath.startsWith("./python/") || !sourcePath.endsWith(".py")) {
@@ -16,9 +21,12 @@ const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 const output = document.querySelector("#json");
+const backingWidth = canvas.width;
+const backingHeight = canvas.height;
 
 let client = null;
-let player = null;
+let engine = null;
+let renderer = null;
 try {
   await init();
   const source = await loadText(sourcePath);
@@ -39,46 +47,48 @@ try {
   const sceneJson = JSON.stringify(authored.document);
   const serializationMs = performance.now() - jsonStarted;
   const createStarted = performance.now();
-  player = await NoonCanvasPlayer.create(canvas, sceneJson, 4.0);
+  engine = new EngineScenePlayer(sceneJson, LOOP_DURATION_SECONDS, 1);
+  const offscreen = canvas.transferControlToOffscreen();
+  renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
+  renderer.resize(backingWidth, backingHeight);
+  renderer.setCamera(0, 0, cameraHeight);
+  if (!presentPending()) {
+    throw new Error("initial corpus frame was not presented");
+  }
   const playerCreateMs = performance.now() - createStarted;
-  player.resize(canvas.width, canvas.height);
-  player.setCamera(0, 0, cameraHeight);
-  const gpuSupported = player.gpuProfilingSupported();
-  player.setGpuProfilingEnabled(gpuSupported);
 
   for (let frame = 0; frame < warmupFrames; frame += 1) {
     status.value = `Warm-up ${frame + 1}/${warmupFrames} · ${sourcePath}…`;
-    player.renderFrame(await nextAnimationFrame());
+    advanceFrame(await nextAnimationFrame());
   }
 
-  player.resetClock();
-  player.resetGpuProfiling();
+  resetPlayback();
   const cadence = new FrameMetrics({ targetHz });
   const windows = {
     cpu: new SampleWindow(measuredFrames),
     runtime: new SampleWindow(measuredFrames),
-    prepare: new SampleWindow(measuredFrames),
-    upload: new SampleWindow(measuredFrames),
-    encode: new SampleWindow(measuredFrames),
+    transportApply: new SampleWindow(measuredFrames),
+    rendererRender: new SampleWindow(measuredFrames),
   };
   const jank = new BrowserJankMonitor();
   const measurementStart = performance.now();
   jank.start();
-  let measured = 0;
-  while (measured < measuredFrames) {
+  let dirtyFrames = 0;
+  let cleanFrames = 0;
+  for (let measured = 0; measured < measuredFrames; measured += 1) {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${sourcePath}…`;
     const timestamp = await nextAnimationFrame();
-    const submitStarted = performance.now();
-    const presented = player.renderFrame(timestamp);
-    const browserSubmitMs = performance.now() - submitStarted;
-    if (!presented) continue;
-    cadence.record(timestamp, browserSubmitMs);
-    windows.cpu.record(player.lastCpuFrameMs());
-    windows.runtime.record(player.lastRuntimeEvaluationMs());
-    windows.prepare.record(player.lastFramePrepareMs());
-    windows.upload.record(player.lastUploadMs());
-    windows.encode.record(player.lastEncodeSubmitMs());
-    measured += 1;
+    const frameTiming = advanceFrame(timestamp);
+    cadence.record(timestamp, frameTiming.cpuFrameMs);
+    windows.cpu.record(frameTiming.cpuFrameMs);
+    windows.runtime.record(frameTiming.runtimeMs);
+    windows.transportApply.record(frameTiming.transportApplyMs);
+    windows.rendererRender.record(frameTiming.rendererRenderMs);
+    if (frameTiming.dirty) {
+      dirtyFrames += 1;
+    } else {
+      cleanFrames += 1;
+    }
   }
   const measurementEnd = performance.now();
   jank.stop();
@@ -91,14 +101,14 @@ try {
     scene: {
       source: sourcePath,
       context,
-      objects: player.objectCount(),
+      objects: renderer.objectCount(),
       cameraHeight,
     },
     environment: {
       userAgent: navigator.userAgent,
-      rendererBackend: player.rendererBackend(),
+      rendererBackend: renderer.rendererBackend(),
       devicePixelRatio: window.devicePixelRatio || 1,
-      backingResolution: [canvas.width, canvas.height],
+      backingResolution: [backingWidth, backingHeight],
       targetHz,
     },
     setup: {
@@ -111,6 +121,8 @@ try {
     },
     cadence: {
       frames: frame.frames,
+      dirtyFrames,
+      cleanFrames,
       frameIntervalMs: frame.interval,
       effective: frame.cadence,
       browserSubmitMs: frame.submission,
@@ -118,39 +130,39 @@ try {
     cpu: {
       frameMs: windows.cpu.summary(),
       runtimeMs: windows.runtime.summary(),
-      prepareMs: windows.prepare.summary(),
-      uploadMs: windows.upload.summary(),
-      encodeSubmitMs: windows.encode.summary(),
+      transportApplyMs: windows.transportApply.summary(),
+      rendererRenderMs: windows.rendererRender.summary(),
+      // The split execution renderer exposes aggregate render-host time rather
+      // than the deleted monolith's internal prepare/upload/encode phase timers.
+      prepareMs: null,
+      uploadMs: null,
+      encodeSubmitMs: null,
     },
     renderer: {
-      drawCalls: player.lastDrawCalls(),
-      instances: player.lastInstancesDrawn(),
-      lastUploadBytes: player.lastBytesUploaded(),
-      geometryCacheMisses: player.lastGeometryCacheMisses(),
+      drawCalls: renderer.lastDrawCalls(),
+      instances: renderer.lastInstancesDrawn(),
+      lastUploadBytes: renderer.lastBytesUploaded(),
+      geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     },
     browser: {
       longTasks: jank.summary(measurementStart, measurementEnd),
     },
-    gpu: gpuSupported
-      ? {
-          samples: player.gpuProfiledFrameCount(),
-          dropped: player.gpuDroppedSampleCount(),
-          failed: player.gpuFailedSampleCount(),
-          p50: finite(player.gpuRenderP50Ms()),
-          p95: finite(player.gpuRenderP95Ms()),
-          p99:
-            typeof player.gpuRenderP99Ms === "function"
-              ? finite(player.gpuRenderP99Ms())
-              : null,
-        }
-      : { supported: false },
+    gpu: {
+      supported: false,
+      p50: null,
+      p95: null,
+      p99: null,
+      unavailableReason:
+        "ExecutionCanvasRenderer does not yet expose WebGPU timestamp-query profiling",
+    },
   };
 
   window.__NOON_SCENE_PERF__ = report;
   output.textContent = JSON.stringify(report, null, 2);
   status.value =
     `Complete · ${sourcePath} · ${format(report.cadence.effective?.effectiveFps)} FPS · ` +
-    `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms`;
+    `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms · ` +
+    `${dirtyFrames}/${measuredFrames} dirty frames`;
   status.dataset.state = "complete";
   console.log("NOON_SCENE_PERF", report);
 } catch (error) {
@@ -159,7 +171,89 @@ try {
   status.dataset.state = "error";
 } finally {
   client?.terminate();
-  player?.free?.();
+  renderer?.free?.();
+  engine?.free?.();
+}
+
+function advanceFrame(timestamp) {
+  const frameStarted = performance.now();
+  const runtimeStarted = performance.now();
+  const delta = engine.tickDeltaJson(timestamp);
+  const runtimeMs = performance.now() - runtimeStarted;
+  if (delta === undefined || delta === null) {
+    return {
+      dirty: false,
+      cpuFrameMs: performance.now() - frameStarted,
+      runtimeMs,
+      transportApplyMs: 0,
+      rendererRenderMs: 0,
+    };
+  }
+
+  const applyStarted = performance.now();
+  if (!renderer.applyDeltaJson(delta)) {
+    throw new Error("renderer rejected a non-stale corpus execution delta");
+  }
+  // Corpus fixtures do not author a camera object. Keep the benchmark viewport
+  // explicit after transport applies the engine's default camera state.
+  renderer.setCamera(0, 0, cameraHeight);
+  drainGpuDiagnostics();
+  const transportApplyMs = performance.now() - applyStarted;
+
+  const renderStarted = performance.now();
+  if (!presentPending()) {
+    throw new Error("dirty corpus frame was not presented");
+  }
+  const rendererRenderMs = performance.now() - renderStarted;
+  return {
+    dirty: true,
+    cpuFrameMs: performance.now() - frameStarted,
+    runtimeMs,
+    transportApplyMs,
+    rendererRenderMs,
+  };
+}
+
+function resetPlayback() {
+  const delta = engine.seekDeltaJson(0);
+  if (delta === undefined || delta === null) {
+    return;
+  }
+  if (!renderer.applyDeltaJson(delta)) {
+    throw new Error("renderer rejected corpus playback reset");
+  }
+  renderer.setCamera(0, 0, cameraHeight);
+  drainGpuDiagnostics();
+  if (!presentPending()) {
+    throw new Error("corpus playback reset was not presented");
+  }
+}
+
+function presentPending() {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    drainGpuDiagnostics();
+    const presented = renderer.render();
+    drainGpuDiagnostics();
+    if (presented) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function drainGpuDiagnostics() {
+  let fatal = null;
+  const healthy = drainRendererGpuDiagnostics(renderer, {
+    onRecoverable(diagnostic) {
+      console.warn(formatGpuDiagnostic(diagnostic));
+    },
+    onFatal(diagnostic) {
+      fatal = new Error(formatGpuDiagnostic(diagnostic));
+    },
+  });
+  if (!healthy) {
+    throw fatal ?? new Error("renderer reported a fatal GPU diagnostic");
+  }
 }
 
 function parseContext(value) {
@@ -195,10 +289,6 @@ function positiveNumber(name, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} must be positive`);
   return parsed;
-}
-
-function finite(value) {
-  return Number.isFinite(value) ? value : null;
 }
 
 function format(value) {

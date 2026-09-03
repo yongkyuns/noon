@@ -25,10 +25,26 @@ jobs:
           fetch-depth: 0
 
       - name: Validate guardrail scripts
-        run: bash -n scripts/check.sh scripts/architecture-ratchet.sh scripts/architecture-ratchet.test.sh
+        run: >-
+          bash -n
+          scripts/check.sh
+          scripts/architecture-ratchet.sh
+          scripts/architecture-ratchet.test.sh
+          scripts/active-perf-frontend-ratchet.sh
+          scripts/active-perf-frontend-ratchet.test.sh
 
       - name: Exercise architecture guardrails
-        run: bash scripts/architecture-ratchet.test.sh
+        run: |
+          bash scripts/architecture-ratchet.test.sh
+          bash scripts/active-perf-frontend-ratchet.test.sh
+
+      - name: Keep ScenePlayer crate-private
+        run: |
+          if grep -En '^[[:space:]]*pub[[:space:]]+use[[:space:]]+legacy::(.*ScenePlayer|\*)' \
+            crates/noon-web/src/lib.rs; then
+            echo "ScenePlayer is a shrinking transport-only authority and must not be publicly re-exported" >&2
+            exit 1
+          fi
 
       - name: Reject architecture regressions
         env:
@@ -43,3 +59,4 @@ jobs:
             base="HEAD^"
           fi
           bash scripts/architecture-ratchet.sh "$base"
+          bash scripts/active-perf-frontend-ratchet.sh

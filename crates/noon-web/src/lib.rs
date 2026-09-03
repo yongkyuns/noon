@@ -70,7 +70,7 @@ pub use family_bounds::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_write_authoring::*;
 pub use host_player::*;
-pub use legacy::*;
+pub use legacy::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use manim_dashed_line_bridge::*;
 pub use manim_elbow_bridge::*;
