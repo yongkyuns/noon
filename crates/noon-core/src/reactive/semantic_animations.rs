@@ -149,13 +149,15 @@ impl SemanticStore {
         }
         validate_authored_animation_options(options)?;
 
-        Ok(self.insert_semantic_animation_state(SemanticAnimationState::new(
-            SemanticAnimationIntent::TransformTo {
-                target,
-                target_state,
-            },
-            options,
-        )))
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::TransformTo {
+                    target,
+                    target_state,
+                },
+                options,
+            )),
+        )
     }
 
     pub fn semantic_animation_state(
@@ -267,11 +269,7 @@ mod tests {
         let family = store.insert_family();
 
         assert_eq!(
-            store.insert_semantic_transform_animation(
-                target,
-                target,
-                AnimationOptions::new(),
-            ),
+            store.insert_semantic_transform_animation(target, target, AnimationOptions::new(),),
             Err(SemanticAnimationError::SameTargetAndTargetState(target))
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
