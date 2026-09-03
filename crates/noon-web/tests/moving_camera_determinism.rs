@@ -1,7 +1,7 @@
 use noon::prelude::*;
-use noon_core::Camera2DState;
+use noon_core::{Camera2DState, GeometryRef, Transform2D};
 use noon_ir::{decode_scene, encode_scene};
-use noon_web::{EngineScenePlayer, ExecutionDeltaEnvelope, ScenePlayer};
+use noon_web::{scene_snapshot_json, EngineScenePlayer, ExecutionDeltaEnvelope};
 
 fn moving_camera_scene_json() -> String {
     let mut scene = MovingCameraScene::new();
@@ -22,15 +22,17 @@ fn moving_camera_scene_json() -> String {
 fn direct_camera(scene_json: &str, time: f64) -> Camera2DState {
     let definition = decode_scene(scene_json).unwrap();
     let camera_object = definition.camera_object().unwrap();
-    let mut player = ScenePlayer::from_scene_json(scene_json).unwrap();
-    player.advance_to(time).unwrap();
-    let frame = player
-        .frame()
-        .objects
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&scene_snapshot_json(scene_json, time).unwrap()).unwrap();
+    let object = snapshot["objects"]
+        .as_array()
+        .unwrap()
         .iter()
-        .find(|object| object.id == camera_object)
+        .find(|object| object["id"].as_u64() == Some(camera_object.get()))
         .unwrap();
-    Camera2DState::from_frame_object(&frame.geometry, frame.transform).unwrap()
+    let geometry: GeometryRef = serde_json::from_value(object["geometry"].clone()).unwrap();
+    let transform: Transform2D = serde_json::from_value(object["transform"].clone()).unwrap();
+    Camera2DState::from_frame_object(&geometry, transform).unwrap()
 }
 
 fn delta_camera(delta_json: &str) -> Camera2DState {
