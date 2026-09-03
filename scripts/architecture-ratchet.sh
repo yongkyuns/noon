@@ -79,8 +79,49 @@ make that absence structural. See #960/A5 and #961/A6.8.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 )); then
+identity_authority_found=0
+canonical_identity_file='crates/noon-core/src/semantic_store.rs'
+
+semantic_node_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticNodeId([[:space:]{(;]|$)' -- '*.rs' || true)"
+semantic_store_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticStore([[:space:]{(;]|$)' -- '*.rs' || true)"
+semantic_node_impls="$(git grep -nE '^[[:space:]]*impl[[:space:]]+SemanticNodeId([[:space:]{]|$)' -- '*.rs' || true)"
+
+require_canonical_only() {
+  label="$1"
+  matches="$2"
+
+  count=0
+  if [[ -n "$matches" ]]; then
+    count="$(printf '%s\n' "$matches" | wc -l | tr -d '[:space:]')"
+  fi
+
+  if [[ "$count" != "1" ]] || ! printf '%s\n' "$matches" | grep -q "^${canonical_identity_file}:"; then
+    printf 'architecture ratchet: %s must exist exactly once in %s\n' "$label" "$canonical_identity_file" >&2
+    if [[ -n "$matches" ]]; then
+      printf '%s\n' "$matches" >&2
+    else
+      printf '(no matches)\n' >&2
+    fi
+    identity_authority_found=1
+  fi
+}
+
+require_canonical_only 'SemanticNodeId definition' "$semantic_node_defs"
+require_canonical_only 'SemanticStore definition' "$semantic_store_defs"
+require_canonical_only 'SemanticNodeId inherent implementation' "$semantic_node_impls"
+
+if (( identity_authority_found != 0 )); then
+  cat >&2 <<'EOF'
+
+Semantic author identity has one canonical owner. SemanticNodeId and its inherent
+allocator API must stay in crates/noon-core/src/semantic_store.rs, alongside the
+single SemanticStore definition. Add behavior through that authority instead of
+creating a second identity/store definition elsewhere. See #961/A6.3.
+EOF
+fi
+
+if (( migration_found != 0 || module_indirection_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth and module-growth ratchets passed"
+echo "architecture migration-growth, module-growth, and semantic-identity ratchets passed"
