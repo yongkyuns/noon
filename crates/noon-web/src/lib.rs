@@ -50,6 +50,7 @@ mod retained_resource_transport;
 mod retained_scene_spec_runtime;
 mod retained_text_family_transport;
 mod retained_typst_canvas;
+mod scene_player;
 mod semantic_snapshot;
 mod spatial_query;
 
@@ -102,4 +103,5 @@ pub use retained_resource_transport::*;
 pub use retained_text_family_transport::*;
 #[cfg(target_arch = "wasm32")]
 pub use retained_typst_canvas::*;
+pub use scene_player::*;
 pub use semantic_snapshot::*;
