@@ -28,7 +28,7 @@ jobs:
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: |
@@ -36,7 +36,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -51,7 +51,7 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -63,10 +63,10 @@ jobs:
         run: printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: web
 

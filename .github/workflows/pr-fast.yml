@@ -25,7 +25,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: |
@@ -33,7 +33,7 @@ jobs:
           rustup component add rustfmt clippy
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -60,13 +60,13 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: rustup default stable
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -91,7 +91,7 @@ jobs:
       NOON_WEB_PREFLIGHT_ONLY: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run web preflight
         run: bash scripts/build-web-demo.sh
@@ -110,7 +110,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -132,7 +132,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -142,7 +142,7 @@ jobs:
             ${{ runner.os }}-cargo-sources-
 
       - name: Restore trusted WASM build cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /home/runner/.cache/noon-sccache-wasm
@@ -157,7 +157,7 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -179,7 +179,7 @@ jobs:
           exit "$status"
 
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1

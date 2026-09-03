@@ -45,13 +45,13 @@ jobs:
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -74,7 +74,7 @@ jobs:
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -96,7 +96,7 @@ jobs:
         run: node scripts/mixed-family-retained-group-fade-smoke.mjs
       - name: Upload authoring recovery diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playground-authoring-recovery
           path: |

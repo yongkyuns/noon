@@ -28,11 +28,11 @@ jobs:
       NOON_SKIP_PLAYGROUND_TEST: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Validate raster ratchet policy
         run: node scripts/manim-raster-policy.test.mjs
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install Manim system dependencies
@@ -50,7 +50,7 @@ jobs:
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -63,14 +63,14 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
       - name: Build browser package
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -90,7 +90,7 @@ jobs:
         run: node scripts/manim-typst-raster-enforce.mjs
       - name: Upload retained Typst measurement artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: retained-typst-raster-measurement
           path: manim-raster-artifacts/retained-typst
@@ -116,7 +116,7 @@ jobs:
         run: node scripts/manim-seek-playback-raster.mjs
       - name: Upload Manim/Noon/diff artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: manim-raster-differential
           path: manim-raster-artifacts

@@ -26,7 +26,7 @@ jobs:
       SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/master' && 'READ_WRITE' || 'READ_ONLY' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: |
@@ -34,7 +34,7 @@ jobs:
           rustup component add rustfmt clippy
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -70,7 +70,7 @@ jobs:
       SCCACHE_LOCAL_RW_MODE: "READ_ONLY"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Use stable Rust
         run: |
@@ -78,7 +78,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -88,7 +88,7 @@ jobs:
             ${{ runner.os }}-cargo-sources-
 
       - name: Restore WASM compiler cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /home/runner/.cache/noon-sccache-wasm
           key: ${{ runner.os }}-sccache-wasm-v1-${{ github.sha }}
@@ -101,7 +101,7 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -114,7 +114,7 @@ jobs:
         run: bash scripts/build-web-demo.sh
 
       - name: Upload browser package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-pkg
           path: |
@@ -130,14 +130,14 @@ jobs:
     needs: web-build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Download browser package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-pkg
           path: web
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -162,14 +162,14 @@ jobs:
     needs: web-build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Download browser package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-pkg
           path: web
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -212,14 +212,14 @@ jobs:
           - webgl
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Download browser package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-pkg
           path: web
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -242,7 +242,7 @@ jobs:
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Upload browser smoke screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-smoke-screenshots-${{ matrix.backend }}
           path: browser-smoke-artifacts
@@ -255,16 +255,16 @@ jobs:
     needs: browser-rendering
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install visual diff dependency
         run: npm install --no-save --ignore-scripts pngjs@7.0.0
       - name: Download WebGPU screenshots
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: browser-smoke-screenshots-webgpu
           path: browser-backend-parity
       - name: Download WebGL screenshots
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: browser-smoke-screenshots-webgl
           path: browser-backend-parity
@@ -276,7 +276,7 @@ jobs:
             browser-backend-parity-report
       - name: Upload backend visual parity report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-backend-visual-parity
           path: browser-backend-parity-report

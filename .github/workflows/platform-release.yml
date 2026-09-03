@@ -39,11 +39,11 @@ jobs:
       CARGO_INCREMENTAL: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: rustup default stable
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -61,11 +61,11 @@ jobs:
       CARGO_INCREMENTAL: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust
         run: rustup default stable
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -85,13 +85,13 @@ jobs:
       BINARYEN_LINUX_SHA256: '195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Use stable Rust and WASM target
         run: |
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -100,7 +100,7 @@ jobs:
           restore-keys: |
             optimized-wasm-cargo-
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -139,7 +139,7 @@ jobs:
       - name: Exercise optimized WASM in Chromium
         run: node scripts/deterministic-replay-smoke.mjs
       - name: Upload optimized browser package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: optimized-web-pkg
           path: web/pkg
