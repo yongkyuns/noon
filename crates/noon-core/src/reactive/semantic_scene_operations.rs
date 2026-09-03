@@ -139,16 +139,26 @@ impl SemanticStore {
 
     /// Copy one target semantic object into a fresh detached semantic node.
     ///
-    /// Authored content/transform/style/z-index are copied. Scene membership,
-    /// source identity, and family relationships are intentionally not copied.
-    /// The store assigns both a fresh generational NodeId and a fresh stable
-    /// painter insertion-order tie break.
+    /// Authored content/transform/style/z-index and updater declarations are copied.
+    /// Scene membership, source identity, and family relationships are intentionally
+    /// not copied. The store assigns both a fresh generational NodeId and a fresh
+    /// stable painter insertion-order tie break.
     pub fn copy_semantic_object(
         &mut self,
         id: SemanticNodeId,
     ) -> Result<SemanticNodeId, SemanticSceneOperationError> {
         let state = self.semantic_object_state_checked(id)?.clone();
-        Ok(self.insert_semantic_object(state))
+        let updaters = self
+            .node(id)
+            .expect("semantic object identity validated above")
+            .host_updaters()
+            .to_vec();
+        let copy = self.insert_semantic_object(state);
+        self.node_mut(copy)
+            .expect("newly inserted semantic copy exists")
+            .host_updaters_mut()
+            .extend(updaters);
+        Ok(copy)
     }
 
     /// Snapshot one target semantic family's direct members in authoritative order.
@@ -195,7 +205,10 @@ impl SemanticStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SemanticMutationStats, SemanticNodeResidency, SourceIdentity, StoredGeometry};
+    use crate::{
+        HostCallbackId, SemanticMutationStats, SemanticNodeResidency, SourceIdentity,
+        StoredGeometry,
+    };
 
     fn state(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -282,6 +295,8 @@ mod tests {
         authored.style.object_opacity = 0.4;
         authored.set_z_index(7);
         let source = store.insert_semantic_object(authored);
+        let callback = HostCallbackId::new(42);
+        store.add_semantic_updater(source, callback).unwrap();
         let family = store.insert_family();
         store.add_member(family, source).unwrap();
         let source_identity = SourceIdentity::ExplicitKey("hero".into());
@@ -303,6 +318,7 @@ mod tests {
             copied_state.insertion_order(),
             source_state.insertion_order()
         );
+        assert_eq!(store.semantic_updater_callbacks(copy).unwrap(), &[callback]);
         assert_eq!(
             store.node(copy).unwrap().residency(),
             SemanticNodeResidency::Detached
@@ -350,6 +366,7 @@ mod tests {
         );
 
         assert!(store.remove_semantic_family_member(primary, first).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 2);
         assert_eq!(
             store.semantic_family_members_checked(primary).unwrap(),
             vec![second]
