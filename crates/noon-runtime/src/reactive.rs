@@ -1,6 +1,6 @@
 mod runtime;
-pub use runtime::{ReactiveRuntimeStats, SceneBuildError};
 pub(crate) use runtime::ReactiveRuntime;
+pub use runtime::{ReactiveRuntimeStats, SceneBuildError};
 
 mod host_callbacks;
 pub use host_callbacks::*;
