@@ -231,10 +231,7 @@ impl SemanticStore {
         self.semantic_authoring_node_checked(member)?;
         if !self.family_contains_member(family, member) {
             self.set_last_mutation_writes(0);
-            return Err(SemanticSceneOperationError::NotSemanticFamilyMember {
-                family,
-                member,
-            });
+            return Err(SemanticSceneOperationError::NotSemanticFamilyMember { family, member });
         }
         if let Some(anchor) = before {
             self.semantic_authoring_node_checked(anchor)?;
