@@ -583,7 +583,10 @@ impl SemanticStore {
 
         let mut seen = HashSet::with_capacity(replacements.len());
         for replacement in replacements.iter().copied() {
-            assert_ne!(replacement, root, "scene-root splice cannot reinsert its root");
+            assert_ne!(
+                replacement, root,
+                "scene-root splice cannot reinsert its root"
+            );
             let node = self
                 .node(replacement)
                 .expect("scene-root splice replacement must be live");
@@ -668,10 +671,8 @@ impl SemanticStore {
             debug_assert!(self.scene_tail.is_none());
         }
 
-        let slots_written = 1
-            + replacements.len()
-            + (previous.is_some() as usize)
-            + (next.is_some() as usize);
+        let slots_written =
+            1 + replacements.len() + (previous.is_some() as usize) + (next.is_some() as usize);
         self.last_mutation = SemanticMutationStats {
             slots_written,
             cycle_nodes_visited: 0,
