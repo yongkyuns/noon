@@ -1,7 +1,11 @@
 import init, { EngineScenePlayer, ExecutionCanvasRenderer } from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
-import { ANALYTIC_LAYOUTS, buildAnalyticScene } from "./perf-workloads.js";
+import {
+  ANALYTIC_LAYOUTS,
+  buildAnalyticScene,
+  installIncrementalPositionDriver,
+} from "./perf-workloads.js";
 import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
@@ -38,7 +42,7 @@ let workload = null;
 try {
   await init();
   workload = buildAnalyticScene({ count: objectCount, layout, aspect: width / height });
-  installIncrementalDriver(workload.document, driverDurationSeconds);
+  installIncrementalPositionDriver(workload.document, driverDurationSeconds);
 
   const sceneJson = JSON.stringify(workload.document);
   const createStarted = performance.now();
@@ -176,37 +180,6 @@ try {
   browserJank.stop();
   renderer?.free?.();
   engine?.free?.();
-}
-
-function installIncrementalDriver(document, durationSeconds) {
-  if (!Array.isArray(document.objects) || document.objects.length === 0) {
-    throw new Error("performance workload must contain at least one object");
-  }
-  if (!Array.isArray(document.tracks) || document.tracks.length !== 0) {
-    throw new Error("analytic performance workload must start without animation tracks");
-  }
-
-  const object = document.objects[0];
-  const from = object.transform?.translation;
-  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) {
-    throw new Error("performance driver object must have a finite translation");
-  }
-  document.tracks.push({
-    id: 0,
-    object: object.id,
-    property: "position",
-    values: {
-      vec2: {
-        from: { x: from.x, y: from.y },
-        to: { x: from.x + 8, y: from.y },
-      },
-    },
-    timing: {
-      start_time: 0,
-      duration: durationSeconds,
-      easing: "linear",
-    },
-  });
 }
 
 function presentSceneTime(sceneTime) {
