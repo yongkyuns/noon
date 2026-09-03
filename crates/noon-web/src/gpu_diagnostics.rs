@@ -21,14 +21,6 @@ impl GpuDiagnosticKind {
     const fn is_fatal(self) -> bool {
         matches!(self.severity(), GpuDiagnosticSeverity::Fatal)
     }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Validation => "validation",
-            Self::OutOfMemory => "out-of-memory",
-            Self::Internal => "internal",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -80,16 +72,6 @@ impl GpuDiagnostic {
 
     pub(crate) fn is_fatal(&self) -> bool {
         self.kind.is_fatal()
-    }
-
-    pub(crate) fn formatted_message(&self) -> String {
-        format!(
-            "{} generation {} {} error: {}",
-            self.backend,
-            self.generation,
-            self.kind.label(),
-            self.message,
-        )
     }
 }
 
@@ -186,7 +168,7 @@ mod tests {
     fn fatal_same_generation_replaces_pending_validation() {
         let mailbox = GpuDiagnosticMailbox::default();
         mailbox.record(diagnostic(7, GpuDiagnosticKind::Validation, "recoverable"));
-        mailbox.record(diagnostic(7, GpuDiagnosticKind::Internal, "fatal"));
+        mailbox.record(diagnostic(7, GpuDiagnosticKind::OutOfMemory, "fatal"));
         mailbox.record(diagnostic(
             7,
             GpuDiagnosticKind::Validation,
@@ -225,14 +207,5 @@ mod tests {
 
         assert!(mailbox.take_for_generation(1).is_some());
         assert!(mailbox.take_for_generation(1).is_none());
-    }
-
-    #[test]
-    fn formatting_preserves_browser_error_context() {
-        let diagnostic = diagnostic(5, GpuDiagnosticKind::OutOfMemory, "allocation failed");
-        assert_eq!(
-            diagnostic.formatted_message(),
-            "WebGPU generation 5 out-of-memory error: allocation failed",
-        );
     }
 }
