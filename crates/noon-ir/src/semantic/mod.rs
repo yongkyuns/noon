@@ -141,6 +141,9 @@ pub fn decode_semantic_scene(json: &str) -> Result<SemanticScene, SemanticIrErro
     document.into_semantic()
 }
 
+mod signal_timeline;
+pub use signal_timeline::*;
+
 #[cfg(test)]
 mod tests {
     use noon_core::{GeometryRef, Property, ReactiveExpr, ReactiveValue, Vec2};
