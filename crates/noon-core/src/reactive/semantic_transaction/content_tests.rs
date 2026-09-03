@@ -18,7 +18,11 @@ fn replace_content_changes_only_content_and_preserves_authored_state() {
     let signal = store.insert_semantic_input_signal(0.5_f64).unwrap();
     let target = object(&mut store, 1.0);
     {
-        let state = store.node_mut(target).unwrap().semantic_object_state_mut().unwrap();
+        let state = store
+            .node_mut(target)
+            .unwrap()
+            .semantic_object_state_mut()
+            .unwrap();
         state.transform.translation = SemanticVec3::new(1.0, 2.0, 3.0);
         state.style.object_opacity = 0.75;
         state.set_z_index(7);
@@ -57,11 +61,7 @@ fn content_property_and_subscription_changes_share_one_object_slot() {
     transaction
         .replace_content(target, replacement)
         .set_property(target, SemanticObjectProperty::RotationZ, 0.25_f64)
-        .change_subscription(
-            target,
-            SemanticObjectProperty::ObjectOpacity,
-            Some(signal),
-        );
+        .change_subscription(target, SemanticObjectProperty::ObjectOpacity, Some(signal));
     let result = transaction.apply(&mut store).unwrap();
 
     let state = store.semantic_object_state_checked(target).unwrap();
@@ -136,7 +136,10 @@ fn stale_late_content_target_rolls_back_earlier_mutations() {
         })
     );
     assert_eq!(store.semantic_signal_state(signal).unwrap(), &signal_before);
-    assert_eq!(store.semantic_object_state_checked(live).unwrap(), &live_before);
+    assert_eq!(
+        store.semantic_object_state_checked(live).unwrap(),
+        &live_before
+    );
     assert_eq!(store.last_mutation_stats().slots_written, 0);
 }
 
