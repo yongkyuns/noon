@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ANALYTIC_LAYOUTS, buildAnalyticScene } from "./perf-workloads.js";
+import {
+  ANALYTIC_LAYOUTS,
+  buildAnalyticScene,
+  installIncrementalPositionDriver,
+} from "./perf-workloads.js";
 
 test("analytic workloads are deterministic and preserve requested object count", () => {
   for (const layout of ANALYTIC_LAYOUTS) {
@@ -37,8 +41,49 @@ test("overdraw workload keeps transparent objects concentrated near the origin",
   }
 });
 
+test("incremental driver dirties exactly one object through a deterministic position track", () => {
+  const workload = buildAnalyticScene({ count: 10, layout: "fit" });
+  const original = { ...workload.document.objects[0].transform.translation };
+  const driver = installIncrementalPositionDriver(workload.document, 120, 8);
+
+  assert.equal(workload.document.tracks.length, 1);
+  assert.deepEqual(workload.document.tracks[0], {
+    id: 0,
+    object: 0,
+    property: "position",
+    values: {
+      vec2: {
+        from: original,
+        to: { x: original.x + 8, y: original.y },
+      },
+    },
+    timing: {
+      start_time: 0,
+      duration: 120,
+      easing: "linear",
+    },
+  });
+  assert.deepEqual(driver, {
+    object: 0,
+    from: original,
+    to: { x: original.x + 8, y: original.y },
+    durationSeconds: 120,
+  });
+  assert.equal(workload.document.objects.length, 10);
+});
+
 test("analytic workload parameters reject invalid values", () => {
   assert.throws(() => buildAnalyticScene({ count: 0 }), /positive integer/);
   assert.throws(() => buildAnalyticScene({ count: 1, layout: "unknown" }), /unknown analytic layout/);
   assert.throws(() => buildAnalyticScene({ count: 1, aspect: 0 }), /positive finite/);
+
+  const workload = buildAnalyticScene({ count: 1 });
+  assert.throws(
+    () => installIncrementalPositionDriver(workload.document, 0),
+    /duration must be positive/,
+  );
+  assert.throws(
+    () => installIncrementalPositionDriver(workload.document, 1, 0),
+    /distance must be finite and non-zero/,
+  );
 });

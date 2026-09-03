@@ -1,8 +1,15 @@
-import init, { NoonCanvasPlayer } from "./pkg/noon_web.js";
+import init, { EngineScenePlayer, ExecutionCanvasRenderer } from "./pkg/noon_web.js";
 import { BrowserJankMonitor, estimateUnattributedFrameMs } from "./browser-jank.js";
 import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
-import { readCompletePlayerFrameMetrics } from "./player-frame-metrics.js";
-import { ANALYTIC_LAYOUTS, buildAnalyticScene } from "./perf-workloads.js";
+import {
+  ANALYTIC_LAYOUTS,
+  buildAnalyticScene,
+  installIncrementalPositionDriver,
+} from "./perf-workloads.js";
+import {
+  drainRendererGpuDiagnostics,
+  formatGpuDiagnostic,
+} from "./render-gpu-diagnostics.js";
 
 const parameters = new URLSearchParams(location.search);
 const objectCount = positiveInteger("objects", 10_000);
@@ -23,74 +30,66 @@ canvas.width = width;
 canvas.height = height;
 canvas.style.aspectRatio = `${width} / ${height}`;
 
-let player = null;
+const driverDurationSeconds = Math.max(
+  60,
+  ((warmupFrames + measuredFrames + 16) / targetHz) * 2,
+);
 const browserJank = new BrowserJankMonitor();
+let engine = null;
+let renderer = null;
+let workload = null;
+
 try {
   await init();
-  const workload = buildAnalyticScene({ count: objectCount, layout, aspect: width / height });
-  const createStarted = performance.now();
-  player = await NoonCanvasPlayer.create(canvas, JSON.stringify(workload.document), 4.0);
-  const playerCreateMs = performance.now() - createStarted;
-  player.resize(width, height);
-  player.setCamera(0, 0, workload.cameraHeight);
+  workload = buildAnalyticScene({ count: objectCount, layout, aspect: width / height });
+  installIncrementalPositionDriver(workload.document, driverDurationSeconds);
 
-  const gpuSupported = player.gpuProfilingSupported();
-  player.setGpuProfilingEnabled(gpuSupported);
-  player.resetGpuProfiling();
+  const sceneJson = JSON.stringify(workload.document);
+  const createStarted = performance.now();
+  engine = new EngineScenePlayer(sceneJson, driverDurationSeconds, 1);
+  const offscreen = canvas.transferControlToOffscreen();
+  renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
+  renderer.resize(width, height);
+  renderer.setCamera(0, 0, workload.cameraHeight);
+  if (!presentPending()) {
+    throw new Error("initial performance frame was not presented");
+  }
+  const playerCreateMs = performance.now() - createStarted;
 
   status.value = `Warming ${layout} / ${objectCount.toLocaleString()} objects…`;
   for (let frame = 0; frame < warmupFrames; frame += 1) {
-    const timestamp = await nextAnimationFrame();
-    player.renderFrame(timestamp);
+    await nextAnimationFrame();
+    presentSceneTime((frame + 1) / targetHz);
   }
 
-  player.resetGpuProfiling();
-  player.resetClock();
+  // Keep the measurement phase deterministic across devices. Browser rAF owns
+  // cadence sampling only; semantic scene time advances by one target-Hz step.
+  presentSceneTime(0);
   const cadence = new FrameMetrics({ targetHz });
   const windows = {
     cpuFrameMs: new SampleWindow(measuredFrames),
     runtimeMs: new SampleWindow(measuredFrames),
-    prepareMs: new SampleWindow(measuredFrames),
-    uploadMs: new SampleWindow(measuredFrames),
-    encodeSubmitMs: new SampleWindow(measuredFrames),
+    transportApplyMs: new SampleWindow(measuredFrames),
+    rendererRenderMs: new SampleWindow(measuredFrames),
     unattributedFrameMs: new SampleWindow(measuredFrames),
   };
   browserJank.start();
   const measurementStartMs = performance.now();
   let previousTimestamp = null;
-  let incompleteMetricFrames = 0;
   let measured = 0;
   while (measured < measuredFrames) {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
     const timestamp = await nextAnimationFrame();
-    const started = performance.now();
-    const presented = player.renderFrame(timestamp);
-    const browserCallMs = performance.now() - started;
-    if (!presented) {
-      previousTimestamp = null;
-      continue;
-    }
+    const timings = presentSceneTime((measured + 1) / targetHz);
 
-    const metrics = readCompletePlayerFrameMetrics(player);
-    if (metrics === null) {
-      // GPU/context recovery can replace renderer-owned instrumentation between
-      // runtime evaluation and presentation. Exclude that whole frame rather than
-      // mixing partial measurements into percentile windows. The skipped count is
-      // reported so repeated recovery remains visible instead of being hidden.
-      incompleteMetricFrames += 1;
-      previousTimestamp = null;
-      continue;
-    }
-
-    cadence.record(timestamp, browserCallMs);
-    windows.cpuFrameMs.record(metrics.cpuFrameMs);
-    windows.runtimeMs.record(metrics.runtimeMs);
-    windows.prepareMs.record(metrics.prepareMs);
-    windows.uploadMs.record(metrics.uploadMs);
-    windows.encodeSubmitMs.record(metrics.encodeSubmitMs);
+    cadence.record(timestamp, timings.cpuFrameMs);
+    windows.cpuFrameMs.record(timings.cpuFrameMs);
+    windows.runtimeMs.record(timings.runtimeMs);
+    windows.transportApplyMs.record(timings.transportApplyMs);
+    windows.rendererRenderMs.record(timings.rendererRenderMs);
     if (previousTimestamp !== null) {
       windows.unattributedFrameMs.record(
-        estimateUnattributedFrameMs(timestamp - previousTimestamp, metrics.cpuFrameMs),
+        estimateUnattributedFrameMs(timestamp - previousTimestamp, timings.cpuFrameMs),
       );
     }
     previousTimestamp = timestamp;
@@ -99,36 +98,38 @@ try {
   const measurementEndMs = performance.now();
   browserJank.stop();
 
-  await waitForGpuSamples(player, gpuSupported, measuredFrames);
   const frame = cadence.summary();
   const report = {
     schemaVersion: 1,
-    benchmark: "Noon end-to-end analytic frame profile",
+    benchmark: "Noon incremental analytic frame profile",
     generatedAt: new Date().toISOString(),
     workload: {
-      family: "analytic-static",
+      family: "analytic-incremental",
       layout,
-      description: workload.description,
+      description:
+        `${workload.description}; one object carries a deterministic position track ` +
+        "so each frame crosses the execution-delta boundary without rebuilding the scene",
       objects: objectCount,
+      incrementalDriverObjects: 1,
+      driverDurationSeconds,
     },
     environment: {
       userAgent: navigator.userAgent,
-      rendererBackend: player.rendererBackend(),
+      rendererBackend: renderer.rendererBackend(),
       hardwareConcurrency: navigator.hardwareConcurrency ?? null,
       deviceMemoryGiB: navigator.deviceMemory ?? null,
       devicePixelRatio: window.devicePixelRatio || 1,
       canvasCssSize: [canvas.clientWidth, canvas.clientHeight],
       backingResolution: [width, height],
       targetHz,
-      observedRefreshHz:
-        frame.interval?.p50 > 0 ? 1000 / frame.interval.p50 : null,
+      observedRefreshHz: frame.interval?.p50 > 0 ? 1000 / frame.interval.p50 : null,
       crossOriginIsolated: window.crossOriginIsolated,
     },
     setup: {
       playerCreateMs,
       warmupFrames,
       measuredFrames: frame.frames,
-      incompleteMetricFrames,
+      incompleteMetricFrames: 0,
     },
     cadence: {
       frameIntervalMs: frame.interval,
@@ -142,33 +143,25 @@ try {
     cpu: {
       frameMs: windows.cpuFrameMs.summary(),
       runtimeEvaluationMs: windows.runtimeMs.summary(),
-      framePrepareMs: windows.prepareMs.summary(),
-      uploadMs: windows.uploadMs.summary(),
-      encodeSubmitMs: windows.encodeSubmitMs.summary(),
+      transportApplyMs: windows.transportApplyMs.summary(),
+      rendererRenderMs: windows.rendererRenderMs.summary(),
+      // The split execution renderer currently exposes aggregate render-host
+      // timing rather than the deleted monolith's prepare/upload/encode timers.
+      framePrepareMs: null,
+      uploadMs: null,
+      encodeSubmitMs: null,
     },
     renderer: {
-      drawCalls: player.lastDrawCalls(),
-      instances: player.lastInstancesDrawn(),
-      lastUploadBytes: player.lastBytesUploaded(),
-      geometryCacheMisses: player.lastGeometryCacheMisses(),
+      drawCalls: renderer.lastDrawCalls(),
+      instances: renderer.lastInstancesDrawn(),
+      lastUploadBytes: renderer.lastBytesUploaded(),
+      geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     },
-    gpu: gpuSupported
-      ? {
-          timestampSupported: true,
-          samples: player.gpuProfiledFrameCount(),
-          dropped: player.gpuDroppedSampleCount(),
-          failed: player.gpuFailedSampleCount(),
-          renderPassMs: {
-            p50: finiteOrNull(player.gpuRenderP50Ms()),
-            p95: finiteOrNull(player.gpuRenderP95Ms()),
-            p99:
-              typeof player.gpuRenderP99Ms === "function"
-                ? finiteOrNull(player.gpuRenderP99Ms())
-                : null,
-            last: finiteOrNull(player.lastGpuRenderMs()),
-          },
-        }
-      : { timestampSupported: false },
+    gpu: {
+      timestampSupported: false,
+      unavailableReason:
+        "ExecutionCanvasRenderer does not yet expose WebGPU timestamp-query profiling",
+    },
   };
 
   window.__NOON_PERF_REPORT__ = report;
@@ -185,23 +178,68 @@ try {
   status.dataset.state = "error";
 } finally {
   browserJank.stop();
-  player?.free?.();
+  renderer?.free?.();
+  engine?.free?.();
 }
 
-async function waitForGpuSamples(player, supported, expectedFrames) {
-  if (!supported) {
-    return;
+function presentSceneTime(sceneTime) {
+  const frameStarted = performance.now();
+
+  const runtimeStarted = performance.now();
+  const delta = engine.seekDeltaJson(sceneTime);
+  const runtimeMs = performance.now() - runtimeStarted;
+  if (delta === undefined || delta === null) {
+    throw new Error(`incremental performance driver emitted no delta at t=${sceneTime}`);
   }
-  const deadline = performance.now() + 2_000;
-  while (performance.now() < deadline) {
-    const accounted =
-      player.gpuProfiledFrameCount() +
-      player.gpuDroppedSampleCount() +
-      player.gpuFailedSampleCount();
-    if (accounted >= expectedFrames) {
-      return;
+
+  const applyStarted = performance.now();
+  if (!renderer.applyDeltaJson(delta)) {
+    throw new Error(`renderer rejected incremental performance delta at t=${sceneTime}`);
+  }
+  // This synthetic workload has no authored camera object. Keep the profiling
+  // viewport explicit after each transport delta updates mirror state.
+  renderer.setCamera(0, 0, workload.cameraHeight);
+  drainGpuDiagnostics();
+  const transportApplyMs = performance.now() - applyStarted;
+
+  const renderStarted = performance.now();
+  if (!presentPending()) {
+    throw new Error(`performance frame was not presented at t=${sceneTime}`);
+  }
+  const rendererRenderMs = performance.now() - renderStarted;
+
+  return {
+    cpuFrameMs: performance.now() - frameStarted,
+    runtimeMs,
+    transportApplyMs,
+    rendererRenderMs,
+  };
+}
+
+function presentPending() {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    drainGpuDiagnostics();
+    const presented = renderer.render();
+    drainGpuDiagnostics();
+    if (presented) {
+      return true;
     }
-    await nextAnimationFrame();
+  }
+  return false;
+}
+
+function drainGpuDiagnostics() {
+  let fatal = null;
+  const healthy = drainRendererGpuDiagnostics(renderer, {
+    onRecoverable(diagnostic) {
+      console.warn(formatGpuDiagnostic(diagnostic));
+    },
+    onFatal(diagnostic) {
+      fatal = new Error(formatGpuDiagnostic(diagnostic));
+    },
+  });
+  if (!healthy) {
+    throw fatal ?? new Error("renderer reported a fatal GPU diagnostic");
   }
 }
 
@@ -231,10 +269,6 @@ function positiveNumber(name, fallback) {
     throw new Error(`${name} must be a positive number`);
   }
   return parsed;
-}
-
-function finiteOrNull(value) {
-  return Number.isFinite(value) ? value : null;
 }
 
 function formatNumber(value) {
