@@ -324,9 +324,10 @@ impl SemanticMutationTransaction {
                         .map(|binding| binding.signal());
 
                     if let Some(signal) = signal {
-                        let actual = store.semantic_signal_value_kind(*signal).map_err(|error| {
-                            SemanticMutationTransactionError::Signal { index, error }
-                        })?;
+                        let actual =
+                            store.semantic_signal_value_kind(*signal).map_err(|error| {
+                                SemanticMutationTransactionError::Signal { index, error }
+                            })?;
                         let expected = property.value_kind();
                         if actual != expected {
                             return Err(
