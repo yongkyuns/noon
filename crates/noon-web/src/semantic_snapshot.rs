@@ -1,8 +1,8 @@
+use noon_compile::{CompileError, CompiledScene};
 use noon_core::{Color, ObjectSnapshot, Rect};
-use noon_runtime::FrameState;
+use noon_ir::{decode_scene, IrError};
+use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
 use serde_json::{json, Value};
-
-use crate::{PlayerError, ScenePlayer};
 
 fn paint_json(color: Option<Color>, opacity: f32) -> Value {
     match color {
@@ -25,6 +25,43 @@ fn bounds_json(bounds: Option<Rect>) -> Value {
             "height": bounds.height(),
         }),
         None => Value::Null,
+    }
+}
+
+#[derive(Debug)]
+pub enum SemanticSnapshotError {
+    Ir(IrError),
+    Compile(CompileError),
+    Evaluation(EvaluationError),
+}
+
+impl std::fmt::Display for SemanticSnapshotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ir(error) => error.fmt(formatter),
+            Self::Compile(error) => error.fmt(formatter),
+            Self::Evaluation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SemanticSnapshotError {}
+
+impl From<IrError> for SemanticSnapshotError {
+    fn from(value: IrError) -> Self {
+        Self::Ir(value)
+    }
+}
+
+impl From<CompileError> for SemanticSnapshotError {
+    fn from(value: CompileError) -> Self {
+        Self::Compile(value)
+    }
+}
+
+impl From<EvaluationError> for SemanticSnapshotError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
     }
 }
 
@@ -79,10 +116,15 @@ pub fn semantic_frame_value(frame: &FrameState) -> Value {
     })
 }
 
-pub fn semantic_frame_json(scene_json: &str, time: f64) -> Result<String, PlayerError> {
-    let mut player = ScenePlayer::from_scene_json(scene_json)?;
-    player.seek(time)?;
-    Ok(semantic_frame_value(player.frame()).to_string())
+pub fn semantic_frame_json(
+    scene_json: &str,
+    time: f64,
+) -> Result<String, SemanticSnapshotError> {
+    let definition = decode_scene(scene_json)?;
+    let compiled = CompiledScene::compile(&definition)?;
+    let mut runtime = SlottedSceneInstance::new(compiled);
+    runtime.seek(time)?;
+    Ok(semantic_frame_value(runtime.frame()).to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
