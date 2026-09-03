@@ -1050,7 +1050,7 @@ fn semantic_family_leaf_ids(
             }
             SemanticNodeKind::Family => {
                 for member in node.members() {
-                    collect(store, *member, leaves)?;
+                    collect(store, member, leaves)?;
                 }
                 Ok(())
             }
