@@ -1,0 +1,42 @@
+name: Architecture Ratchets
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-ratchets-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-growth:
+    name: Migration architecture does not grow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate guardrail scripts
+        run: bash -n scripts/check.sh scripts/architecture-ratchet.sh
+
+      - name: Reject new migration-era architecture references
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          base="$PR_BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$PUSH_BEFORE_SHA"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="HEAD^"
+          fi
+          bash scripts/architecture-ratchet.sh "$base"

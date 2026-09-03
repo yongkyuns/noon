@@ -159,7 +159,19 @@ Use stable resource generations, dirty-range uploads, retained residency, and ex
 
 Text, Graph, interaction, and 3D are features of the same renderer/runtime architecture, not separate engines.
 
-## 13. Tests and validation
+## 13. Local validation
+
+Use the repository validation entrypoint instead of reconstructing CI commands from memory:
+
+```bash
+bash scripts/check.sh fast
+```
+
+Use `bash scripts/check.sh full` before merge when the change affects Rust plus browser integration or when the owning issue/PR calls for the full local gate. Run narrower focused tests while iterating, but report the exact commands actually run in the PR.
+
+GitHub CI has additional parallel browser, parity, golden, differential, performance, and platform-specific jobs. A local `check.sh` pass does not replace required GitHub checks.
+
+## 14. Tests and validation
 
 Prefer deterministic structural tests over tests that merely make current implementation details permanent.
 
@@ -177,7 +189,7 @@ Protect invariants such as:
 
 JSON-based fixtures are fine when testing an explicit codec/transport/export boundary. Do not make a legacy serialized scene path the canonical engine qualification path.
 
-## 14. PR discipline
+## 15. PR discipline
 
 Keep PRs narrow enough that their architectural effect is reviewable.
 
@@ -194,7 +206,7 @@ Do not add a permanent compatibility layer to make a PR easier to merge.
 
 Do not add new permanent roadmap/architecture documents. Update `docs/architecture.md` only when the architecture itself changes. Put implementation checklists and remaining work in GitHub issues.
 
-## 15. Before finishing a task
+## 16. Before finishing a task
 
 Before declaring work complete:
 
@@ -204,6 +216,7 @@ Before declaring work complete:
 4. Ensure temporary compatibility code has an explicit deletion owner.
 5. Add focused tests for the invariant or behavior changed.
 6. Check that local operations remain local.
-7. Update the owning GitHub issue/PR with what landed and what remains.
+7. Run the appropriate `scripts/check.sh` mode and any focused validation required by the owning issue.
+8. Update the owning GitHub issue/PR with what landed and what remains.
 
 When uncertain, choose the design that keeps one semantic authority, one lowering boundary, one runtime, one renderer, and a fully Rust-native typed in-memory path.

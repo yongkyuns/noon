@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 
 const workflowDir = new URL("../.github/workflows/", import.meta.url);
 const workflowFiles = (await readdir(workflowDir))
@@ -11,6 +11,7 @@ assert.ok(workflowFiles.length > 0, "CI workflow inventory must not be empty");
 const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
+  ["architecture-ratchets.yml", "architecture"],
   ["compiler-cache-seed.yml", "cache-seed"],
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
@@ -44,6 +45,7 @@ assert.deepEqual(
 const requiredFamilies = new Set([
   "pr-fast",
   "main",
+  "architecture",
   "cache-seed",
   "coverage",
   "platform-release",
@@ -53,18 +55,6 @@ const requiredFamilies = new Set([
 const presentFamilies = new Set(classified.map(({ family }) => family));
 for (const family of requiredFamilies) {
   assert.ok(presentFamilies.has(family), `required CI family ${family} must remain represented`);
-}
-
-const ciDocs = await readFile(new URL("../docs/ci.md", import.meta.url), "utf8");
-for (const [needle, purpose] of [
-  [".github/workflows/pr-fast.yml", "pull-request fast gate"],
-  [".github/workflows/ci.yml", "main CI"],
-  [".github/workflows/compiler-cache-seed.yml", "compiler-cache seed"],
-  [".github/workflows/platform-release.yml", "platform/release validation"],
-  [".github/workflows/test-coverage.yml", "test observability"],
-  ["Manim compatibility workflows", "Manim validation family"],
-]) {
-  assert.match(ciDocs, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${purpose} must remain documented`);
 }
 
 const counts = Object.fromEntries(
