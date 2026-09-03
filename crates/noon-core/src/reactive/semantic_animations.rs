@@ -468,7 +468,10 @@ mod tests {
         assert_eq!(second.slot(), replacement.slot());
         assert_ne!(second.generation(), replacement.generation());
 
-        let intent = store.semantic_animation_state(composition).unwrap().intent();
+        let intent = store
+            .semantic_animation_state(composition)
+            .unwrap()
+            .intent();
         assert_eq!(intent.children(), &[first, second]);
         assert_eq!(
             store.semantic_animation_state(second),
@@ -553,10 +556,7 @@ mod tests {
         let third = transform(&mut store, 1.0);
 
         store
-            .insert_semantic_parallel_animation(
-                &[first, second, third],
-                AnimationOptions::new(),
-            )
+            .insert_semantic_parallel_animation(&[first, second, third], AnimationOptions::new())
             .unwrap();
         assert_eq!(store.last_mutation_stats().slots_written, 1);
     }
