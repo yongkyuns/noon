@@ -5,10 +5,8 @@
 //! semantic-ID/frame-row remapping.
 
 use noon_core::{Rect, Vec2};
-use noon_runtime::SpatialQueryResult;
+use noon_runtime::{SlottedSceneInstance, SpatialQueryResult};
 use serde_json::json;
-
-use crate::ScenePlayer;
 
 fn spatial_query_json(result: SpatialQueryResult) -> String {
     let stats = result.stats();
@@ -35,27 +33,38 @@ fn spatial_query_json(result: SpatialQueryResult) -> String {
     .to_string()
 }
 
-impl ScenePlayer {
-    pub fn hit_test_json(&self, x: f32, y: f32) -> String {
-        spatial_query_json(self.hit_test(Vec2::new(x, y)))
-    }
+/// Serialize one retained runtime hit-test without routing through the legacy
+/// browser player. Spatial identity and locality are owned by Runtime; this
+/// adapter only exposes that result at the browser serialization boundary.
+pub fn hit_test_json(runtime: &SlottedSceneInstance, x: f32, y: f32) -> String {
+    spatial_query_json(runtime.hit_test(Vec2::new(x, y)))
+}
 
-    pub fn query_viewport_json(&self, min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> String {
-        spatial_query_json(
-            self.query_viewport(Rect::new(Vec2::new(min_x, min_y), Vec2::new(max_x, max_y))),
-        )
-    }
+/// Serialize one retained runtime viewport query without making `ScenePlayer` a
+/// dependency of the spatial-query boundary.
+pub fn query_viewport_json(
+    runtime: &SlottedSceneInstance,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+) -> String {
+    spatial_query_json(
+        runtime.query_viewport(Rect::new(Vec2::new(min_x, min_y), Vec2::new(max_x, max_y))),
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use noon_compile::CompiledScene;
     use noon_core::{GeometryRef, SceneDefinition, Transform2D};
-    use noon_ir::encode_scene;
+    use noon_core::{MutationTransaction, ScenePatch};
+    use noon_runtime::SlottedSceneInstance;
     use serde_json::Value;
 
     use super::*;
 
-    fn query_player() -> ScenePlayer {
+    fn query_runtime() -> SlottedSceneInstance {
         let mut scene = SceneDefinition::new();
         let back = scene.add(GeometryRef::circle(1.0));
         let front = scene.add(GeometryRef::rectangle(1.0, 1.0));
@@ -67,14 +76,13 @@ mod tests {
             translation: Vec2::new(0.0, 0.0),
             ..Transform2D::IDENTITY
         };
-        let json = encode_scene(&scene).unwrap();
-        ScenePlayer::from_scene_json(&json).unwrap()
+        SlottedSceneInstance::new(CompiledScene::compile(&scene).unwrap())
     }
 
     #[test]
     fn hit_test_json_preserves_painter_order_and_query_metrics() {
-        let player = query_player();
-        let result: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let runtime = query_runtime();
+        let result: Value = serde_json::from_str(&hit_test_json(&runtime, 0.0, 0.0)).unwrap();
         let slots = result["slots"].as_array().unwrap();
 
         assert_eq!(slots.len(), 2);
@@ -99,9 +107,8 @@ mod tests {
                 ..Transform2D::IDENTITY
             };
         }
-        let json = encode_scene(&scene).unwrap();
-        let player = ScenePlayer::from_scene_json(&json).unwrap();
-        let result: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let runtime = SlottedSceneInstance::new(CompiledScene::compile(&scene).unwrap());
+        let result: Value = serde_json::from_str(&hit_test_json(&runtime, 0.0, 0.0)).unwrap();
         let slots = result["slots"].as_array().unwrap();
         let candidates = result["stats"]["candidates_tested"].as_u64().unwrap();
 
@@ -125,42 +132,39 @@ mod tests {
             ..Transform2D::IDENTITY
         };
 
-        let initial_json = encode_scene(&scene).unwrap();
-        let mut player = ScenePlayer::from_scene_json(&initial_json).unwrap();
-        let initial: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let mut runtime = SlottedSceneInstance::new(CompiledScene::compile(&scene).unwrap());
+        let initial: Value = serde_json::from_str(&hit_test_json(&runtime, 0.0, 0.0)).unwrap();
         assert!(initial["slots"].as_array().unwrap().is_empty());
 
-        scene.object_mut(object).unwrap().transform = Transform2D::IDENTITY;
-        player
-            .reconcile_scene_json(&encode_scene(&scene).unwrap())
-            .unwrap();
-        let moved_in: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let moved_in = MutationTransaction::from_mutations([ScenePatch::SetTransform {
+            object,
+            transform: Transform2D::IDENTITY,
+        }]);
+        runtime.apply_transaction(&moved_in).unwrap();
+        let moved_in: Value = serde_json::from_str(&hit_test_json(&runtime, 0.0, 0.0)).unwrap();
         assert_eq!(moved_in["slots"].as_array().unwrap().len(), 1);
         assert_eq!(moved_in["slots"][0]["slot"], 0);
         assert_eq!(moved_in["slots"][0]["generation"], 0);
         assert_eq!(moved_in["stats"]["full_scan_fallbacks"], 0);
-        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
-        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
 
-        scene.object_mut(object).unwrap().transform = Transform2D {
-            translation: Vec2::new(8.0, 0.0),
-            ..Transform2D::IDENTITY
-        };
-        player
-            .reconcile_scene_json(&encode_scene(&scene).unwrap())
-            .unwrap();
-        let moved_out: Value = serde_json::from_str(&player.hit_test_json(0.0, 0.0)).unwrap();
+        let moved_out = MutationTransaction::from_mutations([ScenePatch::SetTransform {
+            object,
+            transform: Transform2D {
+                translation: Vec2::new(8.0, 0.0),
+                ..Transform2D::IDENTITY
+            },
+        }]);
+        runtime.apply_transaction(&moved_out).unwrap();
+        let moved_out: Value = serde_json::from_str(&hit_test_json(&runtime, 0.0, 0.0)).unwrap();
         assert!(moved_out["slots"].as_array().unwrap().is_empty());
         assert_eq!(moved_out["stats"]["full_scan_fallbacks"], 0);
-        assert_eq!(player.last_transaction_stats().runtime_rebuilds, 0);
-        assert_eq!(player.last_transaction_stats().semantic_scene_clones, 0);
     }
 
     #[test]
     fn viewport_json_exposes_generation_safe_slots_without_scene_scan() {
-        let player = query_player();
+        let runtime = query_runtime();
         let result: Value =
-            serde_json::from_str(&player.query_viewport_json(-0.25, -0.25, 0.25, 0.25)).unwrap();
+            serde_json::from_str(&query_viewport_json(&runtime, -0.25, -0.25, 0.25, 0.25)).unwrap();
 
         assert_eq!(result["slots"].as_array().unwrap().len(), 2);
         assert_eq!(result["stats"]["results"], 2);
