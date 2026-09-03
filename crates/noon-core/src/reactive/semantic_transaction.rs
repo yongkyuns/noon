@@ -51,6 +51,9 @@ pub enum SemanticMutation {
         member: SemanticNodeId,
         before: Option<SemanticNodeId>,
     },
+    RemoveAnimation {
+        animation: SemanticNodeId,
+    },
     RemoveNode {
         node: SemanticNodeId,
     },
@@ -66,6 +69,7 @@ impl SemanticMutation {
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
             | Self::ReorderMember { family, .. } => *family,
+            Self::RemoveAnimation { animation } => *animation,
             Self::RemoveNode { node } => *node,
         }
     }
@@ -96,6 +100,7 @@ impl SemanticMutation {
                 family: *family,
                 member: *member,
             },
+            Self::RemoveAnimation { animation } => SemanticMutationKey::NodeRemoval(*animation),
             Self::RemoveNode { node } => SemanticMutationKey::NodeRemoval(*node),
         }
     }
@@ -262,14 +267,28 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Delete one authored animation declaration through the same structural
+    /// transaction path as node deletion.
+    ///
+    /// The target must be a live animation at the transaction boundary. Removing a
+    /// child animation also removes parent compositions that can no longer remain
+    /// valid; composition children are references and are not owned/deleted when a
+    /// composition itself is removed.
+    pub fn remove_animation(&mut self, animation: SemanticNodeId) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::RemoveAnimation { animation });
+        self
+    }
+
     /// Delete one semantic identity and atomically clean declarations that cannot
     /// remain valid without it.
     ///
     /// Signal bindings are unbound. Derived signals and animation declarations
     /// that reference the removed identity are themselves removed, recursively.
     /// Structural removals are terminal within a transaction: once the first
-    /// `RemoveNode` is authored, no later non-removal mutation is accepted. This
-    /// keeps complete preflight valid through commit without staging a second scene.
+    /// structural removal is authored, no later non-removal mutation is accepted.
+    /// This keeps complete preflight valid through commit without staging a second
+    /// scene.
     pub fn remove_node(&mut self, node: SemanticNodeId) -> &mut Self {
         self.mutations.push(SemanticMutation::RemoveNode { node });
         self
@@ -364,16 +383,17 @@ impl SemanticMutationTransaction {
                         before,
                     });
                 }
-                SemanticMutation::RemoveNode { node } => {
+                SemanticMutation::RemoveAnimation { animation }
+                | SemanticMutation::RemoveNode { node: animation } => {
                     // An earlier explicit removal may have cascade-removed this
                     // node already. Preflight proved the handle was live at the
                     // transaction boundary; a cascade therefore satisfies this
                     // later structural mutation without duplicate impacts.
-                    if store.node(node).is_none() {
+                    if store.node(animation).is_none() {
                         continue;
                     }
                     let outcome = store
-                        .remove_node_with_reverse_cleanup(node)
+                        .remove_node_with_reverse_cleanup(animation)
                         .expect("preflighted node removal must remain valid while transaction owns the store");
                     written_slots.extend(outcome.written_slots().iter().copied());
                     for effect in outcome.effects() {
@@ -405,6 +425,22 @@ impl SemanticMutationTransaction {
         let mut removal_started = false;
         for (index, mutation) in self.mutations.iter().enumerate() {
             match mutation {
+                SemanticMutation::RemoveAnimation { animation } => {
+                    let Some(node) = store.node(*animation) else {
+                        return Err(SemanticMutationTransactionError::UnknownAnimation {
+                            index,
+                            animation: *animation,
+                        });
+                    };
+                    if !matches!(node.kind(), SemanticNodeKind::Animation(_)) {
+                        return Err(SemanticMutationTransactionError::NotAnimation {
+                            index,
+                            animation: *animation,
+                        });
+                    }
+                    removal_started = true;
+                    removed_nodes.insert(*animation);
+                }
                 SemanticMutation::RemoveNode { node } => {
                     removal_started = true;
                     removed_nodes.insert(*node);
@@ -422,8 +458,10 @@ impl SemanticMutationTransaction {
         let mut family_edges = FamilyEdgePreflight::default();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
-            if !matches!(mutation, SemanticMutation::RemoveNode { .. })
-                && removed_nodes.contains(&mutation.target())
+            if !matches!(
+                mutation,
+                SemanticMutation::RemoveAnimation { .. } | SemanticMutation::RemoveNode { .. }
+            ) && removed_nodes.contains(&mutation.target())
             {
                 return Err(SemanticMutationTransactionError::TargetRemoved {
                     index,
@@ -664,6 +702,9 @@ impl SemanticMutationTransaction {
                             })?,
                     );
                 }
+                SemanticMutation::RemoveAnimation { .. } => {
+                    changed.push(true);
+                }
                 SemanticMutation::RemoveNode { node } => {
                     if store.node(*node).is_none() {
                         return Err(SemanticMutationTransactionError::Node {
@@ -879,6 +920,14 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         error: SemanticSceneOperationError,
     },
+    UnknownAnimation {
+        index: usize,
+        animation: SemanticNodeId,
+    },
+    NotAnimation {
+        index: usize,
+        animation: SemanticNodeId,
+    },
     NonFinitePropertyValue {
         index: usize,
         object: SemanticNodeId,
@@ -974,7 +1023,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             ),
             Self::MutationAfterRemove { index } => write!(
                 formatter,
-                "semantic transaction mutation {index} follows structural removal; RemoveNode mutations must be terminal"
+                "semantic transaction mutation {index} follows structural removal; structural removals must be terminal"
             ),
             Self::TargetRemoved { index, target } => write!(
                 formatter,
@@ -1043,6 +1092,18 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::Object { index, error } | Self::Family { index, error } => {
                 write!(formatter, "semantic transaction mutation {index}: {error}")
             }
+            Self::UnknownAnimation { index, animation } => write!(
+                formatter,
+                "semantic transaction mutation {index}: unknown semantic animation {}:{}",
+                animation.slot(),
+                animation.generation()
+            ),
+            Self::NotAnimation { index, animation } => write!(
+                formatter,
+                "semantic transaction mutation {index}: semantic node {}:{} is not an animation",
+                animation.slot(),
+                animation.generation()
+            ),
             Self::NonFinitePropertyValue {
                 index,
                 object,
@@ -1106,6 +1167,9 @@ mod family_edge_tests;
 
 #[cfg(test)]
 mod reorder_member_tests;
+
+#[cfg(test)]
+mod remove_animation_tests;
 
 #[cfg(test)]
 mod remove_node_tests;
