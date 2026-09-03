@@ -14,6 +14,10 @@ pub enum SemanticSceneOperationError {
     NotSemanticObject(SemanticNodeId),
     NotSemanticFamily(SemanticNodeId),
     NotSemanticAuthoringNode(SemanticNodeId),
+    /// One local scene restructure would promote the same aliased node from
+    /// multiple attached roots. Until the scene store exposes a local root-order
+    /// comparison primitive, fail before commit rather than scan unrelated roots.
+    AmbiguousCrossRootAlias(SemanticNodeId),
     Store(SemanticStoreError),
 }
 
@@ -41,6 +45,12 @@ impl std::fmt::Display for SemanticSceneOperationError {
             Self::NotSemanticAuthoringNode(id) => write!(
                 formatter,
                 "semantic node {}:{} is not a target semantic object or family",
+                id.slot(),
+                id.generation()
+            ),
+            Self::AmbiguousCrossRootAlias(id) => write!(
+                formatter,
+                "semantic node {}:{} would be promoted from multiple scene roots",
                 id.slot(),
                 id.generation()
             ),
