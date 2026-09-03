@@ -126,6 +126,39 @@ and #961/A6.8.
 EOF
 fi
 
+scene_player_consumer_spread_found=0
+scene_player_references="$(
+  git grep -nE \
+    '(^|[^[:alnum:]_])ScenePlayer([^[:alnum:]_]|$)' \
+    -- 'crates/noon-web/src' || true
+)"
+
+while IFS= read -r reference; do
+  [[ -z "$reference" ]] && continue
+  reference_file="${reference%%:*}"
+  case "$reference_file" in
+    crates/noon-web/src/legacy.rs|\
+    crates/noon-web/src/execution_transport.rs|\
+    crates/noon-web/src/execution_visibility.rs|\
+    crates/noon-web/src/spatial_query.rs)
+      ;;
+    *.rs)
+      printf 'architecture ratchet: ScenePlayer consumer outside migration allowlist: %s\n' "$reference" >&2
+      scene_player_consumer_spread_found=1
+      ;;
+  esac
+done <<< "$scene_player_references"
+
+if (( scene_player_consumer_spread_found != 0 )); then
+  cat >&2 <<'EOF'
+
+ScenePlayer is a shrinking migration authority. New noon-web Rust modules must not
+consume it. The temporary allowlist is limited to its definition plus the live
+execution transport, visibility, and spatial-query seams; remove entries as those
+callers migrate rather than adding consumers. See #959/A4 and #961/A6.8.
+EOF
+fi
+
 identity_authority_found=0
 canonical_identity_file='crates/noon-core/src/semantic_store.rs'
 
@@ -167,8 +200,8 @@ creating a second identity/store definition elsewhere. See #961/A6.3.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || identity_authority_found != 0 )); then
+if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, and semantic-identity ratchets passed"
+echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, ScenePlayer-consumer, and semantic-identity ratchets passed"
