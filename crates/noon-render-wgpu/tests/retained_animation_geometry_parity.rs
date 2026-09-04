@@ -82,12 +82,7 @@ fn retained_transform_preserves_runtime_effective_render_geometry() {
         .line_to(Vec2::new(1.0, -1.0))
         .close();
     let render_geometry = GeometryRef::path(source.with_morph_target(target));
-    let frame = retained_geometry_frame(
-        GeometryRef::circle(1.0),
-        Some(render_geometry),
-        1.0,
-        0.5,
-    );
+    let frame = retained_geometry_frame(GeometryRef::circle(1.0), Some(render_geometry), 1.0, 0.5);
 
     assert_prepares_path(&frame);
 }
