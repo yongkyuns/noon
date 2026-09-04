@@ -10,7 +10,8 @@ mkdir -p \
   "$TMP/crates/noon-core" \
   "$TMP/crates/noon-compile" \
   "$TMP/crates/noon-runtime" \
-  "$TMP/crates/noon-render-wgpu"
+  "$TMP/crates/noon-render-wgpu" \
+  "$TMP/crates/noon"
 
 write_clean_fixture() {
   cat >"$TMP/crates/noon-core/Cargo.toml" <<'EOF'
@@ -38,6 +39,14 @@ EOF
   cat >"$TMP/crates/noon-render-wgpu/Cargo.toml" <<'EOF'
 [package]
 name = "noon-render-wgpu"
+[dependencies]
+noon-core = { path = "../noon-core" }
+noon-runtime = { path = "../noon-runtime" }
+EOF
+
+  cat >"$TMP/crates/noon/Cargo.toml" <<'EOF'
+[package]
+name = "noon"
 [dependencies]
 noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
@@ -75,5 +84,9 @@ cat >>"$TMP/crates/noon-render-wgpu/Cargo.toml" <<'EOF'
 path = "../noon"
 EOF
 expect_failure "noon-render-wgpu -> noon through dependency table"
+
+write_clean_fixture
+echo 'noon-native = { path = "../noon-native" }' >>"$TMP/crates/noon/Cargo.toml"
+expect_failure "noon authoring facade -> native platform host"
 
 echo "architecture layer dependency ratchet self-test passed"
