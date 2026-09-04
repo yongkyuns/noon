@@ -9,6 +9,8 @@ mod canonical_family_animation;
 mod canonical_retained_engine_player;
 mod composition;
 mod determinism;
+#[cfg(all(target_arch = "wasm32", debug_assertions))]
+mod direct_execution_smoke;
 mod execution_canvas;
 mod execution_transport;
 mod family_animation_authoring;
@@ -61,6 +63,8 @@ pub use canonical_family_animation::*;
 pub use canonical_retained_engine_player::*;
 pub use composition::*;
 pub use determinism::*;
+#[cfg(all(target_arch = "wasm32", debug_assertions))]
+pub use direct_execution_smoke::*;
 #[cfg(target_arch = "wasm32")]
 pub use execution_canvas::*;
 pub use execution_transport::*;
