@@ -66,8 +66,7 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
     let legacy_instance = SceneInstance::new(CompiledScene::compile(&legacy_scene).unwrap());
 
     let mut semantic_store = SemanticStore::new();
-    let mut semantic_circle =
-        SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
+    let mut semantic_circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
     semantic_circle.transform.translation = SemanticVec3::new(4.5, -3.25, 0.0);
     semantic_circle.transform.rotation_z = 0.75;
     semantic_circle.transform.scale = SemanticVec3::new(2.0, 0.5, 1.0);
