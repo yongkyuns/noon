@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectState, SemanticStore, SemanticStoreError,
+    Color, ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticPresentation, SemanticStore,
+    SemanticStoreError, StoredGeometry, StrokeCap, StrokeJoin, Style, Transform2D, Vec2,
 };
 
 /// Compiler-owned identity bridge from authoritative semantic nodes to the existing
@@ -85,17 +86,18 @@ impl SemanticExecutionIndex {
         }
     }
 
-    /// Lower the current authoritative semantic scene to the first typed execution
-    /// handoff without copying or lossy-converting authored object payloads.
+    /// Lower the current authoritative semantic scene to the typed execution handoff.
     ///
     /// Top-level scene order and family depth-first order come from `SemanticStore`.
     /// Shared/aliased leaves are emitted once at their first visible occurrence.
-    /// Geometry and text remain represented by `SemanticObjectState`, including
-    /// versioned resource handles, so this boundary does not regress target semantic
-    /// content into legacy `GeometryRef`/retained compiler payloads.
+    /// Mixed geometry/text content remains represented by authoritative
+    /// `SemanticObjectContent`, including versioned resource handles. High-precision
+    /// transform/style values are lowered explicitly into the compact values already
+    /// consumed by the current compiled/runtime path.
     ///
-    /// Validation completes before the index is mutated, so a stale/migration-only
-    /// visible leaf cannot leave a partially updated execution identity map.
+    /// All target-object and compact-value validation completes before the identity
+    /// index is mutated, so a stale/state-less object, unsupported paint resource, or
+    /// non-representable f64 value cannot leave a partially updated execution map.
     pub fn lower_scene<'a>(
         &mut self,
         store: &'a SemanticStore,
@@ -114,17 +116,37 @@ impl SemanticExecutionIndex {
                     .ok_or(SemanticLoweringError::MissingSemanticObjectState(
                         semantic_id,
                     ))?;
-                pending.push((semantic_id, state));
+                let base_transform =
+                    lower_transform(state).map_err(|error| SemanticLoweringError::ObjectValue {
+                        object: semantic_id,
+                        error,
+                    })?;
+                let base_style =
+                    lower_style(state).map_err(|error| SemanticLoweringError::ObjectValue {
+                        object: semantic_id,
+                        error,
+                    })?;
+                validate_content(state.content).map_err(|error| {
+                    SemanticLoweringError::ObjectValue {
+                        object: semantic_id,
+                        error,
+                    }
+                })?;
+                pending.push((semantic_id, state, base_transform, base_style));
             }
         }
 
         let objects = pending
             .into_iter()
-            .map(|(semantic_id, state)| SemanticExecutionObject {
-                semantic_id,
-                execution_id: self.ensure_object(semantic_id),
-                state,
-            })
+            .map(
+                |(semantic_id, state, base_transform, base_style)| SemanticExecutionObject {
+                    semantic_id,
+                    execution_id: self.ensure_object(semantic_id),
+                    state,
+                    base_transform,
+                    base_style,
+                },
+            )
             .collect();
 
         Ok(SemanticExecutionProjection { objects })
@@ -142,8 +164,10 @@ impl SemanticExecutionIndex {
 ///
 /// This is intentionally not another runtime scene/plan model: stable compiled and
 /// runtime slots remain owned by `CompiledScene`/`ExecutionSlotTable`. The borrowed
-/// semantic payload lets the next lowering slices feed those existing mechanisms
-/// without first creating a dense retained-scene mirror.
+/// semantic payload preserves full authored state while `base_transform` and
+/// `base_style` make the current compact execution-value lowering explicit. The next
+/// A1.6 slot migration can consume this handoff without routing mixed content through
+/// `GeometryRef`, `RetainedObjectDefinition`, or `RetainedCompiledScene`.
 #[derive(Debug)]
 pub struct SemanticExecutionProjection<'a> {
     objects: Vec<SemanticExecutionObject<'a>>,
@@ -169,9 +193,84 @@ pub struct SemanticExecutionObject<'a> {
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
     pub execution_id: ObjectId,
-    /// Authoritative mixed semantic payload; no legacy content conversion occurs.
+    /// Authoritative mixed semantic payload. This remains borrowed so lowering never
+    /// turns the compact execution representation back into authored truth.
     pub state: &'a SemanticObjectState,
+    /// Explicit compact 2D execution transform derived from `state.transform`.
+    pub base_transform: Transform2D,
+    /// Explicit compact renderer-facing style derived from `state.style`.
+    pub base_style: Style,
 }
+
+impl SemanticExecutionObject<'_> {
+    pub const fn content(&self) -> SemanticObjectContent {
+        self.state.content
+    }
+
+    pub const fn presentation(&self) -> SemanticPresentation {
+        self.state.presentation()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticExecutionValueField {
+    Translation,
+    Scale,
+    RotationZ,
+    FillColor,
+    FillOpacity,
+    StrokeColor,
+    StrokeOpacity,
+    StrokeWidth,
+    ObjectOpacity,
+    Geometry,
+}
+
+impl std::fmt::Display for SemanticExecutionValueField {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Translation => "translation",
+            Self::Scale => "scale",
+            Self::RotationZ => "rotation_z",
+            Self::FillColor => "fill_color",
+            Self::FillOpacity => "fill_opacity",
+            Self::StrokeColor => "stroke_color",
+            Self::StrokeOpacity => "stroke_opacity",
+            Self::StrokeWidth => "stroke_width",
+            Self::ObjectOpacity => "object_opacity",
+            Self::Geometry => "geometry",
+        };
+        formatter.write_str(name)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticExecutionValueError {
+    NonFinite(SemanticExecutionValueField),
+    OutOfF32Range(SemanticExecutionValueField),
+    UnsupportedPaintResource(u64),
+}
+
+impl std::fmt::Display for SemanticExecutionValueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFinite(field) => write!(
+                formatter,
+                "semantic execution lowering requires finite {field}"
+            ),
+            Self::OutOfF32Range(field) => write!(
+                formatter,
+                "semantic execution lowering cannot represent {field} as f32"
+            ),
+            Self::UnsupportedPaintResource(resource) => write!(
+                formatter,
+                "semantic paint resource {resource} has no compact renderer representation yet"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SemanticExecutionValueError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
@@ -179,6 +278,10 @@ pub enum SemanticLoweringError {
     /// A visible object leaf came from a migration-only legacy/state-less path
     /// instead of carrying target `SemanticObjectState` directly.
     MissingSemanticObjectState(SemanticNodeId),
+    ObjectValue {
+        object: SemanticNodeId,
+        error: SemanticExecutionValueError,
+    },
 }
 
 impl From<SemanticStoreError> for SemanticLoweringError {
@@ -197,11 +300,161 @@ impl std::fmt::Display for SemanticLoweringError {
                 id.slot(),
                 id.generation()
             ),
+            Self::ObjectValue { object, error } => write!(
+                formatter,
+                "semantic execution lowering failed for object {}:{}: {error}",
+                object.slot(),
+                object.generation()
+            ),
         }
     }
 }
 
 impl std::error::Error for SemanticLoweringError {}
+
+fn lower_transform(
+    state: &SemanticObjectState,
+) -> Result<Transform2D, SemanticExecutionValueError> {
+    if !state.transform.translation.is_finite() {
+        return Err(SemanticExecutionValueError::NonFinite(
+            SemanticExecutionValueField::Translation,
+        ));
+    }
+    if !state.transform.scale.is_finite() {
+        return Err(SemanticExecutionValueError::NonFinite(
+            SemanticExecutionValueField::Scale,
+        ));
+    }
+
+    Ok(Transform2D {
+        translation: Vec2::new(
+            lower_f32(
+                state.transform.translation.x,
+                SemanticExecutionValueField::Translation,
+            )?,
+            lower_f32(
+                state.transform.translation.y,
+                SemanticExecutionValueField::Translation,
+            )?,
+        ),
+        rotation: lower_f32(
+            state.transform.rotation_z,
+            SemanticExecutionValueField::RotationZ,
+        )?,
+        scale: Vec2::new(
+            lower_f32(
+                state.transform.scale.x,
+                SemanticExecutionValueField::Scale,
+            )?,
+            lower_f32(
+                state.transform.scale.y,
+                SemanticExecutionValueField::Scale,
+            )?,
+        ),
+    })
+}
+
+fn lower_style(state: &SemanticObjectState) -> Result<Style, SemanticExecutionValueError> {
+    let fill = lower_paint(
+        state.style.fill.as_ref(),
+        state.style.fill_opacity,
+        SemanticExecutionValueField::FillColor,
+        SemanticExecutionValueField::FillOpacity,
+    )?;
+    let stroke = lower_paint(
+        state.style.stroke.as_ref(),
+        state.style.stroke_opacity,
+        SemanticExecutionValueField::StrokeColor,
+        SemanticExecutionValueField::StrokeOpacity,
+    )?;
+
+    Ok(Style {
+        fill,
+        stroke,
+        stroke_width: lower_f32(
+            state.style.stroke_width,
+            SemanticExecutionValueField::StrokeWidth,
+        )?,
+        stroke_width_mode: state.style.stroke_width_mode,
+        // Semantic style intentionally does not invent join/cap values yet. Use the
+        // current renderer defaults at this explicit execution boundary.
+        stroke_join: StrokeJoin::Round,
+        stroke_cap: StrokeCap::Round,
+        opacity: lower_f32(
+            state.style.object_opacity,
+            SemanticExecutionValueField::ObjectOpacity,
+        )?,
+    })
+}
+
+fn lower_paint(
+    paint: Option<&SemanticPaint>,
+    local_opacity: f64,
+    color_field: SemanticExecutionValueField,
+    opacity_field: SemanticExecutionValueField,
+) -> Result<Option<Color>, SemanticExecutionValueError> {
+    if !local_opacity.is_finite() {
+        return Err(SemanticExecutionValueError::NonFinite(opacity_field));
+    }
+
+    let Some(paint) = paint else {
+        return Ok(None);
+    };
+    match paint {
+        SemanticPaint::Solid(color) => {
+            if !color.red.is_finite()
+                || !color.green.is_finite()
+                || !color.blue.is_finite()
+                || !color.alpha.is_finite()
+            {
+                return Err(SemanticExecutionValueError::NonFinite(color_field));
+            }
+            let mut color = *color;
+            color.alpha = lower_f32(f64::from(color.alpha) * local_opacity, opacity_field)?;
+            Ok(Some(color))
+        }
+        SemanticPaint::Resource(resource) => Err(
+            SemanticExecutionValueError::UnsupportedPaintResource(*resource),
+        ),
+    }
+}
+
+fn validate_content(content: SemanticObjectContent) -> Result<(), SemanticExecutionValueError> {
+    let finite = match content {
+        SemanticObjectContent::Geometry(geometry) => match geometry {
+            StoredGeometry::Circle { radius } => radius.is_finite(),
+            StoredGeometry::Rectangle { size } => size.x.is_finite() && size.y.is_finite(),
+            StoredGeometry::Line { start, end } => {
+                start.x.is_finite()
+                    && start.y.is_finite()
+                    && end.x.is_finite()
+                    && end.y.is_finite()
+            }
+            StoredGeometry::Resource(_) => true,
+        },
+        SemanticObjectContent::Text(_) => true,
+    };
+    if finite {
+        Ok(())
+    } else {
+        Err(SemanticExecutionValueError::NonFinite(
+            SemanticExecutionValueField::Geometry,
+        ))
+    }
+}
+
+fn lower_f32(
+    value: f64,
+    field: SemanticExecutionValueField,
+) -> Result<f32, SemanticExecutionValueError> {
+    if !value.is_finite() {
+        return Err(SemanticExecutionValueError::NonFinite(field));
+    }
+    if value.abs() > f64::from(f32::MAX) {
+        return Err(SemanticExecutionValueError::OutOfF32Range(field));
+    }
+    Ok(value as f32)
+}
 
 /// One-to-one compatibility encoding for the target semantic object domain.
 ///
@@ -216,9 +469,9 @@ fn compatibility_object_id(id: SemanticNodeId) -> ObjectId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
-        SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-        StoredGeometry, TextResourceHandle, TextResourceId,
+        Color, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
+        SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
+        SemanticStore, SemanticVec3, StoredGeometry, TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -243,7 +496,19 @@ mod tests {
     #[test]
     fn lower_scene_preserves_mixed_semantic_content_and_family_order() {
         let mut store = SemanticStore::new();
-        let geometry = store.insert_semantic_object(circle(2.0));
+        let mut geometry_state = circle(2.0);
+        geometry_state.transform.translation = SemanticVec3::new(3.25, -1.5, 8.0);
+        geometry_state.transform.scale = SemanticVec3::new(2.0, 0.5, 4.0);
+        geometry_state.transform.rotation_z = 0.25;
+        geometry_state.style.stroke = Some(SemanticPaint::Solid(Color::rgba(
+            0.2, 0.4, 0.6, 0.5,
+        )));
+        geometry_state.style.stroke_opacity = 0.4;
+        geometry_state.style.stroke_width = 2.5;
+        geometry_state.style.object_opacity = 0.75;
+        geometry_state.set_z_index(9);
+
+        let geometry = store.insert_semantic_object(geometry_state);
         let text = store.insert_semantic_object(text(7));
         let family = store.insert_family();
         store.add_member(family, geometry).unwrap();
@@ -262,13 +527,25 @@ mod tests {
             vec![geometry, text]
         );
         assert!(matches!(
-            lowered.objects()[0].state.content,
+            lowered.objects()[0].content(),
             SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 2.0 })
         ));
         assert!(matches!(
-            lowered.objects()[1].state.content,
+            lowered.objects()[1].content(),
             SemanticObjectContent::Text(_)
         ));
+        assert_eq!(
+            lowered.objects()[0].base_transform,
+            Transform2D {
+                translation: Vec2::new(3.25, -1.5),
+                rotation: 0.25,
+                scale: Vec2::new(2.0, 0.5),
+            }
+        );
+        assert_eq!(lowered.objects()[0].base_style.stroke_width, 2.5);
+        assert_eq!(lowered.objects()[0].base_style.opacity, 0.75);
+        assert_eq!(lowered.objects()[0].base_style.stroke.unwrap().alpha, 0.2);
+        assert_eq!(lowered.objects()[0].presentation().z_index, 9);
         assert_eq!(index.len(), 2);
     }
 
@@ -304,8 +581,14 @@ mod tests {
         let result = transaction.apply(&mut store).unwrap();
         index.apply_transaction_result(&store, &result);
 
-        let after = index.lower_scene(&store).unwrap().objects()[0].execution_id;
+        let lowered = index.lower_scene(&store).unwrap();
+        let after = lowered.objects()[0].execution_id;
         assert_eq!(after, before);
+        assert_eq!(lowered.objects()[0].base_transform.rotation, 0.5);
+        assert!(matches!(
+            lowered.objects()[0].content(),
+            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 3.0 })
+        ));
         assert_eq!(index.execution_object_id(object), Some(before));
     }
 
@@ -393,6 +676,88 @@ mod tests {
         assert_eq!(
             index.lower_scene(&store).unwrap_err(),
             SemanticLoweringError::MissingSemanticObjectState(state_less)
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn compact_value_failure_is_atomic_with_identity_index() {
+        let mut store = SemanticStore::new();
+        let valid = attach(&mut store, circle(1.0));
+        let mut invalid = circle(2.0);
+        invalid.transform.translation.x = f64::from(f32::MAX) * 2.0;
+        let invalid = attach(&mut store, invalid);
+
+        let mut index = SemanticExecutionIndex::new();
+        assert_eq!(
+            index.lower_scene(&store).unwrap_err(),
+            SemanticLoweringError::ObjectValue {
+                object: invalid,
+                error: SemanticExecutionValueError::OutOfF32Range(
+                    SemanticExecutionValueField::Translation
+                ),
+            }
+        );
+        assert!(index.is_empty());
+        assert_eq!(index.execution_object_id(valid), None);
+    }
+
+    #[test]
+    fn unsupported_semantic_paint_fails_before_identity_commit() {
+        let mut store = SemanticStore::new();
+        let mut state = circle(1.0);
+        state.style.fill = Some(SemanticPaint::Resource(77));
+        let object = attach(&mut store, state);
+
+        let mut index = SemanticExecutionIndex::new();
+        assert_eq!(
+            index.lower_scene(&store).unwrap_err(),
+            SemanticLoweringError::ObjectValue {
+                object,
+                error: SemanticExecutionValueError::UnsupportedPaintResource(77),
+            }
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn semantic_paint_opacity_lowers_without_collapsing_object_opacity() {
+        let mut store = SemanticStore::new();
+        let mut state = circle(1.0);
+        state.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.1, 0.2, 0.3, 0.5)));
+        state.style.fill_opacity = 0.4;
+        state.style.object_opacity = 0.25;
+        let object = attach(&mut store, state);
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = index.lower_scene(&store).unwrap();
+        let object = lowered
+            .objects()
+            .iter()
+            .find(|lowered| lowered.semantic_id == object)
+            .unwrap();
+
+        assert_eq!(object.base_style.fill.unwrap().alpha, 0.2);
+        assert_eq!(object.base_style.opacity, 0.25);
+    }
+
+    #[test]
+    fn non_finite_inline_geometry_fails_closed() {
+        let mut store = SemanticStore::new();
+        let object = attach(
+            &mut store,
+            SemanticObjectState::new(StoredGeometry::Circle { radius: f32::NAN }),
+        );
+
+        let mut index = SemanticExecutionIndex::new();
+        assert_eq!(
+            index.lower_scene(&store).unwrap_err(),
+            SemanticLoweringError::ObjectValue {
+                object,
+                error: SemanticExecutionValueError::NonFinite(
+                    SemanticExecutionValueField::Geometry
+                ),
+            }
         );
         assert!(index.is_empty());
     }
