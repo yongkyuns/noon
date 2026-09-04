@@ -529,9 +529,14 @@ impl NativeGpu {
 }
 
 fn native_key_code(code: KeyCode) -> String {
-    // winit's physical KeyCode variant names follow the W3C `KeyboardEvent.code`
-    // vocabulary used by Noon's browser native-input source identity.
-    format!("{code:?}")
+    // winit mostly follows the W3C `KeyboardEvent.code` vocabulary, but names
+    // MetaLeft/MetaRight as SuperLeft/SuperRight. Normalize those exceptions so
+    // browser and native hosts address the same authored source identity.
+    match code {
+        KeyCode::SuperLeft => "MetaLeft".to_owned(),
+        KeyCode::SuperRight => "MetaRight".to_owned(),
+        _ => format!("{code:?}"),
+    }
 }
 
 fn native_pointer_button(button: MouseButton) -> Option<u8> {
@@ -594,6 +599,8 @@ mod tests {
     fn native_key_and_pointer_identity_match_cross_platform_input_vocabulary() {
         assert_eq!(native_key_code(KeyCode::Space), "Space");
         assert_eq!(native_key_code(KeyCode::KeyA), "KeyA");
+        assert_eq!(native_key_code(KeyCode::SuperLeft), "MetaLeft");
+        assert_eq!(native_key_code(KeyCode::SuperRight), "MetaRight");
         assert_eq!(native_pointer_button(MouseButton::Left), Some(0));
         assert_eq!(native_pointer_button(MouseButton::Middle), Some(1));
         assert_eq!(native_pointer_button(MouseButton::Right), Some(2));
