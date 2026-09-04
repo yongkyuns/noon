@@ -67,6 +67,19 @@ impl BrowserExecutionWakePlan {
         }
     }
 
+    /// Preserve presentation work that has already moved from the execution session
+    /// into a host-owned renderer queue.
+    ///
+    /// Direct canvas construction drains [`ExecutionSession::take_frame_changes`] so
+    /// the renderer can own the exact changes it must present. That ownership transfer
+    /// must not make the host forget the pending presentation when it subsequently
+    /// projects the session's timeline cadence. This operation only ORs presentation
+    /// dirtiness back into the plan; it never changes runtime timeline authority.
+    pub const fn with_additional_presentation_pending(mut self, pending: bool) -> Self {
+        self.present_now |= pending;
+        self
+    }
+
     /// Whether renderer-facing effective state is waiting for one presentation.
     pub const fn present_now(self) -> bool {
         self.present_now
@@ -137,6 +150,24 @@ mod tests {
             BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(4.5));
         assert_eq!(
             clean_deadline.cadence(),
+            BrowserExecutionCadence::TimerAtSceneTime(4.5)
+        );
+    }
+
+    #[test]
+    fn host_owned_presentation_is_recombined_without_changing_runtime_cadence() {
+        let clean_active =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
+        let queued = clean_active.with_additional_presentation_pending(true);
+        assert!(queued.present_now());
+        assert_eq!(queued.cadence(), BrowserExecutionCadence::AnimationFrame);
+
+        let already_pending =
+            BrowserExecutionWakePlan::from_parts(true, TimelineWakeState::Deadline(4.5));
+        let preserved = already_pending.with_additional_presentation_pending(false);
+        assert!(preserved.present_now());
+        assert_eq!(
+            preserved.cadence(),
             BrowserExecutionCadence::TimerAtSceneTime(4.5)
         );
     }

@@ -28,7 +28,8 @@ mod wasm {
 
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
+        BrowserExecutionCadence, BrowserExecutionWakePlan, ExecutionFrameMirror,
+        TransportApplyOutcome, TransportSlotId,
     };
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
@@ -183,6 +184,13 @@ mod wasm {
             match self {
                 Self::Transport(mirror) => Some(mirror),
                 Self::Direct(_) => None,
+            }
+        }
+
+        fn direct(&self) -> Option<&ExecutionSession> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(session) => Some(session),
             }
         }
 
@@ -435,6 +443,31 @@ mod wasm {
 
         pub fn time(&self) -> f64 {
             self.source.frame().map_or(0.0, |frame| frame.time)
+        }
+
+        #[wasm_bindgen(js_name = directPresentPending)]
+        pub fn direct_present_pending(&self) -> Result<bool, JsValue> {
+            Ok(self.direct_wake_plan()?.present_now())
+        }
+
+        #[wasm_bindgen(js_name = directWakeCadence)]
+        pub fn direct_wake_cadence(&self) -> Result<String, JsValue> {
+            let cadence = match self.direct_wake_plan()?.cadence() {
+                BrowserExecutionCadence::AnimationFrame => "animation-frame",
+                BrowserExecutionCadence::TimerAtSceneTime(_) => "timer",
+                BrowserExecutionCadence::Idle => "idle",
+            };
+            Ok(cadence.to_owned())
+        }
+
+        #[wasm_bindgen(js_name = directTimerDelaySeconds)]
+        pub fn direct_timer_delay_seconds(&self) -> Result<Option<f64>, JsValue> {
+            Ok(self.direct_wake_plan()?.timer_delay_seconds(self.time()))
+        }
+
+        #[wasm_bindgen(js_name = advanceDirectToSceneTime)]
+        pub fn advance_direct_to_scene_time(&mut self, time: f64) -> Result<bool, JsValue> {
+            self.evaluate(time)
         }
 
         #[wasm_bindgen(js_name = objectCount)]
@@ -781,6 +814,14 @@ mod wasm {
             self.sync_camera(camera)?;
             self.pending_changes = pending_changes;
             Ok(!self.pending_changes.is_empty())
+        }
+
+        fn direct_wake_plan(&self) -> Result<BrowserExecutionWakePlan, JsValue> {
+            let session = self.source.direct().ok_or_else(|| {
+                js_message("direct wake APIs require a direct ExecutionSession source")
+            })?;
+            Ok(BrowserExecutionWakePlan::from_session(session)
+                .with_additional_presentation_pending(!self.pending_changes.is_empty()))
         }
 
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
