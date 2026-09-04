@@ -90,7 +90,7 @@ mod tests {
             }));
         store.attach_to_scene(object).unwrap();
         store
-            .bind_semantic_signal(pointer, object, SemanticObjectProperty::Position)
+            .bind_semantic_signal(pointer, object, SemanticObjectProperty::Translation)
             .unwrap();
         store
             .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
