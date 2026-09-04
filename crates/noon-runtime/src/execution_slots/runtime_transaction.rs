@@ -37,18 +37,30 @@ impl SceneInstance {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::CompiledScene;
+    use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
     use noon_core::{
-        GeometryRef, SceneDefinition, ScenePatch, Style, Transform2D, Vec2,
+        ScenePatch, SemanticObjectState, SemanticStore, StoredGeometry, Style, Transform2D, Vec2,
     };
 
     use super::*;
 
+    fn semantic_instance() -> (SceneInstance, ObjectId) {
+        let mut store = SemanticStore::new();
+        let semantic_object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(semantic_object).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+        let object = index.execution_object_id(semantic_object).unwrap();
+        (SceneInstance::from_semantic_execution(lowered), object)
+    }
+
     #[test]
     fn effective_transform_uses_the_stable_compiled_object_slot() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+        let (mut instance, object) = semantic_instance();
         let transform = Transform2D {
             translation: Vec2::new(3.0, -2.0),
             rotation: 0.25,
@@ -65,9 +77,7 @@ mod tests {
 
     #[test]
     fn transaction_preflight_rejects_late_failure_before_runtime_publication() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+        let (mut instance, object) = semantic_instance();
         let before = instance.frame().clone();
         let missing = ObjectId::new(999);
         let transaction = MutationTransaction::from_mutations([
