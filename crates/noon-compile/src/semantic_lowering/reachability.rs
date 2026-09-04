@@ -80,11 +80,7 @@ struct ReachabilityJournal {
 }
 
 impl ReachabilityJournal {
-    fn record(
-        &mut self,
-        nodes: &HashMap<SemanticNodeId, ReachabilityNode>,
-        id: SemanticNodeId,
-    ) {
+    fn record(&mut self, nodes: &HashMap<SemanticNodeId, ReachabilityNode>, id: SemanticNodeId) {
         if self.originals.contains_key(&id) {
             return;
         }
@@ -144,11 +140,9 @@ impl SemanticExecutionReachability {
         store: &SemanticStore,
         id: SemanticNodeId,
     ) -> Result<SemanticExecutionReachabilityUpdate, SemanticLoweringError> {
-        let node = store
-            .node(id)
-            .ok_or(SemanticLoweringError::Store(SemanticStoreError::UnknownNode(
-                id,
-            )))?;
+        let node = store.node(id).ok_or(SemanticLoweringError::Store(
+            SemanticStoreError::UnknownNode(id),
+        ))?;
         let mut journal = ReachabilityJournal::default();
         self.set_scene_root(store, id, node.is_scene_owned(), &mut journal)?;
         self.finish_update(store, journal)
@@ -181,9 +175,9 @@ impl SemanticExecutionReachability {
                 SemanticMutationImpact::FamilyMemberAdded { family, member } => {
                     // A later structural deletion in the same atomic transaction may
                     // have removed this edge again. Consume only final live topology.
-                    let edge_is_live = store.node(member).is_some_and(|node| {
-                        node.parents().iter().any(|parent| *parent == family)
-                    });
+                    let edge_is_live = store
+                        .node(member)
+                        .is_some_and(|node| node.parents().iter().any(|parent| *parent == family));
                     if edge_is_live {
                         self.add_family_member(store, family, member, &mut journal)?;
                     }
@@ -297,11 +291,9 @@ impl SemanticExecutionReachability {
             return Ok(true);
         }
 
-        let node = store
-            .node(id)
-            .ok_or(SemanticLoweringError::Store(SemanticStoreError::UnknownNode(
-                id,
-            )))?;
+        let node = store.node(id).ok_or(SemanticLoweringError::Store(
+            SemanticStoreError::UnknownNode(id),
+        ))?;
         let kind = match node.kind() {
             SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
                 ReachabilityKind::Object
@@ -348,13 +340,7 @@ impl SemanticExecutionReachability {
             .expect("tracked node remains present")
             .scene_root = scene_root;
         let is_reachable = self.nodes[&id].is_reachable();
-        self.propagate_reachability_transition(
-            store,
-            id,
-            was_reachable,
-            is_reachable,
-            journal,
-        )
+        self.propagate_reachability_transition(store, id, was_reachable, is_reachable, journal)
     }
 
     fn add_family_member(
@@ -442,13 +428,7 @@ impl SemanticExecutionReachability {
             return Ok(());
         }
         let is_reachable = self.nodes[&id].is_reachable();
-        self.propagate_reachability_transition(
-            store,
-            id,
-            was_reachable,
-            is_reachable,
-            journal,
-        )
+        self.propagate_reachability_transition(store, id, was_reachable, is_reachable, journal)
     }
 
     fn remove_reachable_parent(
@@ -510,9 +490,9 @@ impl SemanticExecutionReachability {
 
         let members = store
             .node(family)
-            .ok_or(SemanticLoweringError::Store(SemanticStoreError::UnknownNode(
-                family,
-            )))?
+            .ok_or(SemanticLoweringError::Store(
+                SemanticStoreError::UnknownNode(family),
+            ))?
             .members();
         self.record_touch(journal, family);
         if let ReachabilityKind::Family {
@@ -539,7 +519,9 @@ impl SemanticExecutionReachability {
         journal: &mut ReachabilityJournal,
     ) {
         let mut members = match self.nodes.get(&family).map(|node| &node.kind) {
-            Some(ReachabilityKind::Family { members }) => members.iter().copied().collect::<Vec<_>>(),
+            Some(ReachabilityKind::Family { members }) => {
+                members.iter().copied().collect::<Vec<_>>()
+            }
             _ => return,
         };
         // Semantic identity order is stable and avoids hash-iteration-dependent
@@ -739,7 +721,10 @@ mod tests {
         let mut reachability = SemanticExecutionReachability::from_store(&store).unwrap();
 
         store.detach_from_scene(object).unwrap();
-        assert!(reachability.sync_scene_root(&store, object).unwrap().is_empty());
+        assert!(reachability
+            .sync_scene_root(&store, object)
+            .unwrap()
+            .is_empty());
         assert!(reachability.is_object_reachable(object));
 
         store.detach_from_scene(family).unwrap();
@@ -756,14 +741,14 @@ mod tests {
         let identity_only = store.insert_authoring_object();
         let mut reachability = SemanticExecutionReachability::from_store(&store).unwrap();
 
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(root, identity_only);
-        let result = transaction.apply(&mut store).unwrap();
+        store.add_member(root, identity_only).unwrap();
+        let impacts = [SemanticMutationImpact::FamilyMemberAdded {
+            family: root,
+            member: identity_only,
+        }];
 
         assert_eq!(
-            reachability
-                .apply_transaction_result(&store, &result)
-                .unwrap_err(),
+            reachability.apply_impacts(&store, &impacts).unwrap_err(),
             SemanticLoweringError::MissingSemanticObjectState(identity_only)
         );
         assert!(reachability.is_reachable(root));
