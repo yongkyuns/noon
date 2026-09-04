@@ -153,8 +153,8 @@ impl RealtimeClock {
         if offset <= 0.0 {
             return Some(self.wall_origin);
         }
-        self.wall_origin
-            .checked_add(Duration::from_secs_f64(offset))
+        let offset = Duration::try_from_secs_f64(offset).ok()?;
+        self.wall_origin.checked_add(offset)
     }
 }
 
@@ -678,6 +678,12 @@ mod tests {
             clock.wall_deadline(15.5),
             Some(wall_origin + Duration::from_secs(3))
         );
+    }
+
+    #[test]
+    fn realtime_clock_rejects_unrepresentable_deadline_without_panicking() {
+        let clock = RealtimeClock::new(Instant::now(), 0.0);
+        assert_eq!(clock.wall_deadline(f64::MAX), None);
     }
 
     #[test]
