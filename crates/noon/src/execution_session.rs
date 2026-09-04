@@ -11,6 +11,8 @@ use noon_core::{
 };
 use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
+const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
+
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionInputError {
@@ -341,8 +343,8 @@ impl ExecutionSession {
                         "semantic native event declaration validates a scalar input signal"
                     )
                 };
-                if *current >= 1_000_000.0 {
-                    1.0
+                if *current >= NATIVE_EVENT_SEQUENCE_WRAP {
+                    0.0
                 } else {
                     *current + 1.0
                 }
@@ -524,6 +526,32 @@ mod tests {
             })
         );
         assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
+    }
+
+    #[test]
+    fn native_discrete_event_counter_matches_existing_bounded_wrap_convention() {
+        let mut store = SemanticStore::new();
+        let signal = store
+            .insert_semantic_input_signal(NATIVE_EVENT_SEQUENCE_WRAP)
+            .unwrap();
+        let source = NativeEventSource::PointerDown { button: 0 };
+        store
+            .bind_semantic_native_event_input(signal, source.clone())
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        session
+            .emit_native_event(NativeEventOccurrence::new(0, source))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.0);
     }
 
     #[test]
