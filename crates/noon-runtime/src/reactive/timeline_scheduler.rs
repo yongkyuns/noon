@@ -544,6 +544,25 @@ mod tests {
     }
 
     #[test]
+    fn next_event_time_tracks_strictly_future_boundary() {
+        let tracks = vec![
+            position_track(1, 0, 1.0, 2.0),
+            position_track(2, 1, 4.0, 1.0),
+        ];
+        let mut scheduler = TimelineEventScheduler::new(&tracks);
+        scheduler.seek(0.0);
+        assert_eq!(scheduler.next_event_time(), Some(1.0));
+        scheduler.advance(1.0);
+        assert_eq!(scheduler.next_event_time(), Some(3.0));
+        scheduler.advance(3.0);
+        assert_eq!(scheduler.next_event_time(), Some(4.0));
+        scheduler.advance(4.0);
+        assert_eq!(scheduler.next_event_time(), Some(5.0));
+        scheduler.advance(5.0);
+        assert_eq!(scheduler.next_event_time(), None);
+    }
+
+    #[test]
     fn relowering_one_large_timeline_channel_does_not_rebuild_other_groups() {
         let mut tracks = Vec::new();
         for index in 0..100_000u32 {
