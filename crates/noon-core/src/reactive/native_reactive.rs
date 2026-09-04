@@ -329,10 +329,54 @@ pub struct ReactiveProgram {
 }
 
 impl ReactiveProgram {
+    /// Compile through the migration-era normalized scene wrapper.
+    ///
+    /// Target validation itself is execution-domain based so the canonical semantic
+    /// lowering path can reuse the same native reactive VM without materializing a
+    /// `SceneDefinition`.
     pub fn compile(
         scene: &SceneDefinition,
         graph: &ReactiveGraphDefinition,
     ) -> Result<Self, ReactiveError> {
+        Self::compile_for_execution_domain(
+            scene.objects().iter().map(|object| object.id),
+            scene
+                .tracks()
+                .iter()
+                .map(|track| (track.object, track.property)),
+            graph,
+        )
+    }
+
+    /// Compile the existing native reactive graph against an execution object/driver
+    /// domain instead of an authored scene representation.
+    ///
+    /// Object identity and timeline-driver ownership are the only scene facts needed
+    /// for binding validation and execution classification. Duplicate object IDs are
+    /// collapsed to one execution-domain member while preserving first-seen order.
+    /// Timeline-driver entries must reference that domain; repeated entries are
+    /// allowed because multiple timeline tracks may share one object/property channel.
+    pub fn compile_for_execution_domain(
+        objects: impl IntoIterator<Item = ObjectId>,
+        timeline_drivers: impl IntoIterator<Item = (ObjectId, Property)>,
+        graph: &ReactiveGraphDefinition,
+    ) -> Result<Self, ReactiveError> {
+        let mut object_lookup = BTreeSet::new();
+        let mut execution_objects = Vec::new();
+        for object in objects {
+            if object_lookup.insert(object) {
+                execution_objects.push(object);
+            }
+        }
+
+        let timeline_drivers = timeline_drivers.into_iter().collect::<Vec<_>>();
+        if let Some((object, _)) = timeline_drivers
+            .iter()
+            .find(|(object, _)| !object_lookup.contains(object))
+        {
+            return Err(ReactiveError::UnknownObject(*object));
+        }
+
         let mut signal_indices = BTreeMap::new();
         for (index, signal) in graph.signals.iter().enumerate() {
             if signal_indices.insert(signal.id, index).is_some() {
@@ -409,7 +453,7 @@ impl ReactiveProgram {
             let signal_index = *signal_indices
                 .get(&binding.signal)
                 .ok_or(ReactiveError::UnknownSignal(binding.signal))?;
-            if scene.object(binding.object).is_none() {
+            if !object_lookup.contains(&binding.object) {
                 return Err(ReactiveError::UnknownObject(binding.object));
             }
             if seen_targets.contains(&(binding.object, binding.property)) {
@@ -418,11 +462,9 @@ impl ReactiveProgram {
                     property: binding.property,
                 });
             }
-            if scene
-                .tracks()
-                .iter()
-                .any(|track| track.object == binding.object && track.property == binding.property)
-            {
+            if timeline_drivers.iter().any(|(object, property)| {
+                *object == binding.object && *property == binding.property
+            }) {
                 return Err(ReactiveError::ConflictingDriver {
                     object: binding.object,
                     property: binding.property,
@@ -445,7 +487,7 @@ impl ReactiveProgram {
             });
         }
 
-        let analysis = build_execution_analysis(scene, graph);
+        let analysis = build_execution_analysis(&execution_objects, &timeline_drivers, graph);
         Ok(Self {
             signals: compiled_signals,
             signal_indices,
@@ -481,16 +523,19 @@ impl ReactiveProgram {
 }
 
 fn build_execution_analysis(
-    scene: &SceneDefinition,
+    objects: &[ObjectId],
+    timeline_drivers: &[(ObjectId, Property)],
     graph: &ReactiveGraphDefinition,
 ) -> ExecutionAnalysis {
     let mut analysis = ExecutionAnalysis::default();
-    for object in scene.objects() {
-        let timeline = scene.tracks().iter().any(|track| track.object == object.id);
+    for object in objects {
+        let timeline = timeline_drivers
+            .iter()
+            .any(|(candidate, _)| candidate == object);
         let reactive = graph
             .bindings
             .iter()
-            .any(|binding| binding.object == object.id);
+            .any(|binding| binding.object == *object);
         let class = match (timeline, reactive) {
             (false, false) => {
                 analysis.static_objects += 1;
@@ -510,7 +555,7 @@ fn build_execution_analysis(
             }
         };
         analysis.objects.push(ObjectExecution {
-            object: object.id,
+            object: *object,
             class,
         });
     }
@@ -1011,6 +1056,96 @@ mod tests {
         assert_eq!(
             analysis.class_for(mixed_object),
             Some(ObjectExecutionClass::TimelineAndReactive)
+        );
+    }
+
+    #[test]
+    fn execution_domain_compile_matches_scene_wrapper() {
+        let mut scene = SemanticScene::new();
+        let timeline_object = scene.add(GeometryRef::circle(1.0));
+        let reactive_object = scene.add(GeometryRef::circle(1.0));
+        scene
+            .definition_mut()
+            .animate_scalar(
+                timeline_object,
+                Property::Rotation,
+                0.0,
+                1.0,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            )
+            .unwrap();
+        let signal = scene.add_input(0.5_f32);
+        scene.bind(signal, reactive_object, Property::Opacity);
+
+        let direct = ReactiveProgram::compile_for_execution_domain(
+            scene.definition().objects().iter().map(|object| object.id),
+            scene
+                .definition()
+                .tracks()
+                .iter()
+                .map(|track| (track.object, track.property)),
+            scene.reactive(),
+        )
+        .unwrap();
+        let wrapped = scene.compile_reactive().unwrap();
+
+        assert_eq!(direct, wrapped);
+    }
+
+    #[test]
+    fn execution_domain_rejects_unknown_binding_target_without_scene_definition() {
+        let object = ObjectId::new(7);
+        let signal = SignalId::new(3);
+        let graph = ReactiveGraphDefinition::from_parts(
+            vec![SignalDefinition {
+                id: signal,
+                source: SignalSource::Input(ReactiveValue::Scalar(0.5)),
+            }],
+            vec![ReactiveBinding {
+                signal,
+                object,
+                property: Property::Opacity,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            ReactiveProgram::compile_for_execution_domain(
+                std::iter::empty::<ObjectId>(),
+                std::iter::empty::<(ObjectId, Property)>(),
+                &graph,
+            ),
+            Err(ReactiveError::UnknownObject(object))
+        );
+    }
+
+    #[test]
+    fn execution_domain_rejects_timeline_reactive_driver_conflict() {
+        let object = ObjectId::new(4);
+        let signal = SignalId::new(2);
+        let graph = ReactiveGraphDefinition::from_parts(
+            vec![SignalDefinition {
+                id: signal,
+                source: SignalSource::Input(ReactiveValue::Scalar(0.5)),
+            }],
+            vec![ReactiveBinding {
+                signal,
+                object,
+                property: Property::Opacity,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            ReactiveProgram::compile_for_execution_domain(
+                [object],
+                [(object, Property::Opacity)],
+                &graph,
+            ),
+            Err(ReactiveError::ConflictingDriver {
+                object,
+                property: Property::Opacity,
+            })
         );
     }
 
