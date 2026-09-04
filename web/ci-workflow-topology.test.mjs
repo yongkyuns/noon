@@ -16,6 +16,7 @@ const exactFamilies = new Map([
   ["compiler-cache-seed.yml", "cache-seed"],
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
+  ["native-host-smoke.yml", "native-host"],
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
