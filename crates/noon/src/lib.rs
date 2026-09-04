@@ -11,6 +11,7 @@ mod arc_authoring;
 mod camera_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
+mod execution_session;
 mod geometry_authoring;
 mod legacy;
 mod line_matcher_authoring;
@@ -27,6 +28,7 @@ pub use arc_authoring::*;
 pub use camera_authoring::*;
 pub use dashed_line_authoring::*;
 pub use elbow_authoring::*;
+pub use execution_session::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
@@ -44,15 +46,16 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        GeometryAuthoringError, LineMatcherAuthoringError, LoweredRetainedFamilyAnimation,
-        MathTypst, MovingCameraScene, Polygon, Polygram, PolygramAuthoringError, ReactiveScene,
-        ReactiveTimelineScene, RegularPolygon, RegularPolygram,
-        RetainedFamilyAnimationLoweringError, RetainedFamilyAnimationLoweringSession,
-        RetainedMobject, RetainedScene, RoundedRectangle, RoundedRectangleAuthoringError, Sector,
-        ShapeMatcherAuthoringError, Star, SurroundingRectangle, Text, TextAuthoringError, Triangle,
-        Typst, Underline, ValueTracker, VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY,
-        DEFAULT_CROSS_SCALE_FACTOR, DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO,
-        DEFAULT_DASH_LENGTH, DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
+        ExecutionSession, GeometryAuthoringError, LineMatcherAuthoringError,
+        LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene, Polygon, Polygram,
+        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
+        RegularPolygram, RetainedFamilyAnimationLoweringError,
+        RetainedFamilyAnimationLoweringSession, RetainedMobject, RetainedScene, RoundedRectangle,
+        RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
+        SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
+        VectorSignal, BACKGROUND_RECTANGLE_DEFAULT_FILL_OPACITY, DEFAULT_CROSS_SCALE_FACTOR,
+        DEFAULT_CROSS_STROKE_WIDTH, DEFAULT_DASHED_RATIO, DEFAULT_DASH_LENGTH,
+        DEFAULT_DOT_RADIUS, DEFAULT_ELBOW_ANGLE, DEFAULT_ELBOW_WIDTH,
         DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
         DEFAULT_ROUNDED_RECTANGLE_CORNER_RADIUS, DEFAULT_UNDERLINE_BUFF,
         SURROUNDING_RECTANGLE_DEFAULT_COLOR,
