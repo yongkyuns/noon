@@ -1,0 +1,57 @@
+name: Native Host Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-host-smoke.yml"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/noon-native/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-render-wgpu/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/native-host-smoke.yml"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/noon-native/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-render-wgpu/**"
+
+permissions:
+  contents: read
+
+jobs:
+  native-surface-presentation:
+    name: Rust semantic scene presents natively
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+
+      - name: Install virtual display and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1
+
+      - name: Present typed Rust semantic scene through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_typed_semantic_frame \
+              -- --ignored --nocapture --test-threads=1
