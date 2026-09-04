@@ -125,9 +125,10 @@ mod tests {
     fn semantic_store_runs_through_typed_session_into_renderer_facing_changes() {
         let mut store = SemanticStore::new();
         let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
-        let object = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 2.0 },
-        ));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 2.0,
+            }));
         store.attach_to_scene(object).unwrap();
         store
             .bind_semantic_signal(signal, object, SemanticObjectProperty::ObjectOpacity)
@@ -154,9 +155,10 @@ mod tests {
     #[test]
     fn execution_vm_signal_identity_does_not_escape_the_session_surface() {
         let mut store = SemanticStore::new();
-        let object = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 1.0 },
-        ));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
         store.attach_to_scene(object).unwrap();
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
