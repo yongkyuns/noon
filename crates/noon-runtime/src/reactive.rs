@@ -17,6 +17,9 @@ pub use signal_timeline::*;
 mod timeline_scheduler;
 pub use timeline_scheduler::*;
 
+mod wake;
+pub use wake::*;
+
 // Retained objects reuse the same deterministic scheduler until frame storage is unified.
 mod retained_runtime;
 pub use retained_runtime::*;
