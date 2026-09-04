@@ -14,6 +14,10 @@ use super::SemanticExecutionProjection;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
     TooManyObjects(usize),
+    UnsupportedSignalBindings {
+        node: SemanticNodeId,
+        count: usize,
+    },
     UnsupportedGeometryResource {
         node: SemanticNodeId,
         resource: GeometryResourceHandle,
@@ -30,6 +34,12 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::TooManyObjects(count) => {
                 write!(formatter, "semantic projection contains too many objects: {count}")
             }
+            Self::UnsupportedSignalBindings { node, count } => write!(
+                formatter,
+                "semantic object {}:{} carries {count} native-reactive signal binding(s) before compiled execution slots consume semantic bindings",
+                node.slot(),
+                node.generation()
+            ),
             Self::UnsupportedGeometryResource { node, resource } => write!(
                 formatter,
                 "semantic object {}:{} uses versioned geometry resource {}@{} before the compiled resource key carries version identity",
@@ -76,6 +86,13 @@ impl CompiledScene {
         let mut object_indices = BTreeMap::new();
 
         for (index, object) in ordered.into_iter().enumerate() {
+            if !object.signal_bindings.is_empty() {
+                return Err(SemanticCompiledSceneError::UnsupportedSignalBindings {
+                    node: object.semantic_id,
+                    count: object.signal_bindings.len(),
+                });
+            }
+
             let object_index = u32::try_from(index)
                 .map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
             let geometry = lower_geometry(object.semantic_id, object.content)?;
@@ -127,8 +144,8 @@ fn lower_geometry(
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Color, GeometryId, SemanticObjectState, SemanticPaint, SemanticStore, SemanticVec3,
-        TextResourceId,
+        Color, GeometryId, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
+        SemanticStore, SemanticVec3, TextResourceId,
     };
 
     use super::*;
@@ -190,6 +207,24 @@ mod tests {
         assert_eq!(compiled.objects()[1].base_transform.translation.y, 3.0);
         assert_eq!(compiled.objects()[1].base_style.fill.unwrap().alpha, 0.5);
         assert!(compiled.tracks().is_empty());
+    }
+
+    #[test]
+    fn native_reactive_bindings_are_not_silently_dropped() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
+        let node = store.insert_semantic_object(circle(1.0));
+        store.attach_to_scene(node).unwrap();
+        store
+            .bind_semantic_signal(signal, node, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompiledSceneError::UnsupportedSignalBindings { node, count: 1 }
+        );
     }
 
     #[test]
