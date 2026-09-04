@@ -199,9 +199,8 @@ mod tests {
             id: GeometryId::new(7),
             version: 3,
         };
-        let node = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Resource(resource),
-        ));
+        let node = store
+            .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
         store.attach_to_scene(node).unwrap();
 
         let mut index = SemanticExecutionIndex::new();
