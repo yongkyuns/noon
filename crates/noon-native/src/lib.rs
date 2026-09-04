@@ -109,6 +109,10 @@ struct NativeApp {
     started: Option<Instant>,
     force_full_redraw: bool,
     error: Option<NativeHostError>,
+    #[cfg(test)]
+    exit_after_present: bool,
+    #[cfg(test)]
+    presented_frame: bool,
 }
 
 impl NativeApp {
@@ -121,6 +125,10 @@ impl NativeApp {
             started: None,
             force_full_redraw: false,
             error: None,
+            #[cfg(test)]
+            exit_after_present: false,
+            #[cfg(test)]
+            presented_frame: false,
         }
     }
 
@@ -178,6 +186,10 @@ impl NativeApp {
         window.pre_present_notify();
         gpu.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+        #[cfg(test)]
+        {
+            self.presented_frame = true;
+        }
         if reconfigure_after_present {
             gpu.surface.configure(&gpu.device, &gpu.config);
         }
@@ -246,6 +258,11 @@ impl ApplicationHandler for NativeApp {
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.redraw() {
                     self.fail(event_loop, error);
+                    return;
+                }
+                #[cfg(test)]
+                if self.exit_after_present && self.presented_frame {
+                    event_loop.exit();
                 }
             }
             _ => {}
@@ -391,5 +408,41 @@ mod tests {
     fn zero_sized_camera_viewport_is_rejected() {
         assert!(camera_for_viewport(0, 720).is_err());
         assert!(camera_for_viewport(1280, 0).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an X11 display and a working native wgpu adapter"]
+    fn native_surface_smoke_presents_typed_semantic_frame() {
+        use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        let mut store = SemanticStore::new();
+        let circle = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.5,
+        }));
+        store.attach_to_scene(circle).unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        let mut event_loop_builder = EventLoop::builder();
+        event_loop_builder.with_any_thread(true);
+        let event_loop = event_loop_builder.build().unwrap();
+        event_loop.set_control_flow(ControlFlow::Poll);
+
+        let mut app = NativeApp::new(
+            session,
+            NativeViewportConfig {
+                title: "Noon native smoke".to_owned(),
+                width: 320,
+                height: 180,
+            },
+        );
+        app.exit_after_present = true;
+        event_loop.run_app(&mut app).unwrap();
+
+        if let Some(error) = app.error.take() {
+            panic!("native surface smoke failed before presentation: {error}");
+        }
+        assert!(app.presented_frame, "native host exited without presenting a frame");
     }
 }
