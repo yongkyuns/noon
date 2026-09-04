@@ -258,7 +258,6 @@ impl ApplicationHandler for NativeApp {
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.redraw() {
                     self.fail(event_loop, error);
-                    return;
                 }
                 #[cfg(test)]
                 if self.exit_after_present && self.presented_frame {
