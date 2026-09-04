@@ -303,6 +303,45 @@ impl ExecutionAnalysis {
     }
 }
 
+/// Minimal execution-target facts required to validate and classify one native
+/// reactive graph.
+///
+/// This is a compiler query surface, not another scene representation. Implementors
+/// expose object identity and timeline-driver facts already owned by their existing
+/// execution representation so `ReactiveProgram` can reuse one graph compiler for
+/// legacy `SceneDefinition` and lowered compiled scenes.
+pub trait ReactiveCompileTarget {
+    fn object_slot_count(&self) -> usize;
+    fn object_at_slot(&self, slot: usize) -> Option<ObjectId>;
+    fn contains_object(&self, object: ObjectId) -> bool;
+    fn has_timeline_driver(&self, object: ObjectId, property: Property) -> bool;
+    fn has_any_timeline_driver(&self, object: ObjectId) -> bool;
+}
+
+impl ReactiveCompileTarget for SceneDefinition {
+    fn object_slot_count(&self) -> usize {
+        self.objects().len()
+    }
+
+    fn object_at_slot(&self, slot: usize) -> Option<ObjectId> {
+        self.objects().get(slot).map(|object| object.id)
+    }
+
+    fn contains_object(&self, object: ObjectId) -> bool {
+        self.object(object).is_some()
+    }
+
+    fn has_timeline_driver(&self, object: ObjectId, property: Property) -> bool {
+        self.tracks()
+            .iter()
+            .any(|track| track.object == object && track.property == property)
+    }
+
+    fn has_any_timeline_driver(&self, object: ObjectId) -> bool {
+        self.tracks().iter().any(|track| track.object == object)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct CompiledSignal {
     id: SignalId,
@@ -329,8 +368,8 @@ pub struct ReactiveProgram {
 }
 
 impl ReactiveProgram {
-    pub fn compile(
-        scene: &SceneDefinition,
+    pub fn compile<T: ReactiveCompileTarget + ?Sized>(
+        target: &T,
         graph: &ReactiveGraphDefinition,
     ) -> Result<Self, ReactiveError> {
         let mut signal_indices = BTreeMap::new();
@@ -409,7 +448,7 @@ impl ReactiveProgram {
             let signal_index = *signal_indices
                 .get(&binding.signal)
                 .ok_or(ReactiveError::UnknownSignal(binding.signal))?;
-            if scene.object(binding.object).is_none() {
+            if !target.contains_object(binding.object) {
                 return Err(ReactiveError::UnknownObject(binding.object));
             }
             if seen_targets.contains(&(binding.object, binding.property)) {
@@ -418,11 +457,7 @@ impl ReactiveProgram {
                     property: binding.property,
                 });
             }
-            if scene
-                .tracks()
-                .iter()
-                .any(|track| track.object == binding.object && track.property == binding.property)
-            {
+            if target.has_timeline_driver(binding.object, binding.property) {
                 return Err(ReactiveError::ConflictingDriver {
                     object: binding.object,
                     property: binding.property,
@@ -445,7 +480,7 @@ impl ReactiveProgram {
             });
         }
 
-        let analysis = build_execution_analysis(scene, graph);
+        let analysis = build_execution_analysis(target, graph);
         Ok(Self {
             signals: compiled_signals,
             signal_indices,
@@ -480,17 +515,20 @@ impl ReactiveProgram {
     }
 }
 
-fn build_execution_analysis(
-    scene: &SceneDefinition,
+fn build_execution_analysis<T: ReactiveCompileTarget + ?Sized>(
+    target: &T,
     graph: &ReactiveGraphDefinition,
 ) -> ExecutionAnalysis {
     let mut analysis = ExecutionAnalysis::default();
-    for object in scene.objects() {
-        let timeline = scene.tracks().iter().any(|track| track.object == object.id);
+    for slot in 0..target.object_slot_count() {
+        let Some(object) = target.object_at_slot(slot) else {
+            continue;
+        };
+        let timeline = target.has_any_timeline_driver(object);
         let reactive = graph
             .bindings
             .iter()
-            .any(|binding| binding.object == object.id);
+            .any(|binding| binding.object == object);
         let class = match (timeline, reactive) {
             (false, false) => {
                 analysis.static_objects += 1;
@@ -509,10 +547,7 @@ fn build_execution_analysis(
                 ObjectExecutionClass::TimelineAndReactive
             }
         };
-        analysis.objects.push(ObjectExecution {
-            object: object.id,
-            class,
-        });
+        analysis.objects.push(ObjectExecution { object, class });
     }
     analysis
 }
