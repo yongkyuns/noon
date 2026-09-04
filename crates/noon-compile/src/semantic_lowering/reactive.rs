@@ -160,7 +160,11 @@ impl ReactiveLowerer<'_> {
             return Err(SemanticReactiveLoweringError::DependencyCycle(semantic_id));
         }
 
-        let source = self.store.semantic_signal_state(semantic_id)?.source().clone();
+        let source = self
+            .store
+            .semantic_signal_state(semantic_id)?
+            .source()
+            .clone();
         let signal = compatibility_signal_id(semantic_id);
         let source = self.lower_source(semantic_id, &source)?;
         self.visiting.remove(&semantic_id);
