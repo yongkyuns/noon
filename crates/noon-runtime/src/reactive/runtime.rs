@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use noon_compile::{CompileError, CompiledScene};
+use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, Property, ReactiveBinding, ReactiveError,
     ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
@@ -143,6 +143,23 @@ impl ReactiveRuntime {
 }
 
 impl SceneInstance {
+    /// Build runtime state directly from the canonical semantic execution lowering
+    /// handoff produced by `noon-compile`.
+    ///
+    /// The compiled scene and compute program were validated together by lowering,
+    /// so runtime only binds the already-lowered reactive targets to dense frame
+    /// indices and instantiates the existing compute VM. No authored scene is
+    /// reconstructed or recompiled at this boundary.
+    pub fn from_semantic_execution(lowered: SemanticExecutionLoweringOutput) -> Self {
+        let (compiled, reactive_projection, program) = lowered.into_execution_parts();
+        let reactive =
+            ReactiveRuntime::new(&compiled, reactive_projection.graph().bindings(), program);
+        let mut instance = Self::new(compiled);
+        instance.reactive = Some(reactive);
+        instance.reapply_reactive();
+        instance
+    }
+
     /// Compile a high-level semantic scene once and attach its validated native
     /// reactive program to this runtime instance.
     ///
