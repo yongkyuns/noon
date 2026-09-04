@@ -177,7 +177,7 @@ impl SemanticExecutionReachability {
                     // have removed this edge again. Consume only final live topology.
                     let edge_is_live = store
                         .node(member)
-                        .is_some_and(|node| node.parents().iter().any(|parent| *parent == family));
+                        .is_some_and(|node| node.parents().contains(&family));
                     if edge_is_live {
                         self.add_family_member(store, family, member, &mut journal)?;
                     }
