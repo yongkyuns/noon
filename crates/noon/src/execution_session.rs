@@ -1,3 +1,4 @@
+use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, CompilePatchError, SemanticAffineAnimationTrackError,
@@ -84,6 +85,7 @@ impl std::error::Error for ExecutionSessionCameraError {}
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
     Schedule(SemanticAnimationScheduleError),
+    Segment(ExecutionSegmentError),
     Payload(SemanticAffineAnimationTrackError),
     Publication(CompilePatchError),
     TrackIdExhausted,
@@ -95,6 +97,10 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             Self::Schedule(error) => {
                 write!(formatter, "semantic animation scheduling failed: {error}")
             }
+            Self::Segment(error) => write!(
+                formatter,
+                "semantic animation continuation segment failed: {error}"
+            ),
             Self::Payload(error) => write!(
                 formatter,
                 "semantic animation payload lowering failed: {error}"
@@ -114,6 +120,12 @@ impl std::error::Error for ExecutionSessionAnimationError {}
 impl From<SemanticAnimationScheduleError> for ExecutionSessionAnimationError {
     fn from(value: SemanticAnimationScheduleError) -> Self {
         Self::Schedule(value)
+    }
+}
+
+impl From<ExecutionSegmentError> for ExecutionSessionAnimationError {
+    fn from(value: ExecutionSegmentError) -> Self {
+        Self::Segment(value)
     }
 }
 
@@ -235,17 +247,34 @@ impl ExecutionSession {
 
     /// Activate one semantic animation root at the session's current deterministic time.
     ///
-    /// The authoritative semantic store remains caller-owned. Scheduling reads the
-    /// current declaration, affine payload lowering captures each target's effective
-    /// runtime transform at most once, and the session attaches execution-local track
-    /// identity. All emitted tracks are then preflighted and published as one existing
-    /// [`MutationTransaction`], so a failed activation cannot expose a partial timeline.
+    /// This compatibility surface preserves the existing frame-returning API. Continuation
+    /// consumers should use [`Self::activate_animation_segment`] so the logical segment comes
+    /// from the same compiler-resolved scheduling/publication pass rather than re-resolving
+    /// duration in an authoring facade.
     pub fn activate_animation(
         &mut self,
         store: &SemanticStore,
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<&FrameState, ExecutionSessionAnimationError> {
+        self.activate_animation_segment(store, root, play_options)?;
+        Ok(self.runtime.frame())
+    }
+
+    /// Activate one semantic animation and return its canonical logical continuation segment.
+    ///
+    /// The authoritative semantic store remains caller-owned. Scheduling reads the current
+    /// declaration once; the segment is constructed directly from that resolved projection's
+    /// `start_time` / `run_time`; affine payload lowering captures each target's effective
+    /// runtime transform at most once; and the session attaches execution-local track identity.
+    /// All emitted tracks are preflighted and published as one existing [`MutationTransaction`],
+    /// so a failed activation cannot expose a partial timeline or continuation boundary.
+    pub fn activate_animation_segment(
+        &mut self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         let schedule = lower_semantic_animation_schedule(
             store,
             &self.execution_index,
@@ -253,11 +282,12 @@ impl ExecutionSession {
             self.runtime.frame().time,
             play_options,
         )?;
+        let segment = ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
         let tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
             self.runtime.effective_transform(object)
         })?;
         if tracks.is_empty() {
-            return Ok(self.runtime.frame());
+            return Ok(segment);
         }
 
         let mut next_track_id = self.next_activation_track_id;
@@ -272,7 +302,7 @@ impl ExecutionSession {
         let transaction = MutationTransaction::from_mutations(mutations);
         self.runtime.apply_transaction(&transaction)?;
         self.next_activation_track_id = next_track_id;
-        Ok(self.runtime.frame())
+        Ok(segment)
     }
 
     /// Apply one native-reactive input using authoritative semantic signal identity.
@@ -485,6 +515,84 @@ mod tests {
             session.wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
+    }
+
+    #[test]
+    fn animation_activation_returns_resolved_continuation_segment() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(6.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(
+                object,
+                target,
+                AnimationOptions::new().run_time(4.0),
+            )
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.seek(3.0).unwrap();
+        session.take_frame_changes();
+
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.5)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(segment.start_time(), 3.0);
+        assert_eq!(segment.duration(), 1.5);
+        assert_eq!(segment.end_time(), 4.5);
+        assert_eq!(
+            session.segment_state(segment).timeline(),
+            TimelineWakeState::Continuous
+        );
+
+        session.advance_segment_to(segment, 100.0).unwrap();
+        assert_eq!(session.frame().time, 4.5);
+        assert!(session.segment_state(segment).is_complete());
+        assert_eq!(session.frame().objects[0].transform.translation.x, 6.0);
+    }
+
+    #[test]
+    fn animation_segment_overflow_fails_before_publication() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.seek(f64::MAX).unwrap();
+        session.take_frame_changes();
+        let before = session.frame().clone();
+
+        assert_eq!(
+            session.activate_animation_segment(&store, animation, linear_second()),
+            Err(ExecutionSessionAnimationError::Segment(
+                ExecutionSegmentError::EndTimeOverflow {
+                    start_time: f64::MAX,
+                    duration: 1.0,
+                }
+            ))
+        );
+        assert_eq!(session.frame(), &before);
+        assert!(session.wake_state().is_quiescent());
     }
 
     #[test]
