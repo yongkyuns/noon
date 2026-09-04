@@ -517,22 +517,12 @@ enum SourceItem {
     Geometry {
         object_id: ObjectId,
         scratch_id: ObjectId,
-        kind: ScratchGeometryKind,
     },
     FastGlyphRun {
         object_id: ObjectId,
         object_index: u32,
         run_index: u32,
     },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScratchGeometryKind {
-    Circle,
-    Rectangle,
-    Line,
-    Path,
-    Unsupported,
 }
 
 /// Persistent preparation state for the mixed retained renderer.
@@ -663,15 +653,14 @@ impl RetainedFramePreparer {
             self.text.can_update_objects_locally(frame, changes, texts, metrics)?
                 && self.changes_are_fast_text_only(frame, changes)
         };
-        let scratch_reused =
-            self.prepare_scratch_with_changes(
-                frame,
-                changes,
-                text_can_update_locally,
-                texts,
-                fonts,
-                geometries,
-            )?;
+        let scratch_reused = self.prepare_scratch_with_changes(
+            frame,
+            changes,
+            text_can_update_locally,
+            texts,
+            fonts,
+            geometries,
+        )?;
 
         if scratch_reused
             && changes.is_empty()
@@ -930,7 +919,10 @@ impl RetainedFramePreparer {
                 continue;
             }
             match &object.content {
-                ObjectContentRef::Geometry(geometry) => {
+                ObjectContentRef::Geometry(semantic_geometry) => {
+                    let geometry = frame
+                        .render_geometry(object_index)
+                        .unwrap_or(semantic_geometry);
                     let geometry = resolve_geometry_ref(geometry, geometries)?;
                     self.push_geometry(
                         object.id,
@@ -1010,7 +1002,6 @@ impl RetainedFramePreparer {
         morph: f32,
     ) {
         let scratch_id = ObjectId::new(self.scratch.objects.len() as u64);
-        let kind = geometry_kind(&geometry);
         self.scratch.objects.push(FrameObjectState {
             id: scratch_id,
             geometry,
@@ -1025,7 +1016,6 @@ impl RetainedFramePreparer {
         self.sources.push(SourceItem::Geometry {
             object_id,
             scratch_id,
-            kind,
         });
     }
 
@@ -1223,16 +1213,6 @@ fn push_coalesced_range(ranges: &mut Vec<std::ops::Range<u32>>, range: std::ops:
     ranges.push(range);
 }
 
-fn geometry_kind(geometry: &GeometryRef) -> ScratchGeometryKind {
-    match geometry {
-        GeometryRef::Circle { .. } => ScratchGeometryKind::Circle,
-        GeometryRef::Rectangle { .. } => ScratchGeometryKind::Rectangle,
-        GeometryRef::Line { .. } => ScratchGeometryKind::Line,
-        GeometryRef::VectorPath(_) => ScratchGeometryKind::Path,
-        GeometryRef::External(_) => ScratchGeometryKind::Unsupported,
-    }
-}
-
 fn resolve_geometry_ref(
     geometry: &GeometryRef,
     geometries: &GeometryResourceArena,
@@ -1306,51 +1286,43 @@ fn rebuild_mixed_order(
             SourceItem::Geometry {
                 object_id,
                 scratch_id,
-                kind,
-            } => match kind {
-                ScratchGeometryKind::Circle => {
-                    if let Some(&index) = circle_indices.get(scratch_id) {
-                        push_geometry_item(output, *object_id, RenderPrimitive::Circle, index);
+            } => {
+                // Preparation is allowed to change the renderer primitive for one
+                // semantic object. In particular analytic Create/Uncreate lowers a
+                // circle/rectangle/line to a temporary path. Recover painter order
+                // from the primitive that was actually prepared rather than from the
+                // source geometry kind captured before preparation.
+                if let Some(&index) = path_indices.get(scratch_id) {
+                    if let Some((batch, _)) = geometry
+                        .path_batches
+                        .iter()
+                        .enumerate()
+                        .find(|(_, batch)| batch.instance_range.contains(&(index as u32)))
+                    {
+                        push_geometry_item(
+                            output,
+                            *object_id,
+                            RenderPrimitive::Path { batch },
+                            index,
+                        );
                     }
-                }
-                ScratchGeometryKind::Rectangle => {
-                    if let Some(&index) = rectangle_indices.get(scratch_id) {
-                        push_geometry_item(output, *object_id, RenderPrimitive::Rectangle, index);
-                    }
-                }
-                ScratchGeometryKind::Line => {
+                    // Create reveal heads are packed as lines sharing the scratch ID
+                    // and must remain immediately above the path body.
                     if let Some(indices) = line_indices.get(scratch_id) {
                         for &index in indices {
                             push_geometry_item(output, *object_id, RenderPrimitive::Line, index);
                         }
                     }
-                }
-                ScratchGeometryKind::Path => {
-                    if let Some(&index) = path_indices.get(scratch_id) {
-                        if let Some((batch, _)) = geometry
-                            .path_batches
-                            .iter()
-                            .enumerate()
-                            .find(|(_, batch)| batch.instance_range.contains(&(index as u32)))
-                        {
-                            push_geometry_item(
-                                output,
-                                *object_id,
-                                RenderPrimitive::Path { batch },
-                                index,
-                            );
-                        }
-                    }
-                    // `Create` reveal heads are packed as a line sharing the scratch
-                    // ID and must remain immediately above this path body.
-                    if let Some(indices) = line_indices.get(scratch_id) {
-                        for &index in indices {
-                            push_geometry_item(output, *object_id, RenderPrimitive::Line, index);
-                        }
+                } else if let Some(&index) = circle_indices.get(scratch_id) {
+                    push_geometry_item(output, *object_id, RenderPrimitive::Circle, index);
+                } else if let Some(&index) = rectangle_indices.get(scratch_id) {
+                    push_geometry_item(output, *object_id, RenderPrimitive::Rectangle, index);
+                } else if let Some(indices) = line_indices.get(scratch_id) {
+                    for &index in indices {
+                        push_geometry_item(output, *object_id, RenderPrimitive::Line, index);
                     }
                 }
-                ScratchGeometryKind::Unsupported => {}
-            },
+            }
         }
     }
 }
