@@ -271,11 +271,27 @@ impl NativeApp {
         })
     }
 
+    fn realtime_clock_for_timeline(
+        &mut self,
+        timeline: TimelineWakeState,
+        now: Instant,
+    ) -> Option<RealtimeClock> {
+        if matches!(timeline, TimelineWakeState::Quiescent) {
+            self.realtime_clock = None;
+            return None;
+        }
+        if self.realtime_clock.is_none() {
+            self.realtime_clock = Some(RealtimeClock::new(now, self.session.frame().time));
+        }
+        self.realtime_clock
+    }
+
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
-        let Some(clock) = self.realtime_clock else {
+        let timeline = self.session.wake_state().timeline();
+        let Some(clock) = self.realtime_clock_for_timeline(timeline, now) else {
             return Ok(());
         };
-        match self.session.wake_state().timeline() {
+        match timeline {
             TimelineWakeState::Continuous => {
                 self.session.advance_to(clock.scene_time_at(now))?;
             }
@@ -288,7 +304,15 @@ impl NativeApp {
                         .advance_to(clock.scene_time_at(now).max(scene_time))?;
                 }
             }
-            TimelineWakeState::Quiescent => {}
+            TimelineWakeState::Quiescent => {
+                unreachable!("quiescent timeline has no realtime clock")
+            }
+        }
+        if matches!(
+            self.session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        ) {
+            self.realtime_clock = None;
         }
         Ok(())
     }
@@ -390,10 +414,6 @@ impl ApplicationHandler for NativeApp {
             match pollster::block_on(NativeGpu::new(window, camera)) {
                 Ok(gpu) => {
                     self.gpu = Some(gpu);
-                    self.realtime_clock = Some(RealtimeClock::new(
-                        Instant::now(),
-                        self.session.frame().time,
-                    ));
                     self.force_full_redraw = true;
                 }
                 Err(error) => self.fail(event_loop, error),
@@ -460,7 +480,7 @@ impl ApplicationHandler for NativeApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(window) = self.window.as_ref() else {
+        let Some(window) = self.window.as_ref().cloned() else {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         };
@@ -476,13 +496,16 @@ impl ApplicationHandler for NativeApp {
             return;
         }
 
-        match wake.timeline() {
+        let timeline = wake.timeline();
+        let now = Instant::now();
+        let clock = self.realtime_clock_for_timeline(timeline, now);
+        match timeline {
             TimelineWakeState::Continuous => {
                 window.request_redraw();
                 event_loop.set_control_flow(ControlFlow::Poll);
             }
             TimelineWakeState::Deadline(scene_time) => {
-                let Some(clock) = self.realtime_clock else {
+                let Some(clock) = clock else {
                     window.request_redraw();
                     event_loop.set_control_flow(ControlFlow::Wait);
                     return;
@@ -491,7 +514,7 @@ impl ApplicationHandler for NativeApp {
                     event_loop.set_control_flow(ControlFlow::Wait);
                     return;
                 };
-                if deadline <= Instant::now() {
+                if deadline <= now {
                     window.request_redraw();
                     event_loop.set_control_flow(ControlFlow::Wait);
                 } else {
@@ -684,6 +707,65 @@ mod tests {
     fn realtime_clock_rejects_unrepresentable_deadline_without_panicking() {
         let clock = RealtimeClock::new(Instant::now(), 0.0);
         assert_eq!(clock.wall_deadline(f64::MAX), None);
+    }
+
+    #[test]
+    fn realtime_clock_reanchors_when_timed_work_starts_after_quiescence() {
+        use noon_core::{
+            AnimationOptions, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
+            StoredGeometry,
+        };
+
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut app = NativeApp::new(session, NativeViewportConfig::default());
+
+        let original_wall = Instant::now();
+        app.realtime_clock = Some(RealtimeClock::new(original_wall, 0.0));
+        assert!(app
+            .realtime_clock_for_timeline(TimelineWakeState::Quiescent, original_wall)
+            .is_none());
+        assert!(app.realtime_clock.is_none());
+
+        let restart_wall = original_wall + Duration::from_secs(30);
+        app.session
+            .activate_animation(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        app.advance_realtime_timeline(restart_wall).unwrap();
+        assert_eq!(app.session.frame().time, 0.0);
+
+        app.advance_realtime_timeline(restart_wall + Duration::from_millis(500))
+            .unwrap();
+        assert!((app.session.frame().time - 0.5).abs() < 1.0e-9);
+        assert_eq!(
+            app.session.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+
+        app.advance_realtime_timeline(restart_wall + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(
+            app.session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
+        assert!(app.realtime_clock.is_none());
     }
 
     #[test]
