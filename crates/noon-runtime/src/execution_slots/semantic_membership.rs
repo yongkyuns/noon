@@ -29,7 +29,7 @@ pub fn apply_execution_slot_membership_changes(
             .insert_object(*object)
             .expect("membership batch was fully preflighted");
         stats.slots_written += 1;
-        stats.slots_reused += usize::from(slot.slot() as usize < capacity_before);
+        stats.slots_reused += usize::from((slot.slot() as usize) < capacity_before);
     }
     Ok(stats)
 }
