@@ -418,9 +418,10 @@ mod tests {
         use winit::platform::x11::EventLoopBuilderExtX11;
 
         let mut store = SemanticStore::new();
-        let circle = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-            radius: 1.5,
-        }));
+        let circle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.5,
+            }));
         store.attach_to_scene(circle).unwrap();
         let session = ExecutionSession::from_semantic_store(&store).unwrap();
 
@@ -443,6 +444,9 @@ mod tests {
         if let Some(error) = app.error.take() {
             panic!("native surface smoke failed before presentation: {error}");
         }
-        assert!(app.presented_frame, "native host exited without presenting a frame");
+        assert!(
+            app.presented_frame,
+            "native host exited without presenting a frame"
+        );
     }
 }
