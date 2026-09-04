@@ -18,6 +18,9 @@ pub enum SemanticCompiledSceneError {
         node: SemanticNodeId,
         count: usize,
     },
+    InvalidAnalyticGeometry {
+        node: SemanticNodeId,
+    },
     UnsupportedGeometryResource {
         node: SemanticNodeId,
         resource: GeometryResourceHandle,
@@ -37,6 +40,12 @@ impl std::fmt::Display for SemanticCompiledSceneError {
             Self::UnsupportedSignalBindings { node, count } => write!(
                 formatter,
                 "semantic object {}:{} carries {count} native-reactive signal binding(s) before compiled execution slots consume semantic bindings",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidAnalyticGeometry { node } => write!(
+                formatter,
+                "semantic object {}:{} contains non-finite analytic geometry",
                 node.slot(),
                 node.generation()
             ),
@@ -124,12 +133,25 @@ fn lower_geometry(
 ) -> Result<GeometryRef, SemanticCompiledSceneError> {
     match content {
         SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
+            if !radius.is_finite() {
+                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
+            }
             Ok(GeometryRef::circle(radius))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
+            if !size.x.is_finite() || !size.y.is_finite() {
+                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
+            }
             Ok(GeometryRef::Rectangle { size })
         }
         SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) => {
+            if !start.x.is_finite()
+                || !start.y.is_finite()
+                || !end.x.is_finite()
+                || !end.y.is_finite()
+            {
+                return Err(SemanticCompiledSceneError::InvalidAnalyticGeometry { node });
+            }
             Ok(GeometryRef::line(start, end))
         }
         SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) => {
@@ -145,7 +167,7 @@ fn lower_geometry(
 mod tests {
     use noon_core::{
         Color, GeometryId, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-        SemanticStore, SemanticVec3, TextResourceId,
+        SemanticStore, SemanticVec3, TextResourceId, Vec2,
     };
 
     use super::*;
@@ -207,6 +229,33 @@ mod tests {
         assert_eq!(compiled.objects()[1].base_transform.translation.y, 3.0);
         assert_eq!(compiled.objects()[1].base_style.fill.unwrap().alpha, 0.5);
         assert!(compiled.tracks().is_empty());
+    }
+
+    #[test]
+    fn non_finite_analytic_geometry_is_rejected_before_compiled_scene_creation() {
+        let cases = [
+            StoredGeometry::Circle { radius: f32::NAN },
+            StoredGeometry::Rectangle {
+                size: Vec2::new(f32::INFINITY, 1.0),
+            },
+            StoredGeometry::Line {
+                start: Vec2::new(0.0, f32::NEG_INFINITY),
+                end: Vec2::ZERO,
+            },
+        ];
+
+        for geometry in cases {
+            let mut store = SemanticStore::new();
+            let node = store.insert_semantic_object(SemanticObjectState::new(geometry));
+            store.attach_to_scene(node).unwrap();
+
+            let mut index = SemanticExecutionIndex::new();
+            let projection = index.lower_scene(&store).unwrap();
+            assert_eq!(
+                CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+                SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+            );
+        }
     }
 
     #[test]
