@@ -1,7 +1,7 @@
 use noon_compile::{lower_semantic_execution, CompiledScene, SemanticExecutionIndex};
 use noon_core::{
-    Color, GeometryRef, SceneDefinition, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-    SemanticStore, SemanticVec3, StoredGeometry, Style, Transform2D, Vec2,
+    Color, GeometryRef, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticVec3, StoredGeometry, Style, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -38,7 +38,9 @@ fn canonical_semantic_execution_output_builds_runtime_without_recompiling_author
 
 #[test]
 fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_observables() {
-    let mut legacy_scene = SceneDefinition::new();
+    // Keep the migration-only flat scene type inferred through the existing compiler
+    // entry instead of introducing a new named dependency on that authored authority.
+    let mut legacy_scene = Default::default();
     let legacy_circle = legacy_scene.add(GeometryRef::circle(2.0));
     {
         let object = legacy_scene.object_mut(legacy_circle).unwrap();
