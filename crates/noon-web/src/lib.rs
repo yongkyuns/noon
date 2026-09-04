@@ -13,6 +13,7 @@ mod determinism;
 mod direct_execution_smoke;
 mod execution_canvas;
 mod execution_transport;
+mod execution_wake;
 mod family_animation_authoring;
 mod family_bounds;
 mod family_write_authoring;
@@ -68,6 +69,7 @@ pub use direct_execution_smoke::*;
 #[cfg(target_arch = "wasm32")]
 pub use execution_canvas::*;
 pub use execution_transport::*;
+pub use execution_wake::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_animation_authoring::*;
 pub use family_bounds::*;
