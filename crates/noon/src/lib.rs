@@ -32,6 +32,7 @@ pub use execution_session::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
+pub use noon_runtime::{EvaluationError, FrameChanges, FrameObjectState, FrameState};
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use retained_family_authoring_lowering::*;
@@ -46,10 +47,10 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        ExecutionSession, GeometryAuthoringError, LineMatcherAuthoringError,
-        LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene, Polygon, Polygram,
-        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
-        RegularPolygram, RetainedFamilyAnimationLoweringError,
+        ExecutionSession, ExecutionSessionInputError, GeometryAuthoringError,
+        LineMatcherAuthoringError, LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene,
+        Polygon, Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene,
+        RegularPolygon, RegularPolygram, RetainedFamilyAnimationLoweringError,
         RetainedFamilyAnimationLoweringSession, RetainedMobject, RetainedScene, RoundedRectangle,
         RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
         SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
