@@ -104,6 +104,125 @@ impl BrowserExecutionWakePlan {
     }
 }
 
+/// Concrete browser callback primitive after mapping authored scene time onto the
+/// browser's monotonic high-resolution wall clock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BrowserHostWake {
+    AnimationFrame,
+    TimerAfterMilliseconds(f64),
+    Idle,
+}
+
+/// One browser-host scheduling observation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrowserExecutionWakeDirective {
+    present_now: bool,
+    wake: BrowserHostWake,
+}
+
+impl BrowserExecutionWakeDirective {
+    pub const fn present_now(self) -> bool {
+        self.present_now
+    }
+
+    pub const fn wake(self) -> BrowserHostWake {
+        self.wake
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BrowserRealtimeAnchor {
+    wall_origin_ms: f64,
+    scene_origin: f64,
+}
+
+/// Stateful wall↔authored-time mapping for the direct browser execution host.
+///
+/// The mapping deliberately disappears while the runtime is idle. When timed work
+/// starts again, the next host observation anchors the current authored time to the
+/// current browser monotonic timestamp, so elapsed wall time while idle is never
+/// charged to newly activated authored work. This is only a clock conversion layer;
+/// cadence and deadlines remain owned by [`BrowserExecutionWakePlan`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BrowserExecutionWakeClock {
+    anchor: Option<BrowserRealtimeAnchor>,
+}
+
+impl BrowserExecutionWakeClock {
+    /// Realize one target-neutral wake plan against a browser monotonic timestamp.
+    ///
+    /// `wall_time_ms` is expected to share the `performance.now()` / RAF timestamp
+    /// time origin. Invalid or unrepresentable values fail closed with `None`.
+    pub fn directive(
+        &mut self,
+        plan: BrowserExecutionWakePlan,
+        wall_time_ms: f64,
+        current_scene_time: f64,
+    ) -> Option<BrowserExecutionWakeDirective> {
+        if !wall_time_ms.is_finite() || !current_scene_time.is_finite() {
+            return None;
+        }
+
+        let wake = match plan.cadence() {
+            BrowserExecutionCadence::Idle => {
+                self.anchor = None;
+                BrowserHostWake::Idle
+            }
+            BrowserExecutionCadence::AnimationFrame => {
+                self.ensure_anchor(wall_time_ms, current_scene_time);
+                BrowserHostWake::AnimationFrame
+            }
+            BrowserExecutionCadence::TimerAtSceneTime(scene_deadline) => {
+                if !scene_deadline.is_finite() {
+                    return None;
+                }
+                let anchor = self.ensure_anchor(wall_time_ms, current_scene_time);
+                let scene_offset_ms = (scene_deadline - anchor.scene_origin) * 1_000.0;
+                if !scene_offset_ms.is_finite() {
+                    return None;
+                }
+                let wall_deadline_ms = if scene_offset_ms <= 0.0 {
+                    anchor.wall_origin_ms
+                } else {
+                    anchor.wall_origin_ms + scene_offset_ms
+                };
+                if !wall_deadline_ms.is_finite() {
+                    return None;
+                }
+                BrowserHostWake::TimerAfterMilliseconds((wall_deadline_ms - wall_time_ms).max(0.0))
+            }
+        };
+
+        Some(BrowserExecutionWakeDirective {
+            present_now: plan.present_now(),
+            wake,
+        })
+    }
+
+    /// Map one browser monotonic timestamp into authored scene time while timed work
+    /// is active. Timestamps before the current anchor saturate at the authored origin.
+    pub fn scene_time_at(self, wall_time_ms: f64) -> Option<f64> {
+        if !wall_time_ms.is_finite() {
+            return None;
+        }
+        let anchor = self.anchor?;
+        let elapsed_seconds = ((wall_time_ms - anchor.wall_origin_ms).max(0.0)) / 1_000.0;
+        let scene_time = anchor.scene_origin + elapsed_seconds;
+        scene_time.is_finite().then_some(scene_time)
+    }
+
+    fn ensure_anchor(
+        &mut self,
+        wall_time_ms: f64,
+        current_scene_time: f64,
+    ) -> BrowserRealtimeAnchor {
+        *self.anchor.get_or_insert(BrowserRealtimeAnchor {
+            wall_origin_ms: wall_time_ms,
+            scene_origin: current_scene_time,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
@@ -182,5 +301,47 @@ mod tests {
         session.advance_segment_to(segment, 9.0).unwrap();
         assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
         assert_eq!(session.frame().time, 2.0);
+    }
+
+    #[test]
+    fn browser_realtime_clock_does_not_charge_quiescent_wall_time_to_later_work() {
+        let mut clock = BrowserExecutionWakeClock::default();
+        let idle = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Quiescent);
+        assert_eq!(
+            clock.directive(idle, 1_000.0, 0.0).unwrap().wake(),
+            BrowserHostWake::Idle
+        );
+        assert_eq!(clock.scene_time_at(30_000.0), None);
+
+        let active = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
+        assert_eq!(
+            clock.directive(active, 31_000.0, 0.0).unwrap().wake(),
+            BrowserHostWake::AnimationFrame
+        );
+        assert_eq!(clock.scene_time_at(31_000.0), Some(0.0));
+        assert_eq!(clock.scene_time_at(31_500.0), Some(0.5));
+
+        clock.directive(idle, 32_000.0, 1.0).unwrap();
+        assert_eq!(clock.scene_time_at(60_000.0), None);
+
+        let deadline =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(3.0));
+        assert_eq!(
+            clock.directive(deadline, 62_000.0, 1.0).unwrap().wake(),
+            BrowserHostWake::TimerAfterMilliseconds(2_000.0)
+        );
+        assert_eq!(clock.scene_time_at(62_000.0), Some(1.0));
+    }
+
+    #[test]
+    fn browser_realtime_clock_rejects_invalid_or_unrepresentable_wall_mapping() {
+        let mut clock = BrowserExecutionWakeClock::default();
+        let active = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
+        assert_eq!(clock.directive(active, f64::NAN, 0.0), None);
+        assert_eq!(clock.directive(active, 0.0, f64::INFINITY), None);
+
+        let deadline =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(f64::MAX));
+        assert_eq!(clock.directive(deadline, 0.0, 0.0), None);
     }
 }

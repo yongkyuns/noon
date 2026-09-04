@@ -28,7 +28,8 @@ mod wasm {
 
     use crate::{
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
-        ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
+        BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
+        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
     };
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
@@ -138,6 +139,14 @@ mod wasm {
         present_call: DiagnosticPresentationCall,
     }
 
+    #[derive(Clone, Copy, Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DirectWakeDirectiveJson {
+        present_now: bool,
+        cadence: &'static str,
+        delay_ms: Option<f64>,
+    }
+
     struct InitializedGpu {
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
@@ -186,6 +195,13 @@ mod wasm {
             }
         }
 
+        fn direct(&self) -> Option<&ExecutionSession> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(session) => Some(session),
+            }
+        }
+
         fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
             match self {
                 Self::Transport(_) => None,
@@ -206,6 +222,7 @@ mod wasm {
         drawable: bool,
         source: CanvasExecutionSource,
         pending_changes: FrameChanges,
+        direct_wake_clock: BrowserExecutionWakeClock,
         preparer: FramePreparer,
         renderer: GpuRenderer,
         camera_center: Vec2,
@@ -290,7 +307,11 @@ mod wasm {
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
-            if !self.drawable || self.pending_changes.is_empty() {
+            let changes_pending = match &self.source {
+                CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
+                CanvasExecutionSource::Direct(session) => session.wake_state().frame_pending(),
+            };
+            if !self.drawable || !changes_pending {
                 return Ok(false);
             }
 
@@ -317,7 +338,11 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            let changes = mem::take(&mut self.pending_changes);
+            let changes = if let Some(session) = self.source.direct_mut() {
+                session.take_frame_changes()
+            } else {
+                mem::take(&mut self.pending_changes)
+            };
             let frame = self
                 .source
                 .frame()
@@ -435,6 +460,81 @@ mod wasm {
 
         pub fn time(&self) -> f64 {
             self.source.frame().map_or(0.0, |frame| frame.time)
+        }
+
+        /// Return one direct-session browser scheduling directive. JavaScript owns
+        /// only the concrete RAF/timer handles; cadence, deadlines, and presentation
+        /// dirtiness remain derived from the authoritative ExecutionSession.
+        #[wasm_bindgen(js_name = directWakeDirectiveJson)]
+        pub fn direct_wake_directive_json(&mut self, wall_time_ms: f64) -> Result<String, JsValue> {
+            let (plan, scene_time) = self.direct_wake_observation()?;
+            let directive = self
+                .direct_wake_clock
+                .directive(plan, wall_time_ms, scene_time)
+                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            let (cadence, delay_ms) = match directive.wake() {
+                BrowserHostWake::AnimationFrame => ("animation-frame", None),
+                BrowserHostWake::TimerAfterMilliseconds(delay_ms) => ("timer", Some(delay_ms)),
+                BrowserHostWake::Idle => ("idle", None),
+            };
+            serde_json::to_string(&DirectWakeDirectiveJson {
+                present_now: directive.present_now(),
+                cadence,
+                delay_ms,
+            })
+            .map_err(js_error)
+        }
+
+        /// Advance direct authored time from one browser monotonic callback timestamp.
+        ///
+        /// A RAF advances continuously. A deterministic timer advances only after its
+        /// runtime-authored deadline is due. Idle observations never advance scene time.
+        #[wasm_bindgen(js_name = advanceDirectRealtime)]
+        pub fn advance_direct_realtime(&mut self, wall_time_ms: f64) -> Result<bool, JsValue> {
+            let (plan, scene_time) = self.direct_wake_observation()?;
+            let directive = self
+                .direct_wake_clock
+                .directive(plan, wall_time_ms, scene_time)
+                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+
+            let target_time = match (directive.wake(), plan.cadence()) {
+                (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => {
+                    Some(self.direct_scene_time_at(wall_time_ms)?)
+                }
+                (
+                    BrowserHostWake::TimerAfterMilliseconds(delay_ms),
+                    BrowserExecutionCadence::TimerAtSceneTime(scene_deadline),
+                ) if delay_ms <= 0.0 => {
+                    Some(self.direct_scene_time_at(wall_time_ms)?.max(scene_deadline))
+                }
+                (BrowserHostWake::TimerAfterMilliseconds(_), _) | (BrowserHostWake::Idle, _) => {
+                    None
+                }
+                _ => {
+                    return Err(js_message(
+                        "direct execution wake directive diverged from session cadence",
+                    ));
+                }
+            };
+
+            let Some(target_time) = target_time else {
+                return Ok(false);
+            };
+            let (pending, camera) = {
+                let session = self.source.direct_mut().ok_or_else(|| {
+                    js_message("direct realtime APIs require a direct ExecutionSession source")
+                })?;
+                session.advance_to(target_time).map_err(js_error)?;
+                let camera = session.camera().map_err(js_error)?;
+                (session.wake_state().frame_pending(), camera)
+            };
+            self.sync_camera(camera)?;
+
+            let (next_plan, next_scene_time) = self.direct_wake_observation()?;
+            self.direct_wake_clock
+                .directive(next_plan, wall_time_ms, next_scene_time)
+                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            Ok(pending)
         }
 
         #[wasm_bindgen(js_name = objectCount)]
@@ -715,14 +815,13 @@ mod wasm {
         /// WASM bootstrap, but no scene/execution document or transport mirror is introduced.
         pub async fn create_from_execution_session(
             canvas: OffscreenCanvas,
-            mut session: ExecutionSession,
+            session: ExecutionSession,
         ) -> Result<Self, JsValue> {
             let camera = session.camera().map_err(js_error)?;
-            let pending_changes = session.take_frame_changes();
             Self::create_with_source(
                 canvas,
                 CanvasExecutionSource::Direct(session),
-                pending_changes,
+                FrameChanges::default(),
                 camera.center,
                 camera.height,
             )
@@ -732,33 +831,33 @@ mod wasm {
         /// Evaluate a direct Rust/WASM execution session and publish only its runtime changes.
         pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let (pending_changes, camera) = {
+            let (pending, camera) = {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
                 session.evaluate(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
-                (session.take_frame_changes(), camera)
+                (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
-            self.pending_changes = pending_changes;
-            Ok(!self.pending_changes.is_empty())
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            Ok(pending)
         }
 
         /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let (pending_changes, camera) = {
+            let (pending, camera) = {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
                 session.seek(time).map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
-                (session.take_frame_changes(), camera)
+                (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
-            self.pending_changes = pending_changes;
-            Ok(!self.pending_changes.is_empty())
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            Ok(pending)
         }
 
         /// Apply one semantic native-reactive input without exposing the execution VM signal ID.
@@ -768,7 +867,7 @@ mod wasm {
             value: impl Into<ReactiveValue>,
         ) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let (pending_changes, camera) = {
+            let (pending, camera) = {
                 let session = self.source.direct_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
@@ -776,25 +875,38 @@ mod wasm {
                     .set_reactive_input(signal, value)
                     .map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
-                (session.take_frame_changes(), camera)
+                (session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
-            self.pending_changes = pending_changes;
-            Ok(!self.pending_changes.is_empty())
+            Ok(pending)
         }
 
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
-            if self.source.transport().is_some() {
-                return Err(js_message(
-                    "typed execution APIs require a direct ExecutionSession source",
-                ));
-            }
-            if !self.pending_changes.is_empty() {
+            let session = self.source.direct().ok_or_else(|| {
+                js_message("typed execution APIs require a direct ExecutionSession source")
+            })?;
+            if session.wake_state().frame_pending() {
                 return Err(js_message(
                     "direct execution host must present pending runtime changes before advancing again",
                 ));
             }
             Ok(())
+        }
+
+        fn direct_wake_observation(&self) -> Result<(BrowserExecutionWakePlan, f64), JsValue> {
+            let session = self.source.direct().ok_or_else(|| {
+                js_message("direct wake APIs require a direct ExecutionSession source")
+            })?;
+            Ok((
+                BrowserExecutionWakePlan::from_session(session),
+                session.frame().time,
+            ))
+        }
+
+        fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
+            self.direct_wake_clock
+                .scene_time_at(wall_time_ms)
+                .ok_or_else(|| js_message("direct execution wake clock has no active time anchor"))
         }
 
         async fn create_with_source(
@@ -830,6 +942,7 @@ mod wasm {
                 drawable: true,
                 source,
                 pending_changes,
+                direct_wake_clock: BrowserExecutionWakeClock::default(),
                 preparer: FramePreparer::new(),
                 renderer,
                 camera_center,
