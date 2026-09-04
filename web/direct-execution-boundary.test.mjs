@@ -13,6 +13,7 @@ const browserSmokeHtml = await readFile(
   new URL("./browser-smoke.html", import.meta.url),
   "utf8",
 );
+const legacySceneDocumentType = ["Scene", "Spec"].join("");
 
 for (const required of [
   "SemanticStore::new()",
@@ -23,7 +24,7 @@ for (const required of [
 }
 for (const forbidden of [
   "serde_json",
-  "SceneSpec",
+  legacySceneDocumentType,
   "ExecutionFrameMirror",
   "initial_delta_json",
   "apply_json",
