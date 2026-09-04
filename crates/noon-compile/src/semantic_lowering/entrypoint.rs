@@ -63,8 +63,12 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Object(error) => write!(formatter, "semantic object lowering failed: {error}"),
-            Self::Reactive(error) => write!(formatter, "semantic reactive lowering failed: {error}"),
-            Self::Compiled(error) => write!(formatter, "compiled execution lowering failed: {error}"),
+            Self::Reactive(error) => {
+                write!(formatter, "semantic reactive lowering failed: {error}")
+            }
+            Self::Compiled(error) => {
+                write!(formatter, "compiled execution lowering failed: {error}")
+            }
         }
     }
 }
@@ -89,8 +93,7 @@ pub fn lower_semantic_execution(
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
-    let compiled =
-        CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
+    let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
 
     *index = staged_index;
     Ok(SemanticExecutionLoweringOutput { compiled, reactive })
