@@ -1,22 +1,29 @@
 //! Native window lifecycle for Noon's typed in-process execution path.
 //!
 //! This crate owns the OS event loop, window, wgpu surface/device/queue, resize,
-//! realtime clock, frame acquisition, submission, and presentation. Semantic state,
-//! lowering/runtime behavior, and retained GPU rendering remain owned by their
-//! existing engine layers.
+//! realtime clock, native platform input collection, frame acquisition, submission,
+//! and presentation. Semantic state, input declarations, lowering/runtime behavior,
+//! and retained GPU rendering remain owned by their existing engine layers.
 
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use noon::{EvaluationError, ExecutionSession, ExecutionSessionCameraError, FrameChanges};
-use noon_core::{Camera2DState, Vec2};
+use noon::{
+    EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
+    FrameChanges,
+};
+use noon_core::{
+    Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
+    Vec2,
+};
 use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -50,6 +57,7 @@ pub enum NativeHostError {
     Gpu(String),
     Runtime(EvaluationError),
     Camera(ExecutionSessionCameraError),
+    Input(ExecutionSessionInputError),
 }
 
 impl std::fmt::Display for NativeHostError {
@@ -59,6 +67,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Camera(error) => error.fmt(formatter),
+            Self::Input(error) => error.fmt(formatter),
         }
     }
 }
@@ -74,6 +83,12 @@ impl From<EvaluationError> for NativeHostError {
 impl From<ExecutionSessionCameraError> for NativeHostError {
     fn from(value: ExecutionSessionCameraError) -> Self {
         Self::Camera(value)
+    }
+}
+
+impl From<ExecutionSessionInputError> for NativeHostError {
+    fn from(value: ExecutionSessionInputError) -> Self {
+        Self::Input(value)
     }
 }
 
@@ -115,6 +130,7 @@ struct NativeApp {
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
     started: Option<Instant>,
+    next_input_sequence: u64,
     force_full_redraw: bool,
     error: Option<NativeHostError>,
     #[cfg(test)]
@@ -131,6 +147,7 @@ impl NativeApp {
             window: None,
             gpu: None,
             started: None,
+            next_input_sequence: 0,
             force_full_redraw: false,
             error: None,
             #[cfg(test)]
@@ -145,6 +162,79 @@ impl NativeApp {
             self.error = Some(error);
         }
         event_loop.exit();
+    }
+
+    fn dispatch_state(
+        &mut self,
+        source: NativeStateSource,
+        value: NativeInputValue,
+    ) -> Result<(), NativeHostError> {
+        self.session.set_native_state_input(source, value)?;
+        Ok(())
+    }
+
+    fn dispatch_event(&mut self, source: NativeEventSource) -> Result<(), NativeHostError> {
+        let sequence = self.next_input_sequence;
+        let next = sequence.checked_add(1).ok_or_else(|| {
+            NativeHostError::Platform("native input event sequence exhausted".to_owned())
+        })?;
+        self.session
+            .emit_native_event(NativeEventOccurrence::new(sequence, source))?;
+        self.next_input_sequence = next;
+        Ok(())
+    }
+
+    fn dispatch_viewport_size(
+        &mut self,
+        window: &Window,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), NativeHostError> {
+        let logical = size.to_logical::<f32>(window.scale_factor());
+        self.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(Vec2::new(logical.width, logical.height)),
+        )
+    }
+
+    fn dispatch_keyboard(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+    ) -> Result<(), NativeHostError> {
+        let PhysicalKey::Code(code) = physical_key else {
+            return Ok(());
+        };
+        let code = native_key_code(code);
+        let pressed = state == ElementState::Pressed;
+        self.dispatch_state(
+            NativeStateSource::Key { code: code.clone() },
+            NativeInputValue::Bool(pressed),
+        )?;
+        self.dispatch_event(if pressed {
+            NativeEventSource::KeyPress { code }
+        } else {
+            NativeEventSource::KeyRelease { code }
+        })
+    }
+
+    fn dispatch_pointer_button(
+        &mut self,
+        button: MouseButton,
+        state: ElementState,
+    ) -> Result<(), NativeHostError> {
+        let Some(button) = native_pointer_button(button) else {
+            return Ok(());
+        };
+        let pressed = state == ElementState::Pressed;
+        self.dispatch_state(
+            NativeStateSource::PointerButton { button },
+            NativeInputValue::Bool(pressed),
+        )?;
+        self.dispatch_event(if pressed {
+            NativeEventSource::PointerDown { button }
+        } else {
+            NativeEventSource::PointerUp { button }
+        })
     }
 
     fn redraw(&mut self) -> Result<(), NativeHostError> {
@@ -221,6 +311,10 @@ impl ApplicationHandler for NativeApp {
                     return;
                 }
             };
+            if let Err(error) = self.dispatch_viewport_size(&window, window.inner_size()) {
+                self.fail(event_loop, error);
+                return;
+            }
             self.window = Some(window);
         }
 
@@ -254,7 +348,7 @@ impl ApplicationHandler for NativeApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = self.window.as_ref() else {
+        let Some(window) = self.window.as_ref().cloned() else {
             return;
         };
         if window.id() != window_id {
@@ -264,6 +358,10 @@ impl ApplicationHandler for NativeApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                if let Err(error) = self.dispatch_viewport_size(&window, size) {
+                    self.fail(event_loop, error);
+                    return;
+                }
                 let camera = match self.session.camera() {
                     Ok(camera) => camera,
                     Err(error) => {
@@ -277,6 +375,16 @@ impl ApplicationHandler for NativeApp {
                         return;
                     }
                     self.force_full_redraw = true;
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Err(error) = self.dispatch_keyboard(event.physical_key, event.state) {
+                    self.fail(event_loop, error);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Err(error) = self.dispatch_pointer_button(button, state) {
+                    self.fail(event_loop, error);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -420,6 +528,23 @@ impl NativeGpu {
     }
 }
 
+fn native_key_code(code: KeyCode) -> String {
+    // winit's physical KeyCode variant names follow the W3C `KeyboardEvent.code`
+    // vocabulary used by Noon's browser native-input source identity.
+    format!("{code:?}")
+}
+
+fn native_pointer_button(button: MouseButton) -> Option<u8> {
+    match button {
+        MouseButton::Left => Some(0),
+        MouseButton::Middle => Some(1),
+        MouseButton::Right => Some(2),
+        MouseButton::Back => Some(3),
+        MouseButton::Forward => Some(4),
+        MouseButton::Other(button) => u8::try_from(button).ok(),
+    }
+}
+
 fn camera_for_viewport(
     state: Camera2DState,
     width: u32,
@@ -463,6 +588,78 @@ mod tests {
     fn zero_sized_camera_viewport_is_rejected() {
         assert!(camera_for_viewport(Camera2DState::default(), 0, 720).is_err());
         assert!(camera_for_viewport(Camera2DState::default(), 1280, 0).is_err());
+    }
+
+    #[test]
+    fn native_key_and_pointer_identity_match_cross_platform_input_vocabulary() {
+        assert_eq!(native_key_code(KeyCode::Space), "Space");
+        assert_eq!(native_key_code(KeyCode::KeyA), "KeyA");
+        assert_eq!(native_pointer_button(MouseButton::Left), Some(0));
+        assert_eq!(native_pointer_button(MouseButton::Middle), Some(1));
+        assert_eq!(native_pointer_button(MouseButton::Right), Some(2));
+        assert_eq!(native_pointer_button(MouseButton::Back), Some(3));
+        assert_eq!(native_pointer_button(MouseButton::Forward), Some(4));
+        assert_eq!(native_pointer_button(MouseButton::Other(42)), Some(42));
+        assert_eq!(native_pointer_button(MouseButton::Other(300)), None);
+    }
+
+    #[test]
+    fn native_app_dispatches_normalized_state_and_events_through_execution_session() {
+        use noon_core::{
+            SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3,
+            StoredGeometry,
+        };
+
+        let mut store = SemanticStore::new();
+        let viewport = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(viewport, NativeStateSource::ViewportSize)
+            .unwrap();
+        let key_event = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_native_event_input(
+                key_event,
+                NativeEventSource::KeyPress {
+                    code: "Space".to_owned(),
+                },
+            )
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(viewport, object, SemanticObjectProperty::Translation)
+            .unwrap();
+        store
+            .bind_semantic_signal(key_event, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut app = NativeApp::new(session, NativeViewportConfig::default());
+
+        app.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(Vec2::new(640.0, 360.0)),
+        )
+        .unwrap();
+        assert_eq!(
+            app.session.frame().objects[0].transform.translation,
+            Vec2::new(640.0, 360.0)
+        );
+
+        app.dispatch_event(NativeEventSource::KeyPress {
+            code: "Space".to_owned(),
+        })
+        .unwrap();
+        app.dispatch_event(NativeEventSource::KeyPress {
+            code: "Space".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(app.session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(app.next_input_sequence, 2);
     }
 
     #[cfg(target_os = "linux")]

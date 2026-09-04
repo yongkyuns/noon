@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use super::{SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticVec3};
+use super::{
+    NativeEventSource, NativeStateSource, SemanticNodeId, SemanticNodeKind, SemanticStore,
+    SemanticVec3,
+};
 
 /// Stable authored value kind of a semantic signal.
 ///
@@ -110,10 +113,23 @@ pub enum SemanticSignalSource {
     Derived(SemanticSignalExpr),
 }
 
+/// Authored native source that drives one semantic input signal.
+///
+/// Platform hosts collect these language-neutral sources, while lowering maps the
+/// owning semantic signal onto private execution `SignalId`s. Native source identity
+/// never becomes authored object identity and no platform-specific event type enters
+/// the semantic scene.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticNativeInputSource {
+    State(NativeStateSource),
+    Event(NativeEventSource),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticSignalState {
     source: SemanticSignalSource,
     value_kind: SemanticSignalValueKind,
+    native_input: Option<SemanticNativeInputSource>,
 }
 
 impl SemanticSignalState {
@@ -121,7 +137,11 @@ impl SemanticSignalState {
         source: SemanticSignalSource,
         value_kind: SemanticSignalValueKind,
     ) -> Self {
-        Self { source, value_kind }
+        Self {
+            source,
+            value_kind,
+            native_input: None,
+        }
     }
 
     pub const fn source(&self) -> &SemanticSignalSource {
@@ -130,6 +150,10 @@ impl SemanticSignalState {
 
     pub const fn value_kind(&self) -> SemanticSignalValueKind {
         self.value_kind
+    }
+
+    pub const fn native_input(&self) -> Option<&SemanticNativeInputSource> {
+        self.native_input.as_ref()
     }
 }
 
@@ -149,6 +173,14 @@ pub enum SemanticSignalError {
         rhs: SemanticSignalValueKind,
     },
     SourceTypeMismatch {
+        signal: SemanticNodeId,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
+    NativeInputRequiresInputSignal {
+        signal: SemanticNodeId,
+    },
+    NativeInputTypeMismatch {
         signal: SemanticNodeId,
         expected: SemanticSignalValueKind,
         actual: SemanticSignalValueKind,
@@ -198,6 +230,22 @@ impl std::fmt::Display for SemanticSignalError {
             } => write!(
                 formatter,
                 "semantic signal {}:{} has stable kind {expected}, but replacement source is {actual}",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeInputRequiresInputSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} must remain an input signal while a native input source is attached",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeInputTypeMismatch {
+                signal,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "native input source for semantic signal {}:{} requires {expected}, but the signal is {actual}",
                 signal.slot(),
                 signal.generation()
             ),
@@ -261,6 +309,70 @@ impl SemanticStore {
         Ok(self.semantic_signal_state(id)?.value_kind())
     }
 
+    /// Attach or clear the language-neutral native input source for one semantic signal.
+    ///
+    /// The declaration lives on the authoritative signal node and therefore follows
+    /// its generational identity automatically. Validation and mutation are O(1) and
+    /// touch exactly that signal slot; no execution identity or scene scan is involved.
+    pub fn set_semantic_native_input(
+        &mut self,
+        id: SemanticNodeId,
+        native_input: Option<SemanticNativeInputSource>,
+    ) -> Result<bool, SemanticSignalError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_signal_state(id)?;
+        let previous = state.native_input().cloned();
+
+        if let Some(native_input) = native_input.as_ref() {
+            if !matches!(state.source(), SemanticSignalSource::Input(_)) {
+                return Err(SemanticSignalError::NativeInputRequiresInputSignal { signal: id });
+            }
+            let expected = native_input_signal_kind(native_input);
+            let actual = state.value_kind();
+            if expected != actual {
+                return Err(SemanticSignalError::NativeInputTypeMismatch {
+                    signal: id,
+                    expected,
+                    actual,
+                });
+            }
+        }
+
+        if previous == native_input {
+            return Ok(false);
+        }
+
+        self.node_mut(id)
+            .and_then(|node| node.semantic_signal_state_mut())
+            .expect("semantic signal existence validated before native input mutation")
+            .native_input = native_input;
+        self.set_last_mutation_writes(1);
+        Ok(true)
+    }
+
+    pub fn bind_semantic_native_state_input(
+        &mut self,
+        id: SemanticNodeId,
+        source: NativeStateSource,
+    ) -> Result<bool, SemanticSignalError> {
+        self.set_semantic_native_input(id, Some(SemanticNativeInputSource::State(source)))
+    }
+
+    pub fn bind_semantic_native_event_input(
+        &mut self,
+        id: SemanticNodeId,
+        source: NativeEventSource,
+    ) -> Result<bool, SemanticSignalError> {
+        self.set_semantic_native_input(id, Some(SemanticNativeInputSource::Event(source)))
+    }
+
+    pub fn clear_semantic_native_input(
+        &mut self,
+        id: SemanticNodeId,
+    ) -> Result<bool, SemanticSignalError> {
+        self.set_semantic_native_input(id, None)
+    }
+
     /// Replace one signal's authored source while preserving semantic identity and kind.
     ///
     /// Validation completes before the target node is written. Work is proportional
@@ -276,6 +388,9 @@ impl SemanticStore {
         let state = self.semantic_signal_state(id)?;
         let previous = state.source().clone();
         let expected = state.value_kind();
+        if state.native_input().is_some() && !matches!(&source, SemanticSignalSource::Input(_)) {
+            return Err(SemanticSignalError::NativeInputRequiresInputSignal { signal: id });
+        }
 
         let mut cache = HashMap::new();
         let actual = infer_source_kind(self, &source, Some(id), &mut cache)?;
@@ -298,6 +413,22 @@ impl SemanticStore {
         self.register_semantic_references_for_owner(id);
         self.set_last_mutation_writes(1);
         Ok(true)
+    }
+}
+
+fn native_input_signal_kind(source: &SemanticNativeInputSource) -> SemanticSignalValueKind {
+    match source {
+        SemanticNativeInputSource::State(
+            NativeStateSource::PointerPosition
+            | NativeStateSource::ViewportSize
+            | NativeStateSource::WheelDelta
+            | NativeStateSource::GestureDelta { .. },
+        ) => SemanticSignalValueKind::Vec3,
+        SemanticNativeInputSource::State(
+            NativeStateSource::PointerButton { .. } | NativeStateSource::Key { .. },
+        ) => SemanticSignalValueKind::Bool,
+        SemanticNativeInputSource::State(NativeStateSource::Control { .. })
+        | SemanticNativeInputSource::Event(_) => SemanticSignalValueKind::Scalar,
     }
 }
 
@@ -489,6 +620,145 @@ mod tests {
             SemanticSignalValueKind::Scalar
         );
         assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn semantic_native_input_declaration_is_signal_owned_typed_and_local() {
+        let mut store = SemanticStore::new();
+        for index in 0..10_000 {
+            object(&mut store, index as f32 + 1.0);
+        }
+        let key = store.insert_semantic_input_signal(false).unwrap();
+        let viewport = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        let event = store.insert_semantic_input_signal(0.0_f64).unwrap();
+
+        let key_source = NativeStateSource::Key {
+            code: "Space".to_owned(),
+        };
+        assert!(store
+            .bind_semantic_native_state_input(key, key_source.clone())
+            .unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(
+            store.semantic_signal_state(key).unwrap().native_input(),
+            Some(&SemanticNativeInputSource::State(key_source))
+        );
+
+        assert!(store
+            .bind_semantic_native_state_input(viewport, NativeStateSource::ViewportSize)
+            .unwrap());
+        assert!(store
+            .bind_semantic_native_event_input(
+                event,
+                NativeEventSource::KeyPress {
+                    code: "Space".to_owned(),
+                },
+            )
+            .unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+
+        assert!(store.clear_semantic_native_input(key).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(
+            store.semantic_signal_state(key).unwrap().native_input(),
+            None
+        );
+        assert!(!store.clear_semantic_native_input(key).unwrap());
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn semantic_native_input_rejects_derived_and_mismatched_signals_atomically() {
+        let mut store = SemanticStore::new();
+        let scalar = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let boolean = store.insert_semantic_input_signal(false).unwrap();
+        let derived = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::signal(scalar))
+            .unwrap();
+
+        assert_eq!(
+            store.bind_semantic_native_state_input(
+                scalar,
+                NativeStateSource::Key {
+                    code: "KeyA".to_owned(),
+                },
+            ),
+            Err(SemanticSignalError::NativeInputTypeMismatch {
+                signal: scalar,
+                expected: SemanticSignalValueKind::Bool,
+                actual: SemanticSignalValueKind::Scalar,
+            })
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.bind_semantic_native_event_input(
+                boolean,
+                NativeEventSource::KeyPress {
+                    code: "KeyA".to_owned(),
+                },
+            ),
+            Err(SemanticSignalError::NativeInputTypeMismatch {
+                signal: boolean,
+                expected: SemanticSignalValueKind::Scalar,
+                actual: SemanticSignalValueKind::Bool,
+            })
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.bind_semantic_native_state_input(
+                derived,
+                NativeStateSource::Control {
+                    name: "zoom".to_owned(),
+                },
+            ),
+            Err(SemanticSignalError::NativeInputRequiresInputSignal { signal: derived })
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn attached_native_input_prevents_silent_conversion_to_a_derived_signal() {
+        let mut store = SemanticStore::new();
+        let dependency = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let target = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_native_state_input(
+                target,
+                NativeStateSource::Control {
+                    name: "zoom".to_owned(),
+                },
+            )
+            .unwrap();
+        let before = store
+            .semantic_signal_state(target)
+            .unwrap()
+            .source()
+            .clone();
+
+        assert_eq!(
+            store.set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(dependency)),
+            ),
+            Err(SemanticSignalError::NativeInputRequiresInputSignal { signal: target })
+        );
+        assert_eq!(
+            store.semantic_signal_state(target).unwrap().source(),
+            &before
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        store.clear_semantic_native_input(target).unwrap();
+        assert!(store
+            .set_semantic_signal_source(
+                target,
+                SemanticSignalSource::Derived(SemanticSignalExpr::signal(dependency)),
+            )
+            .unwrap());
     }
 
     #[test]
