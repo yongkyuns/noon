@@ -14,9 +14,7 @@ mod wasm {
     use std::mem;
 
     use noon::ExecutionSession;
-    use noon_core::{
-        GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2,
-    };
+    use noon_core::{GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2};
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
         RenderPrimitive, UploadStats, UploadWrite,
@@ -359,10 +357,9 @@ mod wasm {
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
-            if let (Some(object), Some(mirror)) = (
-                self.host_updater_diagnostic_object,
-                self.source.transport(),
-            ) {
+            if let (Some(object), Some(mirror)) =
+                (self.host_updater_diagnostic_object, self.source.transport())
+            {
                 self.last_host_updater_diagnostic = build_host_updater_diagnostic(
                     self.backend,
                     mirror,
@@ -736,10 +733,9 @@ mod wasm {
         /// Evaluate a direct Rust/WASM execution session and publish only its runtime changes.
         pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self
-                .source
-                .direct_mut()
-                .ok_or_else(|| js_message("typed execution APIs require a direct session source"))?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
             session.evaluate(time).map_err(js_error)?;
             self.pending_changes = session.take_frame_changes();
             Ok(!self.pending_changes.is_empty())
@@ -748,10 +744,9 @@ mod wasm {
         /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self
-                .source
-                .direct_mut()
-                .ok_or_else(|| js_message("typed execution APIs require a direct session source"))?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
             session.seek(time).map_err(js_error)?;
             self.pending_changes = session.take_frame_changes();
             Ok(!self.pending_changes.is_empty())
@@ -764,11 +759,12 @@ mod wasm {
             value: impl Into<ReactiveValue>,
         ) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self
-                .source
-                .direct_mut()
-                .ok_or_else(|| js_message("typed execution APIs require a direct session source"))?;
-            session.set_reactive_input(signal, value).map_err(js_error)?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
+            session
+                .set_reactive_input(signal, value)
+                .map_err(js_error)?;
             self.pending_changes = session.take_frame_changes();
             Ok(!self.pending_changes.is_empty())
         }
