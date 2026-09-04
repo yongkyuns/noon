@@ -1,45 +1,76 @@
+use std::collections::HashMap;
+
 use noon_core::ObjectId;
 
-use super::{ExecutionSlotError, ExecutionSlotMutationStats, ExecutionSlotPreflight, ExecutionSlotTable};
+use super::{ExecutionSlotError, ExecutionSlotMutationStats, ExecutionSlotTable};
 
-impl ExecutionSlotTable {
-    /// Apply one net execution-membership batch atomically to the durable slot table.
-    ///
-    /// Exits are applied before entries so newly visible objects may reuse freshly
-    /// retired tombstones. The existing sparse preflight shadow validates the entire
-    /// batch first; after preflight succeeds, every primitive slot mutation is
-    /// guaranteed to succeed and no rollback clone of the full table is required.
-    pub fn apply_object_membership_changes(
-        &mut self,
-        exited: &[ObjectId],
-        entered: &[ObjectId],
-    ) -> Result<ExecutionSlotMutationStats, ExecutionSlotError> {
-        let mut shadow = ExecutionSlotPreflight::new(self);
-        for object in exited {
-            shadow.remove_object(*object)?;
-        }
-        for object in entered {
-            shadow.insert_object(*object)?;
-        }
-        drop(shadow);
+/// Apply one net execution-membership batch atomically to the durable slot table.
+///
+/// Exits are committed before entries so newly visible objects may reuse freshly
+/// retired tombstones. The whole batch is validated first using only stable object
+/// identity/generation lookups, so no full-table clone or rollback pass is needed.
+pub fn apply_execution_slot_membership_changes(
+    slots: &mut ExecutionSlotTable,
+    exited: &[ObjectId],
+    entered: &[ObjectId],
+) -> Result<ExecutionSlotMutationStats, ExecutionSlotError> {
+    preflight_membership_changes(slots, exited, entered)?;
 
-        let mut stats = ExecutionSlotMutationStats::default();
-        for object in exited {
-            self.remove_object(*object)
-                .expect("membership batch was fully preflighted");
-            stats.slots_written += 1;
-        }
-        for object in entered {
-            let capacity_before = self.slot_capacity();
-            let slot = self
-                .insert_object(*object)
-                .expect("membership batch was fully preflighted");
-            stats.slots_written += 1;
-            stats.slots_reused += usize::from(slot.slot() as usize < capacity_before);
-        }
-        self.last_mutation = stats;
-        Ok(stats)
+    let mut stats = ExecutionSlotMutationStats::default();
+    for object in exited {
+        slots
+            .remove_object(*object)
+            .expect("membership batch was fully preflighted");
+        stats.slots_written += 1;
     }
+    for object in entered {
+        let capacity_before = slots.slot_capacity();
+        let slot = slots
+            .insert_object(*object)
+            .expect("membership batch was fully preflighted");
+        stats.slots_written += 1;
+        stats.slots_reused += usize::from(slot.slot() as usize < capacity_before);
+    }
+    Ok(stats)
+}
+
+fn preflight_membership_changes(
+    slots: &ExecutionSlotTable,
+    exited: &[ObjectId],
+    entered: &[ObjectId],
+) -> Result<(), ExecutionSlotError> {
+    let mut live_overrides = HashMap::<ObjectId, bool>::new();
+
+    for object in exited {
+        let live = live_overrides
+            .get(object)
+            .copied()
+            .unwrap_or_else(|| slots.slot_for_object(*object).is_some());
+        if !live {
+            return Err(ExecutionSlotError::UnknownObject(*object));
+        }
+
+        let slot = slots
+            .slot_for_object(*object)
+            .expect("exit is live in the base table before any committed batch mutation");
+        if slot.generation() == u32::MAX {
+            return Err(ExecutionSlotError::GenerationExhausted(slot));
+        }
+        live_overrides.insert(*object, false);
+    }
+
+    for object in entered {
+        let live = live_overrides
+            .get(object)
+            .copied()
+            .unwrap_or_else(|| slots.slot_for_object(*object).is_some());
+        if live {
+            return Err(ExecutionSlotError::DuplicateObject(*object));
+        }
+        live_overrides.insert(*object, true);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -57,9 +88,8 @@ mod tests {
         let first_slot = slots.insert_object(first).unwrap();
         let second_slot = slots.insert_object(second).unwrap();
 
-        let stats = slots
-            .apply_object_membership_changes(&[first], &[replacement])
-            .unwrap();
+        let stats =
+            apply_execution_slot_membership_changes(&mut slots, &[first], &[replacement]).unwrap();
         let replacement_slot = slots.slot_for_object(replacement).unwrap();
 
         assert_eq!(stats.slots_written, 2);
@@ -69,7 +99,6 @@ mod tests {
         assert_eq!(slots.slot_for_object(second), Some(second_slot));
         assert_eq!(slots.object_for_slot(first_slot), None);
         assert_eq!(slots.object_for_slot(replacement_slot), Some(replacement));
-        assert_eq!(slots.last_mutation_stats(), stats);
     }
 
     #[test]
@@ -81,7 +110,11 @@ mod tests {
         let capacity = slots.slot_capacity();
 
         assert_eq!(
-            slots.apply_object_membership_changes(&[existing], &[duplicate, duplicate]),
+            apply_execution_slot_membership_changes(
+                &mut slots,
+                &[existing],
+                &[duplicate, duplicate],
+            ),
             Err(ExecutionSlotError::DuplicateObject(duplicate))
         );
         assert_eq!(slots.slot_for_object(existing), Some(existing_slot));
@@ -97,10 +130,9 @@ mod tests {
         let object = ObjectId::new(5);
         let slot = slots.insert_object(object).unwrap();
 
-        let stats = slots.apply_object_membership_changes(&[], &[]).unwrap();
+        let stats = apply_execution_slot_membership_changes(&mut slots, &[], &[]).unwrap();
 
         assert_eq!(stats, ExecutionSlotMutationStats::default());
         assert_eq!(slots.slot_for_object(object), Some(slot));
-        assert_eq!(slots.last_mutation_stats(), stats);
     }
 }
