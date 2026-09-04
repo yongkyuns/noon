@@ -5,8 +5,8 @@ use noon_compile::{
     SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, MutationTransaction, ObjectId, ReactiveError, ReactiveValue, ScenePatch,
-    SemanticNodeId, SemanticStore, TrackId,
+    AnimationOptions, Camera2DState, MutationTransaction, ObjectId, ReactiveError, ReactiveValue,
+    ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
 use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
@@ -38,6 +38,31 @@ impl From<ReactiveError> for ExecutionSessionInputError {
         Self::Reactive(value)
     }
 }
+
+/// Error produced when the canonical semantic camera cannot be derived from the
+/// current effective runtime frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutionSessionCameraError {
+    object: ObjectId,
+}
+
+impl ExecutionSessionCameraError {
+    pub const fn object(self) -> ObjectId {
+        self.object
+    }
+}
+
+impl std::fmt::Display for ExecutionSessionCameraError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "execution camera object {} is missing or not a valid 2D frame",
+            self.object.get()
+        )
+    }
+}
+
+impl std::error::Error for ExecutionSessionCameraError {}
 
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,7 +118,9 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 /// The session does not own or mirror the [`SemanticStore`]. It retains only the
 /// compiler-owned semantic/execution identity mappings needed by hosts plus the
 /// existing [`SceneInstance`] runtime. Renderer and platform lifecycle remain outside
-/// this type.
+/// this type. The canonical camera is retained only as the execution identity of its
+/// ordinary semantic frame object; its value is always derived from the effective
+/// runtime frame.
 ///
 /// Runtime mutation is intentionally not exposed as a mutable escape hatch here:
 /// authored/live structural mutation remains owned by semantic transactions and
@@ -103,6 +130,7 @@ pub struct ExecutionSession {
     execution_index: SemanticExecutionIndex,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
+    camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
 }
 
@@ -113,6 +141,7 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
+        let camera_object = lowered.camera_object();
         let next_activation_track_id = lowered
             .compiled()
             .tracks_iter()
@@ -125,6 +154,7 @@ impl ExecutionSession {
             execution_index,
             reactive_projection,
             runtime,
+            camera_object,
             next_activation_track_id,
         })
     }
@@ -132,6 +162,31 @@ impl ExecutionSession {
     /// Current renderer-facing runtime frame.
     pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
+    }
+
+    /// Current canonical 2D camera derived from the effective runtime frame object.
+    ///
+    /// Scenes without an authored camera use the shared Manim-compatible default.
+    /// An authored camera never falls back silently: if its effective frame becomes
+    /// invalid, the host receives an error just as the transport encoder does.
+    pub fn camera(&self) -> Result<Camera2DState, ExecutionSessionCameraError> {
+        let Some(camera_object) = self.camera_object else {
+            return Ok(Camera2DState::default());
+        };
+        let object = self
+            .runtime
+            .frame()
+            .objects
+            .iter()
+            .find(|object| object.id == camera_object)
+            .ok_or(ExecutionSessionCameraError {
+                object: camera_object,
+            })?;
+        Camera2DState::from_frame_object(&object.geometry, object.transform).ok_or(
+            ExecutionSessionCameraError {
+                object: camera_object,
+            },
+        )
     }
 
     /// Consume renderer-facing invalidation state accumulated by the runtime.
@@ -222,8 +277,8 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, RateFunction, SemanticObjectProperty, SemanticObjectState, SemanticVec3,
-        StoredGeometry, Vec2,
+        AnimationOptions, RateFunction, SemanticObjectProperty, SemanticObjectRole,
+        SemanticObjectState, SemanticVec3, StoredGeometry, Vec2,
     };
 
     use super::*;
@@ -232,6 +287,15 @@ mod tests {
         AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
+    }
+
+    fn camera_state(center: Vec2, height: f32) -> SemanticObjectState {
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(height * 16.0 / 9.0, height),
+        });
+        state.transform.translation = SemanticVec3::new(center.x as f64, center.y as f64, 0.0);
+        state.set_role(SemanticObjectRole::Camera2D);
+        state
     }
 
     #[test]
@@ -253,6 +317,7 @@ mod tests {
         assert_eq!(session.frame().objects.len(), 1);
         assert_eq!(session.frame().objects[0].id, execution_object);
         assert_eq!(session.frame().objects[0].style.opacity, 0.4);
+        assert_eq!(session.camera().unwrap(), Camera2DState::default());
 
         session.take_frame_changes();
         session.set_reactive_input(signal, 0.7_f32).unwrap();
@@ -263,6 +328,42 @@ mod tests {
         session.seek(1.25).unwrap();
         assert_eq!(session.frame().time, 1.25);
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+    }
+
+    #[test]
+    fn canonical_camera_is_derived_from_effective_runtime_transform() {
+        let mut store = SemanticStore::new();
+        let camera = store.insert_semantic_object(camera_state(Vec2::new(1.0, 2.0), 8.0));
+        store.attach_to_scene(camera).unwrap();
+
+        let mut target_state = store.semantic_object_state_checked(camera).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(5.0, -2.0, 0.0);
+        target_state.transform.scale = SemanticVec3::new(1.0, 0.5, 1.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(camera, target, AnimationOptions::new())
+            .unwrap();
+
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        assert_eq!(
+            session.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::new(1.0, 2.0),
+                height: 8.0,
+            }
+        );
+
+        session
+            .activate_animation(&store, animation, linear_second())
+            .unwrap();
+        session.seek(0.5).unwrap();
+        assert_eq!(
+            session.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::new(3.0, 0.0),
+                height: 6.0,
+            }
+        );
     }
 
     #[test]
