@@ -1,0 +1,50 @@
+name: Restack 1087 publication slice
+
+on:
+  push:
+    branches:
+      - a1-a6-revision-publication-context
+
+permissions:
+  contents: write
+
+jobs:
+  restack-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restack verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git cherry-pick f2420cd00f8cd072a40d9dd1c33a94fdbbe13813
+
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --all-features
+
+      - name: Publish one clean restacked commit
+        env:
+          BASE_SHA: bf1bce92f235ccbbc46a4d78a00dc364942f4273
+          BRANCH: a1-a6-revision-publication-context
+        run: |
+          rm .github/workflows/restack-1087-publication.yml
+          git add -A
+          tree=$(git write-tree)
+          commit=$(printf '%s\n' 'A1/A6: publish distinct scene execution and frame revisions' | git commit-tree "$tree" -p "$BASE_SHA")
+          git reset --hard "$commit"
+          git push --force origin "HEAD:$BRANCH"
