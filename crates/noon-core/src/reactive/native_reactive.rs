@@ -331,8 +331,9 @@ pub struct ReactiveProgram {
 impl ReactiveProgram {
     /// Compile through the migration-era normalized scene wrapper.
     ///
-    /// Target validation is execution-domain based so canonical semantic lowering
-    /// can reuse the same native reactive VM without rebuilding authored scene state.
+    /// Target validation itself is execution-domain based so the canonical semantic
+    /// lowering path can reuse the same native reactive VM without reconstructing the
+    /// legacy authored-scene wrapper.
     pub fn compile(
         scene: &SceneDefinition,
         graph: &ReactiveGraphDefinition,
@@ -461,10 +462,9 @@ impl ReactiveProgram {
                     property: binding.property,
                 });
             }
-            if timeline_drivers
-                .iter()
-                .any(|(object, property)| *object == binding.object && *property == binding.property)
-            {
+            if timeline_drivers.iter().any(|(object, property)| {
+                *object == binding.object && *property == binding.property
+            }) {
                 return Err(ReactiveError::ConflictingDriver {
                     object: binding.object,
                     property: binding.property,
