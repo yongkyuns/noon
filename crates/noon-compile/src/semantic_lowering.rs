@@ -1,10 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use noon_core::{
-    Color, ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticPresentation,
-    SemanticSignalBinding, SemanticStore, SemanticStoreError, Style, Transform2D,
+    Color, GeometryRef, GeometryResourceHandle, ObjectId, SemanticMutationImpact,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
+    SemanticPaint, SemanticPresentation, SemanticSignalBinding, SemanticStore, SemanticStoreError,
+    StoredGeometry, Style, TextResourceHandle, Transform2D,
 };
+
+use crate::{CompiledObject, CompiledScene, DynamicProperties};
 
 /// Compiler-owned identity bridge from authoritative semantic nodes to the existing
 /// object-key domain consumed by `CompiledScene` and runtime execution slots.
@@ -189,6 +192,195 @@ pub struct SemanticExecutionObject {
     /// Ordered authored signal drivers. Signal identity remains semantic here; the
     /// runtime consumer maps it to native reactive slots and dirty closure later.
     pub signal_bindings: Vec<SemanticSignalBinding>,
+}
+
+/// Capability failures specific to materializing the current stable `CompiledScene`
+/// from an already value-lowered semantic projection.
+///
+/// Transform/style range policy belongs to `SemanticLoweringError`; this error type
+/// owns only representation gaps in `CompiledScene` itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticCompilationError {
+    TooManyObjects(usize),
+    DuplicateExecutionObject {
+        object: SemanticNodeId,
+        execution_id: ObjectId,
+    },
+    UnsupportedGeometryResource {
+        object: SemanticNodeId,
+        resource: GeometryResourceHandle,
+    },
+    UnsupportedText {
+        object: SemanticNodeId,
+        text: TextResourceHandle,
+    },
+    ReactiveBindingsNotLowered {
+        object: SemanticNodeId,
+    },
+    ZIndexNotLowered {
+        object: SemanticNodeId,
+        z_index: i32,
+    },
+    InvalidAnalyticGeometry {
+        object: SemanticNodeId,
+    },
+}
+
+impl std::fmt::Display for SemanticCompilationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyObjects(count) => {
+                write!(formatter, "semantic projection contains too many objects: {count}")
+            }
+            Self::DuplicateExecutionObject {
+                object,
+                execution_id,
+            } => write!(
+                formatter,
+                "semantic object {}:{} resolves to duplicate execution object {}",
+                object.slot(),
+                object.generation(),
+                execution_id.get()
+            ),
+            Self::UnsupportedGeometryResource { object, resource } => write!(
+                formatter,
+                "semantic object {}:{} uses versioned geometry resource {}@{} before versioned resource payloads reach stable compiled slots",
+                object.slot(),
+                object.generation(),
+                resource.id.get(),
+                resource.version
+            ),
+            Self::UnsupportedText { object, text } => write!(
+                formatter,
+                "semantic object {}:{} uses text resource {}@{} before text payloads reach stable compiled slots",
+                object.slot(),
+                object.generation(),
+                text.id.get(),
+                text.version
+            ),
+            Self::ReactiveBindingsNotLowered { object } => write!(
+                formatter,
+                "semantic object {}:{} has reactive bindings before binding lowering reaches execution slots",
+                object.slot(),
+                object.generation()
+            ),
+            Self::ZIndexNotLowered { object, z_index } => write!(
+                formatter,
+                "semantic object {}:{} has z-index {z_index} before painter ordering is represented by stable compiled slots",
+                object.slot(),
+                object.generation()
+            ),
+            Self::InvalidAnalyticGeometry { object } => write!(
+                formatter,
+                "semantic object {}:{} contains non-finite analytic geometry",
+                object.slot(),
+                object.generation()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SemanticCompilationError {}
+
+impl CompiledScene {
+    /// Materialize the existing stable compiled object/index storage directly from
+    /// the typed semantic execution handoff.
+    ///
+    /// Projection order becomes initial compiled slot order. The same `CompiledScene`
+    /// then retains append-only/tombstoned identity under its existing patch path;
+    /// this constructor does not allocate a peer scene or slot domain.
+    pub fn from_semantic_projection(
+        projection: &SemanticExecutionProjection,
+    ) -> Result<Self, SemanticCompilationError> {
+        let count = projection.len();
+        if u32::try_from(count).is_err() {
+            return Err(SemanticCompilationError::TooManyObjects(count));
+        }
+
+        let mut objects = Vec::with_capacity(count);
+        let mut object_indices = BTreeMap::new();
+
+        for (index, object) in projection.objects().iter().enumerate() {
+            if !object.signal_bindings.is_empty() {
+                return Err(SemanticCompilationError::ReactiveBindingsNotLowered {
+                    object: object.semantic_id,
+                });
+            }
+            if object.presentation.z_index != 0 {
+                return Err(SemanticCompilationError::ZIndexNotLowered {
+                    object: object.semantic_id,
+                    z_index: object.presentation.z_index,
+                });
+            }
+
+            let geometry = lower_compiled_geometry(object.semantic_id, object.content)?;
+            let object_index = u32::try_from(index)
+                .map_err(|_| SemanticCompilationError::TooManyObjects(count))?;
+            if object_indices
+                .insert(object.execution_id, object_index)
+                .is_some()
+            {
+                return Err(SemanticCompilationError::DuplicateExecutionObject {
+                    object: object.semantic_id,
+                    execution_id: object.execution_id,
+                });
+            }
+
+            objects.push(CompiledObject {
+                id: object.execution_id,
+                geometry,
+                base_transform: object.base_transform,
+                base_style: object.base_style,
+                dynamic: DynamicProperties::default(),
+                live: true,
+            });
+        }
+
+        Ok(Self {
+            live_object_count: objects.len(),
+            objects,
+            tracks: BTreeMap::new(),
+            track_count: 0,
+            object_indices,
+            track_locators: BTreeMap::new(),
+        })
+    }
+}
+
+fn lower_compiled_geometry(
+    object: SemanticNodeId,
+    content: SemanticObjectContent,
+) -> Result<GeometryRef, SemanticCompilationError> {
+    match content {
+        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius }) => {
+            if !radius.is_finite() {
+                return Err(SemanticCompilationError::InvalidAnalyticGeometry { object });
+            }
+            Ok(GeometryRef::Circle { radius })
+        }
+        SemanticObjectContent::Geometry(StoredGeometry::Rectangle { size }) => {
+            if !size.x.is_finite() || !size.y.is_finite() {
+                return Err(SemanticCompilationError::InvalidAnalyticGeometry { object });
+            }
+            Ok(GeometryRef::Rectangle { size })
+        }
+        SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) => {
+            if !start.x.is_finite()
+                || !start.y.is_finite()
+                || !end.x.is_finite()
+                || !end.y.is_finite()
+            {
+                return Err(SemanticCompilationError::InvalidAnalyticGeometry { object });
+            }
+            Ok(GeometryRef::Line { start, end })
+        }
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) => {
+            Err(SemanticCompilationError::UnsupportedGeometryResource { object, resource })
+        }
+        SemanticObjectContent::Text(text) => {
+            Err(SemanticCompilationError::UnsupportedText { object, text })
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -446,9 +638,10 @@ fn compatibility_object_id(id: SemanticNodeId) -> ObjectId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Color, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
-        SemanticObjectContent, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-        SemanticStore, SemanticVec3, StoredGeometry, TextResourceHandle, TextResourceId, Vec2,
+        Color, GeometryId, GeometryResourceHandle, SemanticMutationImpact,
+        SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectContent,
+        SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticVec3,
+        StoredGeometry, TextResourceHandle, TextResourceId, Vec2,
     };
 
     use super::*;
@@ -740,5 +933,164 @@ mod tests {
             SemanticLoweringError::MissingSemanticObjectState(state_less)
         );
         assert!(index.is_empty());
+    }
+
+    #[test]
+    fn compiled_scene_consumes_lowered_analytic_values_without_relowering() {
+        let mut store = SemanticStore::new();
+        let mut state = circle(2.0);
+        state.transform.translation = SemanticVec3::new(1.25, -2.5, 7.0);
+        state.transform.scale = SemanticVec3::new(2.0, 0.5, 3.0);
+        state.transform.rotation_z = 0.25;
+        state.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.2, 0.3, 0.4, 0.8)));
+        state.style.fill_opacity = 0.5;
+        state.style.object_opacity = 0.4;
+        let semantic_id = attach(&mut store, state);
+
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+        let expected = projection.objects()[0].clone();
+        let compiled = CompiledScene::from_semantic_projection(&projection).unwrap();
+
+        assert_eq!(compiled.live_object_count(), 1);
+        let object = &compiled.objects()[0];
+        assert_eq!(object.id, expected.execution_id);
+        assert_eq!(object.id, index.execution_object_id(semantic_id).unwrap());
+        assert_eq!(object.geometry, GeometryRef::circle(2.0));
+        assert_eq!(object.base_transform, expected.base_transform);
+        assert_eq!(object.base_style, expected.base_style);
+        assert_eq!(compiled.object_index(object.id), Some(0));
+        assert!(compiled.tracks().is_empty());
+    }
+
+    #[test]
+    fn projection_order_becomes_compiled_slot_order() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_semantic_object(circle(1.0));
+        let second = store.insert_semantic_object(circle(2.0));
+        let family = store.insert_family();
+        store.add_member(family, second).unwrap();
+        store.add_member(family, first).unwrap();
+        store.attach_to_scene(family).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+        let compiled = CompiledScene::from_semantic_projection(&projection).unwrap();
+
+        assert_eq!(
+            compiled
+                .objects()
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            vec![
+                index.execution_object_id(second).unwrap(),
+                index.execution_object_id(first).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn versioned_geometry_resource_is_not_degraded_to_unversioned_geometry() {
+        let mut store = SemanticStore::new();
+        let handle = GeometryResourceHandle {
+            id: GeometryId::new(7),
+            version: 3,
+        };
+        let semantic_id = attach(
+            &mut store,
+            SemanticObjectState::new(StoredGeometry::Resource(handle)),
+        );
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompilationError::UnsupportedGeometryResource {
+                object: semantic_id,
+                resource: handle,
+            }
+        );
+    }
+
+    #[test]
+    fn text_is_rejected_until_stable_compiled_slots_accept_text_payloads() {
+        let mut store = SemanticStore::new();
+        let handle = TextResourceHandle {
+            id: TextResourceId::new(11),
+            version: 4,
+        };
+        let semantic_id = attach(&mut store, SemanticObjectState::new(handle));
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompilationError::UnsupportedText {
+                object: semantic_id,
+                text: handle,
+            }
+        );
+    }
+
+    #[test]
+    fn reactive_bindings_survive_handoff_and_fail_explicitly_at_compiled_scene() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.5_f64).unwrap();
+        let semantic_id = attach(&mut store, circle(1.0));
+        store
+            .bind_semantic_signal(signal, semantic_id, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+        assert_eq!(projection.objects()[0].signal_bindings.len(), 1);
+        assert_eq!(projection.objects()[0].signal_bindings[0].signal(), signal);
+        assert_eq!(
+            projection.objects()[0].signal_bindings[0].property(),
+            SemanticObjectProperty::ObjectOpacity
+        );
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompilationError::ReactiveBindingsNotLowered {
+                object: semantic_id,
+            }
+        );
+    }
+
+    #[test]
+    fn z_index_is_not_silently_dropped() {
+        let mut store = SemanticStore::new();
+        let mut state = circle(1.0);
+        state.set_z_index(2);
+        let semantic_id = attach(&mut store, state);
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompilationError::ZIndexNotLowered {
+                object: semantic_id,
+                z_index: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn non_finite_analytic_geometry_is_rejected_before_compiled_scene_creation() {
+        let mut store = SemanticStore::new();
+        let semantic_id = attach(
+            &mut store,
+            SemanticObjectState::new(StoredGeometry::Circle { radius: f32::NAN }),
+        );
+        let mut index = SemanticExecutionIndex::new();
+        let projection = index.lower_scene(&store).unwrap();
+
+        assert_eq!(
+            CompiledScene::from_semantic_projection(&projection).unwrap_err(),
+            SemanticCompilationError::InvalidAnalyticGeometry {
+                object: semantic_id,
+            }
+        );
     }
 }
