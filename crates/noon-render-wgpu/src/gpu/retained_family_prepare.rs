@@ -214,7 +214,6 @@ impl RetainedFramePreparer {
                 SourceItem::Geometry {
                     object_id,
                     scratch_id,
-                    kind,
                 } => {
                     let object_index = frame
                         .retained
@@ -236,7 +235,6 @@ impl RetainedFramePreparer {
                     self.sources.push(SourceItem::Geometry {
                         object_id,
                         scratch_id,
-                        kind,
                     });
                 }
                 SourceItem::FastGlyphRun {
