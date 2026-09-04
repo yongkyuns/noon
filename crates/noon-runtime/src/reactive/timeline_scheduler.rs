@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
-    ops::Bound::{Excluded, Included},
+    ops::Bound::{Excluded, Included, Unbounded},
 };
 
 use noon_compile::{CompiledChannelKey, CompiledScene, CompiledTrack};
@@ -149,6 +149,14 @@ impl TimelineEventScheduler {
 
     pub fn live_group_count(&self) -> usize {
         self.group_indices.len()
+    }
+
+    pub(crate) fn next_event_time(&self) -> Option<f64> {
+        let lower = time_upper_bound(self.time);
+        self.events
+            .range((Excluded(lower), Unbounded))
+            .next()
+            .map(|(key, _kind)| key.time.0)
     }
 
     /// Replace the event/index lowering for exactly one object/property channel.
@@ -533,6 +541,25 @@ mod tests {
         scheduler.seek(0.5);
         assert_eq!(scheduler.advance(1.0), 1);
         assert_eq!(scheduler.active_groups().len(), 1);
+    }
+
+    #[test]
+    fn next_event_time_tracks_strictly_future_boundary() {
+        let tracks = vec![
+            position_track(1, 0, 1.0, 2.0),
+            position_track(2, 1, 4.0, 1.0),
+        ];
+        let mut scheduler = TimelineEventScheduler::new(&tracks);
+        scheduler.seek(0.0);
+        assert_eq!(scheduler.next_event_time(), Some(1.0));
+        scheduler.advance(1.0);
+        assert_eq!(scheduler.next_event_time(), Some(3.0));
+        scheduler.advance(3.0);
+        assert_eq!(scheduler.next_event_time(), Some(4.0));
+        scheduler.advance(4.0);
+        assert_eq!(scheduler.next_event_time(), Some(5.0));
+        scheduler.advance(5.0);
+        assert_eq!(scheduler.next_event_time(), None);
     }
 
     #[test]

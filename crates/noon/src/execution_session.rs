@@ -9,7 +9,7 @@ use noon_core::{
     NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
     ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
-use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
+use noon_runtime::{EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance};
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
@@ -207,6 +207,12 @@ impl ExecutionSession {
         )
     }
 
+    /// Read runtime-owned presentation dirtiness and timeline cadence without
+    /// exposing the runtime scheduler or introducing a host-side timing model.
+    pub fn wake_state(&self) -> RuntimeWakeState {
+        self.runtime.wake_state()
+    }
+
     /// Consume renderer-facing invalidation state accumulated by the runtime.
     pub fn take_frame_changes(&mut self) -> FrameChanges {
         self.runtime.take_frame_changes()
@@ -379,6 +385,7 @@ mod tests {
         SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticVec3,
         StoredGeometry, Vec2,
     };
+    use noon_runtime::TimelineWakeState;
 
     use super::*;
 
@@ -427,6 +434,57 @@ mod tests {
         session.seek(1.25).unwrap();
         assert_eq!(session.frame().time, 1.25);
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+    }
+
+    #[test]
+    fn wake_state_separates_one_pending_frame_from_static_completion() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        let wake = session.wake_state();
+        assert!(wake.frame_pending());
+        assert_eq!(wake.timeline(), TimelineWakeState::Quiescent);
+        assert!(!wake.is_quiescent());
+
+        session.take_frame_changes();
+        assert!(session.wake_state().is_quiescent());
+    }
+
+    #[test]
+    fn activated_animation_requests_continuous_frames_until_endpoint() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+
+        session
+            .activate_animation(&store, animation, linear_second())
+            .unwrap();
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+
+        session.seek(1.0).unwrap();
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
     }
 
     #[test]

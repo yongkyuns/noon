@@ -8,11 +8,11 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    FrameChanges,
+    FrameChanges, TimelineWakeState,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -113,7 +113,7 @@ pub fn run_with_config(
 
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = NativeApp::new(session, config);
     event_loop
         .run_app(&mut app)
@@ -124,12 +124,46 @@ pub fn run_with_config(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RealtimeClock {
+    wall_origin: Instant,
+    scene_origin: f64,
+}
+
+impl RealtimeClock {
+    const fn new(wall_origin: Instant, scene_origin: f64) -> Self {
+        Self {
+            wall_origin,
+            scene_origin,
+        }
+    }
+
+    fn scene_time_at(self, now: Instant) -> f64 {
+        self.scene_origin
+            + now
+                .saturating_duration_since(self.wall_origin)
+                .as_secs_f64()
+    }
+
+    fn wall_deadline(self, scene_time: f64) -> Option<Instant> {
+        let offset = scene_time - self.scene_origin;
+        if !offset.is_finite() {
+            return None;
+        }
+        if offset <= 0.0 {
+            return Some(self.wall_origin);
+        }
+        self.wall_origin
+            .checked_add(Duration::from_secs_f64(offset))
+    }
+}
+
 struct NativeApp {
     session: ExecutionSession,
     config: NativeViewportConfig,
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
-    started: Option<Instant>,
+    realtime_clock: Option<RealtimeClock>,
     next_input_sequence: u64,
     force_full_redraw: bool,
     error: Option<NativeHostError>,
@@ -146,7 +180,7 @@ impl NativeApp {
             config,
             window: None,
             gpu: None,
-            started: None,
+            realtime_clock: None,
             next_input_sequence: 0,
             force_full_redraw: false,
             error: None,
@@ -237,20 +271,42 @@ impl NativeApp {
         })
     }
 
+    fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
+        let Some(clock) = self.realtime_clock else {
+            return Ok(());
+        };
+        match self.session.wake_state().timeline() {
+            TimelineWakeState::Continuous => {
+                self.session.advance_to(clock.scene_time_at(now))?;
+            }
+            TimelineWakeState::Deadline(scene_time) => {
+                if clock
+                    .wall_deadline(scene_time)
+                    .is_some_and(|deadline| deadline <= now)
+                {
+                    self.session
+                        .advance_to(clock.scene_time_at(now).max(scene_time))?;
+                }
+            }
+            TimelineWakeState::Quiescent => {}
+        }
+        Ok(())
+    }
+
     fn redraw(&mut self) -> Result<(), NativeHostError> {
         let Some(window) = self.window.as_ref().cloned() else {
             return Ok(());
         };
-        let Some(gpu) = self.gpu.as_mut() else {
-            return Ok(());
-        };
-        if !gpu.drawable {
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
             return Ok(());
         }
 
-        let started = self.started.get_or_insert_with(Instant::now);
-        self.session.advance_to(started.elapsed().as_secs_f64())?;
+        self.advance_realtime_timeline(Instant::now())?;
         let camera = self.session.camera()?;
+        let gpu = self
+            .gpu
+            .as_mut()
+            .expect("drawable native host must own GPU state");
         gpu.set_camera(camera)?;
         let changes = self.session.take_frame_changes();
         let changes = if self.force_full_redraw {
@@ -334,7 +390,10 @@ impl ApplicationHandler for NativeApp {
             match pollster::block_on(NativeGpu::new(window, camera)) {
                 Ok(gpu) => {
                     self.gpu = Some(gpu);
-                    self.started = Some(Instant::now());
+                    self.realtime_clock = Some(RealtimeClock::new(
+                        Instant::now(),
+                        self.session.frame().time,
+                    ));
                     self.force_full_redraw = true;
                 }
                 Err(error) => self.fail(event_loop, error),
@@ -400,9 +459,48 @@ impl ApplicationHandler for NativeApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = self.window.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.window.as_ref() else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        };
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        let wake = self.session.wake_state();
+        if self.force_full_redraw || wake.frame_pending() {
             window.request_redraw();
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        match wake.timeline() {
+            TimelineWakeState::Continuous => {
+                window.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
+            }
+            TimelineWakeState::Deadline(scene_time) => {
+                let Some(clock) = self.realtime_clock else {
+                    window.request_redraw();
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                    return;
+                };
+                let Some(deadline) = clock.wall_deadline(scene_time) else {
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                    return;
+                };
+                if deadline <= Instant::now() {
+                    window.request_redraw();
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                }
+            }
+            TimelineWakeState::Quiescent => {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
         }
     }
 }
@@ -570,6 +668,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn realtime_clock_preserves_nonzero_authored_time_origin() {
+        let wall_origin = Instant::now();
+        let clock = RealtimeClock::new(wall_origin, 12.5);
+        let two_seconds_later = wall_origin + Duration::from_secs(2);
+
+        assert_eq!(clock.scene_time_at(two_seconds_later), 14.5);
+        assert_eq!(
+            clock.wall_deadline(15.5),
+            Some(wall_origin + Duration::from_secs(3))
+        );
+    }
+
+    #[test]
     fn canonical_camera_tracks_native_viewport_aspect() {
         let state = Camera2DState {
             center: Vec2::new(2.0, -1.0),
@@ -656,6 +767,7 @@ mod tests {
             app.session.frame().objects[0].transform.translation,
             Vec2::new(640.0, 360.0)
         );
+        assert_eq!(app.session.frame().time, 0.0);
 
         app.dispatch_event(NativeEventSource::KeyPress {
             code: "Space".to_owned(),
@@ -666,6 +778,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(app.session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(app.session.frame().time, 0.0);
         assert_eq!(app.next_input_sequence, 2);
     }
 
@@ -705,7 +818,7 @@ mod tests {
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);
         let event_loop = event_loop_builder.build().unwrap();
-        event_loop.set_control_flow(ControlFlow::Poll);
+        event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut app = NativeApp::new(
             session,
