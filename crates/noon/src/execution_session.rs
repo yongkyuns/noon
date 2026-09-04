@@ -9,9 +9,7 @@ use noon_core::{
     NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
     ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
-use noon_runtime::{
-    EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance, TimelineWakeState,
-};
+use noon_runtime::{EvaluationError, FrameChanges, FrameState, RuntimeWakeState, SceneInstance};
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
@@ -387,6 +385,7 @@ mod tests {
         SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticVec3,
         StoredGeometry, Vec2,
     };
+    use noon_runtime::TimelineWakeState;
 
     use super::*;
 
@@ -476,10 +475,16 @@ mod tests {
         session
             .activate_animation(&store, animation, linear_second())
             .unwrap();
-        assert_eq!(session.wake_state().timeline(), TimelineWakeState::Continuous);
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
 
         session.seek(1.0).unwrap();
-        assert_eq!(session.wake_state().timeline(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
     }
 
     #[test]
