@@ -92,8 +92,8 @@ impl SemanticExecutionIndex {
     /// Shared/aliased leaves are emitted once at their first visible occurrence.
     /// Mixed content remains in the target `SemanticObjectContent` handle domain;
     /// high-precision transform/style values are explicitly compacted to the current
-    /// f32/2D execution values. No `ObjectContentRef`, `RetainedObjectDefinition`, or
-    /// dense retained-scene mirror participates in this boundary.
+    /// f32/2D execution values. No migration-era retained-content or dense retained
+    /// scene mirror participates in this boundary.
     ///
     /// Every visible object is validated and value-lowered before the identity index
     /// is mutated, so one late lowering failure cannot leave a partially updated
@@ -175,8 +175,7 @@ pub struct SemanticExecutionObject {
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
     pub execution_id: ObjectId,
-    /// Target mixed content/resource handle. This deliberately does not regress to
-    /// migration-only `ObjectContentRef` or legacy geometry snapshots.
+    /// Target mixed content/resource handle, without a retained compatibility copy.
     pub content: SemanticObjectContent,
     /// Current compact 2D/f32 execution transform.
     pub base_transform: Transform2D,
@@ -415,11 +414,7 @@ fn lower_paint(
                 });
             }
             let mut color = *color;
-            color.alpha = lower_scalar_f32(
-                node,
-                opacity_field,
-                f64::from(color.alpha) * opacity,
-            )?;
+            color.alpha = lower_scalar_f32(node, opacity_field, f64::from(color.alpha) * opacity)?;
             Ok(Some(color))
         }
         SemanticPaint::Resource(resource) => Err(SemanticLoweringError::UnsupportedPaintResource {
@@ -518,7 +513,10 @@ mod tests {
         let object_state = &lowered.objects()[0];
 
         assert_eq!(object_state.semantic_id, object);
-        assert_eq!(object_state.base_transform.translation, Vec2::new(4.5, -3.25));
+        assert_eq!(
+            object_state.base_transform.translation,
+            Vec2::new(4.5, -3.25)
+        );
         assert_eq!(object_state.base_transform.scale, Vec2::new(2.0, 0.5));
         assert_eq!(object_state.base_transform.rotation, 0.75);
         let fill = object_state.base_style.fill.unwrap();
