@@ -1,4 +1,4 @@
-use noon::ExecutionSession;
+use noon::{ExecutionSegment, ExecutionSession};
 use noon_runtime::{RuntimeWakeState, TimelineWakeState};
 
 /// Browser primitive requested by the target-neutral execution-session wake state.
@@ -35,6 +35,19 @@ impl BrowserExecutionWakePlan {
         Self::from_runtime(session.wake_state())
     }
 
+    /// Derive browser wake mechanics while driving one logical authored segment.
+    ///
+    /// Renderer dirtiness still comes from the ordinary runtime wake observation,
+    /// while authored-time cadence is clipped/supplemented by the session segment
+    /// boundary. A pure `wait()` can therefore request a timer without manufacturing
+    /// a no-op runtime track or giving the browser its own timeline model.
+    pub fn from_segment(session: &ExecutionSession, segment: ExecutionSegment) -> Self {
+        Self::from_parts(
+            session.wake_state().frame_pending(),
+            session.segment_state(segment).timeline(),
+        )
+    }
+
     /// Project one target-neutral runtime wake observation into browser primitives.
     pub fn from_runtime(state: RuntimeWakeState) -> Self {
         Self::from_parts(state.frame_pending(), state.timeline())
@@ -59,7 +72,7 @@ impl BrowserExecutionWakePlan {
         self.present_now
     }
 
-    /// Browser cadence corresponding exactly to the runtime timeline wake state.
+    /// Browser cadence corresponding exactly to the runtime/session wake state.
     pub const fn cadence(self) -> BrowserExecutionCadence {
         self.cadence
     }
@@ -97,6 +110,16 @@ mod tests {
 
     use super::*;
 
+    fn static_session() -> ExecutionSession {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        ExecutionSession::from_semantic_store(&store).unwrap()
+    }
+
     #[test]
     fn browser_projection_preserves_presentation_and_timeline_as_orthogonal_facts() {
         let present_static =
@@ -132,14 +155,7 @@ mod tests {
 
     #[test]
     fn direct_static_session_settles_after_its_initial_presentation() {
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut session = static_session();
         let initial = BrowserExecutionWakePlan::from_session(&session);
         assert!(initial.present_now());
         assert_eq!(initial.cadence(), BrowserExecutionCadence::Idle);
@@ -147,5 +163,24 @@ mod tests {
         session.take_frame_changes();
         let settled = BrowserExecutionWakePlan::from_session(&session);
         assert!(settled.is_idle());
+    }
+
+    #[test]
+    fn pure_wait_uses_segment_deadline_while_raw_runtime_stays_idle() {
+        let mut session = static_session();
+        session.take_frame_changes();
+        let segment = session.wait_segment(2.0).unwrap();
+
+        assert!(BrowserExecutionWakePlan::from_session(&session).is_idle());
+        let waiting = BrowserExecutionWakePlan::from_segment(&session, segment);
+        assert_eq!(
+            waiting.cadence(),
+            BrowserExecutionCadence::TimerAtSceneTime(2.0)
+        );
+        assert_eq!(waiting.timer_delay_seconds(session.frame().time), Some(2.0));
+
+        session.advance_segment_to(segment, 9.0).unwrap();
+        assert!(BrowserExecutionWakePlan::from_segment(&session, segment).is_idle());
+        assert_eq!(session.frame().time, 2.0);
     }
 }
