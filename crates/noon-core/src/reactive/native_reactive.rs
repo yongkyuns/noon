@@ -6,6 +6,47 @@ use crate::{GeometryRef, ObjectId, Property, SceneDefinition, SignalId, ValueKin
 mod compute_ir;
 pub use compute_ir::*;
 
+/// Minimal execution-target facts needed to validate and classify a native reactive graph.
+///
+/// This is a compile-time query boundary, not another scene representation. Implementors
+/// expose existing object/timeline facts in their own storage order; the reactive compiler
+/// neither owns nor mutates that storage.
+pub trait ReactiveCompileTarget {
+    /// Whether `object` names a live execution object.
+    fn contains_object(&self, object: ObjectId) -> bool;
+
+    /// Whether the target already has a timeline driver for this exact property.
+    fn has_timeline_driver(&self, object: ObjectId, property: Property) -> bool;
+
+    /// Whether the target has any timeline activity for this object.
+    fn has_timeline_activity(&self, object: ObjectId) -> bool;
+
+    /// Visit live execution objects in deterministic target order.
+    fn visit_objects(&self, visitor: &mut dyn FnMut(ObjectId));
+}
+
+impl ReactiveCompileTarget for SceneDefinition {
+    fn contains_object(&self, object: ObjectId) -> bool {
+        self.object(object).is_some()
+    }
+
+    fn has_timeline_driver(&self, object: ObjectId, property: Property) -> bool {
+        self.tracks()
+            .iter()
+            .any(|track| track.object == object && track.property == property)
+    }
+
+    fn has_timeline_activity(&self, object: ObjectId) -> bool {
+        self.tracks().iter().any(|track| track.object == object)
+    }
+
+    fn visit_objects(&self, visitor: &mut dyn FnMut(ObjectId)) {
+        for object in self.objects() {
+            visitor(object.id);
+        }
+    }
+}
+
 /// A value that can participate in the native reactive graph.
 ///
 /// Object snapshots are intentionally excluded from this first reactive slice:
@@ -329,8 +370,19 @@ pub struct ReactiveProgram {
 }
 
 impl ReactiveProgram {
+    /// Compatibility entry for the migration-era normalized scene definition.
+    /// New lowering code should validate against its actual execution target through
+    /// [`ReactiveCompileTarget`] instead of reconstructing authored scene state.
     pub fn compile(
         scene: &SceneDefinition,
+        graph: &ReactiveGraphDefinition,
+    ) -> Result<Self, ReactiveError> {
+        Self::compile_for_target(scene, graph)
+    }
+
+    /// Compile one native reactive graph against the actual execution target facts.
+    pub fn compile_for_target<T: ReactiveCompileTarget + ?Sized>(
+        target: &T,
         graph: &ReactiveGraphDefinition,
     ) -> Result<Self, ReactiveError> {
         let mut signal_indices = BTreeMap::new();
@@ -409,7 +461,7 @@ impl ReactiveProgram {
             let signal_index = *signal_indices
                 .get(&binding.signal)
                 .ok_or(ReactiveError::UnknownSignal(binding.signal))?;
-            if scene.object(binding.object).is_none() {
+            if !target.contains_object(binding.object) {
                 return Err(ReactiveError::UnknownObject(binding.object));
             }
             if seen_targets.contains(&(binding.object, binding.property)) {
@@ -418,11 +470,7 @@ impl ReactiveProgram {
                     property: binding.property,
                 });
             }
-            if scene
-                .tracks()
-                .iter()
-                .any(|track| track.object == binding.object && track.property == binding.property)
-            {
+            if target.has_timeline_driver(binding.object, binding.property) {
                 return Err(ReactiveError::ConflictingDriver {
                     object: binding.object,
                     property: binding.property,
@@ -445,7 +493,7 @@ impl ReactiveProgram {
             });
         }
 
-        let analysis = build_execution_analysis(scene, graph);
+        let analysis = build_execution_analysis(target, graph);
         Ok(Self {
             signals: compiled_signals,
             signal_indices,
@@ -480,17 +528,17 @@ impl ReactiveProgram {
     }
 }
 
-fn build_execution_analysis(
-    scene: &SceneDefinition,
+fn build_execution_analysis<T: ReactiveCompileTarget + ?Sized>(
+    target: &T,
     graph: &ReactiveGraphDefinition,
 ) -> ExecutionAnalysis {
     let mut analysis = ExecutionAnalysis::default();
-    for object in scene.objects() {
-        let timeline = scene.tracks().iter().any(|track| track.object == object.id);
+    target.visit_objects(&mut |object| {
+        let timeline = target.has_timeline_activity(object);
         let reactive = graph
             .bindings
             .iter()
-            .any(|binding| binding.object == object.id);
+            .any(|binding| binding.object == object);
         let class = match (timeline, reactive) {
             (false, false) => {
                 analysis.static_objects += 1;
@@ -509,11 +557,8 @@ fn build_execution_analysis(
                 ObjectExecutionClass::TimelineAndReactive
             }
         };
-        analysis.objects.push(ObjectExecution {
-            object: object.id,
-            class,
-        });
-    }
+        analysis.objects.push(ObjectExecution { object, class });
+    });
     analysis
 }
 
