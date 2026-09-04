@@ -1,3 +1,6 @@
+mod compiled_scene;
+pub use compiled_scene::*;
+
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
