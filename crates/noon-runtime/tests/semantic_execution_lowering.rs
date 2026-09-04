@@ -1,7 +1,7 @@
-use noon_compile::{lower_semantic_execution, CompiledScene, SemanticExecutionIndex};
+use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
 use noon_core::{
-    Color, GeometryRef, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore,
-    SemanticVec3, StoredGeometry, Style, Transform2D, Vec2,
+    Color, GeometryRef, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticScene,
+    SemanticStore, SemanticVec3, StoredGeometry, Style, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -38,12 +38,15 @@ fn canonical_semantic_execution_output_builds_runtime_without_recompiling_author
 
 #[test]
 fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_observables() {
-    // Keep the migration-only flat scene type inferred through the existing compiler
-    // entry instead of introducing a new named dependency on that authored authority.
-    let mut legacy_scene = Default::default();
+    // Exercise the already-owned migration constructor rather than importing its
+    // underlying flat authored representation into this new canonical-path fixture.
+    let mut legacy_scene = SemanticScene::new();
     let legacy_circle = legacy_scene.add(GeometryRef::circle(2.0));
     {
-        let object = legacy_scene.object_mut(legacy_circle).unwrap();
+        let object = legacy_scene
+            .definition_mut()
+            .object_mut(legacy_circle)
+            .unwrap();
         object.transform = Transform2D {
             translation: Vec2::new(4.5, -3.25),
             rotation: 0.75,
@@ -59,11 +62,14 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
     }
     let legacy_rectangle = legacy_scene.add(GeometryRef::rectangle(3.0, 1.5));
     {
-        let object = legacy_scene.object_mut(legacy_rectangle).unwrap();
+        let object = legacy_scene
+            .definition_mut()
+            .object_mut(legacy_rectangle)
+            .unwrap();
         object.transform.translation = Vec2::new(-1.0, 2.0);
         object.style.stroke_width = 0.0;
     }
-    let legacy_instance = SceneInstance::new(CompiledScene::compile(&legacy_scene).unwrap());
+    let legacy_instance = SceneInstance::from_semantic(&legacy_scene).unwrap();
 
     let mut semantic_store = SemanticStore::new();
     let mut semantic_circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
