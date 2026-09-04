@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
-    ops::Bound::{Excluded, Included},
+    ops::Bound::{Excluded, Included, Unbounded},
 };
 
 use noon_compile::{CompiledChannelKey, CompiledScene, CompiledTrack};
@@ -149,6 +149,14 @@ impl TimelineEventScheduler {
 
     pub fn live_group_count(&self) -> usize {
         self.group_indices.len()
+    }
+
+    pub(crate) fn next_event_time(&self) -> Option<f64> {
+        let lower = time_upper_bound(self.time);
+        self.events
+            .range((Excluded(lower), Unbounded))
+            .next()
+            .map(|(key, _kind)| key.time.0)
     }
 
     /// Replace the event/index lowering for exactly one object/property channel.
