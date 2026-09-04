@@ -48,7 +48,7 @@ jobs:
       - name: Install virtual display and software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
 
       - name: Present typed Rust semantic scene through native host
         run: |
