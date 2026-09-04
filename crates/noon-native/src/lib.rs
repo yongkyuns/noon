@@ -428,7 +428,8 @@ impl ApplicationHandler for NativeApp {
                     event_loop.set_control_flow(ControlFlow::Wait);
                     return;
                 };
-                let Some(deadline) = started.checked_add(Duration::from_secs_f64(scene_time)) else {
+                let Some(deadline) = started.checked_add(Duration::from_secs_f64(scene_time))
+                else {
                     event_loop.set_control_flow(ControlFlow::Wait);
                     return;
                 };
