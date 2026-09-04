@@ -45,6 +45,19 @@ impl From<TextResourceHandle> for SemanticObjectContent {
     }
 }
 
+/// Scene-level role carried by an ordinary semantic object.
+///
+/// Roles describe how shared semantic scene state interprets an object; they do
+/// not create a second renderer/runtime object model. In particular, a 2D camera
+/// remains an ordinary semantic frame object whose effective execution transform
+/// determines the renderer-facing [`crate::Camera2DState`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SemanticObjectRole {
+    #[default]
+    Ordinary,
+    Camera2D,
+}
+
 /// Stable authored object properties that may be driven by native-reactive signals.
 ///
 /// These names describe semantic state, not execution slots or legacy timeline
@@ -105,8 +118,8 @@ impl SemanticSignalBinding {
 /// Identity and family/lifecycle relationships belong to `SemanticNode`; immutable
 /// heavy content belongs to the existing resource arenas. This value owns the
 /// mutable authored content reference, high-precision transform, semantic style,
-/// painter metadata, and typed native-reactive property bindings that frontends
-/// must share.
+/// painter metadata, scene role, and typed native-reactive property bindings that
+/// frontends must share.
 ///
 /// Bounds are intentionally absent. Layout-accurate and conservative bounds are
 /// derived from content + transform + style (and may be cached as disposable
@@ -117,6 +130,7 @@ pub struct SemanticObjectState {
     pub transform: SemanticTransform2_5D,
     pub style: SemanticStyle,
     presentation: SemanticPresentation,
+    role: SemanticObjectRole,
     signal_bindings: Vec<SemanticSignalBinding>,
 }
 
@@ -127,6 +141,7 @@ impl SemanticObjectState {
             transform: SemanticTransform2_5D::default(),
             style: SemanticStyle::default(),
             presentation: SemanticPresentation::default(),
+            role: SemanticObjectRole::default(),
             signal_bindings: Vec::new(),
         }
     }
@@ -145,6 +160,14 @@ impl SemanticObjectState {
 
     pub const fn insertion_order(&self) -> u64 {
         self.presentation.insertion_order
+    }
+
+    pub const fn role(&self) -> SemanticObjectRole {
+        self.role
+    }
+
+    pub fn set_role(&mut self, role: SemanticObjectRole) {
+        self.role = role;
     }
 
     pub fn signal_bindings(&self) -> &[SemanticSignalBinding] {
@@ -264,7 +287,18 @@ mod tests {
         assert_eq!(state.style.object_opacity, 0.4);
         assert_eq!(state.z_index(), 7);
         assert_eq!(state.insertion_order(), 0);
+        assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         assert!(state.signal_bindings().is_empty());
+    }
+
+    #[test]
+    fn semantic_object_role_is_explicit_and_defaults_to_ordinary() {
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(14.0, 8.0),
+        });
+        assert_eq!(state.role(), SemanticObjectRole::Ordinary);
+        state.set_role(SemanticObjectRole::Camera2D);
+        assert_eq!(state.role(), SemanticObjectRole::Camera2D);
     }
 
     #[test]

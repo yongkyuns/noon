@@ -1,4 +1,4 @@
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(test)]
 const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
 
 #[cfg(target_arch = "wasm32")]
@@ -14,7 +14,9 @@ mod wasm {
     use std::mem;
 
     use noon::ExecutionSession;
-    use noon_core::{GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2};
+    use noon_core::{
+        Camera2DState, GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2,
+    };
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
         RenderPrimitive, UploadStats, UploadWrite,
@@ -29,7 +31,7 @@ mod wasm {
         ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
     };
 
-    use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
+    use super::MANIM_DEFAULT_CLEAR_COLOR;
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -262,11 +264,7 @@ mod wasm {
             };
             match outcome {
                 TransportApplyOutcome::Applied => {
-                    if camera.center != self.camera_center || camera.height != self.camera_height {
-                        self.camera_center = camera.center;
-                        self.camera_height = camera.height;
-                        self.update_camera()?;
-                    }
+                    self.sync_camera(camera)?;
                     self.pending_changes = changes;
                     Ok(true)
                 }
@@ -397,8 +395,8 @@ mod wasm {
             Ok(())
         }
 
-        /// Manual camera control remains as a low-level host API. Semantic scene
-        /// deltas automatically overwrite it with their shared Rust camera state.
+        /// Manual camera control remains as a low-level host API. Authoritative
+        /// transport or direct-session camera updates overwrite it when published.
         #[wasm_bindgen(js_name = setCamera)]
         pub fn set_camera(
             &mut self,
@@ -719,13 +717,14 @@ mod wasm {
             canvas: OffscreenCanvas,
             mut session: ExecutionSession,
         ) -> Result<Self, JsValue> {
+            let camera = session.camera().map_err(js_error)?;
             let pending_changes = session.take_frame_changes();
             Self::create_with_source(
                 canvas,
                 CanvasExecutionSource::Direct(session),
                 pending_changes,
-                Vec2::ZERO,
-                MANIM_DEFAULT_CAMERA_HEIGHT,
+                camera.center,
+                camera.height,
             )
             .await
         }
@@ -733,22 +732,32 @@ mod wasm {
         /// Evaluate a direct Rust/WASM execution session and publish only its runtime changes.
         pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self.source.direct_mut().ok_or_else(|| {
-                js_message("typed execution APIs require a direct session source")
-            })?;
-            session.evaluate(time).map_err(js_error)?;
-            self.pending_changes = session.take_frame_changes();
+            let (pending_changes, camera) = {
+                let session = self.source.direct_mut().ok_or_else(|| {
+                    js_message("typed execution APIs require a direct session source")
+                })?;
+                session.evaluate(time).map_err(js_error)?;
+                let camera = session.camera().map_err(js_error)?;
+                (session.take_frame_changes(), camera)
+            };
+            self.sync_camera(camera)?;
+            self.pending_changes = pending_changes;
             Ok(!self.pending_changes.is_empty())
         }
 
         /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self.source.direct_mut().ok_or_else(|| {
-                js_message("typed execution APIs require a direct session source")
-            })?;
-            session.seek(time).map_err(js_error)?;
-            self.pending_changes = session.take_frame_changes();
+            let (pending_changes, camera) = {
+                let session = self.source.direct_mut().ok_or_else(|| {
+                    js_message("typed execution APIs require a direct session source")
+                })?;
+                session.seek(time).map_err(js_error)?;
+                let camera = session.camera().map_err(js_error)?;
+                (session.take_frame_changes(), camera)
+            };
+            self.sync_camera(camera)?;
+            self.pending_changes = pending_changes;
             Ok(!self.pending_changes.is_empty())
         }
 
@@ -759,13 +768,18 @@ mod wasm {
             value: impl Into<ReactiveValue>,
         ) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
-            let session = self.source.direct_mut().ok_or_else(|| {
-                js_message("typed execution APIs require a direct session source")
-            })?;
-            session
-                .set_reactive_input(signal, value)
-                .map_err(js_error)?;
-            self.pending_changes = session.take_frame_changes();
+            let (pending_changes, camera) = {
+                let session = self.source.direct_mut().ok_or_else(|| {
+                    js_message("typed execution APIs require a direct session source")
+                })?;
+                session
+                    .set_reactive_input(signal, value)
+                    .map_err(js_error)?;
+                let camera = session.camera().map_err(js_error)?;
+                (session.take_frame_changes(), camera)
+            };
+            self.sync_camera(camera)?;
+            self.pending_changes = pending_changes;
             Ok(!self.pending_changes.is_empty())
         }
 
@@ -833,6 +847,15 @@ mod wasm {
             };
             result.update_camera()?;
             Ok(result)
+        }
+
+        fn sync_camera(&mut self, camera: Camera2DState) -> Result<(), JsValue> {
+            if camera.center == self.camera_center && camera.height == self.camera_height {
+                return Ok(());
+            }
+            self.camera_center = camera.center;
+            self.camera_height = camera.height;
+            self.update_camera()
         }
 
         fn update_camera(&mut self) -> Result<(), JsValue> {

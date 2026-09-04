@@ -1,10 +1,14 @@
-use noon_core::{ComputeProgram, ReactiveProgram, SemanticStore};
+use noon_core::{
+    Camera2DState, ComputeProgram, ObjectId, ReactiveProgram, SemanticNodeId, SemanticObjectRole,
+    SemanticStore,
+};
 
 use crate::CompiledScene;
 
 use super::{
     lower_semantic_reactive_projection, SemanticCompiledSceneError, SemanticExecutionIndex,
-    SemanticLoweringError, SemanticReactiveLoweringError, SemanticReactiveProjection,
+    SemanticExecutionProjection, SemanticLoweringError, SemanticReactiveLoweringError,
+    SemanticReactiveProjection,
 };
 
 /// One typed compiler handoff from the authoritative semantic scene into Noon's
@@ -18,6 +22,7 @@ pub struct SemanticExecutionLoweringOutput {
     compiled: CompiledScene,
     reactive: SemanticReactiveProjection,
     compute: ComputeProgram,
+    camera_object: Option<ObjectId>,
 }
 
 impl SemanticExecutionLoweringOutput {
@@ -31,6 +36,13 @@ impl SemanticExecutionLoweringOutput {
 
     pub fn compute(&self) -> &ComputeProgram {
         &self.compute
+    }
+
+    /// Execution identity of the unique semantic object carrying the canonical 2D
+    /// camera role, if authored. The camera value itself remains derived from this
+    /// object's effective runtime geometry/transform rather than duplicated here.
+    pub const fn camera_object(&self) -> Option<ObjectId> {
+        self.camera_object
     }
 
     /// Compatibility decomposition retained while callers migrate to consuming the
@@ -51,6 +63,13 @@ pub enum SemanticExecutionLoweringError {
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
+    MultipleCameraObjects {
+        first: SemanticNodeId,
+        second: SemanticNodeId,
+    },
+    InvalidCameraObject {
+        node: SemanticNodeId,
+    },
 }
 
 impl From<SemanticLoweringError> for SemanticExecutionLoweringError {
@@ -81,6 +100,20 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
             Self::Compiled(error) => {
                 write!(formatter, "compiled execution lowering failed: {error}")
             }
+            Self::MultipleCameraObjects { first, second } => write!(
+                formatter,
+                "semantic scene has multiple 2D camera objects: {}:{} and {}:{}",
+                first.slot(),
+                first.generation(),
+                second.slot(),
+                second.generation()
+            ),
+            Self::InvalidCameraObject { node } => write!(
+                formatter,
+                "semantic 2D camera object {}:{} is not a valid rectangle frame",
+                node.slot(),
+                node.generation()
+            ),
         }
     }
 }
@@ -93,8 +126,9 @@ impl std::error::Error for SemanticExecutionLoweringError {}
 /// semantic snapshot. The reactive graph is validated against the already-lowered
 /// execution object/timeline domain and lowered into the existing compute VM. The
 /// identity index is staged and published only after all downstream lowering
-/// succeeds, including compute-program construction, so an invalid execution
-/// handoff cannot leave a partially admitted semantic-to-execution mapping.
+/// succeeds, including compute-program construction and camera-role validation, so
+/// an invalid execution handoff cannot leave a partially admitted
+/// semantic-to-execution mapping.
 ///
 /// Authored animation declarations remain semantic intent until an explicit
 /// animation activation/composition root is supplied to its dedicated lowering
@@ -106,8 +140,10 @@ pub fn lower_semantic_execution(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
+    let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
     let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
+    let camera_object = validate_camera_object(camera, &compiled)?;
     let program = ReactiveProgram::compile_for_execution_domain(
         compiled
             .objects()
@@ -132,20 +168,71 @@ pub fn lower_semantic_execution(
         compiled,
         reactive,
         compute,
+        camera_object,
     })
+}
+
+fn semantic_camera_object(
+    store: &SemanticStore,
+    projection: &SemanticExecutionProjection,
+) -> Result<Option<(SemanticNodeId, ObjectId)>, SemanticExecutionLoweringError> {
+    let mut camera = None;
+    for object in projection.objects() {
+        let state = store
+            .node(object.semantic_id)
+            .and_then(|node| node.semantic_object_state())
+            .expect("semantic projection object must retain authored object state");
+        if state.role() != SemanticObjectRole::Camera2D {
+            continue;
+        }
+        if let Some((first, _)) = camera {
+            return Err(SemanticExecutionLoweringError::MultipleCameraObjects {
+                first,
+                second: object.semantic_id,
+            });
+        }
+        camera = Some((object.semantic_id, object.execution_id));
+    }
+    Ok(camera)
+}
+
+fn validate_camera_object(
+    camera: Option<(SemanticNodeId, ObjectId)>,
+    compiled: &CompiledScene,
+) -> Result<Option<ObjectId>, SemanticExecutionLoweringError> {
+    let Some((node, object_id)) = camera else {
+        return Ok(None);
+    };
+    let object = compiled
+        .objects()
+        .iter()
+        .find(|object| object.live && object.id == object_id)
+        .expect("semantic camera object must exist in its compiled projection");
+    Camera2DState::from_frame_object(&object.geometry, object.base_transform)
+        .ok_or(SemanticExecutionLoweringError::InvalidCameraObject { node })?;
+    Ok(Some(object_id))
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Property, ReactiveValue, SemanticObjectProperty, SemanticObjectState, SemanticStore,
-        StoredGeometry, TextResourceHandle, TextResourceId,
+        Property, ReactiveValue, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState,
+        SemanticStore, SemanticVec3, StoredGeometry, TextResourceHandle, TextResourceId, Vec2,
     };
 
     use super::*;
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
+    }
+
+    fn camera(center: Vec2, height: f32) -> SemanticObjectState {
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(height * 16.0 / 9.0, height),
+        });
+        state.transform.translation = SemanticVec3::new(center.x as f64, center.y as f64, 0.0);
+        state.set_role(SemanticObjectRole::Camera2D);
+        state
     }
 
     #[test]
@@ -165,6 +252,7 @@ mod tests {
 
         assert_eq!(lowered.compiled().objects().len(), 1);
         assert_eq!(lowered.compiled().objects()[0].id, execution_id);
+        assert_eq!(lowered.camera_object(), None);
         assert_eq!(lowered.reactive().signal_count(), 1);
         assert_eq!(lowered.compute().signal_count(), 1);
         assert_eq!(
@@ -191,6 +279,67 @@ mod tests {
                 value: ReactiveValue::Scalar(0.7),
             }]
         );
+    }
+
+    #[test]
+    fn canonical_camera_role_lowers_to_existing_execution_object_identity() {
+        let mut store = SemanticStore::new();
+        let camera = store.insert_semantic_object(camera(Vec2::new(2.0, -1.0), 6.0));
+        store.attach_to_scene(camera).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+
+        assert_eq!(lowered.camera_object(), index.execution_object_id(camera));
+        let execution_id = lowered.camera_object().unwrap();
+        let compiled = lowered
+            .compiled()
+            .objects()
+            .iter()
+            .find(|object| object.id == execution_id)
+            .unwrap();
+        assert_eq!(
+            Camera2DState::from_frame_object(&compiled.geometry, compiled.base_transform),
+            Some(Camera2DState {
+                center: Vec2::new(2.0, -1.0),
+                height: 6.0,
+            })
+        );
+    }
+
+    #[test]
+    fn multiple_semantic_camera_roles_fail_without_publishing_identity() {
+        let mut store = SemanticStore::new();
+        let first = store.insert_semantic_object(camera(Vec2::ZERO, 8.0));
+        let second = store.insert_semantic_object(camera(Vec2::new(1.0, 0.0), 6.0));
+        store.attach_to_scene(first).unwrap();
+        store.attach_to_scene(second).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        assert!(matches!(
+            lower_semantic_execution(&store, &mut index),
+            Err(SemanticExecutionLoweringError::MultipleCameraObjects {
+                first: actual_first,
+                second: actual_second,
+            }) if actual_first == first && actual_second == second
+        ));
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn non_frame_semantic_camera_fails_without_publishing_identity() {
+        let mut store = SemanticStore::new();
+        let mut state = circle(1.0);
+        state.set_role(SemanticObjectRole::Camera2D);
+        let camera = store.insert_semantic_object(state);
+        store.attach_to_scene(camera).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        assert!(matches!(
+            lower_semantic_execution(&store, &mut index),
+            Err(SemanticExecutionLoweringError::InvalidCameraObject { node }) if node == camera
+        ));
+        assert!(index.is_empty());
     }
 
     #[test]

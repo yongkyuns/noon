@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use noon::{EvaluationError, ExecutionSession, FrameChanges};
+use noon::{EvaluationError, ExecutionSession, ExecutionSessionCameraError, FrameChanges};
 use noon_core::{Camera2DState, Vec2};
 use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
 use winit::application::ApplicationHandler;
@@ -49,6 +49,7 @@ pub enum NativeHostError {
     Platform(String),
     Gpu(String),
     Runtime(EvaluationError),
+    Camera(ExecutionSessionCameraError),
 }
 
 impl std::fmt::Display for NativeHostError {
@@ -57,6 +58,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Platform(message) => write!(formatter, "native platform error: {message}"),
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
             Self::Runtime(error) => error.fmt(formatter),
+            Self::Camera(error) => error.fmt(formatter),
         }
     }
 }
@@ -66,6 +68,12 @@ impl std::error::Error for NativeHostError {}
 impl From<EvaluationError> for NativeHostError {
     fn from(value: EvaluationError) -> Self {
         Self::Runtime(value)
+    }
+}
+
+impl From<ExecutionSessionCameraError> for NativeHostError {
+    fn from(value: ExecutionSessionCameraError) -> Self {
+        Self::Camera(value)
     }
 }
 
@@ -152,6 +160,8 @@ impl NativeApp {
 
         let started = self.started.get_or_insert_with(Instant::now);
         self.session.advance_to(started.elapsed().as_secs_f64())?;
+        let camera = self.session.camera()?;
+        gpu.set_camera(camera)?;
         let changes = self.session.take_frame_changes();
         let changes = if self.force_full_redraw {
             FrameChanges::all()
@@ -220,7 +230,14 @@ impl ApplicationHandler for NativeApp {
                 .as_ref()
                 .expect("resumed native host must own a window")
                 .clone();
-            match pollster::block_on(NativeGpu::new(window)) {
+            let camera = match self.session.camera() {
+                Ok(camera) => camera,
+                Err(error) => {
+                    self.fail(event_loop, error.into());
+                    return;
+                }
+            };
+            match pollster::block_on(NativeGpu::new(window, camera)) {
                 Ok(gpu) => {
                     self.gpu = Some(gpu);
                     self.started = Some(Instant::now());
@@ -247,8 +264,15 @@ impl ApplicationHandler for NativeApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                let camera = match self.session.camera() {
+                    Ok(camera) => camera,
+                    Err(error) => {
+                        self.fail(event_loop, error.into());
+                        return;
+                    }
+                };
                 if let Some(gpu) = self.gpu.as_mut() {
-                    if let Err(error) = gpu.resize(size) {
+                    if let Err(error) = gpu.resize(size, camera) {
                         self.fail(event_loop, error);
                         return;
                     }
@@ -287,7 +311,7 @@ struct NativeGpu {
 }
 
 impl NativeGpu {
-    async fn new(window: Arc<Window>) -> Result<Self, NativeHostError> {
+    async fn new(window: Arc<Window>, camera: Camera2DState) -> Result<Self, NativeHostError> {
         let size = window.inner_size();
         let width = size.width.max(1);
         let height = size.height.max(1);
@@ -321,7 +345,7 @@ impl NativeGpu {
 
         let mut renderer = GpuRenderer::new(&device, config.format);
         renderer.set_viewport(&device, &queue, width, height);
-        renderer.set_camera(&queue, camera_for_viewport(width, height)?);
+        renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 
         Ok(Self {
             instance,
@@ -335,7 +359,11 @@ impl NativeGpu {
         })
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), NativeHostError> {
+    fn resize(
+        &mut self,
+        size: PhysicalSize<u32>,
+        camera: Camera2DState,
+    ) -> Result<(), NativeHostError> {
         self.drawable = size.width > 0 && size.height > 0;
         if !self.drawable {
             return Ok(());
@@ -345,8 +373,21 @@ impl NativeGpu {
         self.surface.configure(&self.device, &self.config);
         self.renderer
             .set_viewport(&self.device, &self.queue, size.width, size.height);
-        self.renderer
-            .set_camera(&self.queue, camera_for_viewport(size.width, size.height)?);
+        self.renderer.set_camera(
+            &self.queue,
+            camera_for_viewport(camera, size.width, size.height)?,
+        );
+        Ok(())
+    }
+
+    fn set_camera(&mut self, camera: Camera2DState) -> Result<(), NativeHostError> {
+        if !self.drawable {
+            return Ok(());
+        }
+        self.renderer.set_camera(
+            &self.queue,
+            camera_for_viewport(camera, self.config.width, self.config.height)?,
+        );
         Ok(())
     }
 
@@ -379,13 +420,16 @@ impl NativeGpu {
     }
 }
 
-fn camera_for_viewport(width: u32, height: u32) -> Result<Camera2D, NativeHostError> {
+fn camera_for_viewport(
+    state: Camera2DState,
+    width: u32,
+    height: u32,
+) -> Result<Camera2D, NativeHostError> {
     if width == 0 || height == 0 {
         return Err(NativeHostError::Gpu(
             "camera viewport dimensions must be positive".to_owned(),
         ));
     }
-    let state = Camera2DState::default();
     let aspect = width as f32 / height as f32;
     Camera2D::new(state.center, Vec2::new(state.height * aspect, state.height))
         .map_err(|error| NativeHostError::Gpu(error.to_string()))
@@ -396,8 +440,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn canonical_camera_tracks_native_viewport_aspect() {
+        let state = Camera2DState {
+            center: Vec2::new(2.0, -1.0),
+            height: 6.0,
+        };
+        let camera = camera_for_viewport(state, 1600, 900).unwrap();
+        assert_eq!(camera.center, state.center);
+        assert!((camera.world_size.x - (6.0 * 16.0 / 9.0)).abs() < 1.0e-5);
+        assert_eq!(camera.world_size.y, 6.0);
+    }
+
+    #[test]
     fn default_camera_tracks_native_viewport_aspect() {
-        let camera = camera_for_viewport(1600, 900).unwrap();
+        let camera = camera_for_viewport(Camera2DState::default(), 1600, 900).unwrap();
         assert_eq!(camera.center, Vec2::ZERO);
         assert!((camera.world_size.x - (8.0 * 16.0 / 9.0)).abs() < 1.0e-5);
         assert_eq!(camera.world_size.y, 8.0);
@@ -405,15 +461,17 @@ mod tests {
 
     #[test]
     fn zero_sized_camera_viewport_is_rejected() {
-        assert!(camera_for_viewport(0, 720).is_err());
-        assert!(camera_for_viewport(1280, 0).is_err());
+        assert!(camera_for_viewport(Camera2DState::default(), 0, 720).is_err());
+        assert!(camera_for_viewport(Camera2DState::default(), 1280, 0).is_err());
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires an X11 display and a working native wgpu adapter"]
     fn native_surface_smoke_presents_typed_semantic_frame() {
-        use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
+        use noon_core::{
+            SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
+        };
         use winit::platform::x11::EventLoopBuilderExtX11;
 
         let mut store = SemanticStore::new();
@@ -422,7 +480,23 @@ mod tests {
                 radius: 1.5,
             }));
         store.attach_to_scene(circle).unwrap();
+
+        let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(12.0, 6.0),
+        });
+        camera_state.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
+        camera_state.set_role(SemanticObjectRole::Camera2D);
+        let camera = store.insert_semantic_object(camera_state);
+        store.attach_to_scene(camera).unwrap();
+
         let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        assert_eq!(
+            session.camera().unwrap(),
+            Camera2DState {
+                center: Vec2::new(2.0, -1.0),
+                height: 6.0,
+            }
+        );
 
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);

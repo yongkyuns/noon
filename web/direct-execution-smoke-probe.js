@@ -52,8 +52,10 @@ async function start() {
   if (!metrics.presented) {
     throw new Error("direct execution renderer did not present its semantic frame");
   }
-  if (metrics.objectCount !== 1) {
-    throw new Error(`direct execution renderer expected 1 object, got ${metrics.objectCount}`);
+  if (metrics.objectCount !== 2) {
+    throw new Error(
+      `direct execution renderer expected semantic object plus camera frame (2 objects), got ${metrics.objectCount}`,
+    );
   }
   if (metrics.drawCalls <= 0) {
     throw new Error(`direct execution renderer emitted ${metrics.drawCalls} draw calls`);
