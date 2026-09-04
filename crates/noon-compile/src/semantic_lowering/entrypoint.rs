@@ -1,4 +1,4 @@
-use noon_core::SemanticStore;
+use noon_core::{ComputeProgram, ReactiveProgram, SemanticStore};
 
 use crate::CompiledScene;
 
@@ -12,12 +12,12 @@ use super::{
 ///
 /// This is a composition boundary, not a second runtime scene model: object/timeline
 /// storage remains `CompiledScene`, native reactive execution remains the existing
-/// `ReactiveGraphDefinition`/compute VM, and durable runtime identity remains owned
-/// by `ExecutionSlotTable`.
+/// compute VM, and durable runtime identity remains owned by `ExecutionSlotTable`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionLoweringOutput {
     compiled: CompiledScene,
     reactive: SemanticReactiveProjection,
+    compute: ComputeProgram,
 }
 
 impl SemanticExecutionLoweringOutput {
@@ -29,8 +29,20 @@ impl SemanticExecutionLoweringOutput {
         &self.reactive
     }
 
+    pub fn compute(&self) -> &ComputeProgram {
+        &self.compute
+    }
+
+    /// Compatibility decomposition retained while callers migrate to consuming the
+    /// complete canonical execution handoff.
     pub fn into_parts(self) -> (CompiledScene, SemanticReactiveProjection) {
         (self.compiled, self.reactive)
+    }
+
+    pub fn into_execution_parts(
+        self,
+    ) -> (CompiledScene, SemanticReactiveProjection, ComputeProgram) {
+        (self.compiled, self.reactive, self.compute)
     }
 }
 
@@ -78,9 +90,11 @@ impl std::error::Error for SemanticExecutionLoweringError {}
 /// Canonical A1.6 initial-scene lowering entry point.
 ///
 /// Object values and active native-reactive bindings are lowered from the same
-/// semantic snapshot. The identity index is staged and published only after all
-/// downstream lowering succeeds, so unsupported compiled payloads or reactive
-/// channels cannot leave a partially admitted semantic-to-execution mapping.
+/// semantic snapshot. The reactive graph is validated against the already-lowered
+/// execution object/timeline domain and lowered into the existing compute VM. The
+/// identity index is staged and published only after all downstream lowering
+/// succeeds, including compute-program construction, so an invalid execution
+/// handoff cannot leave a partially admitted semantic-to-execution mapping.
 ///
 /// Authored animation declarations remain semantic intent until an explicit
 /// animation activation/composition root is supplied to its dedicated lowering
@@ -94,16 +108,38 @@ pub fn lower_semantic_execution(
     let projection = staged_index.lower_scene(store)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
     let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
+    let program = ReactiveProgram::compile_for_execution_domain(
+        compiled
+            .objects()
+            .iter()
+            .filter(|object| object.live)
+            .map(|object| object.id),
+        compiled.tracks_iter().map(|track| {
+            let object = compiled
+                .object_id_at_slot(track.object_index)
+                .expect("compiled timeline track must reference a live object slot");
+            (object, track.property)
+        }),
+        reactive.graph(),
+    )
+    .map_err(SemanticReactiveLoweringError::from)?;
+    let compute = program
+        .into_compute()
+        .map_err(SemanticReactiveLoweringError::from)?;
 
     *index = staged_index;
-    Ok(SemanticExecutionLoweringOutput { compiled, reactive })
+    Ok(SemanticExecutionLoweringOutput {
+        compiled,
+        reactive,
+        compute,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Property, SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
-        TextResourceHandle, TextResourceId,
+        Property, ReactiveValue, SemanticObjectProperty, SemanticObjectState, SemanticStore,
+        StoredGeometry, TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -113,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_entry_lowers_object_values_and_reactive_bindings_together() {
+    fn canonical_entry_lowers_object_values_and_reactivity_into_existing_compute_vm() {
         let mut store = SemanticStore::new();
         let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
         let object = store.insert_semantic_object(circle(2.0));
@@ -125,10 +161,12 @@ mod tests {
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&store, &mut index).unwrap();
         let execution_id = index.execution_object_id(object).unwrap();
+        let execution_signal = lowered.reactive().execution_signal_id(signal).unwrap();
 
         assert_eq!(lowered.compiled().objects().len(), 1);
         assert_eq!(lowered.compiled().objects()[0].id, execution_id);
         assert_eq!(lowered.reactive().signal_count(), 1);
+        assert_eq!(lowered.compute().signal_count(), 1);
         assert_eq!(
             lowered.reactive().graph().bindings()[0].object,
             execution_id
@@ -139,7 +177,19 @@ mod tests {
         );
         assert_eq!(
             lowered.reactive().graph().bindings()[0].signal,
-            lowered.reactive().execution_signal_id(signal).unwrap()
+            execution_signal
+        );
+
+        let mut compute = lowered.compute().clone().instantiate();
+        let update = compute.set_input(execution_signal, 0.7_f32).unwrap();
+        assert_eq!(update.affected_objects(), vec![execution_id]);
+        assert_eq!(
+            update.property_changes(),
+            &[noon_core::ReactivePropertyChange {
+                object: execution_id,
+                property: Property::Opacity,
+                value: ReactiveValue::Scalar(0.7),
+            }]
         );
     }
 
