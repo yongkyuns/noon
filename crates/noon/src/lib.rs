@@ -32,7 +32,10 @@ pub use execution_session::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
 pub use line_matcher_authoring::*;
-pub use noon_runtime::{EvaluationError, FrameChanges, FrameObjectState, FrameState};
+pub use noon_runtime::{
+    EvaluationError, FrameChanges, FrameObjectState, FrameState, RuntimeWakeState,
+    TimelineWakeState,
+};
 pub use polygram_authoring::*;
 pub use reactive_authoring::*;
 pub use retained_family_authoring_lowering::*;
