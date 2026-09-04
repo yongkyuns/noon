@@ -9,7 +9,7 @@ use crate::{ReactiveGraphDefinition, SignalId, SignalSource, ValueKind};
 /// Pointer positions are expressed in scene/world coordinates. Viewport size and
 /// wheel/gesture deltas use canvas CSS-pixel units. Controls are named scalar
 /// values supplied by the embedding UI.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NativeStateSource {
     PointerPosition,
@@ -39,7 +39,7 @@ impl NativeStateSource {
 /// Each event drives a scalar event-sequence signal. Runtime dispatch increments
 /// that signal (with a bounded wrap) for every event, so identical repeated events
 /// still invalidate their dependency closure without requiring a host callback.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NativeEventSource {
     PointerDown { button: u8 },

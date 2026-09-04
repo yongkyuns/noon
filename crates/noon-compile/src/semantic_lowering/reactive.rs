@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    Property, ReactiveError, ReactiveExpr, ReactiveGraphDefinition, ReactiveValue, SemanticNodeId,
+    NativeEventSource, NativeStateSource, Property, ReactiveError, ReactiveExpr,
+    ReactiveGraphDefinition, ReactiveValue, SemanticNativeInputSource, SemanticNodeId,
     SemanticObjectProperty, SemanticSignalError, SemanticSignalExpr, SemanticSignalSource,
     SemanticSignalValue, SemanticStore, SignalDefinition, SignalId, SignalSource,
 };
@@ -13,11 +14,15 @@ use super::SemanticExecutionProjection;
 ///
 /// This is not a second authored graph. `SignalId` values are deterministic
 /// compatibility encodings used only by the existing native reactive compiler/VM;
-/// semantic `SemanticNodeId` remains authoritative.
+/// semantic `SemanticNodeId` remains authoritative. Native input routing is derived
+/// from signal-owned semantic declarations while the same dependency closure is
+/// lowered, so platform hosts never need execution signal identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticReactiveProjection {
     graph: ReactiveGraphDefinition,
     signal_ids: HashMap<SemanticNodeId, SignalId>,
+    native_state_targets: HashMap<NativeStateSource, Vec<SignalId>>,
+    native_event_targets: HashMap<NativeEventSource, Vec<SignalId>>,
 }
 
 impl SemanticReactiveProjection {
@@ -27,6 +32,25 @@ impl SemanticReactiveProjection {
 
     pub fn execution_signal_id(&self, semantic_id: SemanticNodeId) -> Option<SignalId> {
         self.signal_ids.get(&semantic_id).copied()
+    }
+
+    /// Execution targets for one normalized sampled native source.
+    ///
+    /// This is an execution-plan detail consumed by `ExecutionSession`; public
+    /// platform hosts continue to operate only on `NativeStateSource` values.
+    pub fn native_state_targets(&self, source: &NativeStateSource) -> &[SignalId] {
+        self.native_state_targets
+            .get(source)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Execution targets for one normalized discrete native event source.
+    pub fn native_event_targets(&self, source: &NativeEventSource) -> &[SignalId] {
+        self.native_event_targets
+            .get(source)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn signal_count(&self) -> usize {
@@ -108,7 +132,8 @@ impl std::error::Error for SemanticReactiveLoweringError {}
 /// Unbound semantic signals remain authored scene state but do not consume execution
 /// VM slots. Dependencies are generation-checked through `SemanticStore`, and the
 /// resulting `ReactiveGraphDefinition` is the existing native execution graph rather
-/// than a new reactive runtime model.
+/// than a new reactive runtime model. Native input routes are captured only for the
+/// same lowered dependency closure, avoiding a second total-scene discovery pass.
 pub fn lower_semantic_reactive_projection(
     store: &SemanticStore,
     projection: &SemanticExecutionProjection,
@@ -118,6 +143,8 @@ pub fn lower_semantic_reactive_projection(
         definitions: Vec::new(),
         bindings: Vec::new(),
         signal_ids: HashMap::new(),
+        native_state_targets: HashMap::new(),
+        native_event_targets: HashMap::new(),
         visiting: HashSet::new(),
     };
 
@@ -137,6 +164,8 @@ pub fn lower_semantic_reactive_projection(
     Ok(SemanticReactiveProjection {
         graph,
         signal_ids: lowerer.signal_ids,
+        native_state_targets: lowerer.native_state_targets,
+        native_event_targets: lowerer.native_event_targets,
     })
 }
 
@@ -145,6 +174,8 @@ struct ReactiveLowerer<'a> {
     definitions: Vec<SignalDefinition>,
     bindings: Vec<noon_core::ReactiveBinding>,
     signal_ids: HashMap<SemanticNodeId, SignalId>,
+    native_state_targets: HashMap<NativeStateSource, Vec<SignalId>>,
+    native_event_targets: HashMap<NativeEventSource, Vec<SignalId>>,
     visiting: HashSet<SemanticNodeId>,
 }
 
@@ -160,17 +191,30 @@ impl ReactiveLowerer<'_> {
             return Err(SemanticReactiveLoweringError::DependencyCycle(semantic_id));
         }
 
-        let source = self
-            .store
-            .semantic_signal_state(semantic_id)?
-            .source()
-            .clone();
+        let state = self.store.semantic_signal_state(semantic_id)?;
+        let source = state.source().clone();
+        let native_input = state.native_input().cloned();
         let signal = compatibility_signal_id(semantic_id);
         let source = self.lower_source(semantic_id, &source)?;
         self.visiting.remove(&semantic_id);
         self.signal_ids.insert(semantic_id, signal);
         self.definitions
             .push(SignalDefinition { id: signal, source });
+        match native_input {
+            Some(SemanticNativeInputSource::State(source)) => {
+                self.native_state_targets
+                    .entry(source)
+                    .or_default()
+                    .push(signal);
+            }
+            Some(SemanticNativeInputSource::Event(source)) => {
+                self.native_event_targets
+                    .entry(source)
+                    .or_default()
+                    .push(signal);
+            }
+            None => {}
+        }
         Ok(signal)
     }
 
@@ -288,8 +332,8 @@ fn compatibility_signal_id(id: SemanticNodeId) -> SignalId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        ReactiveBinding, SemanticObjectState, SemanticSignalExpr, SemanticVec3, StoredGeometry,
-        Vec2,
+        NativeEventSource, NativeStateSource, ReactiveBinding, SemanticObjectState,
+        SemanticSignalExpr, SemanticVec3, StoredGeometry, Vec2,
     };
 
     use super::*;
@@ -359,6 +403,64 @@ mod tests {
                         Box::new(ReactiveExpr::Constant(ReactiveValue::Scalar(3.0))),
                     ))
         }));
+    }
+
+    #[test]
+    fn native_input_routes_are_lowered_with_the_active_reactive_dependency_closure() {
+        let mut store = SemanticStore::new();
+        let control = store.insert_semantic_input_signal(0.25_f64).unwrap();
+        let event = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let unrelated = store.insert_semantic_input_signal(false).unwrap();
+        let control_source = NativeStateSource::Control {
+            name: "opacity".to_owned(),
+        };
+        let event_source = NativeEventSource::KeyPress {
+            code: "Space".to_owned(),
+        };
+        store
+            .bind_semantic_native_state_input(control, control_source.clone())
+            .unwrap();
+        store
+            .bind_semantic_native_event_input(event, event_source.clone())
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(
+                unrelated,
+                NativeStateSource::Key {
+                    code: "KeyZ".to_owned(),
+                },
+            )
+            .unwrap();
+        let object = visible_circle(&mut store);
+        store
+            .bind_semantic_signal(control, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let derived = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(event)),
+                Box::new(SemanticSignalExpr::scalar(1.0)),
+            ))
+            .unwrap();
+        store
+            .bind_semantic_signal(derived, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let execution = projection(&store, &mut index);
+        let reactive = lower_semantic_reactive_projection(&store, &execution).unwrap();
+        let control_id = reactive.execution_signal_id(control).unwrap();
+        let event_id = reactive.execution_signal_id(event).unwrap();
+
+        assert_eq!(
+            reactive.native_state_targets(&control_source),
+            &[control_id]
+        );
+        assert_eq!(reactive.native_event_targets(&event_source), &[event_id]);
+        assert!(reactive
+            .native_state_targets(&NativeStateSource::Key {
+                code: "KeyZ".to_owned(),
+            })
+            .is_empty());
     }
 
     #[test]

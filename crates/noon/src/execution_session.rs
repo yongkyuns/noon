@@ -5,15 +5,18 @@ use noon_compile::{
     SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, MutationTransaction, ObjectId, ReactiveError, ReactiveValue,
-    ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
+    NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
+    ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
 use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
-/// Error produced when a semantic reactive input cannot be applied to this execution session.
+/// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionSessionInputError {
     UnknownSemanticSignal(SemanticNodeId),
+    NativeInput(NativeInputRuntimeError),
+    NativeEventOutOfOrder { previous: u64, next: u64 },
     Reactive(ReactiveError),
 }
 
@@ -26,12 +29,23 @@ impl std::fmt::Display for ExecutionSessionInputError {
                 signal.slot(),
                 signal.generation()
             ),
+            Self::NativeInput(error) => error.fmt(formatter),
+            Self::NativeEventOutOfOrder { previous, next } => write!(
+                formatter,
+                "native input event sequence must increase: previous {previous}, next {next}"
+            ),
             Self::Reactive(error) => error.fmt(formatter),
         }
     }
 }
 
 impl std::error::Error for ExecutionSessionInputError {}
+
+impl From<NativeInputRuntimeError> for ExecutionSessionInputError {
+    fn from(value: NativeInputRuntimeError) -> Self {
+        Self::NativeInput(value)
+    }
+}
 
 impl From<ReactiveError> for ExecutionSessionInputError {
     fn from(value: ReactiveError) -> Self {
@@ -132,6 +146,7 @@ pub struct ExecutionSession {
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
+    last_native_event_sequence: Option<u64>,
 }
 
 impl ExecutionSession {
@@ -156,6 +171,7 @@ impl ExecutionSession {
             runtime,
             camera_object,
             next_activation_track_id,
+            last_native_event_sequence: None,
         })
     }
 
@@ -268,17 +284,98 @@ impl ExecutionSession {
         Ok(self.runtime.set_reactive_input(execution_signal, value)?)
     }
 
+    /// Deliver one normalized sampled native state source through signal-owned routes.
+    ///
+    /// Source/value validation is shared with browser/native input envelopes. The
+    /// source is resolved only against routes emitted by semantic reactive lowering;
+    /// platform hosts never receive or construct execution `SignalId`s. An unbound
+    /// source is a valid no-op.
+    pub fn set_native_state_input(
+        &mut self,
+        source: NativeStateSource,
+        value: NativeInputValue,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
+        let update = NativeStateUpdate::new(source, value)?;
+        let targets = self
+            .reactive_projection
+            .native_state_targets(&update.source)
+            .to_vec();
+        let value = reactive_value_from_native(update.value);
+        for signal in targets {
+            self.runtime.set_reactive_input(signal, value.clone())?;
+        }
+        Ok(self.runtime.frame())
+    }
+
+    /// Deliver one explicitly ordered discrete native event occurrence.
+    ///
+    /// Occurrences are never coalesced. The session rejects duplicate/out-of-order
+    /// sequence numbers before changing any event signal, then advances each lowered
+    /// scalar event counter using the existing native-event convention.
+    pub fn emit_native_event(
+        &mut self,
+        occurrence: NativeEventOccurrence,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
+        if let Some(previous) = self.last_native_event_sequence {
+            if occurrence.sequence <= previous {
+                return Err(ExecutionSessionInputError::NativeEventOutOfOrder {
+                    previous,
+                    next: occurrence.sequence,
+                });
+            }
+        }
+
+        let targets = self
+            .reactive_projection
+            .native_event_targets(&occurrence.source)
+            .to_vec();
+        let next_values = targets
+            .iter()
+            .map(|signal| {
+                let value = self
+                    .runtime
+                    .reactive_value(*signal)
+                    .expect("lowered native event target must remain a live reactive signal");
+                let ReactiveValue::Scalar(current) = value else {
+                    unreachable!(
+                        "semantic native event declaration validates a scalar input signal"
+                    )
+                };
+                if *current >= 1_000_000.0 {
+                    1.0
+                } else {
+                    *current + 1.0
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (signal, next) in targets.into_iter().zip(next_values) {
+            self.runtime.set_reactive_input(signal, next)?;
+        }
+        self.last_native_event_sequence = Some(occurrence.sequence);
+        Ok(self.runtime.frame())
+    }
+
     /// Resolve an authoritative semantic object identity to its current execution key.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
     }
 }
 
+fn reactive_value_from_native(value: NativeInputValue) -> ReactiveValue {
+    match value {
+        NativeInputValue::Scalar(value) => ReactiveValue::Scalar(value),
+        NativeInputValue::Bool(value) => ReactiveValue::Bool(value),
+        NativeInputValue::Vec2(value) => ReactiveValue::Vec2(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, RateFunction, SemanticObjectProperty, SemanticObjectRole,
-        SemanticObjectState, SemanticVec3, StoredGeometry, Vec2,
+        AnimationOptions, NativeEventSource, NativeStateSource, RateFunction,
+        SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticVec3,
+        StoredGeometry, Vec2,
     };
 
     use super::*;
@@ -328,6 +425,105 @@ mod tests {
         session.seek(1.25).unwrap();
         assert_eq!(session.frame().time, 1.25);
         assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+    }
+
+    #[test]
+    fn native_sampled_source_reaches_runtime_without_exposing_signal_identity() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.25_f64).unwrap();
+        let source = NativeStateSource::Control {
+            name: "opacity".to_owned(),
+        };
+        store
+            .bind_semantic_native_state_input(signal, source.clone())
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        session.take_frame_changes();
+        session
+            .set_native_state_input(source, NativeInputValue::Scalar(0.8))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].style.opacity, 0.8);
+        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    }
+
+    #[test]
+    fn native_sampled_source_validates_value_before_runtime_mutation() {
+        let mut store = SemanticStore::new();
+        let signal = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(signal, NativeStateSource::ViewportSize)
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let before = session.frame().clone();
+
+        assert!(matches!(
+            session.set_native_state_input(
+                NativeStateSource::ViewportSize,
+                NativeInputValue::Scalar(1.0),
+            ),
+            Err(ExecutionSessionInputError::NativeInput(
+                NativeInputRuntimeError::TypeMismatch { .. }
+            ))
+        ));
+        assert_eq!(session.frame(), &before);
+    }
+
+    #[test]
+    fn native_discrete_events_are_ordered_and_never_coalesced() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let source = NativeEventSource::KeyPress {
+            code: "Space".to_owned(),
+        };
+        store
+            .bind_semantic_native_event_input(signal, source.clone())
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+
+        session
+            .emit_native_event(NativeEventOccurrence::new(10, source.clone()))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 1.0);
+        session
+            .emit_native_event(NativeEventOccurrence::new(11, source.clone()))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
+
+        assert_eq!(
+            session.emit_native_event(NativeEventOccurrence::new(11, source)),
+            Err(ExecutionSessionInputError::NativeEventOutOfOrder {
+                previous: 11,
+                next: 11,
+            })
+        );
+        assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
     }
 
     #[test]
