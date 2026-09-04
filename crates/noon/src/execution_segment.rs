@@ -102,10 +102,7 @@ impl ExecutionSession {
     /// This does not add a no-op track or mutate the runtime scheduler. The returned
     /// segment supplies the continuation deadline while ordinary runtime wake state
     /// continues to represent only real authored timeline work.
-    pub fn wait_segment(
-        &self,
-        duration: f64,
-    ) -> Result<ExecutionSegment, ExecutionSegmentError> {
+    pub fn wait_segment(&self, duration: f64) -> Result<ExecutionSegment, ExecutionSegmentError> {
         ExecutionSegment::from_duration(self.frame().time, duration)
     }
 
@@ -185,7 +182,10 @@ mod tests {
     fn pure_wait_exposes_deadline_without_creating_timeline_work() {
         let mut session = static_session();
         session.take_frame_changes();
-        assert_eq!(session.wake_state().timeline(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
 
         let segment = session.wait_segment(2.0).unwrap();
         assert_eq!(segment.start_time(), 0.0);
@@ -195,7 +195,10 @@ mod tests {
             session.segment_state(segment).timeline(),
             TimelineWakeState::Deadline(2.0)
         );
-        assert_eq!(session.wake_state().timeline(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
 
         session.advance_segment_to(segment, 1.0).unwrap();
         assert_eq!(session.frame().time, 1.0);
@@ -204,7 +207,10 @@ mod tests {
         session.advance_segment_to(segment, 9.0).unwrap();
         assert_eq!(session.frame().time, 2.0);
         assert!(session.segment_state(segment).is_complete());
-        assert_eq!(session.wake_state().timeline(), TimelineWakeState::Quiescent);
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
     }
 
     #[test]
