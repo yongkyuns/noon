@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     Color, ObjectId, SemanticMutationImpact, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticPresentation, SemanticStore,
-    SemanticStoreError, Style, Transform2D,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticPresentation,
+    SemanticSignalBinding, SemanticStore, SemanticStoreError, Style, Transform2D,
 };
 
 /// Compiler-owned identity bridge from authoritative semantic nodes to the existing
@@ -92,8 +92,10 @@ impl SemanticExecutionIndex {
     /// Shared/aliased leaves are emitted once at their first visible occurrence.
     /// Mixed content remains in the target `SemanticObjectContent` handle domain;
     /// high-precision transform/style values are explicitly compacted to the current
-    /// f32/2D execution values. No migration-era retained-content or dense retained
-    /// scene mirror participates in this boundary.
+    /// f32/2D execution values. Authored native-reactive property bindings remain
+    /// semantic-identity declarations for the later execution-slot lowering step.
+    /// No migration-era retained-content or dense retained scene mirror participates
+    /// in this boundary.
     ///
     /// Every visible object is validated and value-lowered before the identity index
     /// is mutated, so one late lowering failure cannot leave a partially updated
@@ -129,6 +131,7 @@ impl SemanticExecutionIndex {
                 base_transform: state.base_transform,
                 base_style: state.base_style,
                 presentation: state.presentation,
+                signal_bindings: state.signal_bindings,
             })
             .collect();
 
@@ -183,6 +186,9 @@ pub struct SemanticExecutionObject {
     pub base_style: Style,
     /// Stable painter-order metadata remains independent from transform/style.
     pub presentation: SemanticPresentation,
+    /// Ordered authored signal drivers. Signal identity remains semantic here; the
+    /// runtime consumer maps it to native reactive slots and dirty closure later.
+    pub signal_bindings: Vec<SemanticSignalBinding>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +291,7 @@ struct LoweredObjectState {
     base_transform: Transform2D,
     base_style: Style,
     presentation: SemanticPresentation,
+    signal_bindings: Vec<SemanticSignalBinding>,
 }
 
 fn lower_object_state(
@@ -316,6 +323,7 @@ fn lower_object_state(
         },
         base_style: lower_style(semantic_id, state)?,
         presentation: state.presentation(),
+        signal_bindings: state.signal_bindings().to_vec(),
     })
 }
 
@@ -526,6 +534,43 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn lower_scene_preserves_ordered_native_reactive_bindings() {
+        let mut store = SemanticStore::new();
+        let opacity_signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
+        let translation_signal = store
+            .insert_semantic_input_signal(SemanticVec3::new(3.0, 4.0, 5.0))
+            .unwrap();
+        let object = attach(&mut store, circle(1.0));
+        store
+            .bind_semantic_signal(
+                opacity_signal,
+                object,
+                SemanticObjectProperty::ObjectOpacity,
+            )
+            .unwrap();
+        store
+            .bind_semantic_signal(
+                translation_signal,
+                object,
+                SemanticObjectProperty::Translation,
+            )
+            .unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = index.lower_scene(&store).unwrap();
+        let bindings = &lowered.objects()[0].signal_bindings;
+
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].signal(), opacity_signal);
+        assert_eq!(
+            bindings[0].property(),
+            SemanticObjectProperty::ObjectOpacity
+        );
+        assert_eq!(bindings[1].signal(), translation_signal);
+        assert_eq!(bindings[1].property(), SemanticObjectProperty::Translation);
     }
 
     #[test]
