@@ -51,10 +51,19 @@ pub enum ExecutionSessionAnimationError {
 impl std::fmt::Display for ExecutionSessionAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Schedule(error) => write!(formatter, "semantic animation scheduling failed: {error}"),
-            Self::Payload(error) => write!(formatter, "semantic animation payload lowering failed: {error}"),
-            Self::Publication(error) => write!(formatter, "semantic animation publication failed: {error}"),
-            Self::TrackIdExhausted => formatter.write_str("execution animation track ID space exhausted"),
+            Self::Schedule(error) => {
+                write!(formatter, "semantic animation scheduling failed: {error}")
+            }
+            Self::Payload(error) => write!(
+                formatter,
+                "semantic animation payload lowering failed: {error}"
+            ),
+            Self::Publication(error) => {
+                write!(formatter, "semantic animation publication failed: {error}")
+            }
+            Self::TrackIdExhausted => {
+                formatter.write_str("execution animation track ID space exhausted")
+            }
         }
     }
 }
