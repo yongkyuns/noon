@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use noon_compile::{CompileError, CompiledScene};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, Property, ReactiveBinding, ReactiveError,
-    ReactiveEvaluationStats, ReactiveValue, SemanticScene, SignalId,
+    ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
 };
 
 use crate::{FrameState, SceneInstance};
@@ -78,7 +78,7 @@ impl ReactiveRuntime {
         for binding in bindings {
             let object_index = compiled
                 .object_index(binding.object)
-                .expect("reactive graph was validated against the compiled definition")
+                .expect("reactive graph was validated against the compiled execution domain")
                 as usize;
             let target_index = targets.len();
             targets.push(ReactiveTarget {
@@ -152,7 +152,21 @@ impl SceneInstance {
     /// the timeline, or scan unrelated objects.
     pub fn from_semantic(scene: &SemanticScene) -> Result<Self, SceneBuildError> {
         let compiled = CompiledScene::compile(scene.definition())?;
-        let program = scene.compile_reactive()?.into_compute()?;
+        let program = ReactiveProgram::compile_for_execution_domain(
+            compiled
+                .objects()
+                .iter()
+                .filter(|object| object.live)
+                .map(|object| object.id),
+            compiled.tracks_iter().map(|track| {
+                let object = compiled
+                    .object_id_at_slot(track.object_index)
+                    .expect("compiled timeline track must reference a live object slot");
+                (object, track.property)
+            }),
+            scene.reactive(),
+        )?
+        .into_compute()?;
         let reactive = ReactiveRuntime::new(&compiled, scene.reactive().bindings(), program);
         let mut instance = Self::new(compiled);
         instance.reactive = Some(reactive);
