@@ -21,7 +21,7 @@ impl ExecutionSegment {
             return Err(ExecutionSegmentError::InvalidDuration(duration));
         }
         let end_time = start_time + duration;
-        if !end_time.is_finite() {
+        if !end_time.is_finite() || (duration > 0.0 && end_time <= start_time) {
             return Err(ExecutionSegmentError::EndTimeOverflow {
                 start_time,
                 duration,
@@ -64,7 +64,7 @@ impl std::fmt::Display for ExecutionSegmentError {
                 duration,
             } => write!(
                 formatter,
-                "execution segment end time is not finite: start {start_time}, duration {duration}"
+                "execution segment end time is not representable after start {start_time} with duration {duration}"
             ),
         }
     }
@@ -277,6 +277,13 @@ mod tests {
         ));
 
         session.seek(f64::MAX).unwrap();
+        assert_eq!(
+            session.wait_segment(1.0),
+            Err(ExecutionSegmentError::EndTimeOverflow {
+                start_time: f64::MAX,
+                duration: 1.0,
+            })
+        );
         assert_eq!(
             session.wait_segment(f64::MAX),
             Err(ExecutionSegmentError::EndTimeOverflow {
