@@ -11,6 +11,7 @@ mod arc_authoring;
 mod camera_authoring;
 mod dashed_line_authoring;
 mod elbow_authoring;
+mod execution_segment;
 mod execution_session;
 mod geometry_authoring;
 mod legacy;
@@ -28,6 +29,7 @@ pub use arc_authoring::*;
 pub use camera_authoring::*;
 pub use dashed_line_authoring::*;
 pub use elbow_authoring::*;
+pub use execution_segment::*;
 pub use execution_session::*;
 pub use geometry_authoring::*;
 pub use legacy::*;
@@ -50,10 +52,11 @@ pub mod prelude {
     pub use crate::{
         AnnularSector, Annulus, Arc, ArcAuthoringError, ArcBetweenPoints, BackgroundRectangle,
         Cross, DashedLine, DashedLineAuthoringError, Dot, Elbow, ElbowAuthoringError, Ellipse,
-        ExecutionSession, ExecutionSessionInputError, GeometryAuthoringError,
-        LineMatcherAuthoringError, LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene,
-        Polygon, Polygram, PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene,
-        RegularPolygon, RegularPolygram, RetainedFamilyAnimationLoweringError,
+        ExecutionSegment, ExecutionSegmentError, ExecutionSegmentState, ExecutionSession,
+        ExecutionSessionInputError, GeometryAuthoringError, LineMatcherAuthoringError,
+        LoweredRetainedFamilyAnimation, MathTypst, MovingCameraScene, Polygon, Polygram,
+        PolygramAuthoringError, ReactiveScene, ReactiveTimelineScene, RegularPolygon,
+        RegularPolygram, RetainedFamilyAnimationLoweringError,
         RetainedFamilyAnimationLoweringSession, RetainedMobject, RetainedScene, RoundedRectangle,
         RoundedRectangleAuthoringError, Sector, ShapeMatcherAuthoringError, Star,
         SurroundingRectangle, Text, TextAuthoringError, Triangle, Typst, Underline, ValueTracker,
