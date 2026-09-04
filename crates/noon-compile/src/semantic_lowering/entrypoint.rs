@@ -1,4 +1,4 @@
-use noon_core::SemanticStore;
+use noon_core::{ComputeProgram, ReactiveError, ReactiveProgram, SemanticStore};
 
 use crate::CompiledScene;
 
@@ -18,6 +18,7 @@ use super::{
 pub struct SemanticExecutionLoweringOutput {
     compiled: CompiledScene,
     reactive: SemanticReactiveProjection,
+    compute: ComputeProgram,
 }
 
 impl SemanticExecutionLoweringOutput {
@@ -29,8 +30,22 @@ impl SemanticExecutionLoweringOutput {
         &self.reactive
     }
 
+    /// Existing native reactive VM program compiled against the same lowered
+    /// object/timeline execution domain as this semantic snapshot.
+    pub fn compute(&self) -> &ComputeProgram {
+        &self.compute
+    }
+
+    /// Compatibility decomposition retained while callers migrate to consuming the
+    /// complete canonical execution handoff.
     pub fn into_parts(self) -> (CompiledScene, SemanticReactiveProjection) {
         (self.compiled, self.reactive)
+    }
+
+    pub fn into_execution_parts(
+        self,
+    ) -> (CompiledScene, SemanticReactiveProjection, ComputeProgram) {
+        (self.compiled, self.reactive, self.compute)
     }
 }
 
@@ -39,6 +54,7 @@ pub enum SemanticExecutionLoweringError {
     Object(SemanticLoweringError),
     Reactive(SemanticReactiveLoweringError),
     Compiled(SemanticCompiledSceneError),
+    NativeReactive(ReactiveError),
 }
 
 impl From<SemanticLoweringError> for SemanticExecutionLoweringError {
@@ -59,6 +75,12 @@ impl From<SemanticCompiledSceneError> for SemanticExecutionLoweringError {
     }
 }
 
+impl From<ReactiveError> for SemanticExecutionLoweringError {
+    fn from(value: ReactiveError) -> Self {
+        Self::NativeReactive(value)
+    }
+}
+
 impl std::fmt::Display for SemanticExecutionLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -68,6 +90,9 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
             }
             Self::Compiled(error) => {
                 write!(formatter, "compiled execution lowering failed: {error}")
+            }
+            Self::NativeReactive(error) => {
+                write!(formatter, "native reactive program compilation failed: {error}")
             }
         }
     }
@@ -79,8 +104,9 @@ impl std::error::Error for SemanticExecutionLoweringError {}
 ///
 /// Object values and active native-reactive bindings are lowered from the same
 /// semantic snapshot. The identity index is staged and published only after all
-/// downstream lowering succeeds, so unsupported compiled payloads or reactive
-/// channels cannot leave a partially admitted semantic-to-execution mapping.
+/// downstream lowering succeeds, so unsupported compiled payloads, reactive
+/// channels, or VM compilation cannot leave a partially admitted
+/// semantic-to-execution mapping.
 ///
 /// Authored animation declarations remain semantic intent until an explicit
 /// animation activation/composition root is supplied to its dedicated lowering
@@ -94,16 +120,34 @@ pub fn lower_semantic_execution(
     let projection = staged_index.lower_scene(store)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
     let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(&projection)?;
+    let compute = ReactiveProgram::compile_for_execution_domain(
+        compiled
+            .objects()
+            .iter()
+            .filter(|object| object.live)
+            .map(|object| object.id),
+        compiled.tracks_iter().filter_map(|track| {
+            compiled
+                .object_id_at_slot(track.object_index)
+                .map(|object| (object, track.property))
+        }),
+        reactive.graph(),
+    )?
+    .into_compute()?;
 
     *index = staged_index;
-    Ok(SemanticExecutionLoweringOutput { compiled, reactive })
+    Ok(SemanticExecutionLoweringOutput {
+        compiled,
+        reactive,
+        compute,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        Property, SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
-        TextResourceHandle, TextResourceId,
+        Property, ReactiveValue, SemanticObjectProperty, SemanticObjectState, SemanticStore,
+        StoredGeometry, TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -113,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_entry_lowers_object_values_and_reactive_bindings_together() {
+    fn canonical_entry_lowers_object_values_and_reactive_bindings_into_existing_vm() {
         let mut store = SemanticStore::new();
         let signal = store.insert_semantic_input_signal(0.4_f64).unwrap();
         let object = store.insert_semantic_object(circle(2.0));
@@ -125,10 +169,12 @@ mod tests {
         let mut index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(&store, &mut index).unwrap();
         let execution_id = index.execution_object_id(object).unwrap();
+        let execution_signal = lowered.reactive().execution_signal_id(signal).unwrap();
 
         assert_eq!(lowered.compiled().objects().len(), 1);
         assert_eq!(lowered.compiled().objects()[0].id, execution_id);
         assert_eq!(lowered.reactive().signal_count(), 1);
+        assert_eq!(lowered.compute().signal_count(), 1);
         assert_eq!(
             lowered.reactive().graph().bindings()[0].object,
             execution_id
@@ -139,7 +185,18 @@ mod tests {
         );
         assert_eq!(
             lowered.reactive().graph().bindings()[0].signal,
-            lowered.reactive().execution_signal_id(signal).unwrap()
+            execution_signal
+        );
+
+        let mut state = lowered.compute().clone().instantiate();
+        let update = state.set_input(execution_signal, 0.75_f32).unwrap();
+        assert_eq!(update.affected_objects(), vec![execution_id]);
+        assert_eq!(update.property_changes().len(), 1);
+        assert_eq!(update.property_changes()[0].object, execution_id);
+        assert_eq!(update.property_changes()[0].property, Property::Opacity);
+        assert_eq!(
+            update.property_changes()[0].value,
+            ReactiveValue::Scalar(0.75)
         );
     }
 
