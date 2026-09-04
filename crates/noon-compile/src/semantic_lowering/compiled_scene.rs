@@ -75,56 +75,72 @@ impl CompiledScene {
     /// Materialize the already value-lowered semantic object projection into the
     /// existing stable compiled object representation.
     ///
-    /// Frame-row order is the semantic presentation order. Execution identity is
-    /// preserved through each object's derived execution key, so ordering does not
-    /// manufacture or rewrite identity. Timeline/reactive declarations are outside
-    /// this object-value projection and are lowered through their dedicated A1.6
-    /// channels rather than being synthesized here.
+    /// This standalone compatibility entry remains fail-closed when native-reactive
+    /// bindings are present. Callers that need the complete semantic execution
+    /// boundary must use `lower_semantic_execution`, which lowers those bindings
+    /// through the native reactive graph before object materialization.
     pub fn from_semantic_projection(
         projection: &SemanticExecutionProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        let mut ordered = projection.objects().iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|object| object.presentation.order_key());
-
-        let count = ordered.len();
-        if u32::try_from(count).is_err() {
-            return Err(SemanticCompiledSceneError::TooManyObjects(count));
-        }
-
-        let mut objects = Vec::with_capacity(count);
-        let mut object_indices = BTreeMap::new();
-
-        for (index, object) in ordered.into_iter().enumerate() {
-            if !object.signal_bindings.is_empty() {
-                return Err(SemanticCompiledSceneError::UnsupportedSignalBindings {
-                    node: object.semantic_id,
-                    count: object.signal_bindings.len(),
-                });
-            }
-
-            let object_index = u32::try_from(index)
-                .map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-            let geometry = lower_geometry(object.semantic_id, object.content)?;
-            objects.push(CompiledObject {
-                id: object.execution_id,
-                geometry,
-                base_transform: object.base_transform,
-                base_style: object.base_style,
-                dynamic: DynamicProperties::default(),
-                live: true,
-            });
-            object_indices.insert(object.execution_id, object_index);
-        }
-
-        Ok(Self {
-            live_object_count: objects.len(),
-            objects,
-            tracks: BTreeMap::new(),
-            track_count: 0,
-            object_indices,
-            track_locators: BTreeMap::new(),
-        })
+        materialize_semantic_projection(projection, false)
     }
+
+    /// Materialize object values after the canonical A1.6 entry point has
+    /// successfully consumed every semantic signal binding into the native reactive
+    /// projection. Kept crate-private so standalone callers cannot silently drop
+    /// bindings by opting into this path directly.
+    pub(crate) fn from_semantic_projection_after_reactive_lowering(
+        projection: &SemanticExecutionProjection,
+    ) -> Result<Self, SemanticCompiledSceneError> {
+        materialize_semantic_projection(projection, true)
+    }
+}
+
+fn materialize_semantic_projection(
+    projection: &SemanticExecutionProjection,
+    reactive_bindings_lowered: bool,
+) -> Result<CompiledScene, SemanticCompiledSceneError> {
+    let mut ordered = projection.objects().iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|object| object.presentation.order_key());
+
+    let count = ordered.len();
+    if u32::try_from(count).is_err() {
+        return Err(SemanticCompiledSceneError::TooManyObjects(count));
+    }
+
+    let mut objects = Vec::with_capacity(count);
+    let mut object_indices = BTreeMap::new();
+
+    for (index, object) in ordered.into_iter().enumerate() {
+        if !reactive_bindings_lowered && !object.signal_bindings.is_empty() {
+            return Err(SemanticCompiledSceneError::UnsupportedSignalBindings {
+                node: object.semantic_id,
+                count: object.signal_bindings.len(),
+            });
+        }
+
+        let object_index =
+            u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
+        let geometry = lower_geometry(object.semantic_id, object.content)?;
+        objects.push(CompiledObject {
+            id: object.execution_id,
+            geometry,
+            base_transform: object.base_transform,
+            base_style: object.base_style,
+            dynamic: DynamicProperties::default(),
+            live: true,
+        });
+        object_indices.insert(object.execution_id, object_index);
+    }
+
+    Ok(CompiledScene {
+        live_object_count: objects.len(),
+        objects,
+        tracks: BTreeMap::new(),
+        track_count: 0,
+        object_indices,
+        track_locators: BTreeMap::new(),
+    })
 }
 
 fn lower_geometry(
