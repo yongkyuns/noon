@@ -1,14 +1,48 @@
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
-    lower_semantic_execution, CompilePatchError, SemanticAffineAnimationTrackError,
-    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
-    SemanticReactiveProjection,
+    lower_semantic_execution, lower_semantic_native_inputs, CompilePatchError,
+    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
+    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput,
+    SemanticNativeInputLoweringError, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, MutationTransaction, ObjectId, ReactiveError, ReactiveValue,
-    ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    AnimationOptions, Camera2DState, MutationTransaction, NativeEventSource, NativeStateUpdate,
+    ObjectId, ReactiveError, ReactiveValue, ScenePatch, SemanticNativeInputDefinition,
+    SemanticNodeId, SemanticStore, TrackId,
 };
-use noon_runtime::{EvaluationError, FrameChanges, FrameState, SceneInstance};
+use noon_runtime::{
+    EvaluationError, FrameChanges, FrameState, NativeInputRouter, NativeInputStats, SceneInstance,
+};
+
+/// Error produced while constructing a session with semantic native-input declarations.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionSessionBuildError {
+    Execution(SemanticExecutionLoweringError),
+    NativeInput(SemanticNativeInputLoweringError),
+}
+
+impl std::fmt::Display for ExecutionSessionBuildError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Execution(error) => error.fmt(formatter),
+            Self::NativeInput(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSessionBuildError {}
+
+impl From<SemanticExecutionLoweringError> for ExecutionSessionBuildError {
+    fn from(value: SemanticExecutionLoweringError) -> Self {
+        Self::Execution(value)
+    }
+}
+
+impl From<SemanticNativeInputLoweringError> for ExecutionSessionBuildError {
+    fn from(value: SemanticNativeInputLoweringError) -> Self {
+        Self::NativeInput(value)
+    }
+}
 
 /// Error produced when a semantic reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,6 +164,7 @@ pub struct ExecutionSession {
     execution_index: SemanticExecutionIndex,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
+    native_inputs: NativeInputRouter,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
 }
@@ -141,6 +176,40 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
+        Ok(Self::from_lowered(
+            execution_index,
+            lowered,
+            NativeInputRouter::default(),
+        ))
+    }
+
+    /// Lower one authoritative semantic snapshot plus native-input declarations.
+    ///
+    /// Scene/reactive/input lowering occurs under the same immutable store borrow, so
+    /// a caller cannot validate native input identity against a later semantic mutation
+    /// while retaining an older execution projection.
+    pub fn from_semantic_store_with_native_inputs(
+        store: &SemanticStore,
+        inputs: &SemanticNativeInputDefinition,
+    ) -> Result<Self, ExecutionSessionBuildError> {
+        let mut execution_index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(store, &mut execution_index)?;
+        let native_definition = lower_semantic_native_inputs(store, inputs, lowered.reactive())?;
+        let native_inputs =
+            NativeInputRouter::from_definition(lowered.reactive().graph(), &native_definition)
+                .map_err(|error| {
+                    ExecutionSessionBuildError::NativeInput(
+                        SemanticNativeInputLoweringError::Execution(error),
+                    )
+                })?;
+        Ok(Self::from_lowered(execution_index, lowered, native_inputs))
+    }
+
+    fn from_lowered(
+        execution_index: SemanticExecutionIndex,
+        lowered: SemanticExecutionLoweringOutput,
+        native_inputs: NativeInputRouter,
+    ) -> Self {
         let camera_object = lowered.camera_object();
         let next_activation_track_id = lowered
             .compiled()
@@ -150,13 +219,14 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let reactive_projection = lowered.reactive().clone();
         let runtime = SceneInstance::from_semantic_execution(lowered);
-        Ok(Self {
+        Self {
             execution_index,
             reactive_projection,
             runtime,
+            native_inputs,
             camera_object,
             next_activation_track_id,
-        })
+        }
     }
 
     /// Current renderer-facing runtime frame.
@@ -268,6 +338,33 @@ impl ExecutionSession {
         Ok(self.runtime.set_reactive_input(execution_signal, value)?)
     }
 
+    /// Dispatch one validated sampled native input through the shared runtime router.
+    pub fn dispatch_native_state(
+        &mut self,
+        update: NativeStateUpdate,
+    ) -> Result<bool, ExecutionSessionInputError> {
+        Ok(self.native_inputs.dispatch_state_scene(
+            &mut self.runtime,
+            &update.source,
+            update.value,
+        )?)
+    }
+
+    /// Dispatch one normalized discrete native event through the shared runtime router.
+    pub fn emit_native_event(
+        &mut self,
+        source: &NativeEventSource,
+    ) -> Result<bool, ExecutionSessionInputError> {
+        Ok(self
+            .native_inputs
+            .emit_event_scene(&mut self.runtime, source)?)
+    }
+
+    /// Work counters from the shared native-input router.
+    pub const fn native_input_stats(&self) -> NativeInputStats {
+        self.native_inputs.stats()
+    }
+
     /// Resolve an authoritative semantic object identity to its current execution key.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
@@ -277,7 +374,8 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, RateFunction, SemanticObjectProperty, SemanticObjectRole,
+        AnimationOptions, NativeEventSource, NativeInputValue, NativeStateSource, RateFunction,
+        SemanticNativeInputDefinition, SemanticObjectProperty, SemanticObjectRole,
         SemanticObjectState, SemanticVec3, StoredGeometry, Vec2,
     };
 
@@ -380,6 +478,66 @@ mod tests {
             session.set_reactive_input(object, 1.0_f32),
             Err(ExecutionSessionInputError::UnknownSemanticSignal(object))
         );
+    }
+
+    #[test]
+    fn semantic_native_inputs_use_shared_router_without_exposing_execution_signal_ids() {
+        let mut store = SemanticStore::new();
+        let pointer = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(pointer, object, SemanticObjectProperty::Position)
+            .unwrap();
+        store
+            .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+
+        let mut inputs = SemanticNativeInputDefinition::new();
+        inputs
+            .bind_state(NativeStateSource::PointerPosition, pointer)
+            .bind_event(NativeEventSource::PointerDown { button: 0 }, clicks);
+
+        let mut session =
+            ExecutionSession::from_semantic_store_with_native_inputs(&store, &inputs).unwrap();
+        session.take_frame_changes();
+
+        assert!(session
+            .dispatch_native_state(
+                NativeStateUpdate::new(
+                    NativeStateSource::PointerPosition,
+                    NativeInputValue::Vec2(Vec2::new(2.0, -1.0)),
+                )
+                .unwrap(),
+            )
+            .unwrap());
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        assert!(!session
+            .dispatch_native_state(
+                NativeStateUpdate::new(
+                    NativeStateSource::PointerPosition,
+                    NativeInputValue::Vec2(Vec2::new(2.0, -1.0)),
+                )
+                .unwrap(),
+            )
+            .unwrap());
+
+        let click = NativeEventSource::PointerDown { button: 0 };
+        assert!(session.emit_native_event(&click).unwrap());
+        assert!(session.emit_native_event(&click).unwrap());
+        assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(session.native_input_stats().state_samples_coalesced, 1);
+        assert_eq!(session.native_input_stats().events_received, 2);
+        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
     }
 
     #[test]

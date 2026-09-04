@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    NativeEventSource, NativeInputBinding, NativeStateSource, ReactiveValue, SignalId,
+    NativeEventSource, NativeInputBinding, NativeInputDefinition, NativeInputError,
+    NativeStateSource, ReactiveError, ReactiveGraphDefinition, ReactiveValue, SignalId,
     SignalTimelineError, TimedSemanticScene, ValueKind,
 };
 
-use super::{TimedSceneInstance, TimedSceneRuntimeError};
+use crate::SceneInstance;
+
+use super::{ReactiveRuntimeStats, TimedSceneInstance, TimedSceneRuntimeError};
 
 const EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
@@ -22,7 +25,7 @@ pub struct NativeInputStats {
     pub bindings_invalidated: u64,
 }
 
-/// Dense runtime routing from semantic input sources to reactive signal IDs.
+/// Dense runtime routing from normalized native input sources to reactive signal IDs.
 ///
 /// The router indexes only declared native inputs. Dispatch never scans semantic
 /// objects or the full reactive graph. Identical sampled state is coalesced before
@@ -47,9 +50,25 @@ impl NativeInputRouter {
         {
             return Err(SignalTimelineError::ExternallyDrivenSignal(track.signal));
         }
+        Ok(Self::from_validated_definition(scene.native_inputs()))
+    }
 
+    /// Build routing over an already-lowered native-reactive execution graph.
+    ///
+    /// This is the current `SemanticStore -> ExecutionSession` entry point. Signal
+    /// identity has already been resolved by canonical lowering; the router only
+    /// owns source-to-signal lookup and dispatch accounting.
+    pub fn from_definition(
+        graph: &ReactiveGraphDefinition,
+        inputs: &NativeInputDefinition,
+    ) -> Result<Self, NativeInputError> {
+        inputs.validate(graph)?;
+        Ok(Self::from_validated_definition(inputs))
+    }
+
+    fn from_validated_definition(inputs: &NativeInputDefinition) -> Self {
         let mut result = Self::default();
-        for binding in scene.native_inputs().bindings() {
+        for binding in inputs.bindings() {
             match binding {
                 NativeInputBinding::State { source, signal } => {
                     result
@@ -67,7 +86,7 @@ impl NativeInputRouter {
                 }
             }
         }
-        Ok(result)
+        result
     }
 
     pub const fn stats(&self) -> NativeInputStats {
@@ -92,12 +111,30 @@ impl NativeInputRouter {
         source: &NativeStateSource,
         value: impl Into<ReactiveValue>,
     ) -> Result<bool, TimedSceneRuntimeError> {
+        self.dispatch_state_to(instance, source, value.into())
+    }
+
+    /// Dispatch sampled state into the current canonical scene runtime.
+    pub fn dispatch_state_scene(
+        &mut self,
+        instance: &mut SceneInstance,
+        source: &NativeStateSource,
+        value: impl Into<ReactiveValue>,
+    ) -> Result<bool, ReactiveError> {
+        self.dispatch_state_to(instance, source, value.into())
+    }
+
+    fn dispatch_state_to<T: NativeInputTarget>(
+        &mut self,
+        instance: &mut T,
+        source: &NativeStateSource,
+        value: ReactiveValue,
+    ) -> Result<bool, T::Error> {
         self.stats.state_samples_received += 1;
         let Some(signals) = self.state.get(source) else {
             self.stats.state_dispatches_dropped += 1;
             return Ok(false);
         };
-        let value = value.into();
         let mut changed = false;
         for signal in signals {
             if instance.reactive_value(*signal) == Some(&value) {
@@ -121,6 +158,23 @@ impl NativeInputRouter {
         instance: &mut TimedSceneInstance,
         source: &NativeEventSource,
     ) -> Result<bool, TimedSceneRuntimeError> {
+        self.emit_event_to(instance, source)
+    }
+
+    /// Dispatch one ordered event occurrence into the current canonical scene runtime.
+    pub fn emit_event_scene(
+        &mut self,
+        instance: &mut SceneInstance,
+        source: &NativeEventSource,
+    ) -> Result<bool, ReactiveError> {
+        self.emit_event_to(instance, source)
+    }
+
+    fn emit_event_to<T: NativeInputTarget>(
+        &mut self,
+        instance: &mut T,
+        source: &NativeEventSource,
+    ) -> Result<bool, T::Error> {
         self.stats.events_received += 1;
         let Some(signals) = self.events.get(source) else {
             self.stats.event_dispatches_dropped += 1;
@@ -131,7 +185,7 @@ impl NativeInputRouter {
                 .reactive_value(*signal)
                 .expect("validated native event signal must exist");
             let ReactiveValue::Scalar(current) = current else {
-                return Err(noon_core::ReactiveError::InputTypeMismatch {
+                return Err(ReactiveError::InputTypeMismatch {
                     signal: *signal,
                     expected: ValueKind::Scalar,
                     actual: current.value_kind(),
@@ -143,13 +197,65 @@ impl NativeInputRouter {
             } else {
                 *current + 1.0
             };
-            instance.set_reactive_input(*signal, next)?;
+            instance.set_reactive_input(*signal, ReactiveValue::Scalar(next))?;
             self.stats.reactive_updates += 1;
             let reactive = instance.last_reactive_stats();
             self.stats.derived_signals_evaluated += reactive.derived_signals_evaluated as u64;
             self.stats.bindings_invalidated += reactive.bindings_invalidated as u64;
         }
         Ok(true)
+    }
+}
+
+trait NativeInputTarget {
+    type Error: From<ReactiveError>;
+
+    fn reactive_value(&self, signal: SignalId) -> Option<&ReactiveValue>;
+    fn set_reactive_input(
+        &mut self,
+        signal: SignalId,
+        value: ReactiveValue,
+    ) -> Result<(), Self::Error>;
+    fn last_reactive_stats(&self) -> ReactiveRuntimeStats;
+}
+
+impl NativeInputTarget for TimedSceneInstance {
+    type Error = TimedSceneRuntimeError;
+
+    fn reactive_value(&self, signal: SignalId) -> Option<&ReactiveValue> {
+        TimedSceneInstance::reactive_value(self, signal)
+    }
+
+    fn set_reactive_input(
+        &mut self,
+        signal: SignalId,
+        value: ReactiveValue,
+    ) -> Result<(), Self::Error> {
+        TimedSceneInstance::set_reactive_input(self, signal, value).map(|_| ())
+    }
+
+    fn last_reactive_stats(&self) -> ReactiveRuntimeStats {
+        TimedSceneInstance::last_reactive_stats(self)
+    }
+}
+
+impl NativeInputTarget for SceneInstance {
+    type Error = ReactiveError;
+
+    fn reactive_value(&self, signal: SignalId) -> Option<&ReactiveValue> {
+        SceneInstance::reactive_value(self, signal)
+    }
+
+    fn set_reactive_input(
+        &mut self,
+        signal: SignalId,
+        value: ReactiveValue,
+    ) -> Result<(), Self::Error> {
+        SceneInstance::set_reactive_input(self, signal, value).map(|_| ())
+    }
+
+    fn last_reactive_stats(&self) -> ReactiveRuntimeStats {
+        SceneInstance::last_reactive_stats(self)
     }
 }
 

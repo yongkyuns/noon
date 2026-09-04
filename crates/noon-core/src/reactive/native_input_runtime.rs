@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{NativeEventSource, NativeStateSource, ValueKind, Vec2};
+use crate::{NativeEventSource, NativeStateSource, ReactiveValue, ValueKind, Vec2};
 
 /// Normalized value carried by a sampled native input update.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,6 +25,16 @@ impl NativeInputValue {
             Self::Scalar(value) => value.is_finite(),
             Self::Bool(_) => true,
             Self::Vec2(value) => value.x.is_finite() && value.y.is_finite(),
+        }
+    }
+}
+
+impl From<NativeInputValue> for ReactiveValue {
+    fn from(value: NativeInputValue) -> Self {
+        match value {
+            NativeInputValue::Scalar(value) => Self::Scalar(value),
+            NativeInputValue::Bool(value) => Self::Bool(value),
+            NativeInputValue::Vec2(value) => Self::Vec2(value),
         }
     }
 }
@@ -169,6 +179,14 @@ mod tests {
 
         assert!(old.coalesces_with(&newer));
         assert!(!old.coalesces_with(&other));
+    }
+
+    #[test]
+    fn normalized_input_value_uses_existing_reactive_execution_domain() {
+        assert_eq!(
+            ReactiveValue::from(NativeInputValue::Vec2(Vec2::new(2.0, -1.0))),
+            ReactiveValue::Vec2(Vec2::new(2.0, -1.0))
+        );
     }
 
     #[test]
