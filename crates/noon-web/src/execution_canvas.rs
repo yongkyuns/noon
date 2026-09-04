@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, target_arch = "wasm32"))]
 const MANIM_DEFAULT_CAMERA_HEIGHT: f32 = 8.0;
 
 #[cfg(target_arch = "wasm32")]
@@ -13,12 +13,13 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use std::mem;
 
-    use noon_core::{GeometryRef, ObjectId, Transform2D, Vec2};
+    use noon::ExecutionSession;
+    use noon_core::{GeometryRef, ObjectId, ReactiveValue, SemanticNodeId, Transform2D, Vec2};
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
         RenderPrimitive, UploadStats, UploadWrite,
     };
-    use noon_runtime::{FrameChanges, FrameObjectState};
+    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
@@ -28,7 +29,7 @@ mod wasm {
         ExecutionFrameMirror, TransportApplyOutcome, TransportSlotId,
     };
 
-    use super::MANIM_DEFAULT_CLEAR_COLOR;
+    use super::{MANIM_DEFAULT_CAMERA_HEIGHT, MANIM_DEFAULT_CLEAR_COLOR};
 
     #[derive(Debug)]
     struct WebDisplaySource;
@@ -144,6 +145,53 @@ mod wasm {
         config: wgpu::SurfaceConfiguration,
     }
 
+    enum CanvasExecutionSource {
+        Transport(ExecutionFrameMirror),
+        Direct(ExecutionSession),
+    }
+
+    impl CanvasExecutionSource {
+        fn frame(&self) -> Option<&FrameState> {
+            match self {
+                Self::Transport(mirror) => mirror.frame(),
+                Self::Direct(session) => Some(session.frame()),
+            }
+        }
+
+        fn live_object_count(&self) -> usize {
+            match self {
+                Self::Transport(mirror) => mirror.live_object_count(),
+                Self::Direct(session) => session
+                    .frame()
+                    .presences
+                    .iter()
+                    .filter(|present| **present)
+                    .count(),
+            }
+        }
+
+        fn transport(&self) -> Option<&ExecutionFrameMirror> {
+            match self {
+                Self::Transport(mirror) => Some(mirror),
+                Self::Direct(_) => None,
+            }
+        }
+
+        fn transport_mut(&mut self) -> Option<&mut ExecutionFrameMirror> {
+            match self {
+                Self::Transport(mirror) => Some(mirror),
+                Self::Direct(_) => None,
+            }
+        }
+
+        fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(session) => Some(session),
+            }
+        }
+    }
+
     #[wasm_bindgen(js_name = ExecutionCanvasRenderer)]
     pub struct WasmExecutionCanvasRenderer {
         instance: wgpu::Instance,
@@ -154,7 +202,7 @@ mod wasm {
         canvas: OffscreenCanvas,
         config: wgpu::SurfaceConfiguration,
         drawable: bool,
-        mirror: ExecutionFrameMirror,
+        source: CanvasExecutionSource,
         pending_changes: FrameChanges,
         preparer: FramePreparer,
         renderer: GpuRenderer,
@@ -188,49 +236,14 @@ mod wasm {
                 ));
             }
             let camera = mirror.camera();
-            let width = canvas.width().max(1);
-            let height = canvas.height().max(1);
-            let InitializedGpu {
-                instance,
-                surface,
-                device,
-                queue,
-                backend,
-                config,
-            } = initialize_gpu(&canvas, width, height).await?;
-            let gpu_generation = 1;
-            let gpu_diagnostics = GpuDiagnosticMailbox::default();
-            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
-            let renderer = GpuRenderer::new(&device, config.format);
-
-            let mut result = Self {
-                instance,
-                surface,
-                device,
-                queue,
-                backend,
+            Self::create_with_source(
                 canvas,
-                config,
-                drawable: true,
-                mirror,
+                CanvasExecutionSource::Transport(mirror),
                 pending_changes,
-                preparer: FramePreparer::new(),
-                renderer,
-                camera_center: camera.center,
-                camera_height: camera.height,
-                clear_color: MANIM_DEFAULT_CLEAR_COLOR,
-                last_draw_calls: 0,
-                last_instances_drawn: 0,
-                last_bytes_uploaded: 0,
-                last_geometry_cache_misses: 0,
-                gpu_generation,
-                gpu_diagnostics,
-                host_updater_diagnostic_object: None,
-                last_host_updater_diagnostic: None,
-                gpu_instance_generation: 0,
-            };
-            result.update_camera()?;
-            Ok(result)
+                camera.center,
+                camera.height,
+            )
+            .await
         }
 
         #[wasm_bindgen(js_name = applyDeltaJson)]
@@ -240,10 +253,15 @@ mod wasm {
                     "render worker must present the applied execution delta before accepting another",
                 ));
             }
-            let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
+            let (outcome, changes, camera) = {
+                let mirror = self.source.transport_mut().ok_or_else(|| {
+                    js_message("direct Rust/WASM execution source does not accept transport deltas")
+                })?;
+                let (outcome, changes) = mirror.apply_json(json).map_err(js_error)?;
+                (outcome, changes, mirror.camera())
+            };
             match outcome {
                 TransportApplyOutcome::Applied => {
-                    let camera = self.mirror.camera();
                     if camera.center != self.camera_center || camera.height != self.camera_height {
                         self.camera_center = camera.center;
                         self.camera_height = camera.height;
@@ -303,13 +321,15 @@ mod wasm {
 
             let changes = mem::take(&mut self.pending_changes);
             let frame = self
-                .mirror
+                .source
                 .frame()
                 .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
             let prepared = self.preparer.prepare_incremental(frame, &changes);
             self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
             let mut upload_writes = Vec::new();
-            let upload = if self.host_updater_diagnostic_object.is_some() {
+            let diagnostic_enabled =
+                self.host_updater_diagnostic_object.is_some() && self.source.transport().is_some();
+            let upload = if diagnostic_enabled {
                 self.renderer.upload_with_trace(
                     &self.device,
                     &self.queue,
@@ -337,10 +357,12 @@ mod wasm {
             surface_texture.present();
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
-            if let Some(object) = self.host_updater_diagnostic_object {
+            if let (Some(object), Some(mirror)) =
+                (self.host_updater_diagnostic_object, self.source.transport())
+            {
                 self.last_host_updater_diagnostic = build_host_updater_diagnostic(
                     self.backend,
-                    &self.mirror,
+                    mirror,
                     &changes,
                     &prepared,
                     upload,
@@ -414,12 +436,12 @@ mod wasm {
         }
 
         pub fn time(&self) -> f64 {
-            self.mirror.frame().map_or(0.0, |frame| frame.time)
+            self.source.frame().map_or(0.0, |frame| frame.time)
         }
 
         #[wasm_bindgen(js_name = objectCount)]
         pub fn object_count(&self) -> usize {
-            self.mirror.live_object_count()
+            self.source.live_object_count()
         }
 
         #[wasm_bindgen(js_name = lastDrawCalls)]
@@ -689,6 +711,130 @@ mod wasm {
     }
 
     impl WasmExecutionCanvasRenderer {
+        /// Build the browser canvas host directly from the typed in-process execution session.
+        ///
+        /// This constructor is intentionally Rust-only: JavaScript may supply the canvas during
+        /// WASM bootstrap, but no scene/execution document or transport mirror is introduced.
+        pub async fn create_from_execution_session(
+            canvas: OffscreenCanvas,
+            mut session: ExecutionSession,
+        ) -> Result<Self, JsValue> {
+            let pending_changes = session.take_frame_changes();
+            Self::create_with_source(
+                canvas,
+                CanvasExecutionSource::Direct(session),
+                pending_changes,
+                Vec2::ZERO,
+                MANIM_DEFAULT_CAMERA_HEIGHT,
+            )
+            .await
+        }
+
+        /// Evaluate a direct Rust/WASM execution session and publish only its runtime changes.
+        pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
+            self.ensure_direct_source_idle()?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
+            session.evaluate(time).map_err(js_error)?;
+            self.pending_changes = session.take_frame_changes();
+            Ok(!self.pending_changes.is_empty())
+        }
+
+        /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
+        pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
+            self.ensure_direct_source_idle()?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
+            session.seek(time).map_err(js_error)?;
+            self.pending_changes = session.take_frame_changes();
+            Ok(!self.pending_changes.is_empty())
+        }
+
+        /// Apply one semantic native-reactive input without exposing the execution VM signal ID.
+        pub fn set_reactive_input(
+            &mut self,
+            signal: SemanticNodeId,
+            value: impl Into<ReactiveValue>,
+        ) -> Result<bool, JsValue> {
+            self.ensure_direct_source_idle()?;
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("typed execution APIs require a direct session source")
+            })?;
+            session
+                .set_reactive_input(signal, value)
+                .map_err(js_error)?;
+            self.pending_changes = session.take_frame_changes();
+            Ok(!self.pending_changes.is_empty())
+        }
+
+        fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
+            if self.source.transport().is_some() {
+                return Err(js_message(
+                    "typed execution APIs require a direct ExecutionSession source",
+                ));
+            }
+            if !self.pending_changes.is_empty() {
+                return Err(js_message(
+                    "direct execution host must present pending runtime changes before advancing again",
+                ));
+            }
+            Ok(())
+        }
+
+        async fn create_with_source(
+            canvas: OffscreenCanvas,
+            source: CanvasExecutionSource,
+            pending_changes: FrameChanges,
+            camera_center: Vec2,
+            camera_height: f32,
+        ) -> Result<Self, JsValue> {
+            let width = canvas.width().max(1);
+            let height = canvas.height().max(1);
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+            } = initialize_gpu(&canvas, width, height).await?;
+            let gpu_generation = 1;
+            let gpu_diagnostics = GpuDiagnosticMailbox::default();
+            install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
+            let renderer = GpuRenderer::new(&device, config.format);
+
+            let mut result = Self {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                canvas,
+                config,
+                drawable: true,
+                source,
+                pending_changes,
+                preparer: FramePreparer::new(),
+                renderer,
+                camera_center,
+                camera_height,
+                clear_color: MANIM_DEFAULT_CLEAR_COLOR,
+                last_draw_calls: 0,
+                last_instances_drawn: 0,
+                last_bytes_uploaded: 0,
+                last_geometry_cache_misses: 0,
+                gpu_generation,
+                gpu_diagnostics,
+                host_updater_diagnostic_object: None,
+                last_host_updater_diagnostic: None,
+                gpu_instance_generation: 0,
+            };
+            result.update_camera()?;
+            Ok(result)
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable {
                 return Ok(());
