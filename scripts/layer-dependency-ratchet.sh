@@ -36,22 +36,27 @@ check_layer() {
 check_layer \
   "crates/noon-core/Cargo.toml" \
   "Semantic Scene / noon-core" \
-  noon-compile noon-runtime noon-render-wgpu noon-web noon
+  noon-compile noon-runtime noon-render-wgpu noon-native noon-web noon
 
 check_layer \
   "crates/noon-compile/Cargo.toml" \
   "Execution Plan compiler / noon-compile" \
-  noon-runtime noon-render-wgpu noon-web noon
+  noon-runtime noon-render-wgpu noon-native noon-web noon
 
 check_layer \
   "crates/noon-runtime/Cargo.toml" \
   "Runtime / noon-runtime" \
-  noon-render-wgpu noon-web noon
+  noon-render-wgpu noon-native noon-web noon
 
 check_layer \
   "crates/noon-render-wgpu/Cargo.toml" \
   "Renderer / noon-render-wgpu" \
-  noon-web noon
+  noon-native noon-web noon
+
+check_layer \
+  "crates/noon/Cargo.toml" \
+  "Authoring facade / noon" \
+  noon-native noon-web
 
 if (( found != 0 )); then
   cat >&2 <<'EOF'
