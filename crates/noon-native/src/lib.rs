@@ -8,11 +8,11 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    FrameChanges,
+    FrameChanges, TimelineWakeState,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -113,7 +113,7 @@ pub fn run_with_config(
 
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = NativeApp::new(session, config);
     event_loop
         .run_app(&mut app)
@@ -400,9 +400,48 @@ impl ApplicationHandler for NativeApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = self.window.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.window.as_ref() else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        };
+        if !self.gpu.as_ref().is_some_and(|gpu| gpu.drawable) {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        let wake = self.session.wake_state();
+        if self.force_full_redraw || wake.frame_pending() {
             window.request_redraw();
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        match wake.timeline() {
+            TimelineWakeState::Continuous => {
+                window.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
+            }
+            TimelineWakeState::Deadline(scene_time) => {
+                let Some(started) = self.started else {
+                    window.request_redraw();
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                    return;
+                };
+                let Some(deadline) = started.checked_add(Duration::from_secs_f64(scene_time)) else {
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                    return;
+                };
+                if deadline <= Instant::now() {
+                    window.request_redraw();
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                }
+            }
+            TimelineWakeState::Quiescent => {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
         }
     }
 }
@@ -705,7 +744,7 @@ mod tests {
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);
         let event_loop = event_loop_builder.build().unwrap();
-        event_loop.set_control_flow(ControlFlow::Poll);
+        event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut app = NativeApp::new(
             session,
