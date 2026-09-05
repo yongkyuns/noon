@@ -473,11 +473,7 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        let clock = self.live_clock_at(
-            self.session.frame().time,
-            segment.end_time(),
-            false,
-        )?;
+        let clock = self.live_clock_at(self.session.frame().time, segment.end_time(), false)?;
         noon::LiveSession::new(
             &semantics,
             self.semantic_root
