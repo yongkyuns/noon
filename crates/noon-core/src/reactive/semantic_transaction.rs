@@ -1,18 +1,21 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
-    SemanticAnimationState, SemanticNodeId, SemanticNodeKind, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticSceneOperationError,
-    SemanticSignalBinding, SemanticSignalError, SemanticSignalSource, SemanticSignalValue,
-    SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle, StoredGeometry,
+    AnimationOptions, SemanticAnimationIntent, SemanticAnimationState, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
+    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
+    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
+    StoredGeometry,
 };
 
 mod prepared;
-pub use prepared::PreparedSemanticMutationTransaction;
+pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
 
 mod animation_addition;
-use animation_addition::{commit_add_animation, preflight_add_animation};
+use animation_addition::{
+    commit_add_animation, preflight_add_animation, preflight_animation_options,
+};
 
 mod family_edges;
 use family_edges::FamilyEdgePreflight;
@@ -20,6 +23,17 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::{commit_add_node, preflight_add_node};
+
+mod provisional;
+use provisional::{
+    conflicting_style_error, duplicate_mutation_error, invalid_style_error,
+    non_finite_property_error, property_type_error, replace_object_binding,
+    subscription_type_error,
+};
+use provisional::{next_transaction_id, TransactionNodeCatalog};
+pub use provisional::{
+    SemanticLocalNodeToken, SemanticPendingNodeKind, SemanticTransactionNodeRef,
+};
 
 /// One mutation in the authoritative Semantic Scene transaction vocabulary.
 ///
@@ -36,51 +50,94 @@ pub enum SemanticMutation {
         value: SemanticSignalValue,
     },
     SetProperty {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
     },
     ReplaceContent {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         content: SemanticObjectContent,
     },
     ReplaceStyle {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         style: SemanticStyle,
     },
     ChangeSubscription {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
         signal: Option<SemanticNodeId>,
     },
     AddMember {
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
     },
     RemoveMember {
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
     },
     ReorderMember {
-        family: SemanticNodeId,
-        member: SemanticNodeId,
-        before: Option<SemanticNodeId>,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+        before: Option<SemanticTransactionNodeRef>,
     },
     AddNode {
+        token: SemanticLocalNodeToken,
         creation: SemanticNodeCreation,
     },
     AddAnimation {
         state: SemanticAnimationState,
     },
+    AddTransformAnimation {
+        target: SemanticTransactionNodeRef,
+        target_state: SemanticTransactionNodeRef,
+        options: AnimationOptions,
+    },
     RemoveAnimation {
         animation: SemanticNodeId,
     },
     RemoveNode {
-        node: SemanticNodeId,
+        node: SemanticTransactionNodeRef,
     },
 }
 
 impl SemanticMutation {
+    fn node_references(&self) -> Vec<SemanticTransactionNodeRef> {
+        match self {
+            Self::SetProperty { object, .. }
+            | Self::ReplaceContent { object, .. }
+            | Self::ReplaceStyle { object, .. }
+            | Self::ChangeSubscription { object, .. } => vec![*object],
+            Self::AddMember { family, member } | Self::RemoveMember { family, member } => {
+                vec![*family, *member]
+            }
+            Self::ReorderMember {
+                family,
+                member,
+                before,
+            } => {
+                let mut references = vec![*family, *member];
+                references.extend(*before);
+                references
+            }
+            Self::RemoveNode { node } => vec![*node],
+            Self::AddTransformAnimation {
+                target,
+                target_state,
+                ..
+            } => vec![*target, *target_state],
+            Self::SetSignal { .. }
+            | Self::AddNode { .. }
+            | Self::AddAnimation { .. }
+            | Self::RemoveAnimation { .. } => Vec::new(),
+        }
+    }
+
+    fn references_any_pending(&self, removed: &HashSet<SemanticLocalNodeToken>) -> bool {
+        self.node_references().into_iter().any(
+            |node| matches!(node, SemanticTransactionNodeRef::Pending(token) if removed.contains(&token)),
+        ) || matches!(self, Self::AddNode { token, .. } if removed.contains(token))
+    }
+
     /// Existing semantic identity directly targeted by this mutation.
     ///
     /// Allocation mutations do not have an identity until commit and therefore
@@ -92,13 +149,15 @@ impl SemanticMutation {
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
-            | Self::ChangeSubscription { object, .. } => Some(*object),
+            | Self::ChangeSubscription { object, .. } => object.existing(),
             Self::AddMember { family, .. }
             | Self::RemoveMember { family, .. }
-            | Self::ReorderMember { family, .. } => Some(*family),
-            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
+            | Self::ReorderMember { family, .. } => family.existing(),
+            Self::AddNode { .. }
+            | Self::AddAnimation { .. }
+            | Self::AddTransformAnimation { .. } => None,
             Self::RemoveAnimation { animation } => Some(*animation),
-            Self::RemoveNode { node } => Some(*node),
+            Self::RemoveNode { node } => node.existing(),
         }
     }
 
@@ -131,37 +190,39 @@ impl SemanticMutation {
                 family: *family,
                 member: *member,
             }),
-            Self::AddNode { .. } | Self::AddAnimation { .. } => None,
-            Self::RemoveAnimation { animation } => {
-                Some(SemanticMutationKey::NodeRemoval(*animation))
-            }
+            Self::AddNode { .. }
+            | Self::AddAnimation { .. }
+            | Self::AddTransformAnimation { .. } => None,
+            Self::RemoveAnimation { animation } => Some(SemanticMutationKey::NodeRemoval(
+                SemanticTransactionNodeRef::Existing(*animation),
+            )),
             Self::RemoveNode { node } => Some(SemanticMutationKey::NodeRemoval(*node)),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum SemanticMutationKey {
+pub(super) enum SemanticMutationKey {
     Signal(SemanticNodeId),
     ObjectProperty {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
     },
-    ObjectContent(SemanticNodeId),
-    ObjectStyle(SemanticNodeId),
+    ObjectContent(SemanticTransactionNodeRef),
+    ObjectStyle(SemanticTransactionNodeRef),
     Subscription {
-        object: SemanticNodeId,
+        object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
     },
     FamilyEdge {
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
     },
     FamilyOrder {
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
     },
-    NodeRemoval(SemanticNodeId),
+    NodeRemoval(SemanticTransactionNodeRef),
 }
 
 /// Locality classification emitted by committed semantic mutations.
@@ -213,9 +274,32 @@ pub enum SemanticMutationImpact {
     },
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct SemanticMutationTransaction {
+    id: u32,
+    next_token: u32,
     mutations: Vec<SemanticMutation>,
+}
+
+pub(super) struct SemanticTransactionPreflight {
+    changed: Vec<bool>,
+    staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+    staged_object_order: Vec<SemanticTransactionNodeRef>,
+    family_edges: FamilyEdgePreflight,
+    pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
+    removed_existing: HashSet<SemanticNodeId>,
+    removed_pending: HashSet<SemanticLocalNodeToken>,
+}
+
+impl Default for SemanticMutationTransaction {
+    fn default() -> Self {
+        let id = next_transaction_id();
+        Self {
+            id,
+            next_token: 0,
+            mutations: Vec::new(),
+        }
+    }
 }
 
 impl SemanticMutationTransaction {
@@ -239,12 +323,12 @@ impl SemanticMutationTransaction {
     /// vocabulary as signal values.
     pub fn set_property(
         &mut self,
-        object: SemanticNodeId,
+        object: impl Into<SemanticTransactionNodeRef>,
         property: SemanticObjectProperty,
         value: impl Into<SemanticSignalValue>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::SetProperty {
-            object,
+            object: object.into(),
             property,
             value: value.into(),
         });
@@ -254,11 +338,11 @@ impl SemanticMutationTransaction {
     /// Replace only the authored content reference/value of one semantic object.
     pub fn replace_content(
         &mut self,
-        object: SemanticNodeId,
+        object: impl Into<SemanticTransactionNodeRef>,
         content: impl Into<SemanticObjectContent>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::ReplaceContent {
-            object,
+            object: object.into(),
             content: content.into(),
         });
         self
@@ -269,21 +353,27 @@ impl SemanticMutationTransaction {
     /// This carries paints and discrete stroke topology through the same atomic
     /// mutation vocabulary as scalar style properties. A transaction cannot mix
     /// full-style replacement with scalar style writes for the same object.
-    pub fn replace_style(&mut self, object: SemanticNodeId, style: SemanticStyle) -> &mut Self {
-        self.mutations
-            .push(SemanticMutation::ReplaceStyle { object, style });
+    pub fn replace_style(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::ReplaceStyle {
+            object: object.into(),
+            style,
+        });
         self
     }
 
     /// Change the authored signal driver for one object property.
     pub fn change_subscription(
         &mut self,
-        object: SemanticNodeId,
+        object: impl Into<SemanticTransactionNodeRef>,
         property: SemanticObjectProperty,
         signal: Option<SemanticNodeId>,
     ) -> &mut Self {
         self.mutations.push(SemanticMutation::ChangeSubscription {
-            object,
+            object: object.into(),
             property,
             signal,
         });
@@ -291,16 +381,28 @@ impl SemanticMutationTransaction {
     }
 
     /// Add one direct ordered family edge through the authoritative transaction.
-    pub fn add_member(&mut self, family: SemanticNodeId, member: SemanticNodeId) -> &mut Self {
-        self.mutations
-            .push(SemanticMutation::AddMember { family, member });
+    pub fn add_member(
+        &mut self,
+        family: impl Into<SemanticTransactionNodeRef>,
+        member: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::AddMember {
+            family: family.into(),
+            member: member.into(),
+        });
         self
     }
 
     /// Remove one direct ordered family edge through the authoritative transaction.
-    pub fn remove_member(&mut self, family: SemanticNodeId, member: SemanticNodeId) -> &mut Self {
-        self.mutations
-            .push(SemanticMutation::RemoveMember { family, member });
+    pub fn remove_member(
+        &mut self,
+        family: impl Into<SemanticTransactionNodeRef>,
+        member: impl Into<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::RemoveMember {
+            family: family.into(),
+            member: member.into(),
+        });
         self
     }
 
@@ -310,13 +412,23 @@ impl SemanticMutationTransaction {
     /// only the family's authoritative order is mutated.
     pub fn reorder_member(
         &mut self,
-        family: SemanticNodeId,
-        member: SemanticNodeId,
+        family: impl Into<SemanticTransactionNodeRef>,
+        member: impl Into<SemanticTransactionNodeRef>,
         before: Option<SemanticNodeId>,
     ) -> &mut Self {
+        self.reorder_member_ref(family, member, before.map(Into::into))
+    }
+
+    /// Move a direct family member using existing or transaction-local identities.
+    pub fn reorder_member_ref(
+        &mut self,
+        family: impl Into<SemanticTransactionNodeRef>,
+        member: impl Into<SemanticTransactionNodeRef>,
+        before: Option<SemanticTransactionNodeRef>,
+    ) -> &mut Self {
         self.mutations.push(SemanticMutation::ReorderMember {
-            family,
-            member,
+            family: family.into(),
+            member: member.into(),
             before,
         });
         self
@@ -332,8 +444,21 @@ impl SemanticMutationTransaction {
     /// replacement to transfer one stable source key from an old node to its new
     /// identity without creating a second identity model.
     pub fn add_node(&mut self, creation: SemanticNodeCreation) -> &mut Self {
-        self.mutations.push(SemanticMutation::AddNode { creation });
+        self.create_node(creation);
         self
+    }
+
+    /// Stage a node allocation and return its transaction-local reference token.
+    pub fn create_node(&mut self, creation: SemanticNodeCreation) -> SemanticLocalNodeToken {
+        let ordinal = self.next_token;
+        self.next_token = self
+            .next_token
+            .checked_add(1)
+            .expect("Noon semantic transaction local-node space exhausted");
+        let token = SemanticLocalNodeToken::new(self.id, ordinal);
+        self.mutations
+            .push(SemanticMutation::AddNode { token, creation });
+        token
     }
 
     /// Add one authored animation declaration after complete transaction preflight.
@@ -344,6 +469,22 @@ impl SemanticMutationTransaction {
     pub fn add_animation(&mut self, state: SemanticAnimationState) -> &mut Self {
         self.mutations
             .push(SemanticMutation::AddAnimation { state });
+        self
+    }
+
+    /// Add a transform declaration that may reference objects staged in this batch.
+    pub fn add_transform_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::AddTransformAnimation {
+                target: target.into(),
+                target_state: target_state.into(),
+                options,
+            });
         self
     }
 
@@ -368,9 +509,12 @@ impl SemanticMutationTransaction {
     /// Structural removals are terminal within a transaction: once the first
     /// structural removal is authored, no later non-removal mutation is accepted.
     /// This keeps complete preflight valid through commit without staging a second
-    /// scene.
-    pub fn remove_node(&mut self, node: SemanticNodeId) -> &mut Self {
-        self.mutations.push(SemanticMutation::RemoveNode { node });
+    /// scene. Removing a pending node cancels its allocation and any staged edge or
+    /// animation declaration that references it; those mutations are still fully
+    /// preflighted so cancellation cannot hide an invalid family, kind, or value.
+    pub fn remove_node(&mut self, node: impl Into<SemanticTransactionNodeRef>) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::RemoveNode { node: node.into() });
         self
     }
 
@@ -404,8 +548,10 @@ impl SemanticMutationTransaction {
     fn preflight(
         &self,
         store: &SemanticStore,
-    ) -> Result<Vec<bool>, SemanticMutationTransactionError> {
+    ) -> Result<SemanticTransactionPreflight, SemanticMutationTransactionError> {
+        let catalog = TransactionNodeCatalog::new(self, store);
         let mut removed_nodes = HashSet::new();
+        let mut removed_pending = HashSet::new();
         let mut removal_started = false;
         for (index, mutation) in self.mutations.iter().enumerate() {
             match mutation {
@@ -425,9 +571,18 @@ impl SemanticMutationTransaction {
                     removal_started = true;
                     removed_nodes.insert(*animation);
                 }
-                SemanticMutation::RemoveNode { node } => {
+                SemanticMutation::RemoveNode {
+                    node: SemanticTransactionNodeRef::Existing(node),
+                } => {
                     removal_started = true;
                     removed_nodes.insert(*node);
+                }
+                SemanticMutation::RemoveNode {
+                    node: SemanticTransactionNodeRef::Pending(token),
+                } => {
+                    catalog.validate_pending((*token).into(), index)?;
+                    removal_started = true;
+                    removed_pending.insert(*token);
                 }
                 _ if removal_started => {
                     return Err(SemanticMutationTransactionError::MutationAfterRemove { index });
@@ -436,6 +591,7 @@ impl SemanticMutationTransaction {
             }
         }
         let removed_nodes = store.semantic_removal_closure(&removed_nodes);
+        let pending_creations = catalog.cloned_creations();
 
         let mut targets = HashSet::with_capacity(self.mutations.len());
         let mut style_replacements = HashSet::new();
@@ -443,8 +599,13 @@ impl SemanticMutationTransaction {
         let mut changed = Vec::with_capacity(self.mutations.len());
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
+        let mut staged_objects = HashMap::new();
+        let mut staged_object_order = Vec::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
+            for node in mutation.node_references() {
+                catalog.validate_pending(node, index)?;
+            }
             if !matches!(
                 mutation,
                 SemanticMutation::RemoveAnimation { .. } | SemanticMutation::RemoveNode { .. }
@@ -465,27 +626,46 @@ impl SemanticMutationTransaction {
             } = mutation
             {
                 if removed_nodes.contains(signal) {
-                    return Err(
-                        SemanticMutationTransactionError::SubscriptionUsesRemovedSignal {
-                            index,
-                            object: *object,
-                            property: *property,
-                            signal: *signal,
-                        },
-                    );
+                    return Err(match object {
+                        SemanticTransactionNodeRef::Existing(object) => {
+                            SemanticMutationTransactionError::SubscriptionUsesRemovedSignal {
+                                index,
+                                object: *object,
+                                property: *property,
+                                signal: *signal,
+                            }
+                        }
+                        SemanticTransactionNodeRef::Pending(token) => {
+                            SemanticMutationTransactionError::PendingSubscriptionUsesRemovedSignal {
+                                index,
+                                object: *token,
+                                property: *property,
+                                signal: *signal,
+                            }
+                        }
+                    });
                 }
             }
             if let SemanticMutation::AddMember { family, member }
             | SemanticMutation::RemoveMember { family, member } = mutation
             {
-                if removed_nodes.contains(member) {
-                    return Err(
-                        SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                if let SemanticTransactionNodeRef::Existing(member) = member {
+                    if removed_nodes.contains(member) {
+                        let SemanticTransactionNodeRef::Existing(family) = family else {
+                            return Err(SemanticMutationTransactionError::PendingFamilyEdgeUsesRemovedNode {
                             index,
                             family: *family,
                             member: *member,
-                        },
-                    );
+                        });
+                        };
+                        return Err(
+                            SemanticMutationTransactionError::FamilyEdgeUsesRemovedNode {
+                                index,
+                                family: *family,
+                                member: *member,
+                            },
+                        );
+                    }
                 }
             }
             if let SemanticMutation::ReorderMember {
@@ -494,17 +674,33 @@ impl SemanticMutationTransaction {
                 before,
             } = mutation
             {
-                if removed_nodes.contains(member) {
-                    return Err(
-                        SemanticMutationTransactionError::FamilyOrderUsesRemovedNode {
+                if let SemanticTransactionNodeRef::Existing(member) = member {
+                    if removed_nodes.contains(member) {
+                        let SemanticTransactionNodeRef::Existing(family) = family else {
+                            return Err(SemanticMutationTransactionError::PendingFamilyOrderUsesRemovedNode {
                             index,
                             family: *family,
-                            node: *member,
-                        },
-                    );
+                            node: (*member).into(),
+                        });
+                        };
+                        return Err(
+                            SemanticMutationTransactionError::FamilyOrderUsesRemovedNode {
+                                index,
+                                family: *family,
+                                node: *member,
+                            },
+                        );
+                    }
                 }
-                if let Some(anchor) = before {
+                if let Some(SemanticTransactionNodeRef::Existing(anchor)) = before {
                     if removed_nodes.contains(anchor) {
+                        let SemanticTransactionNodeRef::Existing(family) = family else {
+                            return Err(SemanticMutationTransactionError::PendingFamilyOrderUsesRemovedNode {
+                                index,
+                                family: *family,
+                                node: (*anchor).into(),
+                            });
+                        };
                         return Err(
                             SemanticMutationTransactionError::FamilyOrderUsesRemovedNode {
                                 index,
@@ -515,14 +711,30 @@ impl SemanticMutationTransaction {
                     }
                 }
             }
+            if let SemanticMutation::AddTransformAnimation {
+                target,
+                target_state,
+                ..
+            } = mutation
+            {
+                for node in [*target, *target_state] {
+                    if let SemanticTransactionNodeRef::Existing(node) = node {
+                        if removed_nodes.contains(&node) {
+                            return Err(
+                                SemanticMutationTransactionError::AnimationUsesRemovedNode {
+                                    index,
+                                    node,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
 
             match mutation {
                 SemanticMutation::ReplaceStyle { object, .. } => {
                     if style_property_writes.contains(object) {
-                        return Err(SemanticMutationTransactionError::ConflictingStyleMutation {
-                            index,
-                            object: *object,
-                        });
+                        return Err(conflicting_style_error(index, *object));
                     }
                     style_replacements.insert(*object);
                 }
@@ -530,10 +742,7 @@ impl SemanticMutationTransaction {
                     object, property, ..
                 } if is_style_property(*property) => {
                     if style_replacements.contains(object) {
-                        return Err(SemanticMutationTransactionError::ConflictingStyleMutation {
-                            index,
-                            object: *object,
-                        });
+                        return Err(conflicting_style_error(index, *object));
                     }
                     style_property_writes.insert(*object);
                 }
@@ -542,48 +751,7 @@ impl SemanticMutationTransaction {
 
             if let Some(key) = mutation.key() {
                 if !targets.insert(key) {
-                    return Err(match key {
-                        SemanticMutationKey::Signal(target) => {
-                            SemanticMutationTransactionError::DuplicateTarget { index, target }
-                        }
-                        SemanticMutationKey::ObjectProperty { object, property } => {
-                            SemanticMutationTransactionError::DuplicateProperty {
-                                index,
-                                object,
-                                property,
-                            }
-                        }
-                        SemanticMutationKey::ObjectContent(object) => {
-                            SemanticMutationTransactionError::DuplicateContent { index, object }
-                        }
-                        SemanticMutationKey::ObjectStyle(object) => {
-                            SemanticMutationTransactionError::DuplicateStyle { index, object }
-                        }
-                        SemanticMutationKey::Subscription { object, property } => {
-                            SemanticMutationTransactionError::DuplicateSubscription {
-                                index,
-                                object,
-                                property,
-                            }
-                        }
-                        SemanticMutationKey::FamilyEdge { family, member } => {
-                            SemanticMutationTransactionError::DuplicateFamilyEdge {
-                                index,
-                                family,
-                                member,
-                            }
-                        }
-                        SemanticMutationKey::FamilyOrder { family, member } => {
-                            SemanticMutationTransactionError::DuplicateFamilyOrder {
-                                index,
-                                family,
-                                member,
-                            }
-                        }
-                        SemanticMutationKey::NodeRemoval(node) => {
-                            SemanticMutationTransactionError::DuplicateNodeRemoval { index, node }
-                        }
-                    });
+                    return Err(duplicate_mutation_error(index, key));
                 }
             }
 
@@ -621,68 +789,69 @@ impl SemanticMutationTransaction {
                     property,
                     value,
                 } => {
-                    let state = store
-                        .semantic_object_state_checked(*object)
-                        .map_err(|error| SemanticMutationTransactionError::Object {
-                            index,
-                            error,
-                        })?;
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
                     if !value.is_finite() {
-                        return Err(SemanticMutationTransactionError::NonFinitePropertyValue {
-                            index,
-                            object: *object,
-                            property: *property,
-                        });
+                        return Err(non_finite_property_error(index, *object, *property));
                     }
                     let expected = property.value_kind();
                     let actual = value.value_kind();
                     if actual != expected {
-                        return Err(SemanticMutationTransactionError::PropertyTypeMismatch {
-                            index,
-                            object: *object,
-                            property: *property,
-                            expected,
-                            actual,
-                        });
+                        return Err(property_type_error(
+                            index, *object, *property, expected, actual,
+                        ));
                     }
-                    changed.push(object_property_value(state, *property) != *value);
+                    let did_change = object_property_value(state, *property) != *value;
+                    if did_change {
+                        apply_object_property(state, *property, value.clone());
+                    }
+                    changed.push(did_change);
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
-                    let state = store
-                        .semantic_object_state_checked(*object)
-                        .map_err(|error| SemanticMutationTransactionError::Object {
-                            index,
-                            error,
-                        })?;
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
                     validate_object_content_resource(store, *content, index)?;
-                    changed.push(state.content != *content);
+                    let did_change = state.content != *content;
+                    if did_change {
+                        state.content = *content;
+                    }
+                    changed.push(did_change);
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
-                    let state = store
-                        .semantic_object_state_checked(*object)
-                        .map_err(|error| SemanticMutationTransactionError::Object {
-                            index,
-                            error,
-                        })?;
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
                     if !style.is_finite() {
-                        return Err(SemanticMutationTransactionError::InvalidStyle {
-                            index,
-                            object: *object,
-                        });
+                        return Err(invalid_style_error(index, *object));
                     }
-                    changed.push(state.style != *style);
+                    let did_change = state.style != *style;
+                    if did_change {
+                        state.style = style.clone();
+                    }
+                    changed.push(did_change);
                 }
                 SemanticMutation::ChangeSubscription {
                     object,
                     property,
                     signal,
                 } => {
-                    let state = store
-                        .semantic_object_state_checked(*object)
-                        .map_err(|error| SemanticMutationTransactionError::Object {
-                            index,
-                            error,
-                        })?;
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
                     let existing = state
                         .signal_bindings()
                         .iter()
@@ -696,76 +865,127 @@ impl SemanticMutationTransaction {
                             })?;
                         let expected = property.value_kind();
                         if actual != expected {
-                            return Err(
-                                SemanticMutationTransactionError::SubscriptionTypeMismatch {
-                                    index,
-                                    object: *object,
-                                    property: *property,
-                                    signal: *signal,
-                                    expected,
-                                    actual,
-                                },
-                            );
+                            return Err(subscription_type_error(
+                                index, *object, *property, *signal, expected, actual,
+                            ));
                         }
-                        changed.push(existing != Some(*signal));
+                        let did_change = existing != Some(*signal);
+                        if did_change {
+                            replace_object_binding(state, *property, Some(*signal));
+                        }
+                        changed.push(did_change);
                     } else {
-                        changed.push(existing.is_some());
+                        let did_change = existing.is_some();
+                        if did_change {
+                            replace_object_binding(state, *property, None);
+                        }
+                        changed.push(did_change);
                     }
                 }
                 SemanticMutation::AddMember { family, member } => {
-                    changed.push(family_edges.add(store, *family, *member).map_err(|error| {
-                        SemanticMutationTransactionError::Family { index, error }
-                    })?);
+                    changed.push(family_edges.add(&catalog, *family, *member, index)?);
                 }
                 SemanticMutation::RemoveMember { family, member } => {
-                    changed.push(family_edges.remove(store, *family, *member).map_err(
-                        |error| SemanticMutationTransactionError::Family { index, error },
-                    )?);
+                    changed.push(family_edges.remove(&catalog, *family, *member, index)?);
                 }
                 SemanticMutation::ReorderMember {
                     family,
                     member,
                     before,
                 } => {
-                    changed.push(
-                        family_edges
-                            .reorder(store, *family, *member, *before)
-                            .map_err(|error| SemanticMutationTransactionError::Family {
-                                index,
-                                error,
-                            })?,
-                    );
+                    changed.push(family_edges.reorder(&catalog, *family, *member, *before, index)?);
                 }
-                SemanticMutation::AddNode { creation } => {
+                SemanticMutation::AddNode { token, creation } => {
                     preflight_add_node(
                         store,
                         creation,
                         &removed_nodes,
                         &mut pending_sources,
+                        !removed_pending.contains(token),
                         index,
                     )?;
-                    changed.push(true);
+                    if let SemanticNodeCreation::Object { state, .. } = creation {
+                        staged_objects
+                            .entry((*token).into())
+                            .or_insert_with(|| (**state).clone());
+                    }
+                    changed.push(!removed_pending.contains(token));
                 }
                 SemanticMutation::AddAnimation { state } => {
                     preflight_add_animation(store, state, &removed_nodes, index)?;
                     changed.push(true);
                 }
-                SemanticMutation::RemoveAnimation { .. } => {
-                    changed.push(true);
-                }
-                SemanticMutation::RemoveNode { node } => {
-                    if store.node(*node).is_none() {
-                        return Err(SemanticMutationTransactionError::Node {
-                            index,
-                            error: SemanticStoreError::UnknownNode(*node),
+                SemanticMutation::AddTransformAnimation {
+                    target,
+                    target_state,
+                    options,
+                } => {
+                    preflight_animation_options(*options, index)?;
+                    catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *target,
+                        index,
+                    )?;
+                    catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *target_state,
+                        index,
+                    )?;
+                    if target == target_state {
+                        return Err(match target {
+                            SemanticTransactionNodeRef::Existing(node) => {
+                                SemanticMutationTransactionError::SameAnimationTargetAndTargetState {
+                                    index,
+                                    node: *node,
+                                }
+                            }
+                            SemanticTransactionNodeRef::Pending(_) => {
+                                SemanticMutationTransactionError::SamePendingAnimationTargetAndTargetState {
+                                    index,
+                                    node: *target,
+                                }
+                            }
                         });
                     }
                     changed.push(true);
                 }
+                SemanticMutation::RemoveAnimation { .. } => {
+                    changed.push(true);
+                }
+                SemanticMutation::RemoveNode { node } => match node {
+                    SemanticTransactionNodeRef::Existing(node) => {
+                        if store.node(*node).is_none() {
+                            return Err(SemanticMutationTransactionError::Node {
+                                index,
+                                error: SemanticStoreError::UnknownNode(*node),
+                            });
+                        }
+                        changed.push(true);
+                    }
+                    SemanticTransactionNodeRef::Pending(_) => changed.push(false),
+                },
             }
         }
 
-        Ok(changed)
+        for (mutation, changed) in self.mutations.iter().zip(&mut changed) {
+            if mutation.references_any_pending(&removed_pending) {
+                *changed = false;
+            }
+        }
+        staged_objects.retain(|node, _| {
+            !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token))
+        });
+        Ok(SemanticTransactionPreflight {
+            changed,
+            staged_objects,
+            staged_object_order,
+            family_edges,
+            pending_creations,
+            removed_existing: removed_nodes,
+            removed_pending,
+        })
     }
 }
 
@@ -926,17 +1146,99 @@ fn set_object_subscription(
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemanticMutationTransactionResult {
     impacts: Vec<SemanticMutationImpact>,
+    committed_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
 }
 
 impl SemanticMutationTransactionResult {
     pub fn impacts(&self) -> &[SemanticMutationImpact] {
         &self.impacts
     }
+
+    /// Resolve one token from this committed transaction to its real semantic ID.
+    /// Canceled or foreign tokens return `None`.
+    pub fn resolve(&self, token: SemanticLocalNodeToken) -> Option<SemanticNodeId> {
+        self.committed_nodes.get(&token).copied()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticMutationTransactionError {
     SceneRevisionExhausted,
+    PendingNodeFromDifferentTransaction {
+        index: usize,
+        token: SemanticLocalNodeToken,
+    },
+    UnknownPendingNode {
+        index: usize,
+        token: SemanticLocalNodeToken,
+    },
+    PendingNodeKindMismatch {
+        index: usize,
+        token: SemanticLocalNodeToken,
+        expected: SemanticPendingNodeKind,
+    },
+    DuplicatePendingMutation {
+        index: usize,
+        node: SemanticLocalNodeToken,
+    },
+    ConflictingPendingStyleMutation {
+        index: usize,
+        object: SemanticLocalNodeToken,
+    },
+    PendingFamilyCycle {
+        index: usize,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    },
+    PendingNotFamilyMember {
+        index: usize,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    },
+    PendingSubscriptionUsesRemovedSignal {
+        index: usize,
+        object: SemanticLocalNodeToken,
+        property: SemanticObjectProperty,
+        signal: SemanticNodeId,
+    },
+    PendingFamilyEdgeUsesRemovedNode {
+        index: usize,
+        family: SemanticTransactionNodeRef,
+        member: SemanticNodeId,
+    },
+    PendingFamilyOrderUsesRemovedNode {
+        index: usize,
+        family: SemanticTransactionNodeRef,
+        node: SemanticTransactionNodeRef,
+    },
+    PendingNonFinitePropertyValue {
+        index: usize,
+        object: SemanticLocalNodeToken,
+        property: SemanticObjectProperty,
+    },
+    PendingPropertyTypeMismatch {
+        index: usize,
+        object: SemanticLocalNodeToken,
+        property: SemanticObjectProperty,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
+    InvalidPendingStyle {
+        index: usize,
+        object: SemanticLocalNodeToken,
+    },
+    PendingSubscriptionTypeMismatch {
+        index: usize,
+        object: SemanticLocalNodeToken,
+        property: SemanticObjectProperty,
+        signal: SemanticNodeId,
+        expected: SemanticSignalValueKind,
+        actual: SemanticSignalValueKind,
+    },
+    SamePendingAnimationTargetAndTargetState {
+        index: usize,
+        node: SemanticTransactionNodeRef,
+    },
     DuplicateTarget {
         index: usize,
         target: SemanticNodeId,
@@ -1108,6 +1410,66 @@ impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
+            Self::PendingNodeFromDifferentTransaction { index, token } => write!(
+                formatter,
+                "semantic transaction mutation {index} uses pending node {token:?} from another transaction"
+            ),
+            Self::UnknownPendingNode { index, token } => write!(
+                formatter,
+                "semantic transaction mutation {index} uses unknown pending node {token:?}"
+            ),
+            Self::PendingNodeKindMismatch { index, token, expected } => write!(
+                formatter,
+                "semantic transaction mutation {index} requires pending node {token:?} to be {expected:?}"
+            ),
+            Self::DuplicatePendingMutation { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} repeats a mutation target involving pending node {node:?}"
+            ),
+            Self::ConflictingPendingStyleMutation { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} mixes full and scalar style mutation on pending object {object:?}"
+            ),
+            Self::PendingFamilyCycle { index, family, member } => write!(
+                formatter,
+                "semantic transaction mutation {index} creates a family cycle {family:?} -> {member:?}"
+            ),
+            Self::PendingNotFamilyMember { index, family, member } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot reorder non-member {member:?} in family {family:?}"
+            ),
+            Self::PendingSubscriptionUsesRemovedSignal { index, object, property, signal } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot bind removed signal {signal:?} to {property:?} on pending object {object:?}"
+            ),
+            Self::PendingFamilyEdgeUsesRemovedNode { index, family, member } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot use removed node {member:?} in pending family edge for {family:?}"
+            ),
+            Self::PendingFamilyOrderUsesRemovedNode { index, family, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot use removed node {node:?} in pending family order for {family:?}"
+            ),
+            Self::PendingNonFinitePropertyValue { index, object, property } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} to a non-finite value"
+            ),
+            Self::PendingPropertyTypeMismatch { index, object, property, expected, actual } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot set {property:?} on pending object {object:?} requiring {expected} to {actual}"
+            ),
+            Self::InvalidPendingStyle { index, object } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot set a non-finite style on pending object {object:?}"
+            ),
+            Self::PendingSubscriptionTypeMismatch { index, object, property, signal, expected, actual } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot bind {actual} signal {signal:?} to {property:?} on pending object {object:?} requiring {expected}"
+            ),
+            Self::SamePendingAnimationTargetAndTargetState { index, node } => write!(
+                formatter,
+                "semantic transaction mutation {index} cannot add an animation with identical pending target and target state {node:?}"
+            ),
             Self::DuplicateTarget { index, target } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats target {}:{}",
@@ -1413,3 +1775,6 @@ mod remove_node_tests;
 
 #[cfg(test)]
 mod prepared_tests;
+
+#[cfg(test)]
+mod provisional_tests;
