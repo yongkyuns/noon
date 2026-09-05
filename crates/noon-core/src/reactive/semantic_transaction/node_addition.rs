@@ -65,9 +65,13 @@ pub(super) fn preflight_add_node(
     creation: &SemanticNodeCreation,
     removed_nodes: &HashSet<SemanticNodeId>,
     pending_sources: &mut HashSet<SourceIdentity>,
+    validate_source_identity: bool,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    if let Some(source) = creation.source_identity() {
+    if let Some(source) = creation
+        .source_identity()
+        .filter(|_| validate_source_identity)
+    {
         if let Some(existing) = store.node_for_source(source) {
             if !removed_nodes.contains(&existing) {
                 return Err(SemanticMutationTransactionError::Node {
