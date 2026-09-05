@@ -3,6 +3,8 @@ name = "noon-render-wgpu"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "Reusable retained WGPU renderer for Noon runtime state"
+readme = "README.md"
 
 [features]
 default = ["native", "ci-noop"]
