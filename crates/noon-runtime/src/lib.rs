@@ -138,19 +138,95 @@ impl EffectiveObjectProperties {
     }
 
     pub fn set_transform(&mut self, transform: Transform2D) {
+        let previous = self.transform;
         self.transform = transform;
-        self.refresh_bounds();
+        if self.bounds_basis.is_some() {
+            self.refresh_bounds();
+        } else if previous.rotation == transform.rotation && previous.scale == transform.scale {
+            let delta = transform.translation - previous.translation;
+            self.bounds = self
+                .bounds
+                .map(|bounds| noon_core::Rect::new(bounds.min + delta, bounds.max + delta));
+        } else {
+            self.bounds = None;
+        }
     }
 
     pub fn set_style(&mut self, style: Style) {
+        let spatial_change = self.style.stroke.is_some() != style.stroke.is_some()
+            || self.style.stroke_width != style.stroke_width
+            || self.style.stroke_width_mode != style.stroke_width_mode
+            || self.style.stroke_join != style.stroke_join
+            || self.style.stroke_cap != style.stroke_cap;
         self.style = style;
-        self.refresh_bounds();
+        if self.bounds_basis.is_some() {
+            self.refresh_bounds();
+        } else if spatial_change {
+            self.bounds = None;
+        }
     }
 
     fn refresh_bounds(&mut self) {
         self.bounds = self
             .bounds_basis
             .and_then(|basis| basis.world_bounds(self.transform, self.style));
+    }
+}
+
+#[cfg(test)]
+mod effective_object_properties_tests {
+    use super::*;
+
+    fn cached_path_properties() -> EffectiveObjectProperties {
+        EffectiveObjectProperties {
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            bounds: Some(Rect::new(Vec2::new(-1.0, -2.0), Vec2::new(3.0, 4.0))),
+            bounds_basis: None,
+        }
+    }
+
+    #[test]
+    fn cached_path_bounds_follow_translation_and_survive_opacity_only_style() {
+        let mut properties = cached_path_properties();
+        properties.set_transform(Transform2D {
+            translation: Vec2::new(5.0, -1.0),
+            ..Transform2D::IDENTITY
+        });
+        assert_eq!(
+            properties.bounds,
+            Some(Rect::new(Vec2::new(4.0, -3.0), Vec2::new(8.0, 3.0)))
+        );
+
+        properties.set_style(Style {
+            opacity: 0.25,
+            ..properties.style
+        });
+        assert_eq!(
+            properties.bounds,
+            Some(Rect::new(Vec2::new(4.0, -3.0), Vec2::new(8.0, 3.0)))
+        );
+    }
+
+    #[test]
+    fn cached_path_bounds_are_invalidated_by_unreconstructable_spatial_changes() {
+        let mut properties = cached_path_properties();
+        properties.set_transform(Transform2D {
+            rotation: 0.25,
+            ..Transform2D::IDENTITY
+        });
+        assert_eq!(properties.bounds, None);
+
+        let mut properties = cached_path_properties();
+        properties.set_style(Style {
+            stroke_width: properties.style.stroke_width + 1.0,
+            ..properties.style
+        });
+        assert_eq!(properties.bounds, None);
     }
 }
 
