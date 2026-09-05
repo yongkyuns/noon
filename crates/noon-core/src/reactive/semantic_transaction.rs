@@ -692,24 +692,22 @@ impl SemanticMutationTransaction {
                         );
                     }
                 }
-                if let Some(anchor) = before {
-                    if let SemanticTransactionNodeRef::Existing(anchor) = anchor {
-                        if removed_nodes.contains(anchor) {
-                            let SemanticTransactionNodeRef::Existing(family) = family else {
-                                return Err(SemanticMutationTransactionError::PendingFamilyOrderUsesRemovedNode {
+                if let Some(SemanticTransactionNodeRef::Existing(anchor)) = before {
+                    if removed_nodes.contains(anchor) {
+                        let SemanticTransactionNodeRef::Existing(family) = family else {
+                            return Err(SemanticMutationTransactionError::PendingFamilyOrderUsesRemovedNode {
                                 index,
                                 family: *family,
                                 node: (*anchor).into(),
                             });
-                            };
-                            return Err(
-                                SemanticMutationTransactionError::FamilyOrderUsesRemovedNode {
-                                    index,
-                                    family: *family,
-                                    node: *anchor,
-                                },
-                            );
-                        }
+                        };
+                        return Err(
+                            SemanticMutationTransactionError::FamilyOrderUsesRemovedNode {
+                                index,
+                                family: *family,
+                                node: *anchor,
+                            },
+                        );
                     }
                 }
             }
