@@ -27,6 +27,7 @@ const AUTHORING_PROTOCOL_VERSION = 6;
 const HOST_CHANNEL = "noon.host-callback";
 const HOST_PROTOCOL_VERSION = 1;
 const AUTHORING_STARTUP_METRICS_VERSION = 1;
+const moduleGraphReadyAt = performance.now();
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -43,7 +44,7 @@ self.addEventListener("message", (event) => {
 });
 
 async function initializePyodide() {
-  const startupStartedAt = performance.now();
+  const initializeStartedAt = performance.now();
   const resourceDurations = {};
   const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());
   const pyodideReady = measureStartupTask(resourceDurations, "pyodideInitMs", () => loadPyodide());
@@ -168,8 +169,10 @@ _manim_canonical_scene.install()
   const importsReadyAt = performance.now();
   self.__noonAuthoringStartupMetrics = Object.freeze({
     version: AUTHORING_STARTUP_METRICS_VERSION,
-    totalMs: importsReadyAt - startupStartedAt,
-    startupResourcesMs: resourcesReadyAt - startupStartedAt,
+    totalMs: importsReadyAt,
+    moduleGraphLoadMs: moduleGraphReadyAt,
+    initializeMs: importsReadyAt - initializeStartedAt,
+    startupResourcesMs: resourcesReadyAt - initializeStartedAt,
     noonWebInitMs: resourceDurations.noonWebInitMs,
     pyodideInitMs: resourceDurations.pyodideInitMs,
     compatibilityBundleMs: resourceDurations.compatibilityBundleMs,
