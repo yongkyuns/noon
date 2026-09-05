@@ -596,6 +596,8 @@ pub struct RetainedFramePreparer {
     render_items: Vec<RetainedRenderItem>,
     render_item_ranges: HashMap<ObjectId, std::ops::Range<usize>>,
     visible_render_items: Vec<RetainedRenderItem>,
+    visible_projection_ready: bool,
+    visible_projection_candidates: Vec<usize>,
     visibility_stats: RetainedVisibilityProjectionStats,
     snapshot_mask_quads: Vec<GlyphQuadInstance>,
     snapshot_color_quads: Vec<GlyphQuadInstance>,
@@ -637,6 +639,8 @@ impl Default for RetainedFramePreparer {
             render_items: Vec::new(),
             render_item_ranges: HashMap::new(),
             visible_render_items: Vec::new(),
+            visible_projection_ready: false,
+            visible_projection_candidates: Vec::new(),
             visibility_stats: RetainedVisibilityProjectionStats::default(),
             snapshot_mask_quads: Vec::new(),
             snapshot_color_quads: Vec::new(),
@@ -1069,14 +1073,17 @@ impl RetainedFramePreparer {
         );
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
-            let projected = project_mixed_visibility(
+            if let Some(projected) = project_mixed_visibility_cached(
                 frame,
                 indices,
                 &self.render_items,
                 &self.render_item_ranges,
+                &mut self.visible_projection_ready,
+                &mut self.visible_projection_candidates,
                 &mut self.visible_render_items,
-            );
-            self.visibility_stats.record(indices.len(), projected);
+            ) {
+                self.visibility_stats.record(indices.len(), projected);
+            }
         }
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
@@ -1349,14 +1356,17 @@ impl RetainedFramePreparer {
                 .saturating_add(1);
         }
         if let Some(indices) = visible_object_indices {
-            let projected = project_mixed_visibility(
+            if let Some(projected) = project_mixed_visibility_cached(
                 frame,
                 indices,
                 &self.render_items,
                 &self.render_item_ranges,
+                &mut self.visible_projection_ready,
+                &mut self.visible_projection_candidates,
                 &mut self.visible_render_items,
-            );
-            self.visibility_stats.record(indices.len(), projected);
+            ) {
+                self.visibility_stats.record(indices.len(), projected);
+            }
         }
         self.snapshot_metrics = Some(metrics);
         self.prepared_generation_ready = true;
@@ -1394,14 +1404,18 @@ impl RetainedFramePreparer {
         let Some(indices) = visible_object_indices else {
             return;
         };
-        let projected = project_mixed_visibility(
+        let projected = project_mixed_visibility_cached(
             frame,
             indices,
             &self.render_items,
             &self.render_item_ranges,
+            &mut self.visible_projection_ready,
+            &mut self.visible_projection_candidates,
             &mut self.visible_render_items,
         );
-        self.record_visibility_projection(indices.len(), projected);
+        if let Some(projected) = projected {
+            self.record_visibility_projection(indices.len(), projected);
+        }
     }
 
     fn record_visibility_projection(&mut self, candidates: usize, render_items: usize) {
@@ -1422,13 +1436,30 @@ fn rebuild_render_item_ranges(
     }
 }
 
-fn project_mixed_visibility(
+fn project_mixed_visibility_cached(
     frame: &FrameState,
     visible_object_indices: &[usize],
     render_items: &[RetainedRenderItem],
     ranges: &HashMap<ObjectId, std::ops::Range<usize>>,
+    ready: &mut bool,
+    cached_candidates: &mut Vec<usize>,
     output: &mut Vec<RetainedRenderItem>,
-) -> usize {
+) -> Option<usize> {
+    if *ready
+        && cached_candidates == visible_object_indices
+        && mixed_visibility_topology_matches(
+            frame,
+            visible_object_indices,
+            render_items,
+            ranges,
+            output,
+        )
+    {
+        return None;
+    }
+
+    cached_candidates.clear();
+    cached_candidates.extend_from_slice(visible_object_indices);
     output.clear();
     for &index in visible_object_indices {
         let object = &frame.objects[index];
@@ -1436,7 +1467,30 @@ fn project_mixed_visibility(
             output.extend_from_slice(&render_items[range.clone()]);
         }
     }
-    output.len()
+    *ready = true;
+    Some(output.len())
+}
+
+fn mixed_visibility_topology_matches(
+    frame: &FrameState,
+    visible_object_indices: &[usize],
+    render_items: &[RetainedRenderItem],
+    ranges: &HashMap<ObjectId, std::ops::Range<usize>>,
+    projected: &[RetainedRenderItem],
+) -> bool {
+    let mut projected_start = 0;
+    for &index in visible_object_indices {
+        let object = &frame.objects[index];
+        let Some(range) = ranges.get(&object.id) else {
+            continue;
+        };
+        let projected_end = projected_start + range.len();
+        if projected.get(projected_start..projected_end) != Some(&render_items[range.clone()]) {
+            return false;
+        }
+        projected_start = projected_end;
+    }
+    projected_start == projected.len()
 }
 
 fn validate_visible_object_indices(
@@ -2783,7 +2837,7 @@ mod tests {
     }
 
     #[test]
-    fn offscreen_local_geometry_change_keeps_text_only_projection_candidate_sized() {
+    fn unchanged_text_candidate_reuses_projection_across_clean_and_offscreen_changes() {
         let (mut frame, texts, fonts) = mixed_text_frame();
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
@@ -2804,6 +2858,28 @@ mod tests {
                 Some(&[1]),
             )
             .unwrap();
+        let projected_once = preparer.visibility_stats();
+        {
+            let prepared = preparer
+                .prepare_with_changes_inner(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                    true,
+                    Some(&[1]),
+                )
+                .unwrap();
+            assert!(prepared
+                .render_items
+                .iter()
+                .all(|item| item.object_id() == ObjectId::new(2)));
+        }
+        assert_eq!(preparer.visibility_stats(), projected_once);
         let baseline = preparer.incremental_stats();
         frame.objects[0].transform.translation = Vec2::new(20.0, 0.0);
 
@@ -2832,7 +2908,7 @@ mod tests {
         let after = preparer.incremental_stats();
         assert_eq!(after.scratch_rebuilds, baseline.scratch_rebuilds);
         assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
-        assert_eq!(preparer.visibility_stats().candidates_projected, 2);
+        assert_eq!(preparer.visibility_stats(), projected_once);
     }
 
     #[test]
