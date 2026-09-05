@@ -46,6 +46,7 @@ jobs:
           git add -A
           git commit --amend --no-edit
           cargo fmt --all -- --check
+          git push --force origin HEAD:a1-1086-generated-debug
 
       - name: Clippy noon-core
         run: cargo clippy -p noon-core --all-targets --all-features -- -D warnings
