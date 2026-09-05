@@ -157,12 +157,13 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
-        const PROPERTIES: [Property; 9] = [
+        const PROPERTIES: [Property; 10] = [
             Property::Presence,
             Property::Transform,
             Property::Position,
             Property::Rotation,
             Property::Scale,
+            Property::Fill,
             Property::Opacity,
             Property::Appearance,
             Property::Reveal,
@@ -462,10 +463,11 @@ const fn property_slot(property: Property) -> u8 {
         Property::Position => 2,
         Property::Rotation => 3,
         Property::Scale => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Morph => 8,
+        Property::Fill => 5,
+        Property::Opacity => 6,
+        Property::Appearance => 7,
+        Property::Reveal => 8,
+        Property::Morph => 9,
     }
 }
 
@@ -542,8 +544,8 @@ pub(crate) fn apply_reactive_value_to_row(
             *row.morph = value;
             changed
         }
-        (Property::Transform, _) => {
-            unreachable!("reactive values cannot drive object-snapshot Transform properties")
+        (Property::Transform | Property::Fill, _) => {
+            unreachable!("reactive values cannot drive object-snapshot or fill-color properties")
         }
         _ => unreachable!("validated reactive binding value type must match its property"),
     }

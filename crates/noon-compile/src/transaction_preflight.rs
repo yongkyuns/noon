@@ -369,7 +369,11 @@ pub(super) fn preflight_transaction_with_resources(
                     || !reconciled.identity_time_map
                     || !matches!(
                         reconciled.property,
-                        Property::Position | Property::Rotation | Property::Scale
+                        Property::Position
+                            | Property::Rotation
+                            | Property::Scale
+                            | Property::Fill
+                            | Property::Opacity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

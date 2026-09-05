@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     patch::{validate_geometry, validate_style, validate_transform},
-    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
+    Color, CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
     PatchError, SceneDefinition, TrackId, Vec2,
 };
 
@@ -89,6 +89,7 @@ pub enum Property {
     Position,
     Rotation,
     Scale,
+    Fill,
     Opacity,
     Appearance,
     Reveal,
@@ -100,6 +101,7 @@ pub enum ValueKind {
     Bool,
     Scalar,
     Vec2,
+    Color,
     Object,
 }
 
@@ -108,6 +110,7 @@ impl Property {
         match self {
             Self::Presence => ValueKind::Bool,
             Self::Transform => ValueKind::Object,
+            Self::Fill => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation | Self::Opacity | Self::Appearance | Self::Reveal | Self::Morph => {
                 ValueKind::Scalar
@@ -150,6 +153,10 @@ pub enum TrackValues {
         from: Vec2,
         to: Vec2,
     },
+    Color {
+        from: Option<Color>,
+        to: Option<Color>,
+    },
     Object {
         from: ObjectSnapshot,
         to: ObjectSnapshot,
@@ -162,6 +169,7 @@ impl TrackValues {
             Self::Bool { .. } => ValueKind::Bool,
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
+            Self::Color { .. } => ValueKind::Color,
             Self::Object { .. } => ValueKind::Object,
         }
     }
@@ -190,6 +198,22 @@ impl TrackValues {
                     from: *from,
                     to: *to,
                 })
+            }
+            Self::Color { from, to } => {
+                for (endpoint, color) in [
+                    (TrackValueEndpoint::From, from),
+                    (TrackValueEndpoint::To, to),
+                ] {
+                    if color.as_ref().is_some_and(|color| {
+                        !color.red.is_finite()
+                            || !color.green.is_finite()
+                            || !color.blue.is_finite()
+                            || !color.alpha.is_finite()
+                    }) {
+                        return Err(TimelineError::InvalidColorValue { property, endpoint });
+                    }
+                }
+                Ok(())
             }
             Self::Object { from, to } => {
                 validate_object_track_value(object, property, TrackValueEndpoint::From, from)?;
@@ -289,6 +313,10 @@ pub enum TimelineError {
         from: Vec2,
         to: Vec2,
     },
+    InvalidColorValue {
+        property: Property,
+        endpoint: TrackValueEndpoint,
+    },
     InvalidObjectValue {
         property: Property,
         endpoint: TrackValueEndpoint,
@@ -325,6 +353,10 @@ impl std::fmt::Display for TimelineError {
                 formatter,
                 "non-finite vector values for {property:?}: from=({}, {}), to=({}, {})",
                 from.x, from.y, to.x, to.y
+            ),
+            Self::InvalidColorValue { property, endpoint } => write!(
+                formatter,
+                "non-finite color in {endpoint} value for {property:?}"
             ),
             Self::InvalidObjectValue {
                 property,
@@ -842,6 +874,47 @@ mod tests {
         assert_eq!(
             scene
                 .animate_scalar(object, Property::Opacity, 1.0, 0.0, timing())
+                .unwrap(),
+            TrackId::new(0)
+        );
+    }
+
+    #[test]
+    fn non_finite_fill_color_is_rejected_without_consuming_track_ids() {
+        let mut scene = SceneDefinition::new();
+        let object = scene.add(GeometryRef::circle(1.0));
+        let invalid = Color {
+            red: f32::NAN,
+            ..Color::RED
+        };
+
+        assert_eq!(
+            scene.add_track(
+                object,
+                Property::Fill,
+                TrackValues::Color {
+                    from: Some(Color::BLUE),
+                    to: Some(invalid),
+                },
+                timing(),
+            ),
+            Err(TimelineError::InvalidColorValue {
+                property: Property::Fill,
+                endpoint: TrackValueEndpoint::To,
+            })
+        );
+        assert!(scene.tracks().is_empty());
+        assert_eq!(
+            scene
+                .add_track(
+                    object,
+                    Property::Fill,
+                    TrackValues::Color {
+                        from: None,
+                        to: Some(Color::RED),
+                    },
+                    timing(),
+                )
                 .unwrap(),
             TrackId::new(0)
         );

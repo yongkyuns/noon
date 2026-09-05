@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use noon_compile::ExecutionPatch;
+use noon_compile::{ExecutionPatch, SemanticAnimationCompletion};
 use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -173,11 +173,15 @@ impl ExecutionSession {
         let mut semantic = SemanticMutationTransaction::new();
         let mut release = Vec::with_capacity(pending.entries.len());
         for entry in &pending.entries {
-            semantic.set_property(
-                entry.semantic_object,
-                entry.semantic_property,
-                entry.completion_value.clone(),
-            );
+            match &entry.completion {
+                SemanticAnimationCompletion::None => {}
+                SemanticAnimationCompletion::Property { property, value } => {
+                    semantic.set_property(entry.semantic_object, *property, value.clone());
+                }
+                SemanticAnimationCompletion::Style(style) => {
+                    semantic.replace_style(entry.semantic_object, style.clone());
+                }
+            }
             release.push(ExecutionPatch::ReconcileTrack {
                 track: entry.track,
                 object: entry.execution_object,
@@ -262,9 +266,9 @@ impl ExecutionSession {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
-        TrackTiming, Transform2D, Vec2,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticVec3,
+        StoredGeometry, TrackTiming, Transform2D, Vec2,
     };
 
     use super::*;
@@ -328,6 +332,57 @@ mod tests {
         assert!(session.segment_state(segment).is_complete());
         session.seek(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
+    }
+
+    #[test]
+    fn style_completion_publishes_exact_authored_style_and_releases_both_channels() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        target_state.style.fill_opacity = 0.4;
+        target_state.style.object_opacity = 0.5;
+        let expected = target_state.style.clone();
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        let style = session.frame().objects[0].style;
+        let fill = style.fill.unwrap();
+        assert!((fill.alpha - 0.7).abs() < 1e-6);
+        assert!((style.opacity - 0.75).abs() < 1e-6);
+
+        session.advance_segment_to(segment, 2.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(
+            store.semantic_object_state_checked(object).unwrap().style,
+            expected
+        );
+
+        let mut after = expected.clone();
+        after.fill = Some(SemanticPaint::Solid(Color::BLUE));
+        let mut authored = SemanticMutationTransaction::new();
+        authored.replace_style(object, after);
+        session
+            .apply_semantic_transaction(&mut store, authored)
+            .unwrap();
+        assert_eq!(session.frame().objects[0].style.fill, Some(Color::BLUE));
     }
 
     #[test]

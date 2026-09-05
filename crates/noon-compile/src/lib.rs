@@ -72,6 +72,7 @@ pub struct DynamicProperties {
     pub position: bool,
     pub rotation: bool,
     pub scale: bool,
+    pub fill: bool,
     pub opacity: bool,
     pub appearance: bool,
     pub reveal: bool,
@@ -86,6 +87,7 @@ impl DynamicProperties {
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
+            Property::Fill => self.fill = true,
             Property::Opacity => self.opacity = true,
             Property::Appearance => self.appearance = true,
             Property::Reveal => self.reveal = true,
@@ -99,6 +101,7 @@ impl DynamicProperties {
             || self.position
             || self.rotation
             || self.scale
+            || self.fill
             || self.opacity
             || self.appearance
             || self.reveal
@@ -647,7 +650,11 @@ impl CompiledScene {
                 || !track.time_map.is_identity()
                 || !matches!(
                     track.property,
-                    Property::Position | Property::Rotation | Property::Scale
+                    Property::Position
+                        | Property::Rotation
+                        | Property::Scale
+                        | Property::Fill
+                        | Property::Opacity
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1195,7 +1202,11 @@ impl CompiledScene {
                     || !compiled.time_map.is_identity()
                     || !matches!(
                         compiled.property,
-                        Property::Position | Property::Rotation | Property::Scale
+                        Property::Position
+                            | Property::Rotation
+                            | Property::Scale
+                            | Property::Fill
+                            | Property::Opacity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -1508,10 +1519,11 @@ const fn property_rank(property: Property) -> u8 {
         Property::Position => 2,
         Property::Rotation => 3,
         Property::Scale => 4,
-        Property::Opacity => 5,
-        Property::Appearance => 6,
-        Property::Reveal => 7,
-        Property::Morph => 8,
+        Property::Fill => 5,
+        Property::Opacity => 6,
+        Property::Appearance => 7,
+        Property::Reveal => 8,
+        Property::Morph => 9,
     }
 }
 
@@ -1703,6 +1715,7 @@ mod tests {
                 position: false,
                 rotation: false,
                 scale: false,
+                fill: false,
                 opacity: true,
                 appearance: false,
                 reveal: false,
@@ -1871,6 +1884,7 @@ mod tests {
                 position: false,
                 rotation: false,
                 scale: false,
+                fill: false,
                 opacity: false,
                 appearance: false,
                 reveal: true,

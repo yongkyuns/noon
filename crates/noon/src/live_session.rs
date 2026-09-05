@@ -293,7 +293,7 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Atomically author and activate one affine transform after session bootstrap.
+    /// Atomically author and activate one supported transform/style transition after bootstrap.
     ///
     /// The declaration and execution tracks publish together through the canonical semantic
     /// transaction and runtime. The returned segment uses the existing advance/completion

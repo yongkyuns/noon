@@ -1122,7 +1122,10 @@ impl SceneInstance {
             }
             ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
-                self.reapply_properties(index, &[Property::Transform, Property::Opacity]);
+                self.reapply_properties(
+                    index,
+                    &[Property::Transform, Property::Fill, Property::Opacity],
+                );
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
@@ -1341,12 +1344,13 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 9] = [
+const PROPERTY_ORDER: [Property; 10] = [
     Property::Presence,
     Property::Transform,
     Property::Position,
     Property::Rotation,
     Property::Scale,
+    Property::Fill,
     Property::Opacity,
     Property::Appearance,
     Property::Reveal,
@@ -1589,6 +1593,7 @@ fn apply_group_to_row(
             Property::Position => Some(EvaluatedValue::Vec2(base_transform.translation)),
             Property::Rotation => Some(EvaluatedValue::Scalar(base_transform.rotation)),
             Property::Scale => Some(EvaluatedValue::Vec2(base_transform.scale)),
+            Property::Fill => Some(EvaluatedValue::Color(base_style.fill)),
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
@@ -1660,6 +1665,11 @@ fn apply_evaluated_value(
             row.transform.scale = value;
             changed || render_changed
         }
+        (Property::Fill, EvaluatedValue::Color(value)) => {
+            let changed = row.style.fill != value;
+            row.style.fill = value;
+            changed
+        }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
             let changed = row.style.opacity != value;
             row.style.opacity = value;
@@ -1673,6 +1683,7 @@ fn apply_evaluated_value(
 enum EvaluatedValue {
     Scalar(f32),
     Vec2(Vec2),
+    Color(Option<Color>),
 }
 
 fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
@@ -2110,6 +2121,9 @@ fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
         )),
+        TrackValues::Color { from, to } => {
+            EvaluatedValue::Color(interpolate_optional_color(*from, *to, progress))
+        }
         TrackValues::Bool { .. } => {
             unreachable!("Presence tracks are evaluated as discrete events")
         }
@@ -2686,6 +2700,47 @@ mod tests {
             .apply_patch(&ScenePatch::RemoveTrack(track_id))
             .expect("valid patch");
         assert_eq!(instance.frame().objects[0].style.opacity, 1.0);
+    }
+
+    #[test]
+    fn fill_track_uses_optional_paint_appearance_and_local_style_dirtying() {
+        let mut definition = SceneDefinition::new();
+        let object = definition.add_snapshot(ObjectSnapshot {
+            geometry: GeometryRef::circle(1.0),
+            transform: Transform2D::default(),
+            style: Style {
+                fill: None,
+                ..Style::default()
+            },
+        });
+        definition
+            .add_track(
+                object,
+                Property::Fill,
+                TrackValues::Color {
+                    from: None,
+                    to: Some(Color::RED),
+                },
+                TrackTiming::new(0.0, 2.0, Easing::Linear),
+            )
+            .unwrap();
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
+        instance.take_frame_changes();
+
+        instance.advance_to(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].style.fill,
+            Some(Color {
+                alpha: 0.5,
+                ..Color::RED
+            })
+        );
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+        instance.advance_to(1.0).unwrap();
+        assert!(instance.take_frame_changes().is_empty());
+        instance.advance_to(2.0).unwrap();
+        assert_eq!(instance.frame().objects[0].style.fill, Some(Color::RED));
     }
 
     #[test]

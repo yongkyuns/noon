@@ -4,10 +4,31 @@ use noon_core::{
     validate_track_definition, ObjectId, Property, ResolvedAnimationOptions,
     SemanticAnimationError, SemanticAnimationIntent, SemanticLoweringError, SemanticNodeId,
     SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalValue, SemanticStore,
-    TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
+    SemanticStyle, Style, TimelineError, TrackDefinition, TrackId, TrackValues, Transform2D,
 };
 
-use super::super::{SemanticAnimationScheduleProjection, SemanticScheduledAnimationLeaf};
+use super::super::{
+    projection::lower_semantic_style, SemanticAnimationScheduleProjection,
+    SemanticScheduledAnimationLeaf,
+};
+
+/// The activation-time effective domains consumed by the shared animation lowerer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveAnimationProperties {
+    pub transform: Transform2D,
+    pub style: Style,
+}
+
+/// Exact authored reconciliation performed when one execution channel is released.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticAnimationCompletion {
+    None,
+    Property {
+        property: SemanticObjectProperty,
+        value: SemanticSignalValue,
+    },
+    Style(SemanticStyle),
+}
 
 /// One existing execution-timeline channel lowered from an activated semantic animation.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,8 +37,7 @@ pub struct SemanticAffineAnimationTrack {
     pub target: SemanticNodeId,
     pub execution_object_id: ObjectId,
     pub property: Property,
-    pub semantic_property: SemanticObjectProperty,
-    pub completion_value: SemanticSignalValue,
+    pub completion: SemanticAnimationCompletion,
     pub values: TrackValues,
     pub timing: noon_core::TrackTiming,
     pub time_map: noon_core::CompositionTimeMap,
@@ -47,7 +67,7 @@ impl SemanticAffineAnimationTrack {
     }
 }
 
-/// Activation-level affine continuation of the canonical semantic animation payload seam.
+/// Activation-level supported-channel continuation of the semantic animation payload seam.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticAffineAnimationTrackProjection {
     tracks: Vec<SemanticAffineAnimationTrack>,
@@ -104,6 +124,10 @@ pub enum SemanticAffineAnimationTrackError {
         animation: SemanticNodeId,
         target: SemanticNodeId,
     },
+    InvalidEffectiveStyle {
+        animation: SemanticNodeId,
+        target: SemanticNodeId,
+    },
     UnsupportedContentChange {
         animation: SemanticNodeId,
         target: SemanticNodeId,
@@ -157,6 +181,11 @@ pub enum SemanticAffineAnimationTrackError {
         target_state: SemanticNodeId,
         field: SemanticAffineAnimationField,
     },
+    InvalidTargetStyle {
+        animation: SemanticNodeId,
+        target_state: SemanticNodeId,
+        error: SemanticLoweringError,
+    },
     InvalidTrack {
         animation: SemanticNodeId,
         error: TimelineError,
@@ -201,6 +230,14 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
             Self::InvalidEffectiveTransform { animation, target } => write!(
                 formatter,
                 "semantic animation {}:{} received a non-finite effective transform for target {}:{}",
+                animation.slot(),
+                animation.generation(),
+                target.slot(),
+                target.generation()
+            ),
+            Self::InvalidEffectiveStyle { animation, target } => write!(
+                formatter,
+                "semantic animation {}:{} received a non-finite effective style for target {}:{}",
                 animation.slot(),
                 animation.generation(),
                 target.slot(),
@@ -339,6 +376,18 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 target_state.slot(),
                 target_state.generation()
             ),
+            Self::InvalidTargetStyle {
+                animation,
+                target_state,
+                error,
+            } => write!(
+                formatter,
+                "semantic animation {}:{} target-state {}:{} has invalid style: {error}",
+                animation.slot(),
+                animation.generation(),
+                target_state.slot(),
+                target_state.generation()
+            ),
             Self::InvalidTrack { animation, error } => write!(
                 formatter,
                 "semantic animation {}:{} produced an invalid execution track: {error}",
@@ -351,24 +400,24 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
 
 impl std::error::Error for SemanticAffineAnimationTrackError {}
 
-/// Lower the affine payload of one already-resolved semantic animation activation.
+/// Lower the supported transform/style payload of one resolved semantic activation.
 ///
-/// `effective_transform` is supplied by the execution/session owner and sampled at
+/// `effective_properties` is supplied by the execution/session owner and sampled at
 /// most once per execution object. The compiler therefore never substitutes authored
 /// base state for activation-time effective state and does not own the session barrier.
 ///
-/// This path fails closed for unsupported non-affine state, lifecycle semantics,
+/// This path fails closed for unsupported content/stroke state, lifecycle semantics,
 /// reactive/timeline driver conflicts, stale scheduled leaves, and multiple drivers
 /// of one target/property until the corresponding shared policies exist.
 pub fn lower_semantic_affine_animation_tracks<F>(
     store: &SemanticStore,
     schedule: &SemanticAnimationScheduleProjection,
-    mut effective_transform: F,
+    mut effective_properties: F,
 ) -> Result<SemanticAffineAnimationTrackProjection, SemanticAffineAnimationTrackError>
 where
-    F: FnMut(ObjectId) -> Option<Transform2D>,
+    F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
 {
-    let mut captures = HashMap::<ObjectId, Transform2D>::new();
+    let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut driven = HashMap::<(u64, u8), SemanticNodeId>::new();
     let mut tracks = Vec::new();
 
@@ -381,7 +430,7 @@ where
         let from = if let Some(captured) = captures.get(&leaf.execution_object_id).copied() {
             captured
         } else {
-            let captured = effective_transform(leaf.execution_object_id).ok_or(
+            let captured = effective_properties(leaf.execution_object_id).ok_or(
                 SemanticAffineAnimationTrackError::MissingEffectiveTransform {
                     animation: leaf.animation,
                     target: leaf.target,
@@ -391,19 +440,16 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_affine_channels(source, target, from)
+        let channels = lower_affine_channels(leaf.target_state, source, target, from)
             .map_err(|issue| existing_payload_error(leaf, issue))?;
         for channel in channels {
-            match driven.entry(driver_key(
-                leaf.execution_object_id,
-                channel.semantic_property,
-            )) {
+            match driven.entry(driver_key(leaf.execution_object_id, channel.property)) {
                 Entry::Occupied(entry) => {
                     return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
                         first_animation: *entry.get(),
                         next_animation: leaf.animation,
                         target: leaf.target,
-                        property: channel.semantic_property,
+                        property: channel.conflict_property,
                     });
                 }
                 Entry::Vacant(entry) => {
@@ -415,8 +461,7 @@ where
                 target: leaf.target,
                 execution_object_id: leaf.execution_object_id,
                 property: channel.property,
-                semantic_property: channel.semantic_property,
-                completion_value: channel.completion_value,
+                completion: channel.completion,
                 values: channel.values,
                 timing: leaf.timing,
                 time_map: leaf.time_map.clone(),
@@ -462,14 +507,15 @@ fn object_state<'a>(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredAffineChannel {
     pub property: Property,
-    pub semantic_property: SemanticObjectProperty,
-    pub completion_value: SemanticSignalValue,
+    pub conflict_property: SemanticObjectProperty,
+    pub completion: SemanticAnimationCompletion,
     pub values: TrackValues,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum AffinePayloadIssue {
     InvalidEffectiveTransform,
+    InvalidEffectiveStyle,
     UnsupportedContentChange,
     UnsupportedStyleChange,
     UnsupportedPainterOrderChange,
@@ -485,6 +531,7 @@ pub(super) enum AffinePayloadIssue {
         error: SemanticLoweringError,
     },
     TargetValueOutOfRange(SemanticAffineAnimationField),
+    InvalidTargetStyle(SemanticLoweringError),
 }
 
 pub(super) fn validate_affine_payload(
@@ -501,7 +548,13 @@ pub(super) fn validate_affine_payload(
     if source.content != target.content {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
-    if source.style != target.style {
+    if source.style.stroke != target.style.stroke
+        || source.style.stroke_opacity != target.style.stroke_opacity
+        || source.style.stroke_width != target.style.stroke_width
+        || source.style.stroke_width_mode != target.style.stroke_width_mode
+        || source.style.stroke_join != target.style.stroke_join
+        || source.style.stroke_cap != target.style.stroke_cap
+    {
         return Err(AffinePayloadIssue::UnsupportedStyleChange);
     }
     if source.z_index() != target.z_index() {
@@ -524,12 +577,16 @@ pub(super) fn validate_affine_payload(
 }
 
 pub(super) fn lower_affine_channels(
+    target_state: SemanticNodeId,
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
-    from: Transform2D,
+    from: EffectiveAnimationProperties,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    if !transform_is_finite(from) {
+    if !transform_is_finite(from.transform) {
         return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+    }
+    if !style_is_finite(from.style) {
+        return Err(AffinePayloadIssue::InvalidEffectiveStyle);
     }
     let translation = target
         .transform
@@ -556,17 +613,22 @@ pub(super) fn lower_affine_channels(
         rotation: rotation as f32,
         scale,
     };
-    let mut channels = Vec::with_capacity(3);
+    let target_style = lower_semantic_style(target_state, target)
+        .map_err(AffinePayloadIssue::InvalidTargetStyle)?;
+    let mut channels = Vec::with_capacity(5);
     push_affine_channel(
         source,
         SemanticObjectProperty::Translation,
         Property::Position,
         TrackValues::Vec2 {
-            from: from.translation,
+            from: from.transform.translation,
             to: to.translation,
         },
-        SemanticSignalValue::Vec3(target.transform.translation),
-        from.translation != to.translation,
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::Translation,
+            value: SemanticSignalValue::Vec3(target.transform.translation),
+        },
+        from.transform.translation != to.translation,
         &mut channels,
     )?;
     push_affine_channel(
@@ -574,11 +636,14 @@ pub(super) fn lower_affine_channels(
         SemanticObjectProperty::RotationZ,
         Property::Rotation,
         TrackValues::Scalar {
-            from: from.rotation,
+            from: from.transform.rotation,
             to: to.rotation,
         },
-        SemanticSignalValue::Scalar(target.transform.rotation_z),
-        from.rotation != to.rotation,
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::RotationZ,
+            value: SemanticSignalValue::Scalar(target.transform.rotation_z),
+        },
+        from.transform.rotation != to.rotation,
         &mut channels,
     )?;
     push_affine_channel(
@@ -586,11 +651,51 @@ pub(super) fn lower_affine_channels(
         SemanticObjectProperty::Scale,
         Property::Scale,
         TrackValues::Vec2 {
-            from: from.scale,
+            from: from.transform.scale,
             to: to.scale,
         },
-        SemanticSignalValue::Vec3(target.transform.scale),
-        from.scale != to.scale,
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::Scale,
+            value: SemanticSignalValue::Vec3(target.transform.scale),
+        },
+        from.transform.scale != to.scale,
+        &mut channels,
+    )?;
+    let fill_changed = source.style.fill != target.style.fill
+        || source.style.fill_opacity != target.style.fill_opacity
+        || from.style.fill != target_style.fill;
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::FillOpacity,
+        Property::Fill,
+        TrackValues::Color {
+            from: from.style.fill,
+            to: target_style.fill,
+        },
+        SemanticAnimationCompletion::Style(target.style.clone()),
+        fill_changed,
+        &mut channels,
+    )?;
+    let opacity_changed = source.style.object_opacity != target.style.object_opacity
+        || from.style.opacity != target_style.opacity;
+    let completion = if fill_changed {
+        SemanticAnimationCompletion::None
+    } else {
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::ObjectOpacity,
+            value: SemanticSignalValue::Scalar(target.style.object_opacity),
+        }
+    };
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::ObjectOpacity,
+        Property::Opacity,
+        TrackValues::Scalar {
+            from: from.style.opacity,
+            to: target_style.opacity,
+        },
+        completion,
+        opacity_changed,
         &mut channels,
     )?;
     Ok(channels)
@@ -602,7 +707,7 @@ fn push_affine_channel(
     semantic_property: SemanticObjectProperty,
     property: Property,
     values: TrackValues,
-    completion_value: SemanticSignalValue,
+    completion: SemanticAnimationCompletion,
     changed: bool,
     channels: &mut Vec<LoweredAffineChannel>,
 ) -> Result<(), AffinePayloadIssue> {
@@ -620,8 +725,8 @@ fn push_affine_channel(
     }
     channels.push(LoweredAffineChannel {
         property,
-        semantic_property,
-        completion_value,
+        conflict_property: semantic_property,
+        completion,
         values,
     });
     Ok(())
@@ -634,6 +739,12 @@ fn existing_payload_error(
     match issue {
         AffinePayloadIssue::InvalidEffectiveTransform => {
             SemanticAffineAnimationTrackError::InvalidEffectiveTransform {
+                animation: leaf.animation,
+                target: leaf.target,
+            }
+        }
+        AffinePayloadIssue::InvalidEffectiveStyle => {
+            SemanticAffineAnimationTrackError::InvalidEffectiveStyle {
                 animation: leaf.animation,
                 target: leaf.target,
             }
@@ -704,17 +815,41 @@ fn existing_payload_error(
                 field,
             }
         }
+        AffinePayloadIssue::InvalidTargetStyle(error) => {
+            SemanticAffineAnimationTrackError::InvalidTargetStyle {
+                animation: leaf.animation,
+                target_state: leaf.target_state,
+                error,
+            }
+        }
     }
 }
 
-fn driver_key(object: ObjectId, property: SemanticObjectProperty) -> (u64, u8) {
+fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
     let slot = match property {
-        SemanticObjectProperty::Translation => 0,
-        SemanticObjectProperty::RotationZ => 1,
-        SemanticObjectProperty::Scale => 2,
-        _ => unreachable!("affine payload lowering only registers affine drivers"),
+        Property::Position => 0,
+        Property::Rotation => 1,
+        Property::Scale => 2,
+        Property::Fill => 3,
+        Property::Opacity => 4,
+        _ => unreachable!("shared animation payload lowering only registers supported drivers"),
     };
     (object.get(), slot)
+}
+
+fn style_is_finite(style: Style) -> bool {
+    let color_is_finite = |color: Option<noon_core::Color>| {
+        color.map_or(true, |color| {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        })
+    };
+    color_is_finite(style.fill)
+        && color_is_finite(style.stroke)
+        && style.stroke_width.is_finite()
+        && style.opacity.is_finite()
 }
 
 pub(super) fn transform_is_finite(transform: Transform2D) -> bool {
@@ -727,10 +862,20 @@ pub(super) fn transform_is_finite(transform: Transform2D) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{AnimationOptions, SemanticObjectState, SemanticVec3, StoredGeometry, Vec2};
+    use noon_core::{
+        AnimationOptions, Color, SemanticObjectState, SemanticPaint, SemanticVec3, StoredGeometry,
+        Vec2,
+    };
 
     use super::*;
     use crate::{lower_semantic_animation_schedule, SemanticExecutionIndex};
+
+    fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
+        EffectiveAnimationProperties {
+            transform,
+            style: Style::default(),
+        }
+    }
 
     fn visible_object(store: &mut SemanticStore) -> SemanticNodeId {
         let id = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
@@ -772,11 +917,11 @@ mod tests {
             &store,
             &schedule(&store, &index, animation),
             |_| {
-                Some(Transform2D {
+                Some(effective(Transform2D {
                     translation: Vec2::new(5.0, 7.0),
                     rotation: 0.25,
                     scale: Vec2::new(1.5, 1.5),
-                })
+                }))
             },
         )
         .unwrap();
@@ -814,6 +959,89 @@ mod tests {
     }
 
     #[test]
+    fn style_channels_capture_effective_values_and_reconcile_one_exact_style() {
+        let mut store = SemanticStore::new();
+        let target = visible_object(&mut store);
+        let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
+        target_state.style.fill = Some(SemanticPaint::Solid(Color::RED));
+        target_state.style.fill_opacity = 0.5;
+        target_state.style.object_opacity = 0.25;
+        let expected_style = target_state.style.clone();
+        let target_state = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+        let mut current = Style::default();
+        current.fill = Some(Color::BLUE);
+        current.opacity = 0.75;
+
+        let projection = lower_semantic_affine_animation_tracks(
+            &store,
+            &schedule(&store, &index, animation),
+            |_| {
+                Some(EffectiveAnimationProperties {
+                    transform: Transform2D::default(),
+                    style: current,
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(projection.len(), 2);
+        assert_eq!(projection.tracks()[0].property, Property::Fill);
+        assert_eq!(
+            projection.tracks()[0].values,
+            TrackValues::Color {
+                from: Some(Color::BLUE),
+                to: Some(Color {
+                    alpha: 0.5,
+                    ..Color::RED
+                }),
+            }
+        );
+        assert_eq!(
+            projection.tracks()[0].completion,
+            SemanticAnimationCompletion::Style(expected_style)
+        );
+        assert_eq!(projection.tracks()[1].property, Property::Opacity);
+        assert_eq!(
+            projection.tracks()[1].completion,
+            SemanticAnimationCompletion::None
+        );
+    }
+
+    #[test]
+    fn fill_binding_conflict_fails_before_style_track_publication() {
+        let mut store = SemanticStore::new();
+        let target = visible_object(&mut store);
+        let opacity = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        store
+            .bind_semantic_signal(opacity, target, SemanticObjectProperty::FillOpacity)
+            .unwrap();
+        let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
+        target_state.style.fill_opacity = 0.5;
+        let target_state = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+        let index = index(&store);
+
+        assert_eq!(
+            lower_semantic_affine_animation_tracks(
+                &store,
+                &schedule(&store, &index, animation),
+                |_| Some(effective(Transform2D::default())),
+            ),
+            Err(SemanticAffineAnimationTrackError::ReactiveDriverConflict {
+                animation,
+                target,
+                property: SemanticObjectProperty::FillOpacity,
+            })
+        );
+    }
+
+    #[test]
     fn captures_each_execution_object_once_per_activation() {
         let mut store = SemanticStore::new();
         let target = visible_object(&mut store);
@@ -840,7 +1068,7 @@ mod tests {
         let projection =
             lower_semantic_affine_animation_tracks(&store, &schedule(&store, &index, root), |_| {
                 calls.set(calls.get() + 1);
-                Some(Transform2D::default())
+                Some(effective(Transform2D::default()))
             })
             .unwrap();
 
@@ -891,7 +1119,7 @@ mod tests {
 
         assert_eq!(
             lower_semantic_affine_animation_tracks(&store, &schedule(&store, &index, root), |_| {
-                Some(Transform2D::default())
+                Some(effective(Transform2D::default()))
             },),
             Err(SemanticAffineAnimationTrackError::MultipleDrivers {
                 first_animation: first,
@@ -924,7 +1152,7 @@ mod tests {
             lower_semantic_affine_animation_tracks(
                 &store,
                 &schedule(&store, &index, animation),
-                |_| Some(Transform2D::default()),
+                |_| Some(effective(Transform2D::default())),
             ),
             Err(SemanticAffineAnimationTrackError::ReactiveDriverConflict {
                 animation,

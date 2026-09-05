@@ -18,7 +18,7 @@ use crate::execution_segment::{
 use noon_compile::{
     lower_prepared_semantic_transform_to, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    CompilePatchError, ExecutionMutationTransaction, ExecutionPatch,
+    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
     PreparedSemanticTransformToError, SemanticAffineAnimationTrackError,
     SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
     SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
@@ -725,7 +725,12 @@ impl ExecutionSession {
         let mut segment =
             ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
         let tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
-            self.runtime.effective_transform(object)
+            let index = self.runtime.frame_index_for_object(object)?;
+            let row = self.runtime.frame().objects.get(index)?;
+            Some(EffectiveAnimationProperties {
+                transform: row.transform,
+                style: row.style,
+            })
         })?;
         if tracks.is_empty() {
             return Ok(segment);
@@ -741,8 +746,7 @@ impl ExecutionSession {
             let end_time = track.timing.start_time + track.timing.duration;
             completions.push(SegmentCompletionEntry {
                 semantic_object: track.target,
-                semantic_property: track.semantic_property,
-                completion_value: track.completion_value.clone(),
+                completion: track.completion.clone(),
                 execution_object: track.execution_object_id,
                 property: track.property,
                 track: track_id,
@@ -778,7 +782,7 @@ impl ExecutionSession {
         Ok(segment)
     }
 
-    /// Declare and activate one affine animation against this already-published session.
+    /// Declare and activate one supported transform/style animation against this session.
     ///
     /// Compiler projection, execution track allocation, semantic transaction preparation, and
     /// runtime publication all complete before semantic identity is committed. The final
@@ -813,7 +817,14 @@ impl ExecutionSession {
             target_state,
             options,
             self.runtime.frame().time,
-            |object| self.runtime.effective_transform(object),
+            |object| {
+                let index = self.runtime.frame_index_for_object(object)?;
+                let row = self.runtime.frame().objects.get(index)?;
+                Some(EffectiveAnimationProperties {
+                    transform: row.transform,
+                    style: row.style,
+                })
+            },
         )?;
         let mut segment =
             ExecutionSegment::from_duration(self.runtime.frame().time, projection.run_time())?;
@@ -826,8 +837,7 @@ impl ExecutionSession {
             let definition = track.with_track_id(track_id)?;
             completions.push(SegmentCompletionEntry {
                 semantic_object: track.target,
-                semantic_property: track.semantic_property,
-                completion_value: track.completion_value.clone(),
+                completion: track.completion.clone(),
                 execution_object: track.execution_object_id,
                 property: track.property,
                 track: track_id,

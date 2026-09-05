@@ -1,7 +1,6 @@
 use crate::{EvaluationError, ExecutionSession, FrameState, RuntimeIdentity, TimelineWakeState};
-use noon_core::{
-    ObjectId, Property, SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, TrackId,
-};
+use noon_compile::SemanticAnimationCompletion;
+use noon_core::{ObjectId, Property, SemanticNodeId, TrackId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExecutionSegmentSequence(u64);
@@ -39,8 +38,7 @@ impl ExecutionSegmentToken {
 #[derive(Clone, Debug)]
 pub(crate) struct SegmentCompletionEntry {
     pub semantic_object: SemanticNodeId,
-    pub semantic_property: SemanticObjectProperty,
-    pub completion_value: SemanticSignalValue,
+    pub completion: SemanticAnimationCompletion,
     pub execution_object: ObjectId,
     pub property: Property,
     pub track: TrackId,
