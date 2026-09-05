@@ -6,6 +6,8 @@ import {
   createSharedExecutionMailbox,
 } from "./execution-transport.js";
 
+export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
+
 export async function attachSemanticEngine(
   context,
   request,
@@ -166,6 +168,9 @@ export async function attachSemanticEngine(
         }
         if (!["pause", "resume", "seek", "restart_playback", "set_loop_duration"].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
+        }
+        if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
+          throw new Error("semantic control queue is full; wait for pending commands before retrying");
         }
         controls.push(message);
         void drain();

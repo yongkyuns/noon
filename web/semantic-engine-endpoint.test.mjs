@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, MessagePort } from "node:worker_threads";
-import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
+import { attachSemanticEngine, MAX_PENDING_SEMANTIC_CONTROLS } from "./semantic-engine-endpoint.js";
 import { decodeTransferableExecutionDelta, SharedExecutionDeltaReader } from "./execution-transport.js";
 
 globalThis.MessagePort = MessagePort;
@@ -241,6 +241,41 @@ test("full transport queues controls until a writable event without recursive dr
     f.render.port2.postMessage({ type: "execution_ack", session: initial.session, sequence: initial.sequence });
     assert.equal((await paused).playing, false);
     f.render.port2.postMessage({ type: "execution_ack", session: second.session, sequence: second.sequence });
+    endpoint.stop();
+  } finally { f.close(); }
+});
+
+test("stalled control queue rejects overflow and preserves accepted command order", async () => {
+  const f = fixture();
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    const endpoint = await f.attach();
+    await ready;
+    const first = await initial;
+    f.player.drainDeltaJson = () => f.player.initialDeltaJson();
+    const tick = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await tick;
+    const accepted = [];
+    f.control.port2.on("message", (message) => {
+      if (message.type === "pause") accepted.push(message.requestId);
+    });
+    const rejected = nextMatching(f.control.port2, (message) => message.type === "error");
+    for (let id = 1; id <= MAX_PENDING_SEMANTIC_CONTROLS + 1; id += 1) {
+      f.control.port2.postMessage({
+        channel: "noon.engine", protocolVersion: 1, type: "pause", requestId: id,
+      });
+    }
+    const overflow = await rejected;
+    assert.equal(overflow.requestId, MAX_PENDING_SEMANTIC_CONTROLS + 1);
+    assert.match(overflow.message, /control queue is full/);
+    assert.deepEqual(accepted, []);
+    const drained = nextMatching(f.control.port2,
+      (message) => message.requestId === MAX_PENDING_SEMANTIC_CONTROLS);
+    f.render.port2.postMessage({ type: "execution_ack", session: first.session, sequence: first.sequence });
+    await drained;
+    assert.deepEqual(accepted, Array.from({ length: MAX_PENDING_SEMANTIC_CONTROLS }, (_, index) => index + 1));
     endpoint.stop();
   } finally { f.close(); }
 });
