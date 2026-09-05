@@ -23,6 +23,7 @@ pub struct SemanticReactiveProjection {
     signal_ids: HashMap<SemanticNodeId, SignalId>,
     native_state_targets: HashMap<NativeStateSource, Vec<SignalId>>,
     native_event_targets: HashMap<NativeEventSource, Vec<SignalId>>,
+    native_signals: HashSet<SemanticNodeId>,
     scalar_tracks: Vec<CompiledScalarSignalTrack>,
     timeline_signals: HashSet<SemanticNodeId>,
 }
@@ -84,6 +85,11 @@ impl SemanticReactiveProjection {
             .get(source)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// Whether a lowered signal is owned by a native source rather than direct writes.
+    pub fn is_native_owned(&self, signal: SemanticNodeId) -> bool {
+        self.native_signals.contains(&signal)
     }
 
     pub fn signal_count(&self) -> usize {
@@ -192,6 +198,7 @@ pub fn lower_semantic_reactive_projection(
         signal_ids: HashMap::new(),
         native_state_targets: HashMap::new(),
         native_event_targets: HashMap::new(),
+        native_signals: HashSet::new(),
         visiting: HashSet::new(),
     };
 
@@ -250,6 +257,7 @@ pub fn lower_semantic_reactive_projection(
         signal_ids: lowerer.signal_ids,
         native_state_targets: lowerer.native_state_targets,
         native_event_targets: lowerer.native_event_targets,
+        native_signals: lowerer.native_signals,
         scalar_tracks,
         timeline_signals,
     })
@@ -262,6 +270,7 @@ struct ReactiveLowerer<'a> {
     signal_ids: HashMap<SemanticNodeId, SignalId>,
     native_state_targets: HashMap<NativeStateSource, Vec<SignalId>>,
     native_event_targets: HashMap<NativeEventSource, Vec<SignalId>>,
+    native_signals: HashSet<SemanticNodeId>,
     visiting: HashSet<SemanticNodeId>,
 }
 
@@ -286,6 +295,9 @@ impl ReactiveLowerer<'_> {
         self.signal_ids.insert(semantic_id, signal);
         self.definitions
             .push(SignalDefinition { id: signal, source });
+        if native_input.is_some() {
+            self.native_signals.insert(semantic_id);
+        }
         match native_input {
             Some(SemanticNativeInputSource::State(source)) => {
                 self.native_state_targets
