@@ -15,6 +15,7 @@ from typing import Any
 import _manim_retained_state as _retained_state
 import _manim_typst as _typst
 import _manim_animation_options as _options
+import _manim_compat as _compat
 import _manim_reactive as _reactive
 import _noon_ir as _ir
 import noon as _base
@@ -285,7 +286,11 @@ def _canonical_affine_animation(
     The returned detached target is already an opaque same-store handle.  Python
     does not create a track, timeline entry, or target snapshot for this path.
     """
-    if isinstance(animation, _base._AnimationBuilder):
+    # The final production compatibility bootstrap replaces the early generic
+    # builder with `_AlignedAnimationBuilder`. It deliberately does not inherit
+    # Noon’s original `_AnimationBuilder`, so accepting only the latter skips
+    # this canonical route and incorrectly lowers an ordinary legacy track.
+    if isinstance(animation, (_base._AnimationBuilder, _compat._CompatAnimationBuilder)):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform:
         source, target = animation.source, animation.target
