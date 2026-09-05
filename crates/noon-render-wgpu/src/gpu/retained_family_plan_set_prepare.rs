@@ -62,12 +62,12 @@ impl RetainedFramePreparer {
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
-        self.prepare_with_changes(
+        self.prepare_canonical_mixed_baseline(
             device,
             queue,
             frame.retained,
@@ -128,6 +128,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
@@ -140,8 +141,8 @@ impl RetainedFramePreparer {
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyPlanSetPrepareError> {
         if frame.family_animations.len() != frame.retained.objects.len()
             || frame.family_plan_indices.len() != frame.retained.objects.len()
@@ -165,7 +166,8 @@ impl RetainedFramePreparer {
                         .iter()
                         .position(|object| object.id == object_id)
                         .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
-                    let Some((state, plan)) = selected_family_plan(frame, plans, object_index)? else {
+                    let Some((state, plan)) = selected_family_plan(frame, plans, object_index)?
+                    else {
                         self.sources.push(SourceItem::Geometry {
                             object_id,
                             scratch_id,
@@ -181,9 +183,10 @@ impl RetainedFramePreparer {
                                 object_index,
                                 object_id,
                             )? {
-                                let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
-                                    RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
-                                })?;
+                                let scratch_index =
+                                    usize::try_from(scratch_id.get()).map_err(|_| {
+                                        RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                                    })?;
                                 let target = self.scratch.reveals.get_mut(scratch_index).ok_or(
                                     RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
                                 )?;
@@ -294,13 +297,9 @@ fn selected_family_plan<'a>(
     let Some(state) = frame.family_animation(object_index) else {
         return Ok(None);
     };
-    let object = frame
-        .retained
-        .objects
-        .get(object_index)
-        .ok_or(RetainedPlannedFamilyFrameError::InvalidObjectIndex(
-            object_index,
-        ))?;
+    let object = frame.retained.objects.get(object_index).ok_or(
+        RetainedPlannedFamilyFrameError::InvalidObjectIndex(object_index),
+    )?;
     let plan_index = frame
         .family_plan_index(object_index)
         .ok_or(RetainedPlannedFamilyFrameError::MissingPlanIndex(object.id))?;

@@ -247,6 +247,21 @@ impl ExecutionSession {
         self.runtime.frame()
     }
 
+    /// Read-only text resources projected with this execution session.
+    pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
+        self.runtime.text_resources()
+    }
+
+    /// Read-only font resources projected with this execution session.
+    pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
+        self.runtime.font_resources()
+    }
+
+    /// Read-only geometry resources projected with this execution session.
+    pub fn geometry_resources(&self) -> &impl noon_core::GeometryResourceLookup {
+        self.runtime.geometry_resources()
+    }
+
     /// Stable runtime identity for an initially lowered row. This session does not
     /// expose structural mutation; value/timeline changes preserve this slot table.
     pub fn execution_slot_for_frame_index(
@@ -281,11 +296,12 @@ impl ExecutionSession {
                 .ok_or(ExecutionSessionCameraError {
                     object: camera_object,
                 })?;
-        Camera2DState::from_frame_object(&object.geometry, object.transform).ok_or(
-            ExecutionSessionCameraError {
+        object
+            .geometry()
+            .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.transform))
+            .ok_or(ExecutionSessionCameraError {
                 object: camera_object,
-            },
-        )
+            })
     }
 
     /// Read runtime-owned presentation dirtiness and timeline cadence without

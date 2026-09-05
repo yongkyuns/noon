@@ -191,7 +191,7 @@ mod tests {
         TextDirection, TextRenderItem, TextResource, TextResourceArena, TextSourceKind,
         TextSourceSpan, Transform2D, Vec2,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -242,7 +242,7 @@ mod tests {
 
     fn text_plan() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let mut store = SemanticStore::new();
@@ -256,11 +256,12 @@ mod tests {
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
         builder.accept_leaf(text_leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(10),
                 content: ObjectContentRef::Text(text_handle),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,
@@ -364,11 +365,12 @@ mod tests {
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family_id).unwrap();
         builder.accept_leaf(leaf, &object, &texts).unwrap();
         let plan = builder.finish().unwrap();
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,

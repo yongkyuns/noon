@@ -30,7 +30,9 @@ fn direct_camera(scene_json: &str, time: f64) -> Camera2DState {
         .iter()
         .find(|object| object["id"].as_u64() == Some(camera_object.get()))
         .unwrap();
-    let geometry: GeometryRef = serde_json::from_value(object["geometry"].clone()).unwrap();
+    let content = object["content"].as_object().unwrap();
+    assert_eq!(content["kind"], "geometry");
+    let geometry: GeometryRef = serde_json::from_value(content["geometry"].clone()).unwrap();
     let transform: Transform2D = serde_json::from_value(object["transform"].clone()).unwrap();
     Camera2DState::from_frame_object(&geometry, transform).unwrap()
 }

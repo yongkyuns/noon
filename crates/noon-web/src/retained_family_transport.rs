@@ -5,7 +5,7 @@ use noon_core::{
     RetainedFamilyAnimationPlan, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition,
     SemanticStore, SemanticStoreError, TextResourceArena,
 };
-use noon_runtime::RetainedFrameState;
+use noon_runtime::FrameState;
 use serde::{Deserialize, Serialize};
 
 /// Per-object content-independent family-animation state carried at frame time.
@@ -97,7 +97,7 @@ impl RetainedFamilyPlanTransport {
     /// already-installed local resources.
     pub fn install(
         &self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         texts: &TextResourceArena,
     ) -> Result<RetainedFamilyAnimationPlan, RetainedFamilyTransportError> {
         self.validate()?;
@@ -190,7 +190,7 @@ mod tests {
         TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan, Transform2D,
         Vec2,
     };
-    use noon_runtime::RetainedFrameObjectState;
+    use noon_runtime::FrameObjectState;
 
     use super::*;
 
@@ -267,22 +267,24 @@ mod tests {
         let text = texts.insert(text_resource()).unwrap();
         let text_id = ObjectId::new(10);
         let circle_id = ObjectId::new(11);
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 0.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: text_id,
                     content: ObjectContentRef::Text(text),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
+                    text_bounds: None,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: circle_id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
+                    text_bounds: None,
                 },
             ],
             presences: vec![true, true],

@@ -5,9 +5,10 @@
 //! migration/export adapters owned for deletion by #958/#959.
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
+    Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -41,10 +42,7 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         state: SemanticObjectState,
     ) -> Result<Self, String> {
-        state
-            .content
-            .geometry()
-            .ok_or("mobject does not contain geometry")?;
+        validate_content(&store.borrow(), state.content)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(SemanticNodeCreation::object(state));
         let result = transaction
@@ -84,16 +82,7 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(|error| error.to_string())?;
-        let geometry = state
-            .content
-            .geometry()
-            .ok_or("mobject does not contain geometry")?;
-        if let StoredGeometry::Resource(handle) = geometry {
-            store
-                .geometry_resources()
-                .get(handle)
-                .ok_or("unknown or stale geometry resource")?;
-        }
+        validate_content(&store, state.content)?;
         Ok(())
     }
     pub fn require_same_store(&self, other: &Self) -> Result<(), String> {
@@ -107,10 +96,7 @@ impl Mobject {
     /// Commit presentation changes atomically while retaining node-owned identity,
     /// source/painter metadata, role, bindings, and family membership.
     pub fn commit_state(&mut self, state: SemanticObjectState) -> Result<(), String> {
-        state
-            .content
-            .geometry()
-            .ok_or("mobject does not contain geometry")?;
+        validate_content(&self.store.borrow(), state.content)?;
         let previous = self.state()?;
         let mut transaction = SemanticMutationTransaction::new();
         if previous.content != state.content {
@@ -244,14 +230,7 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(|e| e.to_string())?;
-        layout_for_content(
-            &store,
-            state
-                .content
-                .geometry()
-                .ok_or("mobject does not contain geometry")?,
-            state.transform,
-        )
+        layout_for_content(&store, state.content, state.transform)
     }
     pub fn center(&self) -> Result<(f64, f64), String> {
         if let Some(b) = self.layout_bounds()? {
@@ -286,14 +265,7 @@ impl Mobject {
             .scale
             .lower_xy_f32()
             .map_err(|e| e.to_string())?;
-        let bounds = layout_for_content(
-            &self.store.borrow(),
-            state
-                .content
-                .geometry()
-                .ok_or("geometry mobject required")?,
-            state.transform,
-        )?;
+        let bounds = layout_for_content(&self.store.borrow(), state.content, state.transform)?;
         let scaled_center = bounds
             .map(|b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
             .unwrap_or((state.transform.translation.x, state.transform.translation.y));
@@ -572,3 +544,22 @@ pub(crate) fn import_geometry(
 
 #[cfg(test)]
 mod tests;
+
+fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Result<(), String> {
+    match content {
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
+            store
+                .geometry_resources()
+                .get(handle)
+                .ok_or("unknown or stale geometry resource")?;
+        }
+        SemanticObjectContent::Text(handle) => {
+            store
+                .text_resources()
+                .get(handle)
+                .ok_or("unknown or stale text resource")?;
+        }
+        SemanticObjectContent::Geometry(_) => {}
+    }
+    Ok(())
+}

@@ -5,14 +5,42 @@ use std::{
 };
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontVariationSetting, GeometryRef,
-    GeometryResource, GeometryResourceArena, GeometryResourceHandle, GlyphRun, PositionedGlyph,
-    Rect, StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
-    TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
-    TextRenderItem, TextResource, TextResourceArena, TextResourceHandle, TextSourceKind,
-    TextSourceSpan, TextVectorItem, TextVectorStyle, Transform2D, Vec2, VectorPath,
+    Color, FontFaceIdentity, FontResourceArena, FontResourceLookup, FontVariationSetting,
+    GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
+    GeometryResourceLookup, GlyphRun, PositionedGlyph, Rect, StrokeCap, StrokeJoin, Style,
+    TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke, TextLayoutArtifact,
+    TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem, TextResource,
+    TextResourceArena, TextResourceHandle, TextResourceLookup, TextSourceKind, TextSourceSpan,
+    TextVectorItem, TextVectorStyle, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
+
+/// Lower the compatibility retained scene at the web boundary into the unified
+/// compiled runtime input. Text bounds are immutable resource metadata, captured
+/// from the same scene-owned arena that supplies the renderer bundle.
+pub(crate) fn compile_retained_scene(
+    scene: &noon::RetainedScene,
+    tracks: &[noon_core::TrackDefinition],
+) -> Result<noon_compile::CompiledScene, noon_compile::CompileError> {
+    let objects = scene
+        .objects()
+        .iter()
+        .map(|object| {
+            let mut compiled = noon_compile::CompiledObject::new(
+                object.id,
+                object.content.clone(),
+                object.transform,
+                object.style,
+            );
+            compiled.text_bounds = object
+                .content
+                .text()
+                .and_then(|handle| scene.texts().get(handle).map(|resource| resource.bounds));
+            compiled
+        })
+        .collect();
+    noon_compile::CompiledScene::compile_objects(objects, tracks)
+}
 
 use crate::TransportTextResourceHandle;
 
@@ -66,7 +94,7 @@ impl RenderGeometryPreparation {
 }
 
 pub(crate) fn compiled_render_geometry_preparations(
-    compiled: &noon_compile::RetainedCompiledScene,
+    compiled: &noon_compile::CompiledScene,
     geometries: &[Arc<GeometryRef>],
 ) -> Result<Vec<RenderGeometryPreparation>, RetainedResourceTransportError> {
     let indices = geometries
@@ -111,7 +139,7 @@ pub(crate) fn compiled_render_geometry_preparations(
 }
 
 pub(crate) fn compiled_render_geometries(
-    compiled: &noon_compile::RetainedCompiledScene,
+    compiled: &noon_compile::CompiledScene,
 ) -> Arc<[Arc<GeometryRef>]> {
     let mut seen = std::collections::HashSet::new();
     compiled
@@ -171,9 +199,9 @@ pub struct RetainedResourceBundle {
 impl RetainedResourceBundle {
     pub fn capture(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &TextResourceArena,
-        geometries: &GeometryResourceArena,
-        fonts: &FontResourceArena,
+        texts: &impl TextResourceLookup,
+        geometries: &impl GeometryResourceLookup,
+        fonts: &impl FontResourceLookup,
     ) -> Result<Self, RetainedResourceTransportError> {
         let text_handles = text_handles.into_iter().collect::<BTreeSet<_>>();
         let mut geometry_handles = BTreeSet::new();

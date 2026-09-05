@@ -411,7 +411,7 @@ def _request_list(scene: _compat.Scene) -> list[dict[str, Any]]:
 
 def _bind_request_leaves(session: object, leaves: list[_base.Mobject]) -> None:
     for member in leaves:
-        if _native_text(member):
+        if _native_text(member) and getattr(member, "_semantic_handle", None) is None:
             identity = member._semantic_family_member_handle
             if identity is None:
                 raise RuntimeError("native Text has no shared semantic family identity")

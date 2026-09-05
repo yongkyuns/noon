@@ -7,13 +7,18 @@ mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use noon_core::{
     validate_object_definition, validate_property_patch, validate_track_definition,
     CompositionTimeMap, GeometryRef, MutationTransaction, ObjectId, ObjectStateField, Property,
     SceneDefinition, ScenePatch, Style, TimelineError, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D,
+};
+use noon_core::{
+    FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
+    GeometryId, GeometryResource, GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef,
+    Rect, SemanticStore, TextResource, TextResourceHandle, TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -64,13 +69,169 @@ impl DynamicProperties {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
     pub id: ObjectId,
-    pub geometry: GeometryRef,
+    pub content: ObjectContentRef,
+    /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
+    pub text_bounds: Option<Rect>,
     pub base_transform: Transform2D,
     pub base_style: Style,
     pub dynamic: DynamicProperties,
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
     pub live: bool,
+}
+
+impl CompiledObject {
+    pub fn new(
+        id: ObjectId,
+        content: impl Into<ObjectContentRef>,
+        base_transform: Transform2D,
+        base_style: Style,
+    ) -> Self {
+        Self {
+            id,
+            content: content.into(),
+            text_bounds: None,
+            base_transform,
+            base_style,
+            dynamic: DynamicProperties::default(),
+            live: true,
+        }
+    }
+
+    pub fn geometry(&self) -> Option<&GeometryRef> {
+        self.content.geometry()
+    }
+
+    pub const fn text(&self) -> Option<TextResourceHandle> {
+        self.content.text()
+    }
+}
+
+/// Dependency-closed immutable resources retained by one compiled execution plan.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CompiledResources {
+    texts: BTreeMap<TextResourceHandle, Arc<TextResource>>,
+    fonts: BTreeMap<FontResourceHandle, Arc<FontResource>>,
+    font_handles: BTreeMap<FontResourceKey, FontResourceHandle>,
+    geometries: BTreeMap<GeometryResourceHandle, GeometryResource>,
+    geometry_handles: BTreeMap<GeometryId, GeometryResourceHandle>,
+}
+
+impl TextResourceLookup for CompiledResources {
+    fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.texts.get(&handle).map(Arc::as_ref)
+    }
+}
+
+impl FontResourceLookup for CompiledResources {
+    fn handle_for_face(&self, face: &FontFaceIdentity) -> Option<FontResourceHandle> {
+        self.font_handles
+            .get(&FontResourceKey::from_face(face))
+            .copied()
+    }
+
+    fn get(&self, handle: FontResourceHandle) -> Option<&FontResource> {
+        self.fonts.get(&handle).map(Arc::as_ref)
+    }
+}
+
+impl GeometryResourceLookup for CompiledResources {
+    fn current_handle(&self, id: GeometryId) -> Option<GeometryResourceHandle> {
+        self.geometry_handles.get(&id).copied()
+    }
+
+    fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
+        self.geometries.get(&handle)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompiledResourceError {
+    MissingText(TextResourceHandle),
+    MissingFont(FontResourceKey),
+    MissingGeometry(GeometryResourceHandle),
+}
+
+impl std::fmt::Display for CompiledResourceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingText(handle) => write!(
+                formatter,
+                "missing text resource {}@{}",
+                handle.id.get(),
+                handle.version
+            ),
+            Self::MissingFont(key) => write!(
+                formatter,
+                "missing font resource {}#{}",
+                key.face_key, key.face_index
+            ),
+            Self::MissingGeometry(handle) => write!(
+                formatter,
+                "missing geometry resource {}@{}",
+                handle.id.get(),
+                handle.version
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CompiledResourceError {}
+
+impl CompiledResources {
+    pub fn text_count(&self) -> usize {
+        self.texts.len()
+    }
+
+    pub fn font_count(&self) -> usize {
+        self.fonts.len()
+    }
+
+    pub fn geometry_count(&self) -> usize {
+        self.geometries.len()
+    }
+
+    pub(crate) fn capture_text(
+        &mut self,
+        store: &SemanticStore,
+        handle: TextResourceHandle,
+    ) -> Result<Rect, CompiledResourceError> {
+        if let Some(resource) = self.texts.get(&handle) {
+            return Ok(resource.bounds);
+        }
+        let resource = store
+            .text_resources()
+            .get_shared(handle)
+            .ok_or(CompiledResourceError::MissingText(handle))?;
+
+        for run in resource.runs.iter() {
+            let key = FontResourceKey::from_face(&run.font);
+            let font_handle = store
+                .font_resources()
+                .handle_for_face(&run.font)
+                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+            let font = store
+                .font_resources()
+                .get_shared(font_handle)
+                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+            self.font_handles.insert(key, font_handle);
+            self.fonts.insert(font_handle, font);
+        }
+        for item in resource.vector_items.iter() {
+            let geometry = store
+                .geometry_resources()
+                .get(item.geometry)
+                .cloned()
+                .ok_or(CompiledResourceError::MissingGeometry(item.geometry))?;
+            self.geometry_handles
+                .insert(item.geometry.id, item.geometry);
+            self.geometries.insert(item.geometry, geometry);
+        }
+
+        let bounds = resource.bounds;
+        self.texts.insert(handle, resource);
+        Ok(bounds)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,6 +342,7 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
+    resources: CompiledResources,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -227,10 +389,13 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
     TooManyObjects(usize),
+    DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
+    InvalidTrack(TimelineError),
+    GeometryTrackTargetsText { track: TrackId, property: Property },
     DiscontinuousPresence { previous: TrackId, next: TrackId },
     UnsupportedTransformGeometry(TrackId),
     PathTransformRequiresRetessellation(TrackId),
@@ -246,6 +411,13 @@ impl std::fmt::Display for CompileError {
             Self::UnknownObject(id) => {
                 write!(formatter, "track references unknown object {}", id.get())
             }
+            Self::DuplicateObject(id) => write!(formatter, "duplicate object id {}", id.get()),
+            Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
+            Self::GeometryTrackTargetsText { track, property } => write!(
+                formatter,
+                "geometry-only {property:?} track {} cannot target text content",
+                track.get()
+            ),
             Self::DiscontinuousPresence { previous, next } => write!(
                 formatter,
                 "presence track {} does not hand off continuously to track {}",
@@ -285,6 +457,10 @@ pub enum CompilePatchError {
         field: ObjectStateField,
     },
     InvalidTrack(TimelineError),
+    GeometryTrackTargetsText {
+        track: TrackId,
+        property: Property,
+    },
     DiscontinuousPresence {
         previous: TrackId,
         next: TrackId,
@@ -310,6 +486,11 @@ impl std::fmt::Display for CompilePatchError {
                 object.get()
             ),
             Self::InvalidTrack(error) => write!(formatter, "invalid track: {error}"),
+            Self::GeometryTrackTargetsText { track, property } => write!(
+                formatter,
+                "geometry-only {property:?} track {} cannot target text content",
+                track.get()
+            ),
             Self::DiscontinuousPresence { previous, next } => write!(
                 formatter,
                 "presence track {} does not hand off continuously to track {}",
@@ -339,28 +520,50 @@ impl std::error::Error for CompilePatchError {}
 
 impl CompiledScene {
     pub fn compile(scene: &SceneDefinition) -> Result<Self, CompileError> {
-        let mut object_indices = BTreeMap::new();
-        let mut objects = Vec::with_capacity(scene.objects().len());
+        let objects = scene
+            .objects()
+            .iter()
+            .map(|object| {
+                CompiledObject::new(
+                    object.id,
+                    object.geometry.clone(),
+                    object.transform,
+                    object.style,
+                )
+            })
+            .collect::<Vec<_>>();
+        Self::compile_objects(objects, scene.tracks())
+    }
 
-        for (index, object) in scene.objects().iter().enumerate() {
-            let index = u32::try_from(index)
-                .map_err(|_| CompileError::TooManyObjects(scene.objects().len()))?;
-            object_indices.insert(object.id, index);
-            objects.push(CompiledObject {
-                id: object.id,
-                geometry: object.geometry.clone(),
-                base_transform: object.transform,
-                base_style: object.style,
-                dynamic: DynamicProperties::default(),
-                live: true,
-            });
+    /// Compile geometry and text into the same stable execution-slot domain.
+    pub fn compile_objects(
+        source_objects: Vec<CompiledObject>,
+        source_tracks: &[TrackDefinition],
+    ) -> Result<Self, CompileError> {
+        let mut object_indices = BTreeMap::new();
+        let object_count = source_objects.len();
+        let mut objects = Vec::with_capacity(object_count);
+
+        for (index, mut object) in source_objects.into_iter().enumerate() {
+            let index =
+                u32::try_from(index).map_err(|_| CompileError::TooManyObjects(object_count))?;
+            if object_indices.insert(object.id, index).is_some() {
+                return Err(CompileError::DuplicateObject(object.id));
+            }
+            object.dynamic = DynamicProperties::default();
+            object.live = true;
+            objects.push(object);
         }
 
-        let mut tracks = Vec::with_capacity(scene.tracks().len());
-        for track in scene.tracks() {
+        let mut tracks = Vec::with_capacity(source_tracks.len());
+        for track in source_tracks {
             let object_index = *object_indices
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
+            validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
+            reject_geometry_track_on_text(&objects[object_index as usize], track).map_err(
+                |(track, property)| CompileError::GeometryTrackTargetsText { track, property },
+            )?;
             objects[object_index as usize].dynamic.mark(track.property);
             tracks.push(
                 compile_track(track, object_index)
@@ -391,6 +594,7 @@ impl CompiledScene {
             track_count,
             object_indices,
             track_locators,
+            resources: CompiledResources::default(),
         })
     }
 
@@ -401,6 +605,22 @@ impl CompiledScene {
 
     pub const fn live_object_count(&self) -> usize {
         self.live_object_count
+    }
+
+    pub const fn resources(&self) -> &CompiledResources {
+        &self.resources
+    }
+
+    pub fn text_resources(&self) -> &impl TextResourceLookup {
+        &self.resources
+    }
+
+    pub fn font_resources(&self) -> &impl FontResourceLookup {
+        &self.resources
+    }
+
+    pub fn geometry_resources(&self) -> &impl GeometryResourceLookup {
+        &self.resources
     }
 
     pub fn object_slot_is_live(&self, object_index: u32) -> bool {
@@ -508,7 +728,7 @@ impl CompiledScene {
         match patch {
             ScenePatch::SetGeometry { object, geometry } => self
                 .object_index(*object)
-                .is_none_or(|index| self.objects[index as usize].geometry != *geometry),
+                .is_none_or(|index| self.objects[index as usize].geometry() != Some(geometry)),
             ScenePatch::SetTransform { object, transform } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_transform != *transform),
@@ -544,7 +764,8 @@ impl CompiledScene {
                 validate_object_definition(object).map_err(map_object_state_error)?;
                 self.objects.push(CompiledObject {
                     id: object.id,
-                    geometry: object.geometry.clone(),
+                    content: ObjectContentRef::Geometry(object.geometry.clone()),
+                    text_bounds: None,
                     base_transform: object.transform,
                     base_style: object.style,
                     dynamic: DynamicProperties::default(),
@@ -586,7 +807,8 @@ impl CompiledScene {
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_property_patch(patch).map_err(map_object_state_error)?;
-                self.objects[index as usize].geometry = geometry.clone();
+                self.objects[index as usize].content = ObjectContentRef::Geometry(geometry.clone());
+                self.objects[index as usize].text_bounds = None;
             }
             ScenePatch::SetTransform { object, transform } => {
                 let index = self
@@ -702,6 +924,9 @@ impl CompiledScene {
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
+        reject_geometry_track_on_text(&self.objects[object_index as usize], track).map_err(
+            |(track, property)| CompilePatchError::GeometryTrackTargetsText { track, property },
+        )?;
         compile_track(track, object_index).map_err(|error| compile_patch_error(track.id, error))
     }
 
@@ -800,6 +1025,16 @@ impl CompiledScene {
             stats.dynamic_objects_recomputed += 1;
         }
     }
+}
+
+fn reject_geometry_track_on_text(
+    object: &CompiledObject,
+    track: &TrackDefinition,
+) -> Result<(), (TrackId, Property)> {
+    if object.text().is_some() && matches!(track.property, Property::Transform | Property::Morph) {
+        return Err((track.id, track.property));
+    }
+    Ok(())
 }
 
 fn compile_track(
@@ -916,7 +1151,8 @@ const fn property_rank(property: Property) -> u8 {
 mod tests {
     use noon_core::{
         CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, ObjectDefinition,
-        Property, RateFunction, ScenePatch, TrackTiming, TrackValues, Vec2,
+        Property, RateFunction, ScenePatch, TextResourceHandle, TextResourceId, TrackTiming,
+        TrackValues, Vec2,
     };
 
     use super::*;
@@ -1610,7 +1846,67 @@ mod tests {
         assert_eq!(stats.mutations_preflighted, 1);
         assert_eq!(stats.staged_compiled_scene_clones, 0);
     }
-}
 
-mod retained;
-pub use retained::*;
+    #[test]
+    fn geometry_only_tracks_reject_text_before_compilation_mutates_state() {
+        let text_id = ObjectId::new(20);
+        let text = CompiledObject::new(
+            text_id,
+            TextResourceHandle {
+                id: TextResourceId::new(7),
+                version: 3,
+            },
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let morph = TrackDefinition {
+            id: TrackId::new(8),
+            object: text_id,
+            property: Property::Morph,
+            values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+
+        assert_eq!(
+            CompiledScene::compile_objects(vec![text], &[morph]),
+            Err(CompileError::GeometryTrackTargetsText {
+                track: TrackId::new(8),
+                property: Property::Morph,
+            })
+        );
+    }
+
+    #[test]
+    fn text_morph_patch_fails_before_compiled_state_changes() {
+        let text_id = ObjectId::new(20);
+        let text = CompiledObject::new(
+            text_id,
+            TextResourceHandle {
+                id: TextResourceId::new(7),
+                version: 3,
+            },
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut compiled = CompiledScene::compile_objects(vec![text], &[]).unwrap();
+        let morph = TrackDefinition {
+            id: TrackId::new(8),
+            object: text_id,
+            property: Property::Morph,
+            values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+
+        assert_eq!(
+            compiled.apply_patch(&ScenePatch::AddTrack(morph)),
+            Err(CompilePatchError::GeometryTrackTargetsText {
+                track: TrackId::new(8),
+                property: Property::Morph,
+            })
+        );
+        assert_eq!(compiled.track_count(), 0);
+        assert!(!compiled.objects()[0].dynamic.any());
+    }
+}

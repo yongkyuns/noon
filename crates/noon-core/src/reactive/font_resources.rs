@@ -150,6 +150,12 @@ impl FontResourceArena {
         Some(entry.value.as_ref())
     }
 
+    /// Share one immutable font payload with a derived compiled resource snapshot.
+    pub fn get_shared(&self, handle: FontResourceHandle) -> Option<Arc<FontResource>> {
+        let entry = self.entries.get(handle.id.get() as usize)?;
+        (entry.version == handle.version).then(|| entry.value.clone())
+    }
+
     pub fn handle_for_face(&self, face: &FontFaceIdentity) -> Option<FontResourceHandle> {
         self.handles_by_key
             .get(&FontResourceKey::from_face(face))

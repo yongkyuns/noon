@@ -402,7 +402,8 @@ mod tests {
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
             id: ObjectId::new(id),
-            geometry,
+            content: noon_core::ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
             transform: Transform2D::default(),
             style: Style::default(),
             appearance: 1.0,

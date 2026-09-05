@@ -73,9 +73,9 @@ impl RetainedFramePreparer {
         queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
         let changes = FrameChanges::all();
@@ -92,9 +92,9 @@ impl RetainedFramePreparer {
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
         match active_family_mode(frame, plan)? {
@@ -161,7 +161,7 @@ mod operation_selection_tests {
         RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore, Style,
         TextResourceArena, Transform2D,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -178,7 +178,7 @@ mod operation_selection_tests {
 
     fn fixture() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let mut semantics = SemanticStore::new();
@@ -198,26 +198,29 @@ mod operation_selection_tests {
         builder.accept_leaf(second, &second_object, &texts).unwrap();
         let plan = builder.finish().unwrap();
 
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(99),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
@@ -376,6 +379,37 @@ mod operation_selection_tests {
             + std::mem::size_of_val(geometry.paths);
         assert_eq!(upload.geometry.bytes_uploaded, expected);
         assert_eq!(upload.geometry.buffer_reallocations, 0);
+
+        // A same-slot structural replacement must retain its structural marker
+        // through the family baseline. Reusing the old scratch/source identity
+        // would draw object 99 instead of the replacement object 100.
+        retained.objects[2].id = ObjectId::new(100);
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        let replacement = preparer
+            .prepare_family_animation_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &plan,
+                &FrameChanges::structural(vec![2], vec![2]),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(replacement.geometry_stats().full_rebuilds, 1);
+        assert!(replacement
+            .render_items
+            .iter()
+            .any(|item| item.object_id() == ObjectId::new(100)));
+        assert!(!replacement
+            .render_items
+            .iter()
+            .any(|item| item.object_id() == ObjectId::new(99)));
     }
 
     fn assert_no_unused_mega_streams(frame: &PreparedRetainedGpuFrame<'_>) {
@@ -569,7 +603,10 @@ mod operation_selection_tests {
             )
             .unwrap();
         assert_eq!(rebuilt.geometry_stats().full_rebuilds, 1);
-        assert!(rebuilt.text_generation > generation);
+        // This fixture is geometry-only. Reinstalling path residency rebuilds
+        // geometry, but it must not manufacture a text upload generation.
+        assert_eq!(rebuilt.text_generation, generation);
+        assert!(rebuilt.geometry_only);
         assert_eq!(
             rebuilt.geometry_stats().instance_count,
             retained.objects.len()
@@ -677,7 +714,8 @@ mod operation_selection_tests {
             assert!(writes
                 .iter()
                 .all(|w| w.buffer != "path_vertex" && w.buffer != "path_index"));
-            assert_eq!(prepared.render_items.len(), 1);
+            assert!(prepared.geometry_only);
+            assert!(prepared.render_items.is_empty());
         }
     }
 }

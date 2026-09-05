@@ -48,7 +48,8 @@ fn circle_frame(object_count: usize) -> FrameState {
         objects: (0..object_count)
             .map(|index| FrameObjectState {
                 id: ObjectId::new(index as u64),
-                geometry: GeometryRef::circle(0.5),
+                content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,

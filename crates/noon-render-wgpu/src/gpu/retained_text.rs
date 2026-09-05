@@ -6,18 +6,22 @@ use std::{
 };
 
 use noon_core::{
-    Color, FontResourceArena, FontResourceHandle, GeometryRef, GeometryResource,
-    GeometryResourceArena, GlyphRun, ObjectContentRef, ObjectId, PathCommand, StrokeCap,
+    Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
+    GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, StrokeCap,
     StrokeJoin, StrokeWidthMode, Style, TextAffineTransform, TextGlyphStroke, TextRenderItem,
-    TextResourceArena, TextVectorItem, Transform2D, Vec2, VectorPath,
+    TextResourceLookup, TextVectorItem, Transform2D, Vec2, VectorPath,
 };
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RetainedFrameState};
+#[cfg(test)]
+use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_text_atlas::GpuGlyphAtlas;
 use noon_text_render_wgpu::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
     RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
     TextGpuDrawError, TextGpuDrawStats, TextGpuUploadStats, TextPrepareError,
 };
+#[cfg(test)]
+use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
     scale::ScaleContext,
     zeno::{self, Cap as ZenoCap, Command as ZenoCommand, Join as ZenoJoin, PathData},
@@ -110,6 +114,7 @@ impl PreparedRetainedTextSnapshot<'_> {
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
 pub struct PreparedRetainedGpuFrame<'a> {
     geometry: PreparedFrame<'a>,
+    geometry_only: bool,
     text_generation: u64,
     pub text: PreparedRetainedTextSnapshot<'a>,
     pub render_items: &'a [RetainedRenderItem],
@@ -123,6 +128,14 @@ impl PreparedRetainedGpuFrame<'_> {
 
     pub const fn geometry_stats(&self) -> crate::RenderStats {
         self.geometry.stats
+    }
+
+    /// Painter-ordered geometry batches for a geometry-only prepared frame.
+    ///
+    /// Mixed frames use `render_items` because geometry and glyphs interleave.
+    /// This exposes only renderer-derived batch order, never private scratch IDs.
+    pub fn geometry_render_batches(&self) -> &[OrderedRenderBatch] {
+        self.geometry.render_batches
     }
 }
 
@@ -411,7 +424,7 @@ impl GlyphOutlineCache {
 
     fn outline(
         &mut self,
-        fonts: &FontResourceArena,
+        fonts: &(impl FontResourceLookup + ?Sized),
         run: &GlyphRun,
         glyph_id: u32,
     ) -> Result<(OutlineKey, Arc<VectorPath>), RetainedPrepareError> {
@@ -537,6 +550,8 @@ pub struct RetainedFramePreparer {
     scratch: FrameState,
     scratch_ready: bool,
     scratch_object_count: usize,
+    geometry_only_classification: Option<bool>,
+    scratch_slots: Vec<Option<usize>>,
     incremental_stats: RetainedFrameIncrementalStats,
     sources: Vec<SourceItem>,
     render_items: Vec<RetainedRenderItem>,
@@ -572,6 +587,8 @@ impl Default for RetainedFramePreparer {
             },
             scratch_ready: false,
             scratch_object_count: 0,
+            geometry_only_classification: None,
+            scratch_slots: Vec::new(),
             incremental_stats: RetainedFrameIncrementalStats::default(),
             sources: Vec::new(),
             render_items: Vec::new(),
@@ -667,10 +684,10 @@ impl RetainedFramePreparer {
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &RetainedFrameState,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        frame: &FrameState,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         let changes = FrameChanges::all();
@@ -684,13 +701,54 @@ impl RetainedFramePreparer {
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.prepare_with_changes_inner(
+            device, queue, frame, changes, texts, fonts, geometries, metrics, true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_with_changes_inner<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        allow_geometry_only: bool,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        if changes.is_all() || changes.is_structural() {
+            self.geometry_only_classification = None;
+        }
+        if allow_geometry_only {
+            match self.geometry_only_classification {
+                Some(true) if self.can_prepare_geometry_only(frame, changes) => {
+                    return self.prepare_geometry_only(frame, changes, metrics);
+                }
+                Some(false) => {}
+                Some(true) => {}
+                None if self.frame_is_geometry_only(frame) => {
+                    self.geometry_only_classification = Some(true);
+                    return self.prepare_geometry_only(frame, changes, metrics);
+                }
+                None => self.geometry_only_classification = Some(false),
+            }
+        } else {
+            self.geometry_only_classification = Some(false);
+        }
+        if self.can_update_mixed_geometry_locally(frame, changes, metrics) {
+            return self.prepare_mixed_geometry_locally(frame, changes, geometries, metrics);
+        }
+
         let text_can_update_locally = if changes.is_empty() {
             false
         } else {
@@ -745,6 +803,7 @@ impl RetainedFramePreparer {
             };
             return Ok(PreparedRetainedGpuFrame {
                 geometry,
+                geometry_only: false,
                 text_generation: self.text_generation,
                 text,
                 render_items: &self.render_items,
@@ -791,6 +850,7 @@ impl RetainedFramePreparer {
             };
             return Ok(PreparedRetainedGpuFrame {
                 geometry,
+                geometry_only: false,
                 text_generation: self.text_generation,
                 text,
                 render_items: &self.render_items,
@@ -881,6 +941,7 @@ impl RetainedFramePreparer {
         };
         Ok(PreparedRetainedGpuFrame {
             geometry,
+            geometry_only: false,
             text_generation: self.text_generation,
             text,
             render_items: &self.render_items,
@@ -888,14 +949,44 @@ impl RetainedFramePreparer {
         })
     }
 
+    /// Build the canonical scratch baseline required by family realization.
+    ///
+    /// Family operations substitute renderer-local scratch records even when the
+    /// source frame happens to contain geometry only.  The geometry-only fast path
+    /// deliberately does not build that scratch state, so it cannot be used as a
+    /// family baseline.  Clear the cached classification afterwards: family-local
+    /// scratch is never a valid classification for the next ordinary frame.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_canonical_mixed_baseline(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<(), RetainedPrepareError> {
+        // Keep full and structural publications intact for cache invalidation; only
+        // suppress the geometry-only fast path while this family baseline is built.
+        let result = self
+            .prepare_with_changes_inner(
+                device, queue, frame, changes, texts, fonts, geometries, metrics, false,
+            )
+            .map(|_| ());
+        self.geometry_only_classification = None;
+        result
+    }
+
     fn prepare_scratch_with_changes(
         &mut self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
         text_only_local: bool,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<bool, RetainedPrepareError> {
         if self.scratch_ready
             && (changes.is_empty() || text_only_local)
@@ -919,11 +1010,179 @@ impl RetainedFramePreparer {
         Ok(false)
     }
 
-    fn changes_are_fast_text_only(
-        &self,
-        frame: &RetainedFrameState,
+    fn frame_is_geometry_only(&self, frame: &FrameState) -> bool {
+        frame.objects.iter().enumerate().all(|(index, object)| {
+            frame.is_present(index)
+                && !matches!(object.geometry(), Some(GeometryRef::External(_)))
+                && object.geometry().is_some()
+                && !matches!(frame.render_geometry(index), Some(GeometryRef::External(_)))
+        })
+    }
+
+    fn can_prepare_geometry_only(&self, frame: &FrameState, changes: &FrameChanges) -> bool {
+        if self.geometry_only_classification != Some(true)
+            || changes.is_all()
+            || changes.is_structural()
+        {
+            return false;
+        }
+        changes.object_indices().iter().all(|&index| {
+            frame.objects.get(index).is_some_and(|object| {
+                object.geometry().is_some()
+                    && !matches!(object.geometry(), Some(GeometryRef::External(_)))
+                    && !matches!(frame.render_geometry(index), Some(GeometryRef::External(_)))
+            })
+        })
+    }
+
+    fn prepare_geometry_only<'a>(
+        &'a mut self,
+        frame: &FrameState,
         changes: &FrameChanges,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.prepared_generation_ready = false;
+        let geometry = self.geometry.prepare_incremental(frame, changes);
+        let stats = RetainedPrepareStats {
+            semantic_objects: frame.objects.len(),
+            geometry_slots: frame.objects.len(),
+            glyph_batches: 0,
+            vector_items: 0,
+            outline_runs: 0,
+            outline_cache_hits: self.outlines.stats().hits,
+            outline_cache_misses: self.outlines.stats().misses,
+        };
+        self.snapshot_prepare_stats = stats;
+        self.snapshot_metrics = Some(metrics);
+        self.prepared_generation_ready = true;
+        let text = PreparedRetainedTextSnapshot {
+            time: frame.time,
+            mask_quads: &self.snapshot_mask_quads,
+            color_quads: &self.snapshot_color_quads,
+            items: &self.snapshot_text_items,
+            stats: self.snapshot_text_stats,
+            atlas: self.text.atlas(),
+            partial_upload_base_generation: None,
+            dirty_mask_ranges: &self.dirty_mask_ranges,
+            dirty_color_ranges: &self.dirty_color_ranges,
+        };
+        Ok(PreparedRetainedGpuFrame {
+            geometry,
+            geometry_only: true,
+            text_generation: self.text_generation,
+            text,
+            render_items: &[],
+            stats,
+        })
+    }
+
+    fn can_update_mixed_geometry_locally(
+        &self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        metrics: TextDeviceMetrics,
     ) -> bool {
+        if self.geometry_only_classification != Some(false)
+            || !self.scratch_ready
+            || !self.prepared_generation_ready
+            || self.snapshot_metrics != Some(metrics)
+            || changes.is_all()
+            || changes.is_structural()
+            || changes.is_empty()
+        {
+            return false;
+        }
+        changes.object_indices().iter().all(|&index| {
+            let Some(object) = frame.objects.get(index) else {
+                return false;
+            };
+            let Some(scratch_slot) = self.scratch_slots.get(index).and_then(|slot| *slot) else {
+                return false;
+            };
+            let rendered_geometry = frame.render_geometry(index).or_else(|| object.geometry());
+            frame.is_present(index)
+                && self
+                    .scratch
+                    .objects
+                    .get(scratch_slot)
+                    .is_some_and(|scratch| {
+                        same_analytic_geometry_kind(rendered_geometry, scratch.geometry())
+                            && frame.reveal(index) == self.scratch.reveal(scratch_slot)
+                            && frame.morph(index) == self.scratch.morph(scratch_slot)
+                    })
+        })
+    }
+
+    fn prepare_mixed_geometry_locally<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.prepared_generation_ready = false;
+        let mut scratch_changes = Vec::with_capacity(changes.object_indices().len());
+        for &index in changes.object_indices() {
+            let object = &frame.objects[index];
+            let scratch_slot = self.scratch_slots[index].expect("validated mixed geometry slot");
+            let source_geometry = frame
+                .render_geometry(index)
+                .unwrap_or_else(|| object.geometry().expect("validated mixed geometry object"));
+            let geometry = resolve_geometry_ref(source_geometry, geometries)?;
+            let scratch = &mut self.scratch.objects[scratch_slot];
+            scratch.content = ObjectContentRef::Geometry(geometry);
+            scratch.text_bounds = None;
+            scratch.transform = frame.render_transform(index);
+            scratch.style = object.style;
+            scratch.appearance = object.appearance;
+            self.scratch.reveals[scratch_slot] = frame.reveal(index);
+            self.scratch.morphs[scratch_slot] = frame.morph(index);
+            scratch_changes.push(scratch_slot);
+        }
+        self.scratch.time = frame.time;
+        self.incremental_stats.scratch_reuses =
+            self.incremental_stats.scratch_reuses.saturating_add(1);
+        let scratch_changes = FrameChanges::objects(scratch_changes);
+        let geometry = self
+            .geometry
+            .prepare_incremental(&self.scratch, &scratch_changes);
+        if geometry.stats.full_rebuilds > 0 {
+            self.render_items.clear();
+            rebuild_mixed_order(
+                &mut self.render_items,
+                &self.sources,
+                &self.snapshot_text_items,
+                &geometry,
+            );
+            self.incremental_stats.mixed_order_rebuilds = self
+                .incremental_stats
+                .mixed_order_rebuilds
+                .saturating_add(1);
+        }
+        self.snapshot_metrics = Some(metrics);
+        self.prepared_generation_ready = true;
+        let text = PreparedRetainedTextSnapshot {
+            time: frame.time,
+            mask_quads: &self.snapshot_mask_quads,
+            color_quads: &self.snapshot_color_quads,
+            items: &self.snapshot_text_items,
+            stats: self.snapshot_text_stats,
+            atlas: self.text.atlas(),
+            partial_upload_base_generation: None,
+            dirty_mask_ranges: &self.dirty_mask_ranges,
+            dirty_color_ranges: &self.dirty_color_ranges,
+        };
+        Ok(PreparedRetainedGpuFrame {
+            geometry,
+            geometry_only: false,
+            text_generation: self.text_generation,
+            text,
+            render_items: &self.render_items,
+            stats: self.snapshot_prepare_stats,
+        })
+    }
+
+    fn changes_are_fast_text_only(&self, frame: &FrameState, changes: &FrameChanges) -> bool {
         if !self.scratch_ready || changes.is_all() || changes.is_structural() || changes.is_empty()
         {
             return false;
@@ -941,10 +1200,10 @@ impl RetainedFramePreparer {
 
     fn build_scratch_frame(
         &mut self,
-        frame: &RetainedFrameState,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
-        geometries: &GeometryResourceArena,
+        frame: &FrameState,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<(), RetainedPrepareError> {
         self.scratch.time = frame.time;
         self.scratch.objects.clear();
@@ -956,18 +1215,29 @@ impl RetainedFramePreparer {
         self.sources.clear();
         self.fast_text_only.clear();
         self.fast_text_only.resize(frame.objects.len(), false);
+        self.scratch_slots.clear();
+        self.scratch_slots.resize(frame.objects.len(), None);
+        let mut geometry_only = true;
 
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
+                geometry_only = false;
                 continue;
             }
+            if object.text().is_some() {
+                geometry_only = false;
+            }
+
             match &object.content {
                 ObjectContentRef::Geometry(semantic_geometry) => {
-                    let geometry = frame
+                    let source_geometry = frame
                         .render_geometry(object_index)
                         .unwrap_or(semantic_geometry);
-                    let geometry = resolve_geometry_ref(geometry, geometries)?;
-                    self.push_geometry(
+                    if matches!(source_geometry, GeometryRef::External(_)) {
+                        geometry_only = false;
+                    }
+                    let geometry = resolve_geometry_ref(source_geometry, geometries)?;
+                    let scratch_slot = self.push_geometry(
                         object.id,
                         geometry,
                         frame.render_transform(object_index),
@@ -976,6 +1246,7 @@ impl RetainedFramePreparer {
                         frame.reveal(object_index),
                         frame.morph(object_index),
                     );
+                    self.scratch_slots[object_index] = Some(scratch_slot);
                 }
                 ObjectContentRef::Text(handle) => {
                     let mut fast_text_only = true;
@@ -1030,6 +1301,7 @@ impl RetainedFramePreparer {
                 }
             }
         }
+        self.geometry_only_classification = Some(geometry_only);
         Ok(())
     }
 
@@ -1043,11 +1315,13 @@ impl RetainedFramePreparer {
         appearance: f32,
         reveal: f32,
         morph: f32,
-    ) {
-        let scratch_id = ObjectId::new(self.scratch.objects.len() as u64);
+    ) -> usize {
+        let scratch_slot = self.scratch.objects.len();
+        let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
             id: scratch_id,
-            geometry,
+            content: ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
             transform,
             style,
             appearance,
@@ -1061,6 +1335,7 @@ impl RetainedFramePreparer {
             object_id,
             scratch_id,
         });
+        scratch_slot
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1073,7 +1348,7 @@ impl RetainedFramePreparer {
         reveal: f32,
         morph: f32,
         vector: &TextVectorItem,
-        geometries: &GeometryResourceArena,
+        geometries: &(impl GeometryResourceLookup + ?Sized),
     ) -> Result<(), RetainedPrepareError> {
         let GeometryResource::VectorPath(path) = geometries
             .get(vector.geometry)
@@ -1117,7 +1392,7 @@ impl RetainedFramePreparer {
         reveal: f32,
         morph: f32,
         run: &GlyphRun,
-        fonts: &FontResourceArena,
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedPrepareError> {
         let mut fill_path = VectorPath::new();
         let mut stroke_path = VectorPath::new();
@@ -1257,9 +1532,25 @@ fn push_coalesced_range(ranges: &mut Vec<std::ops::Range<u32>>, range: std::ops:
     ranges.push(range);
 }
 
+fn same_analytic_geometry_kind(left: Option<&GeometryRef>, right: Option<&GeometryRef>) -> bool {
+    matches!(
+        (left, right),
+        (
+            Some(GeometryRef::Circle { .. }),
+            Some(GeometryRef::Circle { .. })
+        ) | (
+            Some(GeometryRef::Rectangle { .. }),
+            Some(GeometryRef::Rectangle { .. })
+        ) | (
+            Some(GeometryRef::Line { .. }),
+            Some(GeometryRef::Line { .. })
+        )
+    )
+}
+
 fn resolve_geometry_ref(
     geometry: &GeometryRef,
-    geometries: &GeometryResourceArena,
+    geometries: &(impl GeometryResourceLookup + ?Sized),
 ) -> Result<GeometryRef, RetainedPrepareError> {
     let GeometryRef::External(id) = geometry else {
         return Ok(geometry.clone());
@@ -1622,6 +1913,12 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         clear_color: wgpu::Color,
     ) -> Result<RetainedDrawStats, TextGpuDrawError> {
+        if prepared.geometry_only {
+            return Ok(RetainedDrawStats {
+                geometry: self.encode(encoder, view, &prepared.geometry, clear_color),
+                text: TextGpuDrawStats::default(),
+            });
+        }
         let scene_view = self.presentation.scene_view(view);
         let sample_count = retained_sample_count(prepared.render_items);
         let color_attachments = if sample_count == 1 {
@@ -1799,9 +2096,47 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 #[cfg(test)]
 mod tests {
     use noon_core::FontResourceId;
-    use noon_runtime::RetainedFrameObjectState;
+    use noon_runtime::FrameObjectState;
 
     use super::*;
+
+    fn mixed_text_frame() -> (FrameState, TextResourceArena, FontResourceArena) {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let bounds = artifact.resource.bounds;
+        let fonts = artifact.fonts;
+        let mut texts = TextResourceArena::new();
+        let text = texts.insert(artifact.resource).unwrap();
+        (
+            FrameState {
+                time: 0.0,
+                objects: vec![
+                    FrameObjectState {
+                        id: ObjectId::new(1),
+                        content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                        text_bounds: None,
+                        transform: Transform2D::default(),
+                        style: Style::default(),
+                        appearance: 1.0,
+                    },
+                    FrameObjectState {
+                        id: ObjectId::new(2),
+                        content: ObjectContentRef::Text(text),
+                        text_bounds: Some(bounds),
+                        transform: Transform2D::default(),
+                        style: Style::default(),
+                        appearance: 1.0,
+                    },
+                ],
+                presences: vec![true, true],
+                reveals: vec![1.0, 1.0],
+                morphs: vec![0.0, 0.0],
+                render_geometries: vec![None, None],
+                render_transforms: vec![None, None],
+            },
+            texts,
+            fonts,
+        )
+    }
 
     fn outline_key(glyph_id: GlyphId) -> OutlineKey {
         OutlineKey {
@@ -1901,23 +2236,7 @@ mod tests {
 
     #[test]
     fn unchanged_frame_reuses_semantic_scratch_generation() {
-        let mut frame = RetainedFrameState {
-            time: 0.0,
-            objects: vec![RetainedFrameObjectState {
-                id: ObjectId::new(1),
-                content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
-                transform: Transform2D::default(),
-                style: Style::default(),
-                appearance: 1.0,
-            }],
-            presences: vec![true],
-            reveals: vec![1.0],
-            morphs: vec![0.0],
-            render_geometries: vec![None],
-            render_transforms: vec![None],
-        };
-        let texts = TextResourceArena::new();
-        let fonts = FontResourceArena::new();
+        let (mut frame, texts, fonts) = mixed_text_frame();
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
@@ -1990,23 +2309,7 @@ mod tests {
 
     #[test]
     fn metric_change_does_not_reuse_parent_generation() {
-        let mut frame = RetainedFrameState {
-            time: 0.0,
-            objects: vec![RetainedFrameObjectState {
-                id: ObjectId::new(1),
-                content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
-                transform: Transform2D::default(),
-                style: Style::default(),
-                appearance: 1.0,
-            }],
-            presences: vec![true],
-            reveals: vec![1.0],
-            morphs: vec![0.0],
-            render_geometries: vec![None],
-            render_transforms: vec![None],
-        };
-        let texts = TextResourceArena::new();
-        let fonts = FontResourceArena::new();
+        let (mut frame, texts, fonts) = mixed_text_frame();
         let geometries = GeometryResourceArena::new();
         let first_metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let second_metrics = TextDeviceMetrics::uniform(200.0).unwrap();

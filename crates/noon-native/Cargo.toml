@@ -9,6 +9,7 @@ description = "Native window host for typed Noon execution sessions"
 noon = { path = "../noon" }
 noon-core = { path = "../noon-core" }
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
+noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["native"] }
 pollster = "1.0"
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 winit = "0.30.13"

@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashSet};
 use noon::TextAuthoringError;
 #[cfg(test)]
 use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
-use noon_compile::RetainedCompileError;
+use noon_compile::CompileError;
 #[cfg(test)]
-use noon_compile::RetainedCompiledScene;
+use noon_compile::CompiledScene;
 use noon_core::ObjectId;
 #[cfg(test)]
 use noon_core::{SceneDefinition, TrackDefinition, Vec2};
@@ -78,7 +78,7 @@ impl MixedRetainedAuthoringScene {
 
         let tracks =
             materialize_retained_tracks(legacy.tracks(), retained_tracks, &retained_scale_factors)?;
-        RetainedCompiledScene::compile(scene.objects(), &tracks)?;
+        crate::retained_resource_transport::compile_retained_scene(&scene, &tracks)?;
 
         Ok(Self {
             scene,
@@ -95,9 +95,9 @@ impl MixedRetainedAuthoringScene {
         &self.tracks
     }
 
-    pub(crate) fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
-        Ok(RetainedCompiledScene::compile(
-            self.scene.objects(),
+    pub(crate) fn compile(&self) -> Result<CompiledScene, MixedRetainedAuthoringError> {
+        Ok(crate::retained_resource_transport::compile_retained_scene(
+            &self.scene,
             &self.tracks,
         )?)
     }
@@ -113,7 +113,7 @@ pub enum MixedRetainedAuthoringError {
     RetainedDocument(String),
     Text(TextAuthoringError),
     TrackMaterialization(RetainedTrackMaterializationError),
-    Compile(RetainedCompileError),
+    Compile(CompileError),
     ObjectCountOverflow,
     PainterOrderOutOfRange { order: u32, object_count: usize },
     ObjectIdentityCollision(ObjectId),
@@ -166,8 +166,8 @@ impl From<RetainedTrackMaterializationError> for MixedRetainedAuthoringError {
     }
 }
 
-impl From<RetainedCompileError> for MixedRetainedAuthoringError {
-    fn from(value: RetainedCompileError) -> Self {
+impl From<CompileError> for MixedRetainedAuthoringError {
+    fn from(value: CompileError) -> Self {
         Self::Compile(value)
     }
 }
@@ -469,7 +469,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             error,
-            MixedRetainedAuthoringError::Compile(RetainedCompileError::UnknownObject(object))
+            MixedRetainedAuthoringError::Compile(CompileError::UnknownObject(object))
                 if object == ObjectId::new(text_id.get() + 1)
         ));
     }

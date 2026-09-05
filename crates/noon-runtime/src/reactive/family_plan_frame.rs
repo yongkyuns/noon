@@ -80,7 +80,7 @@ mod tests {
         TextResourceArena, TextSourceKind, TextSourceSpan, Transform2D, Vec2,
     };
 
-    use crate::{RetainedFrameObjectState, RetainedFrameState};
+    use crate::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -142,7 +142,7 @@ mod tests {
 
     fn mixed_fixture() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let mut store = SemanticStore::new();
@@ -162,19 +162,21 @@ mod tests {
         builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
         let plan = builder.finish().unwrap();
 
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Text(text_handle),
+                    text_bounds: Some(Rect::new(Vec2::ZERO, Vec2::ONE)),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
@@ -208,9 +210,10 @@ mod tests {
     fn inactive_or_unrelated_slots_do_not_force_plan_errors() {
         let (plan, mut frame, mut states) = mixed_fixture();
         states[0] = None;
-        frame.objects.push(RetainedFrameObjectState {
+        frame.objects.push(FrameObjectState {
             id: ObjectId::new(99),
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
             appearance: 1.0,

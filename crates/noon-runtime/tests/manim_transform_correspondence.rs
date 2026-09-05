@@ -1,10 +1,10 @@
-use noon_compile::{CompiledScene, RetainedCompiledScene};
+use noon_compile::CompiledScene;
 use noon_core::{
     Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, StrokeWidthMode,
     Style, TrackTiming, Transform2D, Vec2, VectorPath,
 };
 use noon_core::{ScenePatch, TrackValues};
-use noon_runtime::{RetainedSceneInstance, SceneInstance};
+use noon_runtime::SceneInstance;
 use std::sync::Arc;
 
 fn assert_vec2_close(actual: Vec2, expected: Vec2) {
@@ -66,7 +66,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     assert_eq!(current, Transform2D::IDENTITY);
     assert_ne!(current, frame.objects[0].transform);
 
-    let GeometryRef::VectorPath(render_source) = frame.render_geometry(0) else {
+    let Some(GeometryRef::VectorPath(render_source)) = frame.render_geometry(0) else {
         panic!("Transform must expose a temporary PathPair");
     };
     let render_target = render_source
@@ -94,8 +94,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         to.transform.transform_point(Vec2::new(0.0, 1.0)),
     );
     let stable = instance.frame().render_geometries[0].clone().unwrap();
-    let mut retained =
-        RetainedSceneInstance::new(RetainedCompiledScene::compile_legacy(&scene).unwrap());
+    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     for time in [0.0, 0.2, 0.7, 1.3, 2.0, 1.0] {
         let frame = instance.seek(time).unwrap();
         if time > 0.0 && time < 2.0 {
@@ -108,10 +107,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             assert!(frame.render_transforms[0].is_none());
         }
         let retained_frame = retained.seek(time).unwrap();
-        assert_eq!(
-            frame.render_geometry(0),
-            retained_frame.render_geometry(0).unwrap()
-        );
+        assert_eq!(frame.render_geometry(0), retained_frame.render_geometry(0));
         assert_eq!(
             frame.render_transform(0),
             retained_frame.render_transform(0)
@@ -146,23 +142,19 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     let compiled = CompiledScene::compile(&scene).unwrap();
     let mut stepped = SceneInstance::new(compiled.clone());
     let mut direct = SceneInstance::new(compiled);
-    let mut retained =
-        RetainedSceneInstance::new(RetainedCompiledScene::compile_legacy(&scene).unwrap());
+    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     for time in [1.0, 2.0, 2.25, 2.5, 3.0] {
         let frame = stepped.advance_to(time).unwrap();
         assert_eq!(frame, direct.seek(time).unwrap());
         let retained_frame = retained.advance_to(time).unwrap();
-        assert_eq!(
-            frame.render_geometry(0),
-            retained_frame.render_geometry(0).unwrap()
-        );
+        assert_eq!(frame.render_geometry(0), retained_frame.render_geometry(0));
         assert_eq!(
             frame.render_transform(0),
             retained_frame.render_transform(0)
         );
         if time >= 2.0 {
             assert!(frame.render_transforms[0].is_none());
-            let GeometryRef::VectorPath(path) = frame.render_geometry(0) else {
+            let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(0) else {
                 panic!("path pair");
             };
             let PathCommand::MoveTo { to: point } = path.commands()[0] else {
@@ -185,14 +177,10 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         )
         .unwrap();
     let mut concurrent = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
-    let mut retained =
-        RetainedSceneInstance::new(RetainedCompiledScene::compile_legacy(&scene).unwrap());
+    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     let frame = concurrent.seek(1.0).unwrap();
     let retained_frame = retained.seek(1.0).unwrap();
-    assert_eq!(
-        frame.render_geometry(0),
-        retained_frame.render_geometry(0).unwrap()
-    );
+    assert_eq!(frame.render_geometry(0), retained_frame.render_geometry(0));
     assert_eq!(
         frame.render_transform(0),
         retained_frame.render_transform(0)
@@ -206,7 +194,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     let world = from.transform.transform_point(Vec2::new(1.0, 0.0));
     let relative = (world - base.translation).rotate(-base.rotation);
     let local = Vec2::new(relative.x / base.scale.x, relative.y / base.scale.y);
-    let GeometryRef::VectorPath(path) = frame.render_geometry(0) else {
+    let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(0) else {
         panic!("path pair");
     };
     let PathCommand::MoveTo { to: point } = path.commands()[0] else {
@@ -238,7 +226,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         .unwrap();
     let mut identity_native = SceneInstance::new(CompiledScene::compile(&identity_scene).unwrap());
     let mut identity_retained =
-        RetainedSceneInstance::new(RetainedCompiledScene::compile_legacy(&identity_scene).unwrap());
+        SceneInstance::new(CompiledScene::compile(&identity_scene).unwrap());
     let native_resource = identity_native.seek(0.1).unwrap().render_geometries[0]
         .clone()
         .unwrap();

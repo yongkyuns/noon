@@ -4,10 +4,10 @@ use std::{
 };
 
 use noon_core::{
-    Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Style, TextResourceHandle,
+    Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Rect, Style, TextResourceHandle,
     TextResourceId, Transform2D,
 };
-use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
 
 use crate::TransportSlotId;
@@ -82,6 +82,8 @@ pub struct RetainedTransportObjectState {
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_bounds: Option<Rect>,
     pub presence: bool,
     pub reveal: f32,
     pub morph: f32,
@@ -141,7 +143,10 @@ impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidChannel(channel) => {
-                write!(formatter, "invalid retained execution transport channel {channel:?}")
+                write!(
+                    formatter,
+                    "invalid retained execution transport channel {channel:?}"
+                )
             }
             Self::UnsupportedVersion(version) => write!(
                 formatter,
@@ -201,10 +206,25 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 "retained text slot {}:{} cannot carry transient render geometry",
                 slot.slot, slot.generation
             ),
-            Self::InvalidRenderGeometryResource(index) => write!(formatter, "unknown retained render geometry resource {index} in this session"),
-            Self::AmbiguousRenderGeometry(slot) => write!(formatter, "retained slot {}:{} carries both inline and resource geometry", slot.slot, slot.generation),
-            Self::MissingCompiledRenderResource(slot) => write!(formatter, "retained slot {}:{} has an unregistered compiled render geometry", slot.slot, slot.generation),
-            Self::InvalidRenderTransform(slot) => write!(formatter, "retained slot {}:{} has an invalid render transform", slot.slot, slot.generation),
+            Self::InvalidRenderGeometryResource(index) => write!(
+                formatter,
+                "unknown retained render geometry resource {index} in this session"
+            ),
+            Self::AmbiguousRenderGeometry(slot) => write!(
+                formatter,
+                "retained slot {}:{} carries both inline and resource geometry",
+                slot.slot, slot.generation
+            ),
+            Self::MissingCompiledRenderResource(slot) => write!(
+                formatter,
+                "retained slot {}:{} has an unregistered compiled render geometry",
+                slot.slot, slot.generation
+            ),
+            Self::InvalidRenderTransform(slot) => write!(
+                formatter,
+                "retained slot {}:{} has an invalid render transform",
+                slot.slot, slot.generation
+            ),
         }
     }
 }
@@ -255,7 +275,7 @@ impl RetainedExecutionDeltaEncoder {
 
     fn transport_object(
         &self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         index: usize,
     ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
         let resource = frame
@@ -268,10 +288,11 @@ impl RetainedExecutionDeltaEncoder {
                     .and_then(|indices| indices.get(&(Arc::as_ptr(geometry) as usize)))
                     .copied()
             });
-        debug_assert!(resource.is_none_or(|index| self
-            .render_geometries
-            .as_ref()
-            .is_some_and(|items| (index as usize) < items.len())));
+        debug_assert!(resource.is_none_or(|index| {
+            self.render_geometries
+                .as_ref()
+                .is_some_and(|items| (index as usize) < items.len())
+        }));
         let object = transport_object(frame, index, resource)?;
         if self.render_geometry_indices.is_some()
             && object.render_transform.is_some()
@@ -286,7 +307,7 @@ impl RetainedExecutionDeltaEncoder {
 
     pub fn encode_snapshot(
         &mut self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         camera: Camera2DState,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
@@ -310,7 +331,7 @@ impl RetainedExecutionDeltaEncoder {
 
     pub fn encode_incremental(
         &mut self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
@@ -366,7 +387,7 @@ pub struct RetainedExecutionFrameMirror {
     render_geometries: Arc<[Arc<GeometryRef>]>,
     resource_session: Option<u32>,
     camera: Camera2DState,
-    frame: Option<RetainedFrameState>,
+    frame: Option<FrameState>,
 }
 
 impl RetainedExecutionFrameMirror {
@@ -399,7 +420,7 @@ impl RetainedExecutionFrameMirror {
             None => Ok(object.render_geometry.clone().map(Arc::new)),
         }
     }
-    pub fn frame(&self) -> Option<&RetainedFrameState> {
+    pub fn frame(&self) -> Option<&FrameState> {
         self.frame.as_ref()
     }
 
@@ -502,7 +523,7 @@ impl RetainedExecutionFrameMirror {
             .enumerate()
             .map(|(index, slot)| (slot, index))
             .collect();
-        self.frame = Some(RetainedFrameState {
+        self.frame = Some(FrameState {
             time: delta.time,
             objects: objects.iter().map(frame_object).collect(),
             presences: objects.iter().map(|object| object.presence).collect(),
@@ -608,7 +629,7 @@ fn validate_time(time: f64) -> Result<(), RetainedExecutionTransportError> {
     }
 }
 
-fn validate_frame_shape(frame: &RetainedFrameState) -> Result<(), RetainedExecutionTransportError> {
+fn validate_frame_shape(frame: &FrameState) -> Result<(), RetainedExecutionTransportError> {
     let count = frame.objects.len();
     if frame.presences.len() == count
         && frame.reveals.len() == count
@@ -623,7 +644,7 @@ fn validate_frame_shape(frame: &RetainedFrameState) -> Result<(), RetainedExecut
 }
 
 fn transport_object(
-    frame: &RetainedFrameState,
+    frame: &FrameState,
     index: usize,
     render_geometry_resource: Option<u32>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
@@ -644,6 +665,7 @@ fn transport_object(
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
+        text_bounds: object.text_bounds,
         presence: frame.presences[index],
         reveal: frame.reveals[index],
         morph: frame.morphs[index],
@@ -692,13 +714,14 @@ fn validate_object_state(
     Ok(())
 }
 
-fn frame_object(object: &RetainedTransportObjectState) -> RetainedFrameObjectState {
-    RetainedFrameObjectState {
+fn frame_object(object: &RetainedTransportObjectState) -> FrameObjectState {
+    FrameObjectState {
         id: object.object,
         content: object.content.clone().into(),
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
+        text_bounds: object.text_bounds,
     }
 }
 
@@ -708,22 +731,23 @@ mod tests {
 
     use super::*;
 
-    fn mixed_frame() -> RetainedFrameState {
+    fn mixed_frame() -> FrameState {
         let text = TextResourceHandle {
             id: TextResourceId::new(7),
             version: 3,
         };
-        RetainedFrameState {
+        FrameState {
             time: 0.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
+                    text_bounds: None,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(12),
                     content: ObjectContentRef::Text(text),
                     transform: Transform2D::IDENTITY,
@@ -732,6 +756,7 @@ mod tests {
                         ..Style::default()
                     },
                     appearance: 1.0,
+                    text_bounds: None,
                 },
             ],
             presences: vec![true, true],

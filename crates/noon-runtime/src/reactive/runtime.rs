@@ -464,8 +464,8 @@ mod tests {
             SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         assert_eq!(instance.frame().objects[0].transform.scale, Vec2::ONE);
         assert_eq!(
-            instance.frame().objects[0].geometry,
-            GeometryRef::circle(1.0)
+            instance.frame().objects[0].geometry(),
+            Some(&GeometryRef::circle(1.0))
         );
 
         instance
@@ -476,8 +476,8 @@ mod tests {
             Vec2::new(0.25, 2.0)
         );
         assert_eq!(
-            instance.frame().objects[0].geometry,
-            GeometryRef::circle(1.0)
+            instance.frame().objects[0].geometry(),
+            Some(&GeometryRef::circle(1.0))
         );
     }
 

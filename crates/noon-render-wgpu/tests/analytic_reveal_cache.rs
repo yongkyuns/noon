@@ -12,7 +12,8 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
     };
     FrameObjectState {
         id: ObjectId::new(id),
-        geometry: GeometryRef::rectangle(width, height),
+        content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(width, height)),
+        text_bounds: None,
         transform: Transform2D::IDENTITY,
         style,
         appearance: 1.0,

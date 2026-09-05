@@ -3,25 +3,26 @@ use noon_core::{
     TextResourceArena, Transform2D, Vec2,
 };
 use noon_render_wgpu::{GpuRenderer, RetainedFrameIncrementalStats, RetainedFramePreparer};
-use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_text_render_wgpu::TextDeviceMetrics;
 use noon_typst::{compile_typst_resource, TypstMode};
 
 const STATIC_OBJECTS: usize = 10_000;
 const STATIC_FRAMES: u64 = 128;
 
-fn static_geometry_frame() -> RetainedFrameState {
+fn static_geometry_frame() -> FrameState {
     let objects = (0..STATIC_OBJECTS)
-        .map(|index| RetainedFrameObjectState {
+        .map(|index| FrameObjectState {
             id: ObjectId::new(index as u64),
             content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+            text_bounds: None,
             transform: Transform2D::default(),
             style: Style::default(),
             appearance: 1.0,
         })
         .collect();
 
-    RetainedFrameState {
+    FrameState {
         time: 0.0,
         objects,
         presences: vec![true; STATIC_OBJECTS],
@@ -33,7 +34,7 @@ fn static_geometry_frame() -> RetainedFrameState {
 }
 
 #[test]
-fn unchanged_large_retained_scene_reuses_preparation_scratch_after_warmup() {
+fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
@@ -79,10 +80,10 @@ fn unchanged_large_retained_scene_reuses_preparation_scratch_after_warmup() {
     assert_eq!(
         preparer.incremental_stats(),
         RetainedFrameIncrementalStats {
-            scratch_rebuilds: 1,
-            scratch_reuses: STATIC_FRAMES,
-            text_snapshot_copies: 1,
-            mixed_order_rebuilds: 1,
+            scratch_rebuilds: 0,
+            scratch_reuses: 0,
+            text_snapshot_copies: 0,
+            mixed_order_rebuilds: 0,
         }
     );
 }
@@ -92,12 +93,13 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
     let mut texts = TextResourceArena::new();
     let text = texts.insert(artifact.resource).unwrap();
-    let mut frame = RetainedFrameState {
+    let mut frame = FrameState {
         time: 0.0,
         objects: (0..STATIC_OBJECTS)
-            .map(|index| RetainedFrameObjectState {
+            .map(|index| FrameObjectState {
                 id: ObjectId::new(index as u64),
                 content: ObjectContentRef::Text(text),
+                text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
                 appearance: 1.0,
@@ -204,6 +206,145 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             scratch_reuses: STATIC_FRAMES + 2,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
+        }
+    );
+}
+
+#[test]
+fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuild() {
+    let texts = TextResourceArena::new();
+    let fonts = FontResourceArena::new();
+    let geometries = GeometryResourceArena::new();
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let mut frame = static_geometry_frame();
+
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::all(),
+            &texts,
+            &fonts,
+            &geometries,
+            metrics,
+        )
+        .unwrap();
+    frame.objects[STATIC_OBJECTS / 2].transform.translation = Vec2::new(0.25, -0.125);
+    let prepared = preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
+            &texts,
+            &fonts,
+            &geometries,
+            metrics,
+        )
+        .unwrap();
+
+    assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+    assert_eq!(prepared.geometry_stats().instances_repacked, 1);
+    assert_eq!(
+        preparer.incremental_stats(),
+        RetainedFrameIncrementalStats {
+            scratch_rebuilds: 0,
+            scratch_reuses: 0,
+            text_snapshot_copies: 0,
+            mixed_order_rebuilds: 0,
+        }
+    );
+}
+
+#[test]
+fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
+    let artifact = compile_typst_resource("Noon", TypstMode::Markup).unwrap();
+    let mut texts = TextResourceArena::new();
+    let text = texts.insert(artifact.resource).unwrap();
+    let fonts = artifact.fonts;
+    let geometries = GeometryResourceArena::new();
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let mut frame = static_geometry_frame();
+    frame.objects.push(FrameObjectState {
+        id: ObjectId::new(STATIC_OBJECTS as u64),
+        content: ObjectContentRef::Text(text),
+        text_bounds: None,
+        transform: Transform2D::IDENTITY,
+        style: Style::default(),
+        appearance: 1.0,
+    });
+    frame.presences.push(true);
+    frame.reveals.push(1.0);
+    frame.morphs.push(0.0);
+    frame.render_geometries.push(None);
+    frame.render_transforms.push(None);
+
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::all(),
+            &texts,
+            &fonts,
+            &geometries,
+            metrics,
+        )
+        .unwrap();
+    frame.objects[STATIC_OBJECTS / 2].transform.translation = Vec2::new(-0.4, 0.2);
+    let prepared = preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
+            &texts,
+            &fonts,
+            &geometries,
+            metrics,
+        )
+        .unwrap();
+
+    assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+    assert_eq!(prepared.geometry_stats().instances_repacked, 1);
+    assert_eq!(
+        preparer.incremental_stats(),
+        RetainedFrameIncrementalStats {
+            scratch_rebuilds: 1,
+            scratch_reuses: 1,
+            text_snapshot_copies: 1,
+            mixed_order_rebuilds: 1,
+        }
+    );
+
+    // Text raster residency depends on device metrics. A local geometry edit at a
+    // new viewport density must take the complete mixed path rather than reuse the
+    // prior text snapshot.
+    frame.objects[STATIC_OBJECTS / 2].transform.translation = Vec2::new(-0.2, 0.3);
+    preparer
+        .prepare_with_changes(
+            &device,
+            &queue,
+            &frame,
+            &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
+            &texts,
+            &fonts,
+            &geometries,
+            TextDeviceMetrics::uniform(200.0).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        preparer.incremental_stats(),
+        RetainedFrameIncrementalStats {
+            scratch_rebuilds: 2,
+            scratch_reuses: 1,
+            text_snapshot_copies: 2,
+            mixed_order_rebuilds: 2,
         }
     );
 }

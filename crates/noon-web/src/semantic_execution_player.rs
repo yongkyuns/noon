@@ -1,13 +1,20 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 use noon::ExecutionSession;
 
-use crate::{ExecutionDeltaEncoder, ExecutionDeltaEnvelope, PlaybackClock};
+use crate::{
+    PlaybackClock, RetainedExecutionDeltaEncoder, RetainedExecutionDeltaEnvelope,
+    RetainedResourceBundle,
+};
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
     clock: PlaybackClock,
-    encoder: ExecutionDeltaEncoder,
+    encoder: RetainedExecutionDeltaEncoder,
+    /// Immutable text/font/vector dependencies transferred once at the genuine
+    /// authoring-worker to render-worker boundary.
+    resource_bundle: Vec<u8>,
+    snapshot_sent: bool,
     /// Present when the player came from canonical authoring. This is the one
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -20,10 +27,13 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
+        let resource_bundle = Self::resource_bundle_for(&session)?;
         Ok(Self {
             session,
             clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
-            encoder: ExecutionDeltaEncoder::new(transport_session),
+            encoder: RetainedExecutionDeltaEncoder::new(transport_session),
+            resource_bundle,
+            snapshot_sent: false,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
         })
@@ -36,10 +46,13 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
+        let resource_bundle = Self::resource_bundle_for(&session)?;
         Ok(Self {
             session,
             clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
-            encoder: ExecutionDeltaEncoder::new(transport_session),
+            encoder: RetainedExecutionDeltaEncoder::new(transport_session),
+            resource_bundle,
+            snapshot_sent: false,
             semantics: Some(semantics),
         })
     }
@@ -54,7 +67,8 @@ impl SemanticExecutionPlayer {
         self.clock
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())?;
-        self.encoder = ExecutionDeltaEncoder::new(transport_session);
+        self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
+        self.snapshot_sent = false;
         Ok(())
     }
 
@@ -150,33 +164,34 @@ impl SemanticExecutionPlayer {
         &mut self.session
     }
 
-    fn delta(&mut self, snapshot: bool) -> Result<Option<ExecutionDeltaEnvelope>, String> {
+    fn resource_bundle_for(session: &ExecutionSession) -> Result<Vec<u8>, String> {
+        RetainedResourceBundle::capture(
+            session
+                .frame()
+                .objects
+                .iter()
+                .filter_map(|object| object.text()),
+            session.text_resources(),
+            session.geometry_resources(),
+            session.font_resources(),
+        )
+        .and_then(|bundle| bundle.encode_binary())
+        .map_err(|error| error.to_string())
+    }
+
+    fn delta(&mut self, snapshot: bool) -> Result<Option<RetainedExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
         let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || !self.encoder.is_initialized() {
-            let slots = (0..self.session.frame().objects.len())
-                .filter_map(|index| {
-                    self.session
-                        .execution_slot_for_frame_index(index)
-                        .map(|slot| (slot, index))
-                })
-                .collect::<Vec<_>>();
-            self.encoder
-                .encode_snapshot_with_camera(self.session.frame(), &slots, camera)
-                .map(Some)
-                .map_err(|e| e.to_string())
+        if snapshot || changes.is_all() || !self.snapshot_sent {
+            let delta = self
+                .encoder
+                .encode_snapshot(self.session.frame(), camera)
+                .map_err(|e| e.to_string())?;
+            self.snapshot_sent = true;
+            Ok(Some(delta))
         } else {
-            let slots = changes
-                .object_indices()
-                .iter()
-                .filter_map(|&index| {
-                    self.session
-                        .execution_slot_for_frame_index(index)
-                        .map(|slot| (slot, index))
-                })
-                .collect::<Vec<_>>();
             self.encoder
-                .encode_incremental_with_camera(self.session.frame(), &slots, &[], &[], camera)
+                .encode_incremental(self.session.frame(), &changes, camera)
                 .map_err(|e| e.to_string())
         }
     }
@@ -194,6 +209,11 @@ impl SemanticExecutionPlayer {
     pub fn initial_delta_json(&mut self) -> Result<String, String> {
         self.encoded_delta(true)?
             .ok_or_else(|| "initial snapshot missing".into())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]
+    pub fn resource_bundle_bytes(&self) -> Vec<u8> {
+        self.resource_bundle.clone()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaJson))]
@@ -238,7 +258,7 @@ impl SemanticExecutionPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ExecutionFrameMirror;
+    use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{AnimationOptions, RateFunction};
 
     fn animated_player() -> SemanticExecutionPlayer {
@@ -279,8 +299,8 @@ mod tests {
     #[test]
     fn shared_authoring_to_transport_preserves_style_and_emits_only_dirty_rows() {
         let mut player = animated_player();
-        let mut mirror = ExecutionFrameMirror::default();
-        let initial: ExecutionDeltaEnvelope =
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        let initial: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
         assert_eq!(
             (initial.session, initial.sequence, initial.snapshot),
@@ -302,7 +322,7 @@ mod tests {
         assert_eq!(initial.objects[0].style.fill.unwrap().alpha, 0.4);
         mirror.apply(initial).unwrap();
         player.tick_delta_json(0.0).unwrap();
-        let halfway: ExecutionDeltaEnvelope =
+        let halfway: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.tick_delta_json(500.0).unwrap().unwrap()).unwrap();
         assert!(!halfway.snapshot);
         assert_eq!(halfway.objects.len(), 1);
@@ -312,7 +332,7 @@ mod tests {
             mirror.frame().unwrap().objects[0].transform.translation.x,
             4.0
         );
-        let end: ExecutionDeltaEnvelope =
+        let end: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.tick_delta_json(1000.0).unwrap().unwrap()).unwrap();
         assert_eq!(end.objects[0].transform.translation.x, 6.0);
     }
@@ -324,7 +344,7 @@ mod tests {
         assert!(player.seek_delta_json(f64::NAN).is_err());
         assert!(player.tick_delta_json(f64::INFINITY).is_err());
         assert_eq!(player.time(), 0.0);
-        let delta: ExecutionDeltaEnvelope =
+        let delta: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.seek_delta_json(0.5).unwrap().unwrap()).unwrap();
         assert_eq!(delta.sequence, 1);
         assert_eq!(delta.objects[0].transform.translation.x, 4.0);
@@ -341,5 +361,27 @@ mod tests {
         assert!(player.tick_delta_json(0.0).unwrap().is_none());
         assert!(player.tick_delta_json(500.0).unwrap().is_none());
         assert_eq!(player.time(), 0.5);
+    }
+
+    #[test]
+    fn shared_session_text_uses_the_mixed_resource_boundary() {
+        let mut scene = noon::Scene::new();
+        let label = scene
+            .text(noon::Text::new("Noon").with_font_size(48.0))
+            .unwrap();
+        scene.add(&label).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 8)
+                .unwrap();
+
+        let bundle =
+            RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes()).unwrap();
+        assert_eq!(bundle.text_count(), 1);
+        let initial: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+        assert!(matches!(
+            initial.objects[0].content,
+            TransportObjectContent::Text { .. }
+        ));
     }
 }

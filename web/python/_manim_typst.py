@@ -27,6 +27,11 @@ try:
 except ImportError:  # Shared semantic handles are browser-only.
     _create_family_member_handle = None
 
+try:
+    from js import noonCreateAuthoringTextHandle as _create_authoring_text_handle
+except ImportError:  # Native CPython tests use retained source fallbacks.
+    _create_authoring_text_handle = None
+
 
 _RETAINED_PROTOCOL_VERSION = 2
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
@@ -164,6 +169,7 @@ class _RetainedTextMobject(_base.Mobject):
         handle: object,
         color: _base.Color,
         opacity: float,
+        semantic_handle: object | None = None,
     ) -> None:
         opacity = float(opacity)
         if not math.isfinite(opacity) or not 0.0 <= opacity <= 1.0:
@@ -178,9 +184,13 @@ class _RetainedTextMobject(_base.Mobject):
         self._source = source
         self._font_size = float(font_size)
         self._retained_handle = handle
+        self._semantic_handle = semantic_handle
+        # Canonical native Text already has a normal semantic Mobject identity.
+        # Retained-source Text still needs its temporary family member identity;
+        # allocating one for the canonical path would create an orphan semantic node.
         self._semantic_family_member_handle = (
             None
-            if _create_family_member_handle is None
+            if semantic_handle is not None or _create_family_member_handle is None
             else _create_family_member_handle()
         )
         self.set_color(_as_color(color))
@@ -292,6 +302,10 @@ class _RetainedTextMobject(_base.Mobject):
         return self._scene_lifecycle_state(scene, time)[1]
 
     def _retained_entry(self) -> dict[str, Any]:
+        if self._semantic_handle is not None:
+            raise RuntimeError(
+                "native Text is finalized through the shared semantic session, not a retained source document"
+            )
         if self._retained_object_id is None or self._retained_order is None:
             raise ValueError("retained text object must belong to a Scene before serialization")
         return {
@@ -301,6 +315,10 @@ class _RetainedTextMobject(_base.Mobject):
         }
 
     def _spec(self) -> dict[str, Any]:
+        if self._semantic_handle is not None:
+            # #959 timeline/export seam: Rust derives this transient codec from
+            # the one semantic store. It is never a Python-owned Text mirror.
+            return json.loads(str(self._retained_handle.textSpecJson()))
         return json.loads(str(self._retained_handle.specJson()))
 
     def get_center(self) -> _base.Vec2:
@@ -374,6 +392,24 @@ class _RetainedTextMobject(_base.Mobject):
         raise NotImplementedError
 
     def copy(self) -> _RetainedTextMobject:
+        if self._semantic_handle is not None:
+            clone = self._copy_constructor()
+            source = self._retained_handle
+            clone._retained_handle.moveTo(
+                float(source.wireTranslationX), float(source.wireTranslationY)
+            )
+            clone._retained_handle.setScale(
+                float(source.wireScaleX), float(source.wireScaleY)
+            )
+            clone._retained_handle.setRotation(float(source.wireRotation))
+            clone._retained_handle.setColor(
+                float(source.wireFillRed),
+                float(source.wireFillGreen),
+                float(source.wireFillBlue),
+                float(source.wireFillAlpha),
+            )
+            clone._retained_handle.setOpacity(float(source.wireObjectOpacity))
+            return clone
         spec = self._spec()
         clone = self._copy_constructor()
         transform = spec["transform"]
@@ -442,11 +478,30 @@ class Text(_RetainedTextMobject):
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Text option(s): {unsupported}")
-        handle = _new_native_text_handle(text, font, font_size, line_spacing)
+        if _create_authoring_text_handle is None:
+            handle = _new_native_text_handle(text, font, font_size, line_spacing)
+            semantic_handle = None
+        else:
+            if not isinstance(text, str):
+                raise TypeError("Text source must be a string")
+            if not isinstance(font, str) or font.strip() == "":
+                raise ValueError("font must be a non-empty string")
+            font_size = _validated_font_size(font_size)
+            line_spacing = float(line_spacing)
+            if not math.isfinite(line_spacing) or (
+                line_spacing != -1.0 and line_spacing <= -1.0
+            ):
+                raise ValueError("line_spacing must be -1 or a finite value greater than -1")
+            semantic_handle = _create_authoring_text_handle(
+                text, font, font_size, line_spacing
+            )
+            handle = semantic_handle
         self._font = str(font)
         self._line_spacing = float(line_spacing)
-        self._initialize_retained(str(text), float(font_size), handle, color, opacity)
-        if self._semantic_family_member_handle is not None:
+        self._initialize_retained(
+            str(text), float(font_size), handle, color, opacity, semantic_handle
+        )
+        if semantic_handle is None and self._semantic_family_member_handle is not None:
             self._semantic_family_member_handle.bindRetainedNativeText(self._retained_handle)
 
     @property

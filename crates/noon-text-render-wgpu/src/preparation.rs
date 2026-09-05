@@ -10,11 +10,13 @@
 use std::ops::Range;
 
 use bytemuck::{Pod, Zeroable};
+#[cfg(test)]
+use noon_core::TextResourceArena;
 use noon_core::{
-    Color, FontResourceArena, FontVariationSetting, GlyphRun, ObjectId, TextRenderItem,
-    TextResourceArena, TextResourceHandle, Transform2D, Vec2,
+    Color, FontResourceLookup, FontVariationSetting, GlyphRun, ObjectId, TextRenderItem,
+    TextResourceHandle, TextResourceLookup, Transform2D, Vec2,
 };
-use noon_runtime::{FrameChanges, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameState};
 use noon_text_atlas::{
     GlyphAtlasEntry, GlyphAtlasError, GlyphAtlasPlane, GlyphAtlasStats, GpuGlyphAtlas,
     DEFAULT_GLYPH_ATLAS_EXTENT,
@@ -306,9 +308,9 @@ impl RetainedTextQuadPreparer {
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &RetainedFrameState,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        frame: &FrameState,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         let changes = FrameChanges::all();
@@ -325,10 +327,10 @@ impl RetainedTextQuadPreparer {
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         metrics.validate()?;
@@ -371,9 +373,9 @@ impl RetainedTextQuadPreparer {
 
     fn can_update_objects(
         &self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<bool, TextPrepareError> {
         if !self.prepared_once
@@ -424,9 +426,9 @@ impl RetainedTextQuadPreparer {
     /// to be updated by the caller; this method only describes the text quad state.
     pub fn can_update_objects_locally(
         &self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<bool, TextPrepareError> {
         self.can_update_objects(frame, changes, texts, metrics)
@@ -434,9 +436,9 @@ impl RetainedTextQuadPreparer {
 
     fn update_objects(
         &mut self,
-        frame: &RetainedFrameState,
+        frame: &FrameState,
         changes: &FrameChanges,
-        texts: &TextResourceArena,
+        texts: &(impl TextResourceLookup + ?Sized),
     ) -> usize {
         let mut updated = 0_usize;
         for &index in changes.object_indices() {
@@ -497,9 +499,9 @@ impl RetainedTextQuadPreparer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &RetainedFrameState,
-        texts: &TextResourceArena,
-        fonts: &FontResourceArena,
+        frame: &FrameState,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), TextPrepareError> {
         self.incremental_stats.rebuild_attempts =
@@ -604,7 +606,7 @@ impl RetainedTextQuadPreparer {
         object_fill: Option<Color>,
         object_opacity: f32,
         run: &GlyphRun,
-        fonts: &FontResourceArena,
+        fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), TextPrepareError> {
         let pixel_size = raster_pixel_size(run, object_transform, metrics)?;
@@ -811,7 +813,7 @@ fn color_with_opacity(color: Color, opacity: f32) -> [f32; 4] {
 }
 
 fn raster_key(
-    fonts: &FontResourceArena,
+    fonts: &(impl FontResourceLookup + ?Sized),
     run: &GlyphRun,
     glyph_id: u32,
     pixel_size: f32,
@@ -853,8 +855,8 @@ fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
 mod tests {
     use std::collections::BTreeSet;
 
-    use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D};
-    use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+    use noon_core::{ObjectContentRef, ObjectId, Style, Transform2D};
+    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
     use noon_typst::{compile_typst_resource, TypstMode};
 
     use super::*;
@@ -863,12 +865,13 @@ mod tests {
         text: TextResourceHandle,
         present: bool,
         transform: Transform2D,
-    ) -> RetainedFrameState {
-        RetainedFrameState {
+    ) -> FrameState {
+        FrameState {
             time: 0.0,
-            objects: vec![RetainedFrameObjectState {
+            objects: vec![FrameObjectState {
                 id: ObjectId::new(1),
                 content: ObjectContentRef::Text(text),
+                text_bounds: None,
                 transform,
                 style: Style::default(),
                 appearance: 1.0,
@@ -881,21 +884,23 @@ mod tests {
         }
     }
 
-    fn two_text_frame(text: TextResourceHandle) -> RetainedFrameState {
+    fn two_text_frame(text: TextResourceHandle) -> FrameState {
         let transform = scene_transform();
-        RetainedFrameState {
+        FrameState {
             time: 0.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(1),
                     content: ObjectContentRef::Text(text),
+                    text_bounds: None,
                     transform,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(2),
                     content: ObjectContentRef::Text(text),
+                    text_bounds: None,
                     transform,
                     style: Style::default(),
                     appearance: 1.0,

@@ -83,8 +83,14 @@ fn simultaneous_matches_keep_sources_until_atomic_handoff() {
     assert!(middle.is_present(1));
     assert!(!middle.is_present(2));
     assert!(!middle.is_present(3));
-    assert_eq!(middle.objects[0].geometry, GeometryRef::circle(1.5));
-    assert_eq!(middle.objects[1].geometry, GeometryRef::rectangle(3.0, 1.5));
+    assert_eq!(
+        middle.objects[0].geometry(),
+        Some(&GeometryRef::circle(1.5))
+    );
+    assert_eq!(
+        middle.objects[1].geometry(),
+        Some(&GeometryRef::rectangle(3.0, 1.5))
+    );
     assert_eq!(middle.objects[0].transform.translation, Vec2::new(1.5, 0.5));
     assert_eq!(
         middle.objects[1].transform.translation,
@@ -96,10 +102,13 @@ fn simultaneous_matches_keep_sources_until_atomic_handoff() {
     assert!(!handoff.is_present(1));
     assert!(handoff.is_present(2));
     assert!(handoff.is_present(3));
-    assert_eq!(handoff.objects[2].geometry, GeometryRef::circle(2.0));
     assert_eq!(
-        handoff.objects[3].geometry,
-        GeometryRef::rectangle(4.0, 2.0)
+        handoff.objects[2].geometry(),
+        Some(&GeometryRef::circle(2.0))
+    );
+    assert_eq!(
+        handoff.objects[3].geometry(),
+        Some(&GeometryRef::rectangle(4.0, 2.0))
     );
 }
 

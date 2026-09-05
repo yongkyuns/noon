@@ -5,15 +5,16 @@ use noon_core::{
 use noon_render_wgpu::{
     RetainedFrameIncrementalStats, RetainedFramePreparer, RetainedPrepareError,
 };
-use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_text_render_wgpu::TextDeviceMetrics;
 
-fn geometry_frame(geometry: GeometryRef) -> RetainedFrameState {
-    RetainedFrameState {
+fn geometry_frame(geometry: GeometryRef) -> FrameState {
+    FrameState {
         time: 0.0,
-        objects: vec![RetainedFrameObjectState {
+        objects: vec![FrameObjectState {
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
             transform: Transform2D::default(),
             style: Style::default(),
             appearance: 1.0,
@@ -27,7 +28,7 @@ fn geometry_frame(geometry: GeometryRef) -> RetainedFrameState {
 }
 
 #[test]
-fn failed_scratch_rebuild_cannot_be_reused_by_empty_changes() {
+fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
@@ -51,10 +52,10 @@ fn failed_scratch_rebuild_cannot_be_reused_by_empty_changes() {
     assert_eq!(
         preparer.incremental_stats(),
         RetainedFrameIncrementalStats {
-            scratch_rebuilds: 1,
+            scratch_rebuilds: 0,
             scratch_reuses: 0,
-            text_snapshot_copies: 1,
-            mixed_order_rebuilds: 1,
+            text_snapshot_copies: 0,
+            mixed_order_rebuilds: 0,
         }
     );
 
@@ -92,10 +93,10 @@ fn failed_scratch_rebuild_cannot_be_reused_by_empty_changes() {
     assert_eq!(
         preparer.incremental_stats(),
         RetainedFrameIncrementalStats {
-            scratch_rebuilds: 1,
+            scratch_rebuilds: 0,
             scratch_reuses: 0,
-            text_snapshot_copies: 1,
-            mixed_order_rebuilds: 1,
+            text_snapshot_copies: 0,
+            mixed_order_rebuilds: 0,
         }
     );
 }

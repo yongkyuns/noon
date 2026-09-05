@@ -1,11 +1,11 @@
 use noon::{MathTypst, RetainedScene, Text as NativeText, Typst};
-use noon_compile::RetainedCompiledScene;
+use noon_compile::CompiledScene;
 use noon_core::{
     Color, ObjectDefinition, ObjectId, SceneDefinition, Style, TrackDefinition, Transform2D,
 };
 use noon_ir::{ObjectSpec, ObjectSpecContent, SceneSpec, TextSpec, TextSpecKind, TextSpecOptions};
 
-use crate::retained_authoring_scene::MixedRetainedAuthoringError;
+use crate::retained_authoring_wire_scene::MixedRetainedAuthoringError;
 
 /// Canonical `SceneSpec` lowered into the existing retained runtime/resource model.
 ///
@@ -67,7 +67,7 @@ impl CanonicalRetainedAuthoringScene {
         // Keep the mature retained compiler as the semantic/timeline validator.
         // This also proves every canonical object ID and normalized track reaches the
         // same dense runtime domain before the scene is committed.
-        RetainedCompiledScene::compile(scene.objects(), &tracks)?;
+        crate::retained_resource_transport::compile_retained_scene(&scene, &tracks)?;
 
         Ok(Self {
             scene,
@@ -84,9 +84,9 @@ impl CanonicalRetainedAuthoringScene {
         &self.tracks
     }
 
-    pub(crate) fn compile(&self) -> Result<RetainedCompiledScene, MixedRetainedAuthoringError> {
-        Ok(RetainedCompiledScene::compile(
-            self.scene.objects(),
+    pub(crate) fn compile(&self) -> Result<CompiledScene, MixedRetainedAuthoringError> {
+        Ok(crate::retained_resource_transport::compile_retained_scene(
+            &self.scene,
             &self.tracks,
         )?)
     }

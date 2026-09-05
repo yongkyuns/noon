@@ -991,6 +991,7 @@ fn compiled_scene_matches_live_projection(
 ) -> bool {
     if current.live_object_count() != compact.live_object_count()
         || current.track_count() != compact.track_count()
+        || current.resources() != compact.resources()
     {
         return false;
     }
@@ -998,7 +999,8 @@ fn compiled_scene_matches_live_projection(
     let current_objects = current.objects().iter().filter(|object| object.live);
     if !current_objects.zip(compact.objects()).all(|(left, right)| {
         left.id == right.id
-            && left.geometry == right.geometry
+            && left.content == right.content
+            && left.text_bounds == right.text_bounds
             && left.base_transform == right.base_transform
             && left.base_style == right.base_style
             && left.dynamic == right.dynamic

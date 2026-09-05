@@ -53,16 +53,19 @@ async function start() {
     driver.stop();
   }
 
+  const staticFrameSkipped = renderer.render() === false;
   const metrics = {
     backend: renderer.rendererBackend(),
     presented: wakeStats.presentedFrames > 0,
     objectCount: renderer.objectCount(),
     drawCalls: renderer.lastDrawCalls(),
+    textDrawCalls: renderer.lastTextDrawCalls(),
     bytesUploaded: renderer.lastBytesUploaded(),
     authoredTime: renderer.time(),
     scheduledAnimationFrames: wakeStats.scheduledAnimationFrames,
     scheduledTimers: wakeStats.scheduledTimers,
     idle: wakeStats.idle,
+    staticFrameSkipped,
   };
 
   if (metrics.backend !== expectedBackend) {
@@ -73,13 +76,19 @@ async function start() {
   if (!metrics.presented) {
     throw new Error("direct execution renderer did not present its semantic frame");
   }
-  if (metrics.objectCount !== 2) {
+  if (metrics.objectCount !== 3) {
     throw new Error(
-      `direct execution renderer expected semantic object plus camera frame (2 objects), got ${metrics.objectCount}`,
+      `direct execution renderer expected animated circle, camera, and text object, got ${metrics.objectCount}`,
     );
   }
   if (metrics.drawCalls <= 0) {
     throw new Error(`direct execution renderer emitted ${metrics.drawCalls} draw calls`);
+  }
+  if (metrics.textDrawCalls <= 0) {
+    throw new Error("direct execution mixed renderer emitted no text draw calls");
+  }
+  if (metrics.drawCalls <= metrics.textDrawCalls) {
+    throw new Error("direct execution mixed renderer emitted no geometry draw calls");
   }
   if (metrics.bytesUploaded <= 0) {
     throw new Error(`direct execution renderer uploaded ${metrics.bytesUploaded} bytes`);
@@ -90,8 +99,12 @@ async function start() {
   if (metrics.scheduledAnimationFrames <= 0) {
     throw new Error("direct execution wake driver never requested an animation frame");
   }
+
   if (!metrics.idle) {
     throw new Error("direct execution wake driver did not become idle after authored work settled");
+  }
+  if (!metrics.staticFrameSkipped) {
+    throw new Error("direct execution renderer prepared a static frame without a publication");
   }
 
   state.metrics = metrics;

@@ -24,6 +24,7 @@ use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, Semanti
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
 mod semantic_references;
+mod semantic_text_resources;
 use semantic_references::SemanticIncomingReference;
 pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
 
@@ -407,6 +408,8 @@ pub struct SemanticMutationStats {
 pub struct SemanticStore {
     identity: SemanticStoreIdentity,
     geometry_resources: crate::GeometryResourceArena,
+    text_resources: crate::TextResourceArena,
+    font_resources: crate::FontResourceArena,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -427,6 +430,12 @@ impl Clone for SemanticStore {
     fn clone(&self) -> Self {
         let mut geometry_resources = self.geometry_resources.clone();
         let namespace = geometry_resources.fork_namespace();
+        let mut text_resources = self.text_resources.clone();
+        text_resources.remap_geometry_handles(|handle| {
+            if self.geometry_resources.get(*handle).is_some() {
+                handle.arena = namespace;
+            }
+        });
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
@@ -445,6 +454,8 @@ impl Clone for SemanticStore {
         Self {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
+            text_resources,
+            font_resources: self.font_resources.clone(),
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,

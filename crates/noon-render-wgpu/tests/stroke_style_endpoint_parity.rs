@@ -28,7 +28,8 @@ fn frame(geometry: GeometryRef, style: Style) -> FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(0),
-            geometry,
+            content: noon_core::ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style,
             appearance: 1.0,

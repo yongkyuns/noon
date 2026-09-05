@@ -30,7 +30,10 @@ fn geometry_patch_touches_only_one_object_in_a_100k_scene() {
 
     assert_eq!(live.last_patch_stats(), RuntimePatchStats::default());
     assert_eq!(live.take_frame_changes().object_indices(), &[TARGET_INDEX]);
-    assert_eq!(live.frame().objects[TARGET_INDEX].geometry, replacement);
+    assert_eq!(
+        live.frame().objects[TARGET_INDEX].geometry(),
+        Some(&replacement)
+    );
     assert_eq!(live.frame().objects[UNTOUCHED_INDEX], untouched_before);
     assert_eq!(live.frame().objects.len(), OBJECT_COUNT);
 }

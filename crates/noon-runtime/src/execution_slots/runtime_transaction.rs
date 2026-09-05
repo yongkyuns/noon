@@ -189,9 +189,13 @@ impl SceneInstance {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
     use noon_core::{
-        ScenePatch, SemanticObjectState, SemanticStore, StoredGeometry, Style, Transform2D, Vec2,
+        CompositionTimeMap, FontResourceArena, GeometryResourceArena, Property, RateFunction, Rect,
+        ScenePatch, SemanticObjectState, SemanticStore, StoredGeometry, Style, TextResource,
+        TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
     };
 
     use super::*;
@@ -264,6 +268,64 @@ mod tests {
             instance.effective_transform(object),
             Some(Transform2D::IDENTITY)
         );
+    }
+
+    #[test]
+    fn text_morph_rejection_leaves_live_frame_and_publication_unchanged() {
+        let mut store = SemanticStore::new();
+        let text = store
+            .import_text_resource(
+                TextResource {
+                    source: Arc::from("text"),
+                    kind: TextSourceKind::Plain,
+                    runs: Arc::from([]),
+                    vector_items: Arc::from([]),
+                    render_items: Arc::from([]),
+                    parts: Arc::from([]),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                    baseline: 0.0,
+                    layout_artifact: None,
+                },
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        let semantic_object = store.insert_semantic_object(SemanticObjectState::new(text));
+        store.attach_to_scene(semantic_object).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+        let object = index.execution_object_id(semantic_object).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        let before_frame = instance.frame().clone();
+        let before_publication = instance.publication_context();
+        let changed_style = Style {
+            opacity: 0.25,
+            ..Style::default()
+        };
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetStyle {
+                object,
+                style: changed_style,
+            },
+            ScenePatch::AddTrack(TrackDefinition {
+                id: TrackId::new(9),
+                object,
+                property: Property::Morph,
+                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }),
+        ]);
+
+        assert_eq!(
+            instance.apply_transaction(&transaction),
+            Err(CompilePatchError::GeometryTrackTargetsText {
+                track: TrackId::new(9),
+                property: Property::Morph,
+            })
+        );
+        assert_eq!(instance.frame(), &before_frame);
+        assert_eq!(instance.publication_context(), before_publication);
     }
 
     #[test]
@@ -542,7 +604,7 @@ mod tests {
             },
             ScenePatch::SetGeometry {
                 object,
-                geometry: original.geometry,
+                geometry: original.geometry().unwrap().clone(),
             },
         ]);
         instance.apply_transaction(&transaction).unwrap();

@@ -2,7 +2,7 @@ use noon_core::{
     FamilyAnimationState, RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan,
 };
 
-use crate::{RetainedFamilyFrame, RetainedFamilyFramePlanError, RetainedFrameState};
+use crate::{FrameState, RetainedFamilyFrame, RetainedFamilyFramePlanError};
 
 /// Retained family frame with explicit immutable-plan ownership per active object.
 ///
@@ -13,7 +13,7 @@ use crate::{RetainedFamilyFrame, RetainedFamilyFramePlanError, RetainedFrameStat
 /// identity from object membership.
 #[derive(Clone, Copy, Debug)]
 pub struct RetainedPlannedFamilyFrame<'a> {
-    pub retained: &'a RetainedFrameState,
+    pub retained: &'a FrameState,
     pub family_animations: &'a [Option<FamilyAnimationState>],
     pub family_plan_indices: &'a [Option<u32>],
 }

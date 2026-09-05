@@ -26,32 +26,35 @@ fn circle_to_rectangle_keeps_semantic_endpoints_and_renderer_only_morph() {
 
     let start = instance.seek(0.0).unwrap().clone();
     assert!(matches!(
-        start.objects[0].geometry,
-        GeometryRef::Circle { .. }
+        start.objects[0].geometry(),
+        Some(GeometryRef::Circle { .. })
     ));
     assert!(matches!(
         start.render_geometry(0),
-        GeometryRef::VectorPath(_)
+        Some(GeometryRef::VectorPath(_))
     ));
     assert_eq!(start.morph(0), 0.0);
 
     let midpoint = instance.seek(1.0).unwrap().clone();
     assert!(matches!(
-        midpoint.objects[0].geometry,
-        GeometryRef::Circle { .. }
+        midpoint.objects[0].geometry(),
+        Some(GeometryRef::Circle { .. })
     ));
     assert!(matches!(
         midpoint.render_geometry(0),
-        GeometryRef::VectorPath(_)
+        Some(GeometryRef::VectorPath(_))
     ));
     assert!((midpoint.morph(0) - 0.5).abs() < 1e-6);
 
     let end = instance.seek(2.0).unwrap().clone();
     assert!(matches!(
-        end.objects[0].geometry,
-        GeometryRef::Rectangle { .. }
+        end.objects[0].geometry(),
+        Some(GeometryRef::Rectangle { .. })
     ));
-    assert!(matches!(end.render_geometry(0), GeometryRef::VectorPath(_)));
+    assert!(matches!(
+        end.render_geometry(0),
+        Some(GeometryRef::VectorPath(_))
+    ));
     assert_eq!(end.morph(0), 1.0);
 
     let mut sequential = SceneInstance::new(compiled);

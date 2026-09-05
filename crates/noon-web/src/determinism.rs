@@ -1,6 +1,7 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
 use noon_compile::{CompileError, CompiledScene};
+use noon_core::ObjectContentRef;
 use noon_ir::{decode_scene, IrError};
 use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
 use serde_json::{json, Value};
@@ -26,7 +27,19 @@ pub fn normalized_frame_value(frame: &FrameState) -> Value {
         .map(|(index, object)| {
             json!({
                 "id": object.id.get(),
-                "geometry": &object.geometry,
+                "content": match &object.content {
+                    ObjectContentRef::Geometry(geometry) => json!({
+                        "kind": "geometry",
+                        "geometry": geometry,
+                    }),
+                    ObjectContentRef::Text(text) => json!({
+                        "kind": "text",
+                        "text": {
+                            "id": text.id.get(),
+                            "version": text.version,
+                        },
+                    }),
+                },
                 "transform": object.transform,
                 "style": object.style,
                 "appearance": object.appearance,

@@ -65,10 +65,10 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
     let mut sequential = SceneInstance::new(compiled);
 
     let start = direct.seek(0.0).unwrap().clone();
-    assert_eq!(start.objects[0].geometry, from.geometry);
+    assert_eq!(start.objects[0].geometry(), Some(&from.geometry));
     assert_eq!(start.objects[0].style, from.style);
     assert_eq!(start.morph(0), 0.0);
-    assert_ne!(start.render_geometry(0), &start.objects[0].geometry);
+    assert_ne!(start.render_geometry(0), start.objects[0].geometry());
 
     sequential.advance_to(0.25).unwrap();
     sequential.advance_to(0.50).unwrap();
@@ -79,7 +79,7 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
 
     let midpoint = direct.frame();
     assert_eq!(midpoint.objects[0].id, object);
-    assert_eq!(midpoint.objects[0].geometry, from.geometry);
+    assert_eq!(midpoint.objects[0].geometry(), Some(&from.geometry));
     assert_eq!(midpoint.morph(0), 0.5);
     assert_eq!(
         midpoint.objects[0].transform.translation,
@@ -96,15 +96,15 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
     assert_close(fill.blue, 0.4);
     assert_close(fill.alpha, 0.6);
 
-    let GeometryRef::VectorPath(prepared) = midpoint.render_geometry(0) else {
+    let Some(GeometryRef::VectorPath(prepared)) = midpoint.render_geometry(0) else {
         panic!("filled Transform must retain one prepared path pair");
     };
     assert!(prepared.morph_target().is_some());
 
     let end = direct.seek(2.0).unwrap().clone();
-    assert_eq!(end.objects[0].geometry, to.geometry);
+    assert_eq!(end.objects[0].geometry(), Some(&to.geometry));
     assert_eq!(end.objects[0].transform, to.transform);
     assert_eq!(end.objects[0].style, to.style);
     assert_eq!(end.morph(0), 1.0);
-    assert_ne!(end.render_geometry(0), &end.objects[0].geometry);
+    assert_ne!(end.render_geometry(0), end.objects[0].geometry());
 }

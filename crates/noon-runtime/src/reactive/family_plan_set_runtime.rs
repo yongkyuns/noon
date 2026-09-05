@@ -1,4 +1,4 @@
-use noon_compile::RetainedCompiledScene;
+use noon_compile::CompiledScene;
 use noon_core::{
     FamilyAnimationError, FamilyAnimationSpec, FamilyAnimationState, ObjectId,
     RetainedFamilyAnimationPlan,
@@ -83,7 +83,7 @@ impl From<EvaluationError> for RetainedFamilyPlanSetRuntimeError {
 /// family operation at a time.
 #[derive(Clone, Debug)]
 pub struct RetainedFamilyPlanSetSceneInstance {
-    inner: crate::RetainedSceneInstance,
+    inner: crate::SceneInstance,
     plans: Vec<RetainedFamilyAnimationPlan>,
     specs: Vec<FamilyAnimationSpec>,
     object_schedules: Vec<Vec<PlannedFamilyInterval>>,
@@ -94,7 +94,7 @@ pub struct RetainedFamilyPlanSetSceneInstance {
 
 impl RetainedFamilyPlanSetSceneInstance {
     pub fn new(
-        compiled: RetainedCompiledScene,
+        compiled: CompiledScene,
         animations: Vec<(RetainedFamilyAnimationPlan, FamilyAnimationSpec)>,
     ) -> Result<Self, RetainedFamilyPlanSetRuntimeError> {
         if animations.len() > u32::MAX as usize {
@@ -150,7 +150,7 @@ impl RetainedFamilyPlanSetSceneInstance {
         }
 
         Ok(Self {
-            inner: crate::RetainedSceneInstance::new(compiled),
+            inner: crate::SceneInstance::new(compiled),
             plans,
             specs,
             object_schedules,
@@ -176,7 +176,7 @@ impl RetainedFamilyPlanSetSceneInstance {
         &self.specs
     }
 
-    pub fn inner(&self) -> &crate::RetainedSceneInstance {
+    pub fn inner(&self) -> &crate::SceneInstance {
         &self.inner
     }
 
@@ -267,6 +267,7 @@ fn active_state_at(
 
 #[cfg(test)]
 mod tests {
+    use noon_compile::CompiledObject;
     use noon_core::{
         FamilyAnimationMode, GeometryRef, RateFunction, RetainedFamilyAnimationPlanBuilder,
         RetainedObjectDefinition, SemanticStore, TextResourceArena,
@@ -301,7 +302,16 @@ mod tests {
     fn sequential_same_object_selects_exact_plan_and_next_wins_touching_boundary() {
         let object =
             RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object.id,
+                object.content.clone(),
+                object.transform,
+                object.style,
+            )],
+            &[],
+        )
+        .unwrap();
         let animations = vec![
             (
                 plan_for(object.clone()),
@@ -337,7 +347,16 @@ mod tests {
     fn overlapping_same_object_fails_before_playback() {
         let object =
             RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object.id,
+                object.content.clone(),
+                object.transform,
+                object.style,
+            )],
+            &[],
+        )
+        .unwrap();
         let error = RetainedFamilyPlanSetSceneInstance::new(
             compiled,
             vec![
@@ -364,8 +383,24 @@ mod tests {
         let first = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
         let second =
             RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(2.0));
-        let compiled =
-            RetainedCompiledScene::compile(&[first.clone(), second.clone()], &[]).unwrap();
+        let compiled = CompiledScene::compile_objects(
+            vec![
+                CompiledObject::new(
+                    first.id,
+                    first.content.clone(),
+                    first.transform,
+                    first.style,
+                ),
+                CompiledObject::new(
+                    second.id,
+                    second.content.clone(),
+                    second.transform,
+                    second.style,
+                ),
+            ],
+            &[],
+        )
+        .unwrap();
         let mut runtime = RetainedFamilyPlanSetSceneInstance::new(
             compiled,
             vec![
@@ -394,7 +429,16 @@ mod tests {
     fn direct_seek_matches_forward_playback_for_state_and_plan_identity() {
         let object =
             RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let compiled = RetainedCompiledScene::compile(std::slice::from_ref(&object), &[]).unwrap();
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object.id,
+                object.content.clone(),
+                object.transform,
+                object.style,
+            )],
+            &[],
+        )
+        .unwrap();
         let animations = vec![
             (
                 plan_for(object.clone()),

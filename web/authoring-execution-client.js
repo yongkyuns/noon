@@ -293,7 +293,13 @@ export class AuthoringExecutionClient {
             "split the callback work from retained text instead of silently dropping either",
         );
       }
-      if (this.#mode === AUTHORING_EXECUTION_RETAINED) {
+      // Semantic execution already uses the retained mixed renderer. Rebuild
+      // its resource bundle in place rather than asking the renderer to switch
+      // from retained mode to itself.
+      if (
+        this.#mode === AUTHORING_EXECUTION_RETAINED ||
+        this.#mode === AUTHORING_EXECUTION_SEMANTIC
+      ) {
         return this.#runTransition(() => this.#rebuildRetainedCanonical(sceneSpecJson));
       }
       return this.#runTransition(() => this.#switchRetainedCanonical(sceneSpecJson));

@@ -177,10 +177,8 @@ fn finish_semantic_execution(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
-    let compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(
-        &projection,
-        store.geometry_resources(),
-    )?;
+    let compiled =
+        CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
     let camera_object = validate_camera_object(camera, &compiled)?;
     let program = ReactiveProgram::compile_for_execution_domain(
         compiled
@@ -251,16 +249,23 @@ fn validate_camera_object(
         .iter()
         .find(|object| object.live && object.id == object_id)
         .expect("semantic camera object must exist in its compiled projection");
-    Camera2DState::from_frame_object(&object.geometry, object.base_transform)
+    object
+        .geometry()
+        .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.base_transform))
         .ok_or(SemanticExecutionLoweringError::InvalidCameraObject { node })?;
     Ok(Some(object_id))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use noon_core::{
-        Property, ReactiveValue, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState,
-        SemanticStore, SemanticVec3, StoredGeometry, TextResourceHandle, TextResourceId, Vec2,
+        FontFaceIdentity, FontResourceArena, FontResourceLookup, GeometryResourceArena,
+        GeometryResourceLookup, GlyphRun, Property, ReactiveValue, Rect, SemanticObjectProperty,
+        SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
+        TextAffineTransform, TextDirection, TextRenderItem, TextResource, TextResourceLookup,
+        TextSourceKind, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
     };
 
     use super::*;
@@ -460,7 +465,9 @@ mod tests {
             .find(|object| object.id == execution_id)
             .unwrap();
         assert_eq!(
-            Camera2DState::from_frame_object(&compiled.geometry, compiled.base_transform),
+            compiled.geometry().and_then(|geometry| {
+                Camera2DState::from_frame_object(geometry, compiled.base_transform)
+            }),
             Some(Camera2DState {
                 center: Vec2::new(2.0, -1.0),
                 height: 6.0,
@@ -527,21 +534,132 @@ mod tests {
     }
 
     #[test]
-    fn compiled_payload_failure_does_not_publish_staged_execution_identity() {
+    fn text_payload_retains_only_its_dependency_closed_resources() {
         let mut store = SemanticStore::new();
-        let object = store.insert_semantic_object(SemanticObjectState::new(TextResourceHandle {
-            id: TextResourceId::new(9),
-            version: 2,
-        }));
+        let selected_face = FontFaceIdentity {
+            family: Arc::from("Selected Sans"),
+            face_key: Arc::from("selected-sans-v1"),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        let unrelated_face = FontFaceIdentity {
+            family: Arc::from("Unrelated Sans"),
+            face_key: Arc::from("unrelated-sans-v1"),
+            face_index: 0,
+            variation_key: Arc::from(""),
+        };
+        let mut fonts = FontResourceArena::new();
+        fonts
+            .intern_face(&selected_face, Arc::<[u8]>::from([1_u8, 2, 3]))
+            .unwrap();
+        fonts
+            .intern_face(&unrelated_face, Arc::<[u8]>::from([4_u8, 5, 6]))
+            .unwrap();
+        let mut geometries = GeometryResourceArena::new();
+        let selected_vector = geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(3.0, 1.0)),
+        );
+        let unrelated_vector = geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(99.0, 99.0)),
+        );
+        let handle = store
+            .import_text_resource(
+                TextResource {
+                    source: Arc::from("hello"),
+                    kind: TextSourceKind::Plain,
+                    runs: Arc::from([GlyphRun {
+                        font: selected_face.clone(),
+                        variations: Arc::from([]),
+                        font_size: 24.0,
+                        direction: TextDirection::LeftToRight,
+                        fill: None,
+                        stroke: None,
+                        transform: TextAffineTransform::IDENTITY,
+                        glyphs: Arc::from([]),
+                    }]),
+                    vector_items: Arc::from([TextVectorItem {
+                        geometry: selected_vector,
+                        transform: TextAffineTransform::IDENTITY,
+                        style: TextVectorStyle::default(),
+                        source_span: None,
+                        semantic_key: None,
+                    }]),
+                    render_items: Arc::from([
+                        TextRenderItem::GlyphRun(0),
+                        TextRenderItem::Vector(0),
+                    ]),
+                    parts: Arc::from([]),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)),
+                    baseline: 0.0,
+                    layout_artifact: None,
+                },
+                &fonts,
+                &geometries,
+            )
+            .unwrap();
+        let _unrelated = store
+            .import_text_resource(
+                TextResource {
+                    source: Arc::from("detached"),
+                    kind: TextSourceKind::Plain,
+                    runs: Arc::from([GlyphRun {
+                        font: unrelated_face,
+                        variations: Arc::from([]),
+                        font_size: 24.0,
+                        direction: TextDirection::LeftToRight,
+                        fill: None,
+                        stroke: None,
+                        transform: TextAffineTransform::IDENTITY,
+                        glyphs: Arc::from([]),
+                    }]),
+                    vector_items: Arc::from([TextVectorItem {
+                        geometry: unrelated_vector,
+                        transform: TextAffineTransform::IDENTITY,
+                        style: TextVectorStyle::default(),
+                        source_span: None,
+                        semantic_key: None,
+                    }]),
+                    render_items: Arc::from([
+                        TextRenderItem::GlyphRun(0),
+                        TextRenderItem::Vector(0),
+                    ]),
+                    parts: Arc::from([]),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::ONE),
+                    baseline: 0.0,
+                    layout_artifact: None,
+                },
+                &fonts,
+                &geometries,
+            )
+            .unwrap();
+        let object = store.insert_semantic_object(SemanticObjectState::new(handle));
         store.attach_to_scene(object).unwrap();
 
         let mut index = SemanticExecutionIndex::new();
-        assert!(matches!(
-            lower_semantic_execution(&store, &mut index),
-            Err(SemanticExecutionLoweringError::Compiled(
-                SemanticCompiledSceneError::UnsupportedText { node, .. }
-            )) if node == object
-        ));
-        assert!(index.is_empty());
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+        let execution = index.execution_object_id(object).unwrap();
+        assert_eq!(lowered.compiled().object_index(execution), Some(0));
+        assert_eq!(lowered.compiled().objects()[0].text(), Some(handle));
+        let resources = lowered.compiled().resources();
+        assert_eq!(resources.text_count(), 1);
+        assert_eq!(resources.font_count(), 1);
+        assert_eq!(resources.geometry_count(), 1);
+        let retained_text = TextResourceLookup::get(resources, handle).unwrap();
+        let retained_vector = retained_text.vector_items[0].geometry;
+        assert!(GeometryResourceLookup::get(resources, retained_vector).is_some());
+        assert_eq!(
+            GeometryResourceLookup::current_handle(resources, retained_vector.id),
+            Some(retained_vector)
+        );
+        let retained_font = FontResourceLookup::handle_for_face(resources, &selected_face).unwrap();
+        assert!(FontResourceLookup::get(resources, retained_font).is_some());
+        assert_eq!(
+            lowered.compiled().objects()[0].text_bounds,
+            Some(Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)))
+        );
     }
 }
