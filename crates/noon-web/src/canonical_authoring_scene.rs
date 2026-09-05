@@ -1236,6 +1236,7 @@ mod tests {
             let player = context.live_player(2.0).unwrap();
             let end = player.live_play_animation(&animation).unwrap();
             assert_eq!(end, 2.0);
+            assert!(player.live_wait(0.5).is_err());
             assert!(!player.live_advance_segment_to(1.0).unwrap());
 
             player.live_set_translation(&circle, 100.0, 0.0).unwrap();

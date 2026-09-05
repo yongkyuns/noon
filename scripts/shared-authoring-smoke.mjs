@@ -60,26 +60,15 @@ class SharedAuthoringSmoke(Scene):
         label = Text("Noon", font_size=48).shift(LEFT * 2)
         self.add(circle, label)
 
-        # Target construction and declaration complete before lowering. The
-        # live facade then activates and drives that existing Rust declaration.
+        # Static style authoring completes before the live session. The live
+        # facade then owns property publication and effective-value queries.
         circle.set_fill(BLUE, opacity=0.4)
-        target = circle.copy().shift(RIGHT * 2 + DOWN).scale((1.5, 0.5))
-        animation = self.declare_live_transform_to(
-            circle,
-            target,
-            run_time=2.0,
-            rate_func=linear,
-        )
         live = self.live_execution()
-        end_time = live.play(animation)
-        assert not live.advance_to(1.0)
+        live.set_translation(circle, 2.0, -1.0)
+        live.set_scale(circle, 1.5, 0.5)
         center = live.effective_center(circle)
-        assert abs(center.x - 1.0) < 1e-9
-        assert abs(center.y + 0.5) < 1e-9
-        assert live.advance_to(end_time)
-        assert live.effective_center(circle) == (2.0, -1.0)
-        wait_end = live.wait(0.1)
-        assert live.advance_to(wait_end)
+        assert abs(center.x - 2.0) < 1e-9
+        assert abs(center.y + 1.0) < 1e-9
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
 
@@ -377,37 +366,39 @@ try {
   const transferable = await runMode("transferable", 0);
   const shared = await runMode("shared", 1);
 
-  // Execute the published paired example itself, so wrapper regressions cannot
-  // hide behind a separate smoke-only Python program.
-  const membershipSource = await readFile(
-    path.join(repoRoot, "web/python/examples/live_semantic_scene.py"), "utf8",
-  );
-  const membership = await page.evaluate(async (source) => {
-    const harness = window.sharedAuthoringSmoke;
-    const authored = await harness.authoring.run(source, {});
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 360;
-    document.body.append(canvas);
-    const execution = new harness.AuthoringExecutionClient(canvas);
-    try {
-      await execution.startSemanticExecution(authored.semanticExecution, {
-        authoringClient: harness.authoring,
-        transportMode: "transferable",
-      });
-      let latest;
-      for (let attempt = 0; attempt < 150; attempt += 1) {
-        latest = (await execution.metrics()).metrics;
-        if (latest.objectCount === 3 && latest.presentedFrames > 0) return latest;
-        await new Promise((resolve) => setTimeout(resolve, 20));
+  // Run the published examples through the same authoring and rendering harness.
+  for (const [filename, objectCount] of [
+    ["live_semantic_scene.py", 3],
+    ["live_affine_animation.py", 1],
+  ]) {
+    const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
+    const metrics = await page.evaluate(async ({ source, objectCount }) => {
+      const harness = window.sharedAuthoringSmoke;
+      const authored = await harness.authoring.run(source, {});
+      const canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 360;
+      document.body.append(canvas);
+      const execution = new harness.AuthoringExecutionClient(canvas);
+      try {
+        await execution.startSemanticExecution(authored.semanticExecution, {
+          authoringClient: harness.authoring,
+          transportMode: "transferable",
+        });
+        let latest;
+        for (let attempt = 0; attempt < 150; attempt += 1) {
+          latest = (await execution.metrics()).metrics;
+          if (latest.objectCount === objectCount && latest.presentedFrames > 0) return latest;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
+      } finally {
+        execution.terminate();
       }
-      throw new Error(`live membership example did not render: ${JSON.stringify(latest)}`);
-    } finally {
-      execution.terminate();
-    }
-  }, membershipSource);
-  assert.equal(membership.objectCount, 3);
-  assert.ok(membership.drawCalls > 0, "live membership example emitted no draw calls");
+    }, { source, objectCount });
+    assert.equal(metrics.objectCount, objectCount, filename);
+    assert.ok(metrics.drawCalls > 0, `${filename}: no draw calls`);
+  }
 
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {
