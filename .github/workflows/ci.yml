@@ -181,8 +181,8 @@ jobs:
         run: node scripts/playground-layout-smoke.mjs
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
-      - name: Test native reactive browser runtime
-        run: node scripts/reactive-runtime-smoke.mjs
+      - name: Test shared semantic authoring and runtime
+        run: node scripts/shared-authoring-smoke.mjs
       - name: Test native browser input signals
         run: node scripts/native-input-smoke.mjs
       - name: Test Python updater callback bridge
