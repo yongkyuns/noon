@@ -6,6 +6,17 @@ export const STRESS_FINAL_VISIBLE_OBJECT_COUNT = 626;
 export const STRESS_TRACK_COUNT = 6889;
 export const STRESS_SAMPLE_HZ = 60;
 export const STRESS_SOURCE_SHA256 = "ae058af41d1ace3a00bd289a4f0a474aa492b2ee22523c17d92b7f0fc49c1527";
+export const STRESS_REACTIVATION_TIMES = Object.freeze([
+  0,
+  0.92,
+  1.1,
+  1.4,
+  1.6,
+  2.19,
+  2.4,
+  2.7,
+  3.0,
+]);
 
 // These boundaries are the authored play segments in
 // web/python/examples/manim_parity_stress_grid.py. Keep the complete five-second
@@ -133,4 +144,48 @@ export function assertSteadyStressTelemetry(samples, coldFrames = 3) {
       maximumUploadBytes: Math.max(...steady.map((sample) => sample.uploadBytes)),
     },
   };
+}
+
+export function assertRetainedMorphReactivation(samples) {
+  assert.ok(Array.isArray(samples), "reactivation samples must be an array");
+  const morphs = ["morph-a", "morph-b"].map((phase) => {
+    const rows = samples.filter((sample) => classifyStressPhase(sample.sceneTime) === phase);
+    assert.ok(rows.length >= 3, `${phase} reactivation must sample the complete morph interior`);
+    assert.ok(rows.every((sample) => sample.dirty), `${phase} reactivation must remain dynamic`);
+    assert.ok(
+      rows.every((sample) => sample.geometryCacheMisses === 0),
+      `${phase} reactivation must retain installed geometry resources across the loop boundary`,
+    );
+    assert.ok(
+      rows.every((sample) => sample.inlineRenderGeometryCount === 0),
+      `${phase} reactivation must not fall back to inline path commands`,
+    );
+    assert.ok(
+      rows.every((sample) => sample.renderGeometryResourceCount > 0),
+      `${phase} reactivation must continue to address retained geometry resources`,
+    );
+    assert.ok(
+      rows[0].uploadBytes > 0 && rows[0].uploadBytes < 16 * 1024 * 1024,
+      `${phase} reactivation entry must keep its required packed upload within the scene bound`,
+    );
+    const warmRows = rows.slice(1);
+    assert.ok(
+      warmRows.every((sample) => sample.uploadBytes > 0 && sample.uploadBytes < 1024 * 1024),
+      `${phase} reactivation must upload compact dynamic state without rebuilding packed geometry`,
+    );
+    return {
+      phase,
+      samples: rows.length,
+      maximumGeometryCacheMisses: Math.max(...rows.map((sample) => sample.geometryCacheMisses)),
+      maximumInlineRenderGeometryCount: Math.max(
+        ...rows.map((sample) => sample.inlineRenderGeometryCount),
+      ),
+      minimumRenderGeometryResourceCount: Math.min(
+        ...rows.map((sample) => sample.renderGeometryResourceCount),
+      ),
+      entryUploadBytes: rows[0].uploadBytes,
+      maximumWarmUploadBytes: Math.max(...warmRows.map((sample) => sample.uploadBytes)),
+    };
+  });
+  return { morphs };
 }

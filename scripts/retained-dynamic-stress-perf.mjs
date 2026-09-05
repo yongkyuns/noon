@@ -15,9 +15,11 @@ import {
   STRESS_FINAL_VISIBLE_OBJECT_COUNT,
   STRESS_OBJECT_COUNT,
   STRESS_PHASES,
+  STRESS_REACTIVATION_TIMES,
   STRESS_SAMPLE_HZ,
   STRESS_SOURCE_SHA256,
   STRESS_TRACK_COUNT,
+  assertRetainedMorphReactivation,
   assertSteadyStressTelemetry,
 } from "./retained-dynamic-stress-perf-lib.mjs";
 
@@ -293,6 +295,39 @@ try {
           };
         }),
       };
+      const reactivation = [];
+      for (const sceneTime of reactivationTimes) {
+        await new Promise(requestAnimationFrame);
+        const delta = engine.seekDeltaJson(sceneTime);
+        let inlineRenderGeometryCount = 0;
+        let renderGeometryResourceCount = 0;
+        let dirty = false;
+        if (delta !== undefined && delta !== null) {
+          const envelope = JSON.parse(delta);
+          dirty = renderer.applyDeltaJson(delta);
+          if (dirty && !renderer.render()) {
+            throw new Error(`reactivated frame ${sceneTime} was not presented`);
+          }
+          inlineRenderGeometryCount = envelope.objects.filter(
+            (object) => object.render_geometry !== null && object.render_geometry !== undefined,
+          ).length;
+          renderGeometryResourceCount = envelope.objects.filter(
+            (object) => object.render_geometry_resource !== null &&
+              object.render_geometry_resource !== undefined,
+          ).length;
+        }
+        reactivation.push({
+          sceneTime,
+          dirty,
+          inlineRenderGeometryCount,
+          renderGeometryResourceCount,
+          geometryCacheMisses: renderer.lastGeometryCacheMisses(),
+          uploadBytes: renderer.lastBytesUploaded(),
+          drawCalls: renderer.lastDrawCalls(),
+          instancesDrawn: renderer.lastInstancesDrawn(),
+        });
+      }
+      direct.reactivation = reactivation;
       window.__noonRetainedStressCaptureAt = (sceneTime) => {
         const delta = engine.seekDeltaJson(sceneTime);
         if (delta !== undefined && delta !== null) {
@@ -446,6 +481,7 @@ try {
       sampleHz: STRESS_SAMPLE_HZ,
       workerLoops,
       backendRequested: backend,
+      reactivationTimes: STRESS_REACTIVATION_TIMES,
     },
   );
 
@@ -478,6 +514,7 @@ try {
     STRESS_PHASES.map((phase) => phase.id),
   );
   const steadyTelemetry = assertSteadyStressTelemetry(result.direct.samples);
+  const retainedReactivation = assertRetainedMorphReactivation(result.direct.reactivation);
   assert.deepEqual(
     result.workerModes.map((mode) => mode.transportMode).sort(),
     ["shared", "transferable"],
@@ -541,6 +578,7 @@ try {
     backendRequested: backend,
     captures,
     steadyTelemetry,
+    retainedReactivation,
     ...result,
   };
   await writeFile(artifactPath, `${serializeArtifact(artifact)}\n`);

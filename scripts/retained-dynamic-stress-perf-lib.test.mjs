@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   STRESS_PHASES,
+  STRESS_REACTIVATION_TIMES,
   STRESS_FINAL_VISIBLE_OBJECT_COUNT,
   STRESS_SOURCE_SHA256,
   assertSteadyStressTelemetry,
+  assertRetainedMorphReactivation,
   classifyStressPhase,
   fixedStressSampleTimes,
   summarizeStressPhases,
@@ -27,6 +29,41 @@ test("fixed stress samples cover the complete authored five-second loop", () => 
   assert.equal(classifyStressPhase(4.3), "lifecycle-churn");
   assert.equal(classifyStressPhase(4.7), "final-wave");
   assert.equal(classifyStressPhase(5), "final-wave");
+});
+
+test("morph resources remain installed when a completed loop is reactivated", () => {
+  const rows = STRESS_REACTIVATION_TIMES.map((sceneTime) => ({
+    sceneTime,
+    dirty: true,
+    geometryCacheMisses: 0,
+    inlineRenderGeometryCount: 0,
+    renderGeometryResourceCount:
+      (sceneTime >= 0.9 && sceneTime < 1.45) || (sceneTime >= 2.17 && sceneTime < 2.72)
+        ? 600
+        : 0,
+    uploadBytes: 64,
+  }));
+  const retained = assertRetainedMorphReactivation(rows);
+  assert.deepEqual(retained.morphs.map((phase) => phase.samples), [3, 3]);
+
+  const packedOnEntry = structuredClone(rows);
+  packedOnEntry.find((sample) => sample.sceneTime === 0.92).uploadBytes = 13_281_024;
+  packedOnEntry.find((sample) => sample.sceneTime === 2.19).uploadBytes = 13_281_024;
+  assert.doesNotThrow(() => assertRetainedMorphReactivation(packedOnEntry));
+
+  const regressed = structuredClone(rows);
+  regressed.find((sample) => sample.sceneTime === 2.4).geometryCacheMisses = 1;
+  assert.throws(
+    () => assertRetainedMorphReactivation(regressed),
+    /morph-b reactivation must retain installed geometry resources/u,
+  );
+
+  const redundantlyUploaded = structuredClone(rows);
+  redundantlyUploaded.find((sample) => sample.sceneTime === 1.1).uploadBytes = 13_281_024;
+  assert.throws(
+    () => assertRetainedMorphReactivation(redundantlyUploaded),
+    /morph-a reactivation must upload compact dynamic state/u,
+  );
 });
 
 test("phase summaries and steady telemetry preserve the dynamic workload", () => {

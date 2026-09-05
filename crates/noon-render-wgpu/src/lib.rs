@@ -1579,8 +1579,11 @@ impl FramePreparer {
             return;
         }
 
+        let packed_generation_current =
+            self.packed_path_mesh_cache_generation == self.path_mesh_cache_generation;
         self.path_mesh_cache_generation = self.path_mesh_cache_generation.saturating_add(1);
         let old_cache = std::mem::take(&mut self.path_mesh_cache);
+        let mut remapped_indices = vec![None; old_cache.len()];
         self.path_mesh_lookup.clear();
         for (old_index, entry) in old_cache.into_iter().enumerate() {
             if !keep[old_index] {
@@ -1595,11 +1598,26 @@ impl FramePreparer {
                 entry.fill_enabled,
             );
             let new_index = self.path_mesh_cache.len();
+            remapped_indices[old_index] = Some(new_index);
             self.path_mesh_cache.push(entry);
             self.path_mesh_lookup
                 .entry(key)
                 .or_default()
                 .push(new_index);
+        }
+        // Evicting stale cache entries changes their indices, not the packed
+        // geometry of surviving batches. Preserve that correspondence so the
+        // next frame does not repack and upload the same meshes a second time.
+        if packed_generation_current
+            && self
+                .path_batch_cache_indices
+                .iter()
+                .all(|&index| remapped_indices[index].is_some())
+        {
+            for index in &mut self.path_batch_cache_indices {
+                *index = remapped_indices[*index].expect("packed mesh survived cache pruning");
+            }
+            self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
         }
     }
 
@@ -3061,6 +3079,71 @@ mod tests {
 
         assert_eq!(preparer.path_vertices.len(), arena_vertices_after_growth);
         assert_eq!(preparer.path_indices.len(), arena_indices_after_growth);
+    }
+
+    #[test]
+    fn stale_cache_pruning_preserves_packed_survivors_and_gpu_uploads() {
+        const CACHE_LIMIT: usize = 256;
+        const PINNED: usize = 300;
+        let make_frame = |seed: usize, count: usize| {
+            frame(
+                (0..count)
+                    .map(|index| {
+                        let x = (seed + index) as f32;
+                        let mut state = object(
+                            index as u64,
+                            GeometryRef::path(
+                                VectorPath::new()
+                                    .move_to(Vec2::new(x, 0.0))
+                                    .line_to(Vec2::new(x + 0.5, 0.5)),
+                            ),
+                        );
+                        state.style.fill = None;
+                        state.style.stroke = Some(Color::WHITE);
+                        state.style.stroke_width = 0.02;
+                        state
+                    })
+                    .collect(),
+            )
+        };
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut preparer = FramePreparer::for_individual_path_draws();
+        preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
+        let stale = make_frame(0, CACHE_LIMIT);
+        renderer.upload(&device, &queue, &preparer.prepare(&stale));
+        let mut active = make_frame(1000, PINNED);
+        let cold = preparer.prepare(&active);
+        assert_eq!(cold.stats.geometry_cache_misses, PINNED);
+        renderer.upload(&device, &queue, &cold);
+        assert_eq!(preparer.cached_path_mesh_count(), CACHE_LIMIT + PINNED);
+
+        active.morphs.fill(0.3);
+        let warm = preparer.prepare(&active);
+        assert_eq!(warm.stats.geometry_cache_misses, 0);
+        assert_eq!(warm.stats.path_vertices_repacked, 0);
+        assert_eq!(warm.stats.path_indices_repacked, 0);
+        assert!(warm.path_vertex_dirty_ranges.is_empty());
+        assert!(warm.path_index_dirty_ranges.is_empty());
+        let upload = renderer.upload(&device, &queue, &warm);
+        assert_eq!(upload.bytes_uploaded, std::mem::size_of_val(warm.paths));
+        assert_eq!(upload.buffer_reallocations, 0);
+        assert_eq!(preparer.cached_path_mesh_count(), PINNED);
+
+        // If a packed mesh actually disappears, cache compaction must invalidate
+        // packed reuse even when all remaining geometry is already cached.
+        active.objects[0].geometry = active.objects[1].geometry.clone();
+        let changed = preparer.prepare(&active);
+        assert_eq!(changed.stats.geometry_cache_misses, 0);
+        assert!(changed.stats.path_vertices_repacked > 0);
+        assert!(changed.stats.path_indices_repacked > 0);
+        let actual_vertices = changed.path_vertices.to_vec();
+        let actual_indices = changed.path_indices.to_vec();
+        let mut fresh = FramePreparer::for_individual_path_draws();
+        let expected = fresh.prepare(&active);
+        assert_eq!(actual_vertices, expected.path_vertices);
+        assert_eq!(actual_indices, expected.path_indices);
+        assert_eq!(preparer.cached_path_mesh_count(), PINNED - 1);
     }
 
     #[test]

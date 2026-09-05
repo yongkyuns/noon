@@ -72,6 +72,11 @@ mod wasm {
                 InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
                     .map_err(js_error)?;
             let camera = mirror.camera();
+            let mut preparer = RetainedFramePreparer::new();
+            preparer.set_scene_path_mesh_cache_budget(
+                mirror.resources().render_geometries().len(),
+                mirror.resources().geometries().len(),
+            );
 
             let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
@@ -130,7 +135,7 @@ mod wasm {
                 mirror,
                 pending_frame: false,
                 pending_changes: FrameChanges::default(),
-                preparer: RetainedFramePreparer::new(),
+                preparer,
                 renderer,
                 text_gpu,
                 camera_center: camera.center,

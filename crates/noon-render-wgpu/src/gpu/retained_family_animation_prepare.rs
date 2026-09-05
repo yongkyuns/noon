@@ -400,4 +400,90 @@ mod operation_selection_tests {
             }
         )));
     }
+    #[test]
+    fn compiled_morph_budget_keeps_inactive_phase_meshes_warm() {
+        const PER_PHASE: usize = 300;
+        let (_, mut retained, _) = fixture();
+        let mut template = retained.objects[0].clone();
+        template.style.fill = None;
+        template.style.stroke = Some(noon_core::Color::WHITE);
+        template.style.stroke_width = 0.02;
+        retained.objects = (0..PER_PHASE)
+            .map(|index| {
+                let mut object = template.clone();
+                object.id = ObjectId::new(index as u64);
+                object
+            })
+            .collect();
+        retained.presences = vec![true; PER_PHASE];
+        retained.reveals = vec![1.0; PER_PHASE];
+        retained.morphs = vec![0.3; PER_PHASE];
+        retained.render_transforms = vec![Some(Transform2D::IDENTITY); PER_PHASE];
+        let resources: Vec<_> = (0..2 * PER_PHASE)
+            .map(|index| {
+                let x = index as f32;
+                std::sync::Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(x, 0.0))
+                        .line_to(noon_core::Vec2::new(x + 0.5, 0.5)),
+                ))
+            })
+            .collect();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_scene_path_mesh_cache_budget(resources.len(), 0);
+        for (visit, phase) in [0, 0, 1, 1, 0, 0, 1].into_iter().enumerate() {
+            retained.render_geometries = resources[phase * PER_PHASE..(phase + 1) * PER_PHASE]
+                .iter()
+                .cloned()
+                .map(Some)
+                .collect();
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &retained,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(
+                prepared.geometry_stats().geometry_cache_misses,
+                if visit == 0 || visit == 2 {
+                    PER_PHASE
+                } else {
+                    0
+                }
+            );
+        }
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), 2 * PER_PHASE);
+
+        // Installing a smaller resource set resets the allowance; visible paths
+        // remain pinned while now-stale meshes return to the bounded cache policy.
+        preparer.set_scene_path_mesh_cache_budget(0, 0);
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), PER_PHASE);
+        assert_eq!(
+            preparer.geometry.path_mesh_cache_limit(),
+            crate::DEFAULT_PATH_MESH_CACHE_LIMIT
+        );
+    }
 }

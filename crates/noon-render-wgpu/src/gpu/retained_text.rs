@@ -597,6 +597,24 @@ impl RetainedFramePreparer {
         Self::default()
     }
 
+    /// Budget the path cache for the currently installed immutable scene resources.
+    ///
+    /// Compiled morph pairs need room across timeline phases, in addition to the
+    /// normal allowance for base geometry and transient outlines. This is an entry
+    /// budget, not eager preparation or pinning; recompute it when replacing the
+    /// installed resource set so capacity does not grow with historical scenes.
+    pub fn set_scene_path_mesh_cache_budget(
+        &mut self,
+        compiled_geometry_count: usize,
+        installed_geometry_count: usize,
+    ) {
+        self.geometry.set_path_mesh_cache_limit(
+            compiled_geometry_count.saturating_add(
+                installed_geometry_count.max(crate::DEFAULT_PATH_MESH_CACHE_LIMIT),
+            ),
+        );
+    }
+
     pub fn with_outline_cache_limits(limits: GlyphOutlineCacheLimits) -> Self {
         let mut preparer = Self::default();
         preparer.outlines.set_limits(limits);
