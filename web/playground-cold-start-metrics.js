@@ -37,6 +37,8 @@ export function validateAuthoringStartupMetrics(metrics) {
   }
   const durationFields = [
     "totalMs",
+    "moduleGraphLoadMs",
+    "initializeMs",
     "startupResourcesMs",
     "noonWebInitMs",
     "pyodideInitMs",
@@ -51,11 +53,21 @@ export function validateAuthoringStartupMetrics(metrics) {
       throw new TypeError(`authoring startup metric ${field} must be finite and non-negative`);
     }
   }
-  if (!Number.isSafeInteger(metrics.compatibilityModuleCount) || metrics.compatibilityModuleCount < 0) {
-    throw new TypeError("authoring startup compatibility module count must be a non-negative safe integer");
+  if (
+    !Number.isSafeInteger(metrics.compatibilityModuleCount) ||
+    metrics.compatibilityModuleCount < 0
+  ) {
+    throw new TypeError(
+      "authoring startup compatibility module count must be a non-negative safe integer",
+    );
   }
-  if (!Number.isSafeInteger(metrics.compatibilitySourceChars) || metrics.compatibilitySourceChars < 0) {
-    throw new TypeError("authoring startup compatibility source chars must be a non-negative safe integer");
+  if (
+    !Number.isSafeInteger(metrics.compatibilitySourceChars) ||
+    metrics.compatibilitySourceChars < 0
+  ) {
+    throw new TypeError(
+      "authoring startup compatibility source chars must be a non-negative safe integer",
+    );
   }
   return Object.freeze({ ...metrics });
 }
@@ -82,7 +94,10 @@ export function summarizeAuthoringStartup(metrics) {
     resourceOverlapSavedMs: Math.max(0, resourceWorkMs - checked.startupResourcesMs),
     postResourceBootstrapMs,
     unattributedMs:
-      checked.totalMs - checked.startupResourcesMs - postResourceBootstrapMs,
+      checked.totalMs -
+      checked.moduleGraphLoadMs -
+      checked.startupResourcesMs -
+      postResourceBootstrapMs,
   });
 }
 
