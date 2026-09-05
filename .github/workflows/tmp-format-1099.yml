@@ -1,0 +1,62 @@
+name: Temporary format 1099
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.head_ref == 'tmp/format-1099' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/format-1099
+      - name: Use pinned Rust
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          rustup override set 1.98.0
+      - name: Keep migration ratchet import line stable
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-runtime/src/lib.rs')
+          text = path.read_text()
+          old = '''use noon_core::{
+              Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, PublicationContext,
+              ScenePatch, StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+          };
+          '''
+          new = '''use noon_core::PublicationContext;
+          use noon_core::{
+              Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
+              StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+          };
+          '''
+          if old not in text:
+              raise SystemExit('expected publication import block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Commit mechanical result
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-compile/src/semantic_lowering/entrypoint.rs \
+                  crates/noon-core/src/reactive.rs \
+                  crates/noon-core/src/reactive/publication.rs \
+                  crates/noon-core/src/semantic_store.rs \
+                  crates/noon-runtime/src/execution_slots/runtime_transaction.rs \
+                  crates/noon-runtime/src/lib.rs \
+                  crates/noon-runtime/src/reactive/runtime.rs \
+                  crates/noon/src/execution_session.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'tmp: rustfmt #1099'
+          git push origin HEAD:tmp/format-1099
