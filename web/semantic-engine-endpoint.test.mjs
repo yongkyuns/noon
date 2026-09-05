@@ -225,6 +225,33 @@ test("a callback failure latches the endpoint and never invokes the opaque callb
   } finally { f.close(); }
 });
 
+test("a typed callback-advance failure is surfaced once and never retried", async () => {
+  let ticks = 0;
+  const f = fixture("transferable", async () => {
+    throw new Error("callback should not run after advance failure");
+  });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    f.player.tickCallbackPhaseJson = () => {
+      ticks += 1;
+      throw new Error("unsupported required callback target");
+    };
+
+    f.render.port2.postMessage({ type: "tick", timestamp: 16 });
+    await nextMatching(
+      f.control.port2,
+      (message) => message.type === "error" && /unsupported required callback target/.test(message.message),
+    );
+    f.render.port2.postMessage({ type: "tick", timestamp: 32 });
+    await turn();
+
+    assert.equal(ticks, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("full transport queues controls until a writable event without recursive draining", async () => {
   const f = fixture();
   try {

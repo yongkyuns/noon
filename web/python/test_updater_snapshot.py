@@ -79,5 +79,88 @@ class CallbackContextTests(unittest.TestCase):
         self.assertEqual(set(context._baseline), {3})
 
 
+class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    @staticmethod
+    def _mobject_and_context() -> tuple[object, object, object]:
+        updaters.install()
+        scene = updaters._base.Scene()
+        mobject = updaters._base.Circle(1.0)
+        scene.add(mobject)
+        mobject._semantic_handle = type(
+            "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
+        )()
+        frame = {
+            "delta_time": 0.25,
+            "token": {"runtime": 4, "publication": {}, "sequence": 8},
+            "objects": [
+                {
+                    "node": {"slot": 11, "generation": 3},
+                    "transform": {
+                        "translation": {"x": 2.0, "y": -1.0},
+                        "rotation": 0.0,
+                        "scale": {"x": 1.0, "y": 1.0},
+                    },
+                    "style": {
+                        "fill": None,
+                        "stroke": {
+                            "red": 1.0,
+                            "green": 1.0,
+                            "blue": 1.0,
+                            "alpha": 1.0,
+                        },
+                        "stroke_width": 1.0,
+                        "stroke_width_mode": "scale_with_object",
+                        "stroke_join": "miter",
+                        "stroke_cap": "butt",
+                        "opacity": 1.0,
+                    },
+                    "bounds": {
+                        "min": {"x": 1.0, "y": -2.0},
+                        "max": {"x": 3.0, "y": 0.0},
+                    },
+                }
+            ],
+        }
+        return scene, mobject, updaters._CanonicalCallbackContext(frame)
+
+    def test_translation_only_row_preserves_ordered_property_writes(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(2.0, -1.0))
+            mobject.move_to((4.0, 3.0))
+            mobject.set_opacity(0.5)
+            mobject.shift((1.0, 0.0))
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(5.0, 3.0))
+            writes = context.effective_batch()["writes"]
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+        self.assertEqual([write["kind"] for write in writes], ["transform", "style", "transform"])
+        self.assertEqual(
+            writes[-1]["transform"]["translation"], {"x": 5.0, "y": 3.0}
+        )
+        row = next(iter(context._rows.values()))
+        self.assertIsInstance(row, updaters._PhasePropertyRow)
+        self.assertFalse(hasattr(row, "geometry"))
+
+    def test_spatial_transform_and_raw_operations_fail_explicitly(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            with self.assertRaises(NotImplementedError):
+                mobject.rotate(0.5)
+            with self.assertRaises(NotImplementedError):
+                mobject.scale(2.0)
+            with self.assertRaises(NotImplementedError):
+                mobject.width
+            with self.assertRaises(NotImplementedError):
+                mobject.geometry
+            with self.assertRaises(NotImplementedError):
+                mobject.copy()
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+
 if __name__ == "__main__":
     unittest.main()

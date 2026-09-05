@@ -105,7 +105,12 @@ export async function attachSemanticEngine(
         if (callbackFault === null) {
           try {
             await publishCallbackPhase(player.tickCallbackPhaseJson(timestamp));
-          } catch (error) { fail(error); }
+          } catch (error) {
+            // Session progression errors are terminal for opaque callbacks too:
+            // retrying the same tick could repeat externally visible Python work.
+            callbackFault = error instanceof Error ? error : new Error(String(error));
+            fail(callbackFault);
+          }
         }
       }
     } finally {

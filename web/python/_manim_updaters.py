@@ -12,7 +12,7 @@ import copy
 import inspect
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import _noon_ir as _ir
@@ -27,9 +27,17 @@ _ACTIVE_CONTEXTS: dict[int, Any] = {}
 
 _ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
 _ORIGINAL_APPLY = _base.Mobject._apply
-_ORIGINAL_BOUNDS = _base._bounds
-_CALLBACK_BOUNDS = "__noon_callback_bounds__"
-_CALLBACK_BOUNDS_UNAVAILABLE = "__noon_callback_bounds_unavailable__"
+_ORIGINAL_GET_CENTER = _base.Mobject.get_center
+_ORIGINAL_SHIFT = _base.Mobject.shift
+_ORIGINAL_MOVE_TO = _base.Mobject.move_to
+_ORIGINAL_SET_X = _base.Mobject.set_x
+_ORIGINAL_SET_Y = _base.Mobject.set_y
+_ORIGINAL_SCALE = _base.Mobject.scale
+_ORIGINAL_ROTATE = _base.Mobject.rotate
+_ORIGINAL_SET_COLOR = _base.Mobject.set_color
+_ORIGINAL_SET_FILL = _base.Mobject.set_fill
+_ORIGINAL_SET_STROKE = _base.Mobject.set_stroke
+_ORIGINAL_SET_OPACITY = _base.Mobject.set_opacity
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -439,17 +447,22 @@ class _CallbackContext:
         self._current[object_id] = current
         return current
 
-    def current_raw(self, mobject: _base.Mobject) -> _ir.Mobject:
+    def current_raw(self, mobject: _base.Mobject | int) -> _ir.Mobject:
+        if isinstance(mobject, int):
+            return self._materialize(mobject)
         obj = mobject._object
         if obj is None:
             raise RuntimeError("legacy callback target has no object identity")
         return self._materialize(obj.id)
 
-    def replace_raw(self, mobject: _base.Mobject, raw: _ir.Mobject) -> None:
-        obj = mobject._object
-        if obj is None:
-            raise RuntimeError("legacy callback target has no object identity")
-        object_id = obj.id
+    def replace_raw(self, mobject: _base.Mobject | int, raw: _ir.Mobject) -> None:
+        if isinstance(mobject, int):
+            object_id = mobject
+        else:
+            obj = mobject._object
+            if obj is None:
+                raise RuntimeError("legacy callback target has no object identity")
+            object_id = obj.id
         self._materialize(object_id)
         self._current[object_id] = _ir.Mobject(
             geometry=copy.deepcopy(raw.geometry),
@@ -487,13 +500,135 @@ class _CallbackContext:
         return batch
 
 
+@dataclass(frozen=True, slots=True)
+class _PhaseTransform:
+    translation_x: float
+    translation_y: float
+    rotation: float
+    scale_x: float
+    scale_y: float
+
+    @classmethod
+    def from_wire(cls, value: object) -> "_PhaseTransform":
+        if not isinstance(value, dict):
+            raise TypeError("canonical callback transform must be an object")
+        translation = value.get("translation")
+        scale = value.get("scale")
+        if not isinstance(translation, dict) or not isinstance(scale, dict):
+            raise TypeError("canonical callback transform is malformed")
+        return cls(
+            _phase_number("transform.translation.x", translation.get("x")),
+            _phase_number("transform.translation.y", translation.get("y")),
+            _phase_number("transform.rotation", value.get("rotation")),
+            _phase_number("transform.scale.x", scale.get("x")),
+            _phase_number("transform.scale.y", scale.get("y")),
+        )
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "translation": {"x": self.translation_x, "y": self.translation_y},
+            "rotation": self.rotation,
+            "scale": {"x": self.scale_x, "y": self.scale_y},
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _PhaseStyle:
+    fill: tuple[float, float, float, float] | None
+    stroke: tuple[float, float, float, float] | None
+    stroke_width: float
+    stroke_width_mode: str
+    stroke_join: str
+    stroke_cap: str
+    opacity: float
+
+    @classmethod
+    def from_wire(cls, value: object) -> "_PhaseStyle":
+        if not isinstance(value, dict):
+            raise TypeError("canonical callback style must be an object")
+        for key in ("stroke_width_mode", "stroke_join", "stroke_cap"):
+            if not isinstance(value.get(key), str):
+                raise TypeError(f"canonical callback style.{key} must be a string")
+        return cls(
+            _phase_color("style.fill", value.get("fill")),
+            _phase_color("style.stroke", value.get("stroke")),
+            _phase_number("style.stroke_width", value.get("stroke_width")),
+            value["stroke_width_mode"],
+            value["stroke_join"],
+            value["stroke_cap"],
+            _phase_number("style.opacity", value.get("opacity")),
+        )
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "fill": _phase_color_wire(self.fill),
+            "stroke": _phase_color_wire(self.stroke),
+            "stroke_width": self.stroke_width,
+            "stroke_width_mode": self.stroke_width_mode,
+            "stroke_join": self.stroke_join,
+            "stroke_cap": self.stroke_cap,
+            "opacity": self.opacity,
+        }
+
+
+@dataclass(slots=True)
+class _PhasePropertyRow:
+    """Small callback-boundary row, never an authored scene object or raw geometry."""
+
+    transform: _PhaseTransform
+    style: _PhaseStyle
+    bounds: tuple[float, float, float, float] | None
+    bounds_translation_only: bool
+
+    @classmethod
+    def from_wire(cls, item: dict[str, Any]) -> "_PhasePropertyRow":
+        bounds = _phase_bounds(item.get("bounds"))
+        return cls(
+            _PhaseTransform.from_wire(item.get("transform")),
+            _PhaseStyle.from_wire(item.get("style")),
+            bounds,
+            bounds is not None,
+        )
+
+    def center(self) -> _base.Vec2:
+        bounds = self.require_bounds()
+        return _base.Vec2((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
+
+    def require_bounds(self) -> tuple[float, float, float, float]:
+        if self.bounds is None:
+            raise NotImplementedError(
+                "canonical callback bounds require a Rust-published effective bound"
+            )
+        if not self.bounds_translation_only:
+            raise NotImplementedError(
+                "canonical callback bounds are unavailable after a spatial property change"
+            )
+        return self.bounds
+
+    def shift(self, offset: _base.Vec2) -> None:
+        self.transform = replace(
+            self.transform,
+            translation_x=self.transform.translation_x + offset.x,
+            translation_y=self.transform.translation_y + offset.y,
+        )
+        if self.bounds is not None and self.bounds_translation_only:
+            min_x, min_y, max_x, max_y = self.bounds
+            self.bounds = (
+                min_x + offset.x,
+                min_y + offset.y,
+                max_x + offset.x,
+                max_y + offset.y,
+            )
+
+    def invalidate_bounds(self) -> None:
+        self.bounds_translation_only = False
+
+
 class _CanonicalCallbackContext:
     """Property-only Python overlay over a Rust-prepared phase view.
 
-    It is keyed exclusively by the generational semantic identity supplied by
-    Rust. Geometry/content/membership mutation cannot be encoded here, so an
-    updater either produces ordered effective transform/style writes or fails
-    before the pinned session publication changes.
+    Rows contain only effective scalar properties and a Rust-derived world AABB.
+    They intentionally cannot carry geometry, identity, membership, or authored state.
     """
 
     def __init__(self, frame: dict[str, Any]) -> None:
@@ -502,13 +637,12 @@ class _CanonicalCallbackContext:
         self._frame_items = {
             _phase_node_key(item["node"]): item for item in frame["objects"]
         }
-        self._baseline: dict[tuple[int, int], _ir.Mobject] = {}
-        self._current: dict[tuple[int, int], _ir.Mobject] = {}
+        self._rows: dict[tuple[int, int], _PhasePropertyRow] = {}
         self._writes: list[dict[str, Any]] = []
 
-    def _materialize(self, mobject: _base.Mobject) -> tuple[tuple[int, int], _ir.Mobject]:
+    def row(self, mobject: _base.Mobject) -> tuple[tuple[int, int], _PhasePropertyRow]:
         key = _semantic_key(mobject)
-        existing = self._current.get(key)
+        existing = self._rows.get(key)
         if existing is not None:
             return key, existing
         try:
@@ -519,62 +653,76 @@ class _CanonicalCallbackContext:
                 "reading undeclared semantic node "
                 f"{key[0]}:{key[1]} is not supported"
             ) from error
-        # The phase never transfers immutable geometry/text payloads. Cached
-        # effective bounds are sufficient for center/size scalar access; missing
-        # bounds remain an explicit unsupported geometry query rather than a
-        # fabricated zero-size shape.
-        bounds = item.get("bounds")
-        geometry = (
-            {_CALLBACK_BOUNDS: copy.deepcopy(bounds), "transform": copy.deepcopy(item["transform"])}
-            if bounds is not None
-            else {_CALLBACK_BOUNDS_UNAVAILABLE: True}
-        )
-        raw = _ir.Mobject(
-            geometry=geometry,
-            transform=copy.deepcopy(item["transform"]),
-            style=copy.deepcopy(item["style"]),
-        )
-        self._baseline[key] = raw
-        current = copy.deepcopy(raw)
-        self._current[key] = current
-        return key, current
+        row = _PhasePropertyRow.from_wire(item)
+        self._rows[key] = row
+        return key, row
 
-    def current_raw(self, mobject: _base.Mobject) -> _ir.Mobject:
-        return self._materialize(mobject)[1]
-
-    def replace_raw(self, mobject: _base.Mobject, raw: _ir.Mobject) -> None:
-        key, before = self._materialize(mobject)
-        if before.geometry != raw.geometry:
-            raise NotImplementedError(
-                "canonical callbacks support transform/style properties only; "
-                "geometry/content/membership mutation is not supported"
-            )
-        current = _ir.Mobject(
-            geometry=copy.deepcopy(before.geometry),
-            transform=copy.deepcopy(raw.transform),
-            style=copy.deepcopy(raw.style),
-        )
-        previous = self._current[key]
-        self._current[key] = current
-        if previous.transform != current.transform:
+    def transform_changed(
+        self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow
+    ) -> None:
+        if before != row.transform:
             self._writes.append(
                 {
                     "kind": "transform",
                     "object": _phase_node_json(key),
-                    "transform": copy.deepcopy(current.transform),
+                    "transform": row.transform.to_wire(),
                 }
             )
-        if previous.style != current.style:
+
+    def style_changed(
+        self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
+    ) -> None:
+        if before != row.style:
             self._writes.append(
                 {
                     "kind": "style",
                     "object": _phase_node_json(key),
-                    "style": copy.deepcopy(current.style),
+                    "style": row.style.to_wire(),
                 }
             )
 
     def effective_batch(self) -> dict[str, Any]:
         return {"token": self.token, "writes": self._writes}
+
+
+def _phase_number(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"canonical callback {name} must be a number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"canonical callback {name} must be finite")
+    return result
+
+
+def _phase_color(name: str, value: object) -> tuple[float, float, float, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError(f"canonical callback {name} must be an object or null")
+    return tuple(
+        _phase_number(f"{name}.{channel}", value.get(channel))
+        for channel in ("red", "green", "blue", "alpha")
+    )  # type: ignore[return-value]
+
+
+def _phase_color_wire(value: tuple[float, float, float, float] | None) -> dict[str, float] | None:
+    if value is None:
+        return None
+    return {"red": value[0], "green": value[1], "blue": value[2], "alpha": value[3]}
+
+
+def _phase_bounds(value: object) -> tuple[float, float, float, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("min"), dict) or not isinstance(value.get("max"), dict):
+        raise TypeError("canonical callback bounds must be an object or null")
+    min_x = _phase_number("bounds.min.x", value["min"].get("x"))
+    min_y = _phase_number("bounds.min.y", value["min"].get("y"))
+    max_x = _phase_number("bounds.max.x", value["max"].get("x"))
+    max_y = _phase_number("bounds.max.y", value["max"].get("y"))
+    if min_x > max_x or min_y > max_y:
+        raise ValueError("canonical callback bounds are inverted")
+    return min_x, min_y, max_x, max_y
 
 
 def _phase_node_key(value: object) -> tuple[int, int]:
@@ -592,68 +740,162 @@ def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
     return {"slot": key[0], "generation": key[1]}
 
 
-def _callback_bounds(raw: _ir.Mobject):
-    """Resolve callback-only cached bounds without reading copied geometry.
+def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContext | None:
+    scene = mobject._scene
+    if scene is None or mobject._object is None:
+        return None
+    context = _ACTIVE_CONTEXTS.get(id(scene))
+    if isinstance(context, _CanonicalCallbackContext):
+        return context
+    return None
 
-    The Rust phase view supplies a current effective axis-aligned bound. This
-    adapter keeps that bound coherent through subsequent Python affine writes by
-    mapping its four corners through the relative transform. Degenerate source
-    scales cannot be inverted, so those geometry-derived queries fail instead of
-    producing invented values.
-    """
 
-    geometry = raw.geometry
-    if _CALLBACK_BOUNDS_UNAVAILABLE in geometry:
+def _canonical_row(mobject: _base.Mobject) -> tuple[_CanonicalCallbackContext, tuple[int, int], _PhasePropertyRow] | None:
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        return None
+    key, row = context.row(mobject)
+    return context, key, row
+
+
+def _canonical_current_raw(self: _base.Mobject):
+    if _canonical_phase_context(self) is not None:
         raise NotImplementedError(
-            "canonical callback geometry/bounds reads require Rust-published derived bounds"
+            "canonical callback raw geometry access is not supported; use property operations"
         )
-    payload = geometry.get(_CALLBACK_BOUNDS)
-    if payload is None:
-        return _ORIGINAL_BOUNDS(raw)
-    if not isinstance(payload, dict) or not isinstance(payload.get("min"), dict) or not isinstance(payload.get("max"), dict):
-        raise RuntimeError("canonical callback bounds payload is malformed")
-    original = geometry.get("transform")
-    if not isinstance(original, dict):
-        raise RuntimeError("canonical callback bounds have no source transform")
-    original_scale = original["scale"]
-    if float(original_scale["x"]) == 0.0 or float(original_scale["y"]) == 0.0:
-        raise NotImplementedError("canonical callback bounds are unavailable for zero-scale objects")
+    return _current_raw(self)
 
-    def inverse(point: dict[str, Any]) -> _base.Vec2:
-        x = float(point["x"]) - float(original["translation"]["x"])
-        y = float(point["y"]) - float(original["translation"]["y"])
-        angle = float(original["rotation"])
-        cosine, sine = math.cos(angle), math.sin(angle)
-        return _base.Vec2(
-            (x * cosine + y * sine) / float(original_scale["x"]),
-            (-x * sine + y * cosine) / float(original_scale["y"]),
-        )
 
-    local_min, local_max = inverse(payload["min"]), inverse(payload["max"])
-    corners = (
-        _base.Vec2(local_min.x, local_min.y),
-        _base.Vec2(local_min.x, local_max.y),
-        _base.Vec2(local_max.x, local_min.y),
-        _base.Vec2(local_max.x, local_max.y),
-    )
-    transform = raw.transform
-    scale = transform["scale"]
-    angle = float(transform["rotation"])
-    cosine, sine = math.cos(angle), math.sin(angle)
-    translation = transform["translation"]
-    world = [
-        _base.Vec2(
-            (corner.x * float(scale["x"])) * cosine -
-            (corner.y * float(scale["y"])) * sine + float(translation["x"]),
-            (corner.x * float(scale["x"])) * sine +
-            (corner.y * float(scale["y"])) * cosine + float(translation["y"]),
+def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        raise NotImplementedError(
+            "canonical callbacks support property operations only; raw replacement is unsupported"
         )
-        for corner in corners
-    ]
-    return (
-        _base.Vec2(min(point.x for point in world), min(point.y for point in world)),
-        _base.Vec2(max(point.x for point in world), max(point.y for point in world)),
-    )
+    return _apply(self, raw)  # type: ignore[arg-type]
+
+
+def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_GET_CENTER(self)
+    _, _, row = value
+    return row.center()
+
+
+def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SHIFT(self, direction)
+    context, key, row = value
+    before = row.transform
+    row.shift(_base._as_vec2(direction))
+    context.transform_changed(key, before, row)
+    return self
+
+
+def _canonical_move_to(self: _base.Mobject, point: object) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_MOVE_TO(self, point)
+    _, _, row = value
+    return _canonical_shift(self, _base._as_vec2(point) - row.center())
+
+
+def _canonical_set_x(self: _base.Mobject, x: float) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_X(self, x)
+    _, _, row = value
+    return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
+
+
+def _canonical_set_y(self: _base.Mobject, y: float) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_Y(self, y)
+    _, _, row = value
+    return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))
+
+
+def _canonical_scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        raise NotImplementedError(
+            "canonical callback scale is not supported; use shared semantic operations"
+        )
+    return _ORIGINAL_SCALE(self, factor)
+
+
+def _canonical_rotate(self: _base.Mobject, angle: float) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        raise NotImplementedError(
+            "canonical callback rotation is not supported; use shared semantic operations"
+        )
+    return _ORIGINAL_ROTATE(self, angle)
+
+def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_COLOR(self, color)
+    context, key, row = value
+    color_value = _phase_color("set_color", color.to_ir())
+    before = row.style
+    if row.style.fill is not None:
+        row.style = replace(row.style, fill=color_value)
+    if row.style.stroke is not None:
+        row.style = replace(row.style, stroke=color_value)
+    if row.style.fill is None and row.style.stroke is None:
+        row.style = replace(row.style, fill=color_value)
+    if row.style.stroke != before.stroke:
+        row.invalidate_bounds()
+    context.style_changed(key, before, row)
+    return self
+
+
+def _canonical_set_fill(
+    self: _base.Mobject, color: _base.Color | None = None, opacity: float | None = None
+) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_FILL(self, color, opacity)
+    context, key, row = value
+    before = row.style
+    fill = None if color is None else _phase_color("set_fill", color.to_ir())
+    style = replace(row.style, fill=fill)
+    if opacity is not None:
+        style = replace(style, opacity=float(opacity))
+    row.style = style
+    context.style_changed(key, before, row)
+    return self
+
+
+def _canonical_set_stroke(
+    self: _base.Mobject, color: _base.Color | None = None, width: float | None = None
+) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_STROKE(self, color, width)
+    context, key, row = value
+    before = row.style
+    stroke = None if color is None else _phase_color("set_stroke", color.to_ir())
+    style = replace(row.style, stroke=stroke)
+    if width is not None:
+        style = replace(style, stroke_width=float(width))
+    row.style = style
+    if row.style.stroke != before.stroke or row.style.stroke_width != before.stroke_width:
+        row.invalidate_bounds()
+    context.style_changed(key, before, row)
+    return self
+
+
+def _canonical_set_opacity(self: _base.Mobject, opacity: float) -> _base.Mobject:
+    value = _canonical_row(self)
+    if value is None:
+        return _ORIGINAL_SET_OPACITY(self, opacity)
+    context, key, row = value
+    before = row.style
+    row.style = replace(row.style, opacity=float(opacity))
+    context.style_changed(key, before, row)
+    return self
 
 
 def _color(value: dict[str, float] | None) -> _ir.Color | None:
@@ -1202,8 +1444,18 @@ def install() -> None:
     _base.Mobject.clear_updaters = clear_updaters
     _base.Mobject.get_updaters = get_updaters
     _base.Mobject.has_updaters = has_updaters
-    _base.Mobject._current_raw = _current_raw
-    _base.Mobject._apply = _apply
-    _base._bounds = _callback_bounds
+    _base.Mobject._current_raw = _canonical_current_raw
+    _base.Mobject._apply = _canonical_apply
+    _base.Mobject.get_center = _canonical_get_center
+    _base.Mobject.shift = _canonical_shift
+    _base.Mobject.move_to = _canonical_move_to
+    _base.Mobject.set_x = _canonical_set_x
+    _base.Mobject.set_y = _canonical_set_y
+    _base.Mobject.scale = _canonical_scale
+    _base.Mobject.rotate = _canonical_rotate
+    _base.Mobject.set_color = _canonical_set_color
+    _base.Mobject.set_fill = _canonical_set_fill
+    _base.Mobject.set_stroke = _canonical_set_stroke
+    _base.Mobject.set_opacity = _canonical_set_opacity
     _install_rotating_breadth()
     _INSTALLED = True
