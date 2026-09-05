@@ -418,11 +418,12 @@ impl SemanticExecutionPlayer {
     }
 
     /// Evaluate scalar tracks through the one execution session, then align the
-    /// presentation clock to that same absolute time for a later handoff.
+    /// hold presentation at that same absolute time for a later handoff.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), String> {
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(|error| error.to_string())?;
+        clock.pause();
         self.session.advance_to(time).map_err(|error| error.to_string())?;
         self.clock = clock;
         Ok(())
