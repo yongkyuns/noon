@@ -289,6 +289,7 @@ mod tests {
             reveals: vec![1.0, 1.0],
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
         };
         let transport = RetainedFamilyPlanTransport::new(vec![text_id, circle_id]).unwrap();
         let json = serde_json::to_string(&transport).unwrap();

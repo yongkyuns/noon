@@ -568,6 +568,7 @@ mod draw_border_tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+            render_transforms: vec![None],
         };
         (plan, frame, vec![Some(state(progress))], texts)
     }

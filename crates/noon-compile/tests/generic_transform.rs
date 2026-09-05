@@ -59,10 +59,13 @@ fn path_transform_compiles_to_one_prepared_geometry_pair() {
         .find(|candidate| candidate.id == track)
         .unwrap();
     assert_eq!(compiled_track.property, Property::Transform);
-    let Some(TransformGeometryPlan::PathPair(GeometryRef::VectorPath(prepared))) =
+    let Some(TransformGeometryPlan::PathPair { geometry, .. }) =
         compiled_track.transform_geometry_plan.as_ref()
     else {
         panic!("path Transform must carry a prepared path pair");
+    };
+    let GeometryRef::VectorPath(prepared) = geometry.as_ref() else {
+        panic!("prepared path");
     };
     assert_eq!(prepared.commands(), source_path().commands());
     assert_eq!(prepared.morph_target(), Some(&target_path()));
@@ -109,10 +112,13 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
         .iter()
         .find(|candidate| candidate.id == track)
         .unwrap();
-    let Some(TransformGeometryPlan::PathPair(GeometryRef::VectorPath(prepared))) =
+    let Some(TransformGeometryPlan::PathPair { geometry, .. }) =
         compiled_track.transform_geometry_plan.as_ref()
     else {
         panic!("cross-kind closed analytic Transform must use a prepared path pair");
+    };
+    let GeometryRef::VectorPath(prepared) = geometry.as_ref() else {
+        panic!("prepared path");
     };
     let canonical_source =
         noon_geometry::canonical_outline_path(&from.geometry).expect("canonical circle outline");
@@ -223,7 +229,7 @@ fn certified_closed_filled_path_transform_compiles() {
     let compiled = CompiledScene::compile(&scene).expect("certified filled path Transform");
     assert!(matches!(
         compiled.tracks()[0].transform_geometry_plan,
-        Some(TransformGeometryPlan::PathPair(_))
+        Some(TransformGeometryPlan::PathPair { .. })
     ));
 }
 

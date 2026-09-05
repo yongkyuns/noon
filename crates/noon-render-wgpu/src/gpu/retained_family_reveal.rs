@@ -283,6 +283,7 @@ mod tests {
             reveals: vec![1.0, 1.0],
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
         };
         let animation = state(false);
         (plan, frame, vec![Some(animation), Some(animation)])

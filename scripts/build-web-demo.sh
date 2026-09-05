@@ -66,6 +66,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/reactive-runtime-smoke.mjs
+  node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs
   node --check scripts/updater-callback-smoke.mjs
   node --check scripts/manim-host-updater-diagnostics.mjs
@@ -76,6 +77,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/manim-reference-coverage.test.mjs
   node --test scripts/manim-reference-classification-lock.test.mjs
   node --test scripts/pr-risk-classifier.test.mjs
+  node --test scripts/retained-dynamic-stress-perf-lib.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
 
   for test_file in web/*.test.mjs; do

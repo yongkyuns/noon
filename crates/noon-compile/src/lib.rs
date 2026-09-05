@@ -981,7 +981,7 @@ mod tests {
         let compiled = CompiledScene::compile(&scene).expect("safe filled path must compile");
         assert!(matches!(
             compiled.tracks()[0].transform_geometry_plan,
-            Some(TransformGeometryPlan::PathPair(_))
+            Some(TransformGeometryPlan::PathPair { .. })
         ));
     }
 

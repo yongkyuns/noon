@@ -23,6 +23,7 @@ fn rectangle_frame(reveal: f32) -> FrameState {
         reveals: vec![reveal],
         morphs: vec![0.0],
         render_geometries: vec![None],
+        render_transforms: vec![None],
     }
 }
 

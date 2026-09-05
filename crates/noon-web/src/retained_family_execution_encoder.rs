@@ -18,6 +18,14 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
+    pub(crate) fn with_render_geometries(
+        session: u32,
+        geometries: std::sync::Arc<[std::sync::Arc<noon_core::GeometryRef>]>,
+    ) -> Self {
+        Self {
+            retained: RetainedExecutionDeltaEncoder::with_render_geometries(session, geometries),
+        }
+    }
     pub const fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
@@ -193,6 +201,7 @@ mod tests {
             reveals: vec![1.0, 1.0],
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
     }

@@ -418,6 +418,7 @@ mod tests {
             reveals: vec![1.0; count],
             morphs: vec![0.0; count],
             render_geometries: vec![None; count],
+            render_transforms: vec![None; count],
         }
     }
 

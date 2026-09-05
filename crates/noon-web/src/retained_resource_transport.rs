@@ -5,12 +5,12 @@ use std::{
 };
 
 use noon_core::{
-    Color, FontFaceIdentity, FontResourceArena, FontVariationSetting, GeometryResource,
-    GeometryResourceArena, GeometryResourceHandle, GlyphRun, PositionedGlyph, Rect, StrokeCap,
-    StrokeJoin, TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke,
-    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceArena, TextResourceHandle, TextSourceKind, TextSourceSpan,
-    TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+    Color, FontFaceIdentity, FontResourceArena, FontVariationSetting, GeometryRef,
+    GeometryResource, GeometryResourceArena, GeometryResourceHandle, GlyphRun, PositionedGlyph,
+    Rect, StrokeCap, StrokeJoin, TextAffineTransform, TextClusterIdentity, TextDirection,
+    TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
+    TextRenderItem, TextResource, TextResourceArena, TextResourceHandle, TextSourceKind,
+    TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,46 @@ use crate::TransportTextResourceHandle;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 2;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 3;
+
+/// Immutable compiled render geometry at the genuine cross-worker boundary.
+/// Indices are scoped to the player session and this installed resource bundle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct TransportRenderGeometryResources {
+    session: u32,
+    geometries: Vec<GeometryRef>,
+}
+
+pub(crate) fn compiled_render_geometries(
+    compiled: &noon_compile::RetainedCompiledScene,
+) -> Arc<[Arc<GeometryRef>]> {
+    let mut seen = std::collections::HashSet::new();
+    compiled
+        .tracks_iter()
+        .filter_map(|track| {
+            let noon_compile::TransformGeometryPlan::PathPair {
+                geometry,
+                render_transform,
+            } = track.transform_geometry_plan.as_ref()?
+            else {
+                return None;
+            };
+            // Current-relative screen-space fallback paths are rebuilt rather than
+            // published by identity. Local ScaleWithObject pairs remain stable.
+            if render_transform.is_none()
+                && matches!(&track.values,
+                noon_core::TrackValues::Object { from, to }
+                    if from.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace
+                    && to.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace)
+            {
+                return None;
+            }
+            seen.insert(Arc::as_ptr(geometry) as usize)
+                .then(|| geometry.clone())
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TransportGeometryResourceHandle {
@@ -48,6 +87,7 @@ pub struct RetainedResourceBundle {
     texts: Vec<TransportTextEntry>,
     geometries: Vec<TransportGeometryEntry>,
     fonts: Vec<TransportFontEntry>,
+    render_geometry_resources: Option<TransportRenderGeometryResources>,
 }
 
 impl RetainedResourceBundle {
@@ -109,11 +149,26 @@ impl RetainedResourceBundle {
             texts: text_entries,
             geometries: geometry_entries,
             fonts: font_entries.into_values().collect(),
+            render_geometry_resources: None,
         })
     }
 
     pub fn text_count(&self) -> usize {
         self.texts.len()
+    }
+
+    pub(crate) fn set_render_geometries(
+        &mut self,
+        session: u32,
+        geometries: Arc<[Arc<GeometryRef>]>,
+    ) {
+        self.render_geometry_resources = Some(TransportRenderGeometryResources {
+            session,
+            geometries: geometries
+                .iter()
+                .map(|geometry| geometry.as_ref().clone())
+                .collect(),
+        });
     }
 
     pub fn geometry_count(&self) -> usize {
@@ -144,6 +199,13 @@ impl RetainedResourceBundle {
 
     pub fn install(self) -> Result<InstalledRetainedResources, RetainedResourceTransportError> {
         self.validate_protocol()?;
+        if let Some(resources) = &self.render_geometry_resources {
+            for (index, geometry) in resources.geometries.iter().enumerate() {
+                if !matches!(geometry, GeometryRef::VectorPath(_)) || !geometry.is_finite() {
+                    return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
+                }
+            }
+        }
 
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(self.geometries.len());
@@ -201,6 +263,21 @@ impl RetainedResourceBundle {
             geometries,
             fonts,
             text_handles,
+            render_geometry_session: self
+                .render_geometry_resources
+                .as_ref()
+                .map(|resources| resources.session),
+            render_geometries: self
+                .render_geometry_resources
+                .map(|resources| {
+                    resources
+                        .geometries
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect::<Vec<_>>()
+                        .into()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -225,9 +302,19 @@ pub struct InstalledRetainedResources {
     geometries: GeometryResourceArena,
     fonts: FontResourceArena,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    render_geometry_session: Option<u32>,
+    render_geometries: Arc<[Arc<GeometryRef>]>,
 }
 
 impl InstalledRetainedResources {
+    pub(crate) fn render_geometry_session(&self) -> Option<u32> {
+        self.render_geometry_session
+    }
+
+    pub(crate) fn render_geometries(&self) -> Arc<[Arc<GeometryRef>]> {
+        self.render_geometries.clone()
+    }
+
     pub fn texts(&self) -> &TextResourceArena {
         &self.texts
     }
@@ -260,6 +347,7 @@ pub enum RetainedResourceTransportError {
     MissingFont { face_key: String, face_index: u32 },
     InvalidText(String),
     InvalidFont(String),
+    InvalidRenderGeometry(usize),
     Encode(String),
     Decode(String),
 }
@@ -267,6 +355,10 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRenderGeometry(index) => write!(
+                formatter,
+                "invalid compiled render geometry resource {index}"
+            ),
             Self::InvalidChannel(channel) => {
                 write!(formatter, "invalid retained resource channel {channel}")
             }
@@ -1033,10 +1125,68 @@ mod tests {
             texts: Vec::new(),
             geometries: Vec::new(),
             fonts: Vec::new(),
+            render_geometry_resources: None,
         };
         assert!(matches!(
             bundle.install(),
             Err(RetainedResourceTransportError::InvalidChannel(_))
         ));
     }
+
+    #[test]
+    fn compiled_morph_bundle_installs_geometry_once_and_reuses_local_arcs() {
+        let geometry = Arc::new(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        ));
+        let mut bundle = RetainedResourceBundle::capture(
+            [],
+            &TextResourceArena::new(),
+            &GeometryResourceArena::new(),
+            &FontResourceArena::new(),
+        )
+        .unwrap();
+        bundle.set_render_geometries(17, vec![geometry.clone()].into());
+        let installed = RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap())
+            .unwrap()
+            .install()
+            .unwrap();
+        assert_eq!(installed.render_geometry_session(), Some(17));
+        let first = installed.render_geometries();
+        let again = installed.render_geometries();
+        assert_eq!(first[0], geometry);
+        assert!(Arc::ptr_eq(&first[0], &again[0]));
+        assert!(
+            !Arc::ptr_eq(&first[0], &geometry),
+            "cross-worker decode owns its local resource allocation"
+        );
+    }
+
+    #[test]
+    fn nonfinite_compiled_resource_is_rejected_before_installation() {
+        let mut bundle = RetainedResourceBundle::capture(
+            [],
+            &TextResourceArena::new(),
+            &GeometryResourceArena::new(),
+            &FontResourceArena::new(),
+        )
+        .unwrap();
+        bundle.set_render_geometries(
+            17,
+            vec![Arc::new(GeometryRef::path(
+                VectorPath::new().move_to(Vec2::new(f32::NAN, 0.0)),
+            ))]
+            .into(),
+        );
+        let decoded =
+            RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap()).unwrap();
+        assert!(matches!(
+            decoded.install(),
+            Err(RetainedResourceTransportError::InvalidRenderGeometry(0))
+        ));
+    }
 }
+
+#[cfg(test)]
+mod morph_tests;

@@ -149,6 +149,34 @@
       "_manim_canonical_scene": 5
     }
   },
+  "regression_fixtures": {
+    "crates/noon-web/src/retained_execution_resources/morph_tests.rs": {
+      "tokens": {
+        "SceneDefinition": 2,
+        "ObjectSnapshot": 3
+      },
+      "rust_test_module": {
+        "parent": "crates/noon-web/src/retained_execution_resources.rs",
+        "module": "morph_tests"
+      }
+    },
+    "crates/noon-web/src/retained_resource_transport/morph_tests.rs": {
+      "tokens": {
+        "ObjectSnapshot": 3,
+        "ObjectDefinition": 2
+      },
+      "rust_test_module": {
+        "parent": "crates/noon-web/src/retained_resource_transport.rs",
+        "module": "morph_tests"
+      }
+    },
+    "scripts/retained-dynamic-stress-perf.mjs": {
+      "tokens": {
+        "scene_document": 1,
+        "SceneSpec": 1
+      }
+    }
+  },
   "adapter_call_sites": [
     "crates/noon-web/src/authoring_mobject.rs",
     "crates/noon-web/src/canonical_authoring_scene.rs"

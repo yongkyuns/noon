@@ -381,22 +381,25 @@ fn apply_reactive_value(
             changed
         }
         (Property::Position, ReactiveValue::Vec2(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.translation != *value;
             object.transform.translation = *value;
-            changed
+            changed || render_changed
         }
         (Property::Rotation, ReactiveValue::Scalar(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.rotation != *value;
             object.transform.rotation = *value;
-            changed
+            changed || render_changed
         }
         (Property::Scale, ReactiveValue::Vec2(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.scale != *value;
             object.transform.scale = *value;
-            changed
+            changed || render_changed
         }
         (Property::Opacity, ReactiveValue::Scalar(value)) => {
             let object = &mut frame.objects[object_index];

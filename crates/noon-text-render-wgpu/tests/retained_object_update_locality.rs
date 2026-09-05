@@ -29,6 +29,7 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
         reveals: vec![1.0; OBJECT_COUNT],
         morphs: vec![0.0; OBJECT_COUNT],
         render_geometries: vec![None; OBJECT_COUNT],
+        render_transforms: vec![None; OBJECT_COUNT],
     }
 }
 
@@ -50,6 +51,7 @@ fn single_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState 
         reveals: vec![1.0],
         morphs: vec![0.0],
         render_geometries: vec![None],
+        render_transforms: vec![None],
     }
 }
 

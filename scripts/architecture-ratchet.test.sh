@@ -9,6 +9,17 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/web" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
 cp "$RATCHET" "$TMP/scripts/architecture-ratchet.sh"
 cp "$ROOT/scripts/architecture_migration_relocations.py" "$ROOT/scripts/architecture_migration_relocations.json" "$TMP/scripts/"
+REVIEWED_RELOCATION_CONFIG="$(cat "$TMP/scripts/architecture_migration_relocations.json")"
+python3 - <<'PY' "$TMP/scripts/architecture_migration_relocations.json"
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+config = json.loads(path.read_text())
+config.pop('regression_fixtures', None)
+path.write_text(json.dumps(config, indent=2) + '\n')
+PY
 
 cd "$TMP"
 git init -q
@@ -86,6 +97,8 @@ reset_to_base() {
   git reset -q --hard "$BASE"
   rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
   rm -f web/browser-smoke.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
+  rm -rf crates/noon-web/src/retained_execution_resources crates/noon-web/src/retained_resource_transport
+  rm -f crates/noon-web/src/retained_execution_resources.rs crates/noon-web/src/retained_resource_transport.rs scripts/retained-dynamic-stress-perf.mjs
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
@@ -376,6 +389,108 @@ SHRUNK_BASE="$(git rev-parse HEAD)"
 printf 'use noon_core::ObjectSnapshot;\n' >> crates/noon/src/legacy/semantic_snapshot.rs
 if bash scripts/architecture-ratchet.sh "$SHRUNK_BASE" >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted regrowth under initial codec cap" >&2
+  exit 1
+fi
+
+# #959 regression fixtures may carry exact migration payloads only in reviewed
+# files. Rust fixtures must be crate-test-only and attached through an ordinary,
+# cfg-gated module. The first reviewed config entry establishes its cap; every
+# later comparison ratchets against the base count, including deletion.
+reset_to_base
+printf '%s\n' "$REVIEWED_RELOCATION_CONFIG" > scripts/architecture_migration_relocations.json
+mkdir -p crates/noon-web/src/retained_execution_resources crates/noon-web/src/retained_resource_transport
+cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
+#[cfg(test)]
+mod morph_tests;
+EOF
+cat > crates/noon-web/src/retained_execution_resources/morph_tests.rs <<'EOF'
+#![cfg(test)]
+// SceneDefinition SceneDefinition ObjectSnapshot ObjectSnapshot ObjectSnapshot
+EOF
+cat > crates/noon-web/src/retained_resource_transport.rs <<'EOF'
+#[cfg(test)]
+mod morph_tests;
+EOF
+cat > crates/noon-web/src/retained_resource_transport/morph_tests.rs <<'EOF'
+#![cfg(test)]
+// ObjectSnapshot ObjectSnapshot ObjectSnapshot
+// RetainedObjectDefinition ObjectDefinition
+EOF
+cat > scripts/retained-dynamic-stress-perf.mjs <<'EOF'
+// Explicit export regression fixture: scene_document SceneSpec
+EOF
+bash scripts/architecture-ratchet.sh "$BASE" >/dev/null
+
+sed -i.bak '1s/.*/\/\/ missing crate test gate/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
+expect_rejected 'regression fixture without first-line cfg(test)'
+rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
+sed -i.bak '1s/.*/#![cfg(test)]/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
+rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
+
+printf 'mod morph_tests;\n' > crates/noon-web/src/retained_execution_resources.rs
+expect_rejected 'regression fixture through an ungated parent module'
+cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
+#[cfg(test)]
+mod morph_tests;
+EOF
+printf '// ObjectSnapshot moved into production parent\n' >> crates/noon-web/src/retained_execution_resources.rs
+expect_rejected 'fixture token moved into its production parent'
+sed -i.bak '$d' crates/noon-web/src/retained_execution_resources.rs
+rm crates/noon-web/src/retained_execution_resources.rs.bak
+
+printf '// SceneSpec is not in this fixture inventory\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
+expect_rejected 'new unreviewed fixture token'
+sed -i.bak '$d' crates/noon-web/src/retained_execution_resources/morph_tests.rs
+rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
+printf '// ObjectSnapshot exceeds the reviewed cap\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
+expect_rejected 'regression fixture cap growth'
+sed -i.bak '$d' crates/noon-web/src/retained_execution_resources/morph_tests.rs
+rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
+
+git add scripts/architecture_migration_relocations.json scripts/retained-dynamic-stress-perf.mjs crates/noon-web/src/retained_execution_resources.rs crates/noon-web/src/retained_execution_resources/morph_tests.rs crates/noon-web/src/retained_resource_transport.rs crates/noon-web/src/retained_resource_transport/morph_tests.rs
+git commit -qm 'review bounded migration regression fixtures'
+FIXTURE_BASE="$(git rev-parse HEAD)"
+python3 - <<'PY'
+import json
+import pathlib
+
+path = pathlib.Path('scripts/architecture_migration_relocations.json')
+config = json.loads(path.read_text())
+del config['regression_fixtures']['crates/noon-web/src/retained_execution_resources/morph_tests.rs']
+path.write_text(json.dumps(config, indent=2) + '\n')
+PY
+if bash scripts/architecture-ratchet.sh "$FIXTURE_BASE" >/dev/null 2>&1; then
+  echo 'architecture ratchet test failed: accepted fixture budget entry deletion' >&2
+  exit 1
+fi
+git checkout -q -- scripts/architecture_migration_relocations.json
+sed -i.bak 's/ObjectSnapshot ObjectSnapshot ObjectSnapshot/ObjectSnapshot ObjectSnapshot/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
+rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
+git add crates/noon-web/src/retained_execution_resources/morph_tests.rs
+git commit -qm 'shrink regression fixture payload'
+FIXTURE_SHRUNK_BASE="$(git rev-parse HEAD)"
+printf '// ObjectSnapshot cannot regrow after shrink\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
+if bash scripts/architecture-ratchet.sh "$FIXTURE_SHRUNK_BASE" >/dev/null 2>&1; then
+  echo 'architecture ratchet test failed: accepted fixture regrowth after shrink' >&2
+  exit 1
+fi
+git reset -q --hard "$FIXTURE_SHRUNK_BASE"
+git rm -q crates/noon-web/src/retained_execution_resources/morph_tests.rs
+printf '' > crates/noon-web/src/retained_execution_resources.rs
+git add crates/noon-web/src/retained_execution_resources.rs
+git commit -qm 'delete regression fixture while retaining tombstone budget'
+FIXTURE_DELETED_BASE="$(git rev-parse HEAD)"
+mkdir -p crates/noon-web/src/retained_execution_resources
+cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
+#[cfg(test)]
+mod morph_tests;
+EOF
+cat > crates/noon-web/src/retained_execution_resources/morph_tests.rs <<'EOF'
+#![cfg(test)]
+// ObjectSnapshot
+EOF
+if bash scripts/architecture-ratchet.sh "$FIXTURE_DELETED_BASE" >/dev/null 2>&1; then
+  echo 'architecture ratchet test failed: accepted deleted fixture re-addition' >&2
   exit 1
 fi
 

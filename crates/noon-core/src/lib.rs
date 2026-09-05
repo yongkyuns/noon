@@ -481,6 +481,35 @@ pub struct VectorPath {
 }
 
 impl VectorPath {
+    /// Transform every endpoint/control point, including any morph target.
+    pub fn transformed(&self, transform: Transform2D) -> Self {
+        let mut result = Self::new();
+        for command in self.commands() {
+            result = match *command {
+                PathCommand::MoveTo { to } => result.move_to(transform.transform_point(to)),
+                PathCommand::LineTo { to } => result.line_to(transform.transform_point(to)),
+                PathCommand::QuadraticTo { control, to } => result.quadratic_to(
+                    transform.transform_point(control),
+                    transform.transform_point(to),
+                ),
+                PathCommand::CubicTo {
+                    control1,
+                    control2,
+                    to,
+                } => result.cubic_to(
+                    transform.transform_point(control1),
+                    transform.transform_point(control2),
+                    transform.transform_point(to),
+                ),
+                PathCommand::Close => result.close(),
+            };
+        }
+        if let Some(target) = self.morph_target() {
+            result = result.with_morph_target(target.transformed(transform));
+        }
+        result
+    }
+
     /// Whether every point, including morph targets, is finite.
     pub fn is_finite(&self) -> bool {
         let vec2_is_finite = |value: Vec2| value.x.is_finite() && value.y.is_finite();

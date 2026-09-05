@@ -46,10 +46,21 @@ fn snapshot(path: VectorPath) -> ObjectSnapshot {
 
 #[test]
 fn steady_generic_path_transform_updates_instance_without_retessellation() {
-    let from = snapshot(path_a());
+    assert_steady_transform(noon_core::StrokeWidthMode::ScaleWithObject);
+    assert_steady_transform(noon_core::StrokeWidthMode::ScreenSpace);
+}
+
+fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
+    let mut from = snapshot(path_a());
     let mut to = snapshot(path_b());
+    from.style.stroke_width_mode = stroke_mode;
+    to.style.stroke_width_mode = stroke_mode;
     to.style.stroke = Some(Color::rgb(0.2, 0.7, 0.9));
+    from.transform.translation = Vec2::new(-2.0, 1.0);
+    from.transform.scale = Vec2::new(1.3, 0.7);
     to.transform.rotation = 0.5;
+    to.transform.translation = Vec2::new(3.0, -1.0);
+    to.transform.scale = Vec2::new(0.6, 1.9);
 
     let mut scene = SceneDefinition::new();
     let object = scene.add(from.geometry.clone());
@@ -60,6 +71,7 @@ fn steady_generic_path_transform_updates_instance_without_retessellation() {
 
     let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
     let mut preparer = FramePreparer::new();
+    instance.seek(0.1).unwrap();
 
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);

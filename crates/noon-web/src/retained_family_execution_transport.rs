@@ -540,6 +540,7 @@ mod tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+            render_transforms: vec![None],
         }
     }
 
@@ -569,6 +570,8 @@ mod tests {
                 reveal: 1.0,
                 morph: 0.0,
                 render_geometry: None,
+                render_transform: None,
+                render_geometry_resource: None,
             }],
         }
     }

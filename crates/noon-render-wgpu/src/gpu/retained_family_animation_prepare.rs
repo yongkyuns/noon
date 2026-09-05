@@ -227,6 +227,7 @@ mod operation_selection_tests {
             reveals: vec![1.0, 1.0, 1.0],
             morphs: vec![0.0, 0.0, 0.0],
             render_geometries: vec![None, None, None],
+            render_transforms: vec![None, None, None],
         };
         (
             plan,
@@ -280,6 +281,209 @@ mod operation_selection_tests {
                 object: ObjectId::new(11),
                 mode: FamilyAnimationMode::DrawBorderThenFill,
             }
+        );
+    }
+    #[test]
+    fn family_reveal_keeps_fixed_morph_frame_and_warm_geometry() {
+        let (plan, mut retained, mut states) = fixture();
+        states[1] = None;
+        states[2] = None;
+        let source = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-1.0, 0.0))
+            .line_to(noon_core::Vec2::new(1.0, 0.0));
+        let target = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(0.0, -1.0))
+            .line_to(noon_core::Vec2::new(0.0, 1.0));
+        retained.render_geometries[0] = Some(std::sync::Arc::new(GeometryRef::path(
+            source.with_morph_target(target),
+        )));
+        retained.render_transforms[0] = Some(Transform2D::IDENTITY);
+        retained.objects[0].transform = Transform2D {
+            translation: noon_core::Vec2::new(3.0, -2.0),
+            rotation: 0.7,
+            scale: noon_core::Vec2::new(2.0, 0.5),
+        };
+        retained.objects[0].style.fill = None;
+        retained.objects[0].style.stroke = Some(noon_core::Color::WHITE);
+        retained.objects[0].style.stroke_width = 0.1;
+        retained.objects[0].style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+        retained.morphs[0] = 0.3;
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        let first = preparer
+            .prepare_family_animation_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &plan,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(
+            first.geometry.paths[0].transform,
+            Transform2D::IDENTITY.into()
+        );
+        assert_no_unused_mega_streams(&first);
+        let cold_upload = renderer.upload_retained(&device, &queue, &first, &mut text_state);
+        assert!(cold_upload.geometry.bytes_uploaded > 0);
+
+        retained.morphs[0] = 0.6;
+        states[0].as_mut().unwrap().overall_progress = 0.7;
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        let warm = preparer
+            .prepare_family_animation_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &plan,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(
+            warm.geometry.paths[0].transform,
+            Transform2D::IDENTITY.into()
+        );
+        assert_eq!(warm.geometry_stats().geometry_cache_misses, 0);
+        assert_eq!(warm.geometry_stats().path_vertices_repacked, 0);
+        assert_eq!(warm.geometry_stats().path_indices_repacked, 0);
+        assert_no_unused_mega_streams(&warm);
+        let upload = renderer.upload_retained(&device, &queue, &warm, &mut text_state);
+        let geometry = &warm.geometry;
+        let expected = std::mem::size_of_val(geometry.circles)
+            + std::mem::size_of_val(geometry.rectangles)
+            + std::mem::size_of_val(geometry.lines)
+            + std::mem::size_of_val(geometry.paths);
+        assert_eq!(upload.geometry.bytes_uploaded, expected);
+        assert_eq!(upload.geometry.buffer_reallocations, 0);
+    }
+
+    fn assert_no_unused_mega_streams(frame: &PreparedRetainedGpuFrame<'_>) {
+        assert!(frame.geometry.mega_path_indices.is_empty());
+        assert!(frame.geometry.mega_path_vertex_instances.is_empty());
+        assert!(frame.geometry.mega_path_batches.is_empty());
+        assert!(frame.geometry.mega_path_instance_dirty_ranges.is_empty());
+        assert!(frame.geometry.mega_path_index_dirty_ranges.is_empty());
+        assert_eq!(frame.geometry_stats().mega_path_count, 0);
+        assert_eq!(
+            frame.geometry_stats().mega_path_instance_vertices_repacked,
+            0
+        );
+        assert!(frame.render_items.iter().all(|item| !matches!(
+            item,
+            RetainedRenderItem::Geometry {
+                batch: OrderedRenderBatch {
+                    primitive: RenderPrimitive::MegaPath { .. },
+                    ..
+                },
+                ..
+            }
+        )));
+    }
+    #[test]
+    fn compiled_morph_budget_keeps_inactive_phase_meshes_warm() {
+        const PER_PHASE: usize = 300;
+        let (_, mut retained, _) = fixture();
+        let mut template = retained.objects[0].clone();
+        template.style.fill = None;
+        template.style.stroke = Some(noon_core::Color::WHITE);
+        template.style.stroke_width = 0.02;
+        retained.objects = (0..PER_PHASE)
+            .map(|index| {
+                let mut object = template.clone();
+                object.id = ObjectId::new(index as u64);
+                object
+            })
+            .collect();
+        retained.presences = vec![true; PER_PHASE];
+        retained.reveals = vec![1.0; PER_PHASE];
+        retained.morphs = vec![0.3; PER_PHASE];
+        retained.render_transforms = vec![Some(Transform2D::IDENTITY); PER_PHASE];
+        let resources: Vec<_> = (0..2 * PER_PHASE)
+            .map(|index| {
+                let x = index as f32;
+                std::sync::Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(x, 0.0))
+                        .line_to(noon_core::Vec2::new(x + 0.5, 0.5)),
+                ))
+            })
+            .collect();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        preparer.set_scene_path_mesh_cache_budget(resources.len(), 0);
+        for (visit, phase) in [0, 0, 1, 1, 0, 0, 1].into_iter().enumerate() {
+            retained.render_geometries = resources[phase * PER_PHASE..(phase + 1) * PER_PHASE]
+                .iter()
+                .cloned()
+                .map(Some)
+                .collect();
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &retained,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(
+                prepared.geometry_stats().geometry_cache_misses,
+                if visit == 0 || visit == 2 {
+                    PER_PHASE
+                } else {
+                    0
+                }
+            );
+        }
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), 2 * PER_PHASE);
+
+        // Installing a smaller resource set resets the allowance; visible paths
+        // remain pinned while now-stale meshes return to the bounded cache policy.
+        preparer.set_scene_path_mesh_cache_budget(0, 0);
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(preparer.geometry.cached_path_mesh_count(), PER_PHASE);
+        assert_eq!(
+            preparer.geometry.path_mesh_cache_limit(),
+            crate::DEFAULT_PATH_MESH_CACHE_LIMIT
         );
     }
 }

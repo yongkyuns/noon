@@ -33,7 +33,8 @@ pub fn normalized_frame_value(frame: &FrameState) -> Value {
                 "present": frame.presences[index],
                 "reveal": frame.reveals[index],
                 "morph": frame.morphs[index],
-                "render_geometry": frame.render_geometries[index].as_ref(),
+                "render_geometry": frame.render_geometries[index].as_deref(),
+                "render_transform": frame.render_transforms[index],
             })
         })
         .collect::<Vec<_>>();

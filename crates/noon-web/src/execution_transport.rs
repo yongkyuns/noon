@@ -10,7 +10,7 @@ use crate::legacy::ScenePlayer;
 use crate::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome};
 
 pub const EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution";
-pub const EXECUTION_TRANSPORT_VERSION: u32 = 2;
+pub const EXECUTION_TRANSPORT_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportSlotId {
@@ -40,6 +40,8 @@ pub struct TransportObjectState {
     pub reveal: f32,
     pub morph: f32,
     pub render_geometry: Option<GeometryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_transform: Option<Transform2D>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,6 +77,7 @@ pub enum ExecutionTransportError {
     InvalidTime(f64),
     InvalidCameraState,
     InvalidCameraObject(ObjectId),
+    InvalidRenderTransform(TransportSlotId),
     SequenceExhausted,
     SessionRequiresSnapshot { session: u32, sequence: u64 },
     SequenceGap { expected: u64, actual: u64 },
@@ -104,6 +107,11 @@ impl std::fmt::Display for ExecutionTransportError {
                     "unsupported execution transport version {version}"
                 )
             }
+            Self::InvalidRenderTransform(slot) => write!(
+                formatter,
+                "invalid render transform for slot {}:{}",
+                slot.slot, slot.generation
+            ),
             Self::InvalidTime(time) => write!(formatter, "invalid execution delta time {time}"),
             Self::InvalidCameraState => {
                 formatter.write_str("invalid execution transport camera state")
@@ -466,7 +474,8 @@ impl ExecutionDeltaEncoder {
             presence: frame.presences[index],
             reveal: frame.reveals[index],
             morph: frame.morphs[index],
-            render_geometry: frame.render_geometries[index].clone(),
+            render_geometry: frame.render_geometries[index].as_deref().cloned(),
+            render_transform: frame.render_transforms[index],
         })
     }
 }
@@ -597,6 +606,19 @@ impl ExecutionFrameMirror {
         {
             return Err(ExecutionTransportError::InvalidCameraState);
         }
+        for object in &delta.objects {
+            if let Some(transform) = object.render_transform {
+                if !transform.translation.x.is_finite()
+                    || !transform.translation.y.is_finite()
+                    || !transform.scale.x.is_finite()
+                    || !transform.scale.y.is_finite()
+                    || !transform.rotation.is_finite()
+                    || object.render_geometry.is_none()
+                {
+                    return Err(ExecutionTransportError::InvalidRenderTransform(object.slot));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -646,6 +668,7 @@ impl ExecutionFrameMirror {
             reveals: Vec::with_capacity(count),
             morphs: Vec::with_capacity(count),
             render_geometries: Vec::with_capacity(count),
+            render_transforms: Vec::with_capacity(count),
         };
         for (index, object) in ordered.into_iter().enumerate() {
             let object = object.ok_or(ExecutionTransportError::InvalidOrder(index as u32))?;
@@ -685,6 +708,7 @@ impl ExecutionFrameMirror {
             self.object_slots.remove(&object);
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
+            frame.render_transforms[index] = None;
             removed_indices.push(index);
         }
 
@@ -744,7 +768,10 @@ fn push_frame_object(frame: &mut FrameState, object: TransportObjectState) {
     frame.presences.push(object.presence);
     frame.reveals.push(object.reveal);
     frame.morphs.push(object.morph);
-    frame.render_geometries.push(object.render_geometry);
+    frame
+        .render_geometries
+        .push(object.render_geometry.map(std::sync::Arc::new));
+    frame.render_transforms.push(object.render_transform);
 }
 
 fn replace_frame_object(frame: &mut FrameState, index: usize, object: TransportObjectState) {
@@ -758,7 +785,8 @@ fn replace_frame_object(frame: &mut FrameState, index: usize, object: TransportO
     frame.presences[index] = object.presence;
     frame.reveals[index] = object.reveal;
     frame.morphs[index] = object.morph;
-    frame.render_geometries[index] = object.render_geometry;
+    frame.render_geometries[index] = object.render_geometry.map(std::sync::Arc::new);
+    frame.render_transforms[index] = object.render_transform;
 }
 
 fn encode_player_delta(
@@ -1164,7 +1192,7 @@ mod tests {
 
         let initial = encode_current(&mut encoder, &mut player);
         assert!(initial.snapshot);
-        assert_eq!(initial.protocol_version, 2);
+        assert_eq!(initial.protocol_version, EXECUTION_TRANSPORT_VERSION);
         assert_eq!(initial.layout_generation, player.layout_generation());
         let (outcome, changes) = mirror.apply(initial).unwrap();
         assert_eq!(outcome, TransportApplyOutcome::Applied);

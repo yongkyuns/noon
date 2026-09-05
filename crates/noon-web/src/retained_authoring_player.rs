@@ -44,7 +44,9 @@ impl RetainedAuthoringPlayer {
         let camera_object = mixed.camera_object();
         let compiled = mixed.compile()?;
         let scene = mixed.into_scene();
-        let bundle = RetainedResourceBundle::capture(
+        let render_geometries =
+            crate::retained_resource_transport::compiled_render_geometries(&compiled);
+        let mut bundle = RetainedResourceBundle::capture(
             scene
                 .objects()
                 .iter()
@@ -53,12 +55,16 @@ impl RetainedAuthoringPlayer {
             scene.geometries(),
             scene.fonts(),
         )?;
+        bundle.set_render_geometries(session, render_geometries.clone());
         let resource_bundle = bundle.encode_binary()?;
         let runtime = RetainedSceneInstance::new(compiled);
         Ok(Self {
             scene,
             runtime,
-            encoder: RetainedExecutionDeltaEncoder::new(session),
+            encoder: RetainedExecutionDeltaEncoder::with_render_geometries(
+                session,
+                render_geometries,
+            ),
             resource_bundle,
             camera_object,
             snapshot_sent: false,

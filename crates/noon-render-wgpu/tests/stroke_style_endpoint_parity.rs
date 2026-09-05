@@ -37,6 +37,7 @@ fn frame(geometry: GeometryRef, style: Style) -> FrameState {
         reveals: vec![1.0],
         morphs: vec![0.0],
         render_geometries: vec![None],
+        render_transforms: vec![None],
     }
 }
 

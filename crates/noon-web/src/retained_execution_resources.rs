@@ -16,8 +16,8 @@ use crate::{
 /// `RetainedExecutionFrameMirror` deliberately stays in wire-handle space so its
 /// content-identity checks compare exactly what the engine sent. This layer owns the
 /// installed resource arenas and a separate resolved frame. Snapshots remap every
-/// text handle once; incrementals copy only changed animated state and keep the
-/// already-resolved local content handle unchanged.
+/// text handle once; incrementals copy changed animated state and effective geometry
+/// while keeping already-resolved renderer-local text handles unchanged.
 #[derive(Clone, Debug)]
 pub struct InstalledRetainedExecutionMirror {
     wire: RetainedExecutionFrameMirror,
@@ -30,7 +30,10 @@ impl InstalledRetainedExecutionMirror {
     pub fn from_bundle_bytes(bytes: &[u8]) -> Result<Self, InstalledExecutionError> {
         let resources = RetainedResourceBundle::decode_binary(bytes)?.install()?;
         Ok(Self {
-            wire: RetainedExecutionFrameMirror::default(),
+            wire: RetainedExecutionFrameMirror::with_render_geometries(
+                resources.render_geometry_session(),
+                resources.render_geometries(),
+            ),
             resources,
             resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
@@ -243,8 +246,13 @@ impl InstalledRetainedExecutionMirror {
                 .get_mut(index)
                 .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
 
-            // Content stays renderer-local. The wire mirror has already rejected any
-            // incremental content/identity mutation for this slot.
+            // Text handles stay renderer-local. Geometry snapshots may change during
+            // Transform, and the wire mirror validates geometry-to-geometry updates.
+            // Publish that effective content too, especially when a morph endpoint
+            // clears its temporary render override.
+            if let ObjectContentRef::Geometry(geometry) = &source.content {
+                target.content = ObjectContentRef::Geometry(geometry.clone());
+            }
             target.id = source.id;
             target.transform = source.transform;
             target.style = source.style;
@@ -253,6 +261,7 @@ impl InstalledRetainedExecutionMirror {
             resolved.reveals[index] = wire.reveals[index];
             resolved.morphs[index] = wire.morphs[index];
             resolved.render_geometries[index] = wire.render_geometries[index].clone();
+            resolved.render_transforms[index] = wire.render_transforms[index];
         }
         Ok(())
     }
@@ -575,3 +584,6 @@ mod tests {
         assert!(mirror.frame().is_none());
     }
 }
+
+#[cfg(test)]
+mod morph_tests;

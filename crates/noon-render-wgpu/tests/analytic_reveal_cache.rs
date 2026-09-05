@@ -35,6 +35,7 @@ fn active_analytic_reveal_meshes_survive_cache_pressure_on_full_rebuild() {
         reveals: vec![0.5; objects.len()],
         morphs: vec![0.0; objects.len()],
         render_geometries: vec![None; objects.len()],
+        render_transforms: vec![None; objects.len()],
         objects,
     };
     let mut preparer = FramePreparer::new();
