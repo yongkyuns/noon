@@ -230,6 +230,23 @@ async function renderAndCapture(page, time, screenshotPath) {
   return { metrics, screenshot };
 }
 
+async function directExecutionProof(page, expectedBackend) {
+  await page.waitForFunction(() => window.noonDirectExecutionSmoke?.ready === true, null, {
+    timeout: 30_000,
+  });
+  const direct = await page.evaluate(() => window.noonDirectExecutionSmoke);
+  assert.equal(direct.error, null, `direct Rust/WASM execution proof failed: ${direct.error}`);
+  assert.ok(direct.metrics, "direct Rust/WASM execution proof did not publish metrics");
+  assert.equal(
+    direct.metrics.backend,
+    expectedBackend,
+    `direct Rust/WASM execution selected ${direct.metrics.backend}; expected ${expectedBackend}`,
+  );
+  assert.equal(direct.metrics.presented, true, "direct Rust/WASM execution did not present");
+  assert.ok(direct.metrics.drawCalls > 0, "direct Rust/WASM execution emitted no draw calls");
+  return direct.metrics;
+}
+
 let browser = null;
 try {
   await waitForServer();
@@ -287,6 +304,7 @@ try {
     expectedRendererBackend,
     `browser smoke selected ${initial.rendererBackend}; expected ${expectedRendererBackend}`,
   );
+  const directMetrics = await directExecutionProof(page, expectedRendererBackend);
 
   for (const [index, example] of examples.entries()) {
     const sceneJson = await readFile(example.file, "utf8");
@@ -454,7 +472,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} internal renderer fixtures at four semantic checkpoints each; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} internal renderer fixtures at four semantic checkpoints each; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();

@@ -121,7 +121,16 @@ async function runMode(browser, transportMode) {
   const result = await page.evaluate(async ({ transportMode: mode, retainedDocumentJson }) => {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
-    const sceneJson = wasm.demoSceneJson();
+    const scene = new wasm.AuthoringSceneCore();
+    const circle = scene.add(wasm.authoringCircle(0.65));
+    const rectangle = scene.add(wasm.authoringRectangle(1.5, 0.9));
+    const line = scene.add(wasm.authoringLine(-1.2, 0, 1.2, 0));
+    const square = scene.add(wasm.authoringSquare(0.8));
+    scene.moveTo(circle, -2.0, 0.6);
+    scene.moveTo(rectangle, 2.0, 0.6);
+    scene.moveTo(line, -1.5, -1.4);
+    scene.moveTo(square, 1.5, -1.4);
+    const sceneJson = scene.sceneJson();
     const sceneSpecJson = wasm.canonicalRetainedSceneSpecJson(sceneJson, retainedDocumentJson);
     const originalCanvas = document.querySelector("#scene");
     const devicePixelRatio = window.devicePixelRatio || 1;

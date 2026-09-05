@@ -52,6 +52,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::AddNode { .. }
                 | SemanticMutation::AddAnimation { .. }
+                | SemanticMutation::AddTransformAnimation { .. }
         ) {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
         }
@@ -77,7 +78,10 @@ pub fn lower_semantic_publication(
             SemanticMutation::SetProperty {
                 object, property, ..
             } => {
-                let flags = domains.entry(*object).or_default();
+                let Some(object) = object.existing() else {
+                    continue;
+                };
+                let flags = domains.entry(object).or_default();
                 match property {
                     SemanticObjectProperty::Translation
                     | SemanticObjectProperty::Scale
@@ -86,9 +90,13 @@ pub fn lower_semantic_publication(
                 }
             }
             SemanticMutation::ReplaceStyle { object, .. } => {
-                domains.entry(*object).or_default().1 = true
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().1 = true;
+                }
             }
-            SemanticMutation::AddNode { .. } | SemanticMutation::AddAnimation { .. } => {}
+            SemanticMutation::AddNode { .. }
+            | SemanticMutation::AddAnimation { .. }
+            | SemanticMutation::AddTransformAnimation { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }

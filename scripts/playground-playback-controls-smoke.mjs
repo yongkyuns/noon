@@ -279,6 +279,7 @@ try {
       .find((id) => id && id !== selected);
   });
   assert.ok(targetExampleId, "gallery must expose another example");
+  await page.locator("#example-browser-trigger").click();
   await page.locator(`.example-card[data-example-id="${targetExampleId}"]`).click();
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "true");
   const busy = await playbackSnapshot(page);

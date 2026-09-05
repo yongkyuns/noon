@@ -1,7 +1,30 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 use crate::SceneRevision;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticTransactionReadError {
+    PendingNodeFromDifferentTransaction(SemanticLocalNodeToken),
+    UnknownPendingNode(SemanticLocalNodeToken),
+    RemovedPendingNode(SemanticLocalNodeToken),
+    RemovedExistingNode(SemanticNodeId),
+    UnknownExistingNode(SemanticNodeId),
+    NotObject(SemanticTransactionNodeRef),
+    NotFamily(SemanticTransactionNodeRef),
+    Existing(SemanticSceneOperationError),
+}
+
+impl std::fmt::Display for SemanticTransactionReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "semantic transaction staged read failed: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for SemanticTransactionReadError {}
 
 /// A fully validated mutation batch holding the store exclusively until commit.
 ///
@@ -19,7 +42,7 @@ use crate::SceneRevision;
 pub struct PreparedSemanticMutationTransaction<'a> {
     store: &'a mut SemanticStore,
     transaction: SemanticMutationTransaction,
-    preflight: Vec<bool>,
+    preflight: SemanticTransactionPreflight,
     next_revision: Option<SceneRevision>,
 }
 
@@ -29,7 +52,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         store: &'a mut SemanticStore,
     ) -> Result<Self, SemanticMutationTransactionError> {
         let preflight = transaction.preflight(store)?;
-        let next_revision = if preflight.iter().any(|changed| *changed) {
+        let next_revision = if preflight.changed.iter().any(|changed| *changed) {
             Some(
                 store
                     .scene_revision()
@@ -65,7 +88,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         self.transaction
             .mutations
             .iter()
-            .zip(&self.preflight)
+            .zip(&self.preflight.changed)
             .filter_map(|(mutation, changed)| changed.then_some(mutation))
     }
 
@@ -86,40 +109,139 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// `ReplaceContent`. It is not a structural or subscription overlay; consumers
     /// must separately check which mutation classes they support. One pass over
     /// the batch clones only the affected object states, never the store or arena.
-    pub fn object_updates(&self) -> impl Iterator<Item = (SemanticNodeId, SemanticObjectState)> {
-        let mut positions = HashMap::<SemanticNodeId, usize>::new();
-        let mut updates: Vec<(SemanticNodeId, SemanticObjectState)> = Vec::new();
-        for mutation in self.candidate_mutations() {
-            let (SemanticMutation::SetProperty { object, .. }
-            | SemanticMutation::ReplaceStyle { object, .. }
-            | SemanticMutation::ReplaceContent { object, .. }) = mutation
-            else {
-                continue;
-            };
-            let position = *positions.entry(*object).or_insert_with(|| {
-                let position = updates.len();
-                updates.push((
-                    *object,
-                    self.store
-                        .semantic_object_state_checked(*object)
-                        .expect("preflighted object remains valid under the exclusive store borrow")
-                        .clone(),
-                ));
-                position
-            });
-            let state = &mut updates[position].1;
-            match mutation {
-                SemanticMutation::SetProperty {
-                    property, value, ..
-                } => {
-                    apply_object_property(state, *property, value.clone());
-                }
-                SemanticMutation::ReplaceStyle { style, .. } => state.style = style.clone(),
-                SemanticMutation::ReplaceContent { content, .. } => state.content = *content,
-                _ => unreachable!("presentation mutations selected above"),
+    pub fn object_updates(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, SemanticObjectState)> + '_ {
+        let changed_objects: HashSet<_> = self
+            .candidate_mutations()
+            .filter_map(|mutation| match mutation {
+                SemanticMutation::SetProperty { object, .. }
+                | SemanticMutation::ReplaceStyle { object, .. }
+                | SemanticMutation::ReplaceContent { object, .. } => Some(*object),
+                _ => None,
+            })
+            .collect();
+        self.preflight
+            .staged_object_order
+            .iter()
+            .filter_map(move |node| {
+                let SemanticTransactionNodeRef::Existing(node_id) = node else {
+                    return None;
+                };
+                changed_objects
+                    .contains(node)
+                    .then(|| (*node_id, self.preflight.staged_objects[node].clone()))
+            })
+    }
+
+    /// Read the final staged authored object state without publishing the batch.
+    pub fn object_state(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<&SemanticObjectState, SemanticTransactionReadError> {
+        let object = object.into();
+        if let SemanticTransactionNodeRef::Existing(node) = object {
+            if self.preflight.removed_existing.contains(&node) {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(node));
             }
         }
-        updates.into_iter()
+        if let SemanticTransactionNodeRef::Pending(token) = object {
+            self.validate_read_token(token)?;
+            if self.preflight.removed_pending.contains(&token) {
+                return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+            }
+        }
+        if let Some(state) = self.preflight.staged_objects.get(&object) {
+            return Ok(state);
+        }
+        match object {
+            SemanticTransactionNodeRef::Existing(object) => self
+                .store
+                .semantic_object_state_checked(object)
+                .map_err(SemanticTransactionReadError::Existing),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
+                Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
+                Some(SemanticNodeCreation::Family { .. }) => {
+                    Err(SemanticTransactionReadError::NotObject(object))
+                }
+                None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+            },
+        }
+    }
+
+    /// Read final direct family order through the transaction-local overlay.
+    pub fn family_members(
+        &self,
+        family: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let family = family.into();
+        if let SemanticTransactionNodeRef::Existing(node) = family {
+            if self.preflight.removed_existing.contains(&node) {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(node));
+            }
+        }
+        if let SemanticTransactionNodeRef::Pending(token) = family {
+            self.validate_read_token(token)?;
+            if self.preflight.removed_pending.contains(&token) {
+                return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+            }
+        }
+        match family {
+            SemanticTransactionNodeRef::Existing(family) => {
+                let node = self
+                    .store
+                    .node(family)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
+                if !matches!(node.kind(), SemanticNodeKind::Family) {
+                    return Err(SemanticTransactionReadError::NotFamily(family.into()));
+                }
+                Ok(self
+                    .preflight
+                    .family_edges
+                    .members_for_read(self.store, family.into())
+                    .into_iter()
+                    .filter(|member| !self.is_removed_ref(*member))
+                    .collect())
+            }
+            SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
+                Some(SemanticNodeCreation::Family { .. }) => Ok(self
+                    .preflight
+                    .family_edges
+                    .members_for_read(self.store, family)
+                    .into_iter()
+                    .filter(|member| !self.is_removed_ref(*member))
+                    .collect()),
+                Some(SemanticNodeCreation::Object { .. }) => {
+                    Err(SemanticTransactionReadError::NotFamily(family))
+                }
+                None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+            },
+        }
+    }
+
+    fn validate_read_token(
+        &self,
+        token: SemanticLocalNodeToken,
+    ) -> Result<(), SemanticTransactionReadError> {
+        if !token.belongs_to(self.transaction.id) {
+            return Err(SemanticTransactionReadError::PendingNodeFromDifferentTransaction(token));
+        }
+        Ok(())
+    }
+
+    fn pending_creation(&self, token: SemanticLocalNodeToken) -> Option<&SemanticNodeCreation> {
+        self.preflight.pending_creations.get(&token)
+    }
+
+    fn is_removed_ref(&self, node: SemanticTransactionNodeRef) -> bool {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                self.preflight.removed_existing.contains(&node)
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.preflight.removed_pending.contains(&token)
+            }
+        }
     }
 
     /// Publish the validated batch exactly once, without another preflight.
@@ -133,7 +255,22 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let mut impacts = Vec::with_capacity(transaction.mutations.len());
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
         let mut pending_source_assignments = Vec::new();
-        for (mutation, changed) in transaction.mutations.into_iter().zip(preflight) {
+        let mut committed_nodes = HashMap::new();
+        for mutation in &transaction.mutations {
+            let SemanticMutation::AddNode { token, creation } = mutation else {
+                continue;
+            };
+            if preflight.removed_pending.contains(token) {
+                continue;
+            }
+            let (node, source_identity) = commit_add_node(store, creation.clone());
+            committed_nodes.insert(*token, node);
+            written_slots.insert(node);
+            if let Some(source_identity) = source_identity {
+                pending_source_assignments.push((node, source_identity));
+            }
+        }
+        for (mutation, changed) in transaction.mutations.into_iter().zip(preflight.changed) {
             if !changed {
                 continue;
             }
@@ -153,16 +290,19 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     property,
                     value,
                 } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
                     set_object_property(store, object, property, value);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectProperty { object, property });
                 }
                 SemanticMutation::ReplaceContent { object, content } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
                     set_object_content(store, object, content);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
                     set_object_style(store, object, style);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectStyle { object });
@@ -172,11 +312,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     property,
                     signal,
                 } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
                     set_object_subscription(store, object, property, signal);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::Subscription { object, property });
                 }
                 SemanticMutation::AddMember { family, member } => {
+                    let family = resolve_node_ref(family, &committed_nodes);
+                    let member = resolve_node_ref(member, &committed_nodes);
                     store.add_member(family, member).expect(
                         "preflighted family add must remain valid while transaction owns the semantic store",
                     );
@@ -185,6 +328,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     impacts.push(SemanticMutationImpact::FamilyMemberAdded { family, member });
                 }
                 SemanticMutation::RemoveMember { family, member } => {
+                    let family = resolve_node_ref(family, &committed_nodes);
+                    let member = resolve_node_ref(member, &committed_nodes);
                     let removed = store.remove_member(family, member).expect(
                         "preflighted family removal must remain valid while transaction owns the semantic store",
                     );
@@ -198,6 +343,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     member,
                     before,
                 } => {
+                    let family = resolve_node_ref(family, &committed_nodes);
+                    let member = resolve_node_ref(member, &committed_nodes);
+                    let before = before.map(|node| resolve_node_ref(node, &committed_nodes));
                     let reordered = store.reorder_member(family, member, before).expect(
                         "preflighted family reorder must remain valid while transaction owns the semantic store",
                     );
@@ -211,12 +359,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         before,
                     });
                 }
-                SemanticMutation::AddNode { creation } => {
-                    let (node, source_identity) = commit_add_node(store, creation);
-                    written_slots.insert(node);
-                    if let Some(source_identity) = source_identity {
-                        pending_source_assignments.push((node, source_identity));
-                    }
+                SemanticMutation::AddNode { token, .. } => {
+                    let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
                 }
                 SemanticMutation::AddAnimation { state } => {
@@ -224,8 +368,28 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(animation);
                     impacts.push(SemanticMutationImpact::AnimationAdded { animation });
                 }
+                SemanticMutation::AddTransformAnimation {
+                    target,
+                    target_state,
+                    options,
+                } => {
+                    let target = resolve_node_ref(target, &committed_nodes);
+                    let target_state = resolve_node_ref(target_state, &committed_nodes);
+                    let state = SemanticAnimationState::new(
+                        SemanticAnimationIntent::TransformTo {
+                            target,
+                            target_state,
+                        },
+                        options,
+                    );
+                    let animation = commit_add_animation(store, &state);
+                    written_slots.insert(animation);
+                    impacts.push(SemanticMutationImpact::AnimationAdded { animation });
+                }
                 SemanticMutation::RemoveAnimation { animation }
-                | SemanticMutation::RemoveNode { node: animation } => {
+                | SemanticMutation::RemoveNode {
+                    node: SemanticTransactionNodeRef::Existing(animation),
+                } => {
                     // An earlier explicit removal may have cascade-removed this
                     // node already. Preflight proved the handle was live at the
                     // transaction boundary; a cascade therefore satisfies this
@@ -251,6 +415,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         }
                     }
                 }
+                SemanticMutation::RemoveNode {
+                    node: SemanticTransactionNodeRef::Pending(_),
+                } => unreachable!("pending removal cancels allocation during preflight"),
             }
         }
 
@@ -264,6 +431,19 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
         }
 
-        SemanticMutationTransactionResult { impacts }
+        SemanticMutationTransactionResult {
+            impacts,
+            committed_nodes,
+        }
+    }
+}
+
+fn resolve_node_ref(
+    node: SemanticTransactionNodeRef,
+    committed: &HashMap<SemanticLocalNodeToken, SemanticNodeId>,
+) -> SemanticNodeId {
+    match node {
+        SemanticTransactionNodeRef::Existing(node) => node,
+        SemanticTransactionNodeRef::Pending(token) => committed[&token],
     }
 }

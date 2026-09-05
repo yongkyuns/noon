@@ -11,7 +11,13 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
     throw new Error("semantic execution requires control and render ports");
   }
+  if (typeof context?.createExecutionPlayer !== "function" ||
+      typeof context.returnExecutionPlayer !== "function") {
+    throw new Error("semantic execution requires a context player lease API");
+  }
   let player = null;
+  // A player is leased from the authoring context. The transport session only
+  // frames deltas; it never selects or creates a second runtime for a scene.
   let transport;
   let stopped = false;
   let latestTick = null;
@@ -52,10 +58,15 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
     stopped = true;
     controls.length = 0;
     latestTick = null;
+    if (player !== null) {
+      // The authoring context retains this exact runtime for renderer recovery
+      // and setup retries. Dropping the context is the only genuine teardown.
+      context.returnExecutionPlayer(player);
+      player = null;
+    }
     transport?.close?.();
     renderPort.close();
     controlPort.close();
-    player?.free();
     onStop();
   }
   try {

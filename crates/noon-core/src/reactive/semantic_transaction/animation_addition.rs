@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::{
-    SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticAnimationState,
+    AnimationOptions, SemanticAnimationCompositionKind, SemanticAnimationError,
+    SemanticAnimationIntent, SemanticAnimationState,
 };
 
 use super::{SemanticMutationTransactionError, SemanticNodeId, SemanticStore};
@@ -13,26 +13,7 @@ pub(super) fn preflight_add_animation(
     removed_nodes: &HashSet<SemanticNodeId>,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    let options = state.options();
-    if options
-        .run_time
-        .is_some_and(|run_time| !run_time.is_finite() || run_time <= 0.0)
-    {
-        return Err(SemanticMutationTransactionError::InvalidAnimationRunTime { index });
-    }
-    if options
-        .lag_ratio
-        .is_some_and(|lag_ratio| !lag_ratio.is_finite() || lag_ratio < 0.0)
-    {
-        return Err(SemanticMutationTransactionError::InvalidAnimationLagRatio { index });
-    }
-    if options
-        .path_arc
-        .is_some_and(|path_arc| !path_arc.is_finite())
-    {
-        return Err(SemanticMutationTransactionError::InvalidAnimationPathArc { index });
-    }
-
+    preflight_animation_options(state.options(), index)?;
     match state.intent() {
         SemanticAnimationIntent::TransformTo {
             target,
@@ -72,6 +53,32 @@ pub(super) fn preflight_add_animation(
                     .map_err(|error| animation_lookup_error(index, error))?;
             }
         }
+    }
+
+    Ok(())
+}
+
+pub(super) fn preflight_animation_options(
+    options: AnimationOptions,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    if options
+        .run_time
+        .is_some_and(|run_time| !run_time.is_finite() || run_time <= 0.0)
+    {
+        return Err(SemanticMutationTransactionError::InvalidAnimationRunTime { index });
+    }
+    if options
+        .lag_ratio
+        .is_some_and(|lag_ratio| !lag_ratio.is_finite() || lag_ratio < 0.0)
+    {
+        return Err(SemanticMutationTransactionError::InvalidAnimationLagRatio { index });
+    }
+    if options
+        .path_arc
+        .is_some_and(|path_arc| !path_arc.is_finite())
+    {
+        return Err(SemanticMutationTransactionError::InvalidAnimationPathArc { index });
     }
 
     Ok(())
