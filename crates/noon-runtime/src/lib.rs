@@ -175,6 +175,8 @@ impl EffectiveObjectProperties {
 
 #[cfg(test)]
 mod effective_object_properties_tests {
+    use noon_core::Rect;
+
     use super::*;
 
     fn cached_path_properties() -> EffectiveObjectProperties {
