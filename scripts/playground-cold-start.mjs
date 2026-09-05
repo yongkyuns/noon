@@ -138,8 +138,9 @@ try {
       cases.push(report);
       console.log(
         `${example.label}: preload→metrics ${format(report.milestones.preloadToFirstMetricsMs)} ms, ` +
-          `Python startup ${format(authoringStartup.totalMs)} ms ` +
-          `(critical ${authoringStartup.criticalResource} ${format(authoringStartup.criticalResourceMs)} ms, ` +
+          `Python worker ${format(authoringStartup.totalMs)} ms ` +
+          `(module graph ${format(authoringStartup.moduleGraphLoadMs)} ms, ` +
+          `critical ${authoringStartup.criticalResource} ${format(authoringStartup.criticalResourceMs)} ms, ` +
           `imports ${format(authoringStartup.compatibilityImportInstallMs)} ms), ` +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)})`,
       );
@@ -169,7 +170,7 @@ try {
       automaticPreload: true,
     },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker only: Noon WASM, Pyodide, and the compatibility bundle start in parallel, followed by Rust authoring binding, compatibility FS install, and eager Python import/install phases.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker from worker time-origin through readiness: static worker module-graph loading (including the remote Pyodide module import) is measured separately, then Noon WASM, loadPyodide(), and the compatibility bundle start in parallel, followed by Rust authoring binding, compatibility FS install, and eager Python import/install phases.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
