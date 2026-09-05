@@ -7,7 +7,12 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 
-import { coldStartMilestones, summarizeWorkers } from "../web/playground-cold-start-metrics.js";
+import {
+  classifyWorkerUrl,
+  preloadedColdStartMilestones,
+  summarizeAuthoringStartup,
+  summarizeWorkers,
+} from "../web/playground-cold-start-metrics.js";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -49,9 +54,14 @@ try {
       const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
       const failures = [];
       const workers = [];
+      let authoringWorker = null;
       const origin = monotonicNow();
       page.on("worker", (worker) => {
-        workers.push({ url: worker.url(), atMs: monotonicNow() - origin });
+        const event = { url: worker.url(), atMs: monotonicNow() - origin };
+        workers.push(event);
+        if (classifyWorkerUrl(event.url) === "authoring") {
+          authoringWorker = worker;
+        }
       });
       page.on("pageerror", (error) => failures.push(`pageerror: ${error}`));
       page.on("console", (message) => {
@@ -63,24 +73,18 @@ try {
         waitUntil: "load",
       });
       await page.waitForFunction(
-        () => document.querySelector("#status")?.dataset.runtimeStartup === "deferred",
-        null,
+        (expectedId) => window.__noonExampleGallery?.selectedExampleId === expectedId,
+        example.id,
         { timeout: 60_000 },
       );
       const pageReady = monotonicNow();
-      assert.equal(
-        await page.evaluate(() => window.__noonExampleGallery?.selectedExampleId),
-        example.id,
-      );
 
-      const runRequested = monotonicNow();
-      await page.click("#replace-scene");
       await page.waitForFunction(
         () => document.querySelector("#status")?.dataset.runtimeStartup === "started-on-demand",
         null,
         { timeout: 240_000 },
       );
-      const runtimeStarted = monotonicNow();
+      const preloadStarted = monotonicNow();
       await page.waitForFunction(
         () => {
           const draws = Number(document.querySelector("#metric-draws")?.value);
@@ -92,6 +96,19 @@ try {
       );
       const firstMetrics = monotonicNow();
       if (failures.length > 0) throw new Error(failures.join("\n"));
+
+      assert.ok(authoringWorker !== null, "automatic preload must create the Python authoring worker");
+      const authoringStartup = summarizeAuthoringStartup(
+        await authoringWorker.evaluate(
+          () => globalThis.__noonAuthoringStartupMetrics ?? null,
+        ),
+      );
+      const workerSummary = summarizeWorkers(workers);
+      assert.equal(
+        workerSummary.byRole.authoring,
+        1,
+        "cold preload must retain exactly one Python authoring worker",
+      );
 
       const status = await page.locator("#status").evaluate((node) => ({
         ...node.dataset,
@@ -105,21 +122,23 @@ try {
       const report = {
         label: example.label,
         exampleId: example.id,
-        milestones: coldStartMilestones({
+        milestones: preloadedColdStartMilestones({
           navigationStart,
           pageReady,
-          runRequested,
-          runtimeStarted,
+          preloadStarted,
           firstMetrics,
         }),
-        workers: summarizeWorkers(workers),
+        authoringStartup,
+        workers: workerSummary,
         status,
         metrics,
       };
       cases.push(report);
       console.log(
-        `${example.label}: run→runtime ${format(report.milestones.runToRuntimeMs)} ms, ` +
-          `run→metrics ${format(report.milestones.runToFirstMetricsMs)} ms, ` +
+        `${example.label}: preload→metrics ${format(report.milestones.preloadToFirstMetricsMs)} ms, ` +
+          `Python startup ${format(authoringStartup.totalMs)} ms ` +
+          `(critical ${authoringStartup.criticalResource} ${format(authoringStartup.criticalResourceMs)} ms, ` +
+          `imports ${format(authoringStartup.compatibilityImportInstallMs)} ms), ` +
           `${report.workers.total} workers (${JSON.stringify(report.workers.byRole)})`,
       );
     } finally {
@@ -128,8 +147,8 @@ try {
   }
 
   const artifact = {
-    schemaVersion: 1,
-    benchmark: "Noon public playground cold first-run topology",
+    schemaVersion: 2,
+    benchmark: "Noon public playground preloaded cold-start topology",
     generatedAt: new Date().toISOString(),
     commit: commitSha,
     host: {
@@ -141,9 +160,14 @@ try {
       totalMemoryBytes: os.totalmem(),
       node: process.version,
     },
-    configuration: { backend, examples, freshBrowserProcessPerCase: true },
+    configuration: {
+      backend,
+      examples,
+      freshBrowserProcessPerCase: true,
+      automaticPreload: true,
+    },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. authoringStartup measures the persistent Python worker only: Noon WASM, Pyodide, and the compatibility bundle start in parallel, followed by Rust authoring binding, compatibility FS install, and eager Python import/install phases.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
