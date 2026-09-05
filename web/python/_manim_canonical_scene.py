@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import _manim_retained_state as _retained_state
@@ -57,20 +58,66 @@ def _context(scene: _ir.Scene):
     return context
 
 
+@dataclass(frozen=True)
+class _TypedBindingReservation:
+    object: _ir.Object
+    key: str
+    legacy_snapshot: dict[str, Any] | None
+
+
+def _reserve_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    handle: object,
+    key: str | None,
+) -> _TypedBindingReservation:
+    if mobject._scene is not None:
+        if mobject._scene is scene:
+            raise ValueError("Mobject is already bound to this Scene")
+        raise ValueError("Mobject already belongs to another Scene")
+
+    object_id = scene._next_object_id
+    authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
+    if object_id in scene._object_keys:
+        raise ValueError(f"canonical wrapper object identity is already bound: {object_id}")
+    if authoring_key in scene._object_key_ids:
+        raise ValueError(f"duplicate object key: {authoring_key}")
+
+    legacy_snapshot = None
+    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
+        mobject, _typst._RetainedTextMobject
+    ):
+        legacy_snapshot = json.loads(str(handle.snapshotJson()))
+        legacy_snapshot["id"] = object_id
+    return _TypedBindingReservation(
+        _ir.Object(object_id, scene._owner), authoring_key, legacy_snapshot
+    )
+
+
+def _commit_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    reservation: _TypedBindingReservation,
+    handle: object,
+) -> _ir.Object:
+    """Commit derived wrapper bookkeeping after the shared Rust bind succeeded."""
+    obj = reservation.object
+    scene._object_keys[obj.id] = reservation.key
+    scene._object_key_ids[reservation.key] = obj.id
+    scene._next_object_id = obj.id + 1
+    scene._next_painter_order += 1
+    _record_mobject_binding(mobject, scene, obj, handle, reservation.legacy_snapshot)
+    return obj
+
+
 def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     handle = getattr(self, "_semantic_handle", None)
     if handle is None:
         materialize_legacy_geometry(scene)
         return _ORIGINAL_BIND(self, scene, key=key)
-    checkpoint = scene._authoring_checkpoint()
-    obj, _ = scene._allocate_object(key)
-    try:
-        _context(scene).bindMobject(str(obj.id), handle)
-    except Exception:
-        scene._restore_authoring_checkpoint(checkpoint)
-        raise
-    _record_mobject_binding(self, scene, obj, handle)
-    return obj
+    reservation = _reserve_typed_binding(self, scene, handle, key)
+    _context(scene).bindMobject(str(reservation.object.id), handle)
+    return _commit_typed_binding(self, scene, reservation, handle)
 
 
 def _record_mobject_binding(
@@ -78,6 +125,7 @@ def _record_mobject_binding(
     scene: _base.Scene,
     obj: _ir.Object,
     handle: object,
+    legacy_snapshot: dict[str, Any] | None = None,
 ) -> None:
     scene._object_positions[obj.id] = len(scene._objects)
     # The compatibility table retains identity only on the shared path.
@@ -91,12 +139,8 @@ def _record_mobject_binding(
         if handles is None:
             handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
-    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
-        mobject, _typst._RetainedTextMobject
-    ):
-        snapshot = json.loads(str(handle.snapshotJson()))
-        snapshot["id"] = obj.id
-        scene._objects[-1] = snapshot
+    if legacy_snapshot is not None:
+        scene._objects[-1] = legacy_snapshot
     mobject._bind(scene, obj)
 
 
@@ -229,14 +273,9 @@ class LiveExecution:
         if mobject._scene is self._scene:
             self._context.liveAdd(str(mobject.id), handle)
             return
-        checkpoint = self._scene._authoring_checkpoint()
-        obj, _ = self._scene._allocate_object(None)
-        try:
-            self._context.liveAdd(str(obj.id), handle)
-        except Exception:
-            self._scene._restore_authoring_checkpoint(checkpoint)
-            raise
-        _record_mobject_binding(mobject, self._scene, obj, handle)
+        reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
+        self._context.liveAdd(str(reservation.object.id), handle)
+        _commit_typed_binding(mobject, self._scene, reservation, handle)
 
     def remove(self, mobject: _base.Mobject) -> None:
         self._context.liveRemove(self._handle(mobject))
