@@ -207,7 +207,7 @@ fn detached_additions_allocate_only_on_commit() {
         .add_node(SemanticNodeCreation::object(SemanticObjectState::new(
             StoredGeometry::Circle { radius: 2.0 },
         )));
-    let prepared = transaction.clone().prepare(&mut store).unwrap();
+    let prepared = transaction.prepare(&mut store).unwrap();
     assert_eq!(prepared.mutations().len(), 2);
     assert_eq!(prepared.candidate_mutations().count(), 2);
     assert_eq!(prepared.object_updates().count(), 0);
@@ -218,6 +218,12 @@ fn detached_additions_allocate_only_on_commit() {
     assert_eq!(store.slot_capacity(), before_capacity);
     assert_eq!(store.scene_revision(), revision);
 
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction
+        .add_node(SemanticNodeCreation::family())
+        .add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 2.0 },
+        )));
     let committed = transaction.prepare(&mut store).unwrap().commit();
     assert_eq!(committed.impacts().len(), 2);
     assert_eq!(store.len(), before_len + 2);
