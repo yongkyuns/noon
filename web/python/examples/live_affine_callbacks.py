@@ -13,7 +13,7 @@ from noon import Circle, Scene, WHITE, linear
 class LiveAffineCallbacks(Scene):
     def construct(self):
         animated = Circle(1.0).set_fill(WHITE, opacity=1.0)
-        drift = Circle(0.25).set_fill(WHITE, opacity=1.0).shift((-3.0, 0.0, 0.0))
+        drift = Circle(0.5).set_fill(WHITE, opacity=1.0).shift((-3.0, 0.0, 0.0))
         self.add(animated, drift)
 
         target = animated.copy().shift((2.0, 0.0, 0.0))
