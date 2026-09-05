@@ -9,7 +9,7 @@ use noon_core::{
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
-    AuthoredPublicationError, ExecutionSlotError, FrameObjectState,
+    AuthoredPublicationError, ExecutionSlotError, FrameObjectState, PreparedEffectivePropertyBatch,
 };
 
 use super::ExecutionSession;
@@ -17,6 +17,7 @@ use super::ExecutionSession;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
     RequiredCallbackPending,
+    SegmentCompletionPending,
     ForeignSemanticStore,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -35,6 +36,9 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::RequiredCallbackPending => {
                 f.write_str("a required callback publication is pending")
             }
+            Self::SegmentCompletionPending => f.write_str(
+                "an active animation segment must be completed before authored publication",
+            ),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -110,8 +114,21 @@ impl ExecutionSession {
         store: &mut SemanticStore,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_semantic_transaction_with_execution(store, transaction, Vec::new(), None)
+    }
+
+    pub(crate) fn apply_semantic_transaction_with_execution(
+        &mut self,
+        store: &mut SemanticStore,
+        transaction: SemanticMutationTransaction,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some() && execution_prefix.is_empty() {
+            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
         }
         self.require_published_store(store)?;
         validate_semantic_publication(&transaction)
@@ -127,7 +144,8 @@ impl ExecutionSession {
         )
         .map_err(ExecutionSessionPublicationError::Lowering)?;
         let preparation_stats = publication.stats();
-        let mut conservative_patches = publication.value_transaction().mutations().to_vec();
+        let mut conservative_patches = execution_prefix.clone();
+        conservative_patches.extend_from_slice(publication.value_transaction().mutations());
         conservative_patches.extend(
             publication
                 .possible_exits()
@@ -148,6 +166,11 @@ impl ExecutionSession {
                 structural_change_possible,
             )
             .map_err(ExecutionSessionPublicationError::Runtime)?;
+        if let Some(effective) = effective.as_ref() {
+            self.runtime
+                .preflight_effective_carry_forward(effective, self.publication_context())
+                .map_err(ExecutionSessionPublicationError::Runtime)?;
+        }
         preflight_execution_slot_membership_shape(
             &self.slots,
             publication.possible_exits(),
@@ -164,10 +187,16 @@ impl ExecutionSession {
         let exited = membership.exited_execution_objects().collect::<Vec<_>>();
         let execution = publication.bind(&result, &membership);
         let (execution, resource_additions) = execution.into_parts();
+        let execution = ExecutionMutationTransaction::from_mutations(
+            execution_prefix
+                .into_iter()
+                .chain(execution.mutations().iter().cloned()),
+        );
         self.runtime
-            .apply_authored_execution_transaction(
+            .apply_authored_execution_transaction_with_effective(
                 &execution,
                 resource_additions,
+                effective,
                 self.publication_context(),
                 store.scene_revision(),
             )

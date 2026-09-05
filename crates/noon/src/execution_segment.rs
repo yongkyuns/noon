@@ -1,4 +1,58 @@
-use crate::{EvaluationError, ExecutionSession, FrameState, TimelineWakeState};
+use crate::{EvaluationError, ExecutionSession, FrameState, RuntimeIdentity, TimelineWakeState};
+use noon_core::{
+    ObjectId, Property, SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, TrackId,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExecutionSegmentSequence(u64);
+
+impl ExecutionSegmentSequence {
+    pub(crate) const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExecutionSegmentToken {
+    runtime: RuntimeIdentity,
+    sequence: ExecutionSegmentSequence,
+}
+
+impl ExecutionSegmentToken {
+    pub(crate) const fn new(runtime: RuntimeIdentity, sequence: ExecutionSegmentSequence) -> Self {
+        Self { runtime, sequence }
+    }
+
+    pub const fn runtime(self) -> RuntimeIdentity {
+        self.runtime
+    }
+
+    pub const fn sequence(self) -> ExecutionSegmentSequence {
+        self.sequence
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SegmentCompletionEntry {
+    pub semantic_object: SemanticNodeId,
+    pub semantic_property: SemanticObjectProperty,
+    pub completion_value: SemanticSignalValue,
+    pub execution_object: ObjectId,
+    pub property: Property,
+    pub track: TrackId,
+    pub end_time: f64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingSegmentCompletion {
+    pub token: ExecutionSegmentToken,
+    pub activation_scene_revision: noon_core::SceneRevision,
+    pub entries: Vec<SegmentCompletionEntry>,
+}
 
 /// One authored-time continuation boundary owned by the execution session layer.
 ///
@@ -10,6 +64,7 @@ use crate::{EvaluationError, ExecutionSession, FrameState, TimelineWakeState};
 pub struct ExecutionSegment {
     start_time: f64,
     end_time: f64,
+    token: Option<ExecutionSegmentToken>,
 }
 
 impl ExecutionSegment {
@@ -30,7 +85,17 @@ impl ExecutionSegment {
         Ok(Self {
             start_time,
             end_time,
+            token: None,
         })
+    }
+
+    pub(crate) fn with_completion_token(mut self, token: ExecutionSegmentToken) -> Self {
+        self.token = Some(token);
+        self
+    }
+
+    pub(crate) const fn token(self) -> Option<ExecutionSegmentToken> {
+        self.token
     }
 
     pub const fn start_time(self) -> f64 {
@@ -112,8 +177,18 @@ impl ExecutionSession {
     /// belong to later authored work and must not delay the current continuation.
     pub fn segment_state(&self, segment: ExecutionSegment) -> ExecutionSegmentState {
         let now = self.frame().time;
+        if segment
+            .token()
+            .is_some_and(|token| token.runtime() != self.runtime_identity())
+        {
+            return ExecutionSegmentState {
+                complete: false,
+                timeline: TimelineWakeState::Quiescent,
+            };
+        }
         if now >= segment.end_time {
-            let complete = self.callback_progression_is_coherent_at(now);
+            let completion_pending = self.segment_completion_is_pending(segment.token());
+            let complete = !completion_pending && self.callback_progression_is_coherent_at(now);
             return ExecutionSegmentState {
                 complete,
                 timeline: if complete || self.callback_progression_is_terminal() {

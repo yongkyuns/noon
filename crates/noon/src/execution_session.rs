@@ -1,13 +1,18 @@
 mod callback;
+mod completion;
 mod publication;
 pub use callback::*;
+pub use completion::*;
 pub use publication::*;
 
-use callback::{CallbackSchedule, PendingCallbackPhase};
+use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
+use crate::execution_segment::{
+    ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
+    PendingSegmentCompletion, SegmentCompletionEntry,
+};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
@@ -126,6 +131,7 @@ impl std::error::Error for ExecutionSessionCameraError {}
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
     RequiredCallbackPending,
+    SegmentCompletionPending,
     ForeignSemanticStore,
     StaleSceneRevision {
         expected: noon_core::SceneRevision,
@@ -136,6 +142,7 @@ pub enum ExecutionSessionAnimationError {
     Payload(SemanticAffineAnimationTrackError),
     Publication(CompilePatchError),
     TrackIdExhausted,
+    SegmentSequenceExhausted,
 }
 
 impl std::fmt::Display for ExecutionSessionAnimationError {
@@ -144,6 +151,9 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
+            Self::SegmentCompletionPending => formatter.write_str(
+                "the previous animation segment still requires completion reconciliation",
+            ),
             Self::ForeignSemanticStore => {
                 formatter.write_str("semantic store does not own this execution session")
             }
@@ -169,6 +179,9 @@ impl std::fmt::Display for ExecutionSessionAnimationError {
             }
             Self::TrackIdExhausted => {
                 formatter.write_str("execution animation track ID space exhausted")
+            }
+            Self::SegmentSequenceExhausted => {
+                formatter.write_str("execution segment sequence space exhausted")
             }
         }
     }
@@ -231,6 +244,9 @@ pub struct ExecutionSession {
     next_callback_sequence: Option<u64>,
     pending_callback: Option<PendingCallbackPhase>,
     callback_termination: Option<CallbackTermination>,
+    next_segment_sequence: Option<u64>,
+    pending_segment_completion: Option<PendingSegmentCompletion>,
+    last_callback_receipt: Option<CallbackPublicationReceipt>,
 }
 
 impl Clone for ExecutionSession {
@@ -259,11 +275,27 @@ impl Clone for ExecutionSession {
             next_callback_sequence: Some(0),
             pending_callback: None,
             callback_termination,
+            next_segment_sequence: self.next_segment_sequence,
+            pending_segment_completion: None,
+            last_callback_receipt: self.last_callback_receipt.clone(),
         }
     }
 }
 
 impl ExecutionSession {
+    pub(crate) fn runtime_identity(&self) -> noon_runtime::RuntimeIdentity {
+        self.runtime.runtime_identity()
+    }
+
+    pub(crate) fn segment_completion_is_pending(
+        &self,
+        token: Option<ExecutionSegmentToken>,
+    ) -> bool {
+        self.pending_segment_completion
+            .as_ref()
+            .is_some_and(|pending| Some(pending.token) == token)
+    }
+
     fn ensure_direct_input_ingress_available(&self) -> Result<(), ExecutionSessionInputError> {
         if !self.callback_schedule.is_empty() {
             return Err(ExecutionSessionInputError::RequiredCallbacksConfigured);
@@ -365,6 +397,9 @@ impl ExecutionSession {
             next_callback_sequence: Some(0),
             pending_callback: None,
             callback_termination: None,
+            next_segment_sequence: Some(0),
+            pending_segment_completion: None,
+            last_callback_receipt: None,
         }
     }
 
@@ -603,6 +638,9 @@ impl ExecutionSession {
         if self.pending_callback.is_some() {
             return Err(ExecutionSessionAnimationError::RequiredCallbackPending);
         }
+        if self.pending_segment_completion.is_some() {
+            return Err(ExecutionSessionAnimationError::SegmentCompletionPending);
+        }
         if store.identity() != self.store_identity {
             return Err(ExecutionSessionAnimationError::ForeignSemanticStore);
         }
@@ -618,7 +656,8 @@ impl ExecutionSession {
             self.runtime.frame().time,
             play_options,
         )?;
-        let segment = ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
+        let mut segment =
+            ExecutionSegment::from_duration(schedule.start_time(), schedule.run_time())?;
         let tracks = lower_semantic_affine_animation_tracks(store, &schedule, |object| {
             self.runtime.effective_transform(object)
         })?;
@@ -627,16 +666,48 @@ impl ExecutionSession {
         }
 
         let mut next_track_id = self.next_activation_track_id;
-        let mut mutations = Vec::with_capacity(tracks.len());
+        let mut definitions = Vec::with_capacity(tracks.len());
+        let mut completions = Vec::with_capacity(tracks.len());
         for track in tracks.tracks() {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
-            let definition = track.with_track_id(TrackId::new(raw_id))?;
-            mutations.push(ExecutionPatch::AddTrack(definition));
+            let track_id = TrackId::new(raw_id);
+            let definition = track.with_track_id(track_id)?;
+            let end_time = track.timing.start_time + track.timing.duration;
+            completions.push(SegmentCompletionEntry {
+                semantic_object: track.target,
+                semantic_property: track.semantic_property,
+                completion_value: track.completion_value.clone(),
+                execution_object: track.execution_object_id,
+                property: track.property,
+                track: track_id,
+                end_time,
+            });
+            definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
         }
 
-        let transaction = ExecutionMutationTransaction::from_mutations(mutations);
+        self.runtime
+            .preflight_reconcilable_track_additions(&definitions)
+            .map_err(ExecutionSessionAnimationError::Publication)?;
+        let raw_sequence = self
+            .next_segment_sequence
+            .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
+        let next_segment_sequence = raw_sequence.checked_add(1);
+        let transaction = ExecutionMutationTransaction::from_mutations(
+            definitions.into_iter().map(ExecutionPatch::AddTrack),
+        );
         self.runtime.apply_execution_transaction(&transaction)?;
+        let token = ExecutionSegmentToken::new(
+            self.runtime.runtime_identity(),
+            ExecutionSegmentSequence::new(raw_sequence),
+        );
+        self.next_segment_sequence = next_segment_sequence;
+        segment = segment.with_completion_token(token);
+        self.pending_segment_completion = Some(PendingSegmentCompletion {
+            token,
+            activation_scene_revision: store.scene_revision(),
+            entries: completions,
+        });
         self.next_activation_track_id = next_track_id;
         Ok(segment)
     }
@@ -1011,8 +1082,8 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session.take_frame_changes();
 
-        session
-            .activate_animation(&store, animation, linear_second())
+        let segment = session
+            .activate_animation_segment(&store, animation, linear_second())
             .unwrap();
         assert_eq!(
             session.wake_state().timeline(),
@@ -1024,6 +1095,9 @@ mod tests {
             session.wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
+        assert!(!session.segment_state(segment).is_complete());
+        session.complete_segment(&mut store, segment).unwrap();
+        assert!(session.segment_state(segment).is_complete());
     }
 
     #[test]
@@ -1068,6 +1142,8 @@ mod tests {
 
         session.advance_segment_to(segment, 100.0).unwrap();
         assert_eq!(session.frame().time, 4.5);
+        assert!(!session.segment_state(segment).is_complete());
+        session.complete_segment(&mut store, segment).unwrap();
         assert!(session.segment_state(segment).is_complete());
         assert_eq!(session.frame().objects[0].transform.translation.x, 6.0);
     }
@@ -1344,8 +1420,8 @@ mod tests {
             .unwrap();
 
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        session
-            .activate_animation(&store, first, linear_second())
+        let first_segment = session
+            .activate_animation_segment(&store, first, linear_second())
             .unwrap();
         session.seek(1.0).unwrap();
         assert_eq!(
@@ -1356,9 +1432,10 @@ mod tests {
                 scale: Vec2::new(2.0, 2.0),
             }
         );
+        session.complete_segment(&mut store, first_segment).unwrap();
 
         session
-            .activate_animation(&store, second, linear_second())
+            .activate_animation_segment(&store, second, linear_second())
             .unwrap();
         session.seek(1.5).unwrap();
 

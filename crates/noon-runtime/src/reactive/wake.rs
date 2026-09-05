@@ -112,6 +112,7 @@ mod tests {
             },
             time_map: CompositionTimeMap::default(),
             transform_geometry_plan: None,
+            reconciled: false,
         }
     }
 

@@ -29,7 +29,7 @@ use noon_compile::{
 use noon_core::PublicationContext;
 use noon_core::{
     Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
-    StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+    StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_core::{ObjectContentRef, TextResourceHandle};
 
@@ -290,7 +290,7 @@ impl EffectiveBoundsBasis {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct FrameRowState {
+pub(crate) struct FrameRowState {
     transform: Transform2D,
     style: Style,
     appearance: f32,
@@ -303,7 +303,7 @@ struct FrameRowState {
 }
 
 impl FrameRowState {
-    fn from_frame(frame: &FrameState, object_index: usize) -> Self {
+    pub(crate) fn from_frame(frame: &FrameState, object_index: usize) -> Self {
         Self {
             transform: frame.objects[object_index].transform,
             style: frame.objects[object_index].style,
@@ -332,7 +332,7 @@ impl FrameRowState {
         frame.render_transforms[object_index] = self.render_transform;
     }
 
-    fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
+    pub(crate) fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
         let object = &frame.objects[object_index];
         self.transform != object.transform
             || self.style != object.style
@@ -501,6 +501,22 @@ impl FrameChanges {
             object_indices,
             added_indices,
             removed_indices,
+        }
+    }
+
+    pub(crate) fn contains_object(&self, object_index: usize) -> bool {
+        self.all || self.object_indices.binary_search(&object_index).is_ok()
+    }
+
+    pub(crate) fn remove_unchanged_object(&mut self, object_index: usize) {
+        if self.all
+            || self.added_indices.binary_search(&object_index).is_ok()
+            || self.removed_indices.binary_search(&object_index).is_ok()
+        {
+            return;
+        }
+        if let Ok(position) = self.object_indices.binary_search(&object_index) {
+            self.object_indices.remove(position);
         }
     }
 
@@ -690,6 +706,13 @@ impl Clone for SceneInstance {
 }
 
 impl SceneInstance {
+    pub fn preflight_reconcilable_track_additions(
+        &self,
+        tracks: &[TrackDefinition],
+    ) -> Result<(), CompilePatchError> {
+        self.compiled.preflight_reconcilable_track_additions(tracks)
+    }
+
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
         let groups = build_groups(&compiled);
@@ -886,6 +909,7 @@ impl SceneInstance {
             ExecutionPatch::AddTrack(_)
                 | ExecutionPatch::ReplaceTrack(_)
                 | ExecutionPatch::RemoveTrack(_)
+                | ExecutionPatch::ReconcileTrack { .. }
         ) {
             self.apply_timeline_patch(patch)?;
             return Ok(&self.frame);
@@ -960,10 +984,33 @@ impl SceneInstance {
     }
 
     fn apply_timeline_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
+        if let ExecutionPatch::ReconcileTrack { track, .. } = patch {
+            let channel = self
+                .compiled
+                .channel_for_track(*track)
+                .ok_or(CompilePatchError::UnknownTrack(*track))?;
+            self.compiled.apply_execution_patch(patch)?;
+            let mut evaluation = EvaluationStats::default();
+            self.relower_object(
+                channel.object_index as usize,
+                self.frame.time,
+                &mut evaluation,
+            );
+            self.reapply_reactive_for_object(channel.object_index as usize);
+            self.last_stats = evaluation;
+            self.last_patch_stats = RuntimePatchStats {
+                objects_recomputed: 1,
+                groups_evaluated: evaluation.groups_evaluated,
+                ..RuntimePatchStats::default()
+            };
+            self.mark_changed(channel.object_index as usize);
+            return Ok(());
+        }
         let old_channel = match patch {
             ExecutionPatch::ReplaceTrack(track) => self.compiled.channel_for_track(track.id),
             ExecutionPatch::RemoveTrack(id) => self.compiled.channel_for_track(*id),
             ExecutionPatch::AddTrack(_) => None,
+            ExecutionPatch::ReconcileTrack { .. } => unreachable!("handled above"),
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
         self.compiled.apply_execution_patch(patch)?;
@@ -972,6 +1019,7 @@ impl SceneInstance {
                 self.compiled.channel_for_track(track.id)
             }
             ExecutionPatch::RemoveTrack(_) => None,
+            ExecutionPatch::ReconcileTrack { .. } => unreachable!("handled above"),
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
 
@@ -1093,7 +1141,7 @@ impl SceneInstance {
     }
 
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
-        reset_object_frame(&self.compiled, &mut self.frame, object_index);
+        reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
         for property in PROPERTY_ORDER {
             let channel = CompiledChannelKey::new(object_index as u32, property);
             let tracks = self.compiled.channel_tracks(channel);
@@ -1180,7 +1228,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
             id: object.id,
             content: object.content.clone(),
             text_bounds: object.text_bounds,
-            transform: object.base_transform,
+            transform: affine_base_at_time(compiled, index, object.base_transform, time),
             style: object.base_style,
             appearance: appearances[index],
         })
@@ -1318,7 +1366,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
-        transform: object.base_transform,
+        transform: affine_base_at_time(compiled, object_index, object.base_transform, frame.time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     });
@@ -1344,13 +1392,18 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     frame.render_transforms.push(None);
 }
 
-fn reset_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_index: usize) {
+fn reset_object_frame(
+    compiled: &CompiledScene,
+    frame: &mut FrameState,
+    object_index: usize,
+    time: f64,
+) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
-        transform: object.base_transform,
+        transform: affine_base_at_time(compiled, object_index, object.base_transform, time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     };
@@ -1394,6 +1447,33 @@ fn initial_channel_scalar(
         unreachable!("compiled scalar property must contain scalar values");
     };
     from.clamp(0.0, 1.0)
+}
+
+fn affine_base_at_time(
+    compiled: &CompiledScene,
+    object_index: usize,
+    mut transform: Transform2D,
+    time: f64,
+) -> Transform2D {
+    for property in [Property::Position, Property::Rotation, Property::Scale] {
+        let channel = CompiledChannelKey::new(object_index as u32, property);
+        let tracks = compiled.channel_tracks(channel);
+        let Some(track) = tracks.first() else {
+            continue;
+        };
+        if tracks.last().is_some_and(|last| {
+            last.reconciled && time >= last.timing.start_time + last.timing.duration
+        }) {
+            continue;
+        }
+        match (property, &track.values) {
+            (Property::Position, TrackValues::Vec2 { from, .. }) => transform.translation = *from,
+            (Property::Rotation, TrackValues::Scalar { from, .. }) => transform.rotation = *from,
+            (Property::Scale, TrackValues::Vec2 { from, .. }) => transform.scale = *from,
+            _ => unreachable!("validated affine track must carry matching values"),
+        }
+    }
+    transform
 }
 
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {
@@ -1452,6 +1532,12 @@ fn apply_group_to_row(
     let Some((track, progress)) = selected else {
         return false;
     };
+    if track.reconciled
+        && group.cursor == tracks.len()
+        && time >= track.timing.start_time + track.timing.duration
+    {
+        return false;
+    }
 
     if group.channel.property == Property::Transform {
         return apply_transform_track(&mut row, track, progress);

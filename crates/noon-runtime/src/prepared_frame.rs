@@ -101,9 +101,9 @@ impl PreparedFrameEvaluation {
 /// write before retaining only the last value for each object/property.
 #[derive(Clone, Debug)]
 pub struct PreparedEffectivePropertyBatch {
-    runtime: RuntimeIdentity,
-    expected: PublicationContext,
-    writes: Vec<(usize, EffectivePropertyWrite)>,
+    pub(crate) runtime: RuntimeIdentity,
+    pub(crate) expected: PublicationContext,
+    pub(crate) writes: Vec<(usize, EffectivePropertyWrite)>,
 }
 
 impl PreparedEffectivePropertyBatch {

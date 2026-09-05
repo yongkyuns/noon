@@ -10,6 +10,29 @@ use noon_runtime::{
 
 use super::ExecutionSession;
 
+pub(super) const CALLBACK_TRANSFORM_DOMAIN: u8 = 1;
+pub(super) const CALLBACK_STYLE_DOMAIN: u8 = 2;
+
+#[derive(Clone, Debug)]
+pub(super) struct CallbackPublicationReceipt {
+    time: f64,
+    publication: PublicationContext,
+    domains: BTreeMap<SemanticNodeId, u8>,
+}
+
+impl CallbackPublicationReceipt {
+    pub(super) fn domains_at(
+        &self,
+        object: SemanticNodeId,
+        time: f64,
+        publication: PublicationContext,
+    ) -> Option<u8> {
+        (self.time == time && self.publication == publication)
+            .then(|| self.domains.get(&object).copied())
+            .flatten()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct CallbackSchedule {
     plan: SemanticHostCallbackPlan,
@@ -129,6 +152,22 @@ impl CallbackSchedule {
             .map_or(noon_runtime::TimelineWakeState::Quiescent, |index| {
                 noon_runtime::TimelineWakeState::Deadline(self.plan.events()[index].time())
             })
+    }
+
+    pub(super) fn continues_for_target(&self, target: SemanticNodeId) -> bool {
+        self.active_occurrences
+            .iter()
+            .any(|&index| self.plan.occurrences()[index].target() == target)
+    }
+
+    pub(super) fn carry_completed_publication(
+        &mut self,
+        time: f64,
+        publication: PublicationContext,
+    ) {
+        if self.completed_time == Some(time) {
+            self.completed_publication = Some(publication);
+        }
     }
 }
 
@@ -669,6 +708,8 @@ impl ExecutionSession {
             });
         }
 
+        let receipt_time = pending.prepared.time();
+        let mut receipt_domains = BTreeMap::new();
         let mut writes = Vec::with_capacity(batch.writes.len());
         for write in batch.writes {
             let semantic = write.object();
@@ -678,9 +719,11 @@ impl ExecutionSession {
                 .ok_or(ExecutionSessionCallbackError::UnknownObject(semantic))?;
             let runtime_write = match write {
                 EffectiveSemanticPropertyWrite::Transform { transform, .. } => {
+                    *receipt_domains.entry(semantic).or_insert(0) |= CALLBACK_TRANSFORM_DOMAIN;
                     RuntimeEffectivePropertyWrite::Transform { object, transform }
                 }
                 EffectiveSemanticPropertyWrite::Style { style, .. } => {
+                    *receipt_domains.entry(semantic).or_insert(0) |= CALLBACK_STYLE_DOMAIN;
                     RuntimeEffectivePropertyWrite::Style { object, style }
                 }
             };
@@ -701,6 +744,20 @@ impl ExecutionSession {
             self.callback_schedule
                 .commit(schedule, self.runtime.publication_context());
         }
+        if !self.callback_schedule.is_empty() {
+            if let Some(previous) = self.last_callback_receipt.as_ref() {
+                for (&object, &domains) in &previous.domains {
+                    if self.callback_schedule.continues_for_target(object) {
+                        *receipt_domains.entry(object).or_insert(0) |= domains;
+                    }
+                }
+            }
+        }
+        self.last_callback_receipt = Some(CallbackPublicationReceipt {
+            time: receipt_time,
+            publication: self.runtime.publication_context(),
+            domains: receipt_domains,
+        });
         Ok(self.runtime.frame())
     }
 

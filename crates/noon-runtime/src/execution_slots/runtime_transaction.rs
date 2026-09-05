@@ -7,7 +7,10 @@ use noon_core::{
 };
 use std::collections::HashSet;
 
-use crate::{FrameObjectState, FrameState, SceneInstance};
+use crate::{
+    apply_effective_property_to_row, frame_row_mut, FrameObjectState, FrameRowState, FrameState,
+    PreparedEffectivePropertyBatch, SceneInstance,
+};
 
 /// Retain the final value write in each region bounded by structural/timeline
 /// edits. The caller must preflight all writes, including superseded ones.
@@ -45,6 +48,7 @@ pub enum AuthoredPublicationError {
     },
     ExecutionRevisionExhausted(ExecutionRevision),
     FrameEpochExhausted(FrameEpoch),
+    StaleEffectiveCarryForward,
     Compile(CompilePatchError),
 }
 
@@ -65,6 +69,9 @@ impl std::fmt::Display for AuthoredPublicationError {
             Self::FrameEpochExhausted(epoch) => {
                 write!(formatter, "frame epoch exhausted after {epoch:?}")
             }
+            Self::StaleEffectiveCarryForward => formatter.write_str(
+                "effective carry-forward does not belong to the current runtime publication",
+            ),
             Self::Compile(error) => write!(formatter, "authored transaction failed: {error}"),
         }
     }
@@ -79,6 +86,20 @@ impl From<CompilePatchError> for AuthoredPublicationError {
 }
 
 impl SceneInstance {
+    pub fn preflight_effective_carry_forward(
+        &self,
+        effective: &PreparedEffectivePropertyBatch,
+        expected: PublicationContext,
+    ) -> Result<(), AuthoredPublicationError> {
+        if expected != self.publication_context()
+            || effective.runtime != self.identity
+            || effective.expected != expected
+        {
+            return Err(AuthoredPublicationError::StaleEffectiveCarryForward);
+        }
+        Ok(())
+    }
+
     /// Resolve one live object through the stable execution index without scanning
     /// unrelated frame objects. Removed objects have no live index entry.
     pub fn effective_object(&self, id: ObjectId) -> Option<&FrameObjectState> {
@@ -214,6 +235,27 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.apply_authored_execution_transaction_with_effective(
+            transaction,
+            resource_additions,
+            None,
+            expected,
+            scene_revision,
+        )
+    }
+
+    /// Publish authored execution changes and a sparse already-validated effective
+    /// carry-forward under one frame epoch. This is used by segment completion so
+    /// releasing a timeline driver cannot expose a base-only frame between the
+    /// authored endpoint and a continuing host callback value.
+    pub fn apply_authored_execution_transaction_with_effective(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -232,6 +274,9 @@ impl SceneInstance {
 
         self.compiled
             .preflight_execution_transaction_with_resources(transaction, &resource_additions)?;
+        if let Some(effective) = effective.as_ref() {
+            self.preflight_effective_carry_forward(effective, current)?;
+        }
         let execution_changed = final_value_writes(transaction)
             .into_iter()
             .any(|patch| self.compiled.patch_changes_execution(patch));
@@ -242,7 +287,8 @@ impl SceneInstance {
         } else {
             None
         };
-        let frame_changed = scene_changed || execution_changed;
+        let effective_changed = effective.as_ref().is_some_and(|batch| !batch.is_empty());
+        let frame_changed = scene_changed || execution_changed || effective_changed;
         let next_frame = if frame_changed {
             Some(current.frame_epoch().checked_next().ok_or(
                 AuthoredPublicationError::FrameEpochExhausted(current.frame_epoch()),
@@ -251,9 +297,61 @@ impl SceneInstance {
             None
         };
 
+        let mut affected = HashSet::new();
+        if effective.is_some() {
+            for patch in transaction.mutations() {
+                let object = match patch {
+                    ExecutionPatch::SetContent { object, .. }
+                    | ExecutionPatch::SetTransform { object, .. }
+                    | ExecutionPatch::SetStyle { object, .. }
+                    | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
+                    _ => None,
+                };
+                if let Some(index) = object.and_then(|object| self.compiled.object_index(object)) {
+                    affected.insert(index as usize);
+                }
+            }
+            if let Some(effective) = effective.as_ref() {
+                affected.extend(effective.writes.iter().map(|(index, _)| *index));
+            }
+        }
+        let before_rows = affected
+            .iter()
+            .copied()
+            .map(|index| {
+                (
+                    index,
+                    FrameRowState::from_frame(&self.frame, index),
+                    self.changes.contains_object(index),
+                    self.spatial_changes.contains_object(index),
+                )
+            })
+            .collect::<Vec<_>>();
+
         self.compiled.merge_prepared_resources(resource_additions);
         let applied_execution_change = self.apply_preflighted_transaction(transaction);
         debug_assert_eq!(applied_execution_change, execution_changed);
+        if let Some(effective) = effective {
+            for (object_index, write) in effective.writes {
+                apply_effective_property_to_row(
+                    frame_row_mut(&mut self.frame, object_index),
+                    write,
+                );
+                self.effective_driver_rows.insert(object_index);
+                self.mark_changed(object_index);
+            }
+        }
+        for (index, before, was_changed, was_spatially_changed) in before_rows {
+            if before.differs_from_frame(&self.frame, index) {
+                continue;
+            }
+            if !was_changed {
+                self.changes.remove_unchanged_object(index);
+            }
+            if !was_spatially_changed {
+                self.spatial_changes.remove_unchanged_object(index);
+            }
+        }
         if frame_changed {
             self.publication = PublicationContext::new(
                 scene_revision,
