@@ -306,6 +306,11 @@ impl SemanticExecutionPlayer {
         Ok(live.segment_state(segment).is_complete())
     }
 
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
+        &mut self.session
+    }
+
     fn resource_bundle_for(session: &ExecutionSession) -> Result<Vec<u8>, String> {
         RetainedResourceBundle::capture(
             session
