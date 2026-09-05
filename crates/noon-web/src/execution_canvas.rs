@@ -15,8 +15,8 @@ mod wasm {
 
     use noon::{ExecutionSession, RustHostCallbackTable};
     use noon_core::{
-        Camera2DState, GeometryRef, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D,
-        Vec2,
+        Camera2DState, GeometryRef, NativeEventOccurrence, NativeEventSource, NativeInputValue,
+        NativeStateSource, ObjectId, ReactiveValue, Rect, SemanticNodeId, Transform2D, Vec2,
     };
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
@@ -163,6 +163,35 @@ mod wasm {
     struct DirectExecutionSource {
         session: ExecutionSession,
         callbacks: RustHostCallbackTable,
+        next_native_event_sequence: u64,
+    }
+
+    impl DirectExecutionSource {
+        fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<(), JsValue> {
+            self.session
+                .set_native_state_input(source, value)
+                .map_err(js_error)?;
+            Ok(())
+        }
+
+        fn emit_native_event(
+            &mut self,
+            source: NativeEventSource,
+        ) -> Result<(), JsValue> {
+            let sequence = self.next_native_event_sequence;
+            let next = sequence
+                .checked_add(1)
+                .ok_or_else(|| js_message("native input event sequence exhausted"))?;
+            self.session
+                .emit_native_event(NativeEventOccurrence::new(sequence, source))
+                .map_err(js_error)?;
+            self.next_native_event_sequence = next;
+            Ok(())
+        }
     }
 
     enum CanvasExecutionSource {
@@ -225,6 +254,13 @@ mod wasm {
             match self {
                 Self::Transport(_) => None,
                 Self::Direct(direct) => Some((&mut direct.session, &mut direct.callbacks)),
+            }
+        }
+
+        fn direct_source_mut(&mut self) -> Option<&mut DirectExecutionSource> {
+            match self {
+                Self::Transport(_) => None,
+                Self::Direct(direct) => Some(direct),
             }
         }
     }
@@ -942,7 +978,11 @@ mod wasm {
             let camera = session.camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                CanvasExecutionSource::Direct(DirectExecutionSource { session, callbacks }),
+                CanvasExecutionSource::Direct(DirectExecutionSource {
+                    session,
+                    callbacks,
+                    next_native_event_sequence: 0,
+                }),
                 FrameChanges::default(),
                 camera.center,
                 camera.height,
@@ -1008,6 +1048,48 @@ mod wasm {
                     .map_err(js_error)?;
                 let camera = session.camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)
+            };
+            self.sync_camera(camera)?;
+            Ok(pending)
+        }
+
+        /// Deliver one typed native state sample to this direct Rust/WASM session.
+        ///
+        /// Unlike timeline advancement, native input may accumulate while a
+        /// renderer publication is pending. `ExecutionSession` unions those
+        /// local changes and the next `render` consumes them once, matching the
+        /// native host's pointer-state plus button-event delivery without a
+        /// browser-owned queue or runtime mirror.
+        pub fn set_native_state_input(
+            &mut self,
+            source: NativeStateSource,
+            value: NativeInputValue,
+        ) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(source, value)
+            })
+        }
+
+        /// Deliver one typed, ordered native event to this direct Rust/WASM session.
+        ///
+        /// The canvas host allocates only an occurrence serial. The semantic
+        /// source routing and event-counter update remain session-owned, and a
+        /// rejected occurrence does not consume the serial.
+        pub fn emit_native_event(&mut self, source: NativeEventSource) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| direct.emit_native_event(source))
+        }
+
+        fn apply_direct_native_input(
+            &mut self,
+            apply: impl FnOnce(&mut DirectExecutionSource) -> Result<(), JsValue>,
+        ) -> Result<bool, JsValue> {
+            let (pending, camera) = {
+                let direct = self.source.direct_source_mut().ok_or_else(|| {
+                    js_message("typed native input requires a direct ExecutionSession source")
+                })?;
+                apply(direct)?;
+                let camera = direct.session.camera().map_err(js_error)?;
+                (direct.session.wake_state().frame_pending(), camera)
             };
             self.sync_camera(camera)?;
             Ok(pending)
