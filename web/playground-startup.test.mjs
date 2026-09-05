@@ -236,15 +236,23 @@ const initializeStart = worker.indexOf("async function initializePyodide()");
 assert.notEqual(initializeStart, -1, "Python worker initializer must exist");
 const firstBarrier = worker.indexOf("await startupResourcesReady;", initializeStart);
 assert.ok(firstBarrier > initializeStart, "startup resources must share one handled readiness barrier");
-for (const kickoff of [
-  "const noonWebReady = initNoonWeb();",
-  "const pyodideReady = loadPyodide();",
-  "const compatibilityBundleReady = loadCompatibilityBundle();",
-  "const startupResourcesReady = Promise.all([",
+const initializeBody = worker.slice(initializeStart, firstBarrier);
+for (const [pattern, label] of [
+  [
+    /const noonWebReady = measureStartupTask\([\s\S]*?"noonWebInitMs"[\s\S]*?\(\) => initNoonWeb\(\)\);/,
+    "Noon WASM startup",
+  ],
+  [
+    /const pyodideReady = measureStartupTask\([\s\S]*?"pyodideInitMs"[\s\S]*?\(\) => loadPyodide\(\)\);/,
+    "Pyodide startup",
+  ],
+  [
+    /const compatibilityBundleReady = measureStartupTask\([\s\S]*?"compatibilityBundleMs"[\s\S]*?\(\) => loadCompatibilityBundle\(\),?[\s\S]*?\);/,
+    "compatibility bundle startup",
+  ],
+  [/const startupResourcesReady = Promise\.all\(\[/, "shared startup barrier"],
 ]) {
-  const position = worker.indexOf(kickoff, initializeStart);
-  assert.ok(position > initializeStart, `missing startup kickoff: ${kickoff}`);
-  assert.ok(position < firstBarrier, `${kickoff} must start before the first initialization barrier`);
+  assert.match(initializeBody, pattern, `${label} must start before the first initialization barrier`);
 }
 assert.doesNotMatch(worker, /await initNoonWeb\(\)/, "Noon WASM must not serialize Pyodide startup");
 assert.doesNotMatch(worker, /await loadPyodide\(\)/, "Pyodide must not serialize Noon WASM startup");
@@ -254,8 +262,8 @@ assert.doesNotMatch(
   "independent startup promises must be handled by the shared barrier",
 );
 assert.match(
-  worker,
-  /const compatibilityBundleReady = loadCompatibilityBundle\(\);/,
+  initializeBody,
+  /"compatibilityBundleMs"[\s\S]*?\(\) => loadCompatibilityBundle\(\)/,
   "compatibility source loading must remain parallel with WASM and Pyodide startup",
 );
 
