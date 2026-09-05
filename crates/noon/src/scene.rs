@@ -95,7 +95,7 @@ impl Scene {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    fn require_object(&self, object: &Mobject) -> Result<(), String> {
+    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
         if !Rc::ptr_eq(&self.store, object.store()) {
             return Err("mobject belongs to another scene store".into());
         }

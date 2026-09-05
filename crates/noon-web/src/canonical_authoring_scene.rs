@@ -265,6 +265,20 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    /// Add replayable animation meaning before a live session is created.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn declare_live_transform_to(
+        &self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<noon::DeclaredAnimation, String> {
+        if self.live_player.is_some() || self.live_player_transferred {
+            return Err("declare live animations before beginning execution".into());
+        }
+        self.scene.declare_transform_to(source, target, options)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
@@ -618,6 +632,13 @@ mod wasm {
         state: noon::EffectiveMobjectState,
     }
 
+    /// Opaque JS/Python wrapper over a replayable shared semantic declaration.
+    #[wasm_bindgen]
+    pub struct WasmDeclaredAnimationHandle {
+        declaration: noon::DeclaredAnimation,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
     #[wasm_bindgen]
     impl WasmLiveMobjectState {
         #[wasm_bindgen(getter, js_name = translationX)]
@@ -627,6 +648,20 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = translationY)]
         pub fn translation_y(&self) -> f64 {
             self.state.transform.translation.y as f64
+        }
+    }
+
+    impl WasmDeclaredAnimationHandle {
+        fn declaration_in(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<&noon::DeclaredAnimation, JsValue> {
+            if !std::rc::Rc::ptr_eq(&self.store, store) {
+                return Err(js_error(
+                    "animation and live execution context belong to different authoring stores",
+                ));
+            }
+            Ok(&self.declaration)
         }
     }
 
@@ -670,6 +705,70 @@ mod wasm {
             self.inner
                 .live_player(duration)
                 .map(|_| ())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = declareLiveTransformTo)]
+        pub fn declare_live_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<WasmDeclaredAnimationHandle, JsValue> {
+            source.id_in_store(self.inner.scene.store(), "animation declaration")?;
+            target.id_in_store(self.inner.scene.store(), "animation declaration")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            let declaration = self
+                .inner
+                .declare_live_transform_to(
+                    source.semantic_mobject(),
+                    target.semantic_mobject(),
+                    options,
+                )
+                .map_err(js_error)?;
+            Ok(WasmDeclaredAnimationHandle {
+                declaration,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = livePlayAnimation)]
+        pub fn live_play_animation(
+            &mut self,
+            animation: &WasmDeclaredAnimationHandle,
+        ) -> Result<f64, JsValue> {
+            let declaration = animation.declaration_in(self.inner.scene.store())?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_play_animation(declaration)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveWait)]
+        pub fn live_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_wait(duration)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAdvanceSegmentTo)]
+        pub fn live_advance_segment_to(&mut self, time: f64) -> Result<bool, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_advance_segment_to(time)
                 .map_err(js_error)
         }
 
@@ -871,11 +970,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{
-        AnimationOptions, GeometryRef, RateFunction, SemanticAnimationIntent,
-        SemanticAnimationState, SemanticMutationImpact, SemanticMutationTransaction, SemanticVec3,
-        Transform2D,
-    };
+    use noon_core::{AnimationOptions, GeometryRef, RateFunction, SemanticVec3, Transform2D};
     use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
@@ -1129,33 +1224,19 @@ mod tests {
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, 0.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
-        let store = std::rc::Rc::clone(context.scene.store());
         let options = AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear);
+        let animation = context
+            .declare_live_transform_to(&circle, &target, options)
+            .unwrap();
+        let store = std::rc::Rc::clone(context.scene.store());
 
         {
             let player = context.live_player(2.0).unwrap();
-            let mut declaration = SemanticMutationTransaction::new();
-            declaration.add_animation(SemanticAnimationState::new(
-                SemanticAnimationIntent::TransformTo {
-                    target: circle.node_id(),
-                    target_state: target.node_id(),
-                },
-                options,
-            ));
-            let result = player
-                .session_mut_for_test()
-                .apply_semantic_transaction(&mut store.borrow_mut(), declaration)
-                .unwrap();
-            let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
-                panic!("one animation declaration must allocate one identity")
-            };
-            player
-                .session_mut_for_test()
-                .activate_animation(&store.borrow(), *animation, options)
-                .unwrap();
-            player.session_mut_for_test().seek(1.0).unwrap();
+            let end = player.live_play_animation(&animation).unwrap();
+            assert_eq!(end, 2.0);
+            assert!(!player.live_advance_segment_to(1.0).unwrap());
 
             player.live_set_translation(&circle, 100.0, 0.0).unwrap();
             assert_eq!(

@@ -230,6 +230,77 @@ class LiveExecution:
             float(observed.translationY),
         )
 
+    def play(self, animation: "LiveAnimation") -> float:
+        """Activate one declaration that was authored before this session began."""
+        if not isinstance(animation, LiveAnimation) or animation._scene is not self._scene:
+            raise ValueError("live animation must belong to this Scene")
+        return float(self._context.livePlayAnimation(animation._handle))
+
+    def wait(self, duration: float) -> float:
+        """Start a session-owned continuation wait after the active segment completes."""
+        return float(self._context.liveWait(float(duration)))
+
+    def advance_to(self, time: float) -> bool:
+        """Drive the current segment through the existing Rust runtime."""
+        return bool(self._context.liveAdvanceSegmentTo(float(time)))
+
+
+class LiveAnimation:
+    """Opaque Python identity for a predeclared shared semantic animation."""
+
+    def __init__(self, scene: _base.Scene, handle: object) -> None:
+        self._scene = scene
+        self._handle = handle
+
+
+def _live_rate_function_id(rate_func: object) -> str:
+    """Resolve only the established deterministic Python rate-function vocabulary."""
+    if isinstance(rate_func, str):
+        return rate_func
+    import _manim_rate_functions as _rate_functions
+
+    return _rate_functions.easing_from_rate_func(rate_func)
+
+
+def _declare_live_transform_to(
+    self: _base.Scene,
+    source: _base.Mobject,
+    target: _base.Mobject,
+    *,
+    run_time: float = 1.0,
+    rate_func: object = "smooth",
+) -> LiveAnimation:
+    """Declare a replayable affine TransformTo before lowering a live session.
+
+    ``target`` is an ordinary detached Mobject handle in the same Rust store,
+    usually built with ``source.copy()`` and transformed before this call. This
+    wrapper declares no scheduler and does not create animation meaning during
+    ``LiveExecution.play``.
+    """
+    context = execution_context(self)
+    if context is None:
+        raise RuntimeError(
+            "live animation currently supports typed static geometry/native Text without "
+            "callbacks, retained text, or timeline tracks"
+        )
+    if not isinstance(source, _base.Mobject) or source._scene is not self:
+        raise ValueError("live animation source must belong to this Scene")
+    if not isinstance(target, _base.Mobject) or target._scene is not None:
+        raise ValueError("live animation target must be a detached Mobject")
+    source_handle = getattr(source, "_semantic_handle", None)
+    target_handle = getattr(target, "_semantic_handle", None)
+    if source_handle is None or target_handle is None:
+        raise ValueError("live animation requires typed semantic Mobject handles")
+    return LiveAnimation(
+        self,
+        context.declareLiveTransformTo(
+            source_handle,
+            target_handle,
+            float(run_time),
+            _live_rate_function_id(rate_func),
+        ),
+    )
+
 
 def _live_execution(self: _base.Scene, duration: float = 1.0) -> LiveExecution:
     """Create an explicit typed live session for the currently supported subset."""
@@ -385,4 +456,5 @@ def install() -> None:
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene.play = _play
     _base.Scene.live_execution = _live_execution
+    _base.Scene.declare_live_transform_to = _declare_live_transform_to
     _ir.Scene.to_document = _to_document

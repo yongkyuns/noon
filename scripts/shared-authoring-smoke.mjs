@@ -60,15 +60,26 @@ class SharedAuthoringSmoke(Scene):
         label = Text("Noon", font_size=48).shift(LEFT * 2)
         self.add(circle, label)
 
-        # Static style authoring completes before the live session. The live
-        # facade then owns property publication and effective-value queries.
+        # Target construction and declaration complete before lowering. The
+        # live facade then activates and drives that existing Rust declaration.
         circle.set_fill(BLUE, opacity=0.4)
+        target = circle.copy().shift(RIGHT * 2 + DOWN).scale((1.5, 0.5))
+        animation = self.declare_live_transform_to(
+            circle,
+            target,
+            run_time=2.0,
+            rate_func=linear,
+        )
         live = self.live_execution()
-        live.set_translation(circle, 2.0, -1.0)
-        live.set_scale(circle, 1.5, 0.5)
+        end_time = live.play(animation)
+        assert not live.advance_to(1.0)
         center = live.effective_center(circle)
-        assert abs(center.x - 2.0) < 1e-9
-        assert abs(center.y + 1.0) < 1e-9
+        assert abs(center.x - 1.0) < 1e-9
+        assert abs(center.y + 0.5) < 1e-9
+        assert live.advance_to(end_time)
+        assert live.effective_center(circle) == (2.0, -1.0)
+        wait_end = live.wait(0.1)
+        assert live.advance_to(wait_end)
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
 

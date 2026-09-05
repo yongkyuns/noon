@@ -21,6 +21,10 @@ pub struct SemanticExecutionPlayer {
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
     #[cfg(any(target_arch = "wasm32", test))]
     semantic_root: Option<noon_core::SemanticNodeId>,
+    /// Continuation metadata for this one session-owned runtime, never a
+    /// frontend scheduler or animation state mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    live_segment: Option<noon::ExecutionSegment>,
 }
 
 impl SemanticExecutionPlayer {
@@ -40,6 +44,8 @@ impl SemanticExecutionPlayer {
             semantics: None,
             #[cfg(any(target_arch = "wasm32", test))]
             semantic_root: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            live_segment: None,
         })
     }
 
@@ -60,6 +66,7 @@ impl SemanticExecutionPlayer {
             snapshot_sent: false,
             semantics: Some(semantics),
             semantic_root: Some(semantic_root),
+            live_segment: None,
         })
     }
 
@@ -224,9 +231,79 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(test)]
-    pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
-        &mut self.session
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn require_completed_live_segment(&self) -> Result<(), String> {
+        if let Some(segment) = self.live_segment {
+            if !self.session.segment_state(segment).is_complete() {
+                return Err(
+                    "advance the current live segment to its endpoint before continuing".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_play_animation(
+        &mut self,
+        animation: &noon::DeclaredAnimation,
+    ) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .play_animation(animation)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.live_segment = Some(segment);
+        Ok(end_time)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .wait_segment(duration)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.live_segment = Some(segment);
+        Ok(end_time)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+        let segment = self
+            .live_segment
+            .ok_or("play an animation or wait before advancing a live segment")?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let mut live = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        );
+        live.advance_segment_to(segment, requested_time)
+            .map_err(|error| error.to_string())?;
+        Ok(live.segment_state(segment).is_complete())
     }
 
     fn resource_bundle_for(session: &ExecutionSession) -> Result<Vec<u8>, String> {

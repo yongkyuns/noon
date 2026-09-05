@@ -2,10 +2,15 @@
 //!
 //! This facade owns neither semantic nor runtime state.  It only coordinates a
 //! transaction with the session that already lowered the same semantic store.
-//! Membership and property publication use the same prepared semantic transaction;
-//! animation continuation remains a separate lifecycle contract.
+//! Membership and property publication use the same prepared semantic transaction.
+//! Existing affine declarations use session-local segments; persistent completion
+//! reconciliation remains a separate contract.
 
-use crate::{EffectiveSemanticObject, ExecutionSession, ExecutionSessionPublicationError, Mobject};
+use crate::{
+    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionPublicationError, Mobject,
+};
 use noon_core::{
     PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
@@ -30,6 +35,9 @@ pub struct EffectiveMobjectState {
 pub enum LiveSessionError {
     ForeignMobjectStore,
     Mobject(String),
+    Animation(String),
+    Activation(ExecutionSessionAnimationError),
+    Segment(ExecutionSegmentError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -40,6 +48,9 @@ impl std::fmt::Display for LiveSessionError {
                 formatter.write_str("mobject belongs to another semantic store")
             }
             Self::Mobject(error) => error.fmt(formatter),
+            Self::Animation(error) => error.fmt(formatter),
+            Self::Activation(error) => error.fmt(formatter),
+            Self::Segment(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -50,6 +61,18 @@ impl std::error::Error for LiveSessionError {}
 impl From<ExecutionSessionPublicationError> for LiveSessionError {
     fn from(value: ExecutionSessionPublicationError) -> Self {
         Self::Publication(value)
+    }
+}
+
+impl From<ExecutionSessionAnimationError> for LiveSessionError {
+    fn from(value: ExecutionSessionAnimationError) -> Self {
+        Self::Activation(value)
+    }
+}
+
+impl From<ExecutionSegmentError> for LiveSessionError {
+    fn from(value: ExecutionSegmentError) -> Self {
+        Self::Segment(value)
     }
 }
 
@@ -139,6 +162,53 @@ impl<'a> LiveSession<'a> {
         })
     }
 
+    /// Activate one predeclared animation in this session.
+    ///
+    /// This performs no semantic declaration or target creation: the supplied
+    /// handle is replayable authored state, while activation atomically adds
+    /// execution-local tracks and captures the current effective affine source.
+    /// The returned segment can be driven with [`Self::advance_segment_to`] and
+    /// observed with [`Self::segment_state`]. Completion exposes its effective
+    /// endpoint but does not yet reconcile it into persistent authored state.
+    pub fn play_animation(
+        &mut self,
+        animation: &DeclaredAnimation,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        animation
+            .require_store(self.store)
+            .map_err(LiveSessionError::Animation)?;
+        let store = self.store.borrow();
+        let options = store
+            .semantic_animation_state(animation.node_id())
+            .map_err(|error| LiveSessionError::Animation(error.to_string()))?
+            .options();
+        self.session
+            .activate_animation_segment(&store, animation.node_id(), options)
+            .map_err(Into::into)
+    }
+
+    /// Start a continuation wait without allocating a scheduler track.
+    pub fn wait_segment(&self, duration: f64) -> Result<ExecutionSegment, LiveSessionError> {
+        self.session.wait_segment(duration).map_err(Into::into)
+    }
+
+    /// Observe a logical continuation segment against the shared runtime.
+    pub fn segment_state(&self, segment: ExecutionSegment) -> ExecutionSegmentState {
+        self.session.segment_state(segment)
+    }
+
+    /// Drive one segment toward its exact endpoint through the session runtime.
+    pub fn advance_segment_to(
+        &mut self,
+        segment: ExecutionSegment,
+        requested_time: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.session
+            .advance_segment_to(segment, requested_time)
+            .map(|_| ())
+            .map_err(|error| LiveSessionError::Animation(error.to_string()))
+    }
+
     /// Set any already-supported semantic property through one atomic publish.
     pub fn set_property(
         &mut self,
@@ -220,8 +290,7 @@ mod tests {
     use super::*;
     use crate::Scene;
     use noon_core::{
-        AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
-        SemanticMutationImpact, SemanticObjectContent, SemanticVec3, StoredGeometry,
+        AnimationOptions, RateFunction, SemanticObjectContent, SemanticVec3, StoredGeometry,
     };
 
     #[test]
@@ -285,30 +354,20 @@ mod tests {
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, 0.0).unwrap();
         scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
-        let options = AnimationOptions::new()
-            .run_time(2.0)
-            .rate_func(RateFunction::Linear);
-        let mut declaration = SemanticMutationTransaction::new();
-        declaration.add_animation(SemanticAnimationState::new(
-            SemanticAnimationIntent::TransformTo {
-                target: circle.node_id(),
-                target_state: target.node_id(),
-            },
-            options,
-        ));
-        let result = session
-            .apply_semantic_transaction(&mut scene.store().borrow_mut(), declaration)
-            .unwrap();
-        let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
-            panic!("one animation declaration must allocate one identity")
-        };
-        session
-            .activate_animation(&scene.store().borrow(), *animation, options)
-            .unwrap();
-        session.seek(1.0).unwrap();
 
         let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
         live.set_translation(&circle, 100.0, 0.0).unwrap();
         assert_eq!(
             live.authored(&circle).unwrap().transform.translation,
