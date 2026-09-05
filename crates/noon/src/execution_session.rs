@@ -34,6 +34,19 @@ use noon_runtime::{
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExecutionEvaluationMode {
+    Evaluate,
+    Seek,
+    Advance,
+}
+
+impl ExecutionEvaluationMode {
+    const fn requires_seek(self, current: f64, requested: f64) -> bool {
+        matches!(self, Self::Seek) || requested < current
+    }
+}
+
 /// Candidate-sized viewport result in canonical frame painter order.
 ///
 /// Execution slots remain the index identity; frame indices are a transient
@@ -612,7 +625,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.evaluate_signal_timeline(time)
+        self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Evaluate)
     }
 
     /// Seek deterministically to an absolute time.
@@ -623,7 +636,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.evaluate_signal_timeline(time)
+        self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Seek)
     }
 
     /// Advance to an absolute time, falling back to deterministic seek when time moves backward.
@@ -634,7 +647,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.evaluate_signal_timeline(time)
+        self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Advance)
     }
 
     /// Activate one semantic animation root at the session's current deterministic time.
@@ -775,16 +788,29 @@ impl ExecutionSession {
         self.runtime.last_reactive_stats()
     }
 
-    fn evaluate_signal_timeline(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+    fn evaluate_signal_timeline(
+        &mut self,
+        time: f64,
+        mode: ExecutionEvaluationMode,
+    ) -> Result<&FrameState, EvaluationError> {
         if self.signal_timeline.is_empty() {
-            return self.runtime.advance_to(time);
+            return match mode {
+                ExecutionEvaluationMode::Evaluate => self.runtime.evaluate(time),
+                ExecutionEvaluationMode::Seek => self.runtime.seek(time),
+                ExecutionEvaluationMode::Advance => self.runtime.advance_to(time),
+            };
         }
         let current = self.runtime.frame().time;
-        if self.signal_timeline.is_coherent_at(current, time) {
+        let requires_seek = mode.requires_seek(current, time);
+        if !requires_seek && self.signal_timeline.is_coherent_at(current, time) {
             return Ok(self.runtime.frame());
         }
-        let preview = self.signal_timeline.preview(current, time);
-        if time < current {
+        let preview = if requires_seek {
+            self.signal_timeline.preview_seek(time)
+        } else {
+            self.signal_timeline.preview(current, time)
+        };
+        if requires_seek {
             self.runtime
                 .seek_with_reactive_inputs(time, preview.inputs())?;
         } else {

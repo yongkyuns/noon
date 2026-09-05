@@ -271,7 +271,15 @@ impl SceneInstance {
                     cursor,
                     mapped: group.mapped,
                 };
-                apply_group_to_row(row.as_mut(base_content), tracks, &prepared_group, time);
+                let object = &self.compiled.objects()[object_index];
+                apply_group_to_row(
+                    row.as_mut(base_content),
+                    tracks,
+                    &prepared_group,
+                    time,
+                    object.base_transform,
+                    object.base_style,
+                );
                 cursor_updates.insert(channel, cursor);
                 stats.groups_evaluated += 1;
             }
@@ -297,6 +305,7 @@ impl SceneInstance {
                 cursor,
                 mapped: group.mapped,
             };
+            let object = &self.compiled.objects()[object_index];
             let row = rows
                 .entry(object_index)
                 .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
@@ -305,6 +314,8 @@ impl SceneInstance {
                 tracks,
                 &prepared_group,
                 time,
+                object.base_transform,
+                object.base_style,
             );
             cursor_updates.insert(channel, cursor);
             stats.groups_evaluated += 1;

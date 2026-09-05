@@ -153,7 +153,7 @@ impl SignalTimelineSchedule {
         }
     }
 
-    fn preview_seek(&self, time: f64) -> SignalTimelinePreview {
+    pub(super) fn preview_seek(&self, time: f64) -> SignalTimelinePreview {
         let event_cursor = self.events.partition_point(|event| event.time <= time);
         let mut active = BTreeSet::new();
         for (index, group) in self.groups.iter().enumerate() {

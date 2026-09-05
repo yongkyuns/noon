@@ -9,7 +9,7 @@ use noon_runtime::{
 };
 
 use super::signal_timeline::SignalTimelinePreview;
-use super::ExecutionSession;
+use super::{ExecutionEvaluationMode, ExecutionSession};
 
 pub(super) const CALLBACK_TRANSFORM_DOMAIN: u8 = 1;
 pub(super) const CALLBACK_STYLE_DOMAIN: u8 = 2;
@@ -554,7 +554,7 @@ impl ExecutionSession {
             return Err(EvaluationError::InvalidTime(time).into());
         }
         if self.callback_schedule.is_empty() {
-            self.evaluate_signal_timeline(time)?;
+            self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Advance)?;
             return Ok(CallbackAdvance::Ready(self.runtime.frame()));
         }
         let current = self.frame().time;
@@ -588,7 +588,7 @@ impl ExecutionSession {
             })
             .collect::<Vec<_>>();
         if invocations.is_empty() {
-            self.evaluate_signal_timeline(preview.time)?;
+            self.evaluate_signal_timeline(preview.time, ExecutionEvaluationMode::Advance)?;
             self.callback_schedule
                 .commit(preview, self.runtime.publication_context());
             return Ok(CallbackAdvance::Ready(self.runtime.frame()));
