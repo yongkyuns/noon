@@ -15,6 +15,18 @@ on:
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "web/**"
+  pull_request:
+    paths:
+      - ".github/workflows/playground-cross-browser.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "!crates/**/tests/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-example-browser-smoke.mjs"
+      - "web/**"
   workflow_dispatch:
 
 permissions:
