@@ -278,6 +278,24 @@ def _detached_handle_for(value: object):
     return None if _is_bound(value) else _handle_for(value)
 
 
+def _live_mutation_context(value: object):
+    """Return the retained-session context for a bound object or its target.
+
+    The context reference is wrapper identity only. The handle and its current
+    state remain in Rust; it lets a target cloned after bootstrap publish its
+    detached creation and affine edits through the same live session.
+    """
+    context = getattr(value, "_canonical_live_target_context", None)
+    if context is not None:
+        return context
+    scene = getattr(value, "_scene", None)
+    context = getattr(scene, "_canonical_authoring_context", None)
+    handoff_duration = getattr(context, "liveHandoffDuration", None)
+    if callable(handoff_duration) and handoff_duration() is not None:
+        return context
+    return None
+
+
 def _has_shared_layout_queries(handle: object) -> bool:
     return handle is not None and all(
         hasattr(handle, name)
@@ -525,6 +543,10 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
               else _detached_handle_for(self))
     if handle is not None:
+        if _live_mutation_context(self) is not None:
+            raise NotImplementedError(
+                "raw Mobject replacement is unsupported while canonical live execution is active"
+            )
         handle.replaceSnapshotJson(_snapshot_json(raw))
         return self
     result = _ORIGINAL_APPLY(self, raw)
@@ -541,14 +563,19 @@ def _clone_mobject(
 ) -> _base.Mobject:
     clone = object.__new__(type(self))
     handle = _handle_for(self)
+    live_context = _live_mutation_context(self)
     if handle is not None:
         clone._raw = None
         clone._scene = None
         clone._object = None
         clone._semantic_handle = (
-            handle.targetEditor() if target_state else handle.cloneHandle()
+            live_context.liveTargetEditor(handle)
+            if live_context is not None
+            else handle.targetEditor() if target_state else handle.cloneHandle()
         )
         clone._semantic_handle_fresh = True
+        if live_context is not None:
+            clone._canonical_live_target_context = live_context
     else:
         _init(clone, self._current_raw())
 
@@ -559,6 +586,7 @@ def _clone_mobject(
             "_object",
             "_semantic_handle",
             "_semantic_handle_fresh",
+            "_canonical_live_target_context",
         }:
             if isinstance(value, _base.Mobject):
                 setattr(clone, name, value.copy())
@@ -735,6 +763,13 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     if handle is None:
         return _ORIGINAL_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
+    context = _live_mutation_context(self)
+    if context is not None:
+        try:
+            context.liveShift(handle, offset.x, offset.y)
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     handle.shift(offset.x, offset.y)
     _sync_bound_transform(self, handle)
     return self
@@ -753,6 +788,10 @@ def _move_to(
             point_or_mobject,
             aligned_edge=aligned_edge,
             coor_mask=coor_mask,
+        )
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError(
+            "canonical live affine targets currently support shift, scale, and center rotation; move_to needs a shared layout mutation"
         )
 
     edge = _base._as_vec2(aligned_edge)
@@ -791,6 +830,19 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     else:
         scalar = float(factor)
         value = _base.Vec2(scalar, scalar)
+    context = _live_mutation_context(self)
+    if context is not None:
+        if not _has_wire_projection(handle):
+            raise NotImplementedError("canonical live affine scale needs a typed transform handle")
+        try:
+            context.liveSetScale(
+                handle,
+                float(handle.wireScaleX) * value.x,
+                float(handle.wireScaleY) * value.y,
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     handle.scale(value.x, value.y)
     _sync_bound_transform(self, handle)
     return self
@@ -815,6 +867,21 @@ def _rotate(
             about_edge=about_edge,
             **kwargs,
         )
+    context = _live_mutation_context(self)
+    if context is not None:
+        if kwargs or about_point is not None or about_edge is not None:
+            raise NotImplementedError(
+                "canonical live affine rotation supports only rotation about the current center"
+            )
+        if not _has_wire_projection(handle):
+            raise NotImplementedError("canonical live affine rotation needs a typed transform handle")
+        try:
+            context.liveSetRotation(
+                handle, float(handle.wireRotation) + _compat._rotation_angle_2d(angle, axis)
+            )
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return self
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
@@ -838,6 +905,8 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_COLOR(self, color)
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support style edits")
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
 
@@ -870,6 +939,8 @@ def _become(
     match_center: bool = False,
     stretch: bool = False,
 ) -> _base.Mobject:
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support become")
     handle = _detached_handle_for(self)
     other_handle = _detached_handle_for(mobject)
     if (
@@ -896,6 +967,8 @@ def _replace(
     dim_to_match: int = 0,
     stretch: bool = False,
 ) -> _base.Mobject:
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support replace")
     handle = _detached_handle_for(self)
     other_handle = _detached_handle_for(mobject)
     if handle is not None and other_handle is not None:
@@ -941,6 +1014,10 @@ def _next_to(
             submobject_to_align=submobject_to_align,
             index_of_submobject_to_align=index_of_submobject_to_align,
             coor_mask=coor_mask,
+        )
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError(
+            "canonical live affine targets do not support layout placement"
         )
 
     vector = _base._as_vec2(direction)
@@ -1002,6 +1079,10 @@ def _align_to(
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError(
+            "canonical live affine targets do not support layout alignment"
+        )
     axis = _base._as_vec2(direction)
     if _alignment_is_mobject(mobject_or_point):
         target_handle = _handle_for(mobject_or_point)
@@ -1025,6 +1106,10 @@ def _align_on_frame(
     handle = _mutation_handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         return _ORIGINAL_ALIGN_ON_FRAME(self, direction, buff)
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError(
+            "canonical live affine targets do not support frame alignment"
+        )
     handle.alignOnFrame(direction.x, direction.y, float(buff))
     _sync_bound_transform(self, handle)
     return self
@@ -1039,6 +1124,8 @@ def _set_fill(
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support style edits")
     if color is not None and opacity is not None:
         parsed = _phase_b._as_color("fill color", color)
         handle.setFill(
@@ -1072,6 +1159,8 @@ def _set_stroke(
         return _ORIGINAL_SET_STROKE(
             self, color=color, width=width, opacity=opacity, family=family
         )
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support style edits")
     if color is not None:
         parsed = _phase_b._as_color("stroke color", color)
         handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
@@ -1093,6 +1182,8 @@ def _set_opacity(
     handle = _mutation_handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
+    if _live_mutation_context(self) is not None:
+        raise NotImplementedError("canonical live affine targets do not support style edits")
     handle.setOpacity(_phase_b._opacity("opacity", opacity))
     _sync_bound_style(self, handle)
     return self

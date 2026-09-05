@@ -213,7 +213,7 @@ def _canonical_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
     if authority == "canonical":
         context = _context(scene)
         try:
-            context.authoredWait(float(duration))
+            context.ordinaryWait(float(duration))
         except Exception as error:
             raise ValueError(str(error)) from None
         return scene
@@ -277,7 +277,129 @@ def _play_canonical_tracker(
     return self
 
 
+def _canonical_affine_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, _base.Mobject, object] | None:
+    """Classify one supported ordinary leaf-affine animation without lowering it.
+
+    The returned detached target is already an opaque same-store handle.  Python
+    does not create a track, timeline entry, or target snapshot for this path.
+    """
+    if isinstance(animation, _base._AnimationBuilder):
+        source, target = animation.source, animation.target
+    elif type(animation) is _base.Transform:
+        source, target = animation.source, animation.target
+    else:
+        return None
+    if not isinstance(source, _base.Mobject) or source._scene is not scene:
+        return None
+    if getattr(source, "_semantic_handle", None) is None:
+        return None
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary animation target must be a Mobject")
+    if target._scene is not None:
+        raise NotImplementedError("canonical ordinary animation target must be detached")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError(
+            "canonical ordinary animation requires typed semantic Mobject handles"
+        )
+    context = getattr(scene, "_canonical_authoring_context", None)
+    handoff_duration = getattr(context, "liveHandoffDuration", None)
+    if (
+        callable(handoff_duration)
+        and handoff_duration() is not None
+        and getattr(target, "_canonical_live_target_context", None) is not context
+    ):
+        raise NotImplementedError(
+            "a canonical live Transform target must be copied from its source through the active session"
+        )
+    return source, target, animation
+
+
+def _play_canonical_affine(
+    self: _base.Scene,
+    source: _base.Mobject,
+    target: _base.Mobject,
+    animation: object,
+    *,
+    duration: float | None,
+    run_time: float | None,
+    start_time: float | None,
+    easing: str | None,
+    rate_func: object | None,
+    lag_ratio: float | None,
+    kwargs: dict[str, object],
+) -> _base.Scene:
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError(
+            "canonical ordinary Scene.play uses the shared session cursor"
+        )
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if getattr(self, "_legacy_geometry_materialized", False):
+        raise NotImplementedError(
+            "canonical ordinary animation cannot follow legacy geometry materialization"
+        )
+    if _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError(
+            "canonical ordinary Scene.play cannot follow legacy Scene timing"
+        )
+
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(animation),
+        default_lag_ratio=0.0,
+        play_run_time=(run_time if run_time is not None else duration),
+        play_easing=easing,
+        play_rate_func=rate_func,
+        play_lag_ratio=lag_ratio,
+    )
+    if resolved.lag_ratio != 0.0 or resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+        raise NotImplementedError(
+            "canonical ordinary Scene.play currently supports one linear affine transform"
+        )
+    context = _context(self)
+    try:
+        context.ordinaryPlayTransformTo(
+            getattr(source, "_semantic_handle"),
+            getattr(target, "_semantic_handle"),
+            float(resolved.run_time),
+            str(resolved.rate_func),
+        )
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
 def _play(self, *args, **kwargs):
+    canonical_affine = [
+        classified
+        for argument in args
+        if (classified := _canonical_affine_animation(self, argument)) is not None
+    ]
+    if canonical_affine:
+        if len(canonical_affine) != 1 or len(args) != 1:
+            raise NotImplementedError(
+                "canonical ordinary Scene.play currently supports one leaf affine animation"
+            )
+        source, target, animation = canonical_affine[0]
+        return _play_canonical_affine(
+            self,
+            source,
+            target,
+            animation,
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
     canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
     if canonical_builders:
         if len(canonical_builders) != 1 or len(args) != 1:
@@ -299,6 +421,12 @@ def _play(self, *args, **kwargs):
     if authority == "canonical":
         raise NotImplementedError(
             "legacy Scene.play cannot follow canonical ValueTracker timing"
+        )
+    context = getattr(self, "_canonical_authoring_context", None)
+    handoff_duration = getattr(context, "liveHandoffDuration", None)
+    if callable(handoff_duration) and handoff_duration() is not None:
+        raise NotImplementedError(
+            "an active canonical session currently supports only one leaf affine animation"
         )
     # Native Text timeline export stays in the canonical context. Its #959
     # codec is store-derived at finalization, so geometry materialization must

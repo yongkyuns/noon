@@ -569,7 +569,8 @@ impl CanonicalAuthoringScene {
     /// The authored scalar-track endpoint used for handoff before a player exists.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_duration(&self) -> f64 {
-        self.scene.time()
+        self.live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
     }
 
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
@@ -578,6 +579,28 @@ impl CanonicalAuthoringScene {
         self.require_pre_execution_signal_authoring()?;
         self.scene.wait(duration)?;
         Ok(self.scene.time())
+    }
+
+    /// Complete one canonical continuation wait in the retained live session.
+    ///
+    /// Before bootstrap this remains the existing Rust authored-cursor wait for
+    /// scalar-track authoring.  Once ordinary live execution exists, the wait is
+    /// a real session segment and its endpoint is reconciled before returning to
+    /// Python continuation code.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
+        if self.live_player.is_none() {
+            return self.authored_wait(duration);
+        }
+        let player = self.active_live_player()?;
+        let end_time = player.live_wait(duration)?;
+        if !player.live_advance_segment_to(end_time)? {
+            return Err("required callback work prevents completing an ordinary wait".into());
+        }
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or("live execution player has no handoff duration")
     }
 
     /// Read only the live runtime's authored handoff duration.
@@ -603,6 +626,74 @@ impl CanonicalAuthoringScene {
             return Err("declare live animations before beginning execution".into());
         }
         self.scene.declare_transform_to(source, target, options)
+    }
+
+    /// Run one supported ordinary leaf TransformTo through the one retained
+    /// session. Declaration, activation, endpoint evaluation, and completion
+    /// remain Rust/session operations; Python only supplies typed handles and
+    /// resolved options.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn ordinary_play_transform_to(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+            || !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
+        {
+            return Err(
+                "ordinary affine animation mobjects belong to another authoring store".into(),
+            );
+        }
+        source.validate()?;
+        target.validate()?;
+        if !self.identities.contains_key(&source.node_id()) {
+            return Err(
+                "ordinary affine animation source is not bound to this canonical Scene".into(),
+            );
+        }
+        if self.identities.contains_key(&target.node_id()) {
+            return Err("ordinary affine animation target must be a detached Mobject".into());
+        }
+        if self.live_player.is_none() && self.scene.time() != 0.0 {
+            return Err(
+                "ordinary affine animation cannot follow pre-execution canonical timing".into(),
+            );
+        }
+
+        // `live_player` needs a valid presentation extent before activation. The
+        // player replaces it with the exact returned segment endpoint below.
+        let bootstrap_duration = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time())
+            .max(options.run_time.unwrap_or(1.0));
+        let player = self.live_player(bootstrap_duration)?;
+        if player.has_required_callbacks() {
+            return Err(
+                "ordinary affine animation with required callbacks needs an asynchronous continuation"
+                    .into(),
+            );
+        }
+        let end_time = player.live_declare_and_activate_transform_to(source, target, options)?;
+        if !player.live_advance_segment_to(end_time)? {
+            return Err(
+                "required callback work prevents completing an ordinary affine animation".into(),
+            );
+        }
+        player.live_complete_segment()?;
+        player
+            .live_handoff_duration()
+            .ok_or("live execution player has no handoff duration")
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_target_editor(&mut self, source: &noon::Mobject) -> Result<noon::Mobject, String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        source.validate()?;
+        self.active_live_player()?.live_target_editor(source)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1431,6 +1522,11 @@ mod wasm {
             self.inner.authored_wait(duration).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = ordinaryWait)]
+        pub fn ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
+            self.inner.ordinary_wait(duration).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = addUpdater)]
         pub fn add_updater(
             &mut self,
@@ -1546,6 +1642,46 @@ mod wasm {
                 declaration,
                 store: std::rc::Rc::clone(self.inner.scene.store()),
             })
+        }
+
+        #[wasm_bindgen(js_name = ordinaryPlayTransformTo)]
+        pub fn ordinary_play_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            run_time: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            source.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            target.id_in_store(self.inner.scene.store(), "ordinary affine animation")?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            let options = noon_core::AnimationOptions::new()
+                .run_time(run_time)
+                .rate_func(rate_function);
+            self.inner
+                .ordinary_play_transform_to(
+                    source.semantic_mobject(),
+                    target.semantic_mobject(),
+                    options,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveTargetEditor)]
+        pub fn live_target_editor(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            source.id_in_store(self.inner.scene.store(), "live target editor")?;
+            self.inner
+                .live_target_editor(source.semantic_mobject())
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = livePlayAnimation)]
@@ -2192,6 +2328,87 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_affine_barriers_reuse_the_runtime_and_accept_a_late_detached_target() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let mut first_target = circle.target_editor().unwrap();
+        first_target.set_translation(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+
+        assert_eq!(
+            context
+                .ordinary_play_transform_to(&circle, &first_target, options)
+                .unwrap(),
+            2.0
+        );
+        assert_eq!(context.authored_duration(), 2.0);
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+
+        assert_eq!(context.ordinary_wait(1.0).unwrap(), 3.0);
+        context
+            .active_live_player()
+            .unwrap()
+            .live_shift(&circle, 1.0, 0.0)
+            .unwrap();
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(3.0, -1.0, 0.0)
+        );
+
+        // Python's ordinary `Transform` creates this target after the runtime
+        // exists. The target and its edit publish through that same runtime, so
+        // the second activation neither rebuilds nor resets the live session.
+        let second_target = context
+            .active_live_player()
+            .unwrap()
+            .live_target_editor(&circle)
+            .unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&second_target, 5.0, -1.0)
+            .unwrap();
+        let second_options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        assert_eq!(
+            context
+                .ordinary_play_transform_to(&circle, &second_target, second_options)
+                .unwrap(),
+            4.0
+        );
+        assert_eq!(context.authored_duration(), 4.0);
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(5.0, -1.0, 0.0)
+        );
+    }
+
+    #[test]
     fn ordinary_layout_query_uses_effective_runtime_and_rejects_transferred_reads() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(1.0).unwrap();
@@ -2478,6 +2695,34 @@ mod tests {
             .to_vec();
         assert_eq!(tracks[1].timing().start_time, 3.0);
         assert_eq!(context.authored_duration(), 4.0);
+    }
+
+    #[test]
+    fn ordinary_affine_play_rejects_a_pre_execution_scalar_cursor_without_bootstrapping() {
+        let mut context = CanonicalAuthoringScene::default();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        context
+            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        let circle = context.scene.circle(0.4).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(2.0, -1.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let revision = context.scene.store().borrow().scene_revision();
+
+        let error = context
+            .ordinary_play_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap_err();
+        assert!(error.contains("cannot follow pre-execution canonical timing"));
+        assert!(context.live_player.is_none());
+        assert_eq!(context.authored_duration(), 2.0);
+        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
     }
 
     #[test]

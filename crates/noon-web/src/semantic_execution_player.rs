@@ -197,6 +197,11 @@ impl SemanticExecutionPlayer {
         )
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_required_callbacks(&self) -> bool {
+        self.session.has_required_callbacks()
+    }
+
     /// The authored scene revision represented by this runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
@@ -419,6 +424,62 @@ impl SemanticExecutionPlayer {
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
         Ok(end_time)
+    }
+
+    /// Atomically declare and activate one ordinary affine transform in the
+    /// live session, then retain its normal continuation segment.
+    ///
+    /// The declaration belongs to the shared semantic store.  This wrapper
+    /// owns no target snapshot or timeline cursor; callers drive and complete
+    /// the returned segment through the existing live methods below.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_declare_and_activate_transform_to(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<f64, String> {
+        self.require_completed_live_segment()?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let segment = noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .declare_and_activate_transform_to(source, target, options)
+        .map_err(|error| error.to_string())?;
+        let end_time = segment.end_time();
+        self.clock = self
+            .live_clock_at(self.session.frame().time, end_time, true)
+            .expect("validated execution segment must produce a valid presentation clock");
+        self.live_segment = Some(segment);
+        Ok(end_time)
+    }
+
+    /// Create a detached target through the retained session so its semantic
+    /// publication remains coherent with this runtime. Detached target rows do
+    /// not create execution objects or frame work.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_target_editor(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<noon::Mobject, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .target_editor(source)
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
