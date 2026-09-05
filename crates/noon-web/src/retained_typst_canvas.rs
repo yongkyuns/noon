@@ -162,7 +162,7 @@ mod wasm {
                 .encode_retained(&mut encoder, &view, &prepared, &self.text_gpu, CLEAR_COLOR)
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
-            surface_texture.present();
+            self.queue.present(surface_texture);
             self.last_draw_calls = draw
                 .geometry
                 .draw_calls
@@ -243,6 +243,7 @@ mod wasm {
                     power_preference: wgpu::PowerPreference::HighPerformance,
                     force_fallback_adapter: false,
                     compatible_surface: Some(&surface),
+                    apply_limit_buckets: false,
                 })
                 .await
                 .map_err(js_error)?;

@@ -650,7 +650,7 @@ fn create_glyph_pipeline(
             module: shader,
             entry_point: Some("vs_glyph"),
             compilation_options: Default::default(),
-            buffers: &[glyph_instance_layout()],
+            buffers: &[Some(glyph_instance_layout())],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,

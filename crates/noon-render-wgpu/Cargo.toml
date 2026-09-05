@@ -36,7 +36,7 @@ noon-runtime = { path = "../noon-runtime" }
 noon-text-atlas = { path = "../noon-text-atlas", default-features = false }
 noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false }
 swash = "=0.2.10"
-wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
 noon-compile = { path = "../noon-compile" }

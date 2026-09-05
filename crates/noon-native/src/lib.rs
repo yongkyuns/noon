@@ -365,7 +365,7 @@ impl NativeApp {
             .encode(&mut encoder, &view, &prepared, CLEAR_COLOR);
         window.pre_present_notify();
         gpu.queue.submit(Some(encoder.finish()));
-        surface_texture.present();
+        gpu.queue.present(surface_texture);
         #[cfg(test)]
         {
             self.presented_frame = true;
@@ -553,6 +553,7 @@ impl NativeGpu {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;

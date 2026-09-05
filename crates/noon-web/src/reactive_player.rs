@@ -237,6 +237,7 @@ mod wasm {
                     power_preference: wgpu::PowerPreference::HighPerformance,
                     force_fallback_adapter: false,
                     compatible_surface: Some(&surface),
+                    apply_limit_buckets: false,
                 })
                 .await
                 .map_err(js_error)?;
@@ -616,7 +617,7 @@ mod wasm {
             self.renderer
                 .encode(&mut encoder, &view, &prepared, self.clear_color);
             self.queue.submit(std::iter::once(encoder.finish()));
-            surface_texture.present();
+            self.queue.present(surface_texture);
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
