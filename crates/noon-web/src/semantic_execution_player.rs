@@ -1182,14 +1182,12 @@ mod tests {
             )
             .unwrap();
         store
-            .bind_semantic_native_event_input(
-                clicks,
-                NativeEventSource::PointerDown { button: 0 },
-            )
+            .bind_semantic_native_event_input(clicks, NativeEventSource::PointerDown { button: 0 })
             .unwrap();
-        let object = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 1.0 },
-        ));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
         store.attach_to_scene(object).unwrap();
         store
             .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
@@ -1219,14 +1217,12 @@ mod tests {
         let mut store = SemanticStore::new();
         let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
         store
-            .bind_semantic_native_event_input(
-                clicks,
-                NativeEventSource::PointerDown { button: 0 },
-            )
+            .bind_semantic_native_event_input(clicks, NativeEventSource::PointerDown { button: 0 })
             .unwrap();
-        let object = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 1.0 },
-        ));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
         store.attach_to_scene(object).unwrap();
         store
             .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)

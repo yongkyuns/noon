@@ -178,10 +178,7 @@ mod wasm {
             Ok(())
         }
 
-        fn emit_native_event(
-            &mut self,
-            source: NativeEventSource,
-        ) -> Result<(), JsValue> {
+        fn emit_native_event(&mut self, source: NativeEventSource) -> Result<(), JsValue> {
             let sequence = self.next_native_event_sequence;
             let next = sequence
                 .checked_add(1)
