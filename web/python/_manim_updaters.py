@@ -38,6 +38,10 @@ _ORIGINAL_SET_COLOR = _base.Mobject.set_color
 _ORIGINAL_SET_FILL = _base.Mobject.set_fill
 _ORIGINAL_SET_STROKE = _base.Mobject.set_stroke
 _ORIGINAL_SET_OPACITY = _base.Mobject.set_opacity
+_ORIGINAL_VMOBJECT_SET_COLOR: Callable[..., _base.Mobject] | None = None
+_ORIGINAL_VMOBJECT_SET_FILL: Callable[..., _base.Mobject] | None = None
+_ORIGINAL_VMOBJECT_SET_STROKE: Callable[..., _base.Mobject] | None = None
+_ORIGINAL_VMOBJECT_SET_OPACITY: Callable[..., _base.Mobject] | None = None
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -845,8 +849,6 @@ def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobje
         row.style = replace(row.style, stroke=color_value)
     if row.style.fill is None and row.style.stroke is None:
         row.style = replace(row.style, fill=color_value)
-    if row.style.stroke != before.stroke:
-        row.invalidate_bounds()
     context.style_changed(key, before, row)
     return self
 
@@ -881,7 +883,10 @@ def _canonical_set_stroke(
     if width is not None:
         style = replace(style, stroke_width=float(width))
     row.style = style
-    if row.style.stroke != before.stroke or row.style.stroke_width != before.stroke_width:
+    if (
+        (row.style.stroke is None) != (before.stroke is None)
+        or row.style.stroke_width != before.stroke_width
+    ):
         row.invalidate_bounds()
     context.style_changed(key, before, row)
     return self
@@ -896,6 +901,75 @@ def _canonical_set_opacity(self: _base.Mobject, opacity: float) -> _base.Mobject
     row.style = replace(row.style, opacity=float(opacity))
     context.style_changed(key, before, row)
     return self
+
+
+def _canonical_vmobject_set_color(
+    self: _base.Mobject,
+    color: object,
+    family: bool = True,
+) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        del family
+        from _manim_phase_b import _as_color
+
+        return _canonical_set_color(self, _as_color("color", color))
+    assert _ORIGINAL_VMOBJECT_SET_COLOR is not None
+    return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
+
+
+def _canonical_vmobject_set_fill(
+    self: _base.Mobject,
+    color: object = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        del family
+        if color is not None:
+            from _manim_phase_b import _as_color
+
+            color = _as_color("fill color", color)
+        return _canonical_set_fill(self, color, opacity)
+    assert _ORIGINAL_VMOBJECT_SET_FILL is not None
+    return _ORIGINAL_VMOBJECT_SET_FILL(self, color=color, opacity=opacity, family=family)
+
+
+def _canonical_vmobject_set_stroke(
+    self: _base.Mobject,
+    color: object = None,
+    width: float | None = None,
+    opacity: float | None = None,
+    family: bool = True,
+) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        del family
+        if opacity is not None:
+            raise NotImplementedError(
+                "canonical callback stroke opacity is not supported; use set_opacity"
+            )
+        if color is not None:
+            from _manim_phase_b import _as_color
+
+            color = _as_color("stroke color", color)
+        return _canonical_set_stroke(self, color, width)
+    assert _ORIGINAL_VMOBJECT_SET_STROKE is not None
+    return _ORIGINAL_VMOBJECT_SET_STROKE(
+        self, color=color, width=width, opacity=opacity, family=family
+    )
+
+
+def _canonical_vmobject_set_opacity(
+    self: _base.Mobject,
+    opacity: float,
+    family: bool = True,
+) -> _base.Mobject:
+    if _canonical_phase_context(self) is not None:
+        del family
+        from _manim_phase_b import _opacity
+
+        return _canonical_set_opacity(self, _opacity("opacity", opacity))
+    assert _ORIGINAL_VMOBJECT_SET_OPACITY is not None
+    return _ORIGINAL_VMOBJECT_SET_OPACITY(self, opacity, family=family)
 
 
 def _color(value: dict[str, float] | None) -> _ir.Color | None:
@@ -1457,5 +1531,22 @@ def install() -> None:
     _base.Mobject.set_fill = _canonical_set_fill
     _base.Mobject.set_stroke = _canonical_set_stroke
     _base.Mobject.set_opacity = _canonical_set_opacity
+    # Semantic-handle installation gives VMobject its own final public style
+    # methods. Reinstall the phase dispatch at that public boundary so it cannot
+    # fall through to raw snapshot mutation while a canonical callback is active.
+    import _manim_compat as _compat
+
+    global _ORIGINAL_VMOBJECT_SET_COLOR
+    global _ORIGINAL_VMOBJECT_SET_FILL
+    global _ORIGINAL_VMOBJECT_SET_STROKE
+    global _ORIGINAL_VMOBJECT_SET_OPACITY
+    _ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
+    _ORIGINAL_VMOBJECT_SET_FILL = _compat.VMobject.set_fill
+    _ORIGINAL_VMOBJECT_SET_STROKE = _compat.VMobject.set_stroke
+    _ORIGINAL_VMOBJECT_SET_OPACITY = _compat.VMobject.set_opacity
+    _compat.VMobject.set_color = _canonical_vmobject_set_color
+    _compat.VMobject.set_fill = _canonical_vmobject_set_fill
+    _compat.VMobject.set_stroke = _canonical_vmobject_set_stroke
+    _compat.VMobject.set_opacity = _canonical_vmobject_set_opacity
     _install_rotating_breadth()
     _INSTALLED = True
