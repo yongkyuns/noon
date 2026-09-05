@@ -1800,7 +1800,7 @@ mod tests {
         let effective = rerun.live_effective(&circle).unwrap();
         assert_eq!(effective.transform.translation, Vec2::new(3.0, -1.0));
         assert_eq!(effective.transform.scale, Vec2::new(2.0, 0.5));
-        assert_eq!(effective.style.fill_opacity, 0.8);
+        assert_eq!(effective.style.fill.alpha, 0.8);
         let snapshot: crate::RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
