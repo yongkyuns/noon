@@ -453,7 +453,7 @@ try {
           authoringClient: harness.authoring,
           transportMode: "transferable",
         };
-        if (endpointTime !== null) options.loopDurationSeconds = authored.duration;
+        if (authored.duration > 0) options.loopDurationSeconds = authored.duration;
         await execution.startSemanticExecution(authored.semanticExecution, options);
 
         async function waitForFrame(afterPresentedFrames = 0) {
@@ -515,8 +515,8 @@ try {
       const expectedX = 320 + expectedFinalCenter[0] * 45;
       const expectedY = 180 - expectedFinalCenter[1] * 45;
       assert.ok(finalPixels.count > 100, `${filename}: completed circle was not visible`);
-      assert.ok(Math.abs(finalPixels.centerX - expectedX) < 4, `${filename}: completed x endpoint`);
-      assert.ok(Math.abs(finalPixels.centerY - expectedY) < 4, `${filename}: completed y endpoint`);
+      assert.ok(Math.abs(finalPixels.centerX - expectedX) < 4, `${filename}: completed x endpoint expected ${expectedX}; pixels ${JSON.stringify(finalPixels)}`);
+      assert.ok(Math.abs(finalPixels.centerY - expectedY) < 4, `${filename}: completed y endpoint expected ${expectedY}; pixels ${JSON.stringify(finalPixels)}`);
     }
     if (expectText) {
       const pixels = textPixelStats(await page.locator(`#${result.canvasId}`).screenshot());
