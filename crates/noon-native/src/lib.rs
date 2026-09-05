@@ -347,12 +347,26 @@ impl NativeApp {
             gpu.set_camera(camera)?;
             gpu.acquire(window.clone())?
         };
+        let Some(acquired) = acquired else {
+            return Ok(());
+        };
+        let viewport_aspect = {
+            let gpu = self
+                .gpu
+                .as_ref()
+                .expect("drawable native host must own GPU state");
+            gpu_viewport_aspect(gpu.config.width, gpu.config.height)?
+        };
+        let viewport_bounds = camera
+            .viewport_bounds(viewport_aspect)
+            .ok_or_else(|| NativeHostError::Gpu("camera viewport is invalid".to_owned()))?;
+        let visibility = self.session.query_viewport(viewport_bounds);
         let force_full_redraw = self.force_full_redraw;
         let Some(((surface_texture, reconfigure_after_present), publication)) =
             Self::take_renderer_publication_after_acquire(
                 &mut self.session,
                 force_full_redraw,
-                acquired,
+                Some(acquired),
             )
         else {
             return Ok(());
@@ -365,7 +379,13 @@ impl NativeApp {
         let metrics = gpu.text_metrics(camera)?;
         let prepared = gpu
             .preparer
-            .prepare_publication(&gpu.device, &gpu.queue, &publication, metrics)
+            .prepare_publication_visible(
+                &gpu.device,
+                &gpu.queue,
+                &publication,
+                visibility.object_indices(),
+                metrics,
+            )
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         gpu.renderer
             .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
@@ -737,6 +757,15 @@ fn camera_for_viewport(
     let aspect = width as f32 / height as f32;
     Camera2D::new(state.center, Vec2::new(state.height * aspect, state.height))
         .map_err(|error| NativeHostError::Gpu(error.to_string()))
+}
+
+fn gpu_viewport_aspect(width: u32, height: u32) -> Result<f32, NativeHostError> {
+    if width == 0 || height == 0 {
+        return Err(NativeHostError::Gpu(
+            "camera viewport dimensions must be positive".to_owned(),
+        ));
+    }
+    Ok(width as f32 / height as f32)
 }
 
 #[cfg(test)]

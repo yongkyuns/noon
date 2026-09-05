@@ -329,7 +329,8 @@ impl SceneInstance {
         )
     }
 
-    pub(crate) fn take_spatial_changes(&mut self) -> FrameChanges {
+    /// Consume derived spatial invalidation for the execution-session index owner.
+    pub fn take_spatial_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.spatial_changes)
     }
 
@@ -355,6 +356,10 @@ impl SceneInstance {
 
     pub fn contains_object(&self, id: ObjectId) -> bool {
         self.compiled.object_index(id).is_some()
+    }
+
+    pub fn frame_index_for_object(&self, id: ObjectId) -> Option<usize> {
+        self.compiled.object_index(id).map(|index| index as usize)
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {

@@ -29,7 +29,9 @@ use swash::{
 };
 
 use super::{Camera2D, DrawStats, GpuRenderer, UploadStats, PATH_SAMPLE_COUNT};
-use crate::{FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive};
+use crate::{
+    FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive, VisibleRenderError,
+};
 
 pub const DEFAULT_GLYPH_OUTLINE_CACHE_MAX_ENTRIES: usize = 4_096;
 pub const DEFAULT_GLYPH_OUTLINE_CACHE_MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
@@ -82,6 +84,24 @@ pub struct RetainedFrameIncrementalStats {
     pub scratch_reuses: u64,
     pub text_snapshot_copies: u64,
     pub mixed_order_rebuilds: u64,
+}
+
+/// Cumulative work performed to derive camera-visible submission lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetainedVisibilityProjectionStats {
+    pub projections: u64,
+    pub candidates_projected: u64,
+    pub render_items_projected: u64,
+}
+
+impl RetainedVisibilityProjectionStats {
+    fn record(&mut self, candidates: usize, render_items: usize) {
+        self.projections = self.projections.saturating_add(1);
+        self.candidates_projected = self.candidates_projected.saturating_add(candidates as u64);
+        self.render_items_projected = self
+            .render_items_projected
+            .saturating_add(render_items as u64);
+    }
 }
 
 pub struct PreparedRetainedTextSnapshot<'a> {
@@ -153,6 +173,7 @@ pub enum RetainedPrepareError {
     InvalidGlyphId(u32),
     InvalidFontSize,
     InvalidVariation,
+    Visibility(VisibleRenderError),
     Text(TextPrepareError),
 }
 
@@ -183,6 +204,7 @@ impl std::fmt::Display for RetainedPrepareError {
                 formatter.write_str("glyph outline font size must be finite and positive")
             }
             Self::InvalidVariation => formatter.write_str("glyph outline variation must be finite"),
+            Self::Visibility(error) => error.fmt(formatter),
             Self::Text(error) => write!(formatter, "retained text preparation failed: {error}"),
         }
     }
@@ -193,6 +215,12 @@ impl std::error::Error for RetainedPrepareError {}
 impl From<TextPrepareError> for RetainedPrepareError {
     fn from(value: TextPrepareError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<VisibleRenderError> for RetainedPrepareError {
+    fn from(value: VisibleRenderError) -> Self {
+        Self::Visibility(value)
     }
 }
 
@@ -566,6 +594,9 @@ pub struct RetainedFramePreparer {
     incremental_stats: RetainedFrameIncrementalStats,
     sources: Vec<SourceItem>,
     render_items: Vec<RetainedRenderItem>,
+    render_item_ranges: HashMap<ObjectId, std::ops::Range<usize>>,
+    visible_render_items: Vec<RetainedRenderItem>,
+    visibility_stats: RetainedVisibilityProjectionStats,
     snapshot_mask_quads: Vec<GlyphQuadInstance>,
     snapshot_color_quads: Vec<GlyphQuadInstance>,
     snapshot_text_items: Vec<PreparedTextItem>,
@@ -604,6 +635,9 @@ impl Default for RetainedFramePreparer {
             incremental_stats: RetainedFrameIncrementalStats::default(),
             sources: Vec::new(),
             render_items: Vec::new(),
+            render_item_ranges: HashMap::new(),
+            visible_render_items: Vec::new(),
+            visibility_stats: RetainedVisibilityProjectionStats::default(),
             snapshot_mask_quads: Vec::new(),
             snapshot_color_quads: Vec::new(),
             snapshot_text_items: Vec::new(),
@@ -692,6 +726,10 @@ impl RetainedFramePreparer {
         self.incremental_stats
     }
 
+    pub const fn visibility_stats(&self) -> RetainedVisibilityProjectionStats {
+        self.visibility_stats
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prepare<'a>(
         &'a mut self,
@@ -740,6 +778,42 @@ impl RetainedFramePreparer {
         Ok(prepared)
     }
 
+    /// Prepare one coherent runtime publication while projecting draw submission
+    /// to painter-ordered viewport candidates. Resident geometry, glyph snapshots,
+    /// and immutable resources remain canonical and are updated from the publication's
+    /// dirty set before this candidate-sized renderer projection is returned.
+    pub fn prepare_publication_visible<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &RendererPublication<'_>,
+        visible_object_indices: &[usize],
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        let received = publication.context();
+        if let Some(applied) = self.last_applied_publication {
+            if publication_is_stale(received, applied) {
+                return Err(RetainedPrepareError::StalePublication { received, applied });
+            }
+        }
+        validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+
+        let prepared = self.prepare_with_changes_inner(
+            device,
+            queue,
+            publication.frame(),
+            publication.changes(),
+            publication.text_resources(),
+            publication.font_resources(),
+            publication.geometry_resources(),
+            metrics,
+            true,
+            Some(visible_object_indices),
+        )?;
+        *prepared.applied_publication = Some(received);
+        Ok(prepared)
+    }
+
     /// Last successfully applied runtime publication, if this preparer has one.
     pub fn last_applied_publication(&self) -> Option<PublicationContext> {
         self.last_applied_publication
@@ -767,7 +841,7 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepare_with_changes_inner(
-            device, queue, frame, changes, texts, fonts, geometries, metrics, true,
+            device, queue, frame, changes, texts, fonts, geometries, metrics, true, None,
         )
     }
 
@@ -783,6 +857,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
         allow_geometry_only: bool,
+        visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
@@ -790,13 +865,23 @@ impl RetainedFramePreparer {
         if allow_geometry_only {
             match self.geometry_only_classification {
                 Some(true) if self.can_prepare_geometry_only(frame, changes) => {
-                    return self.prepare_geometry_only(frame, changes, metrics);
+                    return self.prepare_geometry_only(
+                        frame,
+                        changes,
+                        metrics,
+                        visible_object_indices,
+                    );
                 }
                 Some(false) => {}
                 Some(true) => {}
                 None if self.frame_is_geometry_only(frame) => {
                     self.geometry_only_classification = Some(true);
-                    return self.prepare_geometry_only(frame, changes, metrics);
+                    return self.prepare_geometry_only(
+                        frame,
+                        changes,
+                        metrics,
+                        visible_object_indices,
+                    );
                 }
                 None => self.geometry_only_classification = Some(false),
             }
@@ -804,7 +889,13 @@ impl RetainedFramePreparer {
             self.geometry_only_classification = Some(false);
         }
         if self.can_update_mixed_geometry_locally(frame, changes, metrics) {
-            return self.prepare_mixed_geometry_locally(frame, changes, geometries, metrics);
+            return self.prepare_mixed_geometry_locally(
+                frame,
+                changes,
+                geometries,
+                metrics,
+                visible_object_indices,
+            );
         }
 
         let text_can_update_locally = if changes.is_empty() {
@@ -842,6 +933,7 @@ impl RetainedFramePreparer {
             debug_assert_eq!(prepared.items.len(), self.snapshot_text_items.len());
             debug_assert_eq!(prepared.stats, self.snapshot_text_stats);
 
+            self.project_mixed_visibility(frame, visible_object_indices);
             let no_changes = FrameChanges::default();
             let geometry = self
                 .geometry
@@ -860,12 +952,16 @@ impl RetainedFramePreparer {
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
-            applied_publication: &mut self.last_applied_publication,
+                applied_publication: &mut self.last_applied_publication,
                 geometry,
                 geometry_only: false,
                 text_generation: self.text_generation,
                 text,
-                render_items: &self.render_items,
+                render_items: if visible_object_indices.is_some() {
+                    &self.visible_render_items
+                } else {
+                    &self.render_items
+                },
                 stats: self.snapshot_prepare_stats,
             });
         }
@@ -891,6 +987,7 @@ impl RetainedFramePreparer {
                 .text_generation
                 .checked_add(1)
                 .expect("retained text generation counter exhausted");
+            self.project_mixed_visibility(frame, visible_object_indices);
             let no_changes = FrameChanges::default();
             let geometry = self
                 .geometry
@@ -908,12 +1005,16 @@ impl RetainedFramePreparer {
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
-            applied_publication: &mut self.last_applied_publication,
+                applied_publication: &mut self.last_applied_publication,
                 geometry,
                 geometry_only: false,
                 text_generation: self.text_generation,
                 text,
-                render_items: &self.render_items,
+                render_items: if visible_object_indices.is_some() {
+                    &self.visible_render_items
+                } else {
+                    &self.render_items
+                },
                 stats: self.snapshot_prepare_stats,
             });
         }
@@ -966,6 +1067,17 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+        if let Some(indices) = visible_object_indices {
+            let projected = project_mixed_visibility(
+                frame,
+                indices,
+                &self.render_items,
+                &self.render_item_ranges,
+                &mut self.visible_render_items,
+            );
+            self.visibility_stats.record(indices.len(), projected);
+        }
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
@@ -1005,7 +1117,11 @@ impl RetainedFramePreparer {
             geometry_only: false,
             text_generation: self.text_generation,
             text,
-            render_items: &self.render_items,
+            render_items: if visible_object_indices.is_some() {
+                &self.visible_render_items
+            } else {
+                &self.render_items
+            },
             stats,
         })
     }
@@ -1033,7 +1149,7 @@ impl RetainedFramePreparer {
         // suppress the geometry-only fast path while this family baseline is built.
         let result = self
             .prepare_with_changes_inner(
-                device, queue, frame, changes, texts, fonts, geometries, metrics, false,
+                device, queue, frame, changes, texts, fonts, geometries, metrics, false, None,
             )
             .map(|_| ());
         self.geometry_only_classification = None;
@@ -1101,9 +1217,18 @@ impl RetainedFramePreparer {
         frame: &FrameState,
         changes: &FrameChanges,
         metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
-        let geometry = self.geometry.prepare_incremental(frame, changes);
+        if let Some(indices) = visible_object_indices {
+            self.record_visibility_projection(indices.len(), indices.len());
+        }
+        let geometry = match visible_object_indices {
+            Some(indices) => self
+                .geometry
+                .prepare_incremental_visible(frame, changes, indices)?,
+            None => self.geometry.prepare_incremental(frame, changes),
+        };
         let stats = RetainedPrepareStats {
             semantic_objects: frame.objects.len(),
             geometry_slots: frame.objects.len(),
@@ -1181,6 +1306,7 @@ impl RetainedFramePreparer {
         changes: &FrameChanges,
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepared_generation_ready = false;
         let mut scratch_changes = Vec::with_capacity(changes.object_indices().len());
@@ -1216,10 +1342,21 @@ impl RetainedFramePreparer {
                 &self.snapshot_text_items,
                 &geometry,
             );
+            rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
             self.incremental_stats.mixed_order_rebuilds = self
                 .incremental_stats
                 .mixed_order_rebuilds
                 .saturating_add(1);
+        }
+        if let Some(indices) = visible_object_indices {
+            let projected = project_mixed_visibility(
+                frame,
+                indices,
+                &self.render_items,
+                &self.render_item_ranges,
+                &mut self.visible_render_items,
+            );
+            self.visibility_stats.record(indices.len(), projected);
         }
         self.snapshot_metrics = Some(metrics);
         self.prepared_generation_ready = true;
@@ -1240,11 +1377,92 @@ impl RetainedFramePreparer {
             geometry_only: false,
             text_generation: self.text_generation,
             text,
-            render_items: &self.render_items,
+            render_items: if visible_object_indices.is_some() {
+                &self.visible_render_items
+            } else {
+                &self.render_items
+            },
             stats: self.snapshot_prepare_stats,
         })
     }
 
+    fn rebuild_render_item_ranges(&mut self) {
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
+    }
+
+    fn project_mixed_visibility(
+        &mut self,
+        frame: &FrameState,
+        visible_object_indices: Option<&[usize]>,
+    ) {
+        let Some(indices) = visible_object_indices else {
+            return;
+        };
+        let projected = project_mixed_visibility(
+            frame,
+            indices,
+            &self.render_items,
+            &self.render_item_ranges,
+            &mut self.visible_render_items,
+        );
+        self.record_visibility_projection(indices.len(), projected);
+    }
+
+    fn record_visibility_projection(&mut self, candidates: usize, render_items: usize) {
+        self.visibility_stats.record(candidates, render_items);
+    }
+}
+
+fn rebuild_render_item_ranges(
+    ranges: &mut HashMap<ObjectId, std::ops::Range<usize>>,
+    render_items: &[RetainedRenderItem],
+) {
+    ranges.clear();
+    for (index, item) in render_items.iter().enumerate() {
+        ranges
+            .entry(item.object_id())
+            .and_modify(|range| range.end = index + 1)
+            .or_insert(index..index + 1);
+    }
+}
+
+fn project_mixed_visibility(
+    frame: &FrameState,
+    visible_object_indices: &[usize],
+    render_items: &[RetainedRenderItem],
+    ranges: &HashMap<ObjectId, std::ops::Range<usize>>,
+    output: &mut Vec<RetainedRenderItem>,
+) -> usize {
+    output.clear();
+    for &index in visible_object_indices {
+        let object = &frame.objects[index];
+        if let Some(range) = ranges.get(&object.id) {
+            output.extend_from_slice(&render_items[range.clone()]);
+        }
+    }
+    output.len()
+}
+
+fn validate_visible_object_indices(
+    frame: &FrameState,
+    visible_object_indices: &[usize],
+) -> Result<(), VisibleRenderError> {
+    let mut seen = std::collections::HashSet::with_capacity(visible_object_indices.len());
+    for &index in visible_object_indices {
+        if index >= frame.objects.len() {
+            return Err(VisibleRenderError::ObjectIndexOutOfRange {
+                index,
+                objects: frame.objects.len(),
+            });
+        }
+        if !seen.insert(index) {
+            return Err(VisibleRenderError::DuplicateObjectIndex(index));
+        }
+    }
+    Ok(())
+}
+
+impl RetainedFramePreparer {
     fn changes_are_fast_text_only(&self, frame: &FrameState, changes: &FrameChanges) -> bool {
         if !self.scratch_ready || changes.is_all() || changes.is_structural() || changes.is_empty()
         {
@@ -2377,6 +2595,33 @@ mod tests {
     }
 
     #[test]
+    fn visible_publication_keeps_resident_geometry_but_filters_submission() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let mut preparer = RetainedFramePreparer::new();
+        let mut instance = runtime_publication_scene();
+        let publication = instance.take_renderer_publication();
+        let context = publication.context();
+
+        {
+            let prepared = preparer
+                .prepare_publication_visible(&device, &queue, &publication, &[], metrics)
+                .unwrap();
+            assert_eq!(prepared.geometry.circles.len(), 1);
+            assert!(prepared.geometry_render_batches().is_empty());
+        }
+        assert_eq!(preparer.last_applied_publication(), Some(context));
+        assert_eq!(
+            preparer.visibility_stats(),
+            RetainedVisibilityProjectionStats {
+                projections: 1,
+                candidates_projected: 0,
+                render_items_projected: 0,
+            }
+        );
+    }
+
+    #[test]
     fn new_or_changed_text_generation_requires_gpu_upload() {
         assert!(text_upload_needed(None, 1));
         assert!(!text_upload_needed(Some(1), 1));
@@ -2454,6 +2699,144 @@ mod tests {
             }
         );
         assert_eq!(preparer.outline_cache_stats(), outline_stats);
+    }
+
+    #[test]
+    fn mixed_visibility_projects_geometry_and_text_enter_exit_in_painter_order() {
+        let (frame, texts, fonts) = mixed_text_frame();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+
+        {
+            let prepared = preparer
+                .prepare_with_changes_inner(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                    true,
+                    Some(&[0, 1]),
+                )
+                .unwrap();
+            assert!(!prepared.geometry_only);
+            assert_eq!(
+                prepared.render_items.first().unwrap().object_id(),
+                ObjectId::new(1)
+            );
+            assert_eq!(
+                prepared.render_items.last().unwrap().object_id(),
+                ObjectId::new(2)
+            );
+        }
+        let baseline_incremental = preparer.incremental_stats();
+
+        {
+            let prepared = preparer
+                .prepare_with_changes_inner(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                    true,
+                    Some(&[1]),
+                )
+                .unwrap();
+            assert!(!prepared.render_items.is_empty());
+            assert!(prepared
+                .render_items
+                .iter()
+                .all(|item| item.object_id() == ObjectId::new(2)));
+        }
+        {
+            let prepared = preparer
+                .prepare_with_changes_inner(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::default(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                    true,
+                    Some(&[0]),
+                )
+                .unwrap();
+            assert_eq!(prepared.render_items.len(), 1);
+            assert_eq!(prepared.render_items[0].object_id(), ObjectId::new(1));
+        }
+
+        let visibility = preparer.visibility_stats();
+        assert_eq!(visibility.projections, 3);
+        assert_eq!(visibility.candidates_projected, 4);
+        assert_eq!(
+            preparer.incremental_stats().mixed_order_rebuilds,
+            baseline_incremental.mixed_order_rebuilds,
+            "camera-only visibility changes must reuse canonical painter order"
+        );
+    }
+
+    #[test]
+    fn offscreen_local_geometry_change_keeps_text_only_projection_candidate_sized() {
+        let (mut frame, texts, fonts) = mixed_text_frame();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+
+        preparer
+            .prepare_with_changes_inner(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+                true,
+                Some(&[1]),
+            )
+            .unwrap();
+        let baseline = preparer.incremental_stats();
+        frame.objects[0].transform.translation = Vec2::new(20.0, 0.0);
+
+        {
+            let prepared = preparer
+                .prepare_with_changes_inner(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                    true,
+                    Some(&[1]),
+                )
+                .unwrap();
+            assert!(prepared
+                .render_items
+                .iter()
+                .all(|item| item.object_id() == ObjectId::new(2)));
+            assert_eq!(prepared.geometry_stats().instances_repacked, 1);
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+        }
+        let after = preparer.incremental_stats();
+        assert_eq!(after.scratch_rebuilds, baseline.scratch_rebuilds);
+        assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
+        assert_eq!(preparer.visibility_stats().candidates_projected, 2);
     }
 
     #[test]

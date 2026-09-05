@@ -80,37 +80,7 @@ impl std::fmt::Display for VisibleRenderError {
 
 impl std::error::Error for VisibleRenderError {}
 
-/// Incremental frame preparation with an independent candidate-only submission view.
-///
-/// The inner `FramePreparer` always retains the canonical all-live painter batches and
-/// packed GPU/cache state. Visibility preparation projects only the retained candidate
-/// rows into dedicated candidate-sized draw descriptors, so culling never poisons a
-/// later uncullled preparation and never requires an all-live rebuild to switch modes.
-#[derive(Debug, Default)]
-pub struct VisibilityFramePreparer {
-    preparer: FramePreparer,
-    raw_render_batches: Vec<OrderedRenderBatch>,
-    render_batches: Vec<OrderedRenderBatch>,
-    mega_path_batches: Vec<MegaPathBatch>,
-}
-
-impl VisibilityFramePreparer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Prepare the ordinary all-live submission view while preserving retained caches.
-    pub fn prepare_incremental<'a>(
-        &'a mut self,
-        frame: &FrameState,
-        changes: &FrameChanges,
-    ) -> PreparedFrame<'a> {
-        self.raw_render_batches.clear();
-        self.render_batches.clear();
-        self.mega_path_batches.clear();
-        self.preparer.prepare_incremental(frame, changes)
-    }
-
+impl FramePreparer {
     /// Prepare one incremental frame while limiting ordered draw submission to the
     /// supplied retained-visibility candidates.
     ///
@@ -138,34 +108,37 @@ impl VisibilityFramePreparer {
             }
         }
 
-        let mut stats = self.preparer.prepare_incremental(frame, changes).stats;
+        let mut stats = self.prepare_incremental(frame, changes).stats;
 
-        self.raw_render_batches.clear();
+        let mut raw_render_batches = std::mem::take(&mut self.visible_raw_render_batches);
+        raw_render_batches.clear();
         for &object_index in visible_object_indices {
-            push_slot_batches(
-                &mut self.raw_render_batches,
-                self.preparer.slots[object_index],
-            );
+            push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
         }
+        let mut render_batches = std::mem::take(&mut self.visible_render_batches);
+        let mut mega_path_batches = std::mem::take(&mut self.visible_mega_path_batches);
         project_mega_render_batches(
-            &self.preparer,
-            &self.raw_render_batches,
-            &mut self.render_batches,
-            &mut self.mega_path_batches,
+            self,
+            &raw_render_batches,
+            &mut render_batches,
+            &mut mega_path_batches,
         );
+        self.visible_raw_render_batches = raw_render_batches;
+        self.visible_render_batches = render_batches;
+        self.visible_mega_path_batches = mega_path_batches;
 
-        stats.batch_count = self.render_batches.len();
+        stats.batch_count = self.visible_render_batches.len();
         stats.mega_path_count = self
-            .mega_path_batches
+            .visible_mega_path_batches
             .iter()
             .map(|batch| batch.path_count)
             .sum();
-        stats.mega_path_batch_count = self.mega_path_batches.len();
+        stats.mega_path_batch_count = self.visible_mega_path_batches.len();
 
         Ok(projected_frame(
-            &self.preparer,
-            &self.render_batches,
-            &self.mega_path_batches,
+            self,
+            &self.visible_render_batches,
+            &self.visible_mega_path_batches,
             frame.time,
             stats,
         ))
@@ -514,7 +487,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = VisibilityFramePreparer::new();
+        let mut preparer = FramePreparer::new();
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0, 2])
             .unwrap();
@@ -539,7 +512,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = VisibilityFramePreparer::new();
+        let mut preparer = FramePreparer::new();
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[1, 2])
             .unwrap();
@@ -562,7 +535,7 @@ mod tests {
             object(0, GeometryRef::circle(1.0)),
             object(1, GeometryRef::rectangle(2.0, 2.0)),
         ]);
-        let mut preparer = VisibilityFramePreparer::new();
+        let mut preparer = FramePreparer::new();
         let prepared = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[])
             .unwrap();
@@ -575,7 +548,7 @@ mod tests {
     #[test]
     fn invalid_visibility_is_rejected_before_preparation() {
         let frame = frame(vec![object(0, GeometryRef::circle(1.0))]);
-        let mut preparer = VisibilityFramePreparer::new();
+        let mut preparer = FramePreparer::new();
 
         assert!(matches!(
             preparer.prepare_incremental_visible(&frame, &FrameChanges::all(), &[1]),
@@ -597,7 +570,7 @@ mod tests {
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
-        let mut preparer = VisibilityFramePreparer::new();
+        let mut preparer = FramePreparer::new();
 
         let visible = preparer
             .prepare_incremental_visible(&frame, &FrameChanges::all(), &[0])

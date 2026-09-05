@@ -14,13 +14,34 @@ use noon_compile::{
 use noon_core::{
     AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
     NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
-    ReactiveError, ReactiveValue, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    ReactiveError, ReactiveValue, Rect, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
 };
 use noon_runtime::{
-    EvaluationError, FrameChanges, FrameState, RendererPublication, RuntimeWakeState, SceneInstance,
+    EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
+    RuntimeWakeState, SceneInstance, SpatialIndexUpdateStats, SpatialQueryStats,
 };
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
+
+/// Candidate-sized viewport result in canonical frame painter order.
+///
+/// Execution slots remain the index identity; frame indices are a transient
+/// projection for the renderer's currently published dense compatibility view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionViewportQuery {
+    object_indices: Vec<usize>,
+    spatial_stats: SpatialQueryStats,
+}
+
+impl ExecutionViewportQuery {
+    pub fn object_indices(&self) -> &[usize] {
+        &self.object_indices
+    }
+
+    pub const fn spatial_stats(&self) -> SpatialQueryStats {
+        self.spatial_stats
+    }
+}
 
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,6 +203,8 @@ pub struct ExecutionSession {
     reachability: SemanticExecutionReachability,
     painter_order: SemanticPainterOrderIndex,
     slots: noon_runtime::ExecutionSlotTable,
+    spatial_index: ExecutionSpatialIndex,
+    last_spatial_update: SpatialIndexUpdateStats,
     reactive_projection: SemanticReactiveProjection,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
@@ -247,13 +270,30 @@ impl ExecutionSession {
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
         let reactive_projection = lowered.reactive().clone();
-        let runtime = SceneInstance::from_semantic_execution(lowered);
+        let mut runtime = SceneInstance::from_semantic_execution(lowered);
+        let mut spatial_index = ExecutionSpatialIndex::default();
+        let live_slots =
+            runtime
+                .frame()
+                .objects
+                .iter()
+                .enumerate()
+                .filter_map(|(index, object)| {
+                    if !runtime.object_slot_is_live(index) {
+                        return None;
+                    }
+                    slots.slot_for_object(object.id).map(|slot| (slot, index))
+                });
+        let last_spatial_update = spatial_index.rebuild(runtime.frame(), live_slots);
+        let _ = runtime.take_spatial_changes();
         Self {
             store_identity,
             execution_index,
             reachability,
             painter_order,
             slots,
+            spatial_index,
+            last_spatial_update,
             reactive_projection,
             runtime,
             camera_object,
@@ -296,6 +336,33 @@ impl ExecutionSession {
         self.slots.slot_for_object(object.id)
     }
 
+    /// Query current visible rows through the session-owned execution-slot index.
+    pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.sync_spatial_index();
+        let query = self.spatial_index.query_rect(bounds);
+        let object_indices = query
+            .slots()
+            .iter()
+            .filter_map(|&slot| {
+                let object = self.slots.object_for_slot(slot)?;
+                self.runtime.frame_index_for_object(object)
+            })
+            .collect();
+        debug_assert_eq!(
+            object_indices.len(),
+            query.stats().results,
+            "live spatial candidates must resolve through execution identity"
+        );
+        ExecutionViewportQuery {
+            object_indices,
+            spatial_stats: query.stats(),
+        }
+    }
+
+    pub const fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {
+        self.last_spatial_update
+    }
+
     /// Exact authored/executable/effective publication context of this session.
     ///
     /// Hosts can pin coherent live reads and cross-context work to this typed context
@@ -326,6 +393,51 @@ impl ExecutionSession {
             .ok_or(ExecutionSessionCameraError {
                 object: camera_object,
             })
+    }
+
+    fn sync_spatial_index(&mut self) {
+        let changes = self.runtime.take_spatial_changes();
+        if changes.is_empty() {
+            self.last_spatial_update = SpatialIndexUpdateStats::default();
+            return;
+        }
+        if changes.is_all() {
+            let live_slots =
+                self.runtime
+                    .frame()
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, object)| {
+                        if !self.runtime.object_slot_is_live(index) {
+                            return None;
+                        }
+                        self.slots
+                            .slot_for_object(object.id)
+                            .map(|slot| (slot, index))
+                    });
+            self.last_spatial_update = self.spatial_index.rebuild(self.runtime.frame(), live_slots);
+            return;
+        }
+        let mut stats = SpatialIndexUpdateStats::default();
+        for &index in changes.object_indices() {
+            let Some(object) = self.runtime.frame().objects.get(index) else {
+                continue;
+            };
+            if self.runtime.object_slot_is_live(index) {
+                if let Some(slot) = self.slots.slot_for_object(object.id) {
+                    stats.merge_from(self.spatial_index.upsert_frame_slot(
+                        self.runtime.frame(),
+                        slot,
+                        index,
+                        index as u64,
+                    ));
+                }
+            } else {
+                stats.merge_from(self.spatial_index.remove_object(object.id));
+            }
+        }
+        self.last_spatial_update = stats;
     }
 
     /// Read runtime-owned presentation dirtiness and timeline cadence without
@@ -711,6 +823,44 @@ mod tests {
             timeline_publication.frame_epoch(),
             reactive_publication.frame_epoch().checked_next().unwrap()
         );
+    }
+
+    #[test]
+    fn viewport_query_maps_slots_to_painter_order_and_refits_local_changes() {
+        let mut store = SemanticStore::new();
+        let moving = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        let mut left_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.5 });
+        left_state.transform.translation = SemanticVec3::new(-10.0, 0.0, 0.0);
+        let left = store.insert_semantic_object(left_state);
+        let middle =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.5,
+            }));
+        let top = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 0.25,
+        }));
+        for object in [left, middle, top] {
+            store.attach_to_scene(object).unwrap();
+        }
+        store
+            .bind_semantic_signal(moving, middle, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let viewport = Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0));
+
+        let initial = session.query_viewport(viewport);
+        assert_eq!(initial.object_indices(), &[1, 2]);
+        assert_eq!(initial.spatial_stats().results, 2);
+
+        session
+            .set_reactive_input(moving, Vec2::new(20.0, 0.0))
+            .unwrap();
+        let moved = session.query_viewport(viewport);
+        assert_eq!(moved.object_indices(), &[2]);
+        assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 1);
     }
 
     #[test]
