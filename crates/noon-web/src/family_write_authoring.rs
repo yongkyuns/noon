@@ -28,6 +28,26 @@ fn write_lag_ratio(member_count: u32, override_lag_ratio: Option<f64>) -> f64 {
     })
 }
 
+/// Count one canonical Mobject's rendered Write members from its retained resource.
+/// Geometry remains one family member; Text uses the shaped non-whitespace member
+/// count that owns Manim's default duration and lag semantics.
+#[cfg(any(target_arch = "wasm32", test))]
+fn canonical_mobject_animation_member_count(mobject: &noon::Mobject) -> Result<u32, String> {
+    let state = mobject.state()?;
+    let Some(handle) = state.content.text() else {
+        return Ok(1);
+    };
+    let store = mobject.store().borrow();
+    let resource = store
+        .text_resources()
+        .get(handle)
+        .ok_or_else(|| "canonical Text Write lost its text resource".to_owned())?;
+    let count = noon_core::plain_text_animation_members(resource)
+        .map_err(|error| error.to_string())?
+        .len();
+    u32::try_from(count).map_err(|_| "canonical Text Write member count exceeds u32".to_owned())
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::{
@@ -43,7 +63,7 @@ mod wasm {
         WasmAuthoringMobjectHandle, WasmRetainedNativeTextAuthoringHandle,
     };
 
-    use super::{write_duration, write_lag_ratio};
+    use super::{canonical_mobject_animation_member_count, write_duration, write_lag_ratio};
 
     const MAX_JS_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
@@ -189,9 +209,11 @@ mod wasm {
             self.layout.include_mobject(member)?;
             let semantic_leaf =
                 SemanticNodeId::new(member.semantic_slot(), member.semantic_generation());
+            let local_count = canonical_mobject_animation_member_count(member.semantic_mobject())
+                .map_err(js_error)?;
             let next_count = self
                 .member_count
-                .checked_add(1)
+                .checked_add(local_count)
                 .ok_or_else(|| js_error("family Write member count exceeds u32"))?;
             self.bindings.push(FamilyAnimationLeafBinding::new(
                 semantic_leaf,
@@ -284,5 +306,19 @@ mod tests {
         assert_eq!(write_lag_ratio(21, None), 4.0 / 21.0);
         assert_eq!(write_lag_ratio(100, None), 0.04);
         assert_eq!(write_lag_ratio(100, Some(0.7)), 0.7);
+    }
+
+    #[test]
+    fn canonical_text_mobject_retains_rendered_member_dependent_write_timing() {
+        let scene = noon::Scene::new();
+        let text = scene.text(noon::Text::new("ABCDEFGHIJKLMNOPQRST")).unwrap();
+        let members = canonical_mobject_animation_member_count(&text).unwrap();
+
+        assert!(members >= MANIM_WRITE_LONG_FAMILY_THRESHOLD);
+        assert_eq!(write_duration(members, None), MANIM_WRITE_LONG_DURATION);
+        assert_eq!(
+            canonical_mobject_animation_member_count(&scene.circle(0.5).unwrap()).unwrap(),
+            1
+        );
     }
 }

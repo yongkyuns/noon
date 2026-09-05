@@ -63,12 +63,8 @@ class RetainedSequentialFamilySmoke(Scene):
         if (result.kind !== "scene_document") {
           throw new Error(`${label} smoke returned ${result.kind}`);
         }
-        const retained = result.retainedDocument;
-        if (!retained || retained.objects.length !== 1) {
-          throw new Error(`${label} smoke expected one retained native Text leaf`);
-        }
-        if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 1) {
-          throw new Error(`${label} smoke did not author exactly one retained family request`);
+        if (result.retainedDocument != null) {
+          throw new Error(`${label} smoke must export mixed content through SceneSpec only`);
         }
         const sceneSpec = result.sceneSpec;
         if (!sceneSpec || !Array.isArray(sceneSpec.family_animations) || sceneSpec.family_animations.length !== 1) {
@@ -88,12 +84,8 @@ class RetainedSequentialFamilySmoke(Scene):
         if (result.kind !== "scene_document") {
           throw new Error(`sequential family smoke returned ${result.kind}`);
         }
-        const retained = result.retainedDocument;
-        if (!retained || retained.objects.length !== 1) {
-          throw new Error("sequential family smoke expected one retained Text object");
-        }
-        if (!Array.isArray(retained.family_animations) || retained.family_animations.length !== 2) {
-          throw new Error("sequential family smoke did not author two retained family requests");
+        if (result.retainedDocument != null) {
+          throw new Error("sequential family smoke must export mixed content through SceneSpec only");
         }
         const requests = result.sceneSpec?.family_animations;
         if (!Array.isArray(requests) || requests.length !== 2) {
@@ -346,9 +338,12 @@ class RetainedSequentialFamilySmoke(Scene):
                 `stress scene expected 800 geometry objects, got ${stressResult.document.objects.length}`,
               );
             }
-            if (stressResult.retainedDocument?.objects?.length !== 26) {
+            const stressTextObjects = stressResult.sceneSpec.objects.filter(
+              (object) => object.content?.kind === "text",
+            );
+            if (stressTextObjects.length !== 26) {
               throw new Error(
-                `stress scene expected 26 retained Text objects, got ${stressResult.retainedDocument?.objects?.length}`,
+                `stress SceneSpec expected 26 Text objects, got ${stressTextObjects.length}`,
               );
             }
             if (stressResult.sceneSpec.objects.length !== 826) {

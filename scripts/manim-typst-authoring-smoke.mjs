@@ -97,42 +97,36 @@ class MixedPainterOrder(Scene):
         self.add(Square(side_length=0.5))
 `;
 
-function retainedObject(result, { source, fontSize, order, objectId }) {
+function canonicalTextObject(result, { source, fontSize, order, objectId }) {
   assert.equal(result.kind, "scene_document");
-  assert.ok(result.retained_document, "scene result must include a retained authoring document");
-  assert.equal(result.retained_document.channel, "noon.authoring.retained");
-  assert.equal(result.retained_document.protocol_version, 2);
-  assert.equal(result.retained_document.objects.length, 1);
-  const object = result.retained_document.objects[0];
-  assert.ok(Number.isSafeInteger(object.object), "retained object identity must survive JSON exactly");
-  assert.equal(object.object, objectId, "retained content must use the scene-global object ID allocator");
-  assert.equal(object.order, order);
-  assert.equal(object.text.source, source);
-  assert.equal(object.text.font_size, fontSize);
-
+  assert.equal(result.retained_document, null, "SceneSpec is the canonical mixed-content export");
   assert.ok(result.scene_spec, "scene result must include canonical SceneSpec");
-  assert.equal(result.scene_spec.objects[order].id, objectId);
-  assert.equal(result.scene_spec.objects[order].content.kind, "text");
+  const object = result.scene_spec.objects[order];
+  assert.equal(object.id, objectId, "text must use the scene-global object ID allocator");
+  assert.equal(object.content.kind, "text");
+  const text = object.content.value;
+  assert.equal(text.source, source);
+  assert.equal(text.font_size, fontSize);
 
-  const wire = JSON.stringify(result.retained_document);
+  const wire = JSON.stringify(text);
   for (const forbidden of ["glyph", "font_bytes", "svg", "geometry", "atlas"]) {
-    assert.ok(!wire.includes(forbidden), `retained authoring wire must not contain ${forbidden}`);
+    assert.ok(!wire.includes(forbidden), `canonical text source must not contain ${forbidden}`);
   }
-  return object;
+  return { object, text };
 }
 
 function assertNativeText(result, expected) {
-  const object = retainedObject(result, expected);
-  assert.equal(object.text.backend.kind, "native");
-  assert.equal(object.text.backend.font_family, expected.fontFamily ?? "DejaVu Sans Mono");
-  assert.equal(object.text.backend.line_spacing, expected.lineSpacing ?? -1);
-  return object;
+  const text = canonicalTextObject(result, expected);
+  assert.equal(text.text.kind, "plain");
+  assert.equal(text.text.options.kind, "native_plain");
+  assert.equal(text.text.options.font_family, expected.fontFamily ?? "DejaVu Sans Mono");
+  assert.equal(text.text.options.line_spacing, expected.lineSpacing ?? -1);
+  return text;
 }
 
 function assertTypst(result, expected) {
-  const object = retainedObject(result, expected);
-  assert.equal(object.text.backend.kind, "typst");
-  assert.equal(object.text.backend.math, expected.math);
+  const text = canonicalTextObject(result, expected);
+  assert.equal(text.text.kind, expected.math ? "math_typst" : "typst");
 }
 
 let browser = null;
@@ -271,12 +265,12 @@ try {
     objectId: 1,
   });
   assert.ok(
-    Math.abs(nativeLayoutText.text.transform.translation.x - 2.25) < 1e-4,
+    Math.abs(nativeLayoutText.object.transform.translation.x - 2.25) < 1e-4,
     "Text.next_to must use Rust-owned width/critical-point metrics",
   );
-  assert.ok(Math.abs(nativeLayoutText.text.transform.translation.y) < 1e-5);
-  assert.ok(Math.abs(nativeLayoutText.text.transform.scale.x - nativeLayoutText.text.transform.scale.y) < 1e-6);
-  assert.ok(nativeLayoutText.text.transform.scale.x > 0);
+  assert.ok(Math.abs(nativeLayoutText.object.transform.translation.y) < 1e-5);
+  assert.ok(Math.abs(nativeLayoutText.object.transform.scale.x - nativeLayoutText.object.transform.scale.y) < 1e-6);
+  assert.ok(nativeLayoutText.object.transform.scale.x > 0);
 
   const helloTypst = await page.evaluate(
     (source) => window.noonRetainedTextSmoke.run(source),
@@ -325,7 +319,7 @@ try {
   await page.evaluate(() => window.noonRetainedTextSmoke.stop());
   assert.deepEqual(errors, [], `browser errors while testing retained text authoring:\n${errors.join("\n")}`);
   console.log(
-    "Retained text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit backend-neutral source-only sidecars, canonical mixed SceneSpec identities, zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
+    "Text authoring smoke passed: native Text layout/placement and pinned Manim v0.21 Typst/MathTypst sources emit canonical source-only SceneSpec content with zero placeholder geometry, exact JS-safe identities, and deterministic mixed painter order.",
   );
 } finally {
   await browser?.close();

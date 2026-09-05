@@ -60,8 +60,8 @@ class FakeWorker {
     this.#emit("message", { data: message });
   }
 
-  emitError(message = "worker crashed") {
-    this.#emit("error", { message });
+  emitError(message = "worker crashed", details = {}) {
+    this.#emit("error", { message, ...details });
   }
 
   emitMessageError() {
@@ -284,8 +284,15 @@ test("engine failure reconnects without replacing the render worker or canvas", 
   const { client, engine: oldEngine, render } = await startClient(errors);
   const canvas = client.canvas;
 
-  oldEngine.emitError("engine lost");
-  assert.deepEqual(errors, ["engine: engine lost"]);
+  oldEngine.emitError("engine lost", {
+    error: { stack: "Error: engine lost\n    at startRetained (engine-worker.js:42:7)" },
+    filename: "engine-worker.js",
+    lineno: 42,
+    colno: 7,
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /startRetained \(engine-worker\.js:42:7\)/);
+  const initialError = errors[0];
 
   const offset = FakeWorker.instances.length;
   const restartPromise = client.restart();
@@ -314,7 +321,7 @@ test("engine failure reconnects without replacing the render worker or canvas", 
   oldEngine.emitMessage({ malformed: true });
   oldEngine.emitMessageError();
   assert.equal(client.diagnostics.engine.staleWorkerEvents, 2);
-  assert.deepEqual(errors, ["engine: engine lost"]);
+  assert.deepEqual(errors, [initialError]);
 
   const statePromise = client.state();
   await Promise.resolve();

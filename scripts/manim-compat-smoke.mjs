@@ -573,8 +573,11 @@ try {
     concurrentFamilySource,
   );
   assert.equal(concurrent.kind, "scene_document");
-  assert.equal(concurrent.retainedDocument.objects.length, 2);
-  assert.equal(concurrent.retainedDocument.family_animations.length, 2);
+  assert.equal(concurrent.retainedDocument, undefined);
+  assert.equal(
+    concurrent.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
+    2,
+  );
   assert.equal(concurrent.sceneSpec.family_animations.length, 2);
   assert.equal(concurrent.duration, 2, "Scene.play duration must be the maximum child duration");
   const concurrentRequests = concurrent.sceneSpec.family_animations;
@@ -595,7 +598,6 @@ try {
   for (const forbidden of ["glyph_id", "atlas_id", "font_bytes"]) {
     assert.equal(concurrentSerialized.includes(forbidden), false, `concurrent requests leaked ${forbidden}`);
   }
-
   const concurrentRender = await page.evaluate(async (sceneSpec) => {
     const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
     const canvas = document.createElement("canvas");
@@ -661,7 +663,11 @@ try {
   );
   assert.equal(mixedFirst.kind, "scene_document");
   assert.equal(mixedFirst.document.objects.length, 1);
-  assert.equal(mixedFirst.retainedDocument.objects.length, 1);
+  assert.equal(mixedFirst.retainedDocument, undefined);
+  assert.equal(
+    mixedFirst.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
+    1,
+  );
   assert.equal(mixedFirst.sceneSpec.objects.length, 2);
   assert.equal(mixedFirst.sceneSpec.family_animations.length, 1);
   assert.equal(
@@ -680,7 +686,11 @@ try {
   );
   assert.equal(mixedEdited.kind, "scene_document");
   assert.equal(mixedEdited.document.objects.length, 2);
-  assert.equal(mixedEdited.retainedDocument.objects.length, 1);
+  assert.equal(mixedEdited.retainedDocument, undefined);
+  assert.equal(
+    mixedEdited.sceneSpec.objects.filter((object) => object.content?.kind === "text").length,
+    1,
+  );
   assert.equal(mixedEdited.sceneSpec.objects.length, 3);
   assert.equal(mixedEdited.sceneSpec.family_animations.length, 1, "edited rerun must replace family requests");
   assert.equal(
