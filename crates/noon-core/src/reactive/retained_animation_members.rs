@@ -284,6 +284,7 @@ mod tests {
     fn missing_or_unsupported_text_resources_fail_closed() {
         let texts = TextResourceArena::new();
         let missing = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(99),
             version: 7,
         };
@@ -362,6 +363,7 @@ mod tests {
         let leaf = store.insert_authoring_object();
         let texts = TextResourceArena::new();
         let missing = TextResourceHandle {
+            arena: 0,
             id: TextResourceId::new(99),
             version: 7,
         };

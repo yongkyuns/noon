@@ -209,9 +209,11 @@ impl RetainedResourceBundle {
         let mut text_entries = Vec::with_capacity(text_handles.len());
 
         for handle in text_handles {
-            let resource = texts
-                .get(handle)
-                .ok_or_else(|| RetainedResourceTransportError::UnknownText(handle.into()))?;
+            let resource = texts.get(handle).ok_or_else(|| {
+                RetainedResourceTransportError::UnknownText(
+                    TransportTextResourceHandle::from_source_handle(handle),
+                )
+            })?;
             for vector in resource.vector_items.iter() {
                 geometry_handles.insert(vector.geometry);
             }
@@ -232,7 +234,7 @@ impl RetainedResourceBundle {
                     });
             }
             text_entries.push(TransportTextEntry {
-                handle: handle.into(),
+                handle: TransportTextResourceHandle::from_source_handle(handle),
                 resource: TransportTextResource::from_core(resource),
             });
         }
@@ -463,6 +465,12 @@ impl InstalledRetainedResources {
         transport: TransportTextResourceHandle,
     ) -> Option<TextResourceHandle> {
         self.text_handles.get(&transport).copied()
+    }
+
+    pub(crate) fn text_handle_remap(
+        &self,
+    ) -> HashMap<TransportTextResourceHandle, TextResourceHandle> {
+        self.text_handles.clone()
     }
 }
 
@@ -1217,8 +1225,10 @@ mod tests {
         let installed = decoded.install().unwrap();
 
         for original in original_handles {
-            let transport = TransportTextResourceHandle::from(original);
+            let transport = TransportTextResourceHandle::from_source_handle(original);
             let local = installed.resolve_text_handle(transport).unwrap();
+            assert_ne!(original.arena, local.arena);
+            assert!(installed.texts().get(original).is_none());
             let resource = installed.texts().get(local).unwrap();
             assert!(matches!(
                 resource.kind,
