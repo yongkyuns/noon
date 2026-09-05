@@ -3,8 +3,8 @@
 use std::error::Error;
 
 use crate::{
-    AnimationOptions, ExecutionSession, HostCallbackId, RateFunction, RustHostCallbackTable, Scene,
-    Vec2,
+    AnimationOptions, ExecutionSession, ExecutionSessionInputError, HostCallbackId, RateFunction,
+    ReactiveValue, RustHostCallbackTable, Scene, SemanticVec3, Vec2,
 };
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
@@ -149,5 +149,56 @@ pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
         let final_authored = live.authored(&circle)?.transform.translation;
         assert_eq!((final_authored.x, final_authored.y), (5.0, -2.0));
     }
+    Ok(session)
+}
+
+/// Build and settle the paired canonical scalar `ValueTracker` example.
+///
+/// Signal-track scheduling, interpolation, binding evaluation, and direct-write
+/// ownership all remain inside the one canonical execution session. Native and
+/// direct single-context Rust/WASM hosts consume the returned typed session.
+pub fn live_value_tracker() -> Result<ExecutionSession, Box<dyn Error>> {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.4)?;
+    circle.set_fill(1.0, 1.0, 1.0, 1.0)?;
+    scene.add(&circle)?;
+
+    let tracker = scene.value_tracker(0.0)?;
+    let position = scene.position_from_tracker(
+        &tracker,
+        SemanticVec3::new(1.0, 0.0, 0.0),
+        SemanticVec3::new(-2.0, 0.0, 0.0),
+    )?;
+    scene.bind_position(&circle, &position)?;
+    scene
+        .play_value(&tracker, 4.0)
+        .rate_func(RateFunction::Linear)
+        .run_time(2.0)?;
+    assert_eq!(scene.value_tracker_value(&tracker)?, 4.0);
+
+    let mut session = scene.execution_session()?;
+    session.evaluate(1.0)?;
+    assert_eq!(
+        session.effective_signal_value(tracker.node_id()),
+        Some(&ReactiveValue::Scalar(2.0))
+    );
+    assert_eq!(
+        scene.live(&mut session).effective_layout(&circle)?.center,
+        (0.0, 0.0)
+    );
+
+    session.evaluate(2.0)?;
+    assert_eq!(
+        session.effective_signal_value(tracker.node_id()),
+        Some(&ReactiveValue::Scalar(4.0))
+    );
+    assert_eq!(
+        scene.live(&mut session).effective_layout(&circle)?.center,
+        (2.0, 0.0)
+    );
+    assert!(matches!(
+        session.set_reactive_input(tracker.node_id(), 3.0_f32),
+        Err(ExecutionSessionInputError::TimelineOwnedSignal { .. })
+    ));
     Ok(session)
 }

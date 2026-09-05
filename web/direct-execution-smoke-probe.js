@@ -2,6 +2,7 @@ import {
   createDirectAffineCallbackSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
+  createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
@@ -217,6 +218,44 @@ async function directAffineCompletionProof(expectedBackend) {
   return metrics;
 }
 
+async function directValueTrackerProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectValueTrackerSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  const initial = JSON.parse(renderer.directWakeDirectiveJson(0));
+  if (!initial.presentNow) {
+    throw new Error("direct ValueTracker session did not expose its settled publication");
+  }
+  await presentDirectFrame(renderer);
+
+  const endpointLuma = await sampleRenderedPixel(canvas, 2, 0);
+  const midpointLuma = await sampleRenderedPixel(canvas, 0, 0);
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    authoredTime: renderer.time(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    endpointLuma,
+    midpointLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct ValueTracker renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.authoredTime !== 2) {
+    throw new Error(`direct ValueTracker authored time is ${metrics.authoredTime}; expected 2`);
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct ValueTracker produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (endpointLuma < 600 || midpointLuma > 60) {
+    throw new Error(`direct ValueTracker did not render its x=2 endpoint ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function start() {
   const expectedBackend = await waitForPrimaryRenderer();
   const canvas = new OffscreenCanvas(960, 540);
@@ -287,6 +326,7 @@ async function start() {
 
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
+  metrics.valueTracker = await directValueTrackerProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

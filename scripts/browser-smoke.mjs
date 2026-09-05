@@ -322,6 +322,29 @@ async function directExecutionProof(page, expectedBackend) {
     direct.metrics.affineCompletion?.priorSetterLuma <= 60,
     "direct Rust/WASM completion remained at the intervening x=3 setter",
   );
+  assert.equal(
+    direct.metrics.valueTracker?.backend,
+    expectedBackend,
+    "direct Rust/WASM ValueTracker did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.valueTracker?.authoredTime,
+    2,
+    "direct Rust/WASM ValueTracker did not reach its authored endpoint",
+  );
+  assert.equal(
+    direct.metrics.valueTracker?.objectCount,
+    1,
+    "direct Rust/WASM ValueTracker scene did not retain its bound object",
+  );
+  assert.ok(
+    direct.metrics.valueTracker?.endpointLuma >= 600,
+    "direct Rust/WASM ValueTracker did not render its white x=2 endpoint",
+  );
+  assert.ok(
+    direct.metrics.valueTracker?.midpointLuma <= 60,
+    "direct Rust/WASM ValueTracker remained at its x=0 midpoint",
+  );
   return direct.metrics;
 }
 

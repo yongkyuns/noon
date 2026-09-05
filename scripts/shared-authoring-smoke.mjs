@@ -423,6 +423,13 @@ try {
       expectedFinalCenter: [5, -2],
     },
     {
+      filename: "live_value_tracker.py",
+      objectCount: 1,
+      expectedDuration: 2,
+      endpointTime: null,
+      expectedFinalCenter: [2, 0],
+    },
+    {
       filename: "live_content_switch.py",
       objectCount: 2,
       expectedDuration: null,
