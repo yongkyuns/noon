@@ -523,9 +523,8 @@ impl ComputeState {
         };
         let changed_values = journal
             .iter()
-            .filter_map(|(index, previous)| {
-                (self.values[*index] != *previous).then(|| (*index, self.values[*index].clone()))
-            })
+            .filter(|(index, previous)| self.values[*index] != *previous)
+            .map(|(index, _)| (*index, self.values[*index].clone()))
             .collect();
         for (index, value) in journal {
             self.values[index] = value;
