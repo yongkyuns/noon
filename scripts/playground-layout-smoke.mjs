@@ -271,6 +271,7 @@ try {
   assertCentered(desktop.canvas, desktop.wrap, "desktop");
   assertNoOverflow(desktop, "desktop");
 
+  await page.locator("#example-browser-trigger").click();
   await page.locator(".gallery-controls input[type='search']").fill("DifferentRotations");
   await page.waitForFunction(() => document.querySelectorAll(".example-card").length === 1);
   assert.equal(

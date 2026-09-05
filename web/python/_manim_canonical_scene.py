@@ -103,13 +103,14 @@ def _play(self, *args, **kwargs):
 def _to_document(self):
     # Explicit export may project values; it does not provide execution input on
     # the shared path. Legacy animation retains this adapter until #959.
-    objects = list(self._objects)
+    document = _ORIGINAL_TO_DOCUMENT(self)
+    objects = document["objects"]
     if not getattr(self, "_legacy_geometry_materialized", False):
         for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
             snapshot = json.loads(str(handle.snapshotJson()))
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
-    return {"version": _ir.FORMAT_VERSION, "objects": objects, "tracks": list(self._tracks)}
+    return document
 
 
 def execution_context(scene, callbacks=None):
