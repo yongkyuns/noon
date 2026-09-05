@@ -808,7 +808,7 @@ mod wasm {
                     handle.semantic_mobject(),
                     callback,
                     active_from,
-                    position.map(usize::from),
+                    position.map(|index| index as usize),
                 )
                 .map_err(js_error)
         }
