@@ -75,6 +75,7 @@ async function snapshot(page) {
     return {
       runtimeState: status?.dataset.state ?? "",
       runtimeStartup: status?.dataset.runtimeStartup ?? "",
+      liveAuthoring: status?.dataset.liveAuthoring ?? "",
       rendererBackend: status?.dataset.rendererBackend ?? "",
       executionMode: status?.dataset.executionMode ?? "",
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
@@ -91,33 +92,42 @@ async function snapshot(page) {
 
 async function waitForInitialScene(page) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  const deferred = await snapshot(page);
-  assert.equal(deferred.runtimeStartup, "deferred", "authoring runtime must stay deferred on page load");
-  assert.equal(deferred.rendererBackend, "", "deferred authoring page must not initialize the renderer");
-  assert.equal(deferred.presentedFrames, 0, "deferred authoring page must not render frames");
-
-  const sourceTextarea = page.locator("#python-scene-source");
-  await sourceTextarea.focus();
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content", {
     timeout: 30_000,
   });
-
-  const runButton = page.locator("#replace-scene");
-  assert.equal(await runButton.isEnabled(), true, "Run must remain available after lazy editor startup");
-  await runButton.click();
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
       const patch = document.querySelector("#patch-status");
       return (
+        status?.dataset.liveAuthoring === "ready" &&
         status?.dataset.state === "running" &&
         status?.dataset.rendererBackend === "WebGL2" &&
+        Number(status?.dataset.presentedFrames ?? "0") > 0 &&
         patch?.dataset.state === "applied" &&
         !document.querySelector("#replace-scene")?.disabled
       );
     },
     null,
     { timeout: 60_000 },
+  );
+
+  const preloaded = await snapshot(page);
+  assert.equal(
+    preloaded.runtimeStartup,
+    "started-on-demand",
+    "live authoring preload must start the existing execution owner before an explicit Run",
+  );
+  assert.equal(preloaded.liveAuthoring, "ready", "live authoring preload must reach ready state");
+  assert.equal(preloaded.rendererBackend, "WebGL2");
+  assert.ok(preloaded.presentedFrames > 0, "preload must present the initial scene");
+
+  const editor = page.locator("#scene-editor-panel .cm-content");
+  await editor.focus();
+  assert.equal(
+    await page.locator("#replace-scene").isEnabled(),
+    true,
+    "explicit Run must remain available after preload",
   );
 }
 
@@ -138,17 +148,16 @@ async function setEditorSource(page, source) {
   );
 }
 
-async function runAndWait(page, expectedState) {
-  const button = page.locator("#replace-scene");
-  assert.equal(await button.isEnabled(), true, "Run button must be enabled before rerun");
-  await button.click();
+async function waitForAutomaticRun(page, { expectedState, expectedObjectCount = null }) {
   await page.waitForFunction(
-    (state) => {
+    ({ state, objectCount }) => {
       const patch = document.querySelector("#patch-status");
       const run = document.querySelector("#replace-scene");
-      return patch?.dataset.state === state && !run?.disabled;
+      if (patch?.dataset.state !== state || run?.disabled) return false;
+      if (objectCount === null) return true;
+      return document.querySelector("#metric-objects")?.value === String(objectCount);
     },
-    expectedState,
+    { state: expectedState, objectCount: expectedObjectCount },
     { timeout: 60_000 },
   );
   return snapshot(page);
@@ -213,6 +222,7 @@ try {
   phase = "baseline";
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.equal(diagnostics.snapshots.baseline.runtimeState, "running");
+  assert.equal(diagnostics.snapshots.baseline.liveAuthoring, "ready");
   assert.equal(diagnostics.snapshots.baseline.rendererBackend, "WebGL2");
   assert.equal(diagnostics.snapshots.baseline.exampleId, "parity-create-circle");
   assert.notEqual(diagnostics.snapshots.baseline.patchSequence, "");
@@ -220,7 +230,7 @@ try {
 
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
-  diagnostics.snapshots.syntaxError = await runAndWait(page, "error");
+  diagnostics.snapshots.syntaxError = await waitForAutomaticRun(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
   assert.equal(diagnostics.snapshots.syntaxError.runtimeState, "running");
   assert.equal(diagnostics.snapshots.syntaxError.rendererBackend, diagnostics.snapshots.baseline.rendererBackend);
@@ -238,16 +248,17 @@ try {
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
-  await runAndWait(page, "applied");
-  await waitForObjectCount(page, 2);
-  diagnostics.snapshots.syntaxRecovered = await snapshot(page);
+  diagnostics.snapshots.syntaxRecovered = await waitForAutomaticRun(page, {
+    expectedState: "applied",
+    expectedObjectCount: 2,
+  });
   assert.match(diagnostics.snapshots.syntaxRecovered.patchText, /2 objects/);
   assert.equal(diagnostics.snapshots.syntaxRecovered.runtimeState, "running");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
 
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
-  diagnostics.snapshots.runtimeError = await runAndWait(page, "error");
+  diagnostics.snapshots.runtimeError = await waitForAutomaticRun(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
   assert.equal(diagnostics.snapshots.runtimeError.runtimeState, "running");
   assert.equal(diagnostics.snapshots.runtimeError.rendererBackend, "WebGL2");
@@ -265,9 +276,10 @@ try {
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
-  await runAndWait(page, "applied");
-  await waitForObjectCount(page, 1);
-  diagnostics.snapshots.runtimeRecovered = await snapshot(page);
+  diagnostics.snapshots.runtimeRecovered = await waitForAutomaticRun(page, {
+    expectedState: "applied",
+    expectedObjectCount: 1,
+  });
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
   assert.equal(diagnostics.snapshots.runtimeRecovered.runtimeState, "running");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
@@ -293,7 +305,7 @@ try {
   diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground authoring recovery ok: ${diagnostics.snapshots.baseline.objectCount} -> ` +
+    `playground live authoring recovery ok: ${diagnostics.snapshots.baseline.objectCount} -> ` +
       `${diagnostics.snapshots.syntaxRecovered.objectCount} -> ${diagnostics.snapshots.runtimeRecovered.objectCount} objects`,
   );
 } catch (error) {
@@ -301,6 +313,7 @@ try {
   diagnostics.serverOutput = serverOutput;
   if (page !== null) {
     try {
+      diagnostics.snapshots.failure = await snapshot(page);
       await page.screenshot({ path: path.join(artifactDir, "failure.png"), fullPage: true });
     } catch (screenshotError) {
       diagnostics.screenshotFailure = String(screenshotError);
