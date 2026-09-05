@@ -2362,7 +2362,10 @@ mod tests {
         circle.shift(3.0, -1.0).unwrap();
 
         let query_error = context.mobject_layout(&circle).unwrap_err();
-        assert!(query_error.contains("has not been published"), "{query_error}");
+        assert!(
+            query_error.contains("has not been published"),
+            "{query_error}"
+        );
         let run_error = context.prepare_execution_run().unwrap_err();
         assert!(run_error.contains("authored scene changed while live execution is active"));
         assert!(context.live_player.is_some());
