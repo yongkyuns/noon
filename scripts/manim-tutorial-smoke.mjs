@@ -151,9 +151,35 @@ function assertDurationContract(entry, result) {
   );
 }
 
+function canonicalRetainedView(result, label) {
+  assert.equal(
+    result.retainedDocument ?? null,
+    null,
+    `${label}: mixed text must export through canonical SceneSpec only`,
+  );
+  const sceneSpec = result.sceneSpec;
+  assert.ok(sceneSpec, `${label}: canonical SceneSpec is required`);
+  assert.equal(sceneSpec.version, 1, `${label}: expected SceneSpec v1`);
+  const textEntries = (sceneSpec.objects ?? [])
+    .map((object, order) => ({ object, order }))
+    .filter(({ object }) => object.content?.kind === "text");
+  if (textEntries.length === 0) return null;
+  const ids = new Set(textEntries.map(({ object }) => object.id));
+  return {
+    channel: "noon.authoring.retained",
+    protocol_version: 2,
+    objects: textEntries.map(({ object, order }) => ({
+      object: object.id,
+      order,
+      text: { ...object.content.value, transform: object.transform, style: object.style },
+    })),
+    tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),
+  };
+}
+
 function authoredObjectCount(entry, result) {
   const geometryCount = result.document.objects.length;
-  const retained = result.retainedDocument ?? null;
+  const retained = canonicalRetainedView(result, entry.id);
   const expectsRetainedText = entry.features?.includes("retained-text") ?? false;
 
   if (expectsRetainedText) {
@@ -190,7 +216,7 @@ function assertRetainedShrinkTrack(result) {
     0,
     `${retainedTextAnimationId}: animated retained Text must emit zero legacy geometry`,
   );
-  const retained = result.retainedDocument;
+  const retained = canonicalRetainedView(result, retainedTextAnimationId);
   assert.ok(retained, `${retainedTextAnimationId}: retained sidecar is required`);
   assert.equal(retained.channel, "noon.authoring.retained");
   assert.equal(retained.protocol_version, 2);

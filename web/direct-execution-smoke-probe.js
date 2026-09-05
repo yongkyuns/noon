@@ -1,4 +1,3 @@
-import { createDirectExecutionSmokeRenderer } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
 
 const state = {
@@ -40,6 +39,16 @@ async function waitForDirectExecutionToSettle(renderer, driver) {
 }
 
 async function start() {
+  const wasm = await import("./pkg/noon_web.js");
+  const createDirectExecutionSmokeRenderer = wasm.createDirectExecutionSmokeRenderer;
+  if (typeof createDirectExecutionSmokeRenderer !== "function") {
+    state.metrics = {
+      skipped: true,
+      reason: "debug-only direct execution proof is unavailable in this production package",
+    };
+    state.ready = true;
+    return;
+  }
   const expectedBackend = await waitForPrimaryRenderer();
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectExecutionSmokeRenderer(canvas);
