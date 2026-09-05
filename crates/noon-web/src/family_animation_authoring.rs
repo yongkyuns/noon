@@ -102,7 +102,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.layout.include_mobject(member)?;
             let semantic_leaf =
-                SemanticNodeId::new(member.semantic_slot()?, member.semantic_generation()?);
+                SemanticNodeId::new(member.semantic_slot(), member.semantic_generation());
             self.bindings.push(FamilyAnimationLeafBinding::new(
                 semantic_leaf,
                 object_id(final_object_id)?,
