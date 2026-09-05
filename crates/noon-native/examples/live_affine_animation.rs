@@ -31,6 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!live.segment_state(segment).is_complete());
 
     live.advance_segment_to(segment, segment.end_time())?;
+    assert!(!live.segment_state(segment).is_complete());
+    live.complete_segment(segment)?;
     assert!(live.segment_state(segment).is_complete());
     assert_eq!(
         live.effective(&circle)?.transform.translation,
@@ -40,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait uses the same runtime continuation boundary and allocates no track.
     let wait = live.wait_segment(0.25)?;
     live.advance_segment_to(wait, wait.end_time())?;
+    live.complete_segment(wait)?;
     assert!(live.segment_state(wait).is_complete());
     noon_native::run(session)?;
     Ok(())
