@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     collections::HashMap,
     hash::{Hash, Hasher},
     mem::{size_of, size_of_val},
@@ -114,6 +113,7 @@ impl PreparedRetainedTextSnapshot<'_> {
 /// Prepared mixed geometry/text frame. The geometry frame is intentionally kept
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
 pub struct PreparedRetainedGpuFrame<'a> {
+    applied_publication: &'a mut Option<PublicationContext>,
     geometry: PreparedFrame<'a>,
     geometry_only: bool,
     text_generation: u64,
@@ -579,7 +579,7 @@ pub struct RetainedFramePreparer {
     prepared_generation_ready: bool,
     prepared_generation_reuses: u64,
     text_generation: u64,
-    last_applied_publication: Cell<Option<PublicationContext>>,
+    last_applied_publication: Option<PublicationContext>,
 }
 
 impl Default for RetainedFramePreparer {
@@ -617,7 +617,7 @@ impl Default for RetainedFramePreparer {
             prepared_generation_ready: false,
             prepared_generation_reuses: 0,
             text_generation: 0,
-            last_applied_publication: Cell::new(None),
+            last_applied_publication: None,
         }
     }
 }
@@ -719,18 +719,14 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         let received = publication.context();
-        let previous = self.last_applied_publication.get();
+        let previous = self.last_applied_publication;
         if let Some(applied) = previous {
             if publication_is_stale(received, applied) {
                 return Err(RetainedPrepareError::StalePublication { received, applied });
             }
         }
 
-        // The marker is restored on every failed preparation. `prepare_with_changes`
-        // does not yield control, so callers observe this candidate only once its
-        // successful prepared frame is returned.
-        self.last_applied_publication.set(Some(received));
-        match self.prepare_with_changes(
+        let prepared = self.prepare_with_changes(
             device,
             queue,
             publication.frame(),
@@ -739,18 +735,14 @@ impl RetainedFramePreparer {
             publication.font_resources(),
             publication.geometry_resources(),
             metrics,
-        ) {
-            Ok(prepared) => Ok(prepared),
-            Err(error) => {
-                self.last_applied_publication.set(previous);
-                Err(error)
-            }
-        }
+        )?;
+        *prepared.applied_publication = Some(received);
+        Ok(prepared)
     }
 
     /// Last successfully applied runtime publication, if this preparer has one.
     pub fn last_applied_publication(&self) -> Option<PublicationContext> {
-        self.last_applied_publication.get()
+        self.last_applied_publication
     }
 
     /// Reset retained renderer state before deliberately binding this preparer to a
@@ -868,6 +860,7 @@ impl RetainedFramePreparer {
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
                 geometry,
                 geometry_only: false,
                 text_generation: self.text_generation,
@@ -915,6 +908,7 @@ impl RetainedFramePreparer {
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
                 geometry,
                 geometry_only: false,
                 text_generation: self.text_generation,
@@ -1006,6 +1000,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: false,
             text_generation: self.text_generation,
@@ -1133,6 +1128,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: true,
             text_generation: self.text_generation,
@@ -1239,6 +1235,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: false,
             text_generation: self.text_generation,

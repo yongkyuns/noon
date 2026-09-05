@@ -383,17 +383,6 @@ pub struct RetainedExecutionFrameMirror {
 }
 
 impl RetainedExecutionFrameMirror {
-    pub(crate) fn with_render_geometries(
-        session: Option<u32>,
-        geometries: Arc<[Arc<GeometryRef>]>,
-    ) -> Self {
-        Self {
-            resource_session: session,
-            render_geometries: geometries,
-            ..Self::default()
-        }
-    }
-
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
         geometries: Arc<[Arc<GeometryRef>]>,
