@@ -8,6 +8,7 @@ import {
   STRESS_SOURCE_SHA256,
   assertSteadyStressTelemetry,
   assertRetainedMorphReactivation,
+  assertFirstMorphActivationLatency,
   classifyStressPhase,
   fixedStressSampleTimes,
   summarizeStressPhases,
@@ -46,11 +47,6 @@ test("morph resources remain installed when a completed loop is reactivated", ()
   const retained = assertRetainedMorphReactivation(rows);
   assert.deepEqual(retained.morphs.map((phase) => phase.samples), [3, 3]);
 
-  const packedOnEntry = structuredClone(rows);
-  packedOnEntry.find((sample) => sample.sceneTime === 0.92).uploadBytes = 13_281_024;
-  packedOnEntry.find((sample) => sample.sceneTime === 2.19).uploadBytes = 13_281_024;
-  assert.doesNotThrow(() => assertRetainedMorphReactivation(packedOnEntry));
-
   const regressed = structuredClone(rows);
   regressed.find((sample) => sample.sceneTime === 2.4).geometryCacheMisses = 1;
   assert.throws(
@@ -62,6 +58,13 @@ test("morph resources remain installed when a completed loop is reactivated", ()
   redundantlyUploaded.find((sample) => sample.sceneTime === 1.1).uploadBytes = 13_281_024;
   assert.throws(
     () => assertRetainedMorphReactivation(redundantlyUploaded),
+    /morph-a reactivation must upload compact dynamic state/u,
+  );
+
+  const repackedOnEntry = structuredClone(rows);
+  repackedOnEntry.find((sample) => sample.sceneTime === 0.92).uploadBytes = 13_281_024;
+  assert.throws(
+    () => assertRetainedMorphReactivation(repackedOnEntry),
     /morph-a reactivation must upload compact dynamic state/u,
   );
 });
@@ -96,4 +99,31 @@ test("phase summaries and steady telemetry preserve the dynamic workload", () =>
   assert.ok(steady.finalWave.samples >= 20);
   assert.equal(steady.finalWave.maximumGeometryCacheMisses, 0);
   assert.equal(steady.finalWave.minimumUploadBytes, 64);
+
+  const coldMorphRegression = structuredClone(rows);
+  coldMorphRegression.find((sample) => sample.sceneTime === 0.9166666666666666).uploadBytes =
+    13_281_024;
+  assert.throws(
+    () => assertSteadyStressTelemetry(coldMorphRegression),
+    /morph-a must upload compact dynamic state/u,
+  );
+});
+
+test("WebGPU first morph activation cannot hide a preload regression", () => {
+  const rows = fixedStressSampleTimes().map((sceneTime) => ({
+    sceneTime,
+    rendererRenderMs: 2,
+    totalMs: 12,
+  }));
+  const accepted = assertFirstMorphActivationLatency(rows, "WebGPU");
+  assert.equal(accepted.enforced, true);
+  assert.equal(accepted.activations.length, 2);
+  assert.equal(assertFirstMorphActivationLatency(rows, "WebGL2").enforced, false);
+
+  rows.find((sample) => sample.sceneTime === 0.9166666666666666).rendererRenderMs = 113;
+  rows.find((sample) => sample.sceneTime === 0.9166666666666666).totalMs = 126;
+  assert.throws(
+    () => assertFirstMorphActivationLatency(rows, "WebGPU"),
+    /morph-a first WebGPU activation must render within 25ms/u,
+  );
 });

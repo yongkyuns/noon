@@ -267,6 +267,34 @@ pub struct DrawStats {
     pub instances_drawn: usize,
 }
 
+/// Failure before a resident geometry preload touches GPU buffers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathPreloadUploadError {
+    NonEmptyDrawState,
+    BufferLimit {
+        buffer: &'static str,
+        requested: usize,
+        limit: u64,
+    },
+}
+
+impl std::fmt::Display for PathPreloadUploadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonEmptyDrawState => f.write_str("path preload requires empty draw state"),
+            Self::BufferLimit {
+                buffer,
+                requested,
+                limit,
+            } => write!(
+                f,
+                "{buffer} preload allocation {requested} exceeds device buffer limit {limit}"
+            ),
+        }
+    }
+}
+impl std::error::Error for PathPreloadUploadError {}
+
 #[derive(Debug)]
 pub struct GpuRenderer {
     circle_pipeline: wgpu::RenderPipeline,
@@ -552,6 +580,42 @@ impl GpuRenderer {
 
     pub const fn viewport_size(&self) -> [u32; 2] {
         self.viewport_size
+    }
+
+    /// Check device allocation limits and upload an empty-draw resident prefix.
+    /// This queues writes only; the platform host owns submission and readiness.
+    pub fn upload_preloaded_paths(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+    ) -> Result<UploadStats, PathPreloadUploadError> {
+        if !prepared.circles.is_empty()
+            || !prepared.rectangles.is_empty()
+            || !prepared.lines.is_empty()
+            || !prepared.paths.is_empty()
+            || !prepared.path_batches.is_empty()
+            || !prepared.render_batches.is_empty()
+            || !prepared.mega_path_indices.is_empty()
+            || !prepared.mega_path_vertex_instances.is_empty()
+            || !prepared.mega_path_batches.is_empty()
+        {
+            return Err(PathPreloadUploadError::NonEmptyDrawState);
+        }
+        let limit = device.limits().max_buffer_size;
+        validate_preload_allocation(
+            "path vertices",
+            std::mem::size_of_val(prepared.path_vertices),
+            self.path_vertex_capacity_bytes,
+            limit,
+        )?;
+        validate_preload_allocation(
+            "path indices",
+            std::mem::size_of_val(prepared.path_indices),
+            self.path_index_capacity_bytes,
+            limit,
+        )?;
+        Ok(self.upload(device, queue, prepared))
     }
 
     pub fn upload(
@@ -1117,10 +1181,7 @@ fn create_pipeline(
             module: shader,
             entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[
-                Some(quad_vertex_layout()),
-                Some(descriptor.instance_layout),
-            ],
+            buffers: &[Some(quad_vertex_layout()), Some(descriptor.instance_layout)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1281,6 +1342,29 @@ fn ensure_capacity(
     )
 }
 
+fn buffer_growth_capacity(required_bytes: usize) -> usize {
+    required_bytes
+        .checked_next_power_of_two()
+        .unwrap_or(required_bytes)
+        .max(256)
+}
+
+fn validate_preload_allocation(
+    buffer: &'static str,
+    required: usize,
+    current: usize,
+    limit: u64,
+) -> Result<(), PathPreloadUploadError> {
+    if required > current && buffer_growth_capacity(required) as u64 > limit {
+        return Err(PathPreloadUploadError::BufferLimit {
+            buffer,
+            requested: buffer_growth_capacity(required),
+            limit,
+        });
+    }
+    Ok(())
+}
+
 fn ensure_capacity_with_usage(
     device: &wgpu::Device,
     buffer: &mut wgpu::Buffer,
@@ -1293,10 +1377,7 @@ fn ensure_capacity_with_usage(
         return false;
     }
 
-    let new_capacity = required_bytes
-        .checked_next_power_of_two()
-        .unwrap_or(required_bytes)
-        .max(256);
+    let new_capacity = buffer_growth_capacity(required_bytes);
     *buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: new_capacity as wgpu::BufferAddress,
@@ -1369,6 +1450,14 @@ fn payload_hash(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preload_allocation_checks_actual_rounded_device_capacity() {
+        assert!(super::validate_preload_allocation("vertices", 513, 0, 1000).is_err());
+        assert!(super::validate_preload_allocation("vertices", 512, 0, 1000).is_ok());
+        assert!(super::validate_preload_allocation("indices", 1, 0, 255).is_err());
+        assert!(super::validate_preload_allocation("indices", 0, 0, 0).is_ok());
+    }
+
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D, VectorPath};
     use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 

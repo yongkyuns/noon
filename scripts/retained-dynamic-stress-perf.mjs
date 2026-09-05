@@ -20,6 +20,7 @@ import {
   STRESS_SOURCE_SHA256,
   STRESS_TRACK_COUNT,
   assertRetainedMorphReactivation,
+  assertFirstMorphActivationLatency,
   assertSteadyStressTelemetry,
 } from "./retained-dynamic-stress-perf-lib.mjs";
 
@@ -201,10 +202,12 @@ try {
       directCanvas.dataset.profile = "direct";
       document.body.replaceChildren(directCanvas);
       const engine = new wasm.CanonicalRetainedEngineScenePlayer(sceneSpecJson, duration, 1);
+      const rendererCreateStarted = performance.now();
       const renderer = await wasm.RetainedExecutionCanvasRenderer.create(
         directCanvas.transferControlToOffscreen(),
         engine.resourceBundleBytes(),
       );
+      const rendererCreateMs = performance.now() - rendererCreateStarted;
       const expectedBackend = backendRequested === "webgpu" ? "WebGPU" : "WebGL2";
       if (renderer.rendererBackend() !== expectedBackend) {
         throw new Error(
@@ -272,6 +275,9 @@ try {
       }
       const direct = {
         backend: renderer.rendererBackend(),
+        rendererCreateMs,
+        preloadedGeometryCount: renderer.preloadedGeometryCount(),
+        preloadBytesUploaded: renderer.preloadBytesUploaded(),
         visibleObjectCount: renderer.objectCount(),
         samples,
         totals: {
@@ -376,6 +382,14 @@ try {
             `requested ${expectedBackend}, but ${transportMode} renderer selected ${ready.render.backend}`,
           );
         }
+        if (ready.render.time !== 0 || ready.render.presentedFrames !== 1) {
+          client.terminate();
+          canvas.remove();
+          throw new Error(
+            `${transportMode} renderer advanced before ready: time=${ready.render.time}, ` +
+              `frames=${ready.render.presentedFrames}`,
+          );
+        }
         const startupMs = performance.now() - started;
         await client.pause();
         const morphWarmSeeks = phases
@@ -437,6 +451,8 @@ try {
           transportMode,
           startupMs,
           backend: ready.render.backend,
+          preloadedGeometryCount: ready.render.preloadedGeometryCount,
+          preloadBytesUploaded: ready.render.preloadBytesUploaded,
           seeks,
           seekRoundTripMs: summarizeSamples(seeks.map((seek) => seek.roundTripToPresentedMs)),
           cadence: {
@@ -509,6 +525,9 @@ try {
   assert.equal(result.authoring.trackCount, STRESS_TRACK_COUNT);
   assert.equal(result.authoring.familyAnimationCount, 0);
   assert.equal(result.direct.visibleObjectCount, STRESS_FINAL_VISIBLE_OBJECT_COUNT);
+  assert.ok(result.direct.rendererCreateMs > 0, "renderer preload duration must be measured");
+  assert.ok(result.direct.preloadedGeometryCount >= 1200, "renderer must preload both morph sets");
+  assert.ok(result.direct.preloadBytesUploaded > 0, "renderer preload must report GPU upload bytes");
   assert.equal(result.direct.samples.length, STRESS_DURATION_SECONDS * STRESS_SAMPLE_HZ + 1);
   assert.deepEqual(
     result.direct.phases.map((phase) => phase.id),
@@ -516,6 +535,10 @@ try {
   );
   const steadyTelemetry = assertSteadyStressTelemetry(result.direct.samples);
   const retainedReactivation = assertRetainedMorphReactivation(result.direct.reactivation);
+  const firstMorphActivationLatency = assertFirstMorphActivationLatency(
+    result.direct.samples,
+    result.direct.backend,
+  );
   assert.deepEqual(
     result.workerModes.map((mode) => mode.transportMode).sort(),
     ["shared", "transferable"],
@@ -524,6 +547,10 @@ try {
   for (const mode of result.workerModes) {
     assert.equal(mode.finalMetrics.metrics.retained, true);
     assert.equal(mode.finalMetrics.engineMetrics.canonical, true);
+    assert.ok(mode.preloadedGeometryCount >= 1200);
+    assert.ok(mode.preloadBytesUploaded > 0);
+    assert.equal(mode.finalMetrics.metrics.preloadedGeometryCount, mode.preloadedGeometryCount);
+    assert.equal(mode.finalMetrics.metrics.preloadBytesUploaded, mode.preloadBytesUploaded);
     assert.ok(mode.seeks.length >= STRESS_PHASES.length);
     assert.equal(
       mode.seeks.at(-1).visibleObjectCount,
@@ -580,6 +607,7 @@ try {
     captures,
     steadyTelemetry,
     retainedReactivation,
+    firstMorphActivationLatency,
     ...result,
   };
   await writeFile(artifactPath, `${serializeArtifact(artifact)}\n`);

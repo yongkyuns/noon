@@ -7,10 +7,10 @@ use std::{
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontVariationSetting, GeometryRef,
     GeometryResource, GeometryResourceArena, GeometryResourceHandle, GlyphRun, PositionedGlyph,
-    Rect, StrokeCap, StrokeJoin, TextAffineTransform, TextClusterIdentity, TextDirection,
+    Rect, StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
     TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
     TextRenderItem, TextResource, TextResourceArena, TextResourceHandle, TextSourceKind,
-    TextSourceSpan, TextVectorItem, TextVectorStyle, Vec2, VectorPath,
+    TextSourceSpan, TextVectorItem, TextVectorStyle, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::TransportTextResourceHandle;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 3;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 4;
 
 /// Immutable compiled render geometry at the genuine cross-worker boundary.
 /// Indices are scoped to the player session and this installed resource bundle.
@@ -30,6 +30,84 @@ pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 3;
 struct TransportRenderGeometryResources {
     session: u32,
     geometries: Vec<GeometryRef>,
+    preparations: Vec<RenderGeometryPreparation>,
+}
+
+/// Derived renderer inputs, transferred once with the installed geometry table.
+/// Actual playback still resolves its full mesh key; these are preparation hints.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RenderGeometryPreparation {
+    pub resource: u32,
+    pub style: Style,
+    pub transform: Transform2D,
+}
+
+impl RenderGeometryPreparation {
+    fn is_finite(&self) -> bool {
+        let finite_color = |color: Color| {
+            [color.red, color.green, color.blue, color.alpha]
+                .into_iter()
+                .all(f32::is_finite)
+        };
+        [
+            self.transform.translation.x,
+            self.transform.translation.y,
+            self.transform.scale.x,
+            self.transform.scale.y,
+            self.transform.rotation,
+            self.style.stroke_width,
+            self.style.opacity,
+        ]
+        .into_iter()
+        .all(f32::is_finite)
+            && self.style.fill.is_none_or(finite_color)
+            && self.style.stroke.is_none_or(finite_color)
+    }
+}
+
+pub(crate) fn compiled_render_geometry_preparations(
+    compiled: &noon_compile::RetainedCompiledScene,
+    geometries: &[Arc<GeometryRef>],
+) -> Result<Vec<RenderGeometryPreparation>, RetainedResourceTransportError> {
+    let indices = geometries
+        .iter()
+        .enumerate()
+        .map(|(index, geometry)| {
+            u32::try_from(index)
+                .map(|index| (Arc::as_ptr(geometry) as usize, index))
+                .map_err(|_| {
+                    RetainedResourceTransportError::Encode("too many render resources".into())
+                })
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(compiled
+        .tracks_iter()
+        .filter_map(|track| {
+            let noon_compile::TransformGeometryPlan::PathPair {
+                geometry,
+                render_transform,
+            } = track.transform_geometry_plan.as_ref()?
+            else {
+                return None;
+            };
+            let noon_core::TrackValues::Object { from, to } = &track.values else {
+                return None;
+            };
+            // Mixed stroke modes and current-relative paths can change their mesh
+            // key during playback. Keep them on the normal lazy preparation path.
+            if from.style.stroke_width_mode != to.style.stroke_width_mode
+                || (render_transform.is_none()
+                    && from.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace)
+            {
+                return None;
+            }
+            Some(RenderGeometryPreparation {
+                resource: *indices.get(&(Arc::as_ptr(geometry) as usize))?,
+                style: from.style,
+                transform: render_transform.unwrap_or(Transform2D::IDENTITY),
+            })
+        })
+        .collect())
 }
 
 pub(crate) fn compiled_render_geometries(
@@ -161,6 +239,7 @@ impl RetainedResourceBundle {
         &mut self,
         session: u32,
         geometries: Arc<[Arc<GeometryRef>]>,
+        preparations: Vec<RenderGeometryPreparation>,
     ) {
         self.render_geometry_resources = Some(TransportRenderGeometryResources {
             session,
@@ -168,6 +247,7 @@ impl RetainedResourceBundle {
                 .iter()
                 .map(|geometry| geometry.as_ref().clone())
                 .collect(),
+            preparations,
         });
     }
 
@@ -203,6 +283,15 @@ impl RetainedResourceBundle {
             for (index, geometry) in resources.geometries.iter().enumerate() {
                 if !matches!(geometry, GeometryRef::VectorPath(_)) || !geometry.is_finite() {
                     return Err(RetainedResourceTransportError::InvalidRenderGeometry(index));
+                }
+            }
+            for (index, preparation) in resources.preparations.iter().enumerate() {
+                if preparation.resource as usize >= resources.geometries.len()
+                    || !preparation.is_finite()
+                {
+                    return Err(RetainedResourceTransportError::InvalidRenderPreparation(
+                        index,
+                    ));
                 }
             }
         }
@@ -267,6 +356,11 @@ impl RetainedResourceBundle {
                 .render_geometry_resources
                 .as_ref()
                 .map(|resources| resources.session),
+            render_geometry_preparations: self
+                .render_geometry_resources
+                .as_ref()
+                .map(|resources| resources.preparations.clone())
+                .unwrap_or_default(),
             render_geometries: self
                 .render_geometry_resources
                 .map(|resources| {
@@ -304,6 +398,7 @@ pub struct InstalledRetainedResources {
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     render_geometry_session: Option<u32>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
+    render_geometry_preparations: Vec<RenderGeometryPreparation>,
 }
 
 impl InstalledRetainedResources {
@@ -313,6 +408,14 @@ impl InstalledRetainedResources {
 
     pub(crate) fn render_geometries(&self) -> Arc<[Arc<GeometryRef>]> {
         self.render_geometries.clone()
+    }
+
+    pub(crate) fn render_geometry_preparations(&self) -> &[RenderGeometryPreparation] {
+        &self.render_geometry_preparations
+    }
+
+    pub fn render_geometry_preparation_count(&self) -> usize {
+        self.render_geometry_preparations().len()
     }
 
     pub fn texts(&self) -> &TextResourceArena {
@@ -348,6 +451,7 @@ pub enum RetainedResourceTransportError {
     InvalidText(String),
     InvalidFont(String),
     InvalidRenderGeometry(usize),
+    InvalidRenderPreparation(usize),
     Encode(String),
     Decode(String),
 }
@@ -355,6 +459,9 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRenderPreparation(index) => {
+                write!(formatter, "invalid render geometry preparation {index}")
+            }
             Self::InvalidRenderGeometry(index) => write!(
                 formatter,
                 "invalid compiled render geometry resource {index}"
@@ -1147,12 +1254,64 @@ mod tests {
             &FontResourceArena::new(),
         )
         .unwrap();
-        bundle.set_render_geometries(17, vec![geometry.clone()].into());
+        let preparations = vec![
+            RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            },
+            RenderGeometryPreparation {
+                resource: 0,
+                style: Style {
+                    stroke_width: 3.0,
+                    ..Style::default()
+                },
+                transform: Transform2D::IDENTITY,
+            },
+        ];
+        bundle.set_render_geometries(17, vec![geometry.clone()].into(), preparations.clone());
         let installed = RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap())
             .unwrap()
             .install()
             .unwrap();
         assert_eq!(installed.render_geometry_session(), Some(17));
+        assert_eq!(installed.render_geometry_preparations(), preparations);
+        assert_eq!(installed.render_geometry_preparation_count(), 2);
+        for invalid in [
+            RenderGeometryPreparation {
+                resource: 1,
+                ..preparations[0].clone()
+            },
+            RenderGeometryPreparation {
+                style: Style {
+                    stroke_width: f32::NAN,
+                    ..Style::default()
+                },
+                ..preparations[0].clone()
+            },
+            RenderGeometryPreparation {
+                transform: Transform2D {
+                    rotation: f32::INFINITY,
+                    ..Transform2D::IDENTITY
+                },
+                ..preparations[0].clone()
+            },
+        ] {
+            let mut invalid_bundle = bundle.clone();
+            invalid_bundle
+                .render_geometry_resources
+                .as_mut()
+                .unwrap()
+                .preparations
+                .push(invalid);
+            let decoded =
+                RetainedResourceBundle::decode_binary(&invalid_bundle.encode_binary().unwrap())
+                    .unwrap();
+            assert!(matches!(
+                decoded.install(),
+                Err(RetainedResourceTransportError::InvalidRenderPreparation(2))
+            ));
+        }
         let first = installed.render_geometries();
         let again = installed.render_geometries();
         assert_eq!(first[0], geometry);
@@ -1178,6 +1337,7 @@ mod tests {
                 VectorPath::new().move_to(Vec2::new(f32::NAN, 0.0)),
             ))]
             .into(),
+            Vec::new(),
         );
         let decoded =
             RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap()).unwrap();

@@ -597,6 +597,32 @@ impl RetainedFramePreparer {
         Self::default()
     }
 
+    /// Prepare and upload a replacement resident resource set, then install its
+    /// CPU preparation state. Tessellation or device-limit failure leaves the
+    /// previous CPU/GPU installation untouched. The host owns queue submission;
+    /// this operation neither draws nor advances scene time.
+    pub fn preload_path_meshes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut GpuRenderer,
+        requests: &[crate::PathMeshPreload<'_>],
+    ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
+        let mut geometry = FramePreparer::for_individual_path_draws();
+        geometry.set_path_mesh_cache_limit(self.geometry.path_mesh_cache_limit());
+        geometry.preload_paths(requests)?;
+        let frame = geometry.preloaded_frame();
+        let stats = crate::PathMeshPreloadStats {
+            geometry: frame.stats,
+            upload: renderer.upload_preloaded_paths(device, queue, &frame)?,
+        };
+        let mut replacement = Self::with_outline_cache_limits(self.outline_cache_limits());
+        replacement.geometry = geometry;
+        replacement.text_generation = self.text_generation;
+        *self = replacement;
+        Ok(stats)
+    }
+
     /// Budget the path cache for the currently installed immutable scene resources.
     ///
     /// Compiled morph pairs need room across timeline phases, in addition to the
@@ -608,11 +634,10 @@ impl RetainedFramePreparer {
         compiled_geometry_count: usize,
         installed_geometry_count: usize,
     ) {
-        self.geometry.set_path_mesh_cache_limit(
-            compiled_geometry_count.saturating_add(
+        self.geometry
+            .set_path_mesh_cache_limit(compiled_geometry_count.saturating_add(
                 installed_geometry_count.max(crate::DEFAULT_PATH_MESH_CACHE_LIMIT),
-            ),
-        );
+            ));
     }
 
     pub fn with_outline_cache_limits(limits: GlyphOutlineCacheLimits) -> Self {
@@ -669,7 +694,8 @@ impl RetainedFramePreparer {
         let text_can_update_locally = if changes.is_empty() {
             false
         } else {
-            self.text.can_update_objects_locally(frame, changes, texts, metrics)?
+            self.text
+                .can_update_objects_locally(frame, changes, texts, metrics)?
                 && self.changes_are_fast_text_only(frame, changes)
         };
         let scratch_reused = self.prepare_scratch_with_changes(
@@ -898,10 +924,7 @@ impl RetainedFramePreparer {
         frame: &RetainedFrameState,
         changes: &FrameChanges,
     ) -> bool {
-        if !self.scratch_ready
-            || changes.is_all()
-            || changes.is_structural()
-            || changes.is_empty()
+        if !self.scratch_ready || changes.is_all() || changes.is_structural() || changes.is_empty()
         {
             return false;
         }
