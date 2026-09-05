@@ -16,8 +16,8 @@ use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
 };
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
-    StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, PublicationContext,
+    ScenePatch, StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -242,6 +242,7 @@ pub struct SceneInstance {
     spatial_changes: FrameChanges,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
+    publication: PublicationContext,
 }
 
 impl SceneInstance {
@@ -260,6 +261,7 @@ impl SceneInstance {
             spatial_changes: FrameChanges::all(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
+            publication: PublicationContext::default(),
         };
         instance.seek_unchecked(0.0);
         instance
@@ -320,10 +322,14 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
-        if time >= self.frame.time {
+        let previous_time = self.frame.time;
+        if time >= previous_time {
             self.advance_unchecked(time);
         } else {
             self.seek_unchecked(time);
+        }
+        if self.frame.time != previous_time {
+            self.publish_effective_change();
         }
         Ok(&self.frame)
     }
@@ -332,7 +338,11 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        let previous_time = self.frame.time;
         self.seek_unchecked(time);
+        if self.frame.time != previous_time {
+            self.publish_effective_change();
+        }
         Ok(&self.frame)
     }
 
@@ -340,10 +350,14 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
-        if time < self.frame.time {
+        let previous_time = self.frame.time;
+        if time < previous_time {
             self.seek_unchecked(time);
         } else {
             self.advance_unchecked(time);
+        }
+        if self.frame.time != previous_time {
+            self.publish_effective_change();
         }
         Ok(&self.frame)
     }
@@ -1695,6 +1709,33 @@ mod tests {
         }
         direct.seek(2.5).expect("valid time");
         assert_eq!(sequential.frame(), direct.frame());
+    }
+
+    #[test]
+    fn timeline_publication_advances_only_frame_epoch_and_same_time_is_a_no_op() {
+        let mut instance = SceneInstance::new(compile_linear_scene());
+        let before = instance.publication_context();
+
+        instance.advance_to(2.0).expect("valid time");
+        let advanced = instance.publication_context();
+        assert_eq!(advanced.scene_revision(), before.scene_revision());
+        assert_eq!(advanced.execution_revision(), before.execution_revision());
+        assert_eq!(
+            advanced.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+
+        instance.advance_to(2.0).expect("same time is valid");
+        assert_eq!(instance.publication_context(), advanced);
+
+        instance.seek(1.0).expect("backward seek is valid");
+        let sought = instance.publication_context();
+        assert_eq!(sought.scene_revision(), advanced.scene_revision());
+        assert_eq!(sought.execution_revision(), advanced.execution_revision());
+        assert_eq!(
+            sought.frame_epoch(),
+            advanced.frame_epoch().checked_next().unwrap()
+        );
     }
 
     #[test]

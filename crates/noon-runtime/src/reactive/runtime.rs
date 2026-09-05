@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
-    ComputeProgram, ComputeState, ObjectId, Property, ReactiveBinding, ReactiveError,
-    ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene, SignalId,
+    ComputeProgram, ComputeState, ObjectId, Property, PublicationContext, ReactiveBinding,
+    ReactiveError, ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene,
+    SignalId,
 };
 
 use crate::{FrameState, SceneInstance};
@@ -151,10 +152,12 @@ impl SceneInstance {
     /// indices and instantiates the existing compute VM. No authored scene is
     /// reconstructed or recompiled at this boundary.
     pub fn from_semantic_execution(lowered: SemanticExecutionLoweringOutput) -> Self {
+        let publication = lowered.publication_context();
         let (compiled, reactive_projection, program) = lowered.into_execution_parts();
         let reactive =
             ReactiveRuntime::new(&compiled, reactive_projection.graph().bindings(), program);
         let mut instance = Self::new(compiled);
+        instance.publication = publication;
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
         instance
@@ -191,6 +194,42 @@ impl SceneInstance {
         Ok(instance)
     }
 
+    /// Exact authored/executable/effective publication context of this runtime view.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.publication
+    }
+
+    /// Publish a coherent effective-only frame change.
+    pub(crate) fn publish_effective_change(&mut self) {
+        let next = self
+            .publication
+            .frame_epoch()
+            .checked_next()
+            .expect("Noon frame epoch space exhausted");
+        self.publication = self.publication.with_frame_epoch(next);
+    }
+
+    /// Publish one coherent executable-projection change and the corresponding new
+    /// effective frame context. Authored scene revision remains pinned to the
+    /// semantic snapshot from which this session was built.
+    pub(crate) fn publish_execution_change(&mut self) {
+        let execution = self
+            .publication
+            .execution_revision()
+            .checked_next()
+            .expect("Noon execution revision space exhausted");
+        let frame = self
+            .publication
+            .frame_epoch()
+            .checked_next()
+            .expect("Noon frame epoch space exhausted");
+        self.publication = PublicationContext::new(
+            self.publication.scene_revision(),
+            execution,
+            frame,
+        );
+    }
+
     pub const fn last_reactive_stats(&self) -> ReactiveRuntimeStats {
         self.last_reactive_stats
     }
@@ -212,6 +251,7 @@ impl SceneInstance {
             .ok_or(ReactiveError::UnknownSignal(signal))?
             .state
             .set_input(signal, value)?;
+        let effective_changed = !update.signal_changes().is_empty();
         let evaluation = update.stats();
         let mut applied_targets = 0;
         let mut changed_targets = 0;
@@ -241,6 +281,9 @@ impl SceneInstance {
         }
 
         self.last_reactive_stats = runtime_stats(evaluation, applied_targets, changed_targets);
+        if effective_changed {
+            self.publish_effective_change();
+        }
         Ok(&self.frame)
     }
 
@@ -471,6 +514,39 @@ mod tests {
                 dense_targets_changed: 1,
             }
         );
+    }
+
+    #[test]
+    fn signal_only_reactive_update_publishes_frame_epoch_without_frame_dirtiness() {
+        let mut scene = SemanticScene::new();
+        scene.add(GeometryRef::circle(1.0));
+        let input = scene.add_input(1.0_f32);
+        let mut instance =
+            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+
+        instance
+            .set_reactive_input(input, 2.0_f32)
+            .expect("input update must work");
+        let after = instance.publication_context();
+        assert_eq!(after.scene_revision(), before.scene_revision());
+        assert_eq!(after.execution_revision(), before.execution_revision());
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(
+            instance.reactive_value(input),
+            Some(&ReactiveValue::Scalar(2.0))
+        );
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance
+            .set_reactive_input(input, 2.0_f32)
+            .expect("same input is a valid no-op");
+        assert_eq!(instance.publication_context(), after);
+        assert!(instance.take_frame_changes().is_empty());
     }
 
     #[test]

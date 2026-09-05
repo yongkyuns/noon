@@ -31,6 +31,9 @@ impl SceneInstance {
             self.apply_patch(patch)
                 .expect("runtime transaction was fully preflighted");
         }
+        if !transaction.mutations().is_empty() {
+            self.publish_execution_change();
+        }
         Ok(&self.frame)
     }
 }
@@ -79,6 +82,7 @@ mod tests {
     fn transaction_preflight_rejects_late_failure_before_runtime_publication() {
         let (mut instance, object) = semantic_instance();
         let before = instance.frame().clone();
+        let publication_before = instance.publication_context();
         let missing = ObjectId::new(999);
         let transaction = MutationTransaction::from_mutations([
             ScenePatch::SetTransform {
@@ -99,9 +103,32 @@ mod tests {
             CompilePatchError::UnknownObject(missing)
         );
         assert_eq!(instance.frame(), &before);
+        assert_eq!(instance.publication_context(), publication_before);
         assert_eq!(
             instance.effective_transform(object),
             Some(Transform2D::IDENTITY)
         );
+    }
+
+    #[test]
+    fn successful_execution_transaction_advances_execution_and_frame_once() {
+        let (mut instance, object) = semantic_instance();
+        let before = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
+            object,
+            transform: Transform2D {
+                translation: Vec2::new(4.0, 0.0),
+                ..Transform2D::IDENTITY
+            },
+        }]);
+
+        instance.apply_transaction(&transaction).unwrap();
+        let after = instance.publication_context();
+        assert_eq!(after.scene_revision(), before.scene_revision());
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(after.frame_epoch(), before.frame_epoch().checked_next().unwrap());
     }
 }

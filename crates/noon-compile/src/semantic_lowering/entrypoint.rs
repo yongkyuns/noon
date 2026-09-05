@@ -1,6 +1,6 @@
 use noon_core::{
-    Camera2DState, ComputeProgram, ObjectId, ReactiveProgram, SemanticNodeId, SemanticObjectRole,
-    SemanticStore,
+    Camera2DState, ComputeProgram, ExecutionRevision, FrameEpoch, ObjectId, PublicationContext,
+    ReactiveProgram, SemanticNodeId, SemanticObjectRole, SemanticStore,
 };
 
 use crate::CompiledScene;
@@ -23,6 +23,7 @@ pub struct SemanticExecutionLoweringOutput {
     reactive: SemanticReactiveProjection,
     compute: ComputeProgram,
     camera_object: Option<ObjectId>,
+    publication: PublicationContext,
 }
 
 impl SemanticExecutionLoweringOutput {
@@ -36,6 +37,13 @@ impl SemanticExecutionLoweringOutput {
 
     pub fn compute(&self) -> &ComputeProgram {
         &self.compute
+    }
+
+    /// Publication context of the exact semantic snapshot from which this handoff
+    /// was derived. Initial lowering publishes execution revision/frame epoch zero;
+    /// later runtime publications advance those domains independently.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.publication
     }
 
     /// Execution identity of the unique semantic object carrying the canonical 2D
@@ -169,6 +177,11 @@ pub fn lower_semantic_execution(
         reactive,
         compute,
         camera_object,
+        publication: PublicationContext::new(
+            store.scene_revision(),
+            ExecutionRevision::default(),
+            FrameEpoch::default(),
+        ),
     })
 }
 
@@ -253,6 +266,12 @@ mod tests {
         assert_eq!(lowered.compiled().objects().len(), 1);
         assert_eq!(lowered.compiled().objects()[0].id, execution_id);
         assert_eq!(lowered.camera_object(), None);
+        assert_eq!(lowered.publication_context().scene_revision(), store.scene_revision());
+        assert_eq!(
+            lowered.publication_context().execution_revision(),
+            ExecutionRevision::default()
+        );
+        assert_eq!(lowered.publication_context().frame_epoch(), FrameEpoch::default());
         assert_eq!(lowered.reactive().signal_count(), 1);
         assert_eq!(lowered.compute().signal_count(), 1);
         assert_eq!(
