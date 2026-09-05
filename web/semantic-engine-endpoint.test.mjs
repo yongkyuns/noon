@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, MessagePort } from "node:worker_threads";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
-import { decodeTransferableExecutionDelta } from "./execution-transport.js";
+import { decodeTransferableExecutionDelta, SharedExecutionDeltaReader } from "./execution-transport.js";
 
 globalThis.MessagePort = MessagePort;
 const next = (port) => new Promise((resolve) => port.once("message", resolve));
@@ -19,7 +19,7 @@ const request = (port, type, requestId, fields = {}) => {
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
   return result;
 };
-function fixture() {
+function fixture(transportMode = "transferable") {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
@@ -39,7 +39,7 @@ function fixture() {
   return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
-      loopDurationSeconds: 2, transportMode: "transferable",
+      loopDurationSeconds: 2, transportMode,
     }, () => { stopped += 1; }),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
@@ -103,4 +103,30 @@ test("player construction failure closes both transferred ports", () => {
   assert.equal(stopped, 1);
   control.port2.close();
   render.port2.close();
+});
+
+
+test("shared setup cannot expose a snapshot before its resource bundle", async () => {
+  const f = fixture("shared");
+  let endpoint;
+  try {
+    const received = [];
+    const setup = new Promise((resolve, reject) => {
+      f.render.port2.on("message", (message) => {
+        received.push(message.type);
+        if (message.type !== "transport_setup") return;
+        try {
+          assert.deepEqual(received, ["retained_resources", "transport_setup"]);
+          const reader = new SharedExecutionDeltaReader(message.mailbox);
+          const snapshots = [];
+          reader.drain((json) => { snapshots.push(JSON.parse(json)); return true; });
+          assert.equal(snapshots.length, 1);
+          assert.equal(snapshots[0].snapshot, true);
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
+    endpoint = f.attach();
+    await setup;
+  } finally { endpoint?.stop(); f.close(); }
 });

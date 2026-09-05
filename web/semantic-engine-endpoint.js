@@ -107,16 +107,18 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       } else if (message?.type === "transport_writable") drain();
       else if (message?.type === "render_error") fail(new Error(message.message));
     });
-    if (transportMode === EXECUTION_TRANSPORT_SHARED) {
-      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? 1024 * 1024);
-      transport = new SharedExecutionDeltaWriter(mailbox);
-      renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
-    } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
     const resources = Uint8Array.from(player.resourceBundleBytes());
     if (resources.byteLength === 0) {
       throw new Error("semantic execution emitted an empty retained resource bundle");
     }
     renderPort.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
+    // A shared mailbox may already contain its initial snapshot when setup is
+    // received. Install resources before exposing that mailbox to the renderer.
+    if (transportMode === EXECUTION_TRANSPORT_SHARED) {
+      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? 1024 * 1024);
+      transport = new SharedExecutionDeltaWriter(mailbox);
+      renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
+    } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
     send(player.initialDeltaJson());
     controlPort.start();
     renderPort.start();
