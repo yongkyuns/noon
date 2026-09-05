@@ -600,7 +600,7 @@ impl CanonicalAuthoringScene {
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
-            .ok_or("live execution player has no handoff duration")
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
     /// Read only the live runtime's authored handoff duration.
@@ -684,7 +684,7 @@ impl CanonicalAuthoringScene {
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
-            .ok_or("live execution player has no handoff duration")
+            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1944,7 +1944,7 @@ pub use wasm::*;
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{AnimationOptions, GeometryRef, RateFunction, SemanticVec3, Transform2D};
+    use noon_core::{AnimationOptions, GeometryRef, RateFunction, SemanticVec3, Transform2D, Vec2};
     use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
@@ -2353,7 +2353,7 @@ mod tests {
                 .unwrap()
                 .transform
                 .translation,
-            SemanticVec3::new(2.0, -1.0, 0.0)
+            Vec2::new(2.0, -1.0)
         );
 
         assert_eq!(context.ordinary_wait(1.0).unwrap(), 3.0);
@@ -2370,7 +2370,7 @@ mod tests {
                 .unwrap()
                 .transform
                 .translation,
-            SemanticVec3::new(3.0, -1.0, 0.0)
+            Vec2::new(3.0, -1.0)
         );
 
         // Python's ordinary `Transform` creates this target after the runtime
@@ -2404,7 +2404,7 @@ mod tests {
                 .unwrap()
                 .transform
                 .translation,
-            SemanticVec3::new(5.0, -1.0, 0.0)
+            Vec2::new(5.0, -1.0)
         );
     }
 

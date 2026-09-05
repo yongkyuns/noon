@@ -251,7 +251,7 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_shift(
         &mut self,
         mobject: &noon::Mobject,
