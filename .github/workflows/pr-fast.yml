@@ -124,7 +124,9 @@ jobs:
           fi
           changed_paths="$(git diff --name-only "$BASE_SHA" HEAD)"
           printf '%s\n' "$changed_paths"
+          node --test scripts/cold-start-risk-classifier.test.mjs
           printf '%s\n' "$changed_paths" | node scripts/pr-risk-classifier.mjs >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed_paths" | node scripts/cold-start-risk-classifier.mjs >> "$GITHUB_OUTPUT"
 
       - name: Use stable Rust and WASM target
         run: |
@@ -188,6 +190,34 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+
+      - name: Check preloaded cold-start footprint
+        if: steps.browser-risk.outputs.cold_start == 'true'
+        id: cold-start
+        env:
+          NOON_COLD_START_BACKEND: webgl
+          NOON_COLD_START_EXAMPLES: geometry:parity-create-circle
+          NOON_COLD_START_ARTIFACT: browser-smoke-artifacts/cold-start/footprint.json
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/playground-cold-start.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          if [[ -f browser-smoke-artifacts/cold-start/footprint.json ]]; then
+            cat browser-smoke-artifacts/cold-start/footprint.json
+          fi
+          exit "$status"
+
+      - name: Upload cold-start footprint
+        if: always() && steps.browser-risk.outputs.cold_start == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cold-start-footprint-${{ github.event.pull_request.number }}
+          path: browser-smoke-artifacts/cold-start/footprint.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Check deterministic playback
         id: deterministic-replay
@@ -283,6 +313,8 @@ jobs:
         env:
           START_EPOCH: ${{ steps.browser-clock.outputs.epoch }}
           PACKAGE_SECONDS: ${{ steps.browser-package.outputs.seconds }}
+          COLD_START_REQUIRED: ${{ steps.browser-risk.outputs.cold_start }}
+          COLD_START_SECONDS: ${{ steps.cold-start.outputs.seconds }}
           REPLAY_SECONDS: ${{ steps.deterministic-replay.outputs.seconds }}
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
           RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
@@ -308,6 +340,11 @@ jobs:
             fi
           }
 
+          cold_start_duration="skipped"
+          if [[ "$COLD_START_REQUIRED" == "true" ]]; then
+            cold_start_duration="$(display_seconds "$COLD_START_SECONDS")"
+          fi
+
           retained_duration="skipped"
           if [[ "$RETAINED_REQUIRED" == "true" ]]; then
             retained_duration="$(display_seconds "$RETAINED_SECONDS")"
@@ -329,6 +366,7 @@ jobs:
             echo "| Phase | Duration |"
             echo "| --- | ---: |"
             echo "| Browser package | $(display_seconds "$PACKAGE_SECONDS") |"
+            echo "| Preloaded cold start | $cold_start_duration |"
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
             echo "| Canonical retained execution | $retained_duration |"
@@ -338,6 +376,7 @@ jobs:
             echo "| Host-updater diagnostics | $(display_seconds "$HOST_UPDATER_SECONDS") |"
             echo "| Measured browser path | $(display_seconds "$total") |"
             echo
+            echo "Cold-start benchmark escalation required: ${COLD_START_REQUIRED:-unknown}."
             echo "Retained execution escalation required: ${RETAINED_REQUIRED:-unknown}."
             echo "Render mode-switch escalation required: ${MODE_SWITCH_REQUIRED:-unknown}."
             echo "Renderer-critical WebGL escalation required: ${RENDERER_CRITICAL:-unknown}."
