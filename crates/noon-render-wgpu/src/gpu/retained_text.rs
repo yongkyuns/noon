@@ -2431,8 +2431,8 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::CompiledScene;
-    use noon_core::{FontResourceId, SceneDefinition};
+    use noon_compile::{CompiledObject, CompiledScene};
+    use noon_core::FontResourceId;
     use noon_runtime::{FrameObjectState, SceneInstance};
 
     use super::*;
@@ -2566,9 +2566,15 @@ mod tests {
     }
 
     fn runtime_publication_scene() -> SceneInstance {
-        let mut scene = SceneDefinition::new();
-        scene.add(GeometryRef::circle(1.0));
-        SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"))
+        let object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(1.0),
+            Transform2D::default(),
+            Style::default(),
+        );
+        SceneInstance::new(
+            CompiledScene::compile_objects(vec![object], &[]).expect("scene must compile"),
+        )
     }
 
     #[test]
