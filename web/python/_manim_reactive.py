@@ -200,8 +200,34 @@ class _NativeSignal:
         self._scene = scene
         self._signal_id = signal_id
 
+    @classmethod
+    def _from_canonical(
+        cls, scene: _base.Scene, context: object, handle: object
+    ) -> _NativeSignal:
+        """Create a wrapper over one store-owned native signal handle.
+
+        Native signal identity and values remain in Rust. Python retains only
+        the opaque handle required to pass the source back to the same context.
+        """
+        signal = object.__new__(cls)
+        signal._scene = scene
+        signal._canonical_context = context
+        signal._canonical_handle = handle
+        return signal
+
+    def _canonical_context_handle(self) -> tuple[object, object] | None:
+        context = getattr(self, "_canonical_context", None)
+        handle = getattr(self, "_canonical_handle", None)
+        if context is None or handle is None:
+            return None
+        return context, handle
+
     @property
     def signal_id(self) -> int:
+        if self._canonical_context_handle() is not None:
+            raise AttributeError(
+                "canonical native signal identity belongs to the shared Rust semantic store"
+            )
         return self._signal_id
 
 

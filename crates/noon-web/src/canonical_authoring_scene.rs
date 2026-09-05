@@ -374,10 +374,10 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_pre_execution_scalar_authoring(&self) -> Result<(), String> {
+    fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
         if self.live_player.is_some() || self.live_player_transferred {
             return Err(
-                "scalar tracker declarations must be authored before canonical execution begins"
+                "signal declarations and bindings must be authored before canonical execution begins"
                     .into(),
             );
         }
@@ -387,8 +387,100 @@ impl CanonicalAuthoringScene {
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
     fn create_value_tracker(&self, initial: f64) -> Result<noon::ValueTracker, String> {
-        self.require_pre_execution_scalar_authoring()?;
+        self.require_pre_execution_signal_authoring()?;
         self.scene.value_tracker(initial)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.pointer_position_signal()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.viewport_size_signal()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.wheel_delta_signal()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn key_state_signal(
+        &self,
+        code: String,
+        initial: bool,
+    ) -> Result<noon::NativeBoolSignal, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.key_state_signal(code, initial)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn control_signal(&self, name: String, initial: f64) -> Result<noon::ValueTracker, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.control_signal(name, initial)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.pointer_down_events(button)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn wheel_events(&self) -> Result<noon::ValueTracker, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.wheel_events()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.control_commit_events(name)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_native_translation(
+        &self,
+        object: &noon::Mobject,
+        signal: &noon::NativeVectorSignal,
+    ) -> Result<(), String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.bind_native_translation(object, signal)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_rotation(
+        &self,
+        object: &noon::Mobject,
+        signal: &noon::ValueTracker,
+    ) -> Result<(), String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.bind_rotation(object, signal)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_opacity(
+        &self,
+        object: &noon::Mobject,
+        signal: &noon::ValueTracker,
+    ) -> Result<(), String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.bind_opacity(object, signal)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_presence(
+        &self,
+        object: &noon::Mobject,
+        signal: &noon::NativeBoolSignal,
+    ) -> Result<(), String> {
+        self.require_pre_execution_signal_authoring()?;
+        self.scene.bind_presence(object, signal)
     }
 
     /// Build only the common `offset + tracker * direction` semantic expression.
@@ -399,7 +491,7 @@ impl CanonicalAuthoringScene {
         direction: SemanticVec3,
         offset: SemanticVec3,
     ) -> Result<noon::TrackerPosition, String> {
-        self.require_pre_execution_scalar_authoring()?;
+        self.require_pre_execution_signal_authoring()?;
         self.scene.position_from_tracker(tracker, direction, offset)
     }
 
@@ -409,7 +501,7 @@ impl CanonicalAuthoringScene {
         object: &noon::Mobject,
         position: &noon::TrackerPosition,
     ) -> Result<(), String> {
-        self.require_pre_execution_scalar_authoring()?;
+        self.require_pre_execution_signal_authoring()?;
         self.scene.bind_position(object, position)
     }
 
@@ -421,7 +513,7 @@ impl CanonicalAuthoringScene {
         duration: f64,
         rate_function: noon_core::RateFunction,
     ) -> Result<f64, String> {
-        self.require_pre_execution_scalar_authoring()?;
+        self.require_pre_execution_signal_authoring()?;
         self.scene
             .play_value(tracker, target)
             .rate_func(rate_function)
@@ -464,7 +556,7 @@ impl CanonicalAuthoringScene {
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
-        self.require_pre_execution_scalar_authoring()?;
+        self.require_pre_execution_signal_authoring()?;
         self.scene.wait(duration)?;
         Ok(self.scene.time())
     }
@@ -859,6 +951,10 @@ mod wasm {
             .map_err(|error| js_error(format!("invalid callback ID {value:?}: {error}")))
     }
 
+    fn parse_button(value: u32) -> Result<u8, JsValue> {
+        u8::try_from(value).map_err(|_| js_error("button must be in the range 0..255"))
+    }
+
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
@@ -888,6 +984,20 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmValueTrackerHandle {
         tracker: noon::ValueTracker,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    /// Opaque JS/Python identity for one canonical native vector source.
+    #[wasm_bindgen]
+    pub struct WasmNativeVectorSignalHandle {
+        signal: noon::NativeVectorSignal,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    /// Opaque JS/Python identity for one canonical native boolean source.
+    #[wasm_bindgen]
+    pub struct WasmNativeBoolSignalHandle {
+        signal: noon::NativeBoolSignal,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
@@ -965,6 +1075,42 @@ mod wasm {
         }
     }
 
+    impl WasmNativeVectorSignalHandle {
+        fn signal_in(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<&noon::NativeVectorSignal, JsValue> {
+            if !std::rc::Rc::ptr_eq(&self.store, store) || !self.signal.is_in_store(store) {
+                return Err(js_error(
+                    "native vector signal and canonical authoring context belong to different stores",
+                ));
+            }
+            store
+                .borrow()
+                .semantic_signal_state(self.signal.node_id())
+                .map_err(|error| js_error(error.to_string()))?;
+            Ok(&self.signal)
+        }
+    }
+
+    impl WasmNativeBoolSignalHandle {
+        fn signal_in(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<&noon::NativeBoolSignal, JsValue> {
+            if !std::rc::Rc::ptr_eq(&self.store, store) || !self.signal.is_in_store(store) {
+                return Err(js_error(
+                    "native bool signal and canonical authoring context belong to different stores",
+                ));
+            }
+            store
+                .borrow()
+                .semantic_signal_state(self.signal.node_id())
+                .map_err(|error| js_error(error.to_string()))?;
+            Ok(&self.signal)
+        }
+    }
+
     impl WasmTrackerPositionHandle {
         fn position_in(
             &self,
@@ -1017,6 +1163,150 @@ mod wasm {
                 tracker,
                 store: std::rc::Rc::clone(self.inner.scene.store()),
             })
+        }
+
+        #[wasm_bindgen(js_name = pointerPositionSignal)]
+        pub fn pointer_position_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
+            let signal = self.inner.pointer_position_signal().map_err(js_error)?;
+            Ok(WasmNativeVectorSignalHandle {
+                signal,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = viewportSizeSignal)]
+        pub fn viewport_size_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
+            let signal = self.inner.viewport_size_signal().map_err(js_error)?;
+            Ok(WasmNativeVectorSignalHandle {
+                signal,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = wheelDeltaSignal)]
+        pub fn wheel_delta_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
+            let signal = self.inner.wheel_delta_signal().map_err(js_error)?;
+            Ok(WasmNativeVectorSignalHandle {
+                signal,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = keyStateSignal)]
+        pub fn key_state_signal(
+            &mut self,
+            code: String,
+            initial: bool,
+        ) -> Result<WasmNativeBoolSignalHandle, JsValue> {
+            let signal = self
+                .inner
+                .key_state_signal(code, initial)
+                .map_err(js_error)?;
+            Ok(WasmNativeBoolSignalHandle {
+                signal,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = controlSignal)]
+        pub fn control_signal(
+            &mut self,
+            name: String,
+            initial: f64,
+        ) -> Result<WasmValueTrackerHandle, JsValue> {
+            let tracker = self.inner.control_signal(name, initial).map_err(js_error)?;
+            Ok(WasmValueTrackerHandle {
+                tracker,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = pointerDownEvents)]
+        pub fn pointer_down_events(
+            &mut self,
+            button: u32,
+        ) -> Result<WasmValueTrackerHandle, JsValue> {
+            let tracker = self
+                .inner
+                .pointer_down_events(parse_button(button)?)
+                .map_err(js_error)?;
+            Ok(WasmValueTrackerHandle {
+                tracker,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = wheelEvents)]
+        pub fn wheel_events(&mut self) -> Result<WasmValueTrackerHandle, JsValue> {
+            let tracker = self.inner.wheel_events().map_err(js_error)?;
+            Ok(WasmValueTrackerHandle {
+                tracker,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = controlCommitEvents)]
+        pub fn control_commit_events(
+            &mut self,
+            name: String,
+        ) -> Result<WasmValueTrackerHandle, JsValue> {
+            let tracker = self.inner.control_commit_events(name).map_err(js_error)?;
+            Ok(WasmValueTrackerHandle {
+                tracker,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = bindNativeTranslation)]
+        pub fn bind_native_translation(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            signal: &WasmNativeVectorSignalHandle,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.store(), "native translation binding")?;
+            let signal = signal.signal_in(self.inner.scene.store())?;
+            self.inner
+                .bind_native_translation(object.semantic_mobject(), signal)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = bindRotation)]
+        pub fn bind_rotation(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            signal: &WasmValueTrackerHandle,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.store(), "rotation binding")?;
+            let signal = signal.tracker_in(self.inner.scene.store())?;
+            self.inner
+                .bind_rotation(object.semantic_mobject(), signal)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = bindOpacity)]
+        pub fn bind_opacity(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            signal: &WasmValueTrackerHandle,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.store(), "opacity binding")?;
+            let signal = signal.tracker_in(self.inner.scene.store())?;
+            self.inner
+                .bind_opacity(object.semantic_mobject(), signal)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = bindPresence)]
+        pub fn bind_presence(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            signal: &WasmNativeBoolSignalHandle,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.store(), "presence binding")?;
+            let signal = signal.signal_in(self.inner.scene.store())?;
+            self.inner
+                .bind_presence(object.semantic_mobject(), signal)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = trackerPosition)]
@@ -2121,5 +2411,32 @@ mod tests {
             .to_vec();
         assert_eq!(tracks[1].timing().start_time, 3.0);
         assert_eq!(context.authored_duration(), 4.0);
+    }
+
+    #[test]
+    fn native_signal_declarations_bind_through_the_canonical_scene() {
+        let mut context = CanonicalAuthoringScene::default();
+        let square = context.scene.square(0.9).unwrap();
+        context.bind_mobject(ObjectId::new(0), &square).unwrap();
+
+        let pointer = context.pointer_position_signal().unwrap();
+        context.bind_native_translation(&square, &pointer).unwrap();
+        let opacity = context.control_signal("opacity".into(), 1.0).unwrap();
+        context.bind_opacity(&square, &opacity).unwrap();
+        let clicks = context.pointer_down_events(0).unwrap();
+        context.bind_rotation(&square, &clicks).unwrap();
+        let visible = context.key_state_signal("Space".into(), false).unwrap();
+        context.bind_presence(&square, &visible).unwrap();
+        context.viewport_size_signal().unwrap();
+        context.wheel_delta_signal().unwrap();
+        context.wheel_events().unwrap();
+        context.control_commit_events("opacity".into()).unwrap();
+
+        let foreign = CanonicalAuthoringScene::default();
+        assert!(foreign.bind_native_translation(&square, &pointer).is_err());
+
+        context.live_player(1.0).unwrap();
+        assert!(context.pointer_position_signal().is_err());
+        assert!(context.bind_opacity(&square, &opacity).is_err());
     }
 }

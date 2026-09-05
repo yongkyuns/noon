@@ -34,6 +34,12 @@ _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_PLAY = _base.Scene.play
 _ORIGINAL_BIND_POSITION = _base.Scene.bind_position
+_ORIGINAL_BIND_ROTATION = _base.Scene.bind_rotation
+_ORIGINAL_BIND_OPACITY = _base.Scene.bind_opacity
+_ORIGINAL_BIND_APPEARANCE = _base.Scene.bind_appearance
+_ORIGINAL_BIND_REVEAL = _base.Scene.bind_reveal
+_ORIGINAL_BIND_MORPH = _base.Scene.bind_morph
+_ORIGINAL_BIND_PRESENCE = _base.Scene.bind_presence
 _ORIGINAL_WAIT = _base.Scene.wait
 _ORIGINAL_TIME = _base.Scene.time
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
@@ -312,6 +318,241 @@ def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive
     )
 
 
+def _canonical_native_context(scene: _base.Scene) -> object:
+    if getattr(scene, "_legacy_geometry_materialized", False):
+        raise RuntimeError(
+            "canonical native input cannot be authored after legacy geometry materialization"
+        )
+    return _context(scene)
+
+
+def _canonical_vector_signal(scene: _base.Scene, method: str) -> _reactive.NativeVectorSignal:
+    context = _canonical_native_context(scene)
+    try:
+        handle = getattr(context, method)()
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.NativeVectorSignal._from_canonical(scene, context, handle)
+
+
+def _canonical_tracker_signal(
+    scene: _base.Scene, method: str, *args: object
+) -> _reactive.ValueTracker:
+    context = _canonical_native_context(scene)
+    try:
+        handle = getattr(context, method)(*args)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.ValueTracker._from_canonical(scene, context, handle)
+
+
+def _canonical_pointer_position_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "pointerPositionSignal")
+
+
+def _canonical_viewport_size_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "viewportSizeSignal")
+
+
+def _canonical_wheel_delta_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "wheelDeltaSignal")
+
+
+def _canonical_key_state_signal(
+    self: _base.Scene, code: str, initial: bool = False
+) -> _reactive.NativeBoolSignal:
+    code = _reactive._nonempty_string("code", code)
+    if not isinstance(initial, bool):
+        raise TypeError("initial must be a bool")
+    context = _canonical_native_context(self)
+    try:
+        handle = context.keyStateSignal(code, initial)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.NativeBoolSignal._from_canonical(self, context, handle)
+
+
+def _canonical_control_signal(
+    self: _base.Scene, name: str, value: float = 0.0
+) -> _reactive.ValueTracker:
+    name = _reactive._nonempty_string("name", name)
+    value = _reactive._finite_scalar("value", value)
+    return _canonical_tracker_signal(self, "controlSignal", name, value)
+
+
+def _canonical_pointer_down_events(
+    self: _base.Scene, button: int = 0
+) -> _reactive.ValueTracker:
+    button = _reactive._button(button)
+    return _canonical_tracker_signal(self, "pointerDownEvents", button)
+
+
+def _canonical_wheel_events(self: _base.Scene) -> _reactive.ValueTracker:
+    return _canonical_tracker_signal(self, "wheelEvents")
+
+
+def _canonical_control_commit_events(
+    self: _base.Scene, name: str
+) -> _reactive.ValueTracker:
+    name = _reactive._nonempty_string("name", name)
+    return _canonical_tracker_signal(self, "controlCommitEvents", name)
+
+
+def _is_canonical_scene(scene: _base.Scene) -> bool:
+    return getattr(scene, "_canonical_authoring_context", None) is not None
+
+
+def _canonical_bound_mobject(
+    scene: _base.Scene, mobject: object, operation: str
+) -> object:
+    if not isinstance(mobject, _base.Mobject) or mobject._scene is not scene:
+        raise ValueError(f"{operation} target must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError(f"{operation} requires a typed semantic Mobject")
+    return handle
+
+
+def _canonical_signal_handle(
+    scene: _base.Scene, signal: object, expected: type, operation: str
+) -> tuple[object, object]:
+    if not isinstance(signal, expected):
+        raise TypeError(f"{operation} expects a {expected.__name__}")
+    canonical = signal._canonical_context_handle()
+    if canonical is None:
+        if _is_canonical_scene(scene):
+            raise ValueError(f"{operation} cannot mix legacy and canonical signals")
+        raise TypeError(f"{operation} expects a canonical {expected.__name__}")
+    context, handle = canonical
+    if context is not getattr(scene, "_canonical_authoring_context", None):
+        raise ValueError(f"{expected.__name__} belongs to another canonical Scene context")
+    return context, handle
+
+
+def _canonical_bind_signal(
+    self: _base.Scene,
+    mobject: object,
+    signal: object,
+    expected: type,
+    operation: str,
+    method: str,
+) -> _base.Scene:
+    context, signal_handle = _canonical_signal_handle(self, signal, expected, operation)
+    handle = _canonical_bound_mobject(self, mobject, operation)
+    try:
+        getattr(context, method)(handle, signal_handle)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
+def _unsupported_canonical_native(scene: _base.Scene, operation: str) -> None:
+    # #959 owns the remaining legacy source adapter. Once a canonical context
+    # exists, no raw declaration may be appended alongside the shared store.
+    if _is_canonical_scene(scene):
+        raise NotImplementedError(
+            f"{operation} is not supported by canonical native input authoring"
+        )
+
+
+def _unsupported_native_source(operation: str) -> None:
+    raise NotImplementedError(
+        f"{operation} is not supported by canonical native input authoring"
+    )
+
+
+def _canonical_pointer_button_signal(
+    self: _base.Scene, button: int = 0, initial: bool = False
+) -> _reactive.NativeBoolSignal:
+    _unsupported_native_source("pointer_button_signal")
+
+
+def _canonical_gesture_delta_signal(
+    self: _base.Scene, name: str
+) -> _reactive.NativeVectorSignal:
+    _unsupported_native_source("gesture_delta_signal")
+
+
+def _canonical_pointer_up_events(self: _base.Scene, button: int = 0) -> _reactive.ValueTracker:
+    _unsupported_native_source("pointer_up_events")
+
+
+def _canonical_key_press_events(self: _base.Scene, code: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("key_press_events")
+
+
+def _canonical_key_release_events(self: _base.Scene, code: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("key_release_events")
+
+
+def _canonical_gesture_events(self: _base.Scene, name: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("gesture_events")
+
+
+def _canonical_bind_rotation_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    if isinstance(tracker, _reactive.ValueTracker) and tracker._canonical_context_handle() is not None:
+        return _canonical_bind_signal(
+            self, mobject, tracker, _reactive.ValueTracker, "bind_rotation", "bindRotation"
+        )
+    _unsupported_canonical_native(self, "bind_rotation")
+    return _ORIGINAL_BIND_ROTATION(self, mobject, tracker)
+
+
+def _canonical_bind_opacity_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    if isinstance(tracker, _reactive.ValueTracker) and tracker._canonical_context_handle() is not None:
+        return _canonical_bind_signal(
+            self, mobject, tracker, _reactive.ValueTracker, "bind_opacity", "bindOpacity"
+        )
+    _unsupported_canonical_native(self, "bind_opacity")
+    return _ORIGINAL_BIND_OPACITY(self, mobject, tracker)
+
+
+def _canonical_bind_presence_dispatch(
+    self: _base.Scene, mobject: object, signal: object
+) -> _base.Scene:
+    if isinstance(signal, _reactive.NativeBoolSignal) and signal._canonical_context_handle() is not None:
+        return _canonical_bind_signal(
+            self, mobject, signal, _reactive.NativeBoolSignal, "bind_presence", "bindPresence"
+        )
+    _unsupported_canonical_native(self, "bind_presence")
+    return _ORIGINAL_BIND_PRESENCE(self, mobject, signal)
+
+
+def _canonical_unsupported_binding(
+    self: _base.Scene, operation: str, original: object, *args: object
+) -> _base.Scene:
+    _unsupported_canonical_native(self, operation)
+    return original(self, *args)
+
+
+def _canonical_bind_appearance_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    return _canonical_unsupported_binding(
+        self, "bind_appearance", _ORIGINAL_BIND_APPEARANCE, mobject, tracker
+    )
+
+
+def _canonical_bind_reveal_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    return _canonical_unsupported_binding(
+        self, "bind_reveal", _ORIGINAL_BIND_REVEAL, mobject, tracker
+    )
+
+
+def _canonical_bind_morph_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    return _canonical_unsupported_binding(
+        self, "bind_morph", _ORIGINAL_BIND_MORPH, mobject, tracker
+    )
+
+
 def _canonical_bind_position(
     self: _base.Scene,
     mobject: object,
@@ -319,10 +560,26 @@ def _canonical_bind_position(
     direction: object = None,
     offset: object = None,
 ) -> _base.Scene:
+    if isinstance(tracker, _reactive.NativeVectorSignal):
+        if tracker._canonical_context_handle() is not None:
+            if direction is not None or offset is not None:
+                raise ValueError("direction/offset are not valid for a native vector signal")
+            return _canonical_bind_signal(
+                self,
+                mobject,
+                tracker,
+                _reactive.NativeVectorSignal,
+                "bind_position",
+                "bindNativeTranslation",
+            )
+        _unsupported_canonical_native(self, "bind_position")
+        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
     if not isinstance(tracker, _reactive.ValueTracker):
+        _unsupported_canonical_native(self, "bind_position")
         return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
     canonical = tracker._canonical_context_handle()
     if canonical is None:
+        _unsupported_canonical_native(self, "bind_position")
         return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
     if not isinstance(mobject, _base.Mobject) or mobject._scene is not self:
         raise ValueError("bind_position target must belong to this Scene")
@@ -730,6 +987,26 @@ def install() -> None:
     _base.Scene.time = property(_canonical_scene_time)
     _base.Scene.value_tracker = _canonical_value_tracker
     _base.Scene.bind_position = _canonical_bind_position
+    _base.Scene.pointer_position_signal = _canonical_pointer_position_signal
+    _base.Scene.pointer_button_signal = _canonical_pointer_button_signal
+    _base.Scene.key_state_signal = _canonical_key_state_signal
+    _base.Scene.viewport_size_signal = _canonical_viewport_size_signal
+    _base.Scene.wheel_delta_signal = _canonical_wheel_delta_signal
+    _base.Scene.gesture_delta_signal = _canonical_gesture_delta_signal
+    _base.Scene.control_signal = _canonical_control_signal
+    _base.Scene.pointer_down_events = _canonical_pointer_down_events
+    _base.Scene.pointer_up_events = _canonical_pointer_up_events
+    _base.Scene.key_press_events = _canonical_key_press_events
+    _base.Scene.key_release_events = _canonical_key_release_events
+    _base.Scene.wheel_events = _canonical_wheel_events
+    _base.Scene.gesture_events = _canonical_gesture_events
+    _base.Scene.control_commit_events = _canonical_control_commit_events
+    _base.Scene.bind_rotation = _canonical_bind_rotation_dispatch
+    _base.Scene.bind_opacity = _canonical_bind_opacity_dispatch
+    _base.Scene.bind_presence = _canonical_bind_presence_dispatch
+    _base.Scene.bind_appearance = _canonical_bind_appearance_dispatch
+    _base.Scene.bind_reveal = _canonical_bind_reveal_dispatch
+    _base.Scene.bind_morph = _canonical_bind_morph_dispatch
     _base.Scene.live_execution = _live_execution
     _base.Scene.declare_live_transform_to = _declare_live_transform_to
     _ir.Scene.to_document = _to_document
