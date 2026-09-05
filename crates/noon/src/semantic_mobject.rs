@@ -8,7 +8,7 @@ use noon_core::{
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
     SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    Vec2, VectorPath,
+    Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -232,6 +232,27 @@ impl Mobject {
             .map_err(|e| e.to_string())?;
         layout_for_content(&store, state.content, state.transform)
     }
+
+    /// Resolve authored content through an effective renderer-independent
+    /// transform. Live layout queries use this one-object semantic calculation
+    /// rather than renderer visibility bounds, which include stroke expansion.
+    pub(crate) fn layout_bounds_at(
+        &self,
+        transform: Transform2D,
+    ) -> Result<Option<Bounds2D64>, String> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(|error| error.to_string())?;
+        let mut semantic_transform = state.transform;
+        semantic_transform.translation.x = f64::from(transform.translation.x);
+        semantic_transform.translation.y = f64::from(transform.translation.y);
+        semantic_transform.scale.x = f64::from(transform.scale.x);
+        semantic_transform.scale.y = f64::from(transform.scale.y);
+        semantic_transform.rotation_z = f64::from(transform.rotation);
+        layout_for_content(&store, state.content, semantic_transform)
+    }
+
     pub fn center(&self) -> Result<(f64, f64), String> {
         if let Some(b) = self.layout_bounds()? {
             Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))

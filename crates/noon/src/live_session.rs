@@ -12,7 +12,7 @@ use crate::{
     ExecutionSessionPublicationError, Mobject,
 };
 use noon_core::{
-    PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    Bounds2D64, PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
     SemanticStore, SemanticStyle, Style, Transform2D,
 };
@@ -27,6 +27,18 @@ pub struct EffectiveMobjectState {
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
+    pub publication: PublicationContext,
+}
+
+/// One object's exact layout observation at a coherent runtime publication.
+///
+/// These bounds retain authored layout semantics and therefore exclude the
+/// renderer's conservative stroke expansion used for visibility indexing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveMobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
     pub publication: PublicationContext,
 }
 
@@ -174,6 +186,7 @@ impl<'a> LiveSession<'a> {
         let EffectiveSemanticObject {
             object,
             publication,
+            ..
         } = self
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
@@ -181,6 +194,58 @@ impl<'a> LiveSession<'a> {
             transform: object.transform,
             style: object.style,
             appearance: object.appearance,
+            publication,
+        })
+    }
+
+    /// Read exact layout values from authored content at the current effective
+    /// transform. Work and resource lookup are bounded to this object.
+    pub fn effective_layout(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let store = self.store.borrow();
+        let observed = self
+            .session
+            .effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(LiveSessionError::Mobject(
+                "effective layout queries currently support affine and style drivers only".into(),
+            ));
+        }
+        let transform = observed.object.transform;
+        let publication = observed.publication;
+        drop(store);
+        let bounds = mobject
+            .layout_bounds_at(transform)
+            .map_err(LiveSessionError::Mobject)?;
+        let (center, width, height) = if let Some(Bounds2D64 {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }) = bounds
+        {
+            (
+                ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5),
+                max_x - min_x,
+                max_y - min_y,
+            )
+        } else {
+            (
+                (
+                    f64::from(transform.translation.x),
+                    f64::from(transform.translation.y),
+                ),
+                0.0,
+                0.0,
+            )
+        };
+        Ok(EffectiveMobjectLayout {
+            center,
+            width,
+            height,
             publication,
         })
     }
@@ -413,6 +478,32 @@ mod tests {
             live.effective(&circle).unwrap().transform.translation.x,
             100.0
         );
+    }
+
+    #[test]
+    fn effective_layout_uses_shared_layout_bounds_without_stroke_expansion() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        scene.add(&circle).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+
+        let layout = live.effective_layout(&circle).unwrap();
+        assert_eq!(layout.center, (2.0, -1.0));
+        assert_eq!((layout.width, layout.height), (2.0, 2.0));
     }
 
     #[test]

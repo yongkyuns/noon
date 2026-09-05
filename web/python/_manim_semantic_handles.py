@@ -315,6 +315,23 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
+def _bound_layout_observation(value: _base.Mobject):
+    """Ask the owning Rust context for one coherent ordinary live observation."""
+
+    if (
+        not _is_bound(value)
+        or getattr(value._scene, "_legacy_geometry_materialized", False)
+        or not bool(getattr(value, "_semantic_handle_fresh", False))
+    ):
+        return None
+    handle = getattr(value, "_semantic_handle", None)
+    if handle is None:
+        return None
+    context = getattr(value._scene, "_canonical_authoring_context", None)
+    query = getattr(context, "queryMobjectLayout", None)
+    return None if query is None else query(handle)
+
+
 _CONSTRUCTOR_MISSING = object()
 
 
@@ -565,12 +582,19 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
-    if _handle_for(self) is not None:
+    observed = _bound_layout_observation(self)
+    if observed is not None:
+        return _base.Vec2(float(observed.centerX), float(observed.centerY))
+    handle = _handle_for(self)
+    if handle is not None:
         return _layout_center(self)
     return _ORIGINAL_GET_CENTER(self)
 
 
 def _width(self: _base.Mobject) -> float:
+    observed = _bound_layout_observation(self)
+    if observed is not None:
+        return float(observed.width)
     handle = _handle_for(self)
     if _has_shared_layout_queries(handle):
         return float(handle.width)
@@ -579,6 +603,9 @@ def _width(self: _base.Mobject) -> float:
 
 
 def _height(self: _base.Mobject) -> float:
+    observed = _bound_layout_observation(self)
+    if observed is not None:
+        return float(observed.height)
     handle = _handle_for(self)
     if _has_shared_layout_queries(handle):
         return float(handle.height)

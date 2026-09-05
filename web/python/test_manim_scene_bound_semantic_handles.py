@@ -251,6 +251,57 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert stored["transform"]["translation"] == {"x": 1.0, "y": 0.0}
             assert square.get_center().x == 1.0
 
+            class EffectiveLayout:
+                centerX = 2.5
+                centerY = -1.5
+                width = 6.0
+                height = 4.0
+
+            class CanonicalContext:
+                def __init__(self):
+                    self.transferred = False
+                    self.queries = []
+
+                def queryMobjectLayout(self, queried):
+                    self.queries.append(queried)
+                    if self.transferred:
+                        raise RuntimeError("live execution session is running in the semantic engine")
+                    return EffectiveLayout()
+
+            context = CanonicalContext()
+            scene._canonical_authoring_context = context
+            assert square.get_center() == (2.5, -1.5)
+            assert square.width == 6.0
+            assert square.height == 4.0
+            assert context.queries == [handle, handle, handle]
+
+            # Merely registering an updater does not make its last callback frame
+            # authoritative outside an active phase. Ordinary reads still query
+            # the canonical runtime through the fresh raw semantic handle.
+            square._noon_updaters = [lambda mobject: mobject]
+            context.queries.clear()
+            assert handles._handle_for(square) is None
+            assert square.get_center() == (2.5, -1.5)
+            assert square.width == 6.0
+            assert square.height == 4.0
+            assert context.queries == [handle, handle, handle]
+
+            # The explicit legacy materialization boundary keeps its existing raw
+            # fallback rather than consulting an unrelated canonical runtime.
+            scene._legacy_geometry_materialized = True
+            assert square.get_center() == (1.0, 0.0)
+            del scene._legacy_geometry_materialized
+            del square._noon_updaters
+
+            context.transferred = True
+            try:
+                square.get_center()
+            except RuntimeError as error:
+                assert "running in the semantic engine" in str(error)
+            else:
+                raise AssertionError("transferred live layout read returned stale authored state")
+            del scene._canonical_authoring_context
+
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
             assert abs(stored["style"]["fill"]["alpha"] - 0.25) < 1e-12

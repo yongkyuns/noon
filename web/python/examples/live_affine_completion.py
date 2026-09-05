@@ -36,6 +36,12 @@ class LiveAffineCompletion(Scene):
         second_end = live.play(second)
         assert not live.advance_to(second_end - 1.0)
         assert live.effective_center(circle) == (4.0, -2.0)
+        assert circle.get_center() == (4.0, -2.0)
+        assert circle.width == 2.0
+        assert circle.height == 2.0
         assert not live.advance_to(second_end)
         live.complete()
         assert live.effective_center(circle) == (5.0, -2.0)
+        assert circle.get_center() == (5.0, -2.0)
+        assert circle.width == 2.0
+        assert circle.height == 2.0

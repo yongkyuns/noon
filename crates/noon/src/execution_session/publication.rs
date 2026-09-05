@@ -76,6 +76,17 @@ pub struct StructuralPublicationStats {
 pub struct EffectiveSemanticObject<'a> {
     pub object: &'a FrameObjectState,
     pub publication: PublicationContext,
+    authored_content_layout_applicable: bool,
+}
+
+impl EffectiveSemanticObject<'_> {
+    /// Whether authored content plus the effective affine transform exactly
+    /// describes this frame's layout. Morph/reveal render overrides require a
+    /// dedicated effective-content layout path and are rejected by the first
+    /// ordinary live-query subset.
+    pub const fn authored_content_layout_applicable(&self) -> bool {
+        self.authored_content_layout_applicable
+    }
 }
 
 impl ExecutionSession {
@@ -239,14 +250,27 @@ impl ExecutionSession {
         store
             .semantic_object_state_checked(node)
             .map_err(|_| ExecutionSessionPublicationError::UnknownObject(node))?;
-        let object = self
+        let execution_object = self
             .execution_index
             .execution_object_id(node)
-            .and_then(|id| self.runtime.effective_object(id))
             .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let object_index = self
+            .runtime
+            .frame_index_for_object(execution_object)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let frame = self.runtime.frame();
+        let object = frame
+            .objects
+            .get(object_index)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let authored_content_layout_applicable = frame.render_geometries[object_index].is_none()
+            && frame.render_transforms[object_index].is_none()
+            && frame.reveals[object_index] == 1.0
+            && frame.morphs[object_index] == 0.0;
         Ok(EffectiveSemanticObject {
             object,
             publication: self.publication_context(),
+            authored_content_layout_applicable,
         })
     }
 }

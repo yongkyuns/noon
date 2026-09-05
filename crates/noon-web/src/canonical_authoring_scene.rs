@@ -337,6 +337,42 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    /// Query one bound object's authored layout before bootstrap or its coherent
+    /// effective layout while this context owns the live runtime. A transferred
+    /// player must be returned before authoring can observe it again.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_layout(&mut self, handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+        if self.live_player_transferred {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        handle.validate()?;
+        if !self.identities.contains_key(&handle.node_id()) {
+            return Err("mobject is not bound to this canonical Scene".into());
+        }
+        if let Some(player) = self.live_player.as_mut() {
+            let observed = player.live_effective_layout(handle)?;
+            return Ok((
+                observed.center.0,
+                observed.center.1,
+                observed.width,
+                observed.height,
+            ));
+        }
+        let Some(bounds) = handle.layout_bounds()? else {
+            let (center_x, center_y) = handle.center()?;
+            return Ok((center_x, center_y, 0.0, 0.0));
+        };
+        Ok((
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+            bounds.width(),
+            bounds.height(),
+        ))
+    }
+
     /// Read only the live runtime's authored handoff duration.
     ///
     /// Static authoring has no live session, so its existing authored-duration
@@ -737,6 +773,14 @@ mod wasm {
         state: noon::EffectiveMobjectState,
     }
 
+    #[wasm_bindgen]
+    pub struct WasmMobjectLayoutObservation {
+        center_x: f64,
+        center_y: f64,
+        width: f64,
+        height: f64,
+    }
+
     /// Opaque JS/Python wrapper over a replayable shared semantic declaration.
     #[wasm_bindgen]
     pub struct WasmDeclaredAnimationHandle {
@@ -753,6 +797,29 @@ mod wasm {
         #[wasm_bindgen(getter, js_name = translationY)]
         pub fn translation_y(&self) -> f64 {
             self.state.transform.translation.y as f64
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmMobjectLayoutObservation {
+        #[wasm_bindgen(getter, js_name = centerX)]
+        pub fn center_x(&self) -> f64 {
+            self.center_x
+        }
+
+        #[wasm_bindgen(getter, js_name = centerY)]
+        pub fn center_y(&self) -> f64 {
+            self.center_y
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn width(&self) -> f64 {
+            self.width
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn height(&self) -> f64 {
+            self.height
         }
     }
 
@@ -859,6 +926,23 @@ mod wasm {
         #[wasm_bindgen(js_name = liveHandoffDuration)]
         pub fn live_handoff_duration(&self) -> Option<f64> {
             self.inner.live_handoff_duration()
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectLayout)]
+        pub fn query_mobject_layout(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<WasmMobjectLayoutObservation, JsValue> {
+            let (center_x, center_y, width, height) = self
+                .inner
+                .mobject_layout(handle.semantic_mobject())
+                .map_err(js_error)?;
+            Ok(WasmMobjectLayoutObservation {
+                center_x,
+                center_y,
+                width,
+                height,
+            })
         }
 
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
@@ -1513,6 +1597,49 @@ mod tests {
         assert_eq!(recovery_snapshot.session, 18);
         assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
         assert!(context.live_player(2.0).is_err());
+    }
+
+    #[test]
+    fn ordinary_layout_query_uses_effective_runtime_and_rejects_transferred_reads() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, -2.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let animation = context
+            .declare_live_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        assert_eq!(
+            context.mobject_layout(&circle).unwrap(),
+            (0.0, 0.0, 2.0, 2.0)
+        );
+        {
+            let player = context.live_player(2.0).unwrap();
+            player.live_play_animation(&animation).unwrap();
+            player.live_advance_segment_to(1.0).unwrap();
+        }
+        assert_eq!(
+            context.mobject_layout(&circle).unwrap(),
+            (2.0, -1.0, 2.0, 2.0)
+        );
+
+        let player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context
+            .mobject_layout(&circle)
+            .unwrap_err()
+            .contains("running in the semantic engine"));
+        context.return_execution_player(player).unwrap();
+        assert_eq!(
+            context.mobject_layout(&circle).unwrap(),
+            (2.0, -1.0, 2.0, 2.0)
+        );
     }
 
     #[test]

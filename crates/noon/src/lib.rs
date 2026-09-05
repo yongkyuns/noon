@@ -32,7 +32,9 @@ pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
 pub use host_callbacks::*;
-pub use live_session::{EffectiveMobjectState, LiveSession, LiveSessionError};
+pub use live_session::{
+    EffectiveMobjectLayout, EffectiveMobjectState, LiveSession, LiveSessionError,
+};
 pub use noon_core::*;
 pub use noon_runtime::{
     EffectiveObjectProperties, EvaluationError, FrameChanges, FrameObjectState, FrameState,
