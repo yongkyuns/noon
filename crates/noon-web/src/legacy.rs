@@ -5,10 +5,6 @@
 
 #![forbid(unsafe_code)]
 
-mod clock;
-
-pub use clock::*;
-
 use noon_compile::{CompileError, CompilePatchError, CompiledScene};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -7,6 +7,7 @@ mod authoring_semantics;
 mod canonical_authoring_scene;
 mod canonical_family_animation;
 mod canonical_retained_engine_player;
+mod clock;
 mod composition;
 mod determinism;
 #[cfg(all(target_arch = "wasm32", debug_assertions))]
@@ -20,7 +21,6 @@ mod family_write_authoring;
 #[cfg(any(target_arch = "wasm32", test))]
 mod gpu_diagnostics;
 mod host_player;
-#[path = "legacy.rs"]
 mod legacy;
 mod lifecycle;
 mod manim_dashed_line_bridge;
@@ -62,6 +62,7 @@ pub use authoring_semantics::*;
 pub use canonical_authoring_scene::*;
 pub use canonical_family_animation::*;
 pub use canonical_retained_engine_player::*;
+pub use clock::{ClockError, PlaybackClock};
 pub use composition::*;
 pub use determinism::*;
 #[cfg(all(target_arch = "wasm32", debug_assertions))]
@@ -76,7 +77,7 @@ pub use family_bounds::*;
 #[cfg(target_arch = "wasm32")]
 pub use family_write_authoring::*;
 pub use host_player::*;
-pub use legacy::{ClockError, PlaybackClock, PlayerError, ReconcileOutcome};
+pub use legacy::{PlayerError, ReconcileOutcome};
 pub use lifecycle::*;
 pub use manim_dashed_line_bridge::*;
 pub use manim_elbow_bridge::*;
