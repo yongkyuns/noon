@@ -539,6 +539,136 @@ try {
     }
   }
 
+  // Native hosts send normalized input occurrences across the genuine worker
+  // control port. The Python scene owns no input values or event cursor; the
+  // canonical Rust session evaluates the bindings and publishes each frame.
+  const nativeSignalsSource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_native_signals.py"), "utf8",
+  );
+  const nativeSignalsResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.authoring.run(source, {});
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-live-native-signals";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    await execution.startSemanticExecution(authored.semanticExecution, {
+      authoringClient: harness.authoring,
+      transportMode: "transferable",
+    });
+    let initial;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      initial = (await execution.metrics()).metrics;
+      if (initial.presentedFrames > 0 && initial.objectCount === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (!(initial?.presentedFrames > 0) || initial.objectCount !== 0) {
+      throw new Error(`native-signal initial frame did not stay hidden: ${JSON.stringify(initial)}`);
+    }
+    const paused = await execution.pause();
+    if (paused.playing) throw new Error("native-signal execution did not pause");
+    harness.liveNativeSignalsExecution = execution;
+    return { canvasId: canvas.id, metrics: (await execution.metrics()).metrics };
+  }, nativeSignalsSource);
+
+  async function waitForNativeSignalFrame(afterPresentedFrames, objectCount) {
+    return page.evaluate(async ({ afterPresentedFrames, objectCount }) => {
+      const execution = window.sharedAuthoringSmoke.liveNativeSignalsExecution;
+      let latest;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        latest = (await execution.metrics()).metrics;
+        if (
+          latest.presentedFrames > afterPresentedFrames
+          && latest.objectCount === objectCount
+          && (objectCount === 0 || latest.drawCalls > 0)
+        ) return latest;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(`native-signal input did not render: ${JSON.stringify(latest)}`);
+    }, { afterPresentedFrames, objectCount });
+  }
+
+  try {
+    const initialNativePixels = visiblePixelStats(
+      await page.locator(`#${nativeSignalsResult.canvasId}`).screenshot(),
+    );
+    assert.ok(initialNativePixels.count < 10, "Space=false must keep the native square hidden");
+
+    await page.evaluate(() => window.sharedAuthoringSmoke.liveNativeSignalsExecution.setNativeStateInput(
+      { kind: "key", code: "Space" },
+      { kind: "bool", value: true },
+    ));
+    const visibleNativeMetrics = await waitForNativeSignalFrame(
+      nativeSignalsResult.metrics.presentedFrames,
+      1,
+    );
+    const visibleNativePixels = visiblePixelStats(
+      await page.locator(`#${nativeSignalsResult.canvasId}`).screenshot(),
+    );
+    assert.ok(visibleNativePixels.count > 900, "Space=true did not reveal the native square");
+    assert.ok(Math.abs(visibleNativePixels.centerX - 320) < 4, "revealed native square shifted unexpectedly");
+    assert.ok(Math.abs(visibleNativePixels.centerY - 180) < 4, "revealed native square moved unexpectedly");
+
+    await page.evaluate(() => window.sharedAuthoringSmoke.liveNativeSignalsExecution.setNativeStateInput(
+      { kind: "pointer_position" },
+      { kind: "vec2", x: 1.5, y: -0.5 },
+    ));
+    const movedNativeMetrics = await waitForNativeSignalFrame(visibleNativeMetrics.presentedFrames, 1);
+    const movedNativePixels = visiblePixelStats(
+      await page.locator(`#${nativeSignalsResult.canvasId}`).screenshot(),
+    );
+    assert.ok(movedNativePixels.count > 900, "pointer position hid the native square");
+    assert.ok(Math.abs(movedNativePixels.centerX - (320 + 1.5 * 45)) < 4,
+      "pointer position did not translate the native square");
+    assert.ok(Math.abs(movedNativePixels.centerY - (180 - -0.5 * 45)) < 4,
+      "pointer position did not translate the native square vertically");
+
+    await page.evaluate(() => window.sharedAuthoringSmoke.liveNativeSignalsExecution.setNativeStateInput(
+      { kind: "control", name: "opacity" },
+      { kind: "scalar", value: 0.4 },
+    ));
+    const dimmedNativeMetrics = await waitForNativeSignalFrame(movedNativeMetrics.presentedFrames, 1);
+    const dimmedNativePixels = visiblePixelStats(
+      await page.locator(`#${nativeSignalsResult.canvasId}`).screenshot(),
+    );
+    assert.ok(dimmedNativePixels.count > 100, "native opacity control hid the square");
+    assert.ok(dimmedNativePixels.meanBlue < movedNativePixels.meanBlue * 0.7,
+      "native opacity control did not dim the square");
+
+    const clickPixels = async () => visiblePixelStats(
+      await page.locator(`#${nativeSignalsResult.canvasId}`).screenshot(),
+      (red, green, blue, x, y) => (
+        blue >= 40
+        && blue > red + 15
+        && blue > green + 3
+        && Math.abs(x - (320 + 0.99 * 45)) <= 2
+        && Math.abs(y - (180 - -0.61 * 45)) <= 2
+      ),
+    );
+    await page.evaluate(() => window.sharedAuthoringSmoke.liveNativeSignalsExecution.emitNativeEvent(
+      { kind: "pointer_down", button: 0 },
+    ));
+    const firstClickNativeMetrics = await waitForNativeSignalFrame(dimmedNativeMetrics.presentedFrames, 1);
+    const firstClickNativePixels = await clickPixels();
+    assert.ok(firstClickNativePixels.count > 10,
+      "first ordered primary-pointer event did not rotate the square");
+
+    await page.evaluate(() => window.sharedAuthoringSmoke.liveNativeSignalsExecution.emitNativeEvent(
+      { kind: "pointer_down", button: 0 },
+    ));
+    await waitForNativeSignalFrame(firstClickNativeMetrics.presentedFrames, 1);
+    const secondClickNativePixels = await clickPixels();
+    assert.ok(secondClickNativePixels.count < 2,
+      "second ordered primary-pointer event did not advance the square rotation");
+  } finally {
+    await page.evaluate(() => {
+      window.sharedAuthoringSmoke.liveNativeSignalsExecution?.terminate();
+      window.sharedAuthoringSmoke.liveNativeSignalsExecution = null;
+    });
+  }
+
   // A legacy wait before the first canonical scalar play must fail in the real
   // authoring worker. The #959 bridge may select one cursor, never merge them.
   const mixedTimingError = await page.evaluate(async () => {
