@@ -6,7 +6,7 @@ use noon_core::{
     Vec2,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use noon_core::{HostCallbackId, SemanticMutationTransaction};
+use noon_core::{HostCallbackId, SemanticMutationTransaction, SemanticVec3};
 use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
 #[cfg(target_arch = "wasm32")]
 use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
@@ -371,6 +371,99 @@ impl CanonicalAuthoringScene {
             bounds.width(),
             bounds.height(),
         ))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn require_pre_execution_scalar_authoring(&self) -> Result<(), String> {
+        if self.live_player.is_some() || self.live_player_transferred {
+            return Err(
+                "scalar tracker declarations must be authored before canonical execution begins"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Create one scalar signal in this context's shared semantic store.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn create_value_tracker(&self, initial: f64) -> Result<noon::ValueTracker, String> {
+        self.require_pre_execution_scalar_authoring()?;
+        self.scene.value_tracker(initial)
+    }
+
+    /// Build only the common `offset + tracker * direction` semantic expression.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn tracker_position(
+        &self,
+        tracker: &noon::ValueTracker,
+        direction: SemanticVec3,
+        offset: SemanticVec3,
+    ) -> Result<noon::TrackerPosition, String> {
+        self.require_pre_execution_scalar_authoring()?;
+        self.scene
+            .position_from_tracker(tracker, direction, offset)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn bind_tracker_position(
+        &self,
+        object: &noon::Mobject,
+        position: &noon::TrackerPosition,
+    ) -> Result<(), String> {
+        self.require_pre_execution_scalar_authoring()?;
+        self.scene.bind_position(object, position)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn declare_tracker_play(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        target: f64,
+        duration: f64,
+        rate_function: noon_core::RateFunction,
+    ) -> Result<f64, String> {
+        self.require_pre_execution_scalar_authoring()?;
+        self.scene
+            .play_value(tracker, target)
+            .rate_func(rate_function)
+            .run_time(duration)?;
+        Ok(self.scene.time())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, String> {
+        if self.live_player_transferred {
+            return Err("semantic execution session is running in the semantic engine".into());
+        }
+        match self.live_player.as_mut() {
+            Some(player) => player.live_effective_signal(tracker),
+            None => self.scene.value_tracker_value(tracker),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn set_tracker_value(&mut self, tracker: &noon::ValueTracker, value: f64) -> Result<(), String> {
+        if self.live_player_transferred {
+            return Err("semantic execution session is running in the semantic engine".into());
+        }
+        match self.live_player.as_mut() {
+            Some(player) => player.live_set_signal(tracker, value),
+            None => self.scene.set_value(tracker, value),
+        }
+    }
+
+    /// The authored scalar-track endpoint used for handoff before a player exists.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn authored_duration(&self) -> f64 {
+        self.scene.time()
+    }
+
+    /// Advance the shared Rust authoring cursor without declaring legacy timing.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
+        self.require_pre_execution_scalar_authoring()?;
+        self.scene.wait(duration)?;
+        Ok(self.scene.time())
     }
 
     /// Read only the live runtime's authored handoff duration.
@@ -788,6 +881,20 @@ mod wasm {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     }
 
+    /// Opaque Python/JS identity for one canonical scalar input signal.
+    #[wasm_bindgen]
+    pub struct WasmValueTrackerHandle {
+        tracker: noon::ValueTracker,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    /// Opaque derived position expression; evaluation stays in the session.
+    #[wasm_bindgen]
+    pub struct WasmTrackerPositionHandle {
+        position: noon::TrackerPosition,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
     #[wasm_bindgen]
     impl WasmLiveMobjectState {
         #[wasm_bindgen(getter, js_name = translationX)]
@@ -837,6 +944,42 @@ mod wasm {
         }
     }
 
+    impl WasmValueTrackerHandle {
+        fn tracker_in(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<&noon::ValueTracker, JsValue> {
+            if !std::rc::Rc::ptr_eq(&self.store, store) || !self.tracker.is_in_store(store) {
+                return Err(js_error(
+                    "ValueTracker and canonical authoring context belong to different stores",
+                ));
+            }
+            store
+                .borrow()
+                .semantic_signal_state(self.tracker.node_id())
+                .map_err(|error| js_error(error.to_string()))?;
+            Ok(&self.tracker)
+        }
+    }
+
+    impl WasmTrackerPositionHandle {
+        fn position_in(
+            &self,
+            store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Result<&noon::TrackerPosition, JsValue> {
+            if !std::rc::Rc::ptr_eq(&self.store, store) || !self.position.is_in_store(store) {
+                return Err(js_error(
+                    "tracker position and canonical authoring context belong to different stores",
+                ));
+            }
+            store
+                .borrow()
+                .semantic_signal_state(self.position.node_id())
+                .map_err(|error| js_error(error.to_string()))?;
+            Ok(&self.position)
+        }
+    }
+
     impl CanonicalAuthoringSceneContext {
         pub(crate) fn with_store(
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -859,6 +1002,104 @@ mod wasm {
             self.inner
                 .bind_mobject(id, handle.semantic_mobject())
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createValueTracker)]
+        pub fn create_value_tracker(
+            &mut self,
+            initial: f64,
+        ) -> Result<WasmValueTrackerHandle, JsValue> {
+            let tracker = self.inner.create_value_tracker(initial).map_err(js_error)?;
+            Ok(WasmValueTrackerHandle {
+                tracker,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = trackerPosition)]
+        pub fn tracker_position(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            direction_x: f64,
+            direction_y: f64,
+            offset_x: f64,
+            offset_y: f64,
+        ) -> Result<WasmTrackerPositionHandle, JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let position = self
+                .inner
+                .tracker_position(
+                    tracker,
+                    SemanticVec3::new(direction_x, direction_y, 0.0),
+                    SemanticVec3::new(offset_x, offset_y, 0.0),
+                )
+                .map_err(js_error)?;
+            Ok(WasmTrackerPositionHandle {
+                position,
+                store: std::rc::Rc::clone(self.inner.scene.store()),
+            })
+        }
+
+        #[wasm_bindgen(js_name = bindTrackerPosition)]
+        pub fn bind_tracker_position(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            position: &WasmTrackerPositionHandle,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.store(), "tracker position binding")?;
+            let position = position.position_in(self.inner.scene.store())?;
+            self.inner
+                .bind_tracker_position(object.semantic_mobject(), position)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = declareValueTrackerPlay)]
+        pub fn declare_value_tracker_play(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            target: f64,
+            duration: f64,
+            rate_function: &str,
+        ) -> Result<f64, JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported ValueTracker rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.inner
+                .declare_tracker_play(tracker, target, duration, rate_function)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = valueTrackerValue)]
+        pub fn value_tracker_value(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+        ) -> Result<f64, JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            self.inner.tracker_value(tracker).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setValueTracker)]
+        pub fn set_value_tracker(
+            &mut self,
+            tracker: &WasmValueTrackerHandle,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            self.inner.set_tracker_value(tracker, value).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = authoredDuration)]
+        pub fn authored_duration(&self) -> f64 {
+            self.inner.authored_duration()
+        }
+
+        #[wasm_bindgen(js_name = authoredWait)]
+        pub fn authored_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
+            self.inner.authored_wait(duration).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = addUpdater)]
@@ -1015,6 +1256,15 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_complete_segment()
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveEvaluate)]
+        pub fn live_evaluate(&mut self, time: f64) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_evaluate(time)
                 .map_err(js_error)
         }
 
@@ -1756,5 +2006,77 @@ mod tests {
             .add_updater(&circle, HostCallbackId::new(13), 1.0, None)
             .unwrap_err();
         assert!(error.contains("before canonical execution begins"));
+    }
+
+    #[test]
+    fn scalar_tracker_uses_the_authored_cursor_then_one_live_session() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        let position = context
+            .tracker_position(
+                &tracker,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(-2.0, 0.0, 0.0),
+            )
+            .unwrap();
+        context.bind_tracker_position(&circle, &position).unwrap();
+        assert_eq!(
+            context
+                .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+                .unwrap(),
+            2.0
+        );
+
+        // Before bootstrap, the Rust-authored cursor selects the shared track
+        // endpoint; the language wrapper owns no scalar value or cursor.
+        assert_eq!(context.tracker_value(&tracker).unwrap(), 4.0);
+
+        let player = context.live_player(2.0).unwrap();
+        assert!(player.live_evaluate(2.25).is_err());
+        assert_eq!(player.time(), 0.0);
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 0.0);
+
+        player.live_evaluate(1.0).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+        assert_eq!(
+            player.live_effective(&circle).unwrap().transform.translation,
+            Vec2::ZERO
+        );
+
+        player.live_evaluate(2.0).unwrap();
+        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 4.0);
+        assert_eq!(
+            player.live_effective(&circle).unwrap().transform.translation,
+            Vec2::new(2.0, 0.0)
+        );
+        assert!(player.live_set_signal(&tracker, 3.0).is_err());
+    }
+
+    #[test]
+    fn scalar_tracker_wait_keeps_the_canonical_authoring_cursor() {
+        let mut context = CanonicalAuthoringScene::default();
+        let tracker = context.create_value_tracker(0.0).unwrap();
+        context
+            .declare_tracker_play(&tracker, 4.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        assert_eq!(context.authored_wait(1.0).unwrap(), 3.0);
+        assert_eq!(
+            context
+                .declare_tracker_play(&tracker, 6.0, 1.0, RateFunction::Linear)
+                .unwrap(),
+            4.0
+        );
+        let tracks = context
+            .scene
+            .store()
+            .borrow()
+            .semantic_signal_state(tracker.node_id())
+            .unwrap()
+            .scalar_tracks()
+            .to_vec();
+        assert_eq!(tracks[1].timing().start_time, 3.0);
+        assert_eq!(context.authored_duration(), 4.0);
     }
 }

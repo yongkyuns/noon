@@ -6,8 +6,8 @@ use noon_core::{
     Vec2,
 };
 
-use crate::legacy::AuthoringError;
-use crate::{BoolSignal, ReactiveScene, ValueTracker, VectorSignal};
+use crate::legacy::{AuthoringError, ValueTracker};
+use crate::{BoolSignal, ReactiveScene, VectorSignal};
 
 /// Reactive authoring scene with deterministic timeline-driven tracker inputs and
 /// declarative native browser/runtime inputs.

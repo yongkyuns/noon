@@ -101,7 +101,38 @@ class ValueTracker:
         self._scene: _ir.Scene | None = None
         self._signal_id: int | None = None
 
+    @classmethod
+    def _from_canonical(
+        cls, scene: _base.Scene, context: object, handle: object
+    ) -> ValueTracker:
+        """Create the typed canonical wrapper without a Python scalar value.
+
+        The context owns the signal's semantic identity and authored/runtime
+        values. This object keeps only Python ownership ergonomics plus the
+        opaque typed WASM handle.
+        """
+        tracker = object.__new__(cls)
+        tracker._scene = scene
+        tracker._canonical_context = context
+        tracker._canonical_handle = handle
+        return tracker
+
+    def _canonical_context_handle(self) -> tuple[object, object] | None:
+        context = getattr(self, "_canonical_context", None)
+        handle = getattr(self, "_canonical_handle", None)
+        if context is None or handle is None:
+            return None
+        return context, handle
+
     def get_value(self) -> float:
+        canonical = self._canonical_context_handle()
+        if _ACTIVE_CALLBACK_SIGNAL_VALUES is not None and canonical is not None:
+            raise NotImplementedError(
+                "canonical ValueTracker callback reads require a Rust-published signal read set"
+            )
+        if canonical is not None:
+            context, handle = canonical
+            return float(context.valueTrackerValue(handle))
         if self._signal_id is not None and _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
             payload = _ACTIVE_CALLBACK_SIGNAL_VALUES.get(self._signal_id)
             if payload is None:
@@ -115,6 +146,18 @@ class ValueTracker:
 
     def set_value(self, value: float) -> ValueTracker:
         value = _finite_scalar("value", value)
+        canonical = self._canonical_context_handle()
+        if canonical is not None:
+            if _ACTIVE_CALLBACK_SIGNAL_VALUES is not None:
+                raise NotImplementedError(
+                    "canonical ValueTracker callback writes are not supported"
+                )
+            context, handle = canonical
+            try:
+                context.setValueTracker(handle, value)
+            except Exception as error:
+                raise ValueError(str(error)) from None
+            return self
         if self._scene is not None and self._signal_id is not None:
             if _native_drives_signal(self._scene, self._signal_id):
                 raise ValueError(
@@ -135,10 +178,14 @@ class ValueTracker:
         return self
 
     def increment_value(self, delta: float) -> ValueTracker:
-        return self.set_value(self._value + _finite_scalar("delta", delta))
+        return self.set_value(self.get_value() + _finite_scalar("delta", delta))
 
     @property
     def signal_id(self) -> int:
+        if self._canonical_context_handle() is not None:
+            raise AttributeError(
+                "canonical ValueTracker identity belongs to the shared Rust semantic store"
+            )
         if self._signal_id is None:
             raise AttributeError("ValueTracker has no signal id until attached to a Scene")
         return self._signal_id

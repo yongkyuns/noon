@@ -431,8 +431,10 @@ if isinstance(__noon_result, Scene):
         _manim_canonical_scene.execution_context(__noon_result))
     __noon_semantic = None
     __noon_live_duration = None
+    __noon_authored_duration = None
     if __noon_context is not None:
         __noon_live_duration = __noon_context.liveHandoffDuration()
+        __noon_authored_duration = __noon_context.authoredDuration()
         __noon_callback_session = _manim_updaters.canonical_callback_session_id(__noon_result)
         __noon_semantic = {
             "context_id": str(noonRegisterSemanticExecution(__noon_context)),
@@ -465,6 +467,8 @@ if isinstance(__noon_result, Scene):
     __noon_duration = (
         float(__noon_live_duration)
         if __noon_live_duration is not None
+        else float(__noon_authored_duration)
+        if __noon_authored_duration is not None
         else float(__noon_result.time)
     )
 elif isinstance(__noon_result, PatchBatch):

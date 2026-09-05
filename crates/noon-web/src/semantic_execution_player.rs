@@ -4,9 +4,11 @@ use noon::{
     ExecutionSession, RuntimeIdentity,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
-    Transform2D,
+    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId,
+    Style, Transform2D,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::ReactiveValue;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -413,6 +415,51 @@ impl SemanticExecutionPlayer {
         )
         .complete_segment(segment)
         .map_err(|error| error.to_string())
+    }
+
+    /// Evaluate scalar tracks through the one execution session, then align the
+    /// presentation clock to that same absolute time for a later handoff.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), String> {
+        let mut clock = self.clock.clone();
+        clock.seek(time).map_err(|error| error.to_string())?;
+        self.session.advance_to(time).map_err(|error| error.to_string())?;
+        self.clock = clock;
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_signal(
+        &self,
+        tracker: &noon::ValueTracker,
+    ) -> Result<f64, String> {
+        match self
+            .session
+            .effective_signal_value(tracker.node_id())
+            .ok_or("ValueTracker is not lowered into this execution session")?
+        {
+            ReactiveValue::Scalar(value) => Ok(f64::from(*value)),
+            _ => Err("ValueTracker runtime signal is not scalar".into()),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_signal(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        value: f64,
+    ) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("ValueTracker value must be finite".into());
+        }
+        let value = value as f32;
+        if !value.is_finite() {
+            return Err("ValueTracker value is outside the runtime scalar range".into());
+        }
+        self.session
+            .set_reactive_input(tracker.node_id(), value)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(test)]

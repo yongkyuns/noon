@@ -23,6 +23,7 @@ mod polygram_authoring;
 mod reactive_authoring;
 mod retained_family_authoring_lowering;
 mod rounded_rectangle_authoring;
+mod scalar_authoring;
 mod sector_authoring;
 pub mod semantic_mobject;
 mod shape_matcher_authoring;
@@ -40,8 +41,12 @@ pub use noon_runtime::{
     EffectiveObjectProperties, EvaluationError, FrameChanges, FrameObjectState, FrameState,
     RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
-pub use reactive_authoring::*;
+pub use reactive_authoring::{
+    BoolSignal, ReactiveScene, ReactiveTimelineAuthoringError, ReactiveTimelineScene, ValuePlay,
+    VectorSignal,
+};
 pub use retained_family_authoring_lowering::*;
+pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use semantic_mobject::Mobject;
 mod scene;
 pub use scene::Scene;
@@ -51,6 +56,7 @@ pub use text_authoring::*;
 pub mod prelude {
     pub use crate::{
         DeclaredAnimation, EffectiveMobjectState, ExecutionSession, LiveSession, Mobject, Scene,
+        TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,

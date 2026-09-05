@@ -14,6 +14,8 @@ from typing import Any
 
 import _manim_retained_state as _retained_state
 import _manim_typst as _typst
+import _manim_animation_options as _options
+import _manim_reactive as _reactive
 import _noon_ir as _ir
 import noon as _base
 
@@ -31,6 +33,9 @@ _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_PLAY = _base.Scene.play
+_ORIGINAL_BIND_POSITION = _base.Scene.bind_position
+_ORIGINAL_WAIT = _base.Scene.wait
+_ORIGINAL_TIME = _base.Scene.time
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 
@@ -155,12 +160,189 @@ def materialize_legacy_geometry(scene):
     scene._legacy_geometry_materialized = True
 
 
+def _canonical_tracker_builder(builder: object) -> bool:
+    return (
+        isinstance(builder, _reactive._ValueAnimationBuilder)
+        and builder.tracker._canonical_context_handle() is not None
+    )
+
+
+def _rust_authored_time(scene: _base.Scene) -> float | None:
+    """Read only the canonical Rust authoring cursor when a context exists."""
+    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None:
+        return None
+    return float(context.authoredDuration())
+
+
+def _legacy_authored_time(scene: _base.Scene) -> float:
+    return float(_ORIGINAL_TIME.__get__(scene, type(scene)))
+
+
+def _timing_authority(scene: _base.Scene) -> tuple[str, float]:
+    """Choose one authored cursor during the #959 timing migration.
+
+    Rust owns the scalar path once it has advanced. The retained legacy cursor
+    remains available only for scenes that have not entered that path. A scene
+    must never merge, synchronize, or select a maximum across both cursors.
+    Remove the legacy branch with the #959 timeline adapter.
+    """
+    rust_time = _rust_authored_time(scene)
+    legacy_time = _legacy_authored_time(scene)
+    if rust_time is None or rust_time == 0.0:
+        return "legacy", legacy_time
+    if legacy_time == 0.0:
+        return "canonical", rust_time
+    raise NotImplementedError(
+        "mixed legacy and canonical Scene timing is unsupported during #959 migration"
+    )
+
+
+def _canonical_scene_time(scene: _base.Scene) -> float:
+    return _timing_authority(scene)[1]
+
+
+def _canonical_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
+    authority, _ = _timing_authority(scene)
+    if authority == "canonical":
+        context = _context(scene)
+        try:
+            context.authoredWait(float(duration))
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        return scene
+    return _ORIGINAL_WAIT(scene, duration)
+
+
+def _play_canonical_tracker(
+    self: _base.Scene,
+    builder: _reactive._ValueAnimationBuilder,
+    *,
+    duration: float | None,
+    run_time: float | None,
+    start_time: float | None,
+    easing: str | None,
+    rate_func: object | None,
+    lag_ratio: float | None,
+    kwargs: dict[str, object],
+) -> _base.Scene:
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError(
+            "canonical ValueTracker.play uses the shared Scene authoring cursor"
+        )
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if builder.target_value is None:
+        raise ValueError("ValueTracker.animate must call set_value or increment_value")
+    if builder.tracker._scene is not self:
+        raise ValueError("ValueTracker belongs to another Scene")
+
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(builder),
+        default_lag_ratio=0.0,
+        play_run_time=(run_time if run_time is not None else duration),
+        play_easing=easing,
+        play_rate_func=rate_func,
+        play_lag_ratio=lag_ratio,
+    )
+    if resolved.lag_ratio != 0.0:
+        raise NotImplementedError(
+            "canonical ValueTracker.play currently supports one scalar track at a time"
+        )
+    context, handle = builder.tracker._canonical_context_handle()
+    if context is not _context(self):
+        raise ValueError("ValueTracker belongs to another canonical Scene context")
+    authority, _ = _timing_authority(self)
+    if authority != "canonical" and _legacy_authored_time(self) != 0.0:
+        raise NotImplementedError(
+            "canonical ValueTracker.play cannot follow legacy Scene timing"
+        )
+    context.declareValueTrackerPlay(
+        handle,
+        float(builder.target_value),
+        float(resolved.run_time),
+        str(resolved.rate_func),
+    )
+    return self
+
+
 def _play(self, *args, **kwargs):
+    canonical_builders = [argument for argument in args if _canonical_tracker_builder(argument)]
+    if canonical_builders:
+        if len(canonical_builders) != 1 or len(args) != 1:
+            raise NotImplementedError(
+                "canonical ValueTracker.play currently supports one scalar track without ordinary animations"
+            )
+        return _play_canonical_tracker(
+            self,
+            canonical_builders[0],
+            duration=kwargs.pop("duration", None),
+            run_time=kwargs.pop("run_time", None),
+            start_time=kwargs.pop("start_time", None),
+            easing=kwargs.pop("easing", None),
+            rate_func=kwargs.pop("rate_func", None),
+            lag_ratio=kwargs.pop("lag_ratio", None),
+            kwargs=kwargs,
+        )
+    authority, _ = _timing_authority(self)
+    if authority == "canonical":
+        raise NotImplementedError(
+            "legacy Scene.play cannot follow canonical ValueTracker timing"
+        )
     # Native Text timeline export stays in the canonical context. Its #959
     # codec is store-derived at finalization, so geometry materialization must
     # not force it through a geometry-only legacy document.
     materialize_legacy_geometry(self)
     return _ORIGINAL_PLAY(self, *args, **kwargs)
+
+
+def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive.ValueTracker:
+    if getattr(self, "_legacy_geometry_materialized", False):
+        raise RuntimeError(
+            "canonical ValueTracker cannot be authored after legacy geometry materialization"
+        )
+    context = _context(self)
+    return _reactive.ValueTracker._from_canonical(
+        self, context, context.createValueTracker(float(value))
+    )
+
+
+def _canonical_bind_position(
+    self: _base.Scene,
+    mobject: object,
+    tracker: object,
+    direction: object = None,
+    offset: object = None,
+) -> _base.Scene:
+    if not isinstance(tracker, _reactive.ValueTracker):
+        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+    canonical = tracker._canonical_context_handle()
+    if canonical is None:
+        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+    if not isinstance(mobject, _base.Mobject) or mobject._scene is not self:
+        raise ValueError("bind_position target must belong to this Scene")
+    context, tracker_handle = canonical
+    if context is not _context(self):
+        raise ValueError("ValueTracker belongs to another canonical Scene context")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError("canonical ValueTracker binding requires a typed semantic Mobject")
+    direction_ir = _reactive._vec2_ir(_base.RIGHT if direction is None else direction)
+    offset_ir = _reactive._vec2_ir(_base.ORIGIN if offset is None else offset)
+    position = context.trackerPosition(
+        tracker_handle,
+        float(direction_ir["x"]),
+        float(direction_ir["y"]),
+        float(offset_ir["x"]),
+        float(offset_ir["y"]),
+    )
+    context.bindTrackerPosition(handle, position)
+    return self
 
 
 def _to_document(self):
@@ -257,8 +439,8 @@ class LiveExecution:
         context = execution_context(scene)
         if context is None:
             raise RuntimeError(
-                "live execution currently supports typed static geometry/native Text and "
-                "predeclared property callbacks, without retained text or timeline tracks"
+                "live execution currently supports typed static geometry/native Text, "
+                "canonical scalar ValueTracker tracks, and predeclared property callbacks"
             )
         self._scene = scene
         context.beginLiveExecution(float(duration))
@@ -328,6 +510,10 @@ class LiveExecution:
         """Drive the current segment; affine endpoints require ``complete()``."""
         return bool(self._context.liveAdvanceSegmentTo(float(time)))
 
+    def evaluate(self, time: float) -> None:
+        """Evaluate canonical deterministic tracks at one session-owned time."""
+        self._context.liveEvaluate(float(time))
+
     def complete(self) -> None:
         """Publish the active endpoint before sequential authoring continues."""
         self._context.liveCompleteSegment()
@@ -368,8 +554,8 @@ def _declare_live_transform_to(
     context = execution_context(self)
     if context is None:
         raise RuntimeError(
-            "live animation currently supports typed static geometry/native Text and "
-            "predeclared property callbacks, without retained text or timeline tracks"
+            "live animation currently supports typed static geometry/native Text, "
+            "canonical scalar ValueTracker tracks, and predeclared property callbacks"
         )
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")
@@ -540,6 +726,10 @@ def install() -> None:
     _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene.play = _play
+    _base.Scene.wait = _canonical_wait
+    _base.Scene.time = property(_canonical_scene_time)
+    _base.Scene.value_tracker = _canonical_value_tracker
+    _base.Scene.bind_position = _canonical_bind_position
     _base.Scene.live_execution = _live_execution
     _base.Scene.declare_live_transform_to = _declare_live_transform_to
     _ir.Scene.to_document = _to_document
