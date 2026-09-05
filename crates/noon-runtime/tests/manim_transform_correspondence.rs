@@ -1,8 +1,9 @@
 use noon_compile::{CompiledScene, RetainedCompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, ScenePatch,
-    StrokeWidthMode, Style, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
+    Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, StrokeWidthMode,
+    Style, TrackTiming, Transform2D, Vec2, VectorPath,
 };
+use noon_core::{ScenePatch, TrackValues};
 use noon_runtime::{RetainedSceneInstance, SceneInstance};
 use std::sync::Arc;
 

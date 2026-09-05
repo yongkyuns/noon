@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = Path(__file__).with_suffix('.json')
+CONFIG_REPO_PATH = CONFIG.relative_to(ROOT).as_posix()
 FORBIDDEN_CANONICAL = re.compile(
     r'SceneDefinition|SceneSpec|SceneDocument|ObjectDefinition|ObjectSnapshot|'
     r'from_legacy|\blegacy\b|noon_ir|noon-ir|'
@@ -127,6 +128,8 @@ def main() -> int:
     paths = git('ls-files', '--cached', '--others', '--exclude-standard', '--', '*.rs', '*.py', '*.js', '*.mjs', '*.ts', '*.tsx').splitlines()
     errors: list[str] = []
     sources = {path: (ROOT / path).read_text() for path in paths if (ROOT / path).is_file()}
+    previous_config_source = at_base(base, CONFIG_REPO_PATH)
+    previous_config = json.loads(previous_config_source) if previous_config_source else {}
     for path, source in sources.items():
         if not path.endswith('.rs'):
             continue
@@ -154,6 +157,44 @@ def main() -> int:
             if token_count(source, token) > cap:
                 errors.append(f'{path}: {token} count {token_count(source, token)} exceeds relocation budget {cap}')
             else:
+                permissions.add((path, token))
+
+    previous_fixtures = previous_config.get('regression_fixtures', {})
+    regression_fixtures = config.get('regression_fixtures', {})
+    for path in previous_fixtures.keys() - regression_fixtures.keys():
+        errors.append(f'{path}: regression fixture budget entry was removed before #959 cleanup')
+    for path, fixture in regression_fixtures.items():
+        source = sources.get(path, '')
+        previous = at_base(base, path)
+        rust_module = fixture.get('rust_test_module')
+        if rust_module is not None:
+            parent_path = rust_module['parent']
+            module = rust_module['module']
+            parent = sources.get(parent_path, '')
+            declaration = f'#[cfg(test)]\nmod {module};'
+            module_declarations = re.findall(
+                rf'(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+{re.escape(module)}\s*;',
+                parent,
+            )
+            if source:
+                if source.splitlines()[0] != '#![cfg(test)]':
+                    errors.append(f'{path}: regression fixture must start with #![cfg(test)]')
+                if parent.count(declaration) != 1 or len(module_declarations) != 1:
+                    errors.append(
+                        f'{parent_path}: regression fixture requires exact test-only declaration for {module}'
+                    )
+            elif module_declarations:
+                errors.append(f'{parent_path}: deleted regression fixture module {module} remains declared')
+        for token, reviewed_cap in fixture['tokens'].items():
+            cap = (
+                min(token_count(previous, token), reviewed_cap)
+                if path in previous_fixtures
+                else reviewed_cap
+            )
+            count = token_count(source, token)
+            if count > cap:
+                errors.append(f'{path}: {token} count {count} exceeds regression fixture budget {cap}')
+            elif count:
                 permissions.add((path, token))
 
     for path, allowed in config['rewritten_imports'].items():
