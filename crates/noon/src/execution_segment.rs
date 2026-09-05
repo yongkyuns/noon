@@ -186,6 +186,15 @@ impl ExecutionSession {
                 timeline: TimelineWakeState::Quiescent,
             };
         }
+        if segment
+            .token()
+            .is_some_and(|token| self.segment_was_completed(token))
+        {
+            return ExecutionSegmentState {
+                complete: true,
+                timeline: TimelineWakeState::Quiescent,
+            };
+        }
         if now >= segment.end_time {
             let completion_pending = self.segment_completion_is_pending(segment.token());
             let complete = !completion_pending && self.callback_progression_is_coherent_at(now);

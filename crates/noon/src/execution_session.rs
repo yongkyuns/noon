@@ -246,6 +246,7 @@ pub struct ExecutionSession {
     callback_termination: Option<CallbackTermination>,
     next_segment_sequence: Option<u64>,
     pending_segment_completion: Option<PendingSegmentCompletion>,
+    completed_segment_sequence: Option<ExecutionSegmentSequence>,
     last_callback_receipt: Option<CallbackPublicationReceipt>,
 }
 
@@ -277,6 +278,7 @@ impl Clone for ExecutionSession {
             callback_termination,
             next_segment_sequence: self.next_segment_sequence,
             pending_segment_completion: None,
+            completed_segment_sequence: self.completed_segment_sequence,
             last_callback_receipt: self.last_callback_receipt.clone(),
         }
     }
@@ -294,6 +296,13 @@ impl ExecutionSession {
         self.pending_segment_completion
             .as_ref()
             .is_some_and(|pending| Some(pending.token) == token)
+    }
+
+    pub(crate) fn segment_was_completed(&self, token: ExecutionSegmentToken) -> bool {
+        token.runtime() == self.runtime_identity()
+            && self
+                .completed_segment_sequence
+                .is_some_and(|completed| token.sequence().get() <= completed.get())
     }
 
     fn ensure_direct_input_ingress_available(&self) -> Result<(), ExecutionSessionInputError> {
@@ -399,6 +408,7 @@ impl ExecutionSession {
             callback_termination: None,
             next_segment_sequence: Some(0),
             pending_segment_completion: None,
+            completed_segment_sequence: None,
             last_callback_receipt: None,
         }
     }

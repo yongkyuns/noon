@@ -812,6 +812,11 @@ impl SceneInstance {
         self.compiled.object_index(id).map(|index| index as usize)
     }
 
+    pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
+        self.frame_index_for_object(id)
+            .is_some_and(|index| self.effective_driver_rows.contains(&index))
+    }
+
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
         self.compiled.text_resources()
     }

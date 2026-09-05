@@ -96,6 +96,27 @@ impl ExecutionSession {
         segment: ExecutionSegment,
     ) -> Result<&FrameState, ExecutionSegmentCompletionError> {
         let actual_time = self.frame().time;
+        let token = segment.token();
+        if let Some(token) = token {
+            let runtime = self.runtime.runtime_identity();
+            if token.runtime() != runtime {
+                return Err(ExecutionSegmentCompletionError::ForeignSegment {
+                    expected: runtime,
+                    actual: token.runtime(),
+                });
+            }
+        }
+        if store.identity() != self.store_identity {
+            return Err(ExecutionSegmentCompletionError::Publication(
+                ExecutionSessionPublicationError::ForeignSemanticStore,
+            ));
+        }
+        if token.is_some_and(|token| self.segment_was_completed(token)) {
+            return Ok(self.frame());
+        }
+        if token.is_none() && actual_time >= segment.end_time() {
+            return Ok(self.frame());
+        }
         if actual_time != segment.end_time() {
             return Err(ExecutionSegmentCompletionError::NotAtBoundary {
                 expected: segment.end_time(),
@@ -114,16 +135,9 @@ impl ExecutionSession {
             return Err(ExecutionSegmentCompletionError::CallbackNotCoherent);
         }
 
-        let Some(token) = segment.token() else {
+        let Some(token) = token else {
             return Ok(self.frame());
         };
-        let runtime = self.runtime.runtime_identity();
-        if token.runtime() != runtime {
-            return Err(ExecutionSegmentCompletionError::ForeignSegment {
-                expected: runtime,
-                actual: token.runtime(),
-            });
-        }
         let pending = self
             .pending_segment_completion
             .clone()
@@ -165,13 +179,25 @@ impl ExecutionSession {
             if !seen.insert(entry.semantic_object) {
                 continue;
             }
-            let Some(domains) = self.last_callback_receipt.as_ref().and_then(|receipt| {
+            let domains = self.last_callback_receipt.as_ref().and_then(|receipt| {
                 receipt.domains_at(
                     entry.semantic_object,
                     actual_time,
                     self.publication_context(),
                 )
-            }) else {
+            });
+            if self
+                .runtime
+                .object_has_effective_driver(entry.execution_object)
+                && domains.is_none()
+            {
+                return Err(
+                    ExecutionSegmentCompletionError::UnsupportedHostDriverRelease(
+                        entry.semantic_object,
+                    ),
+                );
+            }
+            let Some(domains) = domains else {
                 continue;
             };
             if !self
@@ -211,6 +237,7 @@ impl ExecutionSession {
 
         self.apply_semantic_transaction_with_execution(store, semantic, release, Some(effective))?;
         self.pending_segment_completion = None;
+        self.completed_segment_sequence = Some(token.sequence());
         self.last_callback_receipt = None;
         let publication = self.publication_context();
         self.callback_schedule
@@ -278,9 +305,14 @@ mod tests {
             .unwrap();
         session.advance_to(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
+        let repeated_publication = session.publication_context();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(session.frame().time, 2.0);
+        assert_eq!(session.publication_context(), repeated_publication);
 
         session.seek(0.5).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+        assert!(session.segment_state(segment).is_complete());
         session.seek(2.0).unwrap();
         assert_eq!(session.frame().objects[0].transform.translation.x, 9.0);
     }
@@ -390,5 +422,62 @@ mod tests {
             session.advance_to_callback_barrier(1.0).unwrap(),
             crate::CallbackAdvance::Ready(_)
         ));
+    }
+
+    #[test]
+    fn unreceipted_effective_driver_rejects_completion_atomically() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target = store.insert_semantic_object(target_state);
+        let animation = store
+            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        session
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        let mut overlay = session
+            .begin_required_callback_phase(segment.end_time(), [object])
+            .unwrap();
+        overlay
+            .set_transform(
+                object,
+                Transform2D {
+                    translation: Vec2::new(5.0, 1.0),
+                    ..Transform2D::IDENTITY
+                },
+            )
+            .unwrap();
+        session
+            .commit_required_callback_phase(overlay.finish())
+            .unwrap();
+        session.last_callback_receipt = None;
+        let revision = store.scene_revision();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        assert_eq!(
+            session.complete_segment(&mut store, segment),
+            Err(ExecutionSegmentCompletionError::UnsupportedHostDriverRelease(object))
+        );
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(!session.segment_state(segment).is_complete());
     }
 }
