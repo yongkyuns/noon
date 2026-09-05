@@ -1540,13 +1540,19 @@ def install() -> None:
     global _ORIGINAL_VMOBJECT_SET_FILL
     global _ORIGINAL_VMOBJECT_SET_STROKE
     global _ORIGINAL_VMOBJECT_SET_OPACITY
-    _ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
-    _ORIGINAL_VMOBJECT_SET_FILL = _compat.VMobject.set_fill
-    _ORIGINAL_VMOBJECT_SET_STROKE = _compat.VMobject.set_stroke
-    _ORIGINAL_VMOBJECT_SET_OPACITY = _compat.VMobject.set_opacity
-    _compat.VMobject.set_color = _canonical_vmobject_set_color
-    _compat.VMobject.set_fill = _canonical_vmobject_set_fill
-    _compat.VMobject.set_stroke = _canonical_vmobject_set_stroke
-    _compat.VMobject.set_opacity = _canonical_vmobject_set_opacity
+    # Inherited methods already use the Mobject phase dispatcher above. Wrap
+    # only VMobject's own overrides, preserving the inherited base signatures.
+    if "set_color" in _compat.VMobject.__dict__:
+        _ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
+        _compat.VMobject.set_color = _canonical_vmobject_set_color
+    if "set_fill" in _compat.VMobject.__dict__:
+        _ORIGINAL_VMOBJECT_SET_FILL = _compat.VMobject.set_fill
+        _compat.VMobject.set_fill = _canonical_vmobject_set_fill
+    if "set_stroke" in _compat.VMobject.__dict__:
+        _ORIGINAL_VMOBJECT_SET_STROKE = _compat.VMobject.set_stroke
+        _compat.VMobject.set_stroke = _canonical_vmobject_set_stroke
+    if "set_opacity" in _compat.VMobject.__dict__:
+        _ORIGINAL_VMOBJECT_SET_OPACITY = _compat.VMobject.set_opacity
+        _compat.VMobject.set_opacity = _canonical_vmobject_set_opacity
     _install_rotating_breadth()
     _INSTALLED = True
