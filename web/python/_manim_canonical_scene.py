@@ -130,7 +130,7 @@ def _to_document(self):
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
     # Native/Typst Text has no geometry projection. The legacy document remains
-    # an explicit geometry-only export while canonical SceneSpec carries mixed
+    # an explicit geometry-only export while the canonical export carries mixed
     # content, so omit identity-only text rows and their legacy tracks here.
     text_ids = set(getattr(self, "_semantic_text_handles", {}))
     if text_ids:

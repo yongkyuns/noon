@@ -86,7 +86,9 @@ assert.match(
 assert.match(browserSmoke, /manim_parity_stress_grid\.py/);
 assert.match(browserSmoke, /stressResult\.duration\) - 5\.0/);
 assert.match(browserSmoke, /stressResult\.document\.objects\.length !== 800/);
-assert.match(browserSmoke, /stressResult\.retainedDocument\?\.objects\?\.length !== 26/);
+assert.match(browserSmoke, /stressTextObjects\.length !== 26/);
+assert.match(browserSmoke, /stressTextObjects = stressResult\.sceneSpec\.objects\.filter/);
+assert.match(browserSmoke, /object\.content\?\.kind === "text"/);
 assert.match(browserSmoke, /stressResult\.sceneSpec\.objects\.length !== 826/);
 assert.match(browserSmoke, /expectedObjectCount: 626/);
 assert.match(browserSmoke, /waitForRenderedState/);
