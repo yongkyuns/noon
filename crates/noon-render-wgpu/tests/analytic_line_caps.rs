@@ -9,7 +9,11 @@ fn line_frame(cap: StrokeCap, width_mode: StrokeWidthMode) -> FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(0),
-            geometry: GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::ZERO),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::line(
+                Vec2::new(-1.0, 0.0),
+                Vec2::ZERO,
+            )),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style {
                 fill: None,
@@ -56,7 +60,8 @@ fn analytic_line_packs_all_cap_modes_without_changing_existing_flag_bits() {
 fn rectangle_packing_does_not_carry_line_cap_bits() {
     for cap in [StrokeCap::Round, StrokeCap::Butt, StrokeCap::Square] {
         let mut frame = line_frame(cap, StrokeWidthMode::ScreenSpace);
-        frame.objects[0].geometry = GeometryRef::rectangle(2.0, 2.0);
+        frame.objects[0].content =
+            noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 2.0));
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
         let flags = prepared.rectangles[0].style.stroke_enabled;

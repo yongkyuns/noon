@@ -171,7 +171,7 @@ mod tests {
         TextRenderItem, TextResource, TextResourceArena, TextSourceKind, TextSourceSpan,
         Transform2D, Vec2,
     };
-    use noon_runtime::{RetainedFrameObjectState, RetainedFrameState};
+    use noon_runtime::{FrameObjectState, FrameState};
 
     use super::*;
 
@@ -241,7 +241,7 @@ mod tests {
 
     fn geometry_runtime_fixture() -> (
         RetainedFamilyAnimationPlan,
-        RetainedFrameState,
+        FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
         let mut store = SemanticStore::new();
@@ -261,19 +261,21 @@ mod tests {
         builder.accept_leaf(second, &second_object, &texts).unwrap();
         let plan = builder.finish().unwrap();
 
-        let frame = RetainedFrameState {
+        let frame = FrameState {
             time: 1.0,
             objects: vec![
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(20),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,
                 },
-                RetainedFrameObjectState {
+                FrameObjectState {
                     id: ObjectId::new(21),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                    text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style::default(),
                     appearance: 1.0,

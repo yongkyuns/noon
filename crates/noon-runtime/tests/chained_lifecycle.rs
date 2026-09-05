@@ -58,19 +58,28 @@ fn chained_replacements_have_exact_presence_handoffs() {
     assert!(!first_handoff.is_present(0));
     assert!(first_handoff.is_present(1));
     assert!(!first_handoff.is_present(2));
-    assert_eq!(first_handoff.objects[1].geometry, GeometryRef::circle(2.0));
+    assert_eq!(
+        first_handoff.objects[1].geometry(),
+        Some(&GeometryRef::circle(2.0))
+    );
 
     let middle = instance.seek(1.5).expect("valid time");
     assert!(!middle.is_present(0));
     assert!(middle.is_present(1));
     assert!(!middle.is_present(2));
-    assert_eq!(middle.objects[1].geometry, GeometryRef::circle(2.5));
+    assert_eq!(
+        middle.objects[1].geometry(),
+        Some(&GeometryRef::circle(2.5))
+    );
 
     let second_handoff = instance.seek(2.0).expect("valid time");
     assert!(!second_handoff.is_present(0));
     assert!(!second_handoff.is_present(1));
     assert!(second_handoff.is_present(2));
-    assert_eq!(second_handoff.objects[2].geometry, GeometryRef::circle(3.0));
+    assert_eq!(
+        second_handoff.objects[2].geometry(),
+        Some(&GeometryRef::circle(3.0))
+    );
 }
 
 #[test]

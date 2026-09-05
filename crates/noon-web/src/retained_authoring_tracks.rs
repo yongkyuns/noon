@@ -85,7 +85,7 @@ impl std::error::Error for RetainedTrackMaterializationError {}
 /// the legacy track count, so sparse imported scenes remain collision-free. Scale
 /// values stay in frontend authoring space and are normalized here with Rust-owned
 /// backend factors before runtime compilation. All semantic validity is intentionally
-/// left to `RetainedCompiledScene::compile`, the canonical validator for the unified
+/// left to `CompiledScene::compile_objects`, the canonical validator for the unified
 /// retained object domain.
 pub fn materialize_retained_tracks(
     legacy_tracks: &[TrackDefinition],

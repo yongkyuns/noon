@@ -323,6 +323,11 @@ def _commit_play_operations(animations: tuple[object, ...]) -> None:
             operations, list
         ):
             continue
+        if source._semantic_handle is not None:
+            # The canonical source remains its pre-animation store state. The
+            # retained track is the explicit #959 export artifact and will be
+            # applied by the shared runtime after finalization.
+            continue
         _apply_method_operations(source, operations)
         _observe_source(source)
 

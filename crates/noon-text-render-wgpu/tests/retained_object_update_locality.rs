@@ -1,5 +1,5 @@
 use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D, Vec2};
-use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_text_render_wgpu::{
     PreparedTextItem, RetainedTextIncrementalStats, RetainedTextQuadPreparer, TextDeviceMetrics,
 };
@@ -9,17 +9,18 @@ const OBJECT_COUNT: usize = 10_000;
 const UPDATE_FRAMES: usize = 128;
 const CHANGED_INDEX: usize = OBJECT_COUNT / 2;
 
-fn large_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
+fn large_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
     let transform = Transform2D {
         scale: Vec2::new(0.05, 0.05),
         ..Transform2D::IDENTITY
     };
-    RetainedFrameState {
+    FrameState {
         time: 0.0,
         objects: (0..OBJECT_COUNT)
-            .map(|index| RetainedFrameObjectState {
+            .map(|index| FrameObjectState {
                 id: ObjectId::new(index as u64),
                 content: ObjectContentRef::Text(text),
+                text_bounds: None,
                 transform,
                 style: Style::default(),
                 appearance: 1.0,
@@ -33,16 +34,17 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
     }
 }
 
-fn single_text_frame(text: noon_core::TextResourceHandle) -> RetainedFrameState {
+fn single_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
     let transform = Transform2D {
         scale: Vec2::new(0.05, 0.05),
         ..Transform2D::IDENTITY
     };
-    RetainedFrameState {
+    FrameState {
         time: 0.0,
-        objects: vec![RetainedFrameObjectState {
+        objects: vec![FrameObjectState {
             id: ObjectId::new(1),
             content: ObjectContentRef::Text(text),
+            text_bounds: None,
             transform,
             style: Style::default(),
             appearance: 1.0,

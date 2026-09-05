@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use noon_core::{Camera2DState, GeometryRef, ObjectId, Style, Transform2D};
+use noon_core::{Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D};
 use noon_runtime::{
     ExecutionSlotError, ExecutionSlotId, FrameChanges, FrameObjectState, FrameState,
 };
@@ -77,6 +77,7 @@ pub enum ExecutionTransportError {
     InvalidTime(f64),
     InvalidCameraState,
     InvalidCameraObject(ObjectId),
+    TextObjectUnsupported(ObjectId),
     InvalidRenderTransform(TransportSlotId),
     SequenceExhausted,
     SessionRequiresSnapshot { session: u32, sequence: u64 },
@@ -119,6 +120,11 @@ impl std::fmt::Display for ExecutionTransportError {
             Self::InvalidCameraObject(object) => write!(
                 formatter,
                 "camera object {} is missing or not a supported 2D frame",
+                object.get()
+            ),
+            Self::TextObjectUnsupported(object) => write!(
+                formatter,
+                "geometry-only execution transport cannot encode text object {}",
                 object.get()
             ),
             Self::SequenceExhausted => {
@@ -440,7 +446,9 @@ impl ExecutionDeltaEncoder {
             .iter()
             .find(|object| object.id == camera_object)
             .ok_or(ExecutionTransportError::InvalidCameraObject(camera_object))?;
-        Camera2DState::from_frame_object(&object.geometry, object.transform)
+        object
+            .geometry()
+            .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.transform))
             .ok_or(ExecutionTransportError::InvalidCameraObject(camera_object))
     }
 
@@ -467,7 +475,10 @@ impl ExecutionDeltaEncoder {
             slot,
             order,
             object: object.id,
-            geometry: object.geometry.clone(),
+            geometry: object
+                .geometry()
+                .cloned()
+                .ok_or(ExecutionTransportError::TextObjectUnsupported(object.id))?,
             transform: object.transform,
             style: object.style,
             appearance: object.appearance,
@@ -760,10 +771,11 @@ impl ExecutionFrameMirror {
 fn push_frame_object(frame: &mut FrameState, object: TransportObjectState) {
     frame.objects.push(FrameObjectState {
         id: object.object,
-        geometry: object.geometry,
+        content: ObjectContentRef::Geometry(object.geometry),
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
+        text_bounds: None,
     });
     frame.presences.push(object.presence);
     frame.reveals.push(object.reveal);
@@ -777,10 +789,11 @@ fn push_frame_object(frame: &mut FrameState, object: TransportObjectState) {
 fn replace_frame_object(frame: &mut FrameState, index: usize, object: TransportObjectState) {
     frame.objects[index] = FrameObjectState {
         id: object.object,
-        geometry: object.geometry,
+        content: ObjectContentRef::Geometry(object.geometry),
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
+        text_bounds: None,
     };
     frame.presences[index] = object.presence;
     frame.reveals[index] = object.reveal;

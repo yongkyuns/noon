@@ -1,15 +1,15 @@
-use noon_compile::RetainedCompiledScene;
+use noon_compile::CompiledScene;
 use noon_core::{
     FamilyAnimationDefinition, FamilyAnimationError, FamilyAnimationState, ObjectId,
     TextFamilyAnimationDefinition, TextFamilyAnimationError, TextFamilyAnimationState,
 };
 
-use crate::{EvaluationError, FrameChanges, RetainedFrameState, RetainedSceneInstance};
+use crate::{EvaluationError, FrameChanges, FrameState, SceneInstance};
 
 /// Evaluated retained frame plus content-independent family animation state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedFamilyFrame<'a> {
-    pub retained: &'a RetainedFrameState,
+    pub retained: &'a FrameState,
     pub family_animations: &'a [Option<FamilyAnimationState>],
 }
 
@@ -72,13 +72,13 @@ impl From<EvaluationError> for RetainedFamilyRuntimeError {
 
 /// Additive retained runtime for content-independent family animations.
 ///
-/// Ordinary retained object properties remain owned by [`RetainedSceneInstance`].
+/// Ordinary retained object properties remain owned by [`SceneInstance`].
 /// This wrapper evaluates only family scheduling state. Concrete content/resource
 /// layers decide how a member realizes `Reveal`, `DrawBorderThenFill`, or future
 /// family operations; no content identity or host callback enters this scheduler.
 #[derive(Clone, Debug)]
 pub struct RetainedFamilySceneInstance {
-    inner: RetainedSceneInstance,
+    inner: SceneInstance,
     animations_by_object: Vec<Vec<FamilyAnimationDefinition>>,
     states: Vec<Option<FamilyAnimationState>>,
     family_changed_indices: Vec<usize>,
@@ -86,7 +86,7 @@ pub struct RetainedFamilySceneInstance {
 
 impl RetainedFamilySceneInstance {
     pub fn new(
-        compiled: RetainedCompiledScene,
+        compiled: CompiledScene,
         animations: Vec<FamilyAnimationDefinition>,
     ) -> Result<Self, RetainedFamilyRuntimeError> {
         let object_count = compiled.objects().len();
@@ -117,7 +117,7 @@ impl RetainedFamilySceneInstance {
             }
         }
 
-        let inner = RetainedSceneInstance::new(compiled);
+        let inner = SceneInstance::new(compiled);
         let states = evaluate_family_states(&animations_by_object, 0.0)?;
         Ok(Self {
             inner,
@@ -179,7 +179,7 @@ impl RetainedFamilySceneInstance {
         )
     }
 
-    pub fn inner(&self) -> &RetainedSceneInstance {
+    pub fn inner(&self) -> &SceneInstance {
         &self.inner
     }
 
@@ -223,7 +223,7 @@ fn evaluate_family_states(
 /// Compatibility frame for the retained Text consumer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedTextFamilyFrame<'a> {
-    pub retained: &'a RetainedFrameState,
+    pub retained: &'a FrameState,
     pub text_family_animations: &'a [Option<TextFamilyAnimationState>],
 }
 
@@ -313,7 +313,7 @@ pub struct RetainedTextFamilySceneInstance {
 
 impl RetainedTextFamilySceneInstance {
     pub fn new(
-        compiled: RetainedCompiledScene,
+        compiled: CompiledScene,
         animations: Vec<TextFamilyAnimationDefinition>,
     ) -> Result<Self, RetainedTextFamilyRuntimeError> {
         for animation in &animations {
@@ -378,16 +378,17 @@ impl RetainedTextFamilySceneInstance {
         self.inner.take_frame_changes()
     }
 
-    pub fn inner(&self) -> &RetainedSceneInstance {
+    pub fn inner(&self) -> &SceneInstance {
         self.inner.inner()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use noon_compile::CompiledObject;
     use noon_core::{
-        FamilyAnimationMode, GeometryRef, RateFunction, RetainedObjectDefinition,
-        TextFamilyAnimationMode, TextResourceHandle, TextResourceId,
+        FamilyAnimationMode, GeometryRef, RateFunction, TextFamilyAnimationMode,
+        TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -399,19 +400,26 @@ mod tests {
         }
     }
 
-    fn compiled_text(object: ObjectId) -> RetainedCompiledScene {
-        RetainedCompiledScene::compile(
-            &[RetainedObjectDefinition::text(object, text_handle())],
+    fn compiled_text(object: ObjectId) -> CompiledScene {
+        CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                text_handle(),
+                noon_core::Transform2D::IDENTITY,
+                noon_core::Style::default(),
+            )],
             &[],
         )
         .unwrap()
     }
 
-    fn compiled_geometry(object: ObjectId) -> RetainedCompiledScene {
-        RetainedCompiledScene::compile(
-            &[RetainedObjectDefinition::geometry(
+    fn compiled_geometry(object: ObjectId) -> CompiledScene {
+        CompiledScene::compile_objects(
+            vec![CompiledObject::new(
                 object,
                 GeometryRef::circle(1.0),
+                noon_core::Transform2D::IDENTITY,
+                noon_core::Style::default(),
             )],
             &[],
         )
@@ -496,10 +504,20 @@ mod tests {
     fn family_state_changes_mark_only_the_target_object_dirty() {
         let first = ObjectId::new(7);
         let second = ObjectId::new(8);
-        let compiled = RetainedCompiledScene::compile(
-            &[
-                RetainedObjectDefinition::text(first, text_handle()),
-                RetainedObjectDefinition::text(second, text_handle()),
+        let compiled = CompiledScene::compile_objects(
+            vec![
+                CompiledObject::new(
+                    first,
+                    text_handle(),
+                    noon_core::Transform2D::IDENTITY,
+                    noon_core::Style::default(),
+                ),
+                CompiledObject::new(
+                    second,
+                    text_handle(),
+                    noon_core::Transform2D::IDENTITY,
+                    noon_core::Style::default(),
+                ),
             ],
             &[],
         )

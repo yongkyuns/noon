@@ -18,7 +18,8 @@ use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
     Vec2,
 };
-use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
+use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+use noon_text_render_wgpu::TextDeviceMetrics;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -171,6 +172,10 @@ struct NativeApp {
     exit_after_present: bool,
     #[cfg(test)]
     presented_frame: bool,
+    #[cfg(test)]
+    last_geometry_draw_calls: usize,
+    #[cfg(test)]
+    last_text_draw_calls: usize,
 }
 
 impl NativeApp {
@@ -188,6 +193,10 @@ impl NativeApp {
             exit_after_present: false,
             #[cfg(test)]
             presented_frame: false,
+            #[cfg(test)]
+            last_geometry_draw_calls: 0,
+            #[cfg(test)]
+            last_text_draw_calls: 0,
         }
     }
 
@@ -349,8 +358,22 @@ impl NativeApp {
             .as_mut()
             .expect("drawable native host must own GPU state");
         let frame = self.session.frame();
-        let prepared = gpu.preparer.prepare_incremental(frame, &changes);
-        gpu.renderer.upload(&gpu.device, &gpu.queue, &prepared);
+        let metrics = gpu.text_metrics(camera)?;
+        let prepared = gpu
+            .preparer
+            .prepare_with_changes(
+                &gpu.device,
+                &gpu.queue,
+                frame,
+                &changes,
+                self.session.text_resources(),
+                self.session.font_resources(),
+                self.session.geometry_resources(),
+                metrics,
+            )
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+        gpu.renderer
+            .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
         let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -359,8 +382,15 @@ impl NativeApp {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Noon native frame"),
             });
-        gpu.renderer
-            .encode(&mut encoder, &view, &prepared, CLEAR_COLOR);
+        let _draw = gpu
+            .renderer
+            .encode_retained(&mut encoder, &view, &prepared, &gpu.text_state, CLEAR_COLOR)
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+        #[cfg(test)]
+        {
+            self.last_geometry_draw_calls = _draw.geometry.draw_calls;
+            self.last_text_draw_calls = _draw.text.draw_calls;
+        }
         window.pre_present_notify();
         gpu.queue.submit(Some(encoder.finish()));
         gpu.queue.present(surface_texture);
@@ -555,7 +585,8 @@ struct NativeGpu {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     drawable: bool,
-    preparer: FramePreparer,
+    preparer: RetainedFramePreparer,
+    text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
 }
 
@@ -597,6 +628,7 @@ impl NativeGpu {
         renderer.set_viewport(&device, &queue, width, height);
         renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 
+        let text_state = renderer.create_retained_text_state(&device, &queue);
         Ok(Self {
             instance,
             surface,
@@ -604,7 +636,8 @@ impl NativeGpu {
             queue,
             config,
             drawable: size.width > 0 && size.height > 0,
-            preparer: FramePreparer::new(),
+            preparer: RetainedFramePreparer::new(),
+            text_state,
             renderer,
         })
     }
@@ -639,6 +672,11 @@ impl NativeGpu {
             camera_for_viewport(camera, self.config.width, self.config.height)?,
         );
         Ok(())
+    }
+
+    fn text_metrics(&self, camera: Camera2DState) -> Result<TextDeviceMetrics, NativeHostError> {
+        TextDeviceMetrics::uniform(self.config.height as f32 / camera.height)
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn acquire(
@@ -948,34 +986,17 @@ mod tests {
     #[test]
     #[ignore = "requires an X11 display and a working native wgpu adapter"]
     fn native_surface_smoke_presents_typed_semantic_frame() {
-        use noon_core::{
-            SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry,
-        };
+        use noon::{Scene, Text};
         use winit::platform::x11::EventLoopBuilderExtX11;
 
-        let mut store = SemanticStore::new();
-        let circle =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.5,
-            }));
-        store.attach_to_scene(circle).unwrap();
-
-        let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: Vec2::new(12.0, 6.0),
-        });
-        camera_state.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
-        camera_state.set_role(SemanticObjectRole::Camera2D);
-        let camera = store.insert_semantic_object(camera_state);
-        store.attach_to_scene(camera).unwrap();
-
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
-        assert_eq!(
-            session.camera().unwrap(),
-            Camera2DState {
-                center: Vec2::new(2.0, -1.0),
-                height: 6.0,
-            }
-        );
+        let mut scene = Scene::new();
+        let mut circle = scene.circle(0.5).unwrap();
+        circle.shift(-2.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut label = scene.text(Text::new("Noon").with_font_size(48.0)).unwrap();
+        label.shift(1.0, 0.0).unwrap();
+        scene.add(&label).unwrap();
+        let session = scene.execution_session().unwrap();
 
         let mut event_loop_builder = EventLoop::builder();
         event_loop_builder.with_any_thread(true);
@@ -985,7 +1006,7 @@ mod tests {
         let mut app = NativeApp::new(
             session,
             NativeViewportConfig {
-                title: "Noon native smoke".to_owned(),
+                title: "Noon native mixed text smoke".to_owned(),
                 width: 320,
                 height: 180,
             },
@@ -999,6 +1020,14 @@ mod tests {
         assert!(
             app.presented_frame,
             "native host exited without presenting a frame"
+        );
+        assert!(
+            app.last_geometry_draw_calls > 0,
+            "native mixed renderer emitted no geometry draw calls"
+        );
+        assert!(
+            app.last_text_draw_calls > 0,
+            "native mixed renderer emitted no text draw calls"
         );
     }
 }

@@ -37,6 +37,8 @@ for (const required of [
   "ExecutionSession::from_semantic_store",
   "create_from_execution_session",
   "activate_animation",
+  "Mobject::from_text",
+  "Text::new(\"Noon\")",
 ]) {
   assert.ok(rustHarness.includes(required), `direct Rust/WASM proof must contain ${required}`);
 }
@@ -112,6 +114,8 @@ for (const required of [
   "createDirectExecutionSmokeRenderer",
   "createDirectExecutionWakeDriver",
   "new OffscreenCanvas",
+  "renderer.time() >= 0.1",
+  "textDrawCalls",
 ]) {
   assert.ok(browserProbe.includes(required), `browser direct-execution proof must contain ${required}`);
 }

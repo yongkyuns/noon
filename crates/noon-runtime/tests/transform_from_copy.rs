@@ -68,14 +68,17 @@ fn transform_from_copy_has_exact_presence_phases() {
     assert!(start.is_present(0));
     assert!(!start.is_present(1));
     assert!(start.is_present(2));
-    assert_eq!(start.objects[2].geometry, GeometryRef::circle(1.0));
+    assert_eq!(start.objects[2].geometry(), Some(&GeometryRef::circle(1.0)));
     assert_eq!(start.objects[2].transform.translation, Vec2::new(-2.0, 0.0));
 
     let middle = instance.seek(2.0).expect("valid time");
     assert!(middle.is_present(0));
     assert!(!middle.is_present(1));
     assert!(middle.is_present(2));
-    assert_eq!(middle.objects[2].geometry, GeometryRef::circle(2.0));
+    assert_eq!(
+        middle.objects[2].geometry(),
+        Some(&GeometryRef::circle(2.0))
+    );
     assert_eq!(
         middle.objects[2].transform.translation,
         Vec2::new(1.0, -1.0)
@@ -85,7 +88,7 @@ fn transform_from_copy_has_exact_presence_phases() {
     assert!(end.is_present(0));
     assert!(end.is_present(1));
     assert!(!end.is_present(2));
-    assert_eq!(end.objects[1].geometry, GeometryRef::circle(3.0));
+    assert_eq!(end.objects[1].geometry(), Some(&GeometryRef::circle(3.0)));
     assert_eq!(end.objects[1].transform.translation, Vec2::new(4.0, -2.0));
 }
 

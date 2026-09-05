@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
 use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
 use noon_core::{
-    Color, GeometryRef, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticScene,
-    SemanticStore, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, Style, Transform2D, Vec2,
+    Color, CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena, Property,
+    RateFunction, Rect, ScenePatch, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
+    SemanticScene, SemanticStore, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, Style,
+    TextResource, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    Vec2,
 };
-use noon_runtime::SceneInstance;
+use noon_runtime::{frame_object_conservative_bounds, SceneInstance};
 
 #[test]
 fn canonical_semantic_execution_output_builds_runtime_without_recompiling_authored_scene() {
@@ -34,6 +39,120 @@ fn canonical_semantic_execution_output_builds_runtime_without_recompiling_author
 
     assert_eq!(instance.frame().objects[0].style.opacity, 0.7);
     assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+}
+
+#[test]
+fn canonical_semantic_text_uses_the_same_runtime_frame() {
+    let mut store = SemanticStore::new();
+    let bounds = Rect::new(Vec2::new(-1.0, -0.5), Vec2::new(2.0, 1.5));
+    let handle = store
+        .import_text_resource(
+            TextResource {
+                source: Arc::from("hello"),
+                kind: TextSourceKind::Plain,
+                runs: Arc::from([]),
+                vector_items: Arc::from([]),
+                render_items: Arc::from([]),
+                parts: Arc::from([]),
+                bounds,
+                baseline: 0.0,
+                layout_artifact: None,
+            },
+            &FontResourceArena::new(),
+            &GeometryResourceArena::new(),
+        )
+        .unwrap();
+    let text = store.insert_semantic_object(SemanticObjectState::new(handle));
+    store.attach_to_scene(text).unwrap();
+
+    let lowered = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
+    let frame = instance.seek(3.0).unwrap();
+
+    assert_eq!(frame.text(0), Some(handle));
+    assert_eq!(frame.objects[0].geometry(), None);
+    assert_eq!(frame.render_geometry(0), None);
+    assert_eq!(frame.objects[0].text_bounds, Some(bounds));
+}
+
+#[test]
+fn canonical_text_and_geometry_share_timeline_updates_and_spatial_bounds() {
+    let mut store = SemanticStore::new();
+    let bounds = Rect::new(Vec2::new(-1.0, -0.5), Vec2::new(2.0, 1.5));
+    let handle = store
+        .import_text_resource(
+            TextResource {
+                source: Arc::from("hello"),
+                kind: TextSourceKind::Plain,
+                runs: Arc::from([]),
+                vector_items: Arc::from([]),
+                render_items: Arc::from([]),
+                parts: Arc::from([]),
+                bounds,
+                baseline: 0.0,
+                layout_artifact: None,
+            },
+            &FontResourceArena::new(),
+            &GeometryResourceArena::new(),
+        )
+        .unwrap();
+    let text = store.insert_semantic_object(SemanticObjectState::new(handle));
+    let circle = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(text).unwrap();
+    store.attach_to_scene(circle).unwrap();
+
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+    let text_id = index.execution_object_id(text).unwrap();
+    let circle_id = index.execution_object_id(circle).unwrap();
+    let (mut compiled, _) = lowered.into_parts();
+    for (track, object, destination) in [
+        (TrackId::new(0), text_id, Vec2::new(4.0, 2.0)),
+        (TrackId::new(1), circle_id, Vec2::new(-2.0, 6.0)),
+    ] {
+        compiled
+            .apply_patch(&ScenePatch::AddTrack(TrackDefinition {
+                id: track,
+                object,
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: destination,
+                },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+    }
+
+    let mut instance = SceneInstance::new(compiled);
+    let frame = instance.seek(1.0).unwrap();
+    let text_index = frame
+        .objects
+        .iter()
+        .position(|object| object.id == text_id)
+        .unwrap();
+    let circle_index = frame
+        .objects
+        .iter()
+        .position(|object| object.id == circle_id)
+        .unwrap();
+    assert_eq!(
+        frame.objects[text_index].transform.translation,
+        Vec2::new(2.0, 1.0)
+    );
+    assert_eq!(
+        frame.objects[circle_index].transform.translation,
+        Vec2::new(-1.0, 3.0)
+    );
+    assert_eq!(frame.text(text_index), Some(handle));
+    assert!(frame.render_geometry(circle_index).is_some());
+    assert_eq!(
+        frame_object_conservative_bounds(frame, text_index),
+        Some(Rect::new(Vec2::new(1.0, 0.5), Vec2::new(4.0, 2.5)))
+    );
 }
 
 #[test]
@@ -111,7 +230,7 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
     {
         // Identity representations intentionally remain migration-specific; compare
         // only the observable execution state and authored painter order.
-        assert_eq!(legacy.geometry, semantic.geometry);
+        assert_eq!(legacy.content, semantic.content);
         assert_eq!(legacy.transform, semantic.transform);
         assert_eq!(legacy.style, semantic.style);
         assert_eq!(legacy.appearance, semantic.appearance);

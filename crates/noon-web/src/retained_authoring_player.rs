@@ -2,7 +2,7 @@ use noon::RetainedScene;
 use noon_core::{
     Camera2DState, FontResourceArena, GeometryResourceArena, ObjectId, TextResourceArena,
 };
-use noon_runtime::{EvaluationError, RetainedFrameState, RetainedSceneInstance};
+use noon_runtime::{EvaluationError, FrameState, SceneInstance};
 
 use crate::{
     MixedRetainedAuthoringError, MixedRetainedAuthoringScene, RetainedExecutionDeltaEncoder,
@@ -13,13 +13,13 @@ use crate::{
 /// Deterministic execution owner for one mixed retained scene.
 ///
 /// Compatibility authoring inputs may still be normalized before construction, but
-/// runtime evaluation consumes one [`RetainedSceneInstance`]. The resource arenas stay
+/// runtime evaluation consumes one [`SceneInstance`]. The resource arenas stay
 /// next to it so renderer preparation can resolve text/font/vector resources without
 /// putting those payloads on the Python or per-frame execution wire.
 #[derive(Clone, Debug)]
 pub struct RetainedAuthoringPlayer {
     scene: RetainedScene,
-    runtime: RetainedSceneInstance,
+    runtime: SceneInstance,
     encoder: RetainedExecutionDeltaEncoder,
     resource_bundle: Vec<u8>,
     camera_object: Option<ObjectId>,
@@ -62,7 +62,7 @@ impl RetainedAuthoringPlayer {
             )?;
         bundle.set_render_geometries(session, render_geometries.clone(), preparations);
         let resource_bundle = bundle.encode_binary()?;
-        let runtime = RetainedSceneInstance::new(compiled);
+        let runtime = SceneInstance::new(compiled);
         Ok(Self {
             scene,
             runtime,
@@ -80,7 +80,7 @@ impl RetainedAuthoringPlayer {
         &self.scene
     }
 
-    pub fn frame(&self) -> &RetainedFrameState {
+    pub fn frame(&self) -> &FrameState {
         self.runtime.frame()
     }
 

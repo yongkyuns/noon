@@ -2,22 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, MessagePort } from "node:worker_threads";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
-import { decodeTransferableExecutionDelta } from "./execution-transport.js";
+import { decodeTransferableExecutionDelta, SharedExecutionDeltaReader } from "./execution-transport.js";
 
 globalThis.MessagePort = MessagePort;
 const next = (port) => new Promise((resolve) => port.once("message", resolve));
+const nextMatching = (port, predicate) => new Promise((resolve) => {
+  const receive = (message) => {
+    if (!predicate(message)) return;
+    port.off("message", receive);
+    resolve(message);
+  };
+  port.on("message", receive);
+});
 const request = (port, type, requestId, fields = {}) => {
   const result = next(port);
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
   return result;
 };
-function fixture() {
+function fixture(transportMode = "transferable") {
   const control = new MessageChannel();
   const render = new MessageChannel();
   let time = 0, playing = true, sequence = 0, returned = 0, returnedPlayer = null, stopped = 0;
-  const json = () => JSON.stringify({ channel: "noon.execution", protocol_version: 1, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
+  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     initialDeltaJson: json,
+    resourceBundleBytes: () => new Uint8Array([1]),
     tickDeltaJson: () => null,
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
@@ -30,18 +39,23 @@ function fixture() {
   return { control, render, player, stats: () => ({ returned, returnedPlayer, stopped }),
     attach: () => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
-      loopDurationSeconds: 2, transportMode: "transferable",
+      loopDurationSeconds: 2, transportMode,
     }, () => { stopped += 1; }),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
 
-test("semantic producer starts with ordinary seq0 transport and supports controls", async () => {
+test("semantic producer installs mixed resources before its retained snapshot and supports controls", async () => {
   const f = fixture();
   try {
-    const ready = next(f.control.port2), initial = next(f.render.port2);
+    const ready = next(f.control.port2);
+    const resources = nextMatching(f.render.port2, (message) => message.type === "retained_resources");
+    const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     const endpoint = f.attach();
     assert.equal((await ready).type, "ready");
+    const resourceBundle = await resources;
+    assert.equal(resourceBundle.type, "retained_resources");
+    assert.deepEqual([...resourceBundle.bytes], [1]);
     const delta = await initial;
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(delta).json).snapshot, true);
     f.render.port2.postMessage({ type: "execution_ack", session: delta.session, sequence: delta.sequence });
@@ -89,4 +103,30 @@ test("player construction failure closes both transferred ports", () => {
   assert.equal(stopped, 1);
   control.port2.close();
   render.port2.close();
+});
+
+
+test("shared setup cannot expose a snapshot before its resource bundle", async () => {
+  const f = fixture("shared");
+  let endpoint;
+  try {
+    const received = [];
+    const setup = new Promise((resolve, reject) => {
+      f.render.port2.on("message", (message) => {
+        received.push(message.type);
+        if (message.type !== "transport_setup") return;
+        try {
+          assert.deepEqual(received, ["retained_resources", "transport_setup"]);
+          const reader = new SharedExecutionDeltaReader(message.mailbox);
+          const snapshots = [];
+          reader.drain((json) => { snapshots.push(JSON.parse(json)); return true; });
+          assert.equal(snapshots.length, 1);
+          assert.equal(snapshots[0].snapshot, true);
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
+    endpoint = f.attach();
+    await setup;
+  } finally { endpoint?.stop(); f.close(); }
 });

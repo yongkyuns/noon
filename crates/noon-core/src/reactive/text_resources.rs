@@ -536,6 +536,27 @@ pub struct TextResourceArena {
 }
 
 impl TextResourceArena {
+    /// Rebind resource dependencies only while cloning an independent store.
+    /// Live resource replacement continues to use versioned publication.
+    pub(crate) fn remap_geometry_handles(
+        &mut self,
+        mut remap: impl FnMut(&mut crate::GeometryResourceHandle),
+    ) {
+        for entry in &mut self.entries {
+            let Some(resource) = entry.value.as_mut() else {
+                continue;
+            };
+            if resource.vector_items.is_empty() {
+                continue;
+            }
+            for item in
+                std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(resource).vector_items)
+            {
+                remap(&mut item.geometry);
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -580,6 +601,17 @@ impl TextResourceArena {
             return None;
         }
         entry.value.as_deref()
+    }
+
+    /// Share one immutable payload with a derived compiled resource snapshot.
+    pub fn get_shared(&self, handle: TextResourceHandle) -> Option<Arc<TextResource>> {
+        let index = text_resource_slot(handle.id);
+        let entry = self.entries.get(index)?;
+        if text_resource_id(index, entry.generation) != handle.id || entry.version != handle.version
+        {
+            return None;
+        }
+        entry.value.clone()
     }
 
     pub fn current_handle(&self, id: TextResourceId) -> Option<TextResourceHandle> {

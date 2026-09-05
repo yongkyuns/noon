@@ -19,9 +19,10 @@ mod wasm {
     };
     use noon_render_wgpu::{
         Camera2D, DrawStats, FramePreparer, GpuRenderer, PackedTransform, PreparedFrame,
-        RenderPrimitive, UploadStats, UploadWrite,
+        RenderPrimitive, RetainedFramePreparer, RetainedTextGpuState, UploadStats, UploadWrite,
     };
     use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+    use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
@@ -226,13 +227,16 @@ mod wasm {
         pending_changes: FrameChanges,
         direct_wake_clock: BrowserExecutionWakeClock,
         preparer: FramePreparer,
+        direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
+        direct_text_gpu: RetainedTextGpuState,
         timestamp_query_supported: bool,
         timestamp_profiler: Option<GpuTimestampProfiler>,
         camera_center: Vec2,
         camera_height: f32,
         clear_color: wgpu::Color,
         last_draw_calls: usize,
+        last_text_draw_calls: usize,
         last_instances_drawn: usize,
         last_bytes_uploaded: usize,
         last_geometry_cache_misses: usize,
@@ -342,11 +346,11 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            let changes = if let Some(session) = self.source.direct_mut() {
-                session.take_frame_changes()
-            } else {
-                mem::take(&mut self.pending_changes)
-            };
+            if self.source.direct().is_some() {
+                return self.render_direct(surface_texture, reconfigure_after_present);
+            }
+
+            let changes = mem::take(&mut self.pending_changes);
             let frame = self
                 .source
                 .frame()
@@ -618,6 +622,12 @@ mod wasm {
             self.last_draw_calls
         }
 
+        /// Draw calls issued for text from the direct mixed renderer's last frame.
+        #[wasm_bindgen(js_name = lastTextDrawCalls)]
+        pub fn last_text_draw_calls(&self) -> usize {
+            self.last_text_draw_calls
+        }
+
         #[wasm_bindgen(js_name = lastInstancesDrawn)]
         pub fn last_instances_drawn(&self) -> usize {
             self.last_instances_drawn
@@ -862,7 +872,7 @@ mod wasm {
     }
 
     fn world_endpoints(object: &FrameObjectState) -> Option<[Vec2; 2]> {
-        let GeometryRef::Line { start, end } = &object.geometry else {
+        let GeometryRef::Line { start, end } = object.geometry()? else {
             return None;
         };
         Some([
@@ -1002,6 +1012,7 @@ mod wasm {
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
             install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
             let renderer = GpuRenderer::new(&device, config.format);
+            let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
 
             let mut result = Self {
                 instance,
@@ -1016,13 +1027,16 @@ mod wasm {
                 pending_changes,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
                 preparer: FramePreparer::new(),
+                direct_preparer: RetainedFramePreparer::new(),
                 renderer,
+                direct_text_gpu,
                 timestamp_query_supported,
                 timestamp_profiler: None,
                 camera_center,
                 camera_height,
                 clear_color: MANIM_DEFAULT_CLEAR_COLOR,
                 last_draw_calls: 0,
+                last_text_draw_calls: 0,
                 last_instances_drawn: 0,
                 last_bytes_uploaded: 0,
                 last_geometry_cache_misses: 0,
@@ -1034,6 +1048,84 @@ mod wasm {
             };
             result.update_camera()?;
             Ok(result)
+        }
+
+        fn render_direct(
+            &mut self,
+            surface_texture: wgpu::SurfaceTexture,
+            reconfigure_after_present: bool,
+        ) -> Result<bool, JsValue> {
+            let metrics = {
+                let camera = self.renderer.camera();
+                TextDeviceMetrics::new(Vec2::new(
+                    self.config.width as f32 / camera.world_size.x,
+                    self.config.height as f32 / camera.world_size.y,
+                ))
+                .map_err(js_error)?
+            };
+            let session = self.source.direct_mut().ok_or_else(|| {
+                js_message("direct retained rendering requires a direct ExecutionSession source")
+            })?;
+            let changes = session.take_frame_changes();
+            let prepared = self
+                .direct_preparer
+                .prepare_with_changes(
+                    &self.device,
+                    &self.queue,
+                    session.frame(),
+                    &changes,
+                    session.text_resources(),
+                    session.font_resources(),
+                    session.geometry_resources(),
+                    metrics,
+                )
+                .map_err(js_error)?;
+            let upload = self.renderer.upload_retained(
+                &self.device,
+                &self.queue,
+                &prepared,
+                &mut self.direct_text_gpu,
+            );
+            self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
+            self.last_bytes_uploaded = upload
+                .geometry
+                .bytes_uploaded
+                .saturating_add(upload.text.bytes_uploaded);
+            self.gpu_instance_generation = self.gpu_instance_generation.saturating_add(1);
+
+            let view = surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Noon direct execution render frame"),
+                });
+            let draw = self
+                .renderer
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.direct_text_gpu,
+                    self.clear_color,
+                )
+                .map_err(js_error)?;
+            self.queue.submit(Some(encoder.finish()));
+            self.queue.present(surface_texture);
+            self.last_draw_calls = draw
+                .geometry
+                .draw_calls
+                .saturating_add(draw.text.draw_calls);
+            self.last_text_draw_calls = draw.text.draw_calls;
+            self.last_instances_drawn = draw
+                .geometry
+                .instances_drawn
+                .saturating_add(draw.text.instances_drawn);
+            if reconfigure_after_present {
+                self.surface.configure(&self.device, &self.config);
+            }
+            Ok(true)
         }
 
         fn sync_camera(&mut self, camera: Camera2DState) -> Result<(), JsValue> {

@@ -243,7 +243,30 @@ async function directExecutionProof(page, expectedBackend) {
     `direct Rust/WASM execution selected ${direct.metrics.backend}; expected ${expectedBackend}`,
   );
   assert.equal(direct.metrics.presented, true, "direct Rust/WASM execution did not present");
+  assert.equal(
+    direct.metrics.objectCount,
+    3,
+    "direct Rust/WASM scene must retain animated geometry, camera, and text",
+  );
   assert.ok(direct.metrics.drawCalls > 0, "direct Rust/WASM execution emitted no draw calls");
+  assert.ok(direct.metrics.textDrawCalls > 0, "direct Rust/WASM execution emitted no text draw calls");
+  assert.ok(
+    direct.metrics.drawCalls > direct.metrics.textDrawCalls,
+    "direct Rust/WASM execution emitted no geometry draw calls alongside text",
+  );
+  assert.ok(
+    direct.metrics.authoredTime >= 0.1,
+    "direct Rust/WASM execution did not settle its authored animation",
+  );
+  assert.ok(
+    direct.metrics.scheduledAnimationFrames > 0,
+    "direct Rust/WASM execution never scheduled its animation wake",
+  );
+  assert.equal(
+    direct.metrics.staticFrameSkipped,
+    true,
+    "direct Rust/WASM renderer prepared a static frame without a publication",
+  );
   return direct.metrics;
 }
 

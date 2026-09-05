@@ -80,7 +80,16 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
             timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
             time_map: Default::default(),
         };
-        let compiled = noon_compile::RetainedCompiledScene::compile(&[object], &[track]).unwrap();
+        let compiled = noon_compile::CompiledScene::compile_objects(
+            vec![noon_compile::CompiledObject::new(
+                object.id,
+                object.content,
+                object.transform,
+                object.style,
+            )],
+            &[track],
+        )
+        .unwrap();
         let geometries = compiled_render_geometries(&compiled);
         let preparations = compiled_render_geometry_preparations(&compiled, &geometries).unwrap();
         assert_eq!(preparations.len(), expected_preparations);

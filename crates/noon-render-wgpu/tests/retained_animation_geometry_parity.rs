@@ -2,8 +2,8 @@ use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2, VectorPath,
 };
-use noon_render_wgpu::{RenderPrimitive, RetainedFramePreparer, RetainedRenderItem};
-use noon_runtime::{FrameChanges, RetainedFrameObjectState, RetainedFrameState};
+use noon_render_wgpu::{RenderPrimitive, RetainedFramePreparer};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_text_render_wgpu::TextDeviceMetrics;
 
 fn retained_geometry_frame(
@@ -11,12 +11,13 @@ fn retained_geometry_frame(
     render_geometry: Option<GeometryRef>,
     reveal: f32,
     morph: f32,
-) -> RetainedFrameState {
-    RetainedFrameState {
+) -> FrameState {
+    FrameState {
         time: 0.5,
-        objects: vec![RetainedFrameObjectState {
+        objects: vec![FrameObjectState {
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(semantic_geometry),
+            text_bounds: None,
             transform: Transform2D::default(),
             style: Style::default(),
             appearance: 1.0,
@@ -29,7 +30,7 @@ fn retained_geometry_frame(
     }
 }
 
-fn assert_prepares_path(frame: &RetainedFrameState) {
+fn assert_prepares_path(frame: &FrameState) {
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
@@ -50,16 +51,10 @@ fn assert_prepares_path(frame: &RetainedFrameState) {
         )
         .unwrap();
 
-    assert!(prepared.render_items.iter().any(|item| {
-        matches!(
-            item,
-            RetainedRenderItem::Geometry {
-                object_id,
-                batch,
-            } if *object_id == ObjectId::new(1)
-                && matches!(batch.primitive, RenderPrimitive::Path { .. })
-        )
-    }));
+    assert!(prepared
+        .geometry_render_batches()
+        .iter()
+        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
     if frame.render_transforms[0].is_some() {
         assert_eq!(prepared.geometry_stats().geometry_cache_misses, 1);
         let mut next = frame.clone();

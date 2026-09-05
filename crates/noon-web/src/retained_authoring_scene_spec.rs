@@ -135,7 +135,7 @@ mod tests {
     use noon_ir::{ObjectSpecContent, TextSpecKind, TextSpecOptions};
 
     use super::*;
-    use crate::MixedRetainedAuthoringScene;
+    use crate::retained_authoring_scene::MixedRetainedAuthoringScene;
 
     fn native_spec(source: &str) -> RetainedTextAuthoringSpec {
         RetainedTextAuthoringSpec::native(source, "DejaVu Sans Mono", 48.0, 0.5).unwrap()

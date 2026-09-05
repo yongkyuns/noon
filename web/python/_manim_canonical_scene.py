@@ -30,8 +30,8 @@ _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_REPLACE_STATIC_SNAPSHOT = _base.Scene._replace_static_snapshot
 _ORIGINAL_BIND = _base.Mobject._bind_to_scene
 _ORIGINAL_PLAY = _base.Scene.play
-_ORIGINAL_TO_SCENE_SPEC = _base.Scene.to_scene_spec
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
+_ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 
 
 def _json(value: object) -> str:
@@ -72,11 +72,18 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     scene._object_positions[obj.id] = len(scene._objects)
     # The compatibility table retains identity only on the shared path.
     scene._objects.append({"id": obj.id})
-    handles = getattr(scene, "_semantic_geometry_handles", None)
-    if handles is None:
-        handles = scene._semantic_geometry_handles = {}
+    if isinstance(self, _typst._RetainedTextMobject):
+        handles = getattr(scene, "_semantic_text_handles", None)
+        if handles is None:
+            handles = scene._semantic_text_handles = {}
+    else:
+        handles = getattr(scene, "_semantic_geometry_handles", None)
+        if handles is None:
+            handles = scene._semantic_geometry_handles = {}
     handles[obj.id] = handle
-    if getattr(scene, "_legacy_geometry_materialized", False):
+    if getattr(scene, "_legacy_geometry_materialized", False) and not isinstance(
+        self, _typst._RetainedTextMobject
+    ):
         snapshot = json.loads(str(handle.snapshotJson()))
         snapshot["id"] = obj.id
         scene._objects[-1] = snapshot
@@ -96,6 +103,9 @@ def materialize_legacy_geometry(scene):
 
 
 def _play(self, *args, **kwargs):
+    # Native Text timeline export stays in the canonical context. Its #959
+    # codec is store-derived at finalization, so geometry materialization must
+    # not force it through a geometry-only legacy document.
     materialize_legacy_geometry(self)
     return _ORIGINAL_PLAY(self, *args, **kwargs)
 
@@ -110,11 +120,40 @@ def _to_document(self):
             snapshot = json.loads(str(handle.snapshotJson()))
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
+    # Native/Typst Text has no geometry projection. The legacy document remains
+    # an explicit geometry-only export while the canonical export carries mixed
+    # content, so omit identity-only text rows and their legacy tracks here.
+    text_ids = set(getattr(self, "_semantic_text_handles", {}))
+    if text_ids:
+        document["objects"] = [
+            object for object in objects if object.get("id") not in text_ids
+        ]
+        document["tracks"] = [
+            track for track in document["tracks"] if track.get("object") not in text_ids
+        ]
+    return document
+
+
+def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
+    """Project identities for the geometry-only legacy document."""
+    document = _ORIGINAL_IDENTITY_DOCUMENT(self)
+    text_ids = set(getattr(self, "_semantic_text_handles", {}))
+    if text_ids:
+        document["objects"] = [
+            identity
+            for identity in document["objects"]
+            if identity["id"] not in text_ids
+        ]
+        document["tracks"] = [
+            identity
+            for identity in document["tracks"]
+            if self._tracks[identity["id"]].get("object") not in text_ids
+        ]
     return document
 
 
 def execution_context(scene, callbacks=None):
-    """Select the complete typed geometry path; unsupported contracts stay explicit."""
+    """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
     if callbacks or getattr(scene, "_legacy_geometry_materialized", False):
         return None
     # The canonical static context does not yet lower the legacy reactive/native
@@ -133,7 +172,8 @@ def execution_context(scene, callbacks=None):
     if getattr(scene, "_retained_text_objects", []):
         return None
     handles = getattr(scene, "_semantic_geometry_handles", {})
-    if len(handles) != len(scene._object_positions):
+    text_handles = getattr(scene, "_semantic_text_handles", {})
+    if len(handles) + len(text_handles) != len(scene._object_positions):
         return None
     for track in scene._tracks:
         if (track.get("property") != "presence" or
@@ -156,7 +196,7 @@ class LiveExecution:
         context = execution_context(scene)
         if context is None:
             raise RuntimeError(
-                "live execution currently supports typed static geometry without "
+                "live execution currently supports typed static geometry/native Text without "
                 "callbacks, retained text, or timeline tracks"
             )
         self._scene = scene
@@ -264,6 +304,14 @@ def _bind_retained_text(
 ) -> object:
     if self._scene is scene and self._object is not None:
         return self._object
+    # Native Text now owns an ordinary shared semantic Mobject handle. Bind it
+    # through the same scene operation as geometry; the retained source adapter
+    # remains only for Typst until that backend reaches this resource path.
+    if getattr(self, "_semantic_handle", None) is not None:
+        obj = _bind_mobject(self, scene, key=key)
+        self._retained_object_id = int(obj.id)
+        self._retained_order = int(scene._object_positions[obj.id])
+        return obj
     if self._scene is not None:
         raise ValueError("retained text Mobject already belongs to another Scene")
 
@@ -301,9 +349,6 @@ def _to_scene_spec(self: _base.Scene) -> dict[str, Any]:
     _retained_state._sync_all(self)
     _retained_state._freeze_bound_sources(self)
 
-    if getattr(self, "_legacy_geometry_materialized", False):
-        return _ORIGINAL_TO_SCENE_SPEC(self)
-
     context = _context(self)
     for source in _retained_state._bound_sources(self):
         context.updateText(
@@ -338,3 +383,4 @@ def install() -> None:
     _base.Scene.play = _play
     _base.Scene.live_execution = _live_execution
     _ir.Scene.to_document = _to_document
+    _ir.Scene.identity_document = _identity_document

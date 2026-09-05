@@ -51,7 +51,8 @@ fn build_frame(segments: usize) -> FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(1),
-            geometry: GeometryRef::path(path),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
             appearance: 1.0,

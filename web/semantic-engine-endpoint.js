@@ -77,6 +77,9 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
+    if (typeof player.resourceBundleBytes !== "function") {
+      throw new Error("semantic execution requires retained resource bundle support");
+    }
     controlPort.addEventListener("message", ({ data: message }) => {
       if (stopped) return;
       try {
@@ -104,6 +107,13 @@ export function attachSemanticEngine(context, request, onStop = () => {}) {
       } else if (message?.type === "transport_writable") drain();
       else if (message?.type === "render_error") fail(new Error(message.message));
     });
+    const resources = Uint8Array.from(player.resourceBundleBytes());
+    if (resources.byteLength === 0) {
+      throw new Error("semantic execution emitted an empty retained resource bundle");
+    }
+    renderPort.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
+    // A shared mailbox may already contain its initial snapshot when setup is
+    // received. Install resources before exposing that mailbox to the renderer.
     if (transportMode === EXECUTION_TRANSPORT_SHARED) {
       const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? 1024 * 1024);
       transport = new SharedExecutionDeltaWriter(mailbox);

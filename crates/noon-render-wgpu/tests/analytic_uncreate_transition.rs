@@ -14,7 +14,8 @@ fn rectangle_frame(reveal: f32) -> FrameState {
         time: 0.0,
         objects: vec![FrameObjectState {
             id: ObjectId::new(1),
-            geometry: GeometryRef::rectangle(2.0, 2.0),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 2.0)),
+            text_bounds: None,
             transform: Transform2D::IDENTITY,
             style,
             appearance: 1.0,

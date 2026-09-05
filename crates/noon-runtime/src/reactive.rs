@@ -20,10 +20,6 @@ pub use timeline_scheduler::*;
 mod wake;
 pub use wake::*;
 
-// Retained objects reuse the same deterministic scheduler until frame storage is unified.
-mod retained_runtime;
-pub use retained_runtime::*;
-
 mod retained_text_family;
 pub use retained_text_family::*;
 
