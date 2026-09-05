@@ -16,8 +16,8 @@ use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
 };
 use noon_core::{
-    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, ScenePatch,
-    StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, ObjectSnapshot, PathCommand, Property, PublicationContext,
+    ScenePatch, StrokeWidthMode, Style, TrackValues, Transform2D, Vec2, VectorPath,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -242,6 +242,7 @@ pub struct SceneInstance {
     spatial_changes: FrameChanges,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
+    publication: PublicationContext,
 }
 
 impl SceneInstance {
@@ -260,6 +261,7 @@ impl SceneInstance {
             spatial_changes: FrameChanges::all(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
+            publication: PublicationContext::default(),
         };
         instance.seek_unchecked(0.0);
         instance
