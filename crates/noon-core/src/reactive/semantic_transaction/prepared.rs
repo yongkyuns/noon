@@ -325,6 +325,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(signal);
                     impacts.push(SemanticMutationImpact::SignalValue { signal });
                 }
+                SemanticMutation::AddScalarSignalTrack {
+                    signal,
+                    from,
+                    to,
+                    timing,
+                } => {
+                    store.add_validated_semantic_scalar_signal_track(
+                        SemanticScalarSignalTrack::new(signal, from, to, timing),
+                    );
+                    written_slots.insert(signal);
+                    impacts.push(SemanticMutationImpact::SignalTracks { signal });
+                }
                 SemanticMutation::SetProperty {
                     object,
                     property,

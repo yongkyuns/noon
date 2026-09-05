@@ -1,11 +1,13 @@
 mod callback;
 mod completion;
 mod publication;
+mod signal_timeline;
 pub use callback::*;
 pub use completion::*;
 pub use publication::*;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
+use signal_timeline::SignalTimelineSchedule;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -53,7 +55,7 @@ impl ExecutionViewportQuery {
 }
 
 /// Error produced when semantic/native reactive input cannot be applied to this execution session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionInputError {
     RequiredCallbackPending,
     RequiredCallbacksConfigured,
@@ -61,6 +63,8 @@ pub enum ExecutionSessionInputError {
     NativeInput(NativeInputRuntimeError),
     NativeEventOutOfOrder { previous: u64, next: u64 },
     Reactive(ReactiveError),
+    Evaluation(EvaluationError),
+    TimelineOwnedSignal { signal: SemanticNodeId },
 }
 
 impl std::fmt::Display for ExecutionSessionInputError {
@@ -84,6 +88,13 @@ impl std::fmt::Display for ExecutionSessionInputError {
                 "native input event sequence must increase: previous {previous}, next {next}"
             ),
             Self::Reactive(error) => error.fmt(formatter),
+            Self::Evaluation(error) => error.fmt(formatter),
+            Self::TimelineOwnedSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} is timeline-owned and cannot be set directly",
+                signal.slot(),
+                signal.generation()
+            ),
         }
     }
 }
@@ -99,6 +110,12 @@ impl From<NativeInputRuntimeError> for ExecutionSessionInputError {
 impl From<ReactiveError> for ExecutionSessionInputError {
     fn from(value: ReactiveError) -> Self {
         Self::Reactive(value)
+    }
+}
+
+impl From<EvaluationError> for ExecutionSessionInputError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
     }
 }
 
@@ -235,6 +252,7 @@ pub struct ExecutionSession {
     spatial_index: ExecutionSpatialIndex,
     last_spatial_update: SpatialIndexUpdateStats,
     reactive_projection: SemanticReactiveProjection,
+    signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
@@ -267,6 +285,7 @@ impl Clone for ExecutionSession {
             spatial_index: self.spatial_index.clone(),
             last_spatial_update: self.last_spatial_update,
             reactive_projection: self.reactive_projection.clone(),
+            signal_timeline: self.signal_timeline.clone(),
             runtime,
             camera_object: self.camera_object,
             next_activation_track_id: self.next_activation_track_id,
@@ -370,7 +389,8 @@ impl ExecutionSession {
             .max()
             .map_or(Some(0), |id| id.checked_add(1));
         let slots = noon_runtime::ExecutionSlotTable::from_compiled(lowered.compiled());
-        let reactive_projection = lowered.reactive().clone();
+        let mut reactive_projection = lowered.reactive().clone();
+        let signal_timeline = SignalTimelineSchedule::new(reactive_projection.take_scalar_tracks());
         let callback_schedule = CallbackSchedule::new(lowered.host_callbacks().clone());
         let mut runtime = SceneInstance::from_semantic_execution(lowered);
         let mut spatial_index = ExecutionSpatialIndex::default();
@@ -397,6 +417,7 @@ impl ExecutionSession {
             spatial_index,
             last_spatial_update,
             reactive_projection,
+            signal_timeline,
             runtime,
             camera_object,
             next_activation_track_id,
@@ -570,6 +591,7 @@ impl ExecutionSession {
         self.runtime
             .wake_state()
             .with_additional_timeline(callback_timeline)
+            .with_additional_timeline(self.signal_timeline.wake_state())
     }
 
     /// Consume renderer-facing invalidation state accumulated by the runtime.
@@ -590,7 +612,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.runtime.evaluate(time)
+        self.evaluate_signal_timeline(time)
     }
 
     /// Seek deterministically to an absolute time.
@@ -601,7 +623,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.runtime.seek(time)
+        self.evaluate_signal_timeline(time)
     }
 
     /// Advance to an absolute time, falling back to deterministic seek when time moves backward.
@@ -612,7 +634,7 @@ impl ExecutionSession {
         if !self.callback_schedule.is_empty() {
             return Err(EvaluationError::RequiredCallbackBarrier);
         }
-        self.runtime.advance_to(time)
+        self.evaluate_signal_timeline(time)
     }
 
     /// Activate one semantic animation root at the session's current deterministic time.
@@ -733,11 +755,44 @@ impl ExecutionSession {
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
+        if self.signal_timeline.owns(signal) {
+            return Err(ExecutionSessionInputError::TimelineOwnedSignal { signal });
+        }
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
             .ok_or(ExecutionSessionInputError::UnknownSemanticSignal(signal))?;
-        Ok(self.runtime.set_reactive_input(execution_signal, value)?)
+        self.apply_reactive_input_batch(vec![(execution_signal, value.into())])
+    }
+
+    /// Read the current effective value for one canonical semantic signal.
+    pub fn effective_signal_value(&self, signal: SemanticNodeId) -> Option<&ReactiveValue> {
+        let execution = self.reactive_projection.execution_signal_id(signal)?;
+        self.runtime.reactive_value(execution)
+    }
+
+    pub const fn last_reactive_stats(&self) -> noon_runtime::ReactiveRuntimeStats {
+        self.runtime.last_reactive_stats()
+    }
+
+    fn evaluate_signal_timeline(&mut self, time: f64) -> Result<&FrameState, EvaluationError> {
+        if self.signal_timeline.is_empty() {
+            return self.runtime.advance_to(time);
+        }
+        let current = self.runtime.frame().time;
+        if self.signal_timeline.is_coherent_at(current, time) {
+            return Ok(self.runtime.frame());
+        }
+        let preview = self.signal_timeline.preview(current, time);
+        if time < current {
+            self.runtime
+                .seek_with_reactive_inputs(time, preview.inputs())?;
+        } else {
+            self.runtime
+                .advance_to_with_reactive_inputs(time, preview.inputs())?;
+        }
+        self.signal_timeline.commit(preview);
+        Ok(self.runtime.frame())
     }
 
     /// Deliver one normalized sampled native state source through signal-owned routes.
@@ -761,10 +816,12 @@ impl ExecutionSession {
         }
         self.ensure_direct_input_ingress_available()?;
         let value = reactive_value_from_native(update.value);
-        for signal in targets {
-            self.runtime.set_reactive_input(signal, value.clone())?;
-        }
-        Ok(self.runtime.frame())
+        self.apply_reactive_input_batch(
+            targets
+                .into_iter()
+                .map(|signal| (signal, value.clone()))
+                .collect(),
+        )
     }
 
     /// Deliver one explicitly ordered discrete native event occurrence.
@@ -814,9 +871,13 @@ impl ExecutionSession {
             })
             .collect::<Vec<_>>();
 
-        for (signal, next) in targets.into_iter().zip(next_values) {
-            self.runtime.set_reactive_input(signal, next)?;
-        }
+        self.apply_reactive_input_batch(
+            targets
+                .into_iter()
+                .zip(next_values)
+                .map(|(signal, next)| (signal, ReactiveValue::Scalar(next)))
+                .collect(),
+        )?;
         self.last_native_event_sequence = Some(occurrence.sequence);
         Ok(self.runtime.frame())
     }
@@ -824,6 +885,26 @@ impl ExecutionSession {
     /// Resolve an authoritative semantic object identity to its current execution key.
     pub fn execution_object_id(&self, node: SemanticNodeId) -> Option<ObjectId> {
         self.execution_index.execution_object_id(node)
+    }
+
+    fn apply_reactive_input_batch(
+        &mut self,
+        inputs: Vec<(noon_core::SignalId, ReactiveValue)>,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
+        let current = self.runtime.frame().time;
+        let signal_timeline = (!self.signal_timeline.is_empty()
+            && !self.signal_timeline.is_coherent_at(current, current))
+        .then(|| self.signal_timeline.preview(current, current));
+        let mut combined = signal_timeline
+            .as_ref()
+            .map_or_else(Vec::new, |preview| preview.inputs().to_vec());
+        combined.extend(inputs);
+        self.runtime
+            .advance_to_with_reactive_inputs(current, &combined)?;
+        if let Some(preview) = signal_timeline {
+            self.signal_timeline.commit(preview);
+        }
+        Ok(self.runtime.frame())
     }
 }
 
@@ -879,8 +960,8 @@ fn reactive_value_from_native(value: NativeInputValue) -> ReactiveValue {
 mod tests {
     use noon_core::{
         AnimationOptions, NativeEventSource, NativeStateSource, RateFunction,
-        SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticVec3,
-        StoredGeometry, Vec2,
+        SemanticMutationTransaction, SemanticObjectProperty, SemanticObjectRole,
+        SemanticObjectState, SemanticSignalExpr, SemanticVec3, StoredGeometry, TrackTiming, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
@@ -1400,6 +1481,159 @@ mod tests {
             session.set_reactive_input(object, 1.0_f32),
             Err(ExecutionSessionInputError::UnknownSemanticSignal(object))
         );
+    }
+
+    #[test]
+    fn canonical_scalar_track_drives_binding_before_publication_and_rejects_direct_input() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            tracker,
+            0.0,
+            4.0,
+            TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        );
+        transaction.apply(&mut store).unwrap();
+
+        assert_eq!(
+            store.semantic_input_scalar_value_at(tracker, 1.0).unwrap(),
+            2.0
+        );
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.evaluate(0.0).unwrap();
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(0.0))
+        );
+        session.advance_to(1.0).unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(2.0))
+        );
+        assert_eq!(session.last_reactive_stats().bindings_invalidated, 1);
+
+        let context = session.publication_context();
+        session.advance_to(1.0).unwrap();
+        assert_eq!(session.publication_context(), context);
+        assert_eq!(
+            session.set_reactive_input(tracker, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+        );
+        assert_eq!(session.publication_context(), context);
+
+        session.advance_to(2.0).unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 4.0);
+        session.seek(0.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 1.0);
+    }
+
+    #[test]
+    fn scalar_track_active_at_zero_is_present_in_initial_coherent_frame() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            tracker,
+            0.0,
+            4.0,
+            TrackTiming::new(-1.0, 2.0, RateFunction::Linear),
+        );
+        transaction.apply(&mut store).unwrap();
+
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        assert_eq!(session.frame().time, 0.0);
+        assert_eq!(session.frame().objects[0].transform.rotation, 2.0);
+        assert_eq!(
+            session.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(2.0))
+        );
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Continuous
+        );
+    }
+
+    #[test]
+    fn one_native_occurrence_updates_shared_closure_atomically() {
+        let mut store = SemanticStore::new();
+        let source = NativeStateSource::Control {
+            name: "shared".to_owned(),
+        };
+        let first = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let second = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        store
+            .bind_semantic_native_state_input(first, source.clone())
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(second, source.clone())
+            .unwrap();
+        let sum = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(first)),
+                Box::new(SemanticSignalExpr::signal(second)),
+            ))
+            .unwrap();
+        let square = store
+            .insert_semantic_derived_signal(SemanticSignalExpr::Mul(
+                Box::new(SemanticSignalExpr::signal(sum)),
+                Box::new(SemanticSignalExpr::signal(sum)),
+            ))
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(square, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        session.take_frame_changes();
+        let context = session.publication_context();
+
+        session
+            .set_native_state_input(source.clone(), NativeInputValue::Scalar(2.0))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 16.0);
+        assert_eq!(session.last_reactive_stats().derived_signals_evaluated, 2);
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            context.frame_epoch().checked_next().unwrap()
+        );
+
+        let context = session.publication_context();
+        let frame = session.frame().clone();
+        assert!(matches!(
+            session.set_native_state_input(source.clone(), NativeInputValue::Scalar(1.0e20)),
+            Err(ExecutionSessionInputError::Evaluation(
+                EvaluationError::Reactive(ReactiveError::NonFiniteValue(_))
+            ))
+        ));
+        assert_eq!(session.publication_context(), context);
+        assert_eq!(session.frame(), &frame);
+
+        session
+            .set_native_state_input(source, NativeInputValue::Scalar(3.0))
+            .unwrap();
+        assert_eq!(session.frame().objects[0].transform.rotation, 36.0);
     }
 
     #[test]

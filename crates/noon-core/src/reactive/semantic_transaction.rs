@@ -8,10 +8,12 @@ use super::semantic_store::SemanticRemoveNodeEffect;
 use super::{
     AnimationOptions, HostCallbackId, SemanticAnimationIntent, SemanticAnimationState,
     SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
-    SemanticObjectState, SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError,
-    SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind, SemanticStore,
-    SemanticStoreError, SemanticStyle, SemanticUpdaterRegistration, StoredGeometry,
+    SemanticObjectState, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
+    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
+    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
+    SemanticUpdaterRegistration, StoredGeometry,
 };
+use crate::TrackTiming;
 
 mod prepared;
 pub use prepared::{PreparedSemanticMutationTransaction, SemanticTransactionReadError};
@@ -52,6 +54,12 @@ pub enum SemanticMutation {
     SetSignal {
         signal: SemanticNodeId,
         value: SemanticSignalValue,
+    },
+    AddScalarSignalTrack {
+        signal: SemanticNodeId,
+        from: f64,
+        to: f64,
+        timing: TrackTiming,
     },
     SetProperty {
         object: SemanticTransactionNodeRef,
@@ -148,6 +156,7 @@ impl SemanticMutation {
                 ..
             } => vec![*target, *target_state],
             Self::SetSignal { .. }
+            | Self::AddScalarSignalTrack { .. }
             | Self::AddNode { .. }
             | Self::AddAnimation { .. }
             | Self::RemoveAnimation { .. } => Vec::new(),
@@ -168,6 +177,7 @@ impl SemanticMutation {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::SetSignal { signal, .. } => Some(*signal),
+            Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
             Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
@@ -189,6 +199,7 @@ impl SemanticMutation {
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
+            Self::AddScalarSignalTrack { .. } => None,
             Self::SetProperty {
                 object, property, ..
             } => Some(SemanticMutationKey::ObjectProperty {
@@ -262,6 +273,9 @@ pub(super) enum SemanticMutationKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
     SignalValue {
+        signal: SemanticNodeId,
+    },
+    SignalTracks {
         signal: SemanticNodeId,
     },
     ObjectProperty {
@@ -346,6 +360,22 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetSignal {
             signal,
             value: value.into(),
+        });
+        self
+    }
+
+    pub fn add_scalar_signal_track(
+        &mut self,
+        signal: SemanticNodeId,
+        from: f64,
+        to: f64,
+        timing: TrackTiming,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::AddScalarSignalTrack {
+            signal,
+            from,
+            to,
+            timing,
         });
         self
     }
@@ -698,6 +728,8 @@ impl SemanticMutationTransaction {
         let mut staged_object_order = Vec::new();
         let mut staged_updaters =
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
+        let mut staged_signal_tracks =
+            HashMap::<SemanticNodeId, Vec<SemanticScalarSignalTrack>>::new();
 
         for (index, mutation) in self.mutations.iter().enumerate() {
             for node in mutation.node_references() {
@@ -863,6 +895,14 @@ impl SemanticMutationTransaction {
                             signal: *signal,
                         });
                     };
+                    if !state.scalar_tracks().is_empty()
+                        || staged_signal_tracks.contains_key(signal)
+                    {
+                        return Err(SemanticMutationTransactionError::Signal {
+                            index,
+                            error: SemanticSignalError::TimelineOwnedSignal { signal: *signal },
+                        });
+                    }
                     if !value.is_finite() {
                         return Err(SemanticMutationTransactionError::Signal {
                             index,
@@ -994,6 +1034,34 @@ impl SemanticMutationTransaction {
                         .or_insert_with(|| catalog.updater_registrations(*target));
                     insert_updater_registration(registrations, registration, *position)
                         .map_err(|error| updater_edit_error(index, *target, error))?;
+                    changed.push(true);
+                }
+                SemanticMutation::AddScalarSignalTrack {
+                    signal,
+                    from,
+                    to,
+                    timing,
+                } => {
+                    if targets.contains(&SemanticMutationKey::Signal(*signal)) {
+                        return Err(SemanticMutationTransactionError::Signal {
+                            index,
+                            error: SemanticSignalError::TimelineOwnedSignal { signal: *signal },
+                        });
+                    }
+                    let track = SemanticScalarSignalTrack::new(*signal, *from, *to, *timing);
+                    let existing_last = store
+                        .semantic_signal_state(*signal)
+                        .ok()
+                        .and_then(|state| state.scalar_tracks().last().copied());
+                    let tracks = staged_signal_tracks.entry(*signal).or_default();
+                    let previous = tracks.last().copied().or(existing_last);
+                    store
+                        .validate_semantic_scalar_signal_track_after(track, previous)
+                        .map_err(|error| SemanticMutationTransactionError::SignalTrack {
+                            index,
+                            error,
+                        })?;
+                    tracks.push(track);
                     changed.push(true);
                 }
                 SemanticMutation::RemoveUpdater {
@@ -1353,7 +1421,7 @@ impl SemanticMutationTransactionResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
     SceneRevisionExhausted,
     InsertionOrderExhausted,
@@ -1519,6 +1587,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         error: SemanticSignalError,
     },
+    SignalTrack {
+        index: usize,
+        error: SemanticScalarSignalTrackError,
+    },
     NotInputSignal {
         index: usize,
         signal: SemanticNodeId,
@@ -1620,6 +1692,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InsertionOrderExhausted => {
                 write!(formatter, "Noon semantic insertion-order space exhausted")
             }
+            Self::SignalTrack { index, error } => write!(
+                formatter,
+                "semantic transaction mutation {index} has invalid signal track: {error}"
+            ),
             Self::PendingNodeFromDifferentTransaction { index, token } => write!(
                 formatter,
                 "semantic transaction mutation {index} uses pending node {token:?} from another transaction"

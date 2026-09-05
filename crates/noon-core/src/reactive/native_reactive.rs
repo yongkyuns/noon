@@ -837,6 +837,7 @@ pub enum ReactiveError {
     UnknownSignal(SignalId),
     UnknownObject(ObjectId),
     SignalIdExhausted,
+    ComputeRevisionExhausted,
     DependencyCycle,
     NonFiniteValue(SignalId),
     NotInputSignal(SignalId),
@@ -874,6 +875,9 @@ impl std::fmt::Display for ReactiveError {
             Self::UnknownSignal(signal) => write!(formatter, "unknown signal {}", signal.get()),
             Self::UnknownObject(object) => write!(formatter, "unknown object {}", object.get()),
             Self::SignalIdExhausted => formatter.write_str("Noon signal ID space exhausted"),
+            Self::ComputeRevisionExhausted => {
+                formatter.write_str("Noon compute-state revision space exhausted")
+            }
             Self::DependencyCycle => {
                 formatter.write_str("reactive dependency graph contains a cycle")
             }

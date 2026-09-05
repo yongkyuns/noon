@@ -86,6 +86,7 @@ impl SemanticExecutionIndex {
                     self.object_ids.remove(&node);
                 }
                 SemanticMutationImpact::SignalValue { .. }
+                | SemanticMutationImpact::SignalTracks { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }

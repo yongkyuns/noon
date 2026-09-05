@@ -8,6 +8,7 @@ use noon_runtime::{
     RuntimeIdentity,
 };
 
+use super::signal_timeline::SignalTimelinePreview;
 use super::ExecutionSession;
 
 pub(super) const CALLBACK_TRANSFORM_DOMAIN: u8 = 1;
@@ -505,6 +506,7 @@ pub(super) struct PendingCallbackPhase {
     token: CallbackPhaseToken,
     prepared: PreparedFrameEvaluation,
     schedule: Option<CallbackSchedulePreview>,
+    signal_timeline: Option<SignalTimelinePreview>,
 }
 
 impl PendingCallbackPhase {
@@ -521,6 +523,10 @@ impl ExecutionSession {
                 || (self.callback_schedule.completed_time == Some(time)
                     && self.callback_schedule.completed_publication
                         == Some(self.publication_context())))
+            && (self.signal_timeline.is_empty()
+                || self
+                    .signal_timeline
+                    .is_coherent_at(self.runtime.frame().time, time))
     }
 
     pub(crate) fn callback_progression_is_terminal(&self) -> bool {
@@ -548,7 +554,7 @@ impl ExecutionSession {
             return Err(EvaluationError::InvalidTime(time).into());
         }
         if self.callback_schedule.is_empty() {
-            self.runtime.advance_to(time)?;
+            self.evaluate_signal_timeline(time)?;
             return Ok(CallbackAdvance::Ready(self.runtime.frame()));
         }
         let current = self.frame().time;
@@ -560,6 +566,10 @@ impl ExecutionSession {
         }
         if self.callback_schedule.completed_time == Some(time)
             && self.callback_schedule.completed_publication == Some(self.publication_context())
+            && (self.signal_timeline.is_empty()
+                || self
+                    .signal_timeline
+                    .is_coherent_at(self.runtime.frame().time, time))
         {
             return Ok(CallbackAdvance::Ready(self.runtime.frame()));
         }
@@ -578,7 +588,7 @@ impl ExecutionSession {
             })
             .collect::<Vec<_>>();
         if invocations.is_empty() {
-            self.runtime.advance_to(preview.time)?;
+            self.evaluate_signal_timeline(preview.time)?;
             self.callback_schedule
                 .commit(preview, self.runtime.publication_context());
             return Ok(CallbackAdvance::Ready(self.runtime.frame()));
@@ -638,7 +648,20 @@ impl ExecutionSession {
         let sequence = self
             .next_callback_sequence
             .ok_or(ExecutionSessionCallbackError::SequenceExhausted)?;
-        let prepared = self.runtime.prepare_advance_to(time)?;
+        let signal_timeline = (!self.signal_timeline.is_empty()
+            && !self
+                .signal_timeline
+                .is_coherent_at(self.runtime.frame().time, time))
+        .then(|| {
+            self.signal_timeline
+                .preview(self.runtime.frame().time, time)
+        });
+        let prepared = self.runtime.prepare_advance_to_with_reactive_inputs(
+            time,
+            signal_timeline
+                .as_ref()
+                .map_or(&[], SignalTimelinePreview::inputs),
+        )?;
         let mut objects = BTreeMap::new();
         for semantic in read_objects {
             let execution = self
@@ -675,6 +698,7 @@ impl ExecutionSession {
             token,
             prepared,
             schedule,
+            signal_timeline,
         });
         Ok(CallbackPhaseOverlay {
             token,
@@ -740,6 +764,9 @@ impl ExecutionSession {
         self.runtime
             .commit_prepared_frame(pending.prepared, effective)
             .expect("preflighted callback phase cannot stale before synchronous commit");
+        if let Some(signal_timeline) = pending.signal_timeline {
+            self.signal_timeline.commit(signal_timeline);
+        }
         if let Some(schedule) = pending.schedule {
             self.callback_schedule
                 .commit(schedule, self.runtime.publication_context());

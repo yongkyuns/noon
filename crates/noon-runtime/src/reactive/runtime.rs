@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
-    ComputeProgram, ComputeState, ObjectId, Property, PublicationContext, ReactiveBinding,
-    ReactiveError, ReactiveEvaluationStats, ReactiveProgram, ReactiveValue, SemanticScene,
-    SignalId,
+    ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch, Property,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
+    ReactiveValue, SemanticScene, SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
@@ -66,6 +66,22 @@ pub(crate) struct ReactiveRuntime {
     targets_by_object: Vec<Vec<usize>>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedReactiveRuntimeUpdate {
+    compute: PreparedComputeInputBatch,
+    property_changes: Vec<(usize, Property, ReactiveValue)>,
+    stats: ReactiveRuntimeStats,
+}
+
+impl PreparedReactiveRuntimeUpdate {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.compute.is_empty()
+    }
+    pub(crate) fn property_changes(&self) -> &[(usize, Property, ReactiveValue)] {
+        &self.property_changes
+    }
+}
+
 impl ReactiveRuntime {
     fn new(
         compiled: &CompiledScene,
@@ -105,6 +121,39 @@ impl ReactiveRuntime {
             .get(&binding_key(object, property))
             .expect("reactive update must reference a lowered binding");
         self.targets[index]
+    }
+
+    pub(crate) fn prepare_input_batch(
+        &mut self,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<PreparedReactiveRuntimeUpdate, ReactiveError> {
+        let compute = self.state.prepare_input_batch(inputs)?;
+        let mut property_changes = Vec::new();
+        let mut stats = ReactiveRuntimeStats::default();
+        let update = compute.update();
+        let evaluation = update.stats();
+        stats.derived_signals_evaluated = evaluation.derived_signals_evaluated;
+        stats.bindings_invalidated = evaluation.bindings_invalidated;
+        for change in update.property_changes() {
+            let target = self.target(change.object, change.property);
+            property_changes.push((target.object_index, target.property, change.value.clone()));
+        }
+        stats.dense_targets_applied = property_changes.len();
+        Ok(PreparedReactiveRuntimeUpdate {
+            compute,
+            property_changes,
+            stats,
+        })
+    }
+
+    pub(crate) fn commit_prepared_input_batch(
+        &mut self,
+        prepared: PreparedReactiveRuntimeUpdate,
+    ) -> ReactiveRuntimeStats {
+        self.state
+            .commit_prepared_input_batch(prepared.compute)
+            .expect("runtime commits a prepared batch only after its owning frame preflight");
+        prepared.stats
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
@@ -233,6 +282,38 @@ impl SceneInstance {
 
     pub fn reactive_value(&self, signal: SignalId) -> Option<&ReactiveValue> {
         self.reactive.as_ref()?.state.value(signal)
+    }
+
+    /// Deterministically seek, evaluating a canonical signal-timeline input batch
+    /// before reactive bindings are reapplied to the rebuilt frame.
+    pub fn seek_with_reactive_inputs(
+        &mut self,
+        time: f64,
+        inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<&FrameState, crate::EvaluationError> {
+        if !time.is_finite() {
+            return Err(crate::EvaluationError::InvalidTime(time));
+        }
+        let previous_time = self.frame.time;
+        let prepared = self
+            .reactive
+            .as_mut()
+            .ok_or_else(|| {
+                crate::EvaluationError::Reactive(ReactiveError::UnknownSignal(inputs[0].0))
+            })?
+            .prepare_input_batch(inputs)
+            .map_err(crate::EvaluationError::Reactive)?;
+        let stats = self
+            .reactive
+            .as_mut()
+            .expect("prepared reactive inputs retain their runtime")
+            .commit_prepared_input_batch(prepared);
+        self.seek_unchecked(time);
+        self.last_reactive_stats = stats;
+        if self.frame.time != previous_time || stats.bindings_invalidated != 0 {
+            self.publish_effective_change();
+        }
+        Ok(&self.frame)
     }
 
     /// Change one native input and apply only its invalidated bindings to the
@@ -397,7 +478,7 @@ fn apply_reactive_value(
     apply_reactive_value_to_row(&mut frame_row_mut(frame, object_index), property, value)
 }
 
-fn apply_reactive_value_to_row(
+pub(crate) fn apply_reactive_value_to_row(
     row: &mut FrameRowMut<'_>,
     property: Property,
     value: &ReactiveValue,

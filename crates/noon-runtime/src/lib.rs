@@ -600,6 +600,7 @@ pub enum EvaluationError {
     FrameEpochExhausted(noon_core::FrameEpoch),
     RequiredCallbackPending,
     RequiredCallbackBarrier,
+    Reactive(noon_core::ReactiveError),
 }
 
 impl std::fmt::Display for EvaluationError {
@@ -618,6 +619,7 @@ impl std::fmt::Display for EvaluationError {
             }
             Self::RequiredCallbackBarrier => formatter
                 .write_str("semantic host callbacks require callback-aware session advancement"),
+            Self::Reactive(error) => error.fmt(formatter),
         }
     }
 }

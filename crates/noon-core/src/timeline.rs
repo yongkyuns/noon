@@ -350,12 +350,7 @@ pub(crate) fn validate_track_timing(
     property: Property,
     timing: TrackTiming,
 ) -> Result<(), TimelineError> {
-    if !timing.start_time.is_finite() {
-        return Err(TimelineError::InvalidStartTime(timing.start_time));
-    }
-    if !timing.duration.is_finite() {
-        return Err(TimelineError::InvalidDuration(timing.duration));
-    }
+    validate_track_time_fields(timing)?;
     if property.is_instant() {
         if timing.duration != 0.0 {
             return Err(TimelineError::InvalidInstantDuration {
@@ -364,6 +359,24 @@ pub(crate) fn validate_track_timing(
             });
         }
     } else if timing.duration < 0.0 {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_continuous_track_timing(timing: TrackTiming) -> Result<(), TimelineError> {
+    validate_track_time_fields(timing)?;
+    if timing.duration < 0.0 {
+        return Err(TimelineError::InvalidDuration(timing.duration));
+    }
+    Ok(())
+}
+
+fn validate_track_time_fields(timing: TrackTiming) -> Result<(), TimelineError> {
+    if !timing.start_time.is_finite() {
+        return Err(TimelineError::InvalidStartTime(timing.start_time));
+    }
+    if !timing.duration.is_finite() {
         return Err(TimelineError::InvalidDuration(timing.duration));
     }
     Ok(())

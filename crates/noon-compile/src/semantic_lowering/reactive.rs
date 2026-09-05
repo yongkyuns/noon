@@ -23,6 +23,39 @@ pub struct SemanticReactiveProjection {
     signal_ids: HashMap<SemanticNodeId, SignalId>,
     native_state_targets: HashMap<NativeStateSource, Vec<SignalId>>,
     native_event_targets: HashMap<NativeEventSource, Vec<SignalId>>,
+    scalar_tracks: Vec<CompiledScalarSignalTrack>,
+    timeline_signals: HashSet<SemanticNodeId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledScalarSignalTrack {
+    semantic_signal: SemanticNodeId,
+    execution_signal: SignalId,
+    from: f32,
+    to: f32,
+    timing: noon_core::TrackTiming,
+}
+
+impl CompiledScalarSignalTrack {
+    pub const fn semantic_signal(self) -> SemanticNodeId {
+        self.semantic_signal
+    }
+
+    pub const fn execution_signal(self) -> SignalId {
+        self.execution_signal
+    }
+
+    pub const fn from(self) -> f32 {
+        self.from
+    }
+
+    pub const fn to(self) -> f32 {
+        self.to
+    }
+
+    pub const fn timing(self) -> noon_core::TrackTiming {
+        self.timing
+    }
 }
 
 impl SemanticReactiveProjection {
@@ -55,6 +88,20 @@ impl SemanticReactiveProjection {
 
     pub fn signal_count(&self) -> usize {
         self.signal_ids.len()
+    }
+
+    pub fn scalar_tracks(&self) -> &[CompiledScalarSignalTrack] {
+        &self.scalar_tracks
+    }
+
+    /// Move scalar tracks into the runtime-owned derived event index while
+    /// retaining semantic/execution signal mappings in this projection.
+    pub fn take_scalar_tracks(&mut self) -> Vec<CompiledScalarSignalTrack> {
+        std::mem::take(&mut self.scalar_tracks)
+    }
+
+    pub fn timeline_owns(&self, semantic_signal: SemanticNodeId) -> bool {
+        self.timeline_signals.contains(&semantic_signal)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -160,12 +207,51 @@ pub fn lower_semantic_reactive_projection(
         }
     }
 
+    let mut lowered_signals = lowerer.signal_ids.keys().copied().collect::<Vec<_>>();
+    lowered_signals.sort();
+    let definition_indices = lowerer
+        .definitions
+        .iter()
+        .enumerate()
+        .map(|(index, definition)| (definition.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut scalar_tracks = Vec::new();
+    for semantic_signal in lowered_signals {
+        let execution_signal = lowerer.signal_ids[&semantic_signal];
+        let semantic_tracks = store
+            .semantic_signal_state(semantic_signal)?
+            .scalar_tracks();
+        if !semantic_tracks.is_empty() {
+            let initial = store
+                .semantic_input_scalar_value_at(semantic_signal, 0.0)
+                .expect("validated scalar tracks remain attached to a scalar input signal");
+            let definition_index = definition_indices[&execution_signal];
+            lowerer.definitions[definition_index].source = SignalSource::Input(
+                ReactiveValue::Scalar(lower_scalar(semantic_signal, initial)?),
+            );
+        }
+        for track in semantic_tracks {
+            scalar_tracks.push(CompiledScalarSignalTrack {
+                semantic_signal,
+                execution_signal,
+                from: lower_scalar(semantic_signal, track.from())?,
+                to: lower_scalar(semantic_signal, track.to())?,
+                timing: track.timing(),
+            });
+        }
+    }
     let graph = ReactiveGraphDefinition::from_parts(lowerer.definitions, lowerer.bindings)?;
+    let timeline_signals = scalar_tracks
+        .iter()
+        .map(|track| track.semantic_signal())
+        .collect();
     Ok(SemanticReactiveProjection {
         graph,
         signal_ids: lowerer.signal_ids,
         native_state_targets: lowerer.native_state_targets,
         native_event_targets: lowerer.native_event_targets,
+        scalar_tracks,
+        timeline_signals,
     })
 }
 
@@ -332,8 +418,9 @@ fn compatibility_signal_id(id: SemanticNodeId) -> SignalId {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        NativeEventSource, NativeStateSource, ReactiveBinding, SemanticObjectState,
-        SemanticSignalExpr, SemanticVec3, StoredGeometry, Vec2,
+        NativeEventSource, NativeStateSource, RateFunction, ReactiveBinding,
+        SemanticMutationTransaction, SemanticObjectState, SemanticSignalExpr, SemanticVec3,
+        StoredGeometry, TrackTiming, Vec2,
     };
 
     use super::*;
@@ -532,5 +619,38 @@ mod tests {
                 SemanticSignalError::UnknownSignal(id)
             )) if id == dependency
         ));
+    }
+
+    #[test]
+    fn lowers_only_reachable_scalar_tracks_with_semantic_ownership_index() {
+        let mut store = SemanticStore::new();
+        let reachable = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let unrelated = store.insert_semantic_input_signal(10.0_f64).unwrap();
+        let object = visible_circle(&mut store);
+        store
+            .bind_semantic_signal(reachable, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            reachable,
+            0.0,
+            4.0,
+            TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        );
+        transaction.add_scalar_signal_track(
+            unrelated,
+            10.0,
+            20.0,
+            TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        );
+        transaction.apply(&mut store).unwrap();
+
+        let mut index = SemanticExecutionIndex::new();
+        let execution = projection(&store, &mut index);
+        let reactive = lower_semantic_reactive_projection(&store, &execution).unwrap();
+        assert_eq!(reactive.scalar_tracks().len(), 1);
+        assert_eq!(reactive.scalar_tracks()[0].semantic_signal(), reachable);
+        assert!(reactive.timeline_owns(reachable));
+        assert!(!reactive.timeline_owns(unrelated));
     }
 }

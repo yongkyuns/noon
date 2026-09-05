@@ -4,11 +4,13 @@ use noon_compile::{
     CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction, ExecutionPatch,
 };
 use noon_core::{ObjectId, PublicationContext, Style, Transform2D};
+use noon_core::{ReactiveValue, SignalId};
 
 use crate::{
-    apply_effective_property_to_row, apply_group_to_row, effective_object_conservative_bounds,
-    upper_bound_start, EffectiveBoundsBasis, EffectiveObjectProperties, FrameRowState, FrameState,
-    RuntimeIdentity, SceneInstance, TrackGroup, PROPERTY_ORDER,
+    apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
+    effective_object_conservative_bounds, upper_bound_start, EffectiveBoundsBasis,
+    EffectiveObjectProperties, FrameRowState, FrameState, RuntimeIdentity, SceneInstance,
+    TrackGroup, PROPERTY_ORDER,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
 
@@ -62,6 +64,7 @@ pub struct PreparedFrameEvaluation {
     stats: EvaluationStats,
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
+    reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
 }
 
 impl PreparedFrameEvaluation {
@@ -158,6 +161,22 @@ impl std::fmt::Display for PreparedFrameCommitError {
 impl std::error::Error for PreparedFrameCommitError {}
 
 impl SceneInstance {
+    /// Atomically advance timeline channels, then apply one already-lowered reactive
+    /// input batch before publishing the resulting frame.
+    pub fn advance_to_with_reactive_inputs(
+        &mut self,
+        time: f64,
+        reactive_inputs: &[(SignalId, ReactiveValue)],
+    ) -> Result<&FrameState, EvaluationError> {
+        let prepared = self.prepare_advance_to_with_reactive_inputs(time, reactive_inputs)?;
+        let effective = self
+            .prepare_effective_property_batch(&[])
+            .expect("an empty effective-property batch is always valid");
+        Ok(self
+            .commit_prepared_frame(prepared, effective)
+            .expect("an immediately committed prepared frame cannot become stale"))
+    }
+
     /// Read effective properties from an unpublished phase. Unchanged bounds can
     /// be supplied from the caller's retained spatial index; a spatially changed
     /// sparse row derives fresh bounds from borrowed retained content.
@@ -201,8 +220,16 @@ impl SceneInstance {
     /// Prepare a forward timeline/native evaluation without changing the current
     /// coherent frame, scheduler, cursors, dirty sets, or publication context.
     pub fn prepare_advance_to(
-        &self,
+        &mut self,
         time: f64,
+    ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        self.prepare_advance_to_with_reactive_inputs(time, &[])
+    }
+
+    pub fn prepare_advance_to_with_reactive_inputs(
+        &mut self,
+        time: f64,
+        reactive_inputs: &[(SignalId, ReactiveValue)],
     ) -> Result<PreparedFrameEvaluation, EvaluationError> {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
@@ -290,6 +317,37 @@ impl SceneInstance {
             );
         }
 
+        let reactive = if reactive_inputs.is_empty() {
+            None
+        } else {
+            Some(
+                self.reactive
+                    .as_mut()
+                    .ok_or_else(|| {
+                        EvaluationError::Reactive(noon_core::ReactiveError::UnknownSignal(
+                            reactive_inputs[0].0,
+                        ))
+                    })?
+                    .prepare_input_batch(reactive_inputs)
+                    .map_err(EvaluationError::Reactive)?,
+            )
+        };
+        if let Some(reactive) = reactive.as_ref() {
+            for (object_index, property, value) in reactive.property_changes() {
+                if !self.object_slot_is_live(*object_index) {
+                    continue;
+                }
+                let row = rows
+                    .entry(*object_index)
+                    .or_insert_with(|| FrameRowState::from_frame(&self.frame, *object_index));
+                apply_reactive_value_to_row(
+                    &mut row.as_mut(&self.frame.objects[*object_index].content),
+                    *property,
+                    value,
+                );
+            }
+        }
+
         Ok(PreparedFrameEvaluation {
             runtime: self.identity,
             expected: self.publication,
@@ -307,6 +365,7 @@ impl SceneInstance {
             stats,
             scheduler_stats: preview.stats(),
             prior_driver_rows,
+            reactive,
         })
     }
 
@@ -389,6 +448,10 @@ impl SceneInstance {
         }
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
+            || prepared
+                .reactive
+                .as_ref()
+                .is_some_and(|update| !update.is_empty())
             || !effective.writes.is_empty();
         if may_publish && self.publication.frame_epoch().checked_next().is_none() {
             return Err(PreparedFrameCommitError::FrameEpochExhausted(
@@ -406,6 +469,10 @@ impl SceneInstance {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
         let may_publish = prepared.time != self.frame.time
             || !prepared.rows.is_empty()
+            || prepared
+                .reactive
+                .as_ref()
+                .is_some_and(|update| !update.is_empty())
             || !effective.writes.is_empty();
         let next_frame = if may_publish {
             Some(self.publication.frame_epoch().checked_next().ok_or(
@@ -424,6 +491,13 @@ impl SceneInstance {
             if let Some(group) = self.groups.get_mut(channel) {
                 group.cursor = *cursor;
             }
+        }
+        if let Some(reactive) = prepared.reactive {
+            self.last_reactive_stats = self
+                .reactive
+                .as_mut()
+                .expect("prepared reactive update retains its runtime")
+                .commit_prepared_input_batch(reactive);
         }
 
         let mut final_rows = prepared
@@ -687,7 +761,7 @@ mod tests {
     #[test]
     fn prepared_values_are_scoped_to_the_runtime_that_created_them() {
         let compiled = compile_linear_scene();
-        let first = SceneInstance::new(compiled.clone());
+        let mut first = SceneInstance::new(compiled.clone());
         let second = SceneInstance::new(compiled);
         let prepared = first.prepare_advance_to(2.0).unwrap();
         let effective = first.prepare_effective_property_batch(&[]).unwrap();
