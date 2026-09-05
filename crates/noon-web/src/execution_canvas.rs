@@ -1076,6 +1076,87 @@ mod wasm {
             self.apply_direct_native_input(move |direct| direct.emit_native_event(source))
         }
 
+        /// Deliver a DOM-normalized pointer position through the current typed
+        /// camera into the canonical session.
+        #[wasm_bindgen(js_name = nativePointerPosition)]
+        pub fn native_pointer_position(
+            &mut self,
+            normalized_x: f32,
+            normalized_y: f32,
+        ) -> Result<bool, JsValue> {
+            let position = self.normalized_pointer_world_position(normalized_x, normalized_y)?;
+            self.set_native_state_input(
+                NativeStateSource::PointerPosition,
+                NativeInputValue::Vec2(position),
+            )
+        }
+
+        /// Deliver one pointer button sample followed by its ordered edge event.
+        #[wasm_bindgen(js_name = nativePointerButton)]
+        pub fn native_pointer_button(
+            &mut self,
+            button: u8,
+            pressed: bool,
+        ) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::PointerButton { button },
+                    NativeInputValue::Bool(pressed),
+                )?;
+                direct.emit_native_event(if pressed {
+                    NativeEventSource::PointerDown { button }
+                } else {
+                    NativeEventSource::PointerUp { button }
+                })
+            })
+        }
+
+        /// Deliver one keyboard state sample followed by its ordered edge event.
+        #[wasm_bindgen(js_name = nativeKey)]
+        pub fn native_key(&mut self, code: String, pressed: bool) -> Result<bool, JsValue> {
+            validate_native_name("key code", &code)?;
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::Key { code: code.clone() },
+                    NativeInputValue::Bool(pressed),
+                )?;
+                direct.emit_native_event(if pressed {
+                    NativeEventSource::KeyPress { code }
+                } else {
+                    NativeEventSource::KeyRelease { code }
+                })
+            })
+        }
+
+        /// Deliver one CSS-pixel wheel sample followed by its ordered event.
+        #[wasm_bindgen(js_name = nativeWheel)]
+        pub fn native_wheel(&mut self, x: f32, y: f32) -> Result<bool, JsValue> {
+            self.apply_direct_native_input(move |direct| {
+                direct.set_native_state_input(
+                    NativeStateSource::WheelDelta,
+                    NativeInputValue::Vec2(Vec2::new(x, y)),
+                )?;
+                direct.emit_native_event(NativeEventSource::Wheel)
+            })
+        }
+
+        /// Deliver one named scalar control sample.
+        #[wasm_bindgen(js_name = nativeControl)]
+        pub fn native_control(&mut self, name: String, value: f32) -> Result<bool, JsValue> {
+            validate_native_name("control name", &name)?;
+            self.set_native_state_input(
+                NativeStateSource::Control { name },
+                NativeInputValue::Scalar(value),
+            )
+        }
+
+        /// Deliver one ordered named-control commit event.
+        #[wasm_bindgen(js_name = nativeControlCommit)]
+        pub fn native_control_commit(&mut self, name: String) -> Result<bool, JsValue> {
+            validate_native_name("control name", &name)?;
+            self.emit_native_event(NativeEventSource::ControlCommit { name })
+        }
+
         fn apply_direct_native_input(
             &mut self,
             apply: impl FnOnce(&mut DirectExecutionSource) -> Result<(), JsValue>,
@@ -1090,6 +1171,24 @@ mod wasm {
             };
             self.sync_camera(camera)?;
             Ok(pending)
+        }
+
+        fn normalized_pointer_world_position(
+            &self,
+            normalized_x: f32,
+            normalized_y: f32,
+        ) -> Result<Vec2, JsValue> {
+            if !normalized_x.is_finite() || !normalized_y.is_finite() {
+                return Err(js_message("normalized pointer coordinates must be finite"));
+            }
+            let x = normalized_x.clamp(0.0, 1.0);
+            let y = normalized_y.clamp(0.0, 1.0);
+            let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+            let world_width = self.camera_height * aspect;
+            Ok(Vec2::new(
+                self.camera_center.x + (x - 0.5) * world_width,
+                self.camera_center.y + (0.5 - y) * self.camera_height,
+            ))
         }
 
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
@@ -1441,6 +1540,13 @@ mod wasm {
 
     fn js_value_message(value: JsValue) -> String {
         value.as_string().unwrap_or_else(|| format!("{value:?}"))
+    }
+
+    fn validate_native_name(kind: &str, value: &str) -> Result<(), JsValue> {
+        if value.trim().is_empty() {
+            return Err(js_message(&format!("{kind} must be a non-empty string")));
+        }
+        Ok(())
     }
 
     fn js_error(error: impl std::fmt::Display) -> JsValue {
