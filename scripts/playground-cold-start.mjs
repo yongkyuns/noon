@@ -72,19 +72,18 @@ try {
       await page.goto(`${baseUrl}/web/?example=${encodeURIComponent(example.id)}`, {
         waitUntil: "load",
       });
+      const pageReady = monotonicNow();
       await page.waitForFunction(
         (expectedId) => window.__noonExampleGallery?.selectedExampleId === expectedId,
         example.id,
         { timeout: 60_000 },
       );
-      const pageReady = monotonicNow();
 
       await page.waitForFunction(
         () => document.querySelector("#status")?.dataset.runtimeStartup === "started-on-demand",
         null,
         { timeout: 240_000 },
       );
-      const preloadStarted = monotonicNow();
       await page.waitForFunction(
         () => {
           const draws = Number(document.querySelector("#metric-draws")?.value);
@@ -109,6 +108,9 @@ try {
         1,
         "cold preload must retain exactly one Python authoring worker",
       );
+      const authoringWorkerEvent = workerSummary.workers.find(({ role }) => role === "authoring");
+      assert.ok(authoringWorkerEvent, "cold preload must record Python worker creation");
+      const preloadStarted = origin + authoringWorkerEvent.atMs;
 
       const status = await page.locator("#status").evaluate((node) => ({
         ...node.dataset,
@@ -167,7 +169,7 @@ try {
       automaticPreload: true,
     },
     note:
-      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. authoringStartup measures the persistent Python worker only: Noon WASM, Pyodide, and the compatibility bundle start in parallel, followed by Rust authoring binding, compatibility FS install, and eager Python import/install phases.",
+      "firstMetrics is the first metrics poll reporting positive object/draw counts; it is an observable proxy, not an exact GPU presentation timestamp. preloadStarted is the Python authoring worker creation event. authoringStartup measures that persistent worker only: Noon WASM, Pyodide, and the compatibility bundle start in parallel, followed by Rust authoring binding, compatibility FS install, and eager Python import/install phases.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
