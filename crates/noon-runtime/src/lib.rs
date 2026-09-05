@@ -364,6 +364,19 @@ impl SceneInstance {
     }
 
     pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
+        if !self.compiled.patch_changes_execution(patch) {
+            self.last_patch_stats = RuntimePatchStats::default();
+            return Ok(&self.frame);
+        }
+        self.apply_patch_unpublished(patch)?;
+        self.publish_execution_change();
+        Ok(&self.frame)
+    }
+
+    fn apply_patch_unpublished(
+        &mut self,
+        patch: &ScenePatch,
+    ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
             patch,

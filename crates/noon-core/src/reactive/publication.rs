@@ -156,4 +156,54 @@ mod tests {
         assert!(failed.apply(&mut store).is_err());
         assert_eq!(store.scene_revision(), committed);
     }
+
+    #[test]
+    fn mixed_signal_property_and_removal_publish_once() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let removed =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 2.0,
+            }));
+        let before = store.scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_signal(signal, 2.0_f64);
+        transaction.set_property(object, SemanticObjectProperty::ObjectOpacity, 0.5_f64);
+        transaction.remove_node(removed);
+        transaction.apply(&mut store).unwrap();
+        assert_eq!(store.scene_revision(), before.checked_next().unwrap());
+        assert!(store.node(removed).is_none());
+
+        let committed = store.scene_revision();
+        let mut no_op = SemanticMutationTransaction::new();
+        no_op.set_signal(signal, 2.0_f64);
+        no_op.set_property(object, SemanticObjectProperty::ObjectOpacity, 0.5_f64);
+        no_op.apply(&mut store).unwrap();
+        assert_eq!(store.scene_revision(), committed);
+
+        let mut failed = SemanticMutationTransaction::new();
+        failed.set_signal(signal, 3.0_f64);
+        failed.remove_node(removed);
+        assert!(failed.apply(&mut store).is_err());
+        assert_eq!(store.scene_revision(), committed);
+    }
+
+    #[test]
+    fn storage_helper_work_counters_do_not_publish_scene_revisions() {
+        let mut store = SemanticStore::new();
+        let signal = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let before = store.scene_revision();
+        store
+            .set_semantic_signal_source(signal, crate::SemanticSignalSource::Input(2.0_f64.into()))
+            .unwrap();
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+        assert_eq!(store.scene_revision(), before);
+        store.remove_node_with_reverse_cleanup(signal).unwrap();
+        assert!(store.last_mutation_stats().slots_written > 0);
+        assert_eq!(store.scene_revision(), before);
+    }
 }

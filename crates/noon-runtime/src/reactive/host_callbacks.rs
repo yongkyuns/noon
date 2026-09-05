@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use noon_compile::CompilePatchError;
 use noon_core::{
     HostCallbackId, HostCallbackRegistry, MutationImpact, MutationTransaction, ObjectId,
-    ReactiveValue, ScenePatch, SignalId, Style, Transform2D,
+    ReactiveValue, SignalId, Style, Transform2D,
 };
 
 use crate::{FrameState, SceneInstance, TimedSceneInstance, TimedSceneRuntimeError};
@@ -292,25 +292,7 @@ impl HostDrivenScene {
         }
 
         if impact == Some(MutationImpact::Property) {
-            for patch in transaction.mutations() {
-                let object = match patch {
-                    ScenePatch::SetGeometry { object, .. }
-                    | ScenePatch::SetTransform { object, .. }
-                    | ScenePatch::SetStyle { object, .. } => *object,
-                    _ => unreachable!("property-impact transaction must contain property patches"),
-                };
-                if !self.scene.scene().contains_object(object) {
-                    return Err(HostCommitError::Patch(CompilePatchError::UnknownObject(
-                        object,
-                    )));
-                }
-            }
-            for patch in transaction.mutations() {
-                self.scene
-                    .scene_mut()
-                    .apply_patch(patch)
-                    .expect("property callback transaction was preflighted");
-            }
+            self.scene.scene_mut().apply_transaction(transaction)?;
             self.last_commit_stats = HostCommitStats {
                 mutations: transaction.mutations().len(),
                 impact,
@@ -326,9 +308,7 @@ impl HostDrivenScene {
         }
 
         let mut staged = self.scene.scene().clone();
-        for patch in transaction.mutations() {
-            staged.apply_patch(patch)?;
-        }
+        staged.apply_transaction(transaction)?;
         self.scene = TimedSceneInstance::from_scene_instance(staged);
         self.last_commit_stats = HostCommitStats {
             mutations: transaction.mutations().len(),
@@ -475,6 +455,36 @@ mod tests {
             Err(HostCommitError::Patch(CompilePatchError::UnknownObject(_)))
         ));
         assert_eq!(driven.scene().frame().objects[9_999].transform, before);
+    }
+
+    #[test]
+    fn callback_batch_publishes_once_and_repeated_values_publish_nothing() {
+        let (scene, objects) = plain_scene(2);
+        let mut driven = HostDrivenScene::new(scene, &HostCallbackRegistry::new()).unwrap();
+        let before = driven.scene().publication_context();
+        let transaction = MutationTransaction::from_mutations(objects.iter().map(|object| {
+            ScenePatch::SetTransform {
+                object: *object,
+                transform: Transform2D {
+                    translation: Vec2::ONE,
+                    ..Transform2D::IDENTITY
+                },
+            }
+        }));
+        driven.commit(&transaction).unwrap();
+        let after = driven.scene().publication_context();
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        driven.scene_mut().take_frame_changes();
+        driven.commit(&transaction).unwrap();
+        assert_eq!(driven.scene().publication_context(), after);
+        assert!(driven.scene_mut().take_frame_changes().is_empty());
     }
 
     #[test]

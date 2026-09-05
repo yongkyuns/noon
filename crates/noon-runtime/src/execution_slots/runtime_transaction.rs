@@ -1,19 +1,45 @@
 use noon_compile::CompilePatchError;
 use noon_core::{MutationTransaction, ObjectId, Transform2D};
+use std::collections::HashSet;
 
-use crate::{FrameState, SceneInstance};
+use crate::{FrameObjectState, FrameState, SceneInstance};
+
+/// Retain the final value write in each region bounded by structural/timeline
+/// edits. The caller must preflight all writes, including superseded ones.
+pub(super) fn final_value_writes(transaction: &MutationTransaction) -> Vec<&noon_core::ScenePatch> {
+    let mut final_writes = HashSet::new();
+    let mut retained = Vec::with_capacity(transaction.mutations().len());
+    for patch in transaction.mutations().iter().rev() {
+        match patch {
+            noon_core::ScenePatch::SetGeometry { object, .. }
+            | noon_core::ScenePatch::SetTransform { object, .. }
+            | noon_core::ScenePatch::SetStyle { object, .. } => {
+                if !final_writes.insert((*object, std::mem::discriminant(patch))) {
+                    continue;
+                }
+            }
+            _ => final_writes.clear(),
+        }
+        retained.push(patch);
+    }
+    retained.reverse();
+    retained
+}
 
 impl SceneInstance {
+    /// Resolve one live object through the stable execution index without scanning
+    /// unrelated frame objects. Removed objects have no live index entry.
+    pub fn effective_object(&self, id: ObjectId) -> Option<&FrameObjectState> {
+        let object_index = self.compiled.object_index(id)? as usize;
+        self.frame.objects.get(object_index)
+    }
+
     /// Resolve one live execution object to its current effective transform.
     ///
     /// The stable compiled object index is used to address the corresponding frame
     /// slot directly; callers do not scan renderer-facing frame objects by identity.
     pub fn effective_transform(&self, id: ObjectId) -> Option<Transform2D> {
-        let object_index = self.compiled.object_index(id)? as usize;
-        self.frame
-            .objects
-            .get(object_index)
-            .map(|object| object.transform)
+        self.effective_object(id).map(|object| object.transform)
     }
 
     /// Publish one already-authored mutation transaction atomically into the runtime.
@@ -27,11 +53,21 @@ impl SceneInstance {
         transaction: &MutationTransaction,
     ) -> Result<&FrameState, CompilePatchError> {
         self.compiled.preflight_transaction(transaction)?;
-        for patch in transaction.mutations() {
-            self.apply_patch(patch)
+        self.last_patch_stats = crate::RuntimePatchStats::default();
+        // Intermediate value writes in an atomic batch are not observable. Keep
+        // the last write per property, bounded by structural/timeline operations
+        // that may change what a property write means. Full preflight above still
+        // validates overwritten writes rather than hiding malformed input.
+        let mut changed = false;
+        for patch in final_value_writes(transaction) {
+            if !self.compiled.patch_changes_execution(patch) {
+                continue;
+            }
+            self.apply_patch_unpublished(patch)
                 .expect("runtime transaction was fully preflighted");
+            changed = true;
         }
-        if !transaction.mutations().is_empty() {
+        if changed {
             self.publish_execution_change();
         }
         Ok(&self.frame)
@@ -133,5 +169,141 @@ mod tests {
             after.frame_epoch(),
             before.frame_epoch().checked_next().unwrap()
         );
+
+        instance.take_frame_changes();
+        instance.apply_transaction(&transaction).unwrap();
+        assert_eq!(instance.publication_context(), after);
+        assert_eq!(
+            instance.last_patch_stats(),
+            crate::RuntimePatchStats::default()
+        );
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn unchanged_value_patches_do_not_publish_or_dirty_the_frame() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let original = instance.effective_object(object).unwrap().clone();
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: original.transform,
+            },
+            ScenePatch::SetStyle {
+                object,
+                style: original.style,
+            },
+            ScenePatch::SetGeometry {
+                object,
+                geometry: original.geometry,
+            },
+        ]);
+        instance.apply_transaction(&transaction).unwrap();
+        assert_eq!(instance.publication_context(), before);
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn cancelling_value_writes_in_one_batch_publish_nothing() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(4.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D::IDENTITY,
+            },
+        ]);
+        instance.apply_transaction(&transaction).unwrap();
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(
+            instance.effective_transform(object),
+            Some(Transform2D::IDENTITY)
+        );
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn overwritten_invalid_value_still_fails_before_publication() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(f32::NAN, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D::IDENTITY,
+            },
+        ]);
+        assert!(instance.apply_transaction(&transaction).is_err());
+        assert_eq!(instance.publication_context(), before);
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn direct_patch_publishes_once_and_repeated_or_failed_patch_does_not() {
+        let (mut instance, object) = semantic_instance();
+        let before = instance.publication_context();
+        let patch = ScenePatch::SetTransform {
+            object,
+            transform: Transform2D {
+                translation: Vec2::new(2.0, 3.0),
+                ..Transform2D::IDENTITY
+            },
+        };
+        instance.apply_patch(&patch).unwrap();
+        let committed = instance.publication_context();
+        assert_eq!(
+            committed.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            committed.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        instance.take_frame_changes();
+        instance.apply_patch(&patch).unwrap();
+        assert_eq!(instance.publication_context(), committed);
+        assert!(instance.take_frame_changes().is_empty());
+        assert!(instance
+            .apply_patch(&ScenePatch::RemoveObject(ObjectId::new(999)))
+            .is_err());
+        assert_eq!(instance.publication_context(), committed);
+    }
+
+    #[test]
+    fn effective_lookup_rejects_removed_slots_and_preserves_later_objects() {
+        let (mut instance, first) = semantic_instance();
+        let later = ObjectId::new(10);
+        instance
+            .apply_patch(&ScenePatch::CreateObject(noon_core::ObjectDefinition {
+                id: later,
+                geometry: noon_core::GeometryRef::circle(2.0),
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+            }))
+            .unwrap();
+        let expected = instance.effective_object(later).unwrap().clone();
+        instance
+            .apply_patch(&ScenePatch::RemoveObject(first))
+            .unwrap();
+        assert!(instance.effective_object(first).is_none());
+        assert_eq!(instance.effective_object(later), Some(&expected));
+        assert!(instance.effective_object(ObjectId::new(999)).is_none());
     }
 }
