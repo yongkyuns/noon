@@ -2,6 +2,7 @@ import {
   createDirectAffineCallbackSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
+  createDirectNativeSignalsSmokeRenderer,
   createDirectValueTrackerSmokeRenderer,
 } from "./pkg/noon_web.js";
 import { createDirectExecutionWakeDriver } from "./direct-execution-wake-driver.js";
@@ -256,6 +257,85 @@ async function directValueTrackerProof(expectedBackend) {
   return metrics;
 }
 
+async function directNativeSignalsProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectNativeSignalsSmokeRenderer(canvas);
+  renderer.resize(canvas.width, canvas.height);
+
+  await presentDirectFrame(renderer);
+  const hiddenLuma = await sampleRenderedPixel(canvas, 0, 0);
+  if (renderer.objectCount() !== 0 || hiddenLuma > 60) {
+    throw new Error(
+      `direct native signals did not apply initial key presence: ${JSON.stringify({
+        objectCount: renderer.objectCount(),
+        hiddenLuma,
+      })}`,
+    );
+  }
+
+  if (!renderer.setSpaceKey(true)) {
+    throw new Error("direct native key state did not publish its presence change");
+  }
+  await presentDirectFrame(renderer);
+  const visibleLuma = await sampleRenderedNeighborhood(canvas, 0, 0, 2);
+
+  if (!renderer.setPointerPosition(1.5, -0.5)) {
+    throw new Error("direct native pointer state did not publish its translation change");
+  }
+  await presentDirectFrame(renderer);
+  const vacatedLuma = await sampleRenderedNeighborhood(canvas, 0, 0, 2);
+  const movedLuma = await sampleRenderedNeighborhood(canvas, 1.5, -0.5, 2);
+
+  if (!renderer.setOpacityControl(0.4)) {
+    throw new Error("direct native control state did not publish its opacity change");
+  }
+  await presentDirectFrame(renderer);
+  const dimmedLuma = await sampleRenderedNeighborhood(canvas, 1.5, -0.5, 2);
+
+  if (!renderer.emitPrimaryPointerDown()) {
+    throw new Error("direct native pointer event did not publish its first ordered occurrence");
+  }
+  await presentDirectFrame(renderer);
+  const firstClickLuma = await sampleRenderedNeighborhood(canvas, 0.99, -0.61, 2);
+
+  if (!renderer.emitPrimaryPointerDown()) {
+    throw new Error("direct native pointer event did not publish its second ordered occurrence");
+  }
+  await presentDirectFrame(renderer);
+  const secondClickLuma = await sampleRenderedNeighborhood(canvas, 0.99, -0.61, 2);
+
+  const metrics = {
+    backend: renderer.rendererBackend(),
+    objectCount: renderer.objectCount(),
+    drawCalls: renderer.lastDrawCalls(),
+    hiddenLuma,
+    visibleLuma,
+    vacatedLuma,
+    movedLuma,
+    dimmedLuma,
+    firstClickLuma,
+    secondClickLuma,
+  };
+  if (metrics.backend !== expectedBackend) {
+    throw new Error(
+      `direct native signals renderer selected ${metrics.backend}; expected ${expectedBackend}`,
+    );
+  }
+  if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
+    throw new Error(`direct native signals produced invalid metrics ${JSON.stringify(metrics)}`);
+  }
+  if (visibleLuma < 200 || vacatedLuma > 60 || movedLuma < 200) {
+    throw new Error(`direct native pointer/presence pixels are invalid ${JSON.stringify(metrics)}`);
+  }
+  if (dimmedLuma < 60 || dimmedLuma >= movedLuma * 0.7) {
+    throw new Error(`direct native opacity did not dim the moved object ${JSON.stringify(metrics)}`);
+  }
+  if (firstClickLuma < 60 || secondClickLuma > 60) {
+    throw new Error(`direct native ordered clicks did not rotate the object ${JSON.stringify(metrics)}`);
+  }
+  return metrics;
+}
+
 async function start() {
   const expectedBackend = await waitForPrimaryRenderer();
   const canvas = new OffscreenCanvas(960, 540);
@@ -327,6 +407,7 @@ async function start() {
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.affineCompletion = await directAffineCompletionProof(expectedBackend);
   metrics.valueTracker = await directValueTrackerProof(expectedBackend);
+  metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

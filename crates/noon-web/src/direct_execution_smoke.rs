@@ -2,8 +2,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use noon::{ExecutionSession, Mobject, Text};
 use noon_core::{
-    AnimationOptions, Camera2DState, RateFunction, SemanticObjectProperty, SemanticObjectRole,
-    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
+    AnimationOptions, Camera2DState, NativeEventSource, NativeInputValue, NativeStateSource,
+    RateFunction, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticStore,
+    SemanticVec3, StoredGeometry, Vec2,
 };
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
@@ -114,6 +115,86 @@ pub async fn create_direct_value_tracker_smoke_renderer(
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::live_value_tracker().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Browser proof around the same canonical native-signal scene used by Rust hosts.
+///
+/// JavaScript supplies only normalized platform occurrences. Source routing,
+/// semantic identity, reactive evaluation, runtime publication, and rendering all
+/// remain in this one Rust/WASM execution context.
+#[wasm_bindgen(js_name = createDirectNativeSignalsSmokeRenderer)]
+pub async fn create_direct_native_signals_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<DirectNativeSignalsSmokeRenderer, JsValue> {
+    let session = noon::example_scenes::live_native_signals().map_err(js_error)?;
+    let renderer =
+        WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await?;
+    Ok(DirectNativeSignalsSmokeRenderer { renderer })
+}
+
+#[wasm_bindgen(js_name = DirectNativeSignalsSmokeRenderer)]
+pub struct DirectNativeSignalsSmokeRenderer {
+    renderer: WasmExecutionCanvasRenderer,
+}
+
+#[wasm_bindgen(js_class = DirectNativeSignalsSmokeRenderer)]
+impl DirectNativeSignalsSmokeRenderer {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+        self.renderer.resize(width, height)
+    }
+
+    pub fn render(&mut self) -> Result<bool, JsValue> {
+        self.renderer.render()
+    }
+
+    #[wasm_bindgen(js_name = rendererBackend)]
+    pub fn renderer_backend(&self) -> String {
+        self.renderer.renderer_backend()
+    }
+
+    #[wasm_bindgen(js_name = objectCount)]
+    pub fn object_count(&self) -> usize {
+        self.renderer.object_count()
+    }
+
+    #[wasm_bindgen(js_name = lastDrawCalls)]
+    pub fn last_draw_calls(&self) -> usize {
+        self.renderer.last_draw_calls()
+    }
+
+    #[wasm_bindgen(js_name = setPointerPosition)]
+    pub fn set_pointer_position(&mut self, x: f32, y: f32) -> Result<bool, JsValue> {
+        self.renderer.set_native_state_input(
+            NativeStateSource::PointerPosition,
+            NativeInputValue::Vec2(Vec2::new(x, y)),
+        )
+    }
+
+    #[wasm_bindgen(js_name = setSpaceKey)]
+    pub fn set_space_key(&mut self, down: bool) -> Result<bool, JsValue> {
+        self.renderer.set_native_state_input(
+            NativeStateSource::Key {
+                code: "Space".to_owned(),
+            },
+            NativeInputValue::Bool(down),
+        )
+    }
+
+    #[wasm_bindgen(js_name = setOpacityControl)]
+    pub fn set_opacity_control(&mut self, opacity: f32) -> Result<bool, JsValue> {
+        self.renderer.set_native_state_input(
+            NativeStateSource::Control {
+                name: "opacity".to_owned(),
+            },
+            NativeInputValue::Scalar(opacity),
+        )
+    }
+
+    #[wasm_bindgen(js_name = emitPrimaryPointerDown)]
+    pub fn emit_primary_pointer_down(&mut self) -> Result<bool, JsValue> {
+        self.renderer
+            .emit_native_event(NativeEventSource::PointerDown { button: 0 })
+    }
 }
 
 fn js_error(error: impl std::fmt::Display) -> JsValue {

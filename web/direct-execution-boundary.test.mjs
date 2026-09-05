@@ -42,7 +42,13 @@ for (const required of [
   "example_scenes::live_affine_callbacks",
   "example_scenes::live_affine_completion",
   "example_scenes::live_value_tracker",
+  "example_scenes::live_native_signals",
   "create_from_execution_session_with_callbacks",
+  "set_native_state_input",
+  "emit_native_event",
+  "NativeStateSource::PointerPosition",
+  "NativeInputValue::Bool",
+  "NativeEventSource::PointerDown",
 ]) {
   assert.ok(rustHarness.includes(required), `direct Rust/WASM proof must contain ${required}`);
 }
@@ -124,12 +130,19 @@ for (const required of [
   "createDirectAffineCallbackSmokeRenderer",
   "createDirectAffineCompletionSmokeRenderer",
   "createDirectValueTrackerSmokeRenderer",
+  "createDirectNativeSignalsSmokeRenderer",
+  "setSpaceKey",
+  "setPointerPosition",
+  "setOpacityControl",
+  "emitPrimaryPointerDown",
   "canvas.convertToBlob",
   "sourceLuma",
   "driftLuma",
   "endpointLuma",
   "priorSetterLuma",
   "midpointLuma",
+  "firstClickLuma",
+  "secondClickLuma",
 ]) {
   assert.ok(browserProbe.includes(required), `browser direct-execution proof must contain ${required}`);
 }
@@ -144,6 +157,7 @@ for (const forbidden of [
   "callbackId",
   "occurrenceIndex",
   "CallbackPhaseOverlay",
+  "SemanticNodeId",
   "throw error;",
 ]) {
   assert.equal(
@@ -165,6 +179,9 @@ for (const required of [
   "direct.metrics.affineCompletion?.authoredTime",
   "direct.metrics.affineCompletion?.endpointLuma",
   "direct.metrics.valueTracker?.endpointLuma",
+  "direct.metrics.nativeSignals?.hiddenLuma",
+  "direct.metrics.nativeSignals?.movedLuma",
+  "direct.metrics.nativeSignals?.firstClickLuma",
   "direct Rust/WASM execution did not present",
 ]) {
   assert.ok(

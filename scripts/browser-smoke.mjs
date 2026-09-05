@@ -345,6 +345,35 @@ async function directExecutionProof(page, expectedBackend) {
     direct.metrics.valueTracker?.midpointLuma <= 60,
     "direct Rust/WASM ValueTracker remained at its x=0 midpoint",
   );
+  assert.equal(
+    direct.metrics.nativeSignals?.backend,
+    expectedBackend,
+    "direct Rust/WASM native signals did not use the selected renderer backend",
+  );
+  assert.equal(
+    direct.metrics.nativeSignals?.objectCount,
+    1,
+    "direct Rust/WASM native signals did not reveal the Rust-authored object",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.hiddenLuma <= 60 &&
+      direct.metrics.nativeSignals?.visibleLuma >= 200,
+    "direct Rust/WASM key state did not drive presence",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.vacatedLuma <= 60 &&
+      direct.metrics.nativeSignals?.movedLuma >= 200,
+    "direct Rust/WASM pointer state did not drive translation",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.dimmedLuma < direct.metrics.nativeSignals?.movedLuma * 0.7,
+    "direct Rust/WASM scalar control did not drive opacity",
+  );
+  assert.ok(
+    direct.metrics.nativeSignals?.firstClickLuma >= 60 &&
+      direct.metrics.nativeSignals?.secondClickLuma <= 60,
+    "direct Rust/WASM ordered pointer events did not drive rotation",
+  );
   return direct.metrics;
 }
 
