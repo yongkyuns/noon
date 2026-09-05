@@ -265,6 +265,17 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    /// Read only the live runtime's authored handoff duration.
+    ///
+    /// Static authoring has no live session, so its existing authored-duration
+    /// projection remains the fallback at the Python export boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_handoff_duration(&self) -> Option<f64> {
+        self.live_player
+            .as_ref()
+            .and_then(crate::SemanticExecutionPlayer::live_handoff_duration)
+    }
+
     /// Add replayable animation meaning before a live session is created.
     #[cfg(any(target_arch = "wasm32", test))]
     fn declare_live_transform_to(
@@ -721,6 +732,11 @@ mod wasm {
                 .live_player(duration)
                 .map(|_| ())
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveHandoffDuration)]
+        pub fn live_handoff_duration(&self) -> Option<f64> {
+            self.inner.live_handoff_duration()
         }
 
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
@@ -1366,6 +1382,56 @@ mod tests {
         assert_eq!(recovery_snapshot.session, 18);
         assert_eq!(recovery_snapshot.objects[0].transform.translation.x, 2.0);
         assert!(context.live_player(2.0).is_err());
+    }
+
+    #[test]
+    fn live_handoff_duration_keeps_the_completed_segment_after_renderer_seek() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        let animation = context
+            .declare_live_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+
+        {
+            let player = context.live_player(1.0).unwrap();
+            assert_eq!(player.live_play_animation(&animation).unwrap(), 2.0);
+            assert!(player.live_advance_segment_to(2.0).unwrap());
+            assert_eq!(player.live_wait(0.25).unwrap(), 2.25);
+            assert!(player.live_advance_segment_to(2.25).unwrap());
+        }
+        assert_eq!(context.live_handoff_duration(), Some(2.25));
+
+        let duration = context.live_handoff_duration().unwrap();
+        let mut handed_off = context.take_execution_player(duration, 17).unwrap();
+        handed_off.seek_delta_json(0.5).unwrap();
+        assert_eq!(handed_off.time(), 0.5);
+        context.return_execution_player(handed_off).unwrap();
+
+        // Presentation may scrub back, but the completed logical continuation
+        // remains the authoritative handoff boundary for the next attachment.
+        assert_eq!(context.live_handoff_duration(), Some(2.25));
+        let duration = context.live_handoff_duration().unwrap();
+        let mut recovered = context.take_execution_player(duration, 18).unwrap();
+        recovered.seek_delta_json(2.0).unwrap();
+        assert_eq!(recovered.time(), 2.0);
+        assert_eq!(
+            recovered
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            4.0
+        );
     }
 
     #[test]

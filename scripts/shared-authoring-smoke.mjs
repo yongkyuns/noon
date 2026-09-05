@@ -147,7 +147,10 @@ const browserArgs = [
   "--disable-dev-shm-usage",
 ];
 
-function visiblePixelStats(buffer) {
+function visiblePixelStats(
+  buffer,
+  isVisible = (red, green, blue) => blue >= 40 && blue > red + 15 && blue > green + 3,
+) {
   const png = PNG.sync.read(buffer);
   let count = 0;
   let minX = png.width;
@@ -160,7 +163,7 @@ function visiblePixelStats(buffer) {
     const pixelRed = png.data[offset];
     const pixelGreen = png.data[offset + 1];
     const pixelBlue = png.data[offset + 2];
-    if (pixelBlue < 40 || pixelBlue <= pixelRed + 15 || pixelBlue <= pixelGreen + 3) continue;
+    if (!isVisible(pixelRed, pixelGreen, pixelBlue)) continue;
     const pixel = offset / 4;
     const x = pixel % png.width;
     const y = Math.floor(pixel / png.width);
@@ -392,37 +395,92 @@ try {
   const shared = await runMode("shared", 1);
 
   // Run the published examples through the same authoring and rendering harness.
-  for (const [filename, objectCount] of [
-    ["live_semantic_scene.py", 3],
-    ["live_affine_animation.py", 1],
+  for (const { filename, objectCount, expectedDuration, endpointTime } of [
+    {
+      filename: "live_semantic_scene.py",
+      objectCount: 3,
+      expectedDuration: null,
+      endpointTime: null,
+    },
+    {
+      filename: "live_affine_animation.py",
+      objectCount: 1,
+      expectedDuration: 2.25,
+      endpointTime: 2,
+    },
   ]) {
     const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
-    const metrics = await page.evaluate(async ({ source, objectCount }) => {
+    const result = await page.evaluate(async ({ source, objectCount, expectedDuration, endpointTime }) => {
       const harness = window.sharedAuthoringSmoke;
       const authored = await harness.authoring.run(source, {});
       const canvas = document.createElement("canvas");
+      canvas.id = endpointTime === null ? "scene-live-static" : "scene-live-affine";
       canvas.width = 640;
       canvas.height = 360;
       document.body.append(canvas);
       const execution = new harness.AuthoringExecutionClient(canvas);
+      let retainForInspection = false;
       try {
-        await execution.startSemanticExecution(authored.semanticExecution, {
+        const options = {
           authoringClient: harness.authoring,
           transportMode: "transferable",
-        });
-        let latest;
-        for (let attempt = 0; attempt < 150; attempt += 1) {
-          latest = (await execution.metrics()).metrics;
-          if (latest.objectCount === objectCount && latest.presentedFrames > 0) return latest;
-          await new Promise((resolve) => setTimeout(resolve, 20));
+        };
+        if (expectedDuration !== null) options.loopDurationSeconds = authored.duration;
+        await execution.startSemanticExecution(authored.semanticExecution, options);
+
+        async function waitForFrame(afterPresentedFrames = 0) {
+          let latest;
+          for (let attempt = 0; attempt < 150; attempt += 1) {
+            latest = (await execution.metrics()).metrics;
+            if (
+              latest.objectCount === objectCount &&
+              latest.drawCalls > 0 &&
+              latest.presentedFrames > afterPresentedFrames
+            ) return latest;
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
         }
-        throw new Error(`live example did not render: ${JSON.stringify(latest)}`);
+
+        const initial = await waitForFrame();
+        let endpoint = null;
+        if (endpointTime !== null) {
+          const paused = await execution.pause();
+          if (paused.playing) throw new Error("live affine endpoint seek did not pause playback");
+          const sought = await execution.seek(endpointTime);
+          const rendered = await waitForFrame(initial.presentedFrames);
+          endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
+          retainForInspection = true;
+          harness.liveExampleExecution = execution;
+        }
+        return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
-        execution.terminate();
+        if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount });
-    assert.equal(metrics.objectCount, objectCount, filename);
-    assert.ok(metrics.drawCalls > 0, `${filename}: no draw calls`);
+    }, { source, objectCount, expectedDuration, endpointTime });
+    assert.equal(result.metrics.objectCount, objectCount, filename);
+    assert.ok(result.metrics.drawCalls > 0, `${filename}: no draw calls`);
+    if (expectedDuration !== null) {
+      assert.equal(result.duration, expectedDuration, `${filename}: canonical live duration`);
+      assert.ok(
+        Math.abs(result.endpoint.time - endpointTime) < 1e-6,
+        `${filename}: endpoint seek`,
+      );
+      assert.ok(result.endpoint.drawCalls > 0, `${filename}: endpoint produced no draw calls`);
+      const endpointPixels = visiblePixelStats(
+        await page.locator(`#${result.canvasId}`).screenshot(),
+        (red, green, blue) => Math.max(red, green, blue) > 80,
+      );
+      assert.ok(endpointPixels.count > 100, `${filename}: endpoint circle was not visible`);
+      assert.ok(endpointPixels.width > 125, `${filename}: endpoint did not retain scale 2`);
+      assert.ok(endpointPixels.height > 125, `${filename}: endpoint did not retain scale 2`);
+      assert.ok(endpointPixels.centerX > 420, `${filename}: endpoint did not retain x=4`);
+      assert.ok(endpointPixels.centerY > 220, `${filename}: endpoint did not retain y=-2`);
+      await page.evaluate(() => {
+        window.sharedAuthoringSmoke.liveExampleExecution.terminate();
+        window.sharedAuthoringSmoke.liveExampleExecution = null;
+      });
+    }
   }
 
   const persisted = await page.evaluate(

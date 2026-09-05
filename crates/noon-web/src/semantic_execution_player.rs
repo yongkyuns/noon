@@ -89,6 +89,18 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
+    /// The authored duration needed to hand this live session to presentation.
+    ///
+    /// The current frame is authoritative once a segment completes. An active
+    /// continuation must also keep its endpoint addressable before it completes.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_handoff_duration(&self) -> Option<f64> {
+        self.semantics.as_ref()?;
+        Some(self.live_segment.map_or(self.session.frame().time, |segment| {
+            self.session.frame().time.max(segment.end_time())
+        }))
+    }
+
     /// The authored scene revision represented by this runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
