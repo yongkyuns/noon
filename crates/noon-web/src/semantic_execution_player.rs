@@ -80,6 +80,10 @@ impl SemanticExecutionPlayer {
         self.clock
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())?;
+        // Live publication may have installed sparse text/font dependencies after
+        // this player was bootstrapped. Refresh only at the explicit cross-worker
+        // handoff boundary so ordinary typed in-process property edits stay local.
+        self.resource_bundle = Self::resource_bundle_for(&self.session)?;
         self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
         Ok(())
@@ -109,6 +113,27 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .set_translation(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_replace_content(
+        &mut self,
+        target: &noon::Mobject,
+        source: &noon::Mobject,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .replace_content(target, source)
         .map(|_| ())
         .map_err(|error| error.to_string())
     }

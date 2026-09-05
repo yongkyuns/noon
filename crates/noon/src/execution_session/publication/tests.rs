@@ -166,24 +166,8 @@ fn independent_and_cloned_stores_cannot_alias_publication_queries_or_animation()
 }
 
 #[test]
-fn out_of_band_edits_and_unsupported_mutations_fail_closed() {
+fn out_of_band_edits_fail_closed() {
     let (mut store, mut session, nodes) = fixture(1);
-    let context = session.publication_context();
-    let mut unsupported = SemanticMutationTransaction::new();
-    unsupported.replace_content(
-        nodes[0],
-        store
-            .semantic_object_state_checked(nodes[0])
-            .unwrap()
-            .content,
-    );
-    assert!(matches!(
-        session.apply_semantic_transaction(&mut store, unsupported),
-        Err(ExecutionSessionPublicationError::Lowering(
-            SemanticPublicationLoweringError::UnsupportedMutation { .. }
-        ))
-    ));
-    assert_eq!(session.publication_context(), context);
     translation(nodes[0], 2.0).apply(&mut store).unwrap();
     assert!(matches!(
         session.apply_semantic_transaction(&mut store, translation(nodes[0], 3.0)),

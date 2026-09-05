@@ -7,14 +7,14 @@ use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
     lower_semantic_execution, lower_semantic_execution_root, CompilePatchError,
-    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
-    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticExecutionReachability,
-    SemanticReactiveProjection,
+    ExecutionMutationTransaction, ExecutionPatch, SemanticAffineAnimationTrackError,
+    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
+    SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
-    AnimationOptions, Camera2DState, MutationTransaction, NativeEventOccurrence,
-    NativeInputRuntimeError, NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId,
-    ReactiveError, ReactiveValue, Rect, ScenePatch, SemanticNodeId, SemanticStore, TrackId,
+    AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
+    NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, ReactiveError, ReactiveValue,
+    Rect, SemanticNodeId, SemanticStore, TrackId,
 };
 use noon_runtime::{
     EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
@@ -308,6 +308,11 @@ impl ExecutionSession {
         self.runtime.frame()
     }
 
+    /// Work performed by the most recent incremental execution-plan patch.
+    pub const fn last_patch_stats(&self) -> noon_runtime::RuntimePatchStats {
+        self.runtime.last_patch_stats()
+    }
+
     /// Read-only text resources projected with this execution session.
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
         self.runtime.text_resources()
@@ -493,7 +498,7 @@ impl ExecutionSession {
     /// declaration once; the segment is constructed directly from that resolved projection's
     /// `start_time` / `run_time`; affine payload lowering captures each target's effective
     /// runtime transform at most once; and the session attaches execution-local track identity.
-    /// All emitted tracks are preflighted and published as one existing [`MutationTransaction`],
+    /// All emitted tracks are preflighted and published as one execution transaction,
     /// so a failed activation cannot expose a partial timeline or continuation boundary.
     pub fn activate_animation_segment(
         &mut self,
@@ -529,12 +534,12 @@ impl ExecutionSession {
         for track in tracks.tracks() {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let definition = track.with_track_id(TrackId::new(raw_id))?;
-            mutations.push(ScenePatch::AddTrack(definition));
+            mutations.push(ExecutionPatch::AddTrack(definition));
             next_track_id = raw_id.checked_add(1);
         }
 
-        let transaction = MutationTransaction::from_mutations(mutations);
-        self.runtime.apply_transaction(&transaction)?;
+        let transaction = ExecutionMutationTransaction::from_mutations(mutations);
+        self.runtime.apply_execution_transaction(&transaction)?;
         self.next_activation_track_id = next_track_id;
         Ok(segment)
     }

@@ -158,10 +158,7 @@ pub fn validate_object_definition(object: &ObjectDefinition) -> Result<(), Patch
     validate_style(object.id, object.style)
 }
 
-pub(super) fn validate_geometry(
-    object: ObjectId,
-    geometry: &GeometryRef,
-) -> Result<(), PatchError> {
+pub fn validate_geometry(object: ObjectId, geometry: &GeometryRef) -> Result<(), PatchError> {
     let valid = geometry.is_finite();
     valid.then_some(()).ok_or(PatchError::InvalidObjectState {
         object,
@@ -169,10 +166,7 @@ pub(super) fn validate_geometry(
     })
 }
 
-pub(super) fn validate_transform(
-    object: ObjectId,
-    transform: Transform2D,
-) -> Result<(), PatchError> {
+pub fn validate_transform(object: ObjectId, transform: Transform2D) -> Result<(), PatchError> {
     let valid = vec2_is_finite(transform.translation)
         && transform.rotation.is_finite()
         && vec2_is_finite(transform.scale);
@@ -182,7 +176,7 @@ pub(super) fn validate_transform(
     })
 }
 
-pub(super) fn validate_style(object: ObjectId, style: Style) -> Result<(), PatchError> {
+pub fn validate_style(object: ObjectId, style: Style) -> Result<(), PatchError> {
     let valid = style.fill.is_none_or(color_is_finite)
         && style.stroke.is_none_or(color_is_finite)
         && style.stroke_width.is_finite()

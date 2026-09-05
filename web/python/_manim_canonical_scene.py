@@ -280,6 +280,13 @@ class LiveExecution:
     def remove(self, mobject: _base.Mobject) -> None:
         self._context.liveRemove(self._handle(mobject))
 
+    def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
+        """Use preauthored source content while preserving target identity and state."""
+        self._context.liveReplaceContent(
+            self._handle(target),
+            self._handle(source, allow_detached=True),
+        )
+
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
         self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
 

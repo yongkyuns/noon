@@ -138,6 +138,21 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Replace one live object's content with content already authored in this store.
+    /// Transform, style, semantic identity, and family membership stay unchanged.
+    pub fn replace_content(
+        &mut self,
+        target: &Mobject,
+        source: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(target)?;
+        self.require_mobject(source)?;
+        let content = source.state().map_err(LiveSessionError::Mobject)?.content;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(target.node_id(), content);
+        self.apply(transaction)
+    }
+
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -289,9 +304,7 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::Scene;
-    use noon_core::{
-        AnimationOptions, RateFunction, SemanticObjectContent, SemanticVec3, StoredGeometry,
-    };
+    use noon_core::{AnimationOptions, RateFunction, SemanticVec3};
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -322,29 +335,17 @@ mod tests {
     }
 
     #[test]
-    fn live_facade_rejects_foreign_handles_and_unsupported_publication_without_fallback() {
+    fn live_facade_rejects_foreign_handles_without_fallback() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
         let foreign = Scene::new().circle(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
-        let before = scene.store().borrow().scene_revision();
-
-        let mut live = scene.live(&mut session);
+        let live = scene.live(&mut session);
         assert!(matches!(
             live.effective(&foreign),
             Err(LiveSessionError::ForeignMobjectStore)
         ));
-        let mut unsupported = SemanticMutationTransaction::new();
-        unsupported.replace_content(
-            circle.node_id(),
-            SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 2.0 }),
-        );
-        assert!(matches!(
-            live.apply(unsupported),
-            Err(LiveSessionError::Publication(_))
-        ));
-        assert_eq!(scene.store().borrow().scene_revision(), before);
     }
 
     #[test]

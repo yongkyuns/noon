@@ -148,7 +148,7 @@ fn materialize_semantic_projection(
     })
 }
 
-fn lower_content(
+pub(super) fn lower_content(
     node: SemanticNodeId,
     content: SemanticObjectContent,
     store: Option<&SemanticStore>,

@@ -1,11 +1,11 @@
 use noon_compile::{
-    prepare_semantic_publication, validate_semantic_publication, SemanticPublicationLoweringError,
-    SemanticPublicationPreparationStats,
+    prepare_semantic_publication, validate_semantic_publication, ExecutionMutationTransaction,
+    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
 };
 use noon_core::{
-    MutationTransaction, PublicationContext, ScenePatch, SceneRevision,
-    SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
+    PublicationContext, SceneRevision, SemanticMutationTransaction,
+    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
+    SemanticStore,
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
@@ -96,10 +96,11 @@ impl ExecutionSession {
     /// exclusively; all semantic/compiler/runtime failures precede publication.
     /// The final semantic commit is infallible and synchronous with runtime commit.
     ///
-    /// Structural publication admits append-compatible geometry entries and local
-    /// family exits. Aliases are reduced to exact net membership after semantic
-    /// commit. Text/resource growth, reactive membership, content replacement, and
-    /// painter-order interleaving remain explicit unsupported cases.
+    /// Structural publication admits append-compatible geometry entries, local
+    /// family exits, and content already owned by this store before session bootstrap.
+    /// Aliases are reduced to exact net membership after semantic commit. Resource
+    /// allocation, reactive membership, and painter-order interleaving remain explicit
+    /// unsupported cases.
     pub fn apply_semantic_transaction(
         &mut self,
         store: &mut SemanticStore,
@@ -125,14 +126,15 @@ impl ExecutionSession {
                 .possible_exits()
                 .iter()
                 .copied()
-                .map(ScenePatch::RemoveObject),
+                .map(ExecutionPatch::RemoveObject),
         );
-        let conservative = MutationTransaction::from_mutations(conservative_patches);
+        let conservative = ExecutionMutationTransaction::from_mutations(conservative_patches);
         let structural_change_possible =
             publication.possible_entry_count() != 0 || !publication.possible_exits().is_empty();
         self.runtime
-            .preflight_authored_transaction_shape(
+            .preflight_authored_transaction_shape_with_resources(
                 &conservative,
+                publication.resource_additions(),
                 self.publication_context(),
                 prepared.proposed_scene_revision(),
                 publication.possible_entry_count(),
@@ -154,9 +156,11 @@ impl ExecutionSession {
         let entered = membership.entered_execution_objects().collect::<Vec<_>>();
         let exited = membership.exited_execution_objects().collect::<Vec<_>>();
         let execution = publication.bind(&result, &membership);
+        let (execution, resource_additions) = execution.into_parts();
         self.runtime
-            .apply_authored_transaction(
+            .apply_authored_execution_transaction(
                 &execution,
+                resource_additions,
                 self.publication_context(),
                 store.scene_revision(),
             )

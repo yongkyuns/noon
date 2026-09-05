@@ -2,19 +2,19 @@
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
-    GeometryRef, MutationTransaction, ObjectDefinition, ObjectId,
-    PreparedSemanticMutationTransaction, ScenePatch, SemanticMutation, SemanticMutationTransaction,
+    ObjectId, PreparedSemanticMutationTransaction, SemanticMutation, SemanticMutationTransaction,
     SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
-    SemanticPresentation, SemanticTransactionNodeRef, SemanticTransactionReadError, Style,
-    Transform2D,
+    SemanticPresentation, SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
 
 use super::{
-    lower_semantic_geometry_value, lower_semantic_style, lower_semantic_style_value,
+    lower_content, lower_semantic_geometry_value, lower_semantic_style, lower_semantic_style_value,
     lower_semantic_transform, lower_semantic_transform_value, semantic_execution_object_id,
-    SemanticExecutionIndex, SemanticExecutionReachability, SemanticExecutionReachabilityUpdate,
-    SemanticExecutionValueError, SemanticGeometryValueError, SemanticLoweringError,
+    SemanticCompiledSceneError, SemanticExecutionIndex, SemanticExecutionReachability,
+    SemanticExecutionReachabilityUpdate, SemanticExecutionValueError, SemanticGeometryValueError,
+    SemanticLoweringError,
 };
+use crate::{CompiledObject, CompiledResources, ExecutionMutationTransaction, ExecutionPatch};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
@@ -40,6 +40,10 @@ pub enum SemanticPublicationLoweringError {
     PreparedGeometry {
         object: SemanticTransactionNodeRef,
         error: SemanticGeometryValueError,
+    },
+    PreparedContent {
+        object: SemanticTransactionNodeRef,
+        error: SemanticCompiledSceneError,
     },
     PainterOrderInterleaving {
         object: SemanticTransactionNodeRef,
@@ -82,6 +86,9 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
                 f,
                 "semantic object {object:?} geometry cannot lower for publication: {error}"
             ),
+            Self::PreparedContent { object, error } => {
+                write!(f, "semantic object {object:?} content cannot lower for publication: {error}")
+            }
             Self::PainterOrderInterleaving {
                 object,
                 order,
@@ -117,24 +124,27 @@ pub struct SemanticPublicationPreparationStats {
 #[derive(Clone, Debug)]
 struct PreparedEntry {
     object: SemanticTransactionNodeRef,
-    geometry: GeometryRef,
-    transform: Transform2D,
-    style: Style,
+    compiled: CompiledObject,
     presentation: SemanticPresentation,
 }
 
 /// Fully fallible compiler work retained until transaction-local names become IDs.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PreparedSemanticPublication {
-    values: MutationTransaction,
+    values: ExecutionMutationTransaction,
+    resource_additions: CompiledResources,
     entries: Vec<PreparedEntry>,
     possible_exits: Vec<ObjectId>,
     stats: SemanticPublicationPreparationStats,
 }
 
 impl PreparedSemanticPublication {
-    pub fn value_transaction(&self) -> &MutationTransaction {
+    pub fn value_transaction(&self) -> &ExecutionMutationTransaction {
         &self.values
+    }
+
+    pub fn resource_additions(&self) -> &CompiledResources {
+        &self.resource_additions
     }
 
     pub fn possible_exits(&self) -> &[ObjectId] {
@@ -154,7 +164,7 @@ impl PreparedSemanticPublication {
         self,
         result: &noon_core::SemanticMutationTransactionResult,
         membership: &SemanticExecutionReachabilityUpdate,
-    ) -> MutationTransaction {
+    ) -> BoundSemanticPublication {
         let entered = membership
             .entered_objects()
             .iter()
@@ -164,9 +174,9 @@ impl PreparedSemanticPublication {
         patches.extend(
             membership
                 .exited_execution_objects()
-                .map(ScenePatch::RemoveObject),
+                .map(ExecutionPatch::RemoveObject),
         );
-        for entry in self.entries {
+        for mut entry in self.entries {
             let semantic = match entry.object {
                 SemanticTransactionNodeRef::Existing(node) => node,
                 SemanticTransactionNodeRef::Pending(token) => result
@@ -176,13 +186,33 @@ impl PreparedSemanticPublication {
             if !entered.contains(&semantic) {
                 continue;
             }
-            let mut object =
-                ObjectDefinition::new(semantic_execution_object_id(semantic), entry.geometry);
-            object.transform = entry.transform;
-            object.style = entry.style;
-            patches.push(ScenePatch::CreateObject(object));
+            entry.compiled.id = semantic_execution_object_id(semantic);
+            patches.push(ExecutionPatch::CreateObject(entry.compiled));
         }
-        MutationTransaction::from_mutations(patches)
+        BoundSemanticPublication {
+            transaction: ExecutionMutationTransaction::from_mutations(patches),
+            resource_additions: self.resource_additions,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BoundSemanticPublication {
+    transaction: ExecutionMutationTransaction,
+    resource_additions: CompiledResources,
+}
+
+impl BoundSemanticPublication {
+    pub fn transaction(&self) -> &ExecutionMutationTransaction {
+        &self.transaction
+    }
+
+    pub fn resource_additions(&self) -> &CompiledResources {
+        &self.resource_additions
+    }
+
+    pub fn into_parts(self) -> (ExecutionMutationTransaction, CompiledResources) {
+        (self.transaction, self.resource_additions)
     }
 }
 
@@ -199,6 +229,7 @@ fn validate_mutations(
         if !matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
+                | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::ReplaceStyle { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
@@ -221,7 +252,7 @@ pub fn prepare_semantic_publication(
     live_painter_tail: Option<(i32, u64)>,
 ) -> Result<PreparedSemanticPublication, SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations())?;
-    let values = lower_semantic_publication(prepared, index)?;
+    let (values, resource_additions) = lower_semantic_publication(prepared, index)?;
     let mut possible_entry_refs = Vec::new();
     let mut seen_entries = HashSet::new();
     let mut possible_exit_nodes = Vec::new();
@@ -313,6 +344,7 @@ pub fn prepare_semantic_publication(
     };
     Ok(PreparedSemanticPublication {
         values,
+        resource_additions,
         entries,
         possible_exits,
         stats,
@@ -422,20 +454,18 @@ fn lower_prepared_entry(
         .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
     Ok(PreparedEntry {
         object,
-        geometry,
-        transform,
-        style,
+        compiled: CompiledObject::new(ObjectId::new(0), geometry, transform, style),
         presentation: state.presentation(),
     })
 }
 
-/// Lower only changed transform/style values already in this execution domain.
-pub fn lower_semantic_publication(
+/// Lower only changed content/transform/style values already in this execution domain.
+fn lower_semantic_publication(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     index: &SemanticExecutionIndex,
-) -> Result<MutationTransaction, SemanticPublicationLoweringError> {
+) -> Result<(ExecutionMutationTransaction, CompiledResources), SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations())?;
-    let mut domains: HashMap<SemanticNodeId, (bool, bool)> = HashMap::new();
+    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool)> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
             SemanticMutation::SetProperty {
@@ -452,6 +482,11 @@ pub fn lower_semantic_publication(
                     _ => flags.1 = true,
                 }
             }
+            SemanticMutation::ReplaceContent { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().2 = true;
+                }
+            }
             SemanticMutation::ReplaceStyle { object, .. } => {
                 if let Some(object) = object.existing() {
                     domains.entry(object).or_default().1 = true;
@@ -466,24 +501,45 @@ pub fn lower_semantic_publication(
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
-    let mut mutations = Vec::with_capacity(domains.len() * 2);
+    let mut mutations = Vec::with_capacity(domains.len() * 3);
+    let mut resource_additions = CompiledResources::default();
     for (node, state) in prepared.object_updates() {
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };
-        let (transform, style) = domains[&node];
+        let (transform, style, content) = domains[&node];
+        if content {
+            let (content, text_bounds) = lower_content(
+                node,
+                state.content,
+                Some(prepared.store()),
+                &mut resource_additions,
+            )
+            .map_err(|error| SemanticPublicationLoweringError::PreparedContent {
+                object: node.into(),
+                error,
+            })?;
+            mutations.push(ExecutionPatch::SetContent {
+                object,
+                content,
+                text_bounds,
+            });
+        }
         if transform {
-            mutations.push(ScenePatch::SetTransform {
+            mutations.push(ExecutionPatch::SetTransform {
                 object,
                 transform: lower_semantic_transform(node, &state)?,
             });
         }
         if style {
-            mutations.push(ScenePatch::SetStyle {
+            mutations.push(ExecutionPatch::SetStyle {
                 object,
                 style: lower_semantic_style(node, &state)?,
             });
         }
     }
-    Ok(MutationTransaction::from_mutations(mutations))
+    Ok((
+        ExecutionMutationTransaction::from_mutations(mutations),
+        resource_additions,
+    ))
 }

@@ -316,6 +316,21 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_replace_content(
+        &mut self,
+        target: &noon::Mobject,
+        source: &noon::Mobject,
+    ) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
+            || !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+        {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        self.active_live_player()?
+            .live_replace_content(target, source)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn take_execution_player(
         &mut self,
         duration: f64,
@@ -816,6 +831,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveReplaceContent)]
+        pub fn live_replace_content(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.store(), "live execution context")?;
+            source.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShift)]
         pub fn live_shift(
             &mut self,
@@ -1087,6 +1115,52 @@ mod tests {
                 .execution_slot_for_frame_index(0),
             Some(anchor_slot)
         );
+    }
+
+    #[test]
+    fn live_content_switch_refreshes_handoff_resources_and_preserves_execution_identity() {
+        let mut context = CanonicalAuthoringScene::default();
+        let target = context.scene.circle(0.5).unwrap();
+        let replacement = context.scene.text(noon::Text::new("replacement")).unwrap();
+        context.bind_mobject(ObjectId::new(0), &target).unwrap();
+
+        let (execution_id, slot) = {
+            let player = context.live_player(1.0).unwrap();
+            let bundle =
+                crate::RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes())
+                    .unwrap();
+            assert_eq!(bundle.text_count(), 0);
+            let session = player.session_mut_for_test();
+            (
+                session.execution_object_id(target.node_id()).unwrap(),
+                session.execution_slot_for_frame_index(0).unwrap(),
+            )
+        };
+
+        context.live_replace_content(&target, &replacement).unwrap();
+        {
+            let player = context.active_live_player().unwrap();
+            let session = player.session_mut_for_test();
+            assert_eq!(
+                session.execution_object_id(target.node_id()),
+                Some(execution_id)
+            );
+            assert_eq!(session.execution_slot_for_frame_index(0), Some(slot));
+            assert!(session.frame().objects[0].text().is_some());
+        }
+
+        let mut handed_off = context.take_execution_player(1.0, 29).unwrap();
+        let bundle =
+            crate::RetainedResourceBundle::decode_binary(&handed_off.resource_bundle_bytes())
+                .unwrap();
+        assert_eq!(bundle.text_count(), 1);
+        let snapshot: crate::RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&handed_off.initial_delta_json().unwrap()).unwrap();
+        assert_eq!(snapshot.objects[0].object, execution_id);
+        assert!(matches!(
+            snapshot.objects[0].content,
+            crate::TransportObjectContent::Text { .. }
+        ));
     }
 
     fn native_text(source: &str) -> RetainedTextAuthoringSpec {
