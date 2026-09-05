@@ -8,8 +8,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
     RateFunction, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
-    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore,
-    SemanticVec3, TrackTiming,
+    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore, SemanticVec3,
+    TrackTiming,
 };
 
 use crate::{Mobject, Scene};
@@ -154,10 +154,14 @@ impl Scene {
             return Err("tracker direction and offset must be finite".into());
         }
         let expression = SemanticSignalExpr::Add(
-            Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(offset))),
+            Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
+                offset,
+            ))),
             Box::new(SemanticSignalExpr::Mul(
                 Box::new(SemanticSignalExpr::signal(tracker.node)),
-                Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(direction))),
+                Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
+                    direction,
+                ))),
             )),
         );
         let node = self
@@ -279,7 +283,10 @@ mod tests {
         assert_eq!(signal.scalar_tracks()[0].to(), 4.0);
         assert_eq!(signal.scalar_tracks()[0].timing().start_time, 0.0);
         assert_eq!(signal.scalar_tracks()[0].timing().duration, 2.0);
-        assert_eq!(signal.scalar_tracks()[0].timing().easing, RateFunction::Linear);
+        assert_eq!(
+            signal.scalar_tracks()[0].timing().easing,
+            RateFunction::Linear
+        );
         assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         assert!(scene.set_value(&tracker, 1.0).is_err());
     }

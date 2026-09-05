@@ -400,8 +400,7 @@ impl CanonicalAuthoringScene {
         offset: SemanticVec3,
     ) -> Result<noon::TrackerPosition, String> {
         self.require_pre_execution_scalar_authoring()?;
-        self.scene
-            .position_from_tracker(tracker, direction, offset)
+        self.scene.position_from_tracker(tracker, direction, offset)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -442,7 +441,11 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn set_tracker_value(&mut self, tracker: &noon::ValueTracker, value: f64) -> Result<(), String> {
+    fn set_tracker_value(
+        &mut self,
+        tracker: &noon::ValueTracker,
+        value: f64,
+    ) -> Result<(), String> {
         if self.live_player_transferred {
             return Err("semantic execution session is running in the semantic engine".into());
         }
@@ -1089,7 +1092,9 @@ mod wasm {
             value: f64,
         ) -> Result<(), JsValue> {
             let tracker = tracker.tracker_in(self.inner.scene.store())?;
-            self.inner.set_tracker_value(tracker, value).map_err(js_error)
+            self.inner
+                .set_tracker_value(tracker, value)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = authoredDuration)]
@@ -2071,14 +2076,22 @@ mod tests {
         player.live_evaluate(1.0).unwrap();
         assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
         assert_eq!(
-            player.live_effective(&circle).unwrap().transform.translation,
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::ZERO
         );
 
         player.live_evaluate(2.0).unwrap();
         assert_eq!(player.live_effective_signal(&tracker).unwrap(), 4.0);
         assert_eq!(
-            player.live_effective(&circle).unwrap().transform.translation,
+            player
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::new(2.0, 0.0)
         );
         assert!(player.live_set_signal(&tracker, 3.0).is_err());

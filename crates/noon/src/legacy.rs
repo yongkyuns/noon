@@ -26,6 +26,7 @@ pub use crate::reactive_authoring::ValueTracker;
 
 /// Common imports for normal Noon authoring.
 pub mod prelude {
+    pub use super::ValueTracker;
     pub use super::{
         Animate, AnimationGroup, AuthoringError, Circle, Create, FadeIn, FadeOut, LaggedStart,
         Line, Mobject, MobjectEditor, Path, Rectangle, Rotate, Scene, Square, Succession,
@@ -35,7 +36,6 @@ pub mod prelude {
     pub use crate::{
         ExecutionSession, ReactiveScene, ReactiveTimelineScene, RetainedScene, VectorSignal,
     };
-    pub use super::ValueTracker;
     pub use noon_core::{
         Color, Easing, GeometryRef, ObjectId, ObjectSnapshot, RateFunction, Style, Vec2,
         VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E,

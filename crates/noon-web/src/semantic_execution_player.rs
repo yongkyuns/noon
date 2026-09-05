@@ -3,12 +3,12 @@ use noon::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     ExecutionSession, RuntimeIdentity,
 };
-use noon_core::{
-    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId,
-    Style, Transform2D,
-};
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::ReactiveValue;
+use noon_core::{
+    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
+    Transform2D,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -475,11 +475,7 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        let clock = self.live_clock_at(
-            self.session.frame().time,
-            segment.end_time(),
-            false,
-        )?;
+        let clock = self.live_clock_at(self.session.frame().time, segment.end_time(), false)?;
         noon::LiveSession::new(
             &semantics,
             self.semantic_root
@@ -499,7 +495,9 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(|error| error.to_string())?;
         clock.pause();
-        self.session.advance_to(time).map_err(|error| error.to_string())?;
+        self.session
+            .advance_to(time)
+            .map_err(|error| error.to_string())?;
         self.clock = clock;
         Ok(())
     }
