@@ -59,15 +59,13 @@ class SharedAuthoringSmoke(Scene):
         circle = Circle(radius=1.0)
         self.add(circle)
 
-        # Mutate after attachment. The shared semantic node must remain the source
-        # of truth used by execution finalization.
-        circle.shift((2.0, -1.0, 0.0))
-        circle.scale((1.5, 0.5))
+        # Static style authoring completes before the live session. The live
+        # facade then owns property publication and effective-value queries.
         circle.set_fill(BLUE, opacity=0.4)
-
-        center = circle.get_center()
-        assert abs(circle.width - 3.0) < 1e-9
-        assert abs(circle.height - 1.0) < 1e-9
+        live = self.live_execution()
+        live.set_translation(circle, 2.0, -1.0)
+        live.set_scale(circle, 1.5, 0.5)
+        center = live.effective_center(circle)
         assert abs(center.x - 2.0) < 1e-9
         assert abs(center.y + 1.0) < 1e-9
         assert circle.style["stroke_join"] == "miter"

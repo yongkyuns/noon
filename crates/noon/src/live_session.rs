@@ -10,7 +10,7 @@ use crate::{EffectiveSemanticObject, ExecutionSession, ExecutionSessionPublicati
 use noon_core::{
     PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    SemanticVec3, Style, Transform2D,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -103,7 +103,7 @@ impl<'a> LiveSession<'a> {
             .effective_semantic_object(&store, mobject.node_id())?;
         Ok(EffectiveMobjectState {
             transform: object.transform,
-            style: object.style.clone(),
+            style: object.style,
             appearance: object.appearance,
             publication,
         })
@@ -189,7 +189,10 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::Scene;
-    use noon_core::{SemanticObjectContent, StoredGeometry};
+    use noon_core::{
+        AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
+        SemanticMutationImpact, SemanticObjectContent, SemanticVec3, StoredGeometry,
+    };
 
     #[test]
     fn live_property_edits_publish_once_and_queries_are_effective_not_authored_aliases() {
@@ -243,5 +246,47 @@ mod tests {
             Err(LiveSessionError::Publication(_))
         ));
         assert_eq!(scene.store().borrow().scene_revision(), before);
+    }
+
+    #[test]
+    fn live_query_observes_the_active_driver_while_authored_edits_remain_explicit() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let mut target = circle.target_editor().unwrap();
+        target.set_translation(4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let mut declaration = SemanticMutationTransaction::new();
+        declaration.add_animation(SemanticAnimationState::new(
+            SemanticAnimationIntent::TransformTo {
+                target: circle.node_id(),
+                target_state: target.node_id(),
+            },
+            options,
+        ));
+        let result = session
+            .apply_semantic_transaction(&mut scene.store().borrow_mut(), declaration)
+            .unwrap();
+        let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
+            panic!("one animation declaration must allocate one identity")
+        };
+        session
+            .activate_animation(&scene.store().borrow(), *animation, options)
+            .unwrap();
+        session.seek(1.0).unwrap();
+
+        let mut live = scene.live(&mut session);
+        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        assert_eq!(
+            live.authored(&circle).unwrap().transform.translation,
+            SemanticVec3::new(100.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            2.0
+        );
     }
 }

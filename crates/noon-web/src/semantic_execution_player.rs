@@ -148,6 +148,24 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub struct WasmEffectiveMobjectState {
+        state: noon::EffectiveMobjectState,
+    }
+
+    #[wasm_bindgen]
+    impl WasmEffectiveMobjectState {
+        #[wasm_bindgen(getter, js_name = translationX)]
+        pub fn translation_x(&self) -> f64 {
+            self.state.transform.translation.x as f64
+        }
+
+        #[wasm_bindgen(getter, js_name = translationY)]
+        pub fn translation_y(&self) -> f64 {
+            self.state.transform.translation.y as f64
+        }
+    }
+
+    #[wasm_bindgen]
     impl SemanticExecutionPlayer {
         /// Publish a semantic transform into this already-lowered session. The
         /// handle carries typed store/node identity; no scene payload crosses
@@ -194,6 +212,7 @@ mod wasm {
             handle.id_in_store(&semantics, "live execution player")?;
             noon::LiveSession::new(&semantics, &mut self.session)
                 .set_scale(handle.semantic_mobject(), x, y)
+                .map(|_| ())
                 .map_err(js_error)
         }
 
@@ -207,37 +226,22 @@ mod wasm {
             handle.id_in_store(&semantics, "live execution player")?;
             noon::LiveSession::new(&semantics, &mut self.session)
                 .set_rotation(handle.semantic_mobject(), angle)
+                .map(|_| ())
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = effectiveTranslationX)]
-        pub fn effective_translation_x(
+        #[wasm_bindgen(js_name = effectiveMobject)]
+        pub fn effective_mobject(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<f64, JsValue> {
+        ) -> Result<WasmEffectiveMobjectState, JsValue> {
             let semantics = semantics(self)?;
             handle.id_in_store(&semantics, "live execution player")?;
-            Ok(noon::LiveSession::new(&semantics, &mut self.session)
-                .effective(handle.semantic_mobject())
-                .map_err(js_error)?
-                .transform
-                .translation
-                .x as f64)
-        }
-
-        #[wasm_bindgen(js_name = effectiveTranslationY)]
-        pub fn effective_translation_y(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<f64, JsValue> {
-            let semantics = semantics(self)?;
-            handle.id_in_store(&semantics, "live execution player")?;
-            Ok(noon::LiveSession::new(&semantics, &mut self.session)
-                .effective(handle.semantic_mobject())
-                .map_err(js_error)?
-                .transform
-                .translation
-                .y as f64)
+            Ok(WasmEffectiveMobjectState {
+                state: noon::LiveSession::new(&semantics, &mut self.session)
+                    .effective(handle.semantic_mobject())
+                    .map_err(js_error)?,
+            })
         }
     }
 }

@@ -182,10 +182,10 @@ class LiveExecution:
         self._player.setRotation(self._handle(mobject), float(angle))
 
     def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        handle = self._handle(mobject)
+        observed = self._player.effectiveMobject(self._handle(mobject))
         return _base.Vec2(
-            float(self._player.effectiveTranslationX(handle)),
-            float(self._player.effectiveTranslationY(handle)),
+            float(observed.translationX),
+            float(observed.translationY),
         )
 
 
