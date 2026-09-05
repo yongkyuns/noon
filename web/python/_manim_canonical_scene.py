@@ -69,10 +69,20 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     except Exception:
         scene._restore_authoring_checkpoint(checkpoint)
         raise
+    _record_mobject_binding(self, scene, obj, handle)
+    return obj
+
+
+def _record_mobject_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    obj: _ir.Object,
+    handle: object,
+) -> None:
     scene._object_positions[obj.id] = len(scene._objects)
     # The compatibility table retains identity only on the shared path.
     scene._objects.append({"id": obj.id})
-    if isinstance(self, _typst._RetainedTextMobject):
+    if isinstance(mobject, _typst._RetainedTextMobject):
         handles = getattr(scene, "_semantic_text_handles", None)
         if handles is None:
             handles = scene._semantic_text_handles = {}
@@ -85,8 +95,7 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
         snapshot = json.loads(str(handle.snapshotJson()))
         snapshot["id"] = obj.id
         scene._objects[-1] = snapshot
-    self._bind(scene, obj)
-    return obj
+    mobject._bind(scene, obj)
 
 
 def materialize_legacy_geometry(scene):
@@ -173,13 +182,34 @@ class LiveExecution:
         context.beginLiveExecution(float(duration))
         self._context = context
 
-    def _handle(self, mobject: _base.Mobject) -> object:
-        if not isinstance(mobject, _base.Mobject) or mobject._scene is not self._scene:
+    def _handle(self, mobject: _base.Mobject, *, allow_detached: bool = False) -> object:
+        if not isinstance(mobject, _base.Mobject):
+            raise ValueError("live Mobject must belong to this Scene")
+        if mobject._scene is not self._scene and not (
+            allow_detached and mobject._scene is None
+        ):
             raise ValueError("live Mobject must belong to this Scene")
         handle = getattr(mobject, "_semantic_handle", None)
         if handle is None:
             raise ValueError("live execution requires a typed semantic Mobject handle")
         return handle
+
+    def add(self, mobject: _base.Mobject) -> None:
+        handle = self._handle(mobject, allow_detached=True)
+        if mobject._scene is self._scene:
+            self._context.liveAdd(str(mobject.id), handle)
+            return
+        checkpoint = self._scene._authoring_checkpoint()
+        obj, _ = self._scene._allocate_object(None)
+        try:
+            self._context.liveAdd(str(obj.id), handle)
+        except Exception:
+            self._scene._restore_authoring_checkpoint(checkpoint)
+            raise
+        _record_mobject_binding(mobject, self._scene, obj, handle)
+
+    def remove(self, mobject: _base.Mobject) -> None:
+        self._context.liveRemove(self._handle(mobject))
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
         self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))

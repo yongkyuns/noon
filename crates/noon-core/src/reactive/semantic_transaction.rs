@@ -1096,16 +1096,28 @@ pub(super) fn validate_object_content_resource(
     content: SemanticObjectContent,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    if let SemanticObjectContent::Geometry(geometry) = content {
-        if !geometry.is_finite() {
-            return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
+    match content {
+        SemanticObjectContent::Geometry(geometry) => {
+            if !geometry.is_finite() {
+                return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
+            }
+            if let StoredGeometry::Resource(resource) = geometry {
+                if store.geometry_resources().get(resource).is_none() {
+                    return Err(SemanticMutationTransactionError::InvalidGeometryResource {
+                        index,
+                        resource,
+                    });
+                }
+            }
         }
-    }
-    let SemanticObjectContent::Geometry(StoredGeometry::Resource(resource)) = content else {
-        return Ok(());
-    };
-    if store.geometry_resources().get(resource).is_none() {
-        return Err(SemanticMutationTransactionError::InvalidGeometryResource { index, resource });
+        SemanticObjectContent::Text(resource) => {
+            if store.text_resources().get(resource).is_none() {
+                return Err(SemanticMutationTransactionError::InvalidTextResource {
+                    index,
+                    resource,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -1401,6 +1413,10 @@ pub enum SemanticMutationTransactionError {
     InvalidGeometryResource {
         index: usize,
         resource: crate::GeometryResourceHandle,
+    },
+    InvalidTextResource {
+        index: usize,
+        resource: crate::TextResourceHandle,
     },
     PropertyTypeMismatch {
         index: usize,
@@ -1723,6 +1739,11 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,
                 "semantic transaction mutation {index} references unavailable geometry resource {:?}",
+                resource
+            ),
+            Self::InvalidTextResource { index, resource } => write!(
+                formatter,
+                "semantic transaction mutation {index} references unavailable text resource {:?}",
                 resource
             ),
             Self::PropertyTypeMismatch {

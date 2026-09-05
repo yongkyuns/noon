@@ -2,15 +2,14 @@
 //!
 //! This facade owns neither semantic nor runtime state.  It only coordinates a
 //! transaction with the session that already lowered the same semantic store.
-//! Structural/content publication and animation continuation deliberately stay
-//! outside this bounded property-edit slice until their incremental lowering
-//! contracts are available.
+//! Membership and property publication use the same prepared semantic transaction;
+//! animation continuation remains a separate lifecycle contract.
 
 use crate::{EffectiveSemanticObject, ExecutionSession, ExecutionSessionPublicationError, Mobject};
 use noon_core::{
     PublicationContext, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    Style, Transform2D,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticSignalValue,
+    SemanticStore, SemanticStyle, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -59,22 +58,31 @@ impl From<ExecutionSessionPublicationError> for LiveSessionError {
 /// `LiveSession` has no scheduler, scene copy, or runtime mirror.  Persistent
 /// property edits use the shared semantic transaction vocabulary and publish
 /// through [`ExecutionSession`] atomically.  The supported transaction subset is
-/// exactly the session publication subset (currently transform/style values).
+/// exactly the session publication subset.
 pub struct LiveSession<'a> {
     store: &'a Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
     session: &'a mut ExecutionSession,
 }
 
 impl<'a> LiveSession<'a> {
     /// Bind a facade to the supplied store and existing execution session.
     /// Provenance and revision are checked by every publish/query operation.
-    pub fn new(store: &'a Rc<RefCell<SemanticStore>>, session: &'a mut ExecutionSession) -> Self {
-        Self { store, session }
+    pub fn new(
+        store: &'a Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        session: &'a mut ExecutionSession,
+    ) -> Self {
+        Self {
+            store,
+            root,
+            session,
+        }
     }
 
     /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported structural/content work fails before either layer
-    /// commits; callers must use the future incremental-publication contract.
+    /// runtime. Unsupported content, ordering, and structural work fails before
+    /// either layer commits.
     pub fn apply(
         &mut self,
         transaction: SemanticMutationTransaction,
@@ -83,6 +91,28 @@ impl<'a> LiveSession<'a> {
         self.session
             .apply_semantic_transaction(&mut store, transaction)
             .map_err(Into::into)
+    }
+
+    /// Add an existing detached object to this live scene root.
+    pub fn add(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(self.root, mobject.node_id());
+        self.apply(transaction)
+    }
+
+    /// Remove an existing object from this live scene root without deleting identity.
+    pub fn remove(
+        &mut self,
+        mobject: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.remove_member(self.root, mobject.node_id());
+        self.apply(transaction)
     }
 
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
@@ -288,5 +318,40 @@ mod tests {
             live.effective(&circle).unwrap().transform.translation.x,
             2.0
         );
+    }
+
+    #[test]
+    fn live_membership_detaches_readds_and_appends_without_changing_unrelated_slots() {
+        let mut scene = Scene::new();
+        let anchor = scene.circle(1.0).unwrap();
+        let toggled = scene.circle(2.0).unwrap();
+        let detached = scene.circle(3.0).unwrap();
+        scene.add(&anchor).unwrap();
+        scene.add(&toggled).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
+
+        {
+            let mut live = scene.live(&mut session);
+            live.remove(&toggled).unwrap();
+            assert!(live.effective(&toggled).is_err());
+            live.add(&toggled).unwrap();
+            assert!(live.effective(&toggled).is_ok());
+            live.add(&detached).unwrap();
+            assert_eq!(
+                live.session
+                    .last_structural_publication_stats()
+                    .entered_objects,
+                1
+            );
+            live.set_translation(&detached, 4.0, -2.0).unwrap();
+            assert_eq!(
+                live.effective(&detached).unwrap().transform.translation,
+                noon_core::Vec2::new(4.0, -2.0)
+            );
+        }
+
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+        assert_eq!(session.frame().objects.len(), 4);
     }
 }

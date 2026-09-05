@@ -1,5 +1,10 @@
+use std::sync::Arc;
+
 use super::*;
-use crate::{SemanticObjectState, SemanticVec3, StoredGeometry, Vec2, VectorPath};
+use crate::{
+    FontResourceArena, GeometryResourceArena, Rect, SemanticObjectState, SemanticVec3,
+    StoredGeometry, TextResource, TextResourceHandle, TextSourceKind, Vec2, VectorPath,
+};
 
 fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
     store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
@@ -10,6 +15,30 @@ fn rectangle(width: f32, height: f32) -> SemanticObjectContent {
         size: Vec2::new(width, height),
     }
     .into()
+}
+
+fn text_resource(source: &str) -> TextResource {
+    TextResource {
+        source: Arc::from(source),
+        kind: TextSourceKind::Plain,
+        runs: Arc::from([]),
+        vector_items: Arc::from([]),
+        render_items: Arc::from([]),
+        parts: Arc::from([]),
+        bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+        baseline: 0.0,
+        layout_artifact: None,
+    }
+}
+
+fn import_text(store: &mut SemanticStore, source: &str) -> TextResourceHandle {
+    store
+        .import_text_resource(
+            text_resource(source),
+            &FontResourceArena::new(),
+            &GeometryResourceArena::new(),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -232,4 +261,103 @@ fn unavailable_geometry_resource_replacement_rolls_back_atomically() {
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
+}
+
+#[test]
+fn foreign_text_resource_with_matching_slot_and_version_is_rejected_for_new_node() {
+    let mut store = SemanticStore::new();
+    let local = import_text(&mut store, "local");
+    let mut foreign_store = SemanticStore::new();
+    let foreign = import_text(&mut foreign_store, "foreign");
+    assert_eq!(local.id, foreign.id);
+    assert_eq!(local.version, foreign.version);
+    assert_ne!(local.arena, foreign.arena);
+    let before_len = store.len();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        SemanticObjectContent::Text(foreign),
+    )));
+
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidTextResource {
+            index: 0,
+            resource: foreign,
+        })
+    );
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+}
+
+#[test]
+fn unavailable_text_replacement_rolls_back_an_earlier_valid_property_write() {
+    let mut store = SemanticStore::new();
+    let text = import_text(&mut store, "current");
+    let stale = TextResourceHandle {
+        version: text.version + 1,
+        ..text
+    };
+    let mut foreign_store = SemanticStore::new();
+    let foreign = import_text(&mut foreign_store, "foreign");
+    assert_eq!(text.id, foreign.id);
+    assert_eq!(text.version, foreign.version);
+    assert_ne!(text.arena, foreign.arena);
+    let target = object(&mut store, 1.0);
+    let earlier = object(&mut store, 2.0);
+
+    for unavailable in [foreign, stale] {
+        let before_target = store.semantic_object_state_checked(target).unwrap().clone();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_property(earlier, SemanticObjectProperty::RotationZ, 0.5_f64)
+            .replace_content(target, SemanticObjectContent::Text(unavailable));
+
+        assert_eq!(
+            transaction.apply(&mut store),
+            Err(SemanticMutationTransactionError::InvalidTextResource {
+                index: 1,
+                resource: unavailable,
+            })
+        );
+        assert_eq!(
+            store.semantic_object_state_checked(target).unwrap(),
+            &before_target
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(earlier)
+                .unwrap()
+                .transform
+                .rotation_z,
+            0.0
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+}
+
+#[test]
+fn imported_same_store_text_is_valid_for_add_and_replace() {
+    let mut store = SemanticStore::new();
+    let first = import_text(&mut store, "first");
+    let second = import_text(&mut store, "second");
+
+    let mut add = SemanticMutationTransaction::new();
+    let token = add.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        SemanticObjectContent::Text(first),
+    )));
+    let result = add.apply(&mut store).unwrap();
+    let object = result.resolve(token).unwrap();
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap().content,
+        SemanticObjectContent::Text(first)
+    );
+
+    let mut replace = SemanticMutationTransaction::new();
+    replace.replace_content(object, SemanticObjectContent::Text(second));
+    replace.apply(&mut store).unwrap();
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap().content,
+        SemanticObjectContent::Text(second)
+    );
 }

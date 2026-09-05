@@ -225,6 +225,7 @@ impl CanonicalAuthoringScene {
             self.live_player = Some(crate::SemanticExecutionPlayer::from_live_session(
                 execution,
                 std::rc::Rc::clone(self.scene.store()),
+                self.scene.root(),
                 duration,
                 0,
             )?);
@@ -254,7 +255,7 @@ impl CanonicalAuthoringScene {
         Ok(())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         if self.live_player_transferred {
             return Err("live execution session is running in the semantic engine".into());
@@ -262,6 +263,42 @@ impl CanonicalAuthoringScene {
         self.live_player
             .as_mut()
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        handle.validate()?;
+        let node = handle.node_id();
+        let new_binding = match (self.bindings.get(&id), self.identities.get(&node)) {
+            (None, None) => true,
+            (Some(bound_node), Some(bound_id)) if *bound_node == node && *bound_id == id => false,
+            _ => return Err(format!("canonical object {} is already bound", id.get())),
+        };
+        self.active_live_player()?.live_add(handle)?;
+        if new_binding {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+            return Err("mobject belongs to another authoring store".into());
+        }
+        let node = handle.node_id();
+        let id = *self
+            .identities
+            .get(&node)
+            .ok_or("live Mobject is not bound to this Scene")?;
+        self.active_live_player()?.live_remove(handle)?;
+        self.identities.remove(&node);
+        self.bindings.remove(&id);
+        Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -284,6 +321,7 @@ impl CanonicalAuthoringScene {
         let player = crate::SemanticExecutionPlayer::from_live_session(
             execution,
             store,
+            self.scene.root(),
             duration,
             transport_session,
         )?;
@@ -655,6 +693,30 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAdd)]
+        pub fn live_add(
+            &mut self,
+            object_id: &str,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let id = parse_object_id("object ID", object_id)?;
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .live_add_mobject(id, handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveRemove)]
+        pub fn live_remove(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            self.inner
+                .live_remove_mobject(handle.semantic_mobject())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShift)]
         pub fn live_shift(
             &mut self,
@@ -866,6 +928,70 @@ mod tests {
         assert_eq!(first.checkpoint(), 0);
         assert_eq!(first.scene.store().borrow().scene_revision(), revision);
         first.bind_mobject(ObjectId::new(0), &local).unwrap();
+    }
+
+    #[test]
+    fn live_membership_uses_the_existing_session_and_registers_detached_handles() {
+        let mut context = CanonicalAuthoringScene::default();
+        let anchor = context.scene.circle(0.5).unwrap();
+        let toggled = context.scene.circle(1.0).unwrap();
+        let appended = context.scene.square(1.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
+        context.bind_mobject(ObjectId::new(1), &toggled).unwrap();
+        let anchor_slot = context
+            .live_player(1.0)
+            .unwrap()
+            .session_mut_for_test()
+            .execution_slot_for_frame_index(0)
+            .unwrap();
+
+        context.live_remove_mobject(&toggled).unwrap();
+        assert!(context
+            .active_live_player()
+            .unwrap()
+            .live_effective(&toggled)
+            .is_err());
+        context
+            .live_add_mobject(ObjectId::new(1), &toggled)
+            .unwrap();
+        context
+            .live_add_mobject(ObjectId::new(2), &appended)
+            .unwrap();
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_translation(&appended, 2.0, -1.0)
+            .unwrap();
+
+        assert_eq!(context.node(ObjectId::new(2)).unwrap(), appended.node_id());
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&anchor)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::ZERO
+        );
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&appended)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(2.0, -1.0)
+        );
+        assert_eq!(
+            context
+                .active_live_player()
+                .unwrap()
+                .session_mut_for_test()
+                .execution_slot_for_frame_index(0),
+            Some(anchor_slot)
+        );
     }
 
     fn native_text(source: &str) -> RetainedTextAuthoringSpec {

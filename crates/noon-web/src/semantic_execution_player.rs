@@ -19,6 +19,8 @@ pub struct SemanticExecutionPlayer {
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    semantic_root: Option<noon_core::SemanticNodeId>,
 }
 
 impl SemanticExecutionPlayer {
@@ -36,6 +38,8 @@ impl SemanticExecutionPlayer {
             snapshot_sent: false,
             #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            semantic_root: None,
         })
     }
 
@@ -43,6 +47,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn from_live_session(
         session: ExecutionSession,
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        semantic_root: noon_core::SemanticNodeId,
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
@@ -54,6 +59,7 @@ impl SemanticExecutionPlayer {
             resource_bundle,
             snapshot_sent: false,
             semantics: Some(semantics),
+            semantic_root: Some(semantic_root),
         })
     }
 
@@ -89,10 +95,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_translation(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_translation(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -106,10 +117,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .shift(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .shift(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -123,10 +139,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_scale(mobject, x, y)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_scale(mobject, x, y)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -139,10 +160,15 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .set_rotation(mobject, angle)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .set_rotation(mobject, angle)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -154,9 +180,48 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(&semantics, &mut self.session)
-            .effective(mobject)
-            .map_err(|error| error.to_string())
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .effective(mobject)
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_add(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .add(mobject)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_remove(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .remove(mobject)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     #[cfg(test)]
