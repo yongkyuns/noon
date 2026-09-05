@@ -1086,7 +1086,7 @@ mod wasm {
                 &prepared,
                 &mut self.direct_text_gpu,
             );
-            self.last_geometry_cache_misses = prepared.geometry.stats.geometry_cache_misses;
+            self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
             self.last_bytes_uploaded = upload
                 .geometry
                 .bytes_uploaded
