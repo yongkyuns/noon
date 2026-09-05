@@ -13,7 +13,7 @@ ci-noop = ["wgpu/noop"]
 
 [dependencies]
 noon-text-raster = { path = "../noon-text-raster" }
-wgpu = { version = "29.0.3", default-features = false, features = ["std"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 noon-core = { path = "../noon-core" }

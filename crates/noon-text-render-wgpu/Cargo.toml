@@ -23,7 +23,7 @@ noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
 noon-text-atlas = { path = "../noon-text-atlas", default-features = false }
 noon-text-raster = { path = "../noon-text-raster" }
-wgpu = { version = "29.0.3", default-features = false, features = ["std", "wgsl"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
 noon-typst = { path = "../noon-typst" }

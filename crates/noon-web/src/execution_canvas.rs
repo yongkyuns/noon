@@ -377,7 +377,7 @@ mod wasm {
                 .renderer
                 .encode(&mut encoder, &view, &prepared, self.clear_color);
             self.queue.submit(Some(encoder.finish()));
-            surface_texture.present();
+            self.queue.present(surface_texture);
             self.last_draw_calls = draw.draw_calls;
             self.last_instances_drawn = draw.instances_drawn;
             if let (Some(object), Some(mirror)) =
@@ -1030,6 +1030,7 @@ mod wasm {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: None,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|error| error.to_string())?;
@@ -1064,6 +1065,7 @@ mod wasm {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|error| error.to_string())?;

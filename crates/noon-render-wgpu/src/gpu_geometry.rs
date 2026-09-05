@@ -1117,7 +1117,10 @@ fn create_pipeline(
             module: shader,
             entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[quad_vertex_layout(), descriptor.instance_layout],
+            buffers: &[
+                Some(quad_vertex_layout()),
+                Some(descriptor.instance_layout),
+            ],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1198,7 +1201,7 @@ fn create_path_pipeline_with_instance_layout(
             module: shader,
             entry_point: Some("vs_path"),
             compilation_options: Default::default(),
-            buffers: &[path_vertex_layout(), instance_layout],
+            buffers: &[Some(path_vertex_layout()), Some(instance_layout)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
