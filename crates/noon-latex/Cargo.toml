@@ -1,9 +1,0 @@
-[package]
-name = "noon-latex"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Real-LaTeX backend contract and retained resource normalization for Noon"
-
-[dependencies]
-noon-core = { path = "../noon-core" }
