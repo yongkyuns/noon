@@ -137,6 +137,7 @@ try {
       sampleHz,
       workerLoops,
       backendRequested,
+      reactivationTimes,
     }) => {
       const wasm = await import("./pkg/noon_web.js");
       const { PythonAuthoringClient } = await import("./authoring-client.js");
