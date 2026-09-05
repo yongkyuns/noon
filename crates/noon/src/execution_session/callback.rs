@@ -749,8 +749,8 @@ mod tests {
     use crate::ExecutionSessionInputError;
     use noon_core::{
         HostCallbackId, NativeEventOccurrence, NativeEventSource, NativeInputValue,
-        NativeStateSource, SemanticMutationTransaction, SemanticObjectState, SemanticStore,
-        StoredGeometry, Vec2,
+        NativeStateSource, SemanticMutationTransaction, SemanticObjectProperty,
+        SemanticObjectState, SemanticStore, StoredGeometry, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
@@ -1029,6 +1029,26 @@ mod tests {
             }));
         store.attach_to_scene(object).unwrap();
         store.attach_to_scene(unrelated).unwrap();
+        let input = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(input, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let bound_state_source = NativeStateSource::Control {
+            name: "callback-input".to_owned(),
+        };
+        store
+            .bind_semantic_native_state_input(input, bound_state_source.clone())
+            .unwrap();
+        let event_input = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_signal(event_input, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        let bound_event_source = NativeEventSource::KeyPress {
+            code: "Space".to_owned(),
+        };
+        store
+            .bind_semantic_native_event_input(event_input, bound_event_source.clone())
+            .unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(object, HostCallbackId::new(4), 0.0, None);
         transaction.add_updater(object, HostCallbackId::new(2), 0.0, None);
@@ -1038,23 +1058,29 @@ mod tests {
         let coherent = session.frame().clone();
 
         assert_eq!(
-            session.set_reactive_input(object, 1.0_f32),
+            session.set_reactive_input(input, 1.0_f32),
             Err(ExecutionSessionInputError::RequiredCallbacksConfigured)
         );
         assert_eq!(
-            session.set_native_state_input(
+            session.set_native_state_input(bound_state_source, NativeInputValue::Scalar(1.0),),
+            Err(ExecutionSessionInputError::RequiredCallbacksConfigured)
+        );
+        assert_eq!(
+            session.emit_native_event(NativeEventOccurrence::new(0, bound_event_source,)),
+            Err(ExecutionSessionInputError::RequiredCallbacksConfigured)
+        );
+        session
+            .set_native_state_input(
                 NativeStateSource::ViewportSize,
                 NativeInputValue::Vec2(Vec2::new(10.0, 10.0)),
-            ),
-            Err(ExecutionSessionInputError::RequiredCallbacksConfigured)
-        );
-        assert_eq!(
-            session.emit_native_event(NativeEventOccurrence::new(
+            )
+            .unwrap();
+        session
+            .emit_native_event(NativeEventOccurrence::new(
                 0,
                 NativeEventSource::PointerDown { button: 0 },
-            )),
-            Err(ExecutionSessionInputError::RequiredCallbacksConfigured)
-        );
+            ))
+            .unwrap();
         assert_eq!(session.frame(), &coherent);
 
         assert!(!session.segment_state(zero_duration).is_complete());

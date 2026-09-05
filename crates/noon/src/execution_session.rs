@@ -651,11 +651,11 @@ impl ExecutionSession {
         signal: SemanticNodeId,
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        self.ensure_direct_input_ingress_available()?;
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
             .ok_or(ExecutionSessionInputError::UnknownSemanticSignal(signal))?;
+        self.ensure_direct_input_ingress_available()?;
         Ok(self.runtime.set_reactive_input(execution_signal, value)?)
     }
 
@@ -670,12 +670,15 @@ impl ExecutionSession {
         source: NativeStateSource,
         value: NativeInputValue,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        self.ensure_direct_input_ingress_available()?;
         let update = NativeStateUpdate::new(source, value)?;
         let targets = self
             .reactive_projection
             .native_state_targets(&update.source)
             .to_vec();
+        if targets.is_empty() {
+            return Ok(self.runtime.frame());
+        }
+        self.ensure_direct_input_ingress_available()?;
         let value = reactive_value_from_native(update.value);
         for signal in targets {
             self.runtime.set_reactive_input(signal, value.clone())?;
@@ -692,7 +695,6 @@ impl ExecutionSession {
         &mut self,
         occurrence: NativeEventOccurrence,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
-        self.ensure_direct_input_ingress_available()?;
         if let Some(previous) = self.last_native_event_sequence {
             if occurrence.sequence <= previous {
                 return Err(ExecutionSessionInputError::NativeEventOutOfOrder {
@@ -706,6 +708,11 @@ impl ExecutionSession {
             .reactive_projection
             .native_event_targets(&occurrence.source)
             .to_vec();
+        if targets.is_empty() {
+            self.last_native_event_sequence = Some(occurrence.sequence);
+            return Ok(self.runtime.frame());
+        }
+        self.ensure_direct_input_ingress_available()?;
         let next_values = targets
             .iter()
             .map(|signal| {
