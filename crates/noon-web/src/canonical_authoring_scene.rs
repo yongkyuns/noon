@@ -1906,7 +1906,7 @@ mod tests {
     }
 
     #[test]
-    fn live_handoff_duration_keeps_the_completed_segment_after_renderer_seek() {
+    fn live_advancement_anchors_presentation_and_handoff_cannot_rewind_it() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
@@ -1925,16 +1925,45 @@ mod tests {
         {
             let player = context.live_player(1.0).unwrap();
             assert_eq!(player.live_play_animation(&animation).unwrap(), 2.0);
+            let (publication, frame) = {
+                let session = player.session_mut_for_test();
+                (session.publication_context(), session.frame().clone())
+            };
+            assert!(player.live_advance_segment_to(f64::NAN).is_err());
+            let session = player.session_mut_for_test();
+            assert_eq!(session.publication_context(), publication);
+            assert_eq!(session.frame(), &frame);
+            assert!(player.is_playing());
             assert!(!player.live_advance_segment_to(2.0).unwrap());
+            assert_eq!(player.time(), 2.0);
+            assert!(!player.is_playing());
             player.live_complete_segment().unwrap();
             assert_eq!(player.live_wait(0.25).unwrap(), 2.25);
+            assert!(player.is_playing());
             assert!(player.live_advance_segment_to(2.25).unwrap());
+            assert_eq!(player.time(), 2.25);
+            assert!(!player.is_playing());
             player.live_complete_segment().unwrap();
         }
         assert_eq!(context.live_handoff_duration(), Some(2.25));
 
+        let error = context.take_execution_player(2.0, 16).err().unwrap();
+        assert!(error.contains("shorter than live handoff duration 2.25"));
+        assert_eq!(context.live_handoff_duration(), Some(2.25));
+
         let duration = context.live_handoff_duration().unwrap();
         let mut handed_off = context.take_execution_player(duration, 17).unwrap();
+        handed_off.tick_delta_json(4_000.0).unwrap();
+        assert_eq!(handed_off.time(), 2.25);
+        assert_eq!(
+            handed_off
+                .live_effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            4.0
+        );
         handed_off.seek_delta_json(0.5).unwrap();
         assert_eq!(handed_off.time(), 0.5);
         context.return_execution_player(handed_off).unwrap();

@@ -50,6 +50,52 @@ impl SemanticExecutionPlayer {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn validate_live_loop_duration(&self, duration: f64) -> Result<(), String> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(format!("invalid playback loop duration {duration}"));
+        }
+        let Some(required) = self.live_handoff_duration() else {
+            return Ok(());
+        };
+        if duration < required {
+            return Err(format!(
+                "playback duration {duration} is shorter than live handoff duration {required}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Prepare a presentation clock for an already-validated runtime time.
+    ///
+    /// The caller builds this clone before a fallible runtime operation and only
+    /// installs it after that operation succeeds. This keeps the presentation
+    /// clock and published frame atomic without making either one a second time
+    /// authority.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn live_clock_at(
+        &self,
+        time: f64,
+        segment_end: f64,
+        playing: bool,
+    ) -> Result<PlaybackClock, String> {
+        let mut clock = self.clock.clone();
+        if let Some(duration) = clock.loop_duration() {
+            let required = time.max(segment_end);
+            if required > duration {
+                clock
+                    .set_loop_duration(required)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        clock.seek(time).map_err(|error| error.to_string())?;
+        clock.pause();
+        if playing {
+            clock.resume();
+        }
+        Ok(clock)
+    }
+
     pub fn from_session(
         session: ExecutionSession,
         duration: f64,
@@ -108,15 +154,19 @@ impl SemanticExecutionPlayer {
                 "cannot rebind transport while a required callback phase is pending".into(),
             );
         }
+        self.validate_live_loop_duration(duration)?;
+        let mut clock = self.clock.clone();
         if !self.session.has_required_callbacks() {
-            self.clock
+            clock
                 .set_loop_duration(duration)
                 .map_err(|error| error.to_string())?;
         }
         // Live publication may have installed sparse text/font dependencies after
         // this player was bootstrapped. Refresh only at the explicit cross-worker
         // handoff boundary so ordinary typed in-process property edits stay local.
-        self.resource_bundle = Self::resource_bundle_for(&self.session)?;
+        let resource_bundle = Self::resource_bundle_for(&self.session)?;
+        self.clock = clock;
+        self.resource_bundle = resource_bundle;
         self.encoder = RetainedExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
         Ok(())
@@ -354,6 +404,9 @@ impl SemanticExecutionPlayer {
         .play_animation(animation)
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
+        self.clock = self
+            .live_clock_at(self.session.frame().time, end_time, true)
+            .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
         Ok(end_time)
     }
@@ -374,6 +427,9 @@ impl SemanticExecutionPlayer {
         .wait_segment(duration)
         .map_err(|error| error.to_string())?;
         let end_time = segment.end_time();
+        self.clock = self
+            .live_clock_at(self.session.frame().time, end_time, true)
+            .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(segment);
         Ok(end_time)
     }
@@ -387,15 +443,27 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        let mut live = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        );
-        live.advance_segment_to(segment, requested_time)
-            .map_err(|error| error.to_string())?;
-        Ok(live.segment_state(segment).is_complete())
+        let current_time = self.session.frame().time;
+        let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
+        let complete = {
+            let mut live = noon::LiveSession::new(
+                &semantics,
+                self.semantic_root
+                    .expect("live semantic store has one scene root"),
+                &mut self.session,
+            );
+            live.advance_segment_to(segment, requested_time)
+                .map_err(|error| error.to_string())?;
+            live.segment_state(segment).is_complete()
+        };
+        // Runtime publication is authoritative. A callback-aware advance may
+        // stop at an earlier coherent barrier, which remains within the
+        // endpoint extent preflighted above.
+        clock
+            .seek(self.session.frame().time)
+            .expect("published live time must remain within the preflighted segment extent");
+        self.clock = clock;
+        Ok(complete)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -407,6 +475,11 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
+        let clock = self.live_clock_at(
+            self.session.frame().time,
+            segment.end_time(),
+            false,
+        )?;
         noon::LiveSession::new(
             &semantics,
             self.semantic_root
@@ -414,7 +487,9 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .complete_segment(segment)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        self.clock = clock;
+        Ok(())
     }
 
     /// Evaluate scalar tracks through the one execution session, then align the
@@ -905,6 +980,8 @@ impl SemanticExecutionPlayer {
                     .into(),
             );
         }
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.validate_live_loop_duration(duration)?;
         self.clock
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())
