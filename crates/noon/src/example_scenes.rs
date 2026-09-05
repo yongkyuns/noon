@@ -165,8 +165,6 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
 
     let mut first_target = circle.target_editor()?;
     first_target.set_translation(2.0, -1.0)?;
-    let mut second_target = circle.target_editor()?;
-    second_target.set_translation(5.0, -1.0)?;
     let linear = |duration| {
         AnimationOptions::new()
             .run_time(duration)
@@ -198,6 +196,8 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
 
     {
         let mut live = scene.live(&mut session);
+        let second_target = live.target_editor(&circle)?;
+        live.set_translation(&second_target, 5.0, -1.0)?;
         let second =
             live.declare_and_activate_transform_to(&circle, &second_target, linear(1.0))?;
         assert_eq!((second.start_time(), second.end_time()), (3.0, 4.0));
