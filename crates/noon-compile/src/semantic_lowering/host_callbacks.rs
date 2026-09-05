@@ -4,8 +4,6 @@ use noon_core::{
     HostCallbackId, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticUpdaterRegistration,
 };
 
-use super::SemanticExecutionProjection;
-
 /// One semantic registration occurrence in deterministic authoring order.
 ///
 /// Callable identity remains host-owned. Repeated `callback_id` values are valid:
@@ -64,13 +62,11 @@ impl SemanticHostCallbackEvent {
 ///
 /// Events are sorted once during lowering. Runtime selection can advance across
 /// crossed boundaries and maintain its ordered active set without scanning dormant
-/// registration history on every frame. The conservative semantic read set is
-/// shared by the phase rather than copied into each occurrence.
+/// registration history on every frame.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticHostCallbackPlan {
     occurrences: Vec<SemanticHostCallbackOccurrence>,
     events: Vec<SemanticHostCallbackEvent>,
-    conservative_read_objects: Vec<SemanticNodeId>,
 }
 
 impl SemanticHostCallbackPlan {
@@ -82,10 +78,6 @@ impl SemanticHostCallbackPlan {
         &self.events
     }
 
-    pub fn conservative_read_objects(&self) -> &[SemanticNodeId] {
-        &self.conservative_read_objects
-    }
-
     pub fn is_empty(&self) -> bool {
         self.occurrences.is_empty()
     }
@@ -94,7 +86,6 @@ impl SemanticHostCallbackPlan {
 pub(super) fn lower_semantic_host_callbacks(
     store: &SemanticStore,
     roots: &[SemanticNodeId],
-    projection: &SemanticExecutionProjection,
 ) -> SemanticHostCallbackPlan {
     let mut occurrences = Vec::new();
     let mut seen = HashSet::new();
@@ -140,19 +131,9 @@ pub(super) fn lower_semantic_host_callbacks(
             .then_with(|| left.occurrence_index.cmp(&right.occurrence_index))
     });
 
-    let conservative_read_objects = if occurrences.is_empty() {
-        Vec::new()
-    } else {
-        projection
-            .objects()
-            .iter()
-            .map(|object| object.semantic_id)
-            .collect()
-    };
     SemanticHostCallbackPlan {
         occurrences,
         events,
-        conservative_read_objects,
     }
 }
 
@@ -221,7 +202,6 @@ mod tests {
                 (nested, HostCallbackId::new(3)),
             ]
         );
-        assert_eq!(plan.conservative_read_objects(), &[first, second]);
     }
 
     #[test]
@@ -278,7 +258,7 @@ mod tests {
 
         assert_eq!(plan.occurrences().len(), 1);
         assert_eq!(plan.occurrences()[0].target(), selected);
-        assert_eq!(plan.conservative_read_objects(), &[selected_object]);
+        assert!(index.execution_object_id(selected_object).is_some());
     }
 
     #[test]
@@ -299,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn no_callback_scene_has_no_conservative_read_cache() {
+    fn no_callback_scene_has_empty_schedule() {
         let mut store = SemanticStore::new();
         let target = object(&mut store, 1.0);
         store.attach_to_scene(target).unwrap();
@@ -307,9 +287,5 @@ mod tests {
         let lowered =
             crate::lower_semantic_execution(&store, &mut SemanticExecutionIndex::new()).unwrap();
         assert!(lowered.host_callbacks().is_empty());
-        assert!(lowered
-            .host_callbacks()
-            .conservative_read_objects()
-            .is_empty());
     }
 }

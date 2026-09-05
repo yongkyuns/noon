@@ -14,6 +14,7 @@ mod elbow_authoring;
 mod execution_segment;
 mod execution_session;
 mod geometry_authoring;
+mod host_callbacks;
 pub mod legacy;
 mod line_matcher_authoring;
 mod live_session;
@@ -29,6 +30,7 @@ mod text_authoring;
 pub use animation_authoring::DeclaredAnimation;
 pub use execution_segment::*;
 pub use execution_session::*;
+pub use host_callbacks::*;
 pub use live_session::{EffectiveMobjectState, LiveSession, LiveSessionError};
 pub use noon_core::*;
 pub use noon_runtime::{

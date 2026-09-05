@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    RendererPublication, TimelineWakeState,
+    RendererPublication, RustHostCallbackError, RustHostCallbackTable, TimelineWakeState,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -57,6 +57,7 @@ pub enum NativeHostError {
     Platform(String),
     Gpu(String),
     Runtime(EvaluationError),
+    Callback(RustHostCallbackError),
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
 }
@@ -67,6 +68,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Platform(message) => write!(formatter, "native platform error: {message}"),
             Self::Gpu(message) => write!(formatter, "native GPU error: {message}"),
             Self::Runtime(error) => error.fmt(formatter),
+            Self::Callback(error) => error.fmt(formatter),
             Self::Camera(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
         }
@@ -78,6 +80,12 @@ impl std::error::Error for NativeHostError {}
 impl From<EvaluationError> for NativeHostError {
     fn from(value: EvaluationError) -> Self {
         Self::Runtime(value)
+    }
+}
+
+impl From<RustHostCallbackError> for NativeHostError {
+    fn from(value: RustHostCallbackError) -> Self {
+        Self::Callback(value)
     }
 }
 
@@ -101,9 +109,26 @@ pub fn run(session: ExecutionSession) -> Result<(), NativeHostError> {
     run_with_config(session, NativeViewportConfig::default())
 }
 
+/// Run one typed execution session with direct Rust host callables.
+pub fn run_with_callbacks(
+    session: ExecutionSession,
+    callbacks: RustHostCallbackTable,
+) -> Result<(), NativeHostError> {
+    run_with_callbacks_and_config(session, callbacks, NativeViewportConfig::default())
+}
+
 /// Run one typed execution session with explicit window configuration.
 pub fn run_with_config(
     session: ExecutionSession,
+    config: NativeViewportConfig,
+) -> Result<(), NativeHostError> {
+    run_with_callbacks_and_config(session, RustHostCallbackTable::new(), config)
+}
+
+/// Run one typed execution session with direct Rust callbacks and viewport config.
+pub fn run_with_callbacks_and_config(
+    session: ExecutionSession,
+    callbacks: RustHostCallbackTable,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
     if config.width == 0 || config.height == 0 {
@@ -115,7 +140,7 @@ pub fn run_with_config(
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = NativeApp::new(session, config);
+    let mut app = NativeApp::new_with_callbacks(session, callbacks, config);
     event_loop
         .run_app(&mut app)
         .map_err(|error| NativeHostError::Platform(error.to_string()))?;
@@ -161,6 +186,7 @@ impl RealtimeClock {
 
 struct NativeApp {
     session: ExecutionSession,
+    callbacks: RustHostCallbackTable,
     config: NativeViewportConfig,
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
@@ -179,9 +205,19 @@ struct NativeApp {
 }
 
 impl NativeApp {
+    #[cfg(test)]
     fn new(session: ExecutionSession, config: NativeViewportConfig) -> Self {
+        Self::new_with_callbacks(session, RustHostCallbackTable::new(), config)
+    }
+
+    fn new_with_callbacks(
+        session: ExecutionSession,
+        callbacks: RustHostCallbackTable,
+        config: NativeViewportConfig,
+    ) -> Self {
         Self {
             session,
+            callbacks,
             config,
             window: None,
             gpu: None,
@@ -302,15 +338,16 @@ impl NativeApp {
         };
         match timeline {
             TimelineWakeState::Continuous => {
-                self.session.advance_to(clock.scene_time_at(now))?;
+                self.callbacks
+                    .advance_to(&mut self.session, clock.scene_time_at(now))?;
             }
             TimelineWakeState::Deadline(scene_time) => {
                 if clock
                     .wall_deadline(scene_time)
                     .is_some_and(|deadline| deadline <= now)
                 {
-                    self.session
-                        .advance_to(clock.scene_time_at(now).max(scene_time))?;
+                    self.callbacks
+                        .advance_to(&mut self.session, clock.scene_time_at(now).max(scene_time))?;
                 }
             }
             TimelineWakeState::Quiescent => {
@@ -848,6 +885,58 @@ mod tests {
             TimelineWakeState::Quiescent
         );
         assert!(app.realtime_clock.is_none());
+    }
+
+    #[test]
+    fn native_realtime_bootstrap_runs_time_zero_callbacks_before_presentation() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use noon::{HostCallbackId, RustHostCallbackTable};
+        use noon_core::{
+            SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
+        };
+
+        const CALLBACK: HostCallbackId = HostCallbackId::new(1);
+
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(object, CALLBACK, 0.0, None);
+        transaction.apply(&mut store).unwrap();
+
+        let invocations = Rc::new(Cell::new(0));
+        let invoked = Rc::clone(&invocations);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(CALLBACK, move |context| {
+                invoked.set(invoked.get() + 1);
+                let mut transform = context.target_state().transform;
+                transform.translation.y = 2.0;
+                context.set_target_transform(transform)
+            })
+            .unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut app =
+            NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
+
+        // Native viewport bootstrap is a no-op when the scene has no subscriber.
+        // The same first redraw path must then execute the authored time-zero phase
+        // before the renderer can consume the initial publication.
+        app.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(Vec2::new(960.0, 540.0)),
+        )
+        .unwrap();
+        app.advance_realtime_timeline(Instant::now()).unwrap();
+
+        assert_eq!(invocations.get(), 1);
+        assert_eq!(app.session.frame().time, 0.0);
+        assert_eq!(app.session.frame().objects[0].transform.translation.y, 2.0);
     }
 
     #[test]

@@ -184,7 +184,7 @@ fn finish_semantic_execution(
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection(store, &projection)?;
-    let host_callbacks = lower_semantic_host_callbacks(store, roots, &projection);
+    let host_callbacks = lower_semantic_host_callbacks(store, roots);
     let compiled =
         CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
     let camera_object = validate_camera_object(camera, &compiled)?;
