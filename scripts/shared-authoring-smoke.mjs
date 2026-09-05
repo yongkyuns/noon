@@ -163,10 +163,10 @@ function visiblePixelStats(
     const pixelRed = png.data[offset];
     const pixelGreen = png.data[offset + 1];
     const pixelBlue = png.data[offset + 2];
-    if (!isVisible(pixelRed, pixelGreen, pixelBlue)) continue;
     const pixel = offset / 4;
     const x = pixel % png.width;
     const y = Math.floor(pixel / png.width);
+    if (!isVisible(pixelRed, pixelGreen, pixelBlue, x, y)) continue;
     count += 1;
     minX = Math.min(minX, x);
     maxX = Math.max(maxX, x);
@@ -497,6 +497,73 @@ try {
       });
     }
   }
+
+  // Opaque callbacks must progress forward through the required Rust barrier.
+  // The two circles independently prove ordered timeline/host writes and dt
+  // accumulation on an object without a timeline driver.
+  const callbackSource = await readFile(
+    path.join(repoRoot, "web/python/examples/live_affine_callbacks.py"), "utf8",
+  );
+  const callbackResult = await page.evaluate(async (source) => {
+    const harness = window.sharedAuthoringSmoke;
+    const authored = await harness.authoring.run(source, {});
+    const canvas = document.createElement("canvas");
+    canvas.id = "scene-live-affine-callbacks";
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    const execution = new harness.AuthoringExecutionClient(canvas);
+    harness.liveExampleExecution = execution;
+    await execution.startSemanticExecution(authored.semanticExecution, {
+      authoringClient: harness.authoring,
+      transportMode: "transferable",
+    });
+    let latest;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      latest = await execution.state();
+      if (latest.time >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!(latest.time >= 2)) {
+      throw new Error(`required callbacks did not progress: ${JSON.stringify(latest)}`);
+    }
+    const paused = await execution.pause();
+    const metrics = (await execution.metrics()).metrics;
+    return { canvasId: canvas.id, paused, metrics };
+  }, callbackSource);
+  assert.equal(callbackResult.paused.playing, false);
+  assert.equal(callbackResult.metrics.objectCount, 2);
+  assert.ok(callbackResult.metrics.drawCalls > 0);
+  // Renderer delivery is asynchronous. Await the coherent paused publication,
+  // without seeking or re-running either opaque callback.
+  let callbackPixels;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const screenshot = await page.locator(`#${callbackResult.canvasId}`).screenshot();
+    const animated = visiblePixelStats(screenshot,
+      (r, g, b, x) => x > 300 && Math.min(r, g, b) > 35);
+    const drift = visiblePixelStats(screenshot,
+      (r, g, b, x) => x < 250 && Math.min(r, g, b) > 35);
+    callbackPixels = { animated, drift };
+    if (animated.count > 500 && drift.count > 100
+      && Math.abs(animated.centerX - 410) < 4
+      && Math.abs(animated.centerY - 135) < 4
+      && Math.abs(drift.centerX - 185) < 4
+      && Math.abs(drift.centerY - (180 - 45 * callbackResult.paused.time)) < 4) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(callbackPixels.animated.count > 500, "ordered callback circle was blank");
+  assert.ok(callbackPixels.drift.count > 100, "accumulating callback circle was blank");
+  assert.ok(Math.abs(callbackPixels.animated.centerX - 410) < 4, "timeline endpoint x");
+  assert.ok(Math.abs(callbackPixels.animated.centerY - 135) < 4, "ordered callback lift y");
+  assert.ok(Math.abs(callbackPixels.drift.centerX - 185) < 4, "unowned callback x");
+  assert.ok(Math.abs(callbackPixels.drift.centerY - (180 - 45 * callbackResult.paused.time)) < 4,
+    "dt callback did not accumulate coherent forward time");
+  assert.ok(callbackPixels.drift.meanRed > callbackPixels.animated.meanRed + 30,
+    "second ordered callback did not apply half opacity");
+  await page.evaluate(() => {
+    window.sharedAuthoringSmoke.liveExampleExecution.terminate();
+    window.sharedAuthoringSmoke.liveExampleExecution = null;
+  });
 
   const persisted = await page.evaluate(
     async ({ persistedSceneSource, reusePersistedSceneSource }) => {

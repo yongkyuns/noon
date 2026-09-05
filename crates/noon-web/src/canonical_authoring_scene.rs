@@ -255,11 +255,7 @@ impl CanonicalAuthoringScene {
     /// Close every open callback occurrence on this target at an exclusive
     /// authored time before the canonical execution session exists.
     #[cfg(target_arch = "wasm32")]
-    fn clear_updaters(
-        &mut self,
-        handle: &noon::Mobject,
-        inactive_from: f64,
-    ) -> Result<(), String> {
+    fn clear_updaters(&mut self, handle: &noon::Mobject, inactive_from: f64) -> Result<(), String> {
         self.require_pre_execution_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.clear_updaters(handle.node_id(), inactive_from);
@@ -273,8 +269,7 @@ impl CanonicalAuthoringScene {
     fn require_pre_execution_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
         if self.live_player.is_some() || self.live_player_transferred {
             return Err(
-                "callback registrations must be authored before canonical execution begins"
-                    .into(),
+                "callback registrations must be authored before canonical execution begins".into(),
             );
         }
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {

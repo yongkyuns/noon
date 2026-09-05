@@ -651,11 +651,11 @@ impl ExecutionSession {
         signal: SemanticNodeId,
         value: impl Into<ReactiveValue>,
     ) -> Result<&FrameState, ExecutionSessionInputError> {
+        self.ensure_direct_input_ingress_available()?;
         let execution_signal = self
             .reactive_projection
             .execution_signal_id(signal)
             .ok_or(ExecutionSessionInputError::UnknownSemanticSignal(signal))?;
-        self.ensure_direct_input_ingress_available()?;
         Ok(self.runtime.set_reactive_input(execution_signal, value)?)
     }
 

@@ -96,9 +96,12 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
 | Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
 | Affine animation | [live_affine_animation.rs](crates/noon-native/examples/live_affine_animation.rs) | [live_affine_animation.py](web/python/examples/live_affine_animation.py) |
+| Ordered property callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
+
+The callback example runs forward, combining an affine animation with ordered transform/style updates and a separate `dt` accumulator. This callback path currently supports object property reads and writes for active callback targets. Family callbacks, structural callback edits, undeclared reads, and seeking or looping opaque callbacks are not supported. A callback failure stops progression at the last coherent frame.
 
 The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
 

@@ -328,7 +328,7 @@ enum FrameContentMut<'a> {
 impl FrameContentMut<'_> {
     fn geometry_mut(&mut self) -> Option<&mut GeometryRef> {
         let content: &mut ObjectContentRef = match self {
-            Self::Direct(content) => &mut **content,
+            Self::Direct(content) => content,
             Self::Staged {
                 base,
                 content_override,

@@ -1,7 +1,7 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 use noon::{
-    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch,
-    EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
+    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
+    ExecutionSession, RuntimeIdentity,
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
@@ -102,7 +102,9 @@ impl SemanticExecutionPlayer {
         transport_session: u32,
     ) -> Result<(), String> {
         if self.pending_callback_phase.is_some() {
-            return Err("cannot rebind transport while a required callback phase is pending".into());
+            return Err(
+                "cannot rebind transport while a required callback phase is pending".into(),
+            );
         }
         if !self.session.has_required_callbacks() {
             self.clock
@@ -582,7 +584,8 @@ fn validate_callback_style(style: Style) -> Result<(), String> {
             .into_iter()
             .all(f32::is_finite)
     };
-    if !style.stroke_width.is_finite() || !style.opacity.is_finite()
+    if !style.stroke_width.is_finite()
+        || !style.opacity.is_finite()
         || style.fill.is_some_and(|color| !finite_color(color))
         || style.stroke.is_some_and(|color| !finite_color(color))
     {
@@ -592,8 +595,8 @@ fn validate_callback_style(style: Style) -> Result<(), String> {
 }
 
 fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
-    let wire: CallbackBatchWire =
-        serde_json::from_str(json).map_err(|error| format!("invalid callback batch JSON: {error}"))?;
+    let wire: CallbackBatchWire = serde_json::from_str(json)
+        .map_err(|error| format!("invalid callback batch JSON: {error}"))?;
     let token = CallbackPhaseToken::try_from(wire.token)?;
     let writes = wire
         .writes
@@ -697,9 +700,14 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickCallbackPhaseJson))]
-    pub fn tick_callback_phase_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
+    pub fn tick_callback_phase_json(
+        &mut self,
+        timestamp_ms: f64,
+    ) -> Result<Option<String>, String> {
         let mut clock = self.clock.clone();
-        let requested = clock.scene_time(timestamp_ms).map_err(|error| error.to_string())?;
+        let requested = clock
+            .scene_time(timestamp_ms)
+            .map_err(|error| error.to_string())?;
         let phase = self.advance_to_callback_phase(requested)?;
         if phase.is_none() {
             self.clock = clock;
@@ -792,7 +800,8 @@ impl SemanticExecutionPlayer {
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
         if self.session.has_required_callbacks() {
             return Err(
-                "direct seek is unsupported for required callbacks; begin a new authoring run".into(),
+                "direct seek is unsupported for required callbacks; begin a new authoring run"
+                    .into(),
             );
         }
         let mut clock = self.clock.clone();
@@ -1023,8 +1032,13 @@ mod tests {
                 },
             ],
         });
-        player.commit_callback_phase_json(&batch.to_string()).unwrap();
-        assert_eq!(player.session.frame().objects[0].transform.translation.y, 1.0);
+        player
+            .commit_callback_phase_json(&batch.to_string())
+            .unwrap();
+        assert_eq!(
+            player.session.frame().objects[0].transform.translation.y,
+            1.0
+        );
         assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
         assert!(player.drain_delta_json().unwrap().is_some());
     }
@@ -1048,10 +1062,8 @@ mod tests {
         .unwrap();
         let phase = player.initial_callback_phase_json().unwrap().unwrap();
         player.interrupt_callback_phase_json(&phase).unwrap();
-        let termination: serde_json::Value = serde_json::from_str(
-            &player.callback_termination_json().unwrap().unwrap(),
-        )
-        .unwrap();
+        let termination: serde_json::Value =
+            serde_json::from_str(&player.callback_termination_json().unwrap().unwrap()).unwrap();
         assert_eq!(termination["kind"], "interrupted");
         assert!(player.tick_callback_phase_json(16.0).is_err());
     }
