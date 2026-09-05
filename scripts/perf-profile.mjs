@@ -66,7 +66,7 @@ try {
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: browserArgs(backend, forceSoftwareWebGpu),
+    args: browserArgs(backend, forceSoftwareWebGpu, requireGpuTimestamps),
   });
 
   const results = [];
@@ -120,6 +120,10 @@ try {
         assert.ok(
           report.gpu.samples >= minimumSamples,
           `${layout}/${objects} produced ${report.gpu.samples} GPU samples; expected at least ${minimumSamples}`,
+        );
+        assert.ok(
+          Number.isFinite(report.gpu.renderPassMs?.p95),
+          `${layout}/${objects} did not report a finite GPU render-pass p95`,
         );
         assert.equal(
           report.gpu.failed,
@@ -196,8 +200,9 @@ async function waitForServer() {
   throw new Error(`Performance server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function browserArgs(mode, forceSoftware = false) {
+function browserArgs(mode, forceSoftware = false, requireTimestamps = false) {
   if (mode === "webgpu") {
+    const timestampArgs = requireTimestamps ? ["--enable-dawn-features=allow_unsafe_apis"] : [];
     if (forceSoftware) {
       return [
         "--enable-unsafe-webgpu",
@@ -211,6 +216,7 @@ function browserArgs(mode, forceSoftware = false) {
         "--use-vulkan=swiftshader",
         "--disable-gpu-sandbox",
         "--disable-dev-shm-usage",
+        ...timestampArgs,
       ];
     }
     return [
@@ -219,6 +225,7 @@ function browserArgs(mode, forceSoftware = false) {
       "--ignore-gpu-blocklist",
       "--disable-gpu-sandbox",
       "--disable-dev-shm-usage",
+      ...timestampArgs,
     ];
   }
   return [

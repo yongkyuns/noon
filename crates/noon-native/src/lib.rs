@@ -326,30 +326,28 @@ impl NativeApp {
         }
 
         self.advance_realtime_timeline(Instant::now())?;
+        if !self.publication_pending() {
+            return Ok(());
+        }
         let camera = self.session.camera()?;
+        let acquired = {
+            let gpu = self
+                .gpu
+                .as_mut()
+                .expect("drawable native host must own GPU state");
+            gpu.set_camera(camera)?;
+            gpu.acquire(window.clone())?
+        };
+        let Some(((surface_texture, reconfigure_after_present), changes)) =
+            self.take_frame_changes_after_acquire(acquired)
+        else {
+            return Ok(());
+        };
+
         let gpu = self
             .gpu
             .as_mut()
             .expect("drawable native host must own GPU state");
-        gpu.set_camera(camera)?;
-        let changes = self.session.take_frame_changes();
-        let changes = if self.force_full_redraw {
-            FrameChanges::all()
-        } else {
-            changes
-        };
-        if changes.is_empty() {
-            return Ok(());
-        }
-
-        let Some((surface_texture, reconfigure_after_present)) = gpu.acquire(window.clone())?
-        else {
-            // The runtime invalidation has already been consumed. Preserve correctness
-            // across a transient surface failure by rebuilding the next presented frame.
-            self.force_full_redraw = true;
-            return Ok(());
-        };
-
         let frame = self.session.frame();
         let prepared = gpu.preparer.prepare_incremental(frame, &changes);
         gpu.renderer.upload(&gpu.device, &gpu.queue, &prepared);
@@ -375,6 +373,28 @@ impl NativeApp {
         }
         self.force_full_redraw = false;
         Ok(())
+    }
+
+    fn publication_pending(&self) -> bool {
+        self.force_full_redraw || self.session.wake_state().frame_pending()
+    }
+
+    /// Bind runtime invalidation consumption to a successful surface acquisition.
+    ///
+    /// A timeout, occlusion, or surface recovery leaves the session's pending
+    /// publication intact so the next acquired surface receives the same changes.
+    fn take_frame_changes_after_acquire<T>(
+        &mut self,
+        acquired: Option<T>,
+    ) -> Option<(T, FrameChanges)> {
+        let acquired = acquired?;
+        let session_changes = self.session.take_frame_changes();
+        let changes = if self.force_full_redraw {
+            FrameChanges::all()
+        } else {
+            session_changes
+        };
+        (!changes.is_empty()).then_some((acquired, changes))
     }
 }
 
@@ -869,6 +889,59 @@ mod tests {
         assert_eq!(app.session.frame().objects[0].transform.rotation, 2.0);
         assert_eq!(app.session.frame().time, 0.0);
         assert_eq!(app.next_input_sequence, 2);
+    }
+
+    #[test]
+    fn transient_surface_acquire_retains_pending_session_publication() {
+        use noon_core::{
+            SemanticObjectProperty, SemanticObjectState, SemanticStore, SemanticVec3,
+            StoredGeometry,
+        };
+
+        let mut store = SemanticStore::new();
+        let viewport = store
+            .insert_semantic_input_signal(SemanticVec3::new(0.0, 0.0, 0.0))
+            .unwrap();
+        store
+            .bind_semantic_native_state_input(viewport, NativeStateSource::ViewportSize)
+            .unwrap();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        store
+            .bind_semantic_signal(viewport, object, SemanticObjectProperty::Translation)
+            .unwrap();
+        let session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut app = NativeApp::new(session, NativeViewportConfig::default());
+
+        assert!(app.session.take_frame_changes().is_all());
+        assert!(!app.publication_pending());
+
+        app.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(Vec2::new(640.0, 360.0)),
+        )
+        .unwrap();
+        assert!(!app.force_full_redraw);
+        assert!(app.publication_pending());
+        assert!(app.take_frame_changes_after_acquire::<()>(None).is_none());
+        assert!(
+            app.session.wake_state().frame_pending(),
+            "a failed surface acquisition must not consume the runtime publication"
+        );
+        assert!(
+            !app.force_full_redraw,
+            "a failed surface acquisition must not promote an incremental publication to a full redraw"
+        );
+
+        let Some(((), changes)) = app.take_frame_changes_after_acquire(Some(())) else {
+            panic!("the retry must receive the pending runtime publication");
+        };
+        assert!(!changes.is_all());
+        assert_eq!(changes.object_indices(), &[0]);
+        assert!(!app.session.wake_state().frame_pending());
     }
 
     #[cfg(target_os = "linux")]

@@ -1,5 +1,5 @@
 //! Direct authoring scope over one family in the shared semantic store.
-use crate::{ExecutionSession, Mobject};
+use crate::{ExecutionSession, LiveSession, Mobject};
 use noon_core::{
     GeometryRef, SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
@@ -105,6 +105,12 @@ impl Scene {
         &self,
     ) -> Result<ExecutionSession, noon_compile::SemanticExecutionLoweringError> {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
+    }
+
+    /// Borrow the already-published execution session for live property edits
+    /// and effective-value queries. This facade retains no scene/runtime state.
+    pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
+        LiveSession::new(&self.store, session)
     }
 }
 #[cfg(test)]

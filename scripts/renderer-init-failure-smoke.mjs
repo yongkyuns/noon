@@ -81,6 +81,17 @@ async function waitForHarness(page) {
   return page.evaluate(() => window.noonSmoke.metrics());
 }
 
+async function loadVisibleAuthoringScene(page) {
+  return page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    await wasm.default();
+    const scene = new wasm.AuthoringSceneCore();
+    const circle = scene.add(wasm.authoringCircle(0.75));
+    scene.moveTo(circle, 0, 0);
+    return window.noonSmoke.loadScene(scene.sceneJson());
+  });
+}
+
 async function waitForExecutionRendererHarness(page) {
   await page.goto(`${baseUrl}/web/execution-renderer-smoke.html`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonExecutionRendererSmoke?.ready === true, null, {
@@ -130,6 +141,8 @@ try {
     "WebGL2",
     `WebGPU-disabled renderer selected ${fallbackInitial.rendererBackend}`,
   );
+  const fallbackScene = await loadVisibleAuthoringScene(fallbackPage);
+  assert.equal(fallbackScene.objectCount, 1, "WebGL fallback did not load the visible authoring fixture");
   const fallbackFrame = await fallbackPage.evaluate(() => window.noonSmoke.renderAt(0.5));
   assert.equal(fallbackFrame.error, null, "WebGL fallback reported a runtime error");
   assert.equal(fallbackFrame.rendererBackend, "WebGL2");

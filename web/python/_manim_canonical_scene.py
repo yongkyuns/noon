@@ -103,18 +103,32 @@ def _play(self, *args, **kwargs):
 def _to_document(self):
     # Explicit export may project values; it does not provide execution input on
     # the shared path. Legacy animation retains this adapter until #959.
-    objects = list(self._objects)
+    document = _ORIGINAL_TO_DOCUMENT(self)
+    objects = document["objects"]
     if not getattr(self, "_legacy_geometry_materialized", False):
         for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
             snapshot = json.loads(str(handle.snapshotJson()))
             snapshot["id"] = object_id
             objects[self._object_positions[object_id]] = snapshot
-    return {"version": _ir.FORMAT_VERSION, "objects": objects, "tracks": list(self._tracks)}
+    return document
 
 
 def execution_context(scene, callbacks=None):
     """Select the complete typed geometry path; unsupported contracts stay explicit."""
     if callbacks or getattr(scene, "_legacy_geometry_materialized", False):
+        return None
+    # The canonical static context does not yet lower the legacy reactive/native
+    # declarations.  Reject them here rather than silently constructing a live
+    # session that omits their drivers; #61 owns their shared-semantic migration.
+    if any(
+        getattr(scene, attribute, [])
+        for attribute in (
+            "_reactive_signals",
+            "_reactive_bindings",
+            "_reactive_signal_tracks",
+            "_native_inputs",
+        )
+    ):
         return None
     if getattr(scene, "_retained_text_objects", []):
         return None
@@ -127,6 +141,59 @@ def execution_context(scene, callbacks=None):
                 track.get("values", {}).get("bool", {}).get("to") is not True):
             return None
     return _context(scene)
+
+
+class LiveExecution:
+    """Explicit live property/query facade over one Rust/WASM execution session.
+
+    The wrapper retains only Python object ergonomics. The canonical context
+    owns the semantic store and its one runtime session until normal execution
+    leases that same session to the renderer; no Python snapshot is consulted
+    for a live read or write.
+    """
+
+    def __init__(self, scene: _base.Scene, duration: float = 1.0) -> None:
+        context = execution_context(scene)
+        if context is None:
+            raise RuntimeError(
+                "live execution currently supports typed static geometry without "
+                "callbacks, retained text, or timeline tracks"
+            )
+        self._scene = scene
+        context.beginLiveExecution(float(duration))
+        self._context = context
+
+    def _handle(self, mobject: _base.Mobject) -> object:
+        if not isinstance(mobject, _base.Mobject) or mobject._scene is not self._scene:
+            raise ValueError("live Mobject must belong to this Scene")
+        handle = getattr(mobject, "_semantic_handle", None)
+        if handle is None:
+            raise ValueError("live execution requires a typed semantic Mobject handle")
+        return handle
+
+    def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
+
+    def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveShift(self._handle(mobject), float(x), float(y))
+
+    def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveSetScale(self._handle(mobject), float(x), float(y))
+
+    def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
+        self._context.liveSetRotation(self._handle(mobject), float(angle))
+
+    def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
+        observed = self._context.liveEffectiveMobject(self._handle(mobject))
+        return _base.Vec2(
+            float(observed.translationX),
+            float(observed.translationY),
+        )
+
+
+def _live_execution(self: _base.Scene, duration: float = 1.0) -> LiveExecution:
+    """Create an explicit typed live session for the currently supported subset."""
+    return LiveExecution(self, duration)
 
 
 def _append_snapshot(
@@ -269,4 +336,5 @@ def install() -> None:
     _base.Scene.to_scene_spec = _to_scene_spec
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene.play = _play
+    _base.Scene.live_execution = _live_execution
     _ir.Scene.to_document = _to_document

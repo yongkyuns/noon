@@ -102,7 +102,4 @@ start().catch((error) => {
   state.error = String(error);
   state.ready = true;
   console.error(error);
-  setTimeout(() => {
-    throw error;
-  }, 0);
 });

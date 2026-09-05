@@ -51,6 +51,7 @@ try {
   renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
   renderer.resize(width, height);
   renderer.setCamera(0, 0, workload.cameraHeight);
+  renderer.enableGpuTimestampProfiling(true);
   if (!presentPending()) {
     throw new Error("initial performance frame was not presented");
   }
@@ -65,6 +66,15 @@ try {
   // Keep the measurement phase deterministic across devices. Browser rAF owns
   // cadence sampling only; semantic scene time advances by one target-Hz step.
   presentSceneTime(0);
+  const warmupGpuTimestamps = await settleGpuTimestampMetrics(
+    new SampleWindow(warmupFrames + 8),
+  );
+  if (
+    warmupGpuTimestamps.timestampSupported &&
+    !renderer.resetGpuTimestampMetrics()
+  ) {
+    throw new Error("GPU timestamp warmup readbacks did not drain before measurement");
+  }
   const cadence = new FrameMetrics({ targetHz });
   const windows = {
     cpuFrameMs: new SampleWindow(measuredFrames),
@@ -72,6 +82,7 @@ try {
     transportApplyMs: new SampleWindow(measuredFrames),
     rendererRenderMs: new SampleWindow(measuredFrames),
     unattributedFrameMs: new SampleWindow(measuredFrames),
+    gpuRenderPassMs: new SampleWindow(measuredFrames),
   };
   browserJank.start();
   const measurementStartMs = performance.now();
@@ -81,6 +92,7 @@ try {
     status.value = `Measuring ${measured + 1}/${measuredFrames} · ${layout} / ${objectCount.toLocaleString()} objects…`;
     const timestamp = await nextAnimationFrame();
     const timings = presentSceneTime((measured + 1) / targetHz);
+    takeGpuTimestampMetrics(windows.gpuRenderPassMs);
 
     cadence.record(timestamp, timings.cpuFrameMs);
     windows.cpuFrameMs.record(timings.cpuFrameMs);
@@ -95,6 +107,7 @@ try {
     previousTimestamp = timestamp;
     measured += 1;
   }
+  const gpuTimestamps = await settleGpuTimestampMetrics(windows.gpuRenderPassMs);
   const measurementEndMs = performance.now();
   browserJank.stop();
 
@@ -158,9 +171,15 @@ try {
       geometryCacheMisses: renderer.lastGeometryCacheMisses(),
     },
     gpu: {
-      timestampSupported: false,
-      unavailableReason:
-        "ExecutionCanvasRenderer does not yet expose WebGPU timestamp-query profiling",
+      timestampSupported: gpuTimestamps.timestampSupported,
+      unavailableReason: gpuTimestamps.timestampSupported
+        ? null
+        : "WebGPU TIMESTAMP_QUERY is unavailable on this renderer device",
+      samples: gpuTimestamps.samples,
+      dropped: gpuTimestamps.dropped,
+      failed: gpuTimestamps.failed,
+      inFlight: gpuTimestamps.inFlight,
+      renderPassMs: windows.gpuRenderPassMs.summary(),
     },
   };
 
@@ -226,6 +245,40 @@ function presentPending() {
     }
   }
   return false;
+}
+
+function takeGpuTimestampMetrics(sampleWindow) {
+  const raw = renderer.takeGpuTimestampJson();
+  const metrics = JSON.parse(raw);
+  if (!metrics || typeof metrics !== "object") {
+    throw new Error("renderer returned invalid GPU timestamp diagnostics");
+  }
+  const renderPassMs = Array.isArray(metrics.renderPassMs) ? metrics.renderPassMs : [];
+  for (const milliseconds of renderPassMs) {
+    sampleWindow.record(milliseconds);
+  }
+  return {
+    timestampSupported: metrics.timestampSupported === true,
+    samples: nonnegativeInteger(metrics.samples),
+    dropped: nonnegativeInteger(metrics.dropped),
+    failed: nonnegativeInteger(metrics.failed),
+    inFlight: nonnegativeInteger(metrics.inFlight),
+  };
+}
+
+async function settleGpuTimestampMetrics(sampleWindow) {
+  let metrics = takeGpuTimestampMetrics(sampleWindow);
+  // Mapping resolves after queue submission. Yield browser frames to process
+  // those callbacks, bounded so profiling never turns into a synchronous wait.
+  for (let attempt = 0; metrics.timestampSupported && metrics.inFlight > 0 && attempt < 32; attempt += 1) {
+    await nextAnimationFrame();
+    metrics = takeGpuTimestampMetrics(sampleWindow);
+  }
+  return metrics;
+}
+
+function nonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function drainGpuDiagnostics() {

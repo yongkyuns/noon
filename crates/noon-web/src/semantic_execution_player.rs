@@ -8,6 +8,10 @@ pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
     clock: PlaybackClock,
     encoder: ExecutionDeltaEncoder,
+    /// Present when the player came from canonical authoring. This is the one
+    /// semantic store that produced `session`, not an execution mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
 }
 
 impl SemanticExecutionPlayer {
@@ -20,7 +24,130 @@ impl SemanticExecutionPlayer {
             session,
             clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
             encoder: ExecutionDeltaEncoder::new(transport_session),
+            #[cfg(any(target_arch = "wasm32", test))]
+            semantics: None,
         })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn from_live_session(
+        session: ExecutionSession,
+        semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            session,
+            clock: PlaybackClock::looping(duration).map_err(|e| e.to_string())?,
+            encoder: ExecutionDeltaEncoder::new(transport_session),
+            semantics: Some(semantics),
+        })
+    }
+
+    /// Change only derived transport framing while retaining the same runtime.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn rebind_transport(
+        &mut self,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<(), String> {
+        self.clock
+            .set_loop_duration(duration)
+            .map_err(|error| error.to_string())?;
+        self.encoder = ExecutionDeltaEncoder::new(transport_session);
+        Ok(())
+    }
+
+    /// The authored scene revision represented by this runtime.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
+        self.session.publication_context().scene_revision()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_set_translation(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_translation(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_shift(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .shift(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_scale(
+        &mut self,
+        mobject: &noon::Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_scale(mobject, x, y)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_rotation(
+        &mut self,
+        mobject: &noon::Mobject,
+        angle: f64,
+    ) -> Result<(), String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .set_rotation(mobject, angle)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<noon::EffectiveMobjectState, String> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(&semantics, &mut self.session)
+            .effective(mobject)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
+        &mut self.session
     }
 
     fn delta(&mut self, snapshot: bool) -> Result<Option<ExecutionDeltaEnvelope>, String> {
