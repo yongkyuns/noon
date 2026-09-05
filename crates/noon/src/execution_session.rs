@@ -1,3 +1,6 @@
+mod publication;
+pub use publication::*;
+
 use crate::execution_segment::{ExecutionSegment, ExecutionSegmentError};
 use noon_compile::{
     lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
@@ -84,6 +87,7 @@ impl std::error::Error for ExecutionSessionCameraError {}
 /// Error produced while activating one authoritative semantic animation declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionAnimationError {
+    ForeignSemanticStore,
     StaleSceneRevision {
         expected: noon_core::SceneRevision,
         actual: noon_core::SceneRevision,
@@ -98,6 +102,9 @@ pub enum ExecutionSessionAnimationError {
 impl std::fmt::Display for ExecutionSessionAnimationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ForeignSemanticStore => {
+                formatter.write_str("semantic store does not own this execution session")
+            }
             Self::StaleSceneRevision { expected, actual } => write!(
                 formatter,
                 "semantic scene revision {} does not match execution scene revision {}",
@@ -165,6 +172,7 @@ impl From<CompilePatchError> for ExecutionSessionAnimationError {
 /// incremental lowering rather than the migration-era runtime patch surface.
 #[derive(Clone, Debug)]
 pub struct ExecutionSession {
+    store_identity: noon_core::SemanticStoreIdentity,
     execution_index: SemanticExecutionIndex,
     slots: noon_runtime::ExecutionSlotTable,
     reactive_projection: SemanticReactiveProjection,
@@ -181,7 +189,11 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution(store, &mut execution_index)?;
-        Ok(Self::from_lowered(execution_index, lowered))
+        Ok(Self::from_lowered(
+            store.identity(),
+            execution_index,
+            lowered,
+        ))
     }
 
     /// Instantiate the existing runtime for one semantic scene family.
@@ -196,10 +208,15 @@ impl ExecutionSession {
     ) -> Result<Self, SemanticExecutionLoweringError> {
         let mut execution_index = SemanticExecutionIndex::new();
         let lowered = lower_semantic_execution_root(store, root, &mut execution_index)?;
-        Ok(Self::from_lowered(execution_index, lowered))
+        Ok(Self::from_lowered(
+            store.identity(),
+            execution_index,
+            lowered,
+        ))
     }
 
     fn from_lowered(
+        store_identity: noon_core::SemanticStoreIdentity,
         execution_index: SemanticExecutionIndex,
         lowered: SemanticExecutionLoweringOutput,
     ) -> Self {
@@ -214,6 +231,7 @@ impl ExecutionSession {
         let reactive_projection = lowered.reactive().clone();
         let runtime = SceneInstance::from_semantic_execution(lowered);
         Self {
+            store_identity,
             execution_index,
             slots,
             reactive_projection,
@@ -326,6 +344,9 @@ impl ExecutionSession {
         root: SemanticNodeId,
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
+        if store.identity() != self.store_identity {
+            return Err(ExecutionSessionAnimationError::ForeignSemanticStore);
+        }
         let expected = self.publication_context().scene_revision();
         let actual = store.scene_revision();
         if actual != expected {
