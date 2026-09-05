@@ -81,13 +81,24 @@ let session = scene.execution_session()?;
 assert_eq!(session.frame().objects.len(), 2);
 ```
 
-This is an intentional source API change: constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for an executable static and affine animation example using typed lowering and runtime execution.
+Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
 The older fluent snapshot authoring API is available explicitly through `noon::legacy`, including `noon::legacy::prelude`; it is migration code owned for deletion by #959. Its advanced animation examples have not yet all moved to the canonical public API. Initial membership changes prepare subsequent sessions; they do not implicitly mutate an already running session.
 
-After creating a session, publish transform/style edits and detached object or animation declarations through `ExecutionSession::apply_semantic_transaction`. It prepares the semantic edit and its affected execution values together, so a failed edit leaves the authored and live states unchanged. Use `effective_semantic_object(&store, node)` to read a value and its publication context after animation; ordinary `Mobject` inspection still reads authored/base state. Direct handle mutations after initial lowering make that session's scene revision stale and are rejected by live publication. Membership, content and reactive-topology edits are not yet supported by this live API. The [`shared_authoring` example](crates/noon/examples/shared_authoring.rs) demonstrates publishing the next target after a completed segment.
+After creating a session, use `scene.live(&mut session)` for shared property edits, append-compatible membership changes, predeclared affine animations, and replacement with content already owned by the semantic store. Property and structural edits use `ExecutionSession::apply_semantic_transaction` to prepare semantic changes and typed execution publication together, so a failed edit leaves authored and live states unchanged. Use `live.effective(&object)` for the current coherent value; ordinary `Mobject` inspection still reads authored/base state. Direct handle mutations after initial lowering make that session's scene revision stale. Live resource allocation, interleaved membership ordering, reactive-topology changes and animation-completion reconciliation remain unsupported.
 
-Static Python geometry scenes now execute directly from their shared semantic handles. The browser sends execution deltas across the renderer worker boundary without exporting a scene document. Python animation, text and callback scenes still use migration code until their shared execution and continuation contracts are complete. Document-oriented tools can explicitly request `exportDocument: true` from `PythonAuthoringClient.run`.
+Python geometry and text scenes, including the explicit `live_execution()` facade, execute from their shared semantic handles. The browser sends execution deltas across the actual worker boundary. The native and direct Rust/WASM paths remain typed in-process. Some Manim timeline and callback features still use migration code while their shared continuation contracts are completed. Document-oriented tools can explicitly request `exportDocument: true` from `PythonAuthoringClient.run`.
+
+Equivalent examples run through the native Rust renderer and the Python browser host:
+
+| Feature | Rust | Python |
+| --- | --- | --- |
+| Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
+| Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
+| Affine animation | [live_affine_animation.rs](crates/noon-native/examples/live_affine_animation.rs) | [live_affine_animation.py](web/python/examples/live_affine_animation.py) |
+| Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
+
+Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
 
 The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
 
