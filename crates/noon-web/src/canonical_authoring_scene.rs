@@ -2376,11 +2376,7 @@ mod tests {
         // Python's ordinary `Transform` creates this target after the runtime
         // exists. The target and its edit publish through that same runtime, so
         // the second activation neither rebuilds nor resets the live session.
-        let second_target = context
-            .active_live_player()
-            .unwrap()
-            .live_target_editor(&circle)
-            .unwrap();
+        let second_target = context.live_target_editor(&circle).unwrap();
         context
             .active_live_player()
             .unwrap()
