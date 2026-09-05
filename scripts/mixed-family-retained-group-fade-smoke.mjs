@@ -151,12 +151,15 @@ class MixedRetainedGroupFadeLagFailure(Scene):
             assert member._retained_object_id is None
 `;
 
-function retainedSources(result) {
-  return (result.retainedDocument?.objects ?? []).map((object) => object.text.source);
+function canonicalTextSources(result) {
+  assert.equal(result.retainedDocument, undefined, "canonical export must not retain a sidecar");
+  return result.sceneSpec.objects
+    .filter((object) => object.content?.kind === "text")
+    .map((object) => object.content.value.source);
 }
 
 function tracksFor(result, property) {
-  return (result.retainedDocument?.tracks ?? []).filter((track) => track.property === property);
+  return result.sceneSpec.tracks.filter((track) => track.property === property);
 }
 
 function assertFadeTracks(result, objectIndexes) {
@@ -233,10 +236,9 @@ try {
     writeFirstSource,
   );
   assert.equal(writeFirst.kind, "scene_document");
-  assert.deepEqual(retainedSources(writeFirst), ["WRITE", "A", "B"]);
+  assert.deepEqual(canonicalTextSources(writeFirst), ["WRITE", "A", "B"]);
   assert.equal(writeFirst.sceneSpec.objects.length, 3);
   assert.equal(writeFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(writeFirst.retainedDocument.family_animations.length, 1);
   assert.equal(writeFirst.duration, 1);
   assertFadeTracks(writeFirst, [1, 2]);
 
@@ -245,17 +247,16 @@ try {
     fadeFirstEditedSource,
   );
   assert.equal(fadeFirst.kind, "scene_document");
-  assert.deepEqual(retainedSources(fadeFirst), ["A2", "B2", "C2", "EDITED"]);
+  assert.deepEqual(canonicalTextSources(fadeFirst), ["A2", "B2", "C2", "EDITED"]);
   assert.equal(fadeFirst.sceneSpec.objects.length, 4);
   assert.equal(fadeFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(fadeFirst.retainedDocument.family_animations.length, 1);
   assertFadeTracks(fadeFirst, [0, 1, 2]);
 
   const sameLeaf = await page.evaluate(
     (source) => window.noonManimCompat.run(source),
     sameLeafSource,
   );
-  assert.deepEqual(retainedSources(sameLeaf), ["SHARED", "PEER"]);
+  assert.deepEqual(canonicalTextSources(sameLeaf), ["SHARED", "PEER"]);
   assert.equal((sameLeaf.sceneSpec.family_animations ?? []).length, 0);
   assertFadeTracks(sameLeaf, [0, 1]);
   assertFadeOutTracks(sameLeaf, [0, 1]);
@@ -264,7 +265,7 @@ try {
     (source) => window.noonManimCompat.run(source),
     rollbackSource,
   );
-  assert.deepEqual(retainedSources(rollback), ["WRITE", "A", "B", "MOVE"]);
+  assert.deepEqual(canonicalTextSources(rollback), ["WRITE", "A", "B", "MOVE"]);
   assert.equal(rollback.sceneSpec.family_animations.length, 1);
   assert.equal(tracksFor(rollback, "position").length, 1);
   assertFadeTracks(rollback, [1, 2]);

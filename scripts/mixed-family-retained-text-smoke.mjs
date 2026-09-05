@@ -117,12 +117,15 @@ class MixedRetainedRollback(Scene):
         )
 `;
 
-function retainedSources(result) {
-  return (result.retainedDocument?.objects ?? []).map((object) => object.text.source);
+function canonicalTextSources(result) {
+  assert.equal(result.retainedDocument, undefined, "canonical export must not retain a sidecar");
+  return result.sceneSpec.objects
+    .filter((object) => object.content?.kind === "text")
+    .map((object) => object.content.value.source);
 }
 
 function tracksFor(result, property) {
-  return (result.retainedDocument?.tracks ?? []).filter((track) => track.property === property);
+  return result.sceneSpec.tracks.filter((track) => track.property === property);
 }
 
 let browser = null;
@@ -152,10 +155,9 @@ try {
   );
   assert.equal(propertyFirst.kind, "scene_document");
   assert.equal(propertyFirst.document.objects.length, 0);
-  assert.deepEqual(retainedSources(propertyFirst), ["MOVE", "WRITE"]);
+  assert.deepEqual(canonicalTextSources(propertyFirst), ["MOVE", "WRITE"]);
   assert.equal(propertyFirst.sceneSpec.objects.length, 2);
   assert.equal(propertyFirst.sceneSpec.family_animations.length, 1);
-  assert.equal(propertyFirst.retainedDocument.family_animations.length, 1);
   assert.equal(propertyFirst.duration, 1);
   const firstPositions = tracksFor(propertyFirst, "position");
   assert.equal(firstPositions.length, 1);
@@ -174,10 +176,9 @@ try {
   );
   assert.equal(edited.kind, "scene_document");
   assert.equal(edited.document.objects.length, 0);
-  assert.deepEqual(retainedSources(edited), ["EDITED", "SHIFT", "FADE"]);
+  assert.deepEqual(canonicalTextSources(edited), ["EDITED", "SHIFT", "FADE"]);
   assert.equal(edited.sceneSpec.objects.length, 3);
   assert.equal(edited.sceneSpec.family_animations.length, 1);
-  assert.equal(edited.retainedDocument.family_animations.length, 1);
   assert.equal(edited.duration, 1);
   const editedPositions = tracksFor(edited, "position");
   assert.equal(editedPositions.length, 1);
@@ -201,7 +202,7 @@ try {
     (source) => window.noonManimCompat.run(source),
     sameLeafSource,
   );
-  assert.deepEqual(retainedSources(sameLeaf), ["ONE"]);
+  assert.deepEqual(canonicalTextSources(sameLeaf), ["ONE"]);
   assert.equal(sameLeaf.sceneSpec.objects.length, 1);
   assert.equal(sameLeaf.sceneSpec.family_animations.length, 1);
   assert.equal(tracksFor(sameLeaf, "position").length, 0, "rejected same-leaf play must not leak a retained track");
@@ -210,7 +211,7 @@ try {
     (source) => window.noonManimCompat.run(source),
     rollbackSource,
   );
-  assert.deepEqual(retainedSources(rollback), ["ROLLBACK", "MOVE"]);
+  assert.deepEqual(canonicalTextSources(rollback), ["ROLLBACK", "MOVE"]);
   assert.equal(rollback.sceneSpec.objects.length, 2);
   assert.equal(rollback.sceneSpec.family_animations.length, 1, "failed family request must be rolled back before retry");
   assert.equal(tracksFor(rollback, "position").length, 1, "failed retained property track must not survive retry");
