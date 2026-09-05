@@ -318,6 +318,9 @@ pub enum SemanticSignalError {
     TimelineOwnedSignal {
         signal: SemanticNodeId,
     },
+    NativeOwnedSignal {
+        signal: SemanticNodeId,
+    },
 }
 
 impl std::fmt::Display for SemanticSignalError {
@@ -385,6 +388,12 @@ impl std::fmt::Display for SemanticSignalError {
             Self::TimelineOwnedSignal { signal } => write!(
                 formatter,
                 "semantic signal {}:{} is owned by an authored timeline",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeOwnedSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} is owned by a native input source",
                 signal.slot(),
                 signal.generation()
             ),
@@ -651,6 +660,9 @@ impl SemanticStore {
         }
         if state.native_input().is_some() && !matches!(&source, SemanticSignalSource::Input(_)) {
             return Err(SemanticSignalError::NativeInputRequiresInputSignal { signal: id });
+        }
+        if state.native_input().is_some() {
+            return Err(SemanticSignalError::NativeOwnedSignal { signal: id });
         }
 
         let mut cache = HashMap::new();
@@ -1463,6 +1475,41 @@ mod tests {
                 ..
             }) if id == signal
         ));
+    }
+
+    #[test]
+    fn native_owned_signal_rejects_direct_writes_before_transaction_commit() {
+        let mut store = SemanticStore::new();
+        let other = store.insert_semantic_input_signal(1.0_f64).unwrap();
+        let native = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        store
+            .bind_semantic_native_state_input(
+                native,
+                NativeStateSource::Control {
+                    name: "opacity".into(),
+                },
+            )
+            .unwrap();
+        let revision = store.scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_signal(other, 2.0_f64)
+            .set_signal(native, 0.5_f64);
+        assert!(matches!(transaction.apply(&mut store),
+            Err(SemanticMutationTransactionError::Signal {
+                error: SemanticSignalError::NativeOwnedSignal { signal }, ..
+            }) if signal == native
+        ));
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.semantic_input_scalar_value_at(other, 0.0), Ok(1.0));
+        assert_eq!(store.semantic_input_scalar_value_at(native, 0.0), Ok(0.0));
+        assert_eq!(
+            store.set_semantic_signal_source(native, SemanticSignalSource::Input(0.5_f64.into())),
+            Err(SemanticSignalError::NativeOwnedSignal { signal: native })
+        );
+        store.clear_semantic_native_input(native).unwrap();
+        transaction.apply(&mut store).unwrap();
+        assert_eq!(store.semantic_input_scalar_value_at(native, 0.0), Ok(0.5));
     }
 
     #[test]

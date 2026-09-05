@@ -895,6 +895,12 @@ impl SemanticMutationTransaction {
                             signal: *signal,
                         });
                     };
+                    if state.native_input().is_some() {
+                        return Err(SemanticMutationTransactionError::Signal {
+                            index,
+                            error: SemanticSignalError::NativeOwnedSignal { signal: *signal },
+                        });
+                    }
                     if !state.scalar_tracks().is_empty()
                         || staged_signal_tracks.contains_key(signal)
                     {
