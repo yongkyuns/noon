@@ -12,8 +12,8 @@ class LiveAffineCompletion(Scene):
         circle = Circle(1.0)
         self.add(circle)
 
-        first_target = circle.copy().shift((4.0, -2.0, 0.0))
-        second_target = circle.copy().shift((8.0, -2.0, 0.0))
+        first_target = circle.copy().shift((2.0, -2.0, 0.0))
+        second_target = circle.copy().shift((5.0, -2.0, 0.0))
         first = self.declare_live_transform_to(
             circle, first_target, run_time=2.0, rate_func=linear
         )
@@ -25,17 +25,17 @@ class LiveAffineCompletion(Scene):
         first_end = live.play(first)
         assert not live.advance_to(first_end)
         live.complete()
-        assert live.effective_center(circle) == (4.0, -2.0)
+        assert live.effective_center(circle) == (2.0, -2.0)
 
-        live.set_translation(circle, 5.0, -2.0)
+        live.set_translation(circle, 3.0, -2.0)
         wait_end = live.wait(0.25)
         assert live.advance_to(wait_end)
         live.complete()
-        assert live.effective_center(circle) == (5.0, -2.0)
+        assert live.effective_center(circle) == (3.0, -2.0)
 
         second_end = live.play(second)
         assert not live.advance_to(second_end - 1.0)
-        assert live.effective_center(circle) == (6.5, -2.0)
+        assert live.effective_center(circle) == (4.0, -2.0)
         assert not live.advance_to(second_end)
         live.complete()
-        assert live.effective_center(circle) == (8.0, -2.0)
+        assert live.effective_center(circle) == (5.0, -2.0)

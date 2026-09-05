@@ -407,9 +407,9 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut first_target = circle.target_editor().unwrap();
-        first_target.set_translation(4.0, -2.0).unwrap();
+        first_target.set_translation(2.0, -2.0).unwrap();
         let mut second_target = circle.target_editor().unwrap();
-        second_target.set_translation(8.0, -2.0).unwrap();
+        second_target.set_translation(5.0, -2.0).unwrap();
         scene.add(&circle).unwrap();
         let first = scene
             .declare_transform_to(
@@ -440,13 +440,13 @@ mod tests {
         assert!(live.segment_state(first_segment).is_complete());
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
-            4.0
+            2.0
         );
 
-        live.set_translation(&circle, 5.0, -2.0).unwrap();
+        live.set_translation(&circle, 3.0, -2.0).unwrap();
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
-            5.0
+            3.0
         );
         let second_segment = live.play_animation(&second).unwrap();
         live.advance_segment_to(second_segment, second_segment.end_time())
@@ -454,7 +454,7 @@ mod tests {
         live.complete_segment(second_segment).unwrap();
         assert_eq!(
             live.effective(&circle).unwrap().transform.translation.x,
-            8.0
+            5.0
         );
     }
 
