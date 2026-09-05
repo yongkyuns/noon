@@ -1,4 +1,8 @@
-use noon_core::{GeometryRef, Property, Style, TrackDefinition, TrackValues, VectorPath};
+use noon_core::{
+    GeometryRef, Property, StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D,
+    VectorPath,
+};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransformGeometryPlan {
@@ -18,7 +22,11 @@ pub enum TransformGeometryPlan {
         to_start: noon_core::Vec2,
         to_end: noon_core::Vec2,
     },
-    PathPair(GeometryRef),
+    PathPair {
+        geometry: Arc<GeometryRef>,
+        /// Fixed coordinate frame for renderer-only endpoints; semantic TRS stays separate.
+        render_transform: Option<Transform2D>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,16 +93,28 @@ pub(crate) fn compile_transform_geometry_plan(
             to_start: *to_start,
             to_end: *to_end,
         },
-        (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => {
-            compile_path_pair(from.style, to.style, source.clone(), target.clone())?
-        }
+        (GeometryRef::VectorPath(source), GeometryRef::VectorPath(target)) => compile_path_pair(
+            from.style,
+            to.style,
+            from.transform,
+            to.transform,
+            source.clone(),
+            target.clone(),
+        )?,
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
         | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {
             let source = noon_geometry::canonical_outline_path(&from.geometry)
                 .expect("closed analytic source geometry must convert to a path");
             let target = noon_geometry::canonical_outline_path(&to.geometry)
                 .expect("closed analytic target geometry must convert to a path");
-            compile_path_pair(from.style, to.style, source, target)?
+            compile_path_pair(
+                from.style,
+                to.style,
+                from.transform,
+                to.transform,
+                source,
+                target,
+            )?
         }
         _ => return Err(TransformCompileFailure::UnsupportedGeometry),
     };
@@ -111,6 +131,8 @@ fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
 fn compile_path_pair(
     from_style: Style,
     to_style: Style,
+    from_transform: Transform2D,
+    to_transform: Transform2D,
     source: VectorPath,
     target: VectorPath,
 ) -> Result<TransformGeometryPlan, TransformCompileFailure> {
@@ -123,7 +145,138 @@ fn compile_path_pair(
     {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
-    Ok(TransformGeometryPlan::PathPair(GeometryRef::path(
-        source.with_morph_target(target),
-    )))
+    // A fixed world frame keeps both stroke tessellation and path resource identity
+    // independent of animation progress. Preserve the current-relative lane when
+    // interpolation can become singular: later independent TRS drivers may need
+    // to invert the semantic transform to take ownership of this render geometry.
+    let same_nonzero_sign = |a: f32, b: f32| {
+        a.abs() > 1.0e-7 && b.abs() > 1.0e-7 && a.is_sign_positive() == b.is_sign_positive()
+    };
+    if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+        && to_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+        && same_nonzero_sign(from_transform.scale.x, to_transform.scale.x)
+        && same_nonzero_sign(from_transform.scale.y, to_transform.scale.y)
+    {
+        let world_source = source.transformed(from_transform);
+        let world_target = target.transformed(to_transform);
+        // Overflowed derived points and unsafe world-space filled topology retain
+        // the established local plan rather than installing an invalid resource.
+        if world_source.is_finite()
+            && world_target.is_finite()
+            && fixed_frame_inverse_is_finite(
+                &world_source,
+                &world_target,
+                from_transform,
+                to_transform,
+            )
+            && (from_style.fill.is_none()
+                || noon_geometry::plan_filled_morph(
+                    &world_source,
+                    &world_target,
+                    noon_geometry::MorphOptions::DEFAULT,
+                )
+                .is_ok())
+        {
+            return Ok(TransformGeometryPlan::PathPair {
+                geometry: Arc::new(GeometryRef::path(
+                    world_source.with_morph_target(world_target),
+                )),
+                render_transform: Some(Transform2D::IDENTITY),
+            });
+        }
+    }
+    Ok(TransformGeometryPlan::PathPair {
+        geometry: Arc::new(GeometryRef::path(source.with_morph_target(target))),
+        render_transform: None,
+    })
+}
+
+// Independent drivers can take over a fixed frame only if its conversion back
+// to any interpolated semantic TRS is finite. Bound the inverse in f64 so valid
+// but extreme authored coordinates retain the original local-plan behavior.
+fn fixed_frame_inverse_is_finite(
+    source: &VectorPath,
+    target: &VectorPath,
+    from: Transform2D,
+    to: Transform2D,
+) -> bool {
+    if !(to.rotation - from.rotation).is_finite()
+        || !(to.translation.x - from.translation.x).is_finite()
+        || !(to.translation.y - from.translation.y).is_finite()
+    {
+        return false;
+    }
+    let max_world = [source, target]
+        .into_iter()
+        .filter_map(VectorPath::conservative_bounds)
+        .flat_map(|bounds| [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y])
+        .map(|value| f64::from(value).abs())
+        .fold(0.0_f64, f64::max);
+    let max_translation = [
+        from.translation.x,
+        from.translation.y,
+        to.translation.x,
+        to.translation.y,
+    ]
+    .into_iter()
+    .map(|value| f64::from(value).abs())
+    .fold(0.0_f64, f64::max);
+    let min_scale = [from.scale.x, from.scale.y, to.scale.x, to.scale.y]
+        .into_iter()
+        .map(|value| f64::from(value).abs())
+        .fold(f64::INFINITY, f64::min);
+    let relative_bound = 4.0 * (max_world + max_translation);
+    relative_bound < f64::from(f32::MAX) && relative_bound / min_scale < f64::from(f32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noon_core::{Color, Vec2};
+
+    #[test]
+    fn fixed_world_pair_requires_finite_invertible_driver_takeover() {
+        let source = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(0.0, 1.0));
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        for (scale, translation, fixed) in [
+            (Vec2::new(2.0, 0.5), Vec2::ZERO, true),
+            (Vec2::new(-2.0, 0.5), Vec2::ZERO, false),
+            (Vec2::new(0.0, 1.0), Vec2::ZERO, false),
+            (Vec2::new(1.0e-8, 1.0), Vec2::ZERO, false),
+            (Vec2::ONE, Vec2::new(f32::MAX, 0.0), false),
+        ] {
+            let plan = compile_path_pair(
+                style,
+                style,
+                Transform2D::IDENTITY,
+                Transform2D {
+                    scale,
+                    translation,
+                    ..Transform2D::IDENTITY
+                },
+                source.clone(),
+                target.clone(),
+            )
+            .unwrap();
+            let TransformGeometryPlan::PathPair {
+                geometry,
+                render_transform,
+            } = plan
+            else {
+                panic!("pair");
+            };
+            assert_eq!(render_transform.is_some(), fixed);
+            assert!(geometry.is_finite());
+        }
+    }
 }

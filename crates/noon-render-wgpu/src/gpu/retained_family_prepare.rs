@@ -486,6 +486,7 @@ mod tests {
             reveals: vec![1.0, 1.0],
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
     }
@@ -561,6 +562,7 @@ mod tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+            render_transforms: vec![None],
         };
         (plan, frame, vec![Some(state(progress))], texts)
     }

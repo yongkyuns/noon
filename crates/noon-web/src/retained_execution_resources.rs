@@ -30,7 +30,10 @@ impl InstalledRetainedExecutionMirror {
     pub fn from_bundle_bytes(bytes: &[u8]) -> Result<Self, InstalledExecutionError> {
         let resources = RetainedResourceBundle::decode_binary(bytes)?.install()?;
         Ok(Self {
-            wire: RetainedExecutionFrameMirror::default(),
+            wire: RetainedExecutionFrameMirror::with_render_geometries(
+                resources.render_geometry_session(),
+                resources.render_geometries(),
+            ),
             resources,
             resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
@@ -253,6 +256,7 @@ impl InstalledRetainedExecutionMirror {
             resolved.reveals[index] = wire.reveals[index];
             resolved.morphs[index] = wire.morphs[index];
             resolved.render_geometries[index] = wire.render_geometries[index].clone();
+            resolved.render_transforms[index] = wire.render_transforms[index];
         }
         Ok(())
     }

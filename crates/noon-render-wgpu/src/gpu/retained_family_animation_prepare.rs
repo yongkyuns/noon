@@ -227,6 +227,7 @@ mod operation_selection_tests {
             reveals: vec![1.0, 1.0, 1.0],
             morphs: vec![0.0, 0.0, 0.0],
             render_geometries: vec![None, None, None],
+            render_transforms: vec![None, None, None],
         };
         (
             plan,
@@ -281,5 +282,122 @@ mod operation_selection_tests {
                 mode: FamilyAnimationMode::DrawBorderThenFill,
             }
         );
+    }
+    #[test]
+    fn family_reveal_keeps_fixed_morph_frame_and_warm_geometry() {
+        let (plan, mut retained, mut states) = fixture();
+        states[1] = None;
+        states[2] = None;
+        let source = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-1.0, 0.0))
+            .line_to(noon_core::Vec2::new(1.0, 0.0));
+        let target = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(0.0, -1.0))
+            .line_to(noon_core::Vec2::new(0.0, 1.0));
+        retained.render_geometries[0] = Some(std::sync::Arc::new(GeometryRef::path(
+            source.with_morph_target(target),
+        )));
+        retained.render_transforms[0] = Some(Transform2D::IDENTITY);
+        retained.objects[0].transform = Transform2D {
+            translation: noon_core::Vec2::new(3.0, -2.0),
+            rotation: 0.7,
+            scale: noon_core::Vec2::new(2.0, 0.5),
+        };
+        retained.objects[0].style.fill = None;
+        retained.objects[0].style.stroke = Some(noon_core::Color::WHITE);
+        retained.objects[0].style.stroke_width = 0.1;
+        retained.objects[0].style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+        retained.morphs[0] = 0.3;
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text_state = renderer.create_retained_text_state(&device, &queue);
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        let first = preparer
+            .prepare_family_animation_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &plan,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(
+            first.geometry.paths[0].transform,
+            Transform2D::IDENTITY.into()
+        );
+        assert_no_unused_mega_streams(&first);
+        let cold_upload = renderer.upload_retained(&device, &queue, &first, &mut text_state);
+        assert!(cold_upload.geometry.bytes_uploaded > 0);
+
+        retained.morphs[0] = 0.6;
+        states[0].as_mut().unwrap().overall_progress = 0.7;
+        let frame = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &states,
+        };
+        let warm = preparer
+            .prepare_family_animation_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &plan,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(
+            warm.geometry.paths[0].transform,
+            Transform2D::IDENTITY.into()
+        );
+        assert_eq!(warm.geometry_stats().geometry_cache_misses, 0);
+        assert_eq!(warm.geometry_stats().path_vertices_repacked, 0);
+        assert_eq!(warm.geometry_stats().path_indices_repacked, 0);
+        assert_no_unused_mega_streams(&warm);
+        let upload = renderer.upload_retained(&device, &queue, &warm, &mut text_state);
+        let geometry = &warm.geometry;
+        let expected = std::mem::size_of_val(geometry.circles)
+            + std::mem::size_of_val(geometry.rectangles)
+            + std::mem::size_of_val(geometry.lines)
+            + std::mem::size_of_val(geometry.paths);
+        assert_eq!(upload.geometry.bytes_uploaded, expected);
+        assert_eq!(upload.geometry.buffer_reallocations, 0);
+    }
+
+    fn assert_no_unused_mega_streams(frame: &PreparedRetainedGpuFrame<'_>) {
+        assert!(frame.geometry.mega_path_indices.is_empty());
+        assert!(frame.geometry.mega_path_vertex_instances.is_empty());
+        assert!(frame.geometry.mega_path_batches.is_empty());
+        assert!(frame.geometry.mega_path_instance_dirty_ranges.is_empty());
+        assert!(frame.geometry.mega_path_index_dirty_ranges.is_empty());
+        assert_eq!(frame.geometry_stats().mega_path_count, 0);
+        assert_eq!(
+            frame.geometry_stats().mega_path_instance_vertices_repacked,
+            0
+        );
+        assert!(frame.render_items.iter().all(|item| !matches!(
+            item,
+            RetainedRenderItem::Geometry {
+                batch: OrderedRenderBatch {
+                    primitive: RenderPrimitive::MegaPath { .. },
+                    ..
+                },
+                ..
+            }
+        )));
     }
 }

@@ -303,6 +303,9 @@ pub struct FramePreparer {
     path_indices: Vec<u32>,
     path_batches: Vec<PathBatch>,
     path_batch_vertex_ranges: Vec<Range<u32>>,
+    // Mixed text/geometry consumers emit their own individual path painter order;
+    // they never consume the per-vertex instance stream used by packed path draws.
+    individual_path_draws: bool,
     mega_path_indices: Vec<u32>,
     mega_path_vertex_instances: Vec<PathInstance>,
     mega_path_batches: Vec<MegaPathBatch>,
@@ -341,6 +344,13 @@ pub struct FramePreparer {
 impl FramePreparer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn for_individual_path_draws() -> Self {
+        Self {
+            individual_path_draws: true,
+            ..Self::default()
+        }
     }
 
     pub fn prepare<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
@@ -473,9 +483,14 @@ impl FramePreparer {
                     let packed = if partial_reveal_bits.is_some() {
                         // The temporary geometry already *is* Manim's partial VMobject.
                         // Never apply the legacy path shader reveal a second time.
-                        pack_path(object, 1.0, 0.0)
+                        pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
                     } else {
-                        pack_path(object, reveal, frame.morph(object_index))
+                        pack_path(
+                            object,
+                            frame.render_transform(object_index),
+                            reveal,
+                            frame.morph(object_index),
+                        )
                     };
                     instances_repacked += 1;
                     if self.paths[index] != packed {
@@ -487,6 +502,7 @@ impl FramePreparer {
                         let cache_index = self.path_batch_cache_indices[batch];
                         let packed_head = pack_path_reveal_head(
                             object,
+                            frame.render_transform(object_index),
                             &self.path_mesh_cache[cache_index].mesh,
                             reveal,
                         );
@@ -611,7 +627,7 @@ impl FramePreparer {
         let reveal = frame.reveal(object_index);
         let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
         let (cache_index, cache_miss) =
-            match self.cache_path_mesh(path, object.style, object.transform) {
+            match self.cache_path_mesh(path, object.style, frame.render_transform(object_index)) {
                 Ok(value) => value,
                 Err(_) => {
                     let slot = PreparedSlot::Unsupported(self.unsupported.len());
@@ -623,9 +639,14 @@ impl FramePreparer {
             };
 
         let packed = if partial_reveal_bits.is_some() {
-            pack_path(object, 1.0, 0.0)
+            pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
         } else {
-            pack_path(object, reveal, frame.morph(object_index))
+            pack_path(
+                object,
+                frame.render_transform(object_index),
+                reveal,
+                frame.morph(object_index),
+            )
         };
         let path_index = self.paths.len();
         self.path_ids.push(object.id);
@@ -636,6 +657,7 @@ impl FramePreparer {
             if partial_reveal_bits.is_none() && should_create_path_reveal_head(object, reveal) {
                 Some(pack_path_reveal_head(
                     object,
+                    frame.render_transform(object_index),
                     &self.path_mesh_cache[cache_index].mesh,
                     reveal,
                 ))
@@ -719,8 +741,10 @@ impl FramePreparer {
             instance_range: instance_start..instance_start + 1,
         });
         self.path_batch_cache_indices.push(cache_index);
-        self.mega_path_segments.push(None);
-        self.mega_path_detached.push(false);
+        if !self.individual_path_draws {
+            self.mega_path_segments.push(None);
+            self.mega_path_detached.push(false);
+        }
         let slot = PreparedSlot::Path {
             index: path_index,
             batch,
@@ -841,7 +865,7 @@ impl FramePreparer {
             unreachable!("unique path replacement preflight requires a path slot");
         };
         let (cache_index, cache_miss) =
-            self.cache_path_mesh(path, object.style, object.transform)?;
+            self.cache_path_mesh(path, object.style, frame.render_transform(object_index))?;
         let mesh = &self.path_mesh_cache[cache_index].mesh;
         let packed_vertices = mesh
             .vertices
@@ -958,7 +982,11 @@ impl FramePreparer {
                     _ => None,
                 });
             if let Some(path) = path {
-                let cache_index = match self.cache_path_mesh(path, object.style, object.transform) {
+                let cache_index = match self.cache_path_mesh(
+                    path,
+                    object.style,
+                    frame.render_transform(object_index),
+                ) {
                     Ok((index, cache_miss)) => {
                         geometry_cache_misses += usize::from(cache_miss);
                         index
@@ -992,9 +1020,14 @@ impl FramePreparer {
                 path_groups[batch]
                     .instances
                     .push(if partial_reveal_bits.is_some() {
-                        pack_path(object, 1.0, 0.0)
+                        pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
                     } else {
-                        pack_path(object, reveal, frame.morph(object_index))
+                        pack_path(
+                            object,
+                            frame.render_transform(object_index),
+                            reveal,
+                            frame.morph(object_index),
+                        )
                     });
                 let reveal_head = if partial_reveal_bits.is_none()
                     && should_create_path_reveal_head(object, reveal)
@@ -1003,6 +1036,7 @@ impl FramePreparer {
                     self.line_ids.push(object.id);
                     self.lines.push(pack_path_reveal_head(
                         object,
+                        frame.render_transform(object_index),
                         &self.path_mesh_cache[cache_index].mesh,
                         reveal,
                     ));
@@ -1336,7 +1370,10 @@ impl FramePreparer {
                     && geometry_matches
                     && reveal_head_available
                     && cache.stroke_transform
-                        == path_stroke_transform_key(object.style, object.transform)
+                        == path_stroke_transform_key(
+                            object.style,
+                            frame.render_transform(object_index),
+                        )
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
@@ -1497,7 +1534,8 @@ impl FramePreparer {
             let GeometryRef::VectorPath(path) = frame.render_geometry(object_index) else {
                 continue;
             };
-            let stroke_transform = path_stroke_transform_key(object.style, object.transform);
+            let stroke_transform =
+                path_stroke_transform_key(object.style, frame.render_transform(object_index));
             let stroke_width_bits = object.style.stroke_width.to_bits();
             let fill_enabled = object.style.fill.is_some();
             let key = path_mesh_key(
@@ -1655,37 +1693,10 @@ fn path_stroke_transform_key(style: Style, transform: Transform2D) -> PathStroke
 }
 
 fn transform_path_without_translation(path: &VectorPath, transform: Transform2D) -> VectorPath {
-    fn point(value: Vec2, transform: Transform2D) -> Vec2 {
-        value
-            .component_mul(transform.scale)
-            .rotate(transform.rotation)
-    }
-
-    let mut transformed = VectorPath::new();
-    for command in path.commands() {
-        transformed = match *command {
-            PathCommand::MoveTo { to } => transformed.move_to(point(to, transform)),
-            PathCommand::LineTo { to } => transformed.line_to(point(to, transform)),
-            PathCommand::QuadraticTo { control, to } => {
-                transformed.quadratic_to(point(control, transform), point(to, transform))
-            }
-            PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => transformed.cubic_to(
-                point(control1, transform),
-                point(control2, transform),
-                point(to, transform),
-            ),
-            PathCommand::Close => transformed.close(),
-        };
-    }
-    if let Some(target) = path.morph_target() {
-        transformed =
-            transformed.with_morph_target(transform_path_without_translation(target, transform));
-    }
-    transformed
+    path.transformed(Transform2D {
+        translation: Vec2::ZERO,
+        ..transform
+    })
 }
 
 fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
@@ -1827,12 +1838,13 @@ fn should_create_path_reveal_head(object: &FrameObjectState, reveal: f32) -> boo
 
 fn pack_path_reveal_head(
     object: &FrameObjectState,
+    render_transform: Transform2D,
     mesh: &TessellatedPath,
     reveal: f32,
 ) -> LineInstance {
     let reveal = reveal.clamp(0.0, 1.0);
     let point = mesh.reveal_head_position(reveal).unwrap_or(Vec2::ZERO);
-    let mut transform = packed_path_transform(object.style, object.transform);
+    let mut transform = packed_path_transform(object.style, render_transform);
     transform.padding = 1.0;
     let mut style = pack_style(object);
     style.fill = [0.0; 4];
@@ -1865,9 +1877,14 @@ fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn pack_path(object: &FrameObjectState, reveal: f32, morph: f32) -> PathInstance {
+fn pack_path(
+    object: &FrameObjectState,
+    render_transform: Transform2D,
+    reveal: f32,
+    morph: f32,
+) -> PathInstance {
     PathInstance {
-        transform: packed_path_transform(object.style, object.transform),
+        transform: packed_path_transform(object.style, render_transform),
         style: pack_style(object),
         path_params: [reveal.clamp(0.0, 1.0), morph.clamp(0.0, 1.0)],
     }
@@ -1953,6 +1970,7 @@ mod tests {
             presences,
             reveals,
             morphs,
+            render_transforms: vec![None; render_geometries.len()],
             render_geometries,
         }
     }
@@ -1978,7 +1996,7 @@ mod tests {
         path.style.stroke = Some(Color::BLACK);
         path.style.stroke_width = 0.08;
         let mut initial = frame(vec![path.clone()]);
-        initial.render_geometries[0] = Some(geometry.clone());
+        initial.render_geometries[0] = Some(geometry.clone().into());
         let mut preparer = FramePreparer::new();
 
         let cold = preparer.prepare(&initial);
@@ -2738,6 +2756,7 @@ mod tests {
         frame.reveals.push(1.0);
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
 
         let prepared = preparer.prepare_incremental(
             &frame,
@@ -2810,6 +2829,7 @@ mod tests {
         frame.reveals.push(1.0);
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
         let prepared =
             preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![1], Vec::new()));
 
@@ -3114,6 +3134,7 @@ mod structural_execution_delta_tests {
             reveals: vec![1.0; count],
             morphs: vec![0.0; count],
             render_geometries: vec![None; count],
+            render_transforms: vec![None; count],
         };
         let mut preparer = FramePreparer::new();
         let initial = preparer.prepare(&frame);
@@ -3141,6 +3162,7 @@ mod structural_execution_delta_tests {
             reveals: vec![1.0; count],
             morphs: vec![0.0; count],
             render_geometries: vec![None; count],
+            render_transforms: vec![None; count],
         };
         let mut preparer = FramePreparer::new();
         preparer.prepare(&frame);
@@ -3149,6 +3171,7 @@ mod structural_execution_delta_tests {
         frame.reveals.push(1.0);
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
         let changes = FrameChanges::structural(vec![count], Vec::new());
         let prepared = preparer.prepare_incremental(&frame, &changes);
         assert_eq!(prepared.stats.full_rebuilds, 0);

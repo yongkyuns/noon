@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use noon_compile::{
     CompiledChannelKey, CompiledTrack, RetainedCompiledScene, TransformGeometryPlan,
@@ -10,7 +10,7 @@ use noon_core::{
 
 use crate::{
     apply_transform_geometry, interpolate, interpolate_pointwise_rotation_transform,
-    interpolate_style, interpolate_transform, mapped_track_progress,
+    interpolate_style, interpolate_transform, mapped_track_progress, release_render_transform,
     screen_space_path_pair_relative_to_current, set_optional_geometry_if_changed, track_progress,
     upper_bound_start, EvaluatedValue, EvaluationError, EvaluationStats, FrameChanges,
     TimelineEventScheduler, TrackGroup,
@@ -49,7 +49,9 @@ pub struct RetainedFrameState {
     pub morphs: Vec<f32>,
     /// Transient geometry prepared for path transforms. Text never uses this
     /// channel; its retained resource handle remains unchanged.
-    pub render_geometries: Vec<Option<GeometryRef>>,
+    pub render_geometries: Vec<Option<Arc<GeometryRef>>>,
+    /// Derived geometry coordinate frame; absent means semantic object transform.
+    pub render_transforms: Vec<Option<Transform2D>>,
 }
 
 impl RetainedFrameState {
@@ -69,9 +71,13 @@ impl RetainedFrameState {
         self.morphs[object_index]
     }
 
+    pub fn render_transform(&self, object_index: usize) -> Transform2D {
+        self.render_transforms[object_index].unwrap_or(self.objects[object_index].transform)
+    }
+
     pub fn render_geometry(&self, object_index: usize) -> Option<&GeometryRef> {
         self.render_geometries[object_index]
-            .as_ref()
+            .as_deref()
             .or_else(|| self.objects[object_index].geometry())
     }
 
@@ -232,6 +238,7 @@ fn retained_base_frame(compiled: &RetainedCompiledScene, time: f64) -> RetainedF
         reveals,
         morphs,
         render_geometries: vec![None; object_count],
+        render_transforms: vec![None; object_count],
     }
 }
 
@@ -364,19 +371,34 @@ fn retained_apply_evaluated_value(
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
+            let render_changed = release_render_transform(
+                &mut frame.render_geometries[index],
+                &mut frame.render_transforms[index],
+                frame.objects[index].transform,
+            );
             let changed = frame.objects[index].transform.translation != value;
             frame.objects[index].transform.translation = value;
-            changed
+            changed || render_changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
+            let render_changed = release_render_transform(
+                &mut frame.render_geometries[index],
+                &mut frame.render_transforms[index],
+                frame.objects[index].transform,
+            );
             let changed = frame.objects[index].transform.rotation != value;
             frame.objects[index].transform.rotation = value;
-            changed
+            changed || render_changed
         }
         (Property::Scale, EvaluatedValue::Vec2(value)) => {
+            let render_changed = release_render_transform(
+                &mut frame.render_geometries[index],
+                &mut frame.render_transforms[index],
+                frame.objects[index].transform,
+            );
             let changed = frame.objects[index].transform.scale != value;
             frame.objects[index].transform.scale = value;
-            changed
+            changed || render_changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
             let changed = frame.objects[index].style.opacity != value;
@@ -406,30 +428,53 @@ fn retained_apply_transform_track(
         interpolate_transform(from.transform, to.transform, progress)
     };
     let next_style = interpolate_style(from.style, to.style, progress);
-    let next_morph = if matches!(plan, TransformGeometryPlan::PathPair(_)) {
+    let fixed_endpoint = matches!(
+        plan,
+        TransformGeometryPlan::PathPair {
+            render_transform: Some(_),
+            ..
+        }
+    ) && (progress <= 0.0 || progress >= 1.0);
+    let next_morph = if !fixed_endpoint && matches!(plan, TransformGeometryPlan::PathPair { .. }) {
         progress
     } else {
         0.0
     };
     let owned_render_geometry = match plan {
-        TransformGeometryPlan::PathPair(prepared)
-            if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
-                && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
+        TransformGeometryPlan::PathPair {
+            geometry: prepared,
+            render_transform: None,
+        } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+            && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
         {
             screen_space_path_pair_relative_to_current(prepared, from, to, next_transform)
+                .map(Arc::new)
         }
         _ => None,
     };
-    let next_render_geometry = owned_render_geometry.as_ref().or(match plan {
-        TransformGeometryPlan::PathPair(prepared) => Some(prepared),
+    let mut next_render_geometry = owned_render_geometry.as_ref().or(match plan {
+        TransformGeometryPlan::PathPair { geometry, .. } => Some(geometry),
         _ => None,
     });
+
+    if fixed_endpoint {
+        next_render_geometry = None;
+    }
+    let next_render_transform = match plan {
+        TransformGeometryPlan::PathPair {
+            render_transform, ..
+        } if !fixed_endpoint => *render_transform,
+        _ => None,
+    };
+    let transform_changed = frame.render_transforms[index] != next_render_transform;
+    frame.render_transforms[index] = next_render_transform;
 
     let object = &mut frame.objects[index];
     let ObjectContentRef::Geometry(geometry) = &mut object.content else {
         unreachable!("retained compiler rejects geometry-snapshot Transform tracks on text");
     };
-    let mut changed = apply_transform_geometry(geometry, plan, from, to, progress);
+    let mut changed =
+        transform_changed | apply_transform_geometry(geometry, plan, from, to, progress);
     if object.transform != next_transform {
         object.transform = next_transform;
         changed = true;
@@ -442,8 +487,11 @@ fn retained_apply_transform_track(
         frame.morphs[index] = next_morph;
         changed = true;
     }
-    changed |=
-        set_optional_geometry_if_changed(&mut frame.render_geometries[index], next_render_geometry);
+    changed |= set_optional_geometry_if_changed(
+        &mut frame.render_geometries[index],
+        next_render_geometry,
+        owned_render_geometry.is_none(),
+    );
     changed
 }
 

@@ -58,5 +58,6 @@ fn circle_frame(object_count: usize) -> FrameState {
         reveals: vec![1.0; object_count],
         morphs: vec![0.0; object_count],
         render_geometries: vec![None; object_count],
+        render_transforms: vec![None; object_count],
     }
 }

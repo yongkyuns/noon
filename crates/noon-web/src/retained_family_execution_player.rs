@@ -66,7 +66,9 @@ impl RetainedFamilyExecutionPlayer {
         session: u32,
     ) -> Result<Self, RetainedFamilyExecutionPlayerError> {
         let compiled = RetainedCompiledScene::compile(scene.objects(), tracks)?;
-        let bundle = RetainedResourceBundle::capture(
+        let render_geometries =
+            crate::retained_resource_transport::compiled_render_geometries(&compiled);
+        let mut bundle = RetainedResourceBundle::capture(
             scene
                 .objects()
                 .iter()
@@ -75,12 +77,16 @@ impl RetainedFamilyExecutionPlayer {
             scene.geometries(),
             scene.fonts(),
         )?;
+        bundle.set_render_geometries(session, render_geometries.clone());
         let resource_bundle = bundle.encode_binary()?;
         let runtime = RetainedFamilyPlanSetSceneInstance::new(compiled, animations)?;
         Ok(Self {
             scene,
             runtime,
-            encoder: RetainedFamilyExecutionDeltaEncoder::new(session),
+            encoder: RetainedFamilyExecutionDeltaEncoder::with_render_geometries(
+                session,
+                render_geometries,
+            ),
             resource_bundle,
             camera_object,
             snapshot_sent: false,

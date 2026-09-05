@@ -10,7 +10,7 @@ pub use execution_slots::*;
 pub use reactive::*;
 pub use spatial_index::*;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledScene, CompiledTrack, TransformGeometryPlan,
@@ -37,7 +37,9 @@ pub struct FrameState {
     pub presences: Vec<bool>,
     pub reveals: Vec<f32>,
     pub morphs: Vec<f32>,
-    pub render_geometries: Vec<Option<GeometryRef>>,
+    pub render_geometries: Vec<Option<Arc<GeometryRef>>>,
+    /// Derived geometry coordinate frame; absent means semantic object transform.
+    pub render_transforms: Vec<Option<Transform2D>>,
 }
 
 impl FrameState {
@@ -57,9 +59,21 @@ impl FrameState {
         self.morphs[object_index]
     }
 
+    pub fn render_transform(&self, object_index: usize) -> Transform2D {
+        self.render_transforms[object_index].unwrap_or(self.objects[object_index].transform)
+    }
+
+    pub(crate) fn release_render_transform(&mut self, object_index: usize) -> bool {
+        release_render_transform(
+            &mut self.render_geometries[object_index],
+            &mut self.render_transforms[object_index],
+            self.objects[object_index].transform,
+        )
+    }
+
     pub fn render_geometry(&self, object_index: usize) -> &GeometryRef {
         self.render_geometries[object_index]
-            .as_ref()
+            .as_deref()
             .unwrap_or(&self.objects[object_index].geometry)
     }
 }
@@ -452,6 +466,7 @@ impl SceneInstance {
                 let object_index = object_index as usize;
                 self.frame.presences[object_index] = false;
                 self.frame.render_geometries[object_index] = None;
+                self.frame.render_transforms[object_index] = None;
                 self.mark_removed(object_index);
             }
             _ => unreachable!("structural patch helper accepts only create/remove"),
@@ -546,8 +561,10 @@ impl SceneInstance {
                 // Clearing a transient render override makes the callback geometry authoritative
                 // for this phase without rebuilding unrelated runtime slots.
                 self.frame.render_geometries[index] = None;
+                self.frame.render_transforms[index] = None;
             }
             ScenePatch::SetTransform { transform, .. } => {
+                self.frame.release_render_transform(index);
                 self.frame.objects[index].transform = *transform;
                 self.reapply_properties(
                     index,
@@ -675,6 +692,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         reveals: initial_scalar_property(compiled, objects.len(), Property::Reveal, 1.0),
         morphs: initial_scalar_property(compiled, objects.len(), Property::Morph, 0.0),
         render_geometries: vec![None; objects.len()],
+        render_transforms: vec![None; objects.len()],
         objects,
     }
 }
@@ -817,6 +835,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
         0.0,
     ));
     frame.render_geometries.push(None);
+    frame.render_transforms.push(None);
 }
 
 fn reset_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_index: usize) {
@@ -835,6 +854,7 @@ fn reset_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_i
     frame.morphs[object_index] =
         initial_channel_scalar(compiled, object_index, Property::Morph, 0.0);
     frame.render_geometries[object_index] = None;
+    frame.render_transforms[object_index] = None;
 }
 
 fn initial_channel_bool(
@@ -952,22 +972,25 @@ fn apply_evaluated_value(
             changed
         }
         (Property::Position, EvaluatedValue::Vec2(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.translation != value;
             object.transform.translation = value;
-            changed
+            changed || render_changed
         }
         (Property::Rotation, EvaluatedValue::Scalar(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.rotation != value;
             object.transform.rotation = value;
-            changed
+            changed || render_changed
         }
         (Property::Scale, EvaluatedValue::Vec2(value)) => {
+            let render_changed = frame.release_render_transform(object_index);
             let object = &mut frame.objects[object_index];
             let changed = object.transform.scale != value;
             object.transform.scale = value;
-            changed
+            changed || render_changed
         }
         (Property::Opacity, EvaluatedValue::Scalar(value)) => {
             let object = &mut frame.objects[object_index];
@@ -1004,31 +1027,54 @@ fn apply_transform_track(
         interpolate_transform(from.transform, to.transform, progress)
     };
     let next_style = interpolate_style(from.style, to.style, progress);
-    let next_morph = if matches!(plan, TransformGeometryPlan::PathPair(_)) {
+    let fixed_endpoint = matches!(
+        plan,
+        TransformGeometryPlan::PathPair {
+            render_transform: Some(_),
+            ..
+        }
+    ) && (progress <= 0.0 || progress >= 1.0);
+    let next_morph = if !fixed_endpoint && matches!(plan, TransformGeometryPlan::PathPair { .. }) {
         progress
     } else {
         0.0
     };
     let owned_render_geometry = match plan {
-        TransformGeometryPlan::PathPair(prepared)
-            if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
-                && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
+        TransformGeometryPlan::PathPair {
+            geometry: prepared,
+            render_transform: None,
+        } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
+            && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
         {
             screen_space_path_pair_relative_to_current(prepared, from, to, next_transform)
+                .map(Arc::new)
         }
         _ => None,
     };
-    let next_render_geometry = if let Some(geometry) = owned_render_geometry.as_ref() {
+    let mut next_render_geometry = if let Some(geometry) = owned_render_geometry.as_ref() {
         Some(geometry)
     } else {
         match plan {
-            TransformGeometryPlan::PathPair(prepared) => Some(prepared),
+            TransformGeometryPlan::PathPair { geometry, .. } => Some(geometry),
             _ => None,
         }
     };
 
+    if fixed_endpoint {
+        next_render_geometry = None;
+    }
+    let next_render_transform = match plan {
+        TransformGeometryPlan::PathPair {
+            render_transform, ..
+        } if !fixed_endpoint => *render_transform,
+        _ => None,
+    };
+    let transform_changed = frame.render_transforms[object_index] != next_render_transform;
+    frame.render_transforms[object_index] = next_render_transform;
+
     let object = &mut frame.objects[object_index];
-    let mut changed = apply_transform_geometry(&mut object.geometry, plan, from, to, progress);
+    let mut changed = transform_changed
+        | apply_transform_geometry(&mut object.geometry, plan, from, to, progress);
     if object.transform != next_transform {
         object.transform = next_transform;
         changed = true;
@@ -1044,8 +1090,36 @@ fn apply_transform_track(
     changed |= set_optional_geometry_if_changed(
         &mut frame.render_geometries[object_index],
         next_render_geometry,
+        owned_render_geometry.is_none(),
     );
     changed
+}
+
+// Independent affine drivers take ownership in semantic coordinates. The common
+// morph-only lane never enters this conversion, so its compiled pair stays shared.
+fn release_render_transform(
+    geometry: &mut Option<Arc<GeometryRef>>,
+    render_transform: &mut Option<Transform2D>,
+    semantic_transform: Transform2D,
+) -> bool {
+    let Some(render) = *render_transform else {
+        return false;
+    };
+    let Some(GeometryRef::VectorPath(source)) = geometry.as_deref() else {
+        return false;
+    };
+    let Some(target) = source.morph_target() else {
+        return false;
+    };
+    let source = path_relative_to_current(source, render, semantic_transform)
+        .expect("fixed morph plan guarantees invertible semantic scale until driver takeover");
+    let target = path_relative_to_current(target, render, semantic_transform)
+        .expect("fixed morph plan guarantees invertible semantic scale until driver takeover");
+    *geometry = Some(Arc::new(GeometryRef::path(
+        source.with_morph_target(target),
+    )));
+    *render_transform = None;
+    true
 }
 
 fn screen_space_path_pair_relative_to_current(
@@ -1180,7 +1254,7 @@ fn apply_transform_geometry(
                 }
             }
         }
-        TransformGeometryPlan::PathPair(_) => {
+        TransformGeometryPlan::PathPair { .. } => {
             let semantic_geometry = if progress >= 1.0 {
                 &to.geometry
             } else {
@@ -1203,12 +1277,23 @@ fn set_geometry_if_changed(current: &mut GeometryRef, next: &GeometryRef) -> boo
     true
 }
 
+// Compiled resources must recover their registered identity after a temporary
+// affine-driver conversion, even when the owned points happen to be identical.
+// Only dynamically rebuilt, unregistered geometry may retain a content-equal Arc.
 fn set_optional_geometry_if_changed(
-    current: &mut Option<GeometryRef>,
-    next: Option<&GeometryRef>,
+    current: &mut Option<Arc<GeometryRef>>,
+    next: Option<&Arc<GeometryRef>>,
+    require_shared_identity: bool,
 ) -> bool {
     match next {
-        Some(next) if current.as_ref() == Some(next) => false,
+        Some(next)
+            if current.as_ref().is_some_and(|current| {
+                Arc::ptr_eq(current, next)
+                    || (!require_shared_identity && current.as_ref() == next.as_ref())
+            }) =>
+        {
+            false
+        }
         Some(next) => {
             if let Some(current) = current.as_mut() {
                 current.clone_from(next);

@@ -558,7 +558,7 @@ pub struct RetainedFramePreparer {
 impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
-            geometry: FramePreparer::new(),
+            geometry: FramePreparer::for_individual_path_draws(),
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
             scratch: FrameState {
@@ -568,6 +568,7 @@ impl Default for RetainedFramePreparer {
                 reveals: Vec::new(),
                 morphs: Vec::new(),
                 render_geometries: Vec::new(),
+                render_transforms: Vec::new(),
             },
             scratch_ready: false,
             scratch_object_count: 0,
@@ -910,6 +911,7 @@ impl RetainedFramePreparer {
         self.scratch.reveals.clear();
         self.scratch.morphs.clear();
         self.scratch.render_geometries.clear();
+        self.scratch.render_transforms.clear();
         self.sources.clear();
         self.fast_text_only.clear();
         self.fast_text_only.resize(frame.objects.len(), false);
@@ -927,7 +929,7 @@ impl RetainedFramePreparer {
                     self.push_geometry(
                         object.id,
                         geometry,
-                        object.transform,
+                        frame.render_transform(object_index),
                         object.style,
                         object.appearance,
                         frame.reveal(object_index),
@@ -1013,6 +1015,7 @@ impl RetainedFramePreparer {
         self.scratch.reveals.push(reveal);
         self.scratch.morphs.push(morph);
         self.scratch.render_geometries.push(None);
+        self.scratch.render_transforms.push(None);
         self.sources.push(SourceItem::Geometry {
             object_id,
             scratch_id,
@@ -1870,6 +1873,7 @@ mod tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+            render_transforms: vec![None],
         };
         let texts = TextResourceArena::new();
         let fonts = FontResourceArena::new();
@@ -1958,6 +1962,7 @@ mod tests {
             reveals: vec![1.0],
             morphs: vec![0.0],
             render_geometries: vec![None],
+            render_transforms: vec![None],
         };
         let texts = TextResourceArena::new();
         let fonts = FontResourceArena::new();

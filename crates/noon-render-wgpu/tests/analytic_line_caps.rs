@@ -26,6 +26,7 @@ fn line_frame(cap: StrokeCap, width_mode: StrokeWidthMode) -> FrameState {
         reveals: vec![1.0],
         morphs: vec![0.0],
         render_geometries: vec![None],
+        render_transforms: vec![None],
     }
 }
 

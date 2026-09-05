@@ -60,6 +60,7 @@ fn build_frame(segments: usize) -> FrameState {
         reveals: vec![1.0],
         morphs: vec![0.0],
         render_geometries: vec![None],
+        render_transforms: vec![None],
     }
 }
 

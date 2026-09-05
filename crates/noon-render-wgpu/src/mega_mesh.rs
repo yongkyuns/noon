@@ -19,6 +19,9 @@ impl FramePreparer {
         self.mega_path_instance_dirty_ranges.clear();
         self.mega_path_index_dirty_ranges.clear();
         self.mega_path_index_dirty = false;
+        if self.individual_path_draws {
+            return;
+        }
 
         let eligible = self
             .path_batches
@@ -92,6 +95,9 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) -> bool {
+        if self.individual_path_draws {
+            return false;
+        }
         let Some(path_batch) = self.path_batches.get(path_batch_index).cloned() else {
             return false;
         };
@@ -165,6 +171,9 @@ impl FramePreparer {
     /// painter position until the next full rebuild compacts the mega stream.
     pub(crate) fn rebuild_mega_render_batches(&mut self) {
         self.mega_path_batches.clear();
+        if self.individual_path_draws {
+            return;
+        }
         let ordered = std::mem::take(&mut self.render_batches);
         let mut active_mega = None::<usize>;
 
@@ -224,6 +233,9 @@ impl FramePreparer {
     }
 
     pub(crate) fn detach_mega_path(&mut self, path_batch_index: usize) {
+        if self.individual_path_draws {
+            return;
+        }
         if self
             .mega_path_segments
             .get(path_batch_index)
@@ -238,7 +250,8 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) {
-        if self.mega_path_indices.is_empty()
+        if self.individual_path_draws
+            || self.mega_path_indices.is_empty()
             || self
                 .mega_path_detached
                 .get(path_batch_index)

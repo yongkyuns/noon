@@ -5,16 +5,17 @@ use noon_core::{
 };
 use noon_runtime::SceneInstance;
 
-fn semantic_frame(
-    instance: &SceneInstance,
-) -> Vec<(
+type ComparableObjectState = (
     ObjectId,
     noon_runtime::FrameObjectState,
     bool,
     f32,
     f32,
-    Option<GeometryRef>,
-)> {
+    Option<std::sync::Arc<GeometryRef>>,
+    Option<Transform2D>,
+);
+
+fn semantic_frame(instance: &SceneInstance) -> Vec<ComparableObjectState> {
     let frame = instance.frame();
     let mut objects = Vec::new();
     for (index, object) in frame.objects.iter().enumerate() {
@@ -28,6 +29,7 @@ fn semantic_frame(
             frame.reveals[index],
             frame.morphs[index],
             frame.render_geometries[index].clone(),
+            frame.render_transforms[index],
         ));
     }
     objects.sort_by_key(|entry| entry.0);

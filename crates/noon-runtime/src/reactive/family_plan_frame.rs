@@ -184,6 +184,7 @@ mod tests {
             reveals: vec![1.0, 1.0],
             morphs: vec![0.0, 0.0],
             render_geometries: vec![None, None],
+            render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state()), Some(state())])
     }
@@ -218,6 +219,7 @@ mod tests {
         frame.reveals.push(1.0);
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
         states.push(Some(state()));
         let family = RetainedFamilyFrame {
             retained: &frame,

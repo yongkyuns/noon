@@ -28,6 +28,7 @@ fn static_geometry_frame() -> RetainedFrameState {
         reveals: vec![1.0; STATIC_OBJECTS],
         morphs: vec![0.0; STATIC_OBJECTS],
         render_geometries: vec![None; STATIC_OBJECTS],
+        render_transforms: vec![None; STATIC_OBJECTS],
     }
 }
 
@@ -106,6 +107,7 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         reveals: vec![1.0; STATIC_OBJECTS],
         morphs: vec![0.0; STATIC_OBJECTS],
         render_geometries: vec![None; STATIC_OBJECTS],
+        render_transforms: vec![None; STATIC_OBJECTS],
     };
     let fonts = artifact.fonts;
     let geometries = GeometryResourceArena::new();
