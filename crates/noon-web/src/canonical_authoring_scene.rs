@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn new_authoring_run_refreshes_a_returned_runtime_after_direct_scene_edits() {
         let mut context = CanonicalAuthoringScene::default();
-        let circle = context.scene.circle(1.0).unwrap();
+        let mut circle = context.scene.circle(1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
 
         let initial = context.take_execution_player(1.0, 17).unwrap();
@@ -914,10 +914,7 @@ mod tests {
 
         let mut rerun = context.take_execution_player(1.0, 18).unwrap();
         let effective = rerun.live_effective(&circle).unwrap();
-        assert_eq!(
-            effective.transform.translation,
-            SemanticVec3::new(3.0, -1.0, 0.0)
-        );
+        assert_eq!(effective.transform.translation, Vec2::new(3.0, -1.0));
         let snapshot: crate::ExecutionDeltaEnvelope =
             serde_json::from_str(&rerun.initial_delta_json().unwrap()).unwrap();
         assert_eq!(snapshot.session, 18);
