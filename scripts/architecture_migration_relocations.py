@@ -138,6 +138,18 @@ def main() -> int:
         if path in {'crates/noon/src/scene.rs', 'crates/noon/src/semantic_mobject.rs'} or path.startswith(('crates/noon/src/scene/', 'crates/noon/src/semantic_mobject/')):
             if FORBIDDEN_CANONICAL.search(source) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(source)):
                 errors.append(f'{path}: canonical authoring regained a migration dependency')
+        canonical_execution = path in {
+            'crates/noon-compile/src/semantic_lowering.rs',
+            'crates/noon/src/execution_session.rs',
+            'crates/noon/src/live_session.rs',
+        } or path.startswith((
+            'crates/noon-compile/src/semantic_lowering/',
+            'crates/noon/src/execution_session/',
+        ))
+        if canonical_execution:
+            code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
+            if re.search(r'\b(?:ScenePatch|MutationTransaction|ObjectDefinition)\b', code):
+                errors.append(f'{path}: canonical execution depends on the external scene patch codec')
     codec = sources.get('crates/noon/src/legacy/semantic_snapshot.rs', '')
     if re.search(r'\b(?:struct|enum|impl|static)\s+[A-Za-z_]', re.sub(r'/\*.*?\*/|//[^\n]*', '', codec, flags=re.S)):
         errors.append('crates/noon/src/legacy/semantic_snapshot.rs: codec may contain only free adapters and tests, not another state owner or inherent API')
