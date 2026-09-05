@@ -8,6 +8,9 @@ use super::{
     SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle, StoredGeometry,
 };
 
+mod prepared;
+pub use prepared::PreparedSemanticMutationTransaction;
+
 mod animation_addition;
 use animation_addition::{commit_add_animation, preflight_add_animation};
 
@@ -379,157 +382,23 @@ impl SemanticMutationTransaction {
         self.mutations.is_empty()
     }
 
+    /// Validate and reserve publication while holding the store exclusively.
+    /// Dropping the returned proof discards the batch without changing the store.
+    pub fn prepare(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<PreparedSemanticMutationTransaction<'_>, SemanticMutationTransactionError> {
+        PreparedSemanticMutationTransaction::new(self, store)
+    }
+
     /// Preflight the complete transaction, then commit every changed mutation.
     pub fn apply(
         self,
         store: &mut SemanticStore,
     ) -> Result<SemanticMutationTransactionResult, SemanticMutationTransactionError> {
         store.set_last_mutation_writes(0);
-        let preflight = self.preflight(store)?;
-        // Reserve the publication clock before committing any authored state.
-        // Nested storage helpers update work counters, never the revision clock.
-        let next_revision = preflight.iter().any(|changed| *changed).then(|| {
-            store
-                .scene_revision()
-                .checked_next()
-                .expect("Noon scene revision space exhausted")
-        });
-
-        let mut impacts = Vec::with_capacity(self.mutations.len());
-        let mut written_slots = HashSet::with_capacity(self.mutations.len());
-        let mut pending_source_assignments = Vec::new();
-        for (mutation, changed) in self.mutations.into_iter().zip(preflight) {
-            if !changed {
-                continue;
-            }
-            match mutation {
-                SemanticMutation::SetSignal { signal, value } => {
-                    let changed = store
-                        .set_semantic_signal_source(signal, SemanticSignalSource::Input(value))
-                        .expect(
-                            "preflighted input signal update must remain valid while transaction owns the semantic store",
-                        );
-                    debug_assert!(changed);
-                    written_slots.insert(signal);
-                    impacts.push(SemanticMutationImpact::SignalValue { signal });
-                }
-                SemanticMutation::SetProperty {
-                    object,
-                    property,
-                    value,
-                } => {
-                    set_object_property(store, object, property, value);
-                    written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::ObjectProperty { object, property });
-                }
-                SemanticMutation::ReplaceContent { object, content } => {
-                    set_object_content(store, object, content);
-                    written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::ObjectContent { object });
-                }
-                SemanticMutation::ReplaceStyle { object, style } => {
-                    set_object_style(store, object, style);
-                    written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::ObjectStyle { object });
-                }
-                SemanticMutation::ChangeSubscription {
-                    object,
-                    property,
-                    signal,
-                } => {
-                    set_object_subscription(store, object, property, signal);
-                    written_slots.insert(object);
-                    impacts.push(SemanticMutationImpact::Subscription { object, property });
-                }
-                SemanticMutation::AddMember { family, member } => {
-                    store.add_member(family, member).expect(
-                        "preflighted family add must remain valid while transaction owns the semantic store",
-                    );
-                    written_slots.insert(family);
-                    written_slots.insert(member);
-                    impacts.push(SemanticMutationImpact::FamilyMemberAdded { family, member });
-                }
-                SemanticMutation::RemoveMember { family, member } => {
-                    let removed = store.remove_member(family, member).expect(
-                        "preflighted family removal must remain valid while transaction owns the semantic store",
-                    );
-                    debug_assert!(removed);
-                    written_slots.insert(family);
-                    written_slots.insert(member);
-                    impacts.push(SemanticMutationImpact::FamilyMemberRemoved { family, member });
-                }
-                SemanticMutation::ReorderMember {
-                    family,
-                    member,
-                    before,
-                } => {
-                    let reordered = store.reorder_member(family, member, before).expect(
-                        "preflighted family reorder must remain valid while transaction owns the semantic store",
-                    );
-                    if !reordered {
-                        continue;
-                    }
-                    written_slots.insert(family);
-                    impacts.push(SemanticMutationImpact::FamilyMemberReordered {
-                        family,
-                        member,
-                        before,
-                    });
-                }
-                SemanticMutation::AddNode { creation } => {
-                    let (node, source_identity) = commit_add_node(store, creation);
-                    written_slots.insert(node);
-                    if let Some(source_identity) = source_identity {
-                        pending_source_assignments.push((node, source_identity));
-                    }
-                    impacts.push(SemanticMutationImpact::NodeAdded { node });
-                }
-                SemanticMutation::AddAnimation { state } => {
-                    let animation = commit_add_animation(store, &state);
-                    written_slots.insert(animation);
-                    impacts.push(SemanticMutationImpact::AnimationAdded { animation });
-                }
-                SemanticMutation::RemoveAnimation { animation }
-                | SemanticMutation::RemoveNode { node: animation } => {
-                    // An earlier explicit removal may have cascade-removed this
-                    // node already. Preflight proved the handle was live at the
-                    // transaction boundary; a cascade therefore satisfies this
-                    // later structural mutation without duplicate impacts.
-                    if store.node(animation).is_none() {
-                        continue;
-                    }
-                    let outcome = store
-                        .remove_node_with_reverse_cleanup(animation)
-                        .expect("preflighted node removal must remain valid while transaction owns the store");
-                    written_slots.extend(outcome.written_slots().iter().copied());
-                    for effect in outcome.effects() {
-                        match effect {
-                            SemanticRemoveNodeEffect::NodeRemoved(node) => {
-                                impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
-                            }
-                            SemanticRemoveNodeEffect::SubscriptionRemoved { object, property } => {
-                                impacts.push(SemanticMutationImpact::Subscription {
-                                    object: *object,
-                                    property: *property,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for (node, source_identity) in pending_source_assignments {
-            store
-                .set_source_identity(node, Some(source_identity))
-                .expect("preflighted source identity must be available after terminal removals");
-        }
-        store.set_last_mutation_writes(written_slots.len());
-        if !written_slots.is_empty() {
-            store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
-        }
-
-        Ok(SemanticMutationTransactionResult { impacts })
+        self.prepare(store)
+            .map(PreparedSemanticMutationTransaction::commit)
     }
 
     fn preflight(
@@ -938,6 +807,14 @@ fn set_object_property(
         .and_then(|node| node.semantic_object_state_mut())
         .expect("preflighted semantic object must remain valid while transaction owns the store");
 
+    apply_object_property(state, property, value);
+}
+
+fn apply_object_property(
+    state: &mut SemanticObjectState,
+    property: SemanticObjectProperty,
+    value: SemanticSignalValue,
+) {
     match (property, value) {
         (SemanticObjectProperty::Translation, SemanticSignalValue::Vec3(value)) => {
             state.transform.translation = value;
@@ -1059,6 +936,7 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticMutationTransactionError {
+    SceneRevisionExhausted,
     DuplicateTarget {
         index: usize,
         target: SemanticNodeId,
@@ -1229,6 +1107,7 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SceneRevisionExhausted => write!(formatter, "Noon scene revision space exhausted"),
             Self::DuplicateTarget { index, target } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats target {}:{}",
@@ -1531,3 +1410,6 @@ mod remove_animation_tests;
 
 #[cfg(test)]
 mod remove_node_tests;
+
+#[cfg(test)]
+mod prepared_tests;

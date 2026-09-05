@@ -1,5 +1,8 @@
 use noon_compile::CompilePatchError;
-use noon_core::{MutationTransaction, ObjectId, Transform2D};
+use noon_core::{
+    ExecutionRevision, FrameEpoch, MutationTransaction, ObjectId, PublicationContext,
+    SceneRevision, Transform2D,
+};
 use std::collections::HashSet;
 
 use crate::{FrameObjectState, FrameState, SceneInstance};
@@ -24,6 +27,51 @@ pub(super) fn final_value_writes(transaction: &MutationTransaction) -> Vec<&noon
     }
     retained.reverse();
     retained
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AuthoredPublicationError {
+    StalePublication {
+        expected: PublicationContext,
+        actual: PublicationContext,
+    },
+    InvalidSceneRevision {
+        current: SceneRevision,
+        proposed: SceneRevision,
+    },
+    ExecutionRevisionExhausted(ExecutionRevision),
+    FrameEpochExhausted(FrameEpoch),
+    Compile(CompilePatchError),
+}
+
+impl std::fmt::Display for AuthoredPublicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StalePublication { expected, actual } => write!(
+                formatter,
+                "expected publication context {expected:?}, found {actual:?}"
+            ),
+            Self::InvalidSceneRevision { current, proposed } => write!(
+                formatter,
+                "authored publication scene revision must remain at {current:?} or advance once, got {proposed:?}"
+            ),
+            Self::ExecutionRevisionExhausted(revision) => {
+                write!(formatter, "execution revision exhausted after {revision:?}")
+            }
+            Self::FrameEpochExhausted(epoch) => {
+                write!(formatter, "frame epoch exhausted after {epoch:?}")
+            }
+            Self::Compile(error) => write!(formatter, "authored transaction failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthoredPublicationError {}
+
+impl From<CompilePatchError> for AuthoredPublicationError {
+    fn from(value: CompilePatchError) -> Self {
+        Self::Compile(value)
+    }
 }
 
 impl SceneInstance {
@@ -53,6 +101,74 @@ impl SceneInstance {
         transaction: &MutationTransaction,
     ) -> Result<&FrameState, CompilePatchError> {
         self.compiled.preflight_transaction(transaction)?;
+        let changed = self.apply_preflighted_transaction(transaction);
+        if changed {
+            self.publish_execution_change();
+        }
+        Ok(&self.frame)
+    }
+
+    /// Atomically publish an authored semantic revision and its prepared executable edits.
+    ///
+    /// `expected` pins the complete live context observed by the caller. The supplied
+    /// scene revision may remain current for execution-only work or advance by exactly
+    /// one for a committed authored transaction. All compile validation and revision
+    /// capacity checks finish before the first runtime write.
+    pub fn apply_authored_transaction(
+        &mut self,
+        transaction: &MutationTransaction,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        let current = self.publication_context();
+        if expected != current {
+            return Err(AuthoredPublicationError::StalePublication {
+                expected,
+                actual: current,
+            });
+        }
+
+        let scene_changed = scene_revision != current.scene_revision();
+        if scene_changed && current.scene_revision().checked_next() != Some(scene_revision) {
+            return Err(AuthoredPublicationError::InvalidSceneRevision {
+                current: current.scene_revision(),
+                proposed: scene_revision,
+            });
+        }
+
+        self.compiled.preflight_transaction(transaction)?;
+        let execution_changed = final_value_writes(transaction)
+            .into_iter()
+            .any(|patch| self.compiled.patch_changes_execution(patch));
+        let next_execution = if execution_changed {
+            Some(current.execution_revision().checked_next().ok_or(
+                AuthoredPublicationError::ExecutionRevisionExhausted(current.execution_revision()),
+            )?)
+        } else {
+            None
+        };
+        let frame_changed = scene_changed || execution_changed;
+        let next_frame = if frame_changed {
+            Some(current.frame_epoch().checked_next().ok_or(
+                AuthoredPublicationError::FrameEpochExhausted(current.frame_epoch()),
+            )?)
+        } else {
+            None
+        };
+
+        let applied_execution_change = self.apply_preflighted_transaction(transaction);
+        debug_assert_eq!(applied_execution_change, execution_changed);
+        if frame_changed {
+            self.publication = PublicationContext::new(
+                scene_revision,
+                next_execution.unwrap_or(current.execution_revision()),
+                next_frame.expect("changed authored publication reserved a frame epoch"),
+            );
+        }
+        Ok(&self.frame)
+    }
+
+    fn apply_preflighted_transaction(&mut self, transaction: &MutationTransaction) -> bool {
         self.last_patch_stats = crate::RuntimePatchStats::default();
         // Intermediate value writes in an atomic batch are not observable. Keep
         // the last write per property, bounded by structural/timeline operations
@@ -67,10 +183,7 @@ impl SceneInstance {
                 .expect("runtime transaction was fully preflighted");
             changed = true;
         }
-        if changed {
-            self.publish_execution_change();
-        }
-        Ok(&self.frame)
+        changed
     }
 }
 
@@ -151,6 +264,231 @@ mod tests {
             instance.effective_transform(object),
             Some(Transform2D::IDENTITY)
         );
+    }
+
+    #[test]
+    fn authored_scene_only_publication_advances_scene_and_frame_once() {
+        let (mut instance, _) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let next_scene = before.scene_revision().checked_next().unwrap();
+
+        // Semantic precision may change while its compact f32 projection remains
+        // identical. The empty execution transaction still publishes that authored
+        // revision without claiming an executable change or dirtying a render row.
+        instance
+            .apply_authored_transaction(&MutationTransaction::default(), before, next_scene)
+            .unwrap();
+
+        let after = instance.publication_context();
+        assert_eq!(after.scene_revision(), next_scene);
+        assert_eq!(after.execution_revision(), before.execution_revision());
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert!(instance.take_frame_changes().is_empty());
+
+        instance
+            .apply_authored_transaction(
+                &MutationTransaction::default(),
+                after,
+                after.scene_revision(),
+            )
+            .unwrap();
+        assert_eq!(instance.publication_context(), after);
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn authored_execution_publication_advances_each_changed_domain_once() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
+            object,
+            transform: Transform2D {
+                translation: Vec2::new(2.0, -1.0),
+                ..Transform2D::IDENTITY
+            },
+        }]);
+
+        instance
+            .apply_authored_transaction(
+                &transaction,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .unwrap();
+
+        let after = instance.publication_context();
+        assert_eq!(
+            after.scene_revision(),
+            before.scene_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+    }
+
+    #[test]
+    fn authored_execution_only_publication_keeps_scene_revision_current() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([ScenePatch::SetStyle {
+            object,
+            style: Style {
+                opacity: 0.25,
+                ..Style::default()
+            },
+        }]);
+
+        instance
+            .apply_authored_transaction(&transaction, before, before.scene_revision())
+            .unwrap();
+
+        let after = instance.publication_context();
+        assert_eq!(after.scene_revision(), before.scene_revision());
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+    }
+
+    #[test]
+    fn authored_publication_rejects_stale_context_and_invalid_scene_revision() {
+        let (mut instance, _) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let stale = PublicationContext::new(
+            before.scene_revision(),
+            before.execution_revision().checked_next().unwrap(),
+            before.frame_epoch(),
+        );
+
+        assert_eq!(
+            instance.apply_authored_transaction(
+                &MutationTransaction::default(),
+                stale,
+                before.scene_revision(),
+            ),
+            Err(AuthoredPublicationError::StalePublication {
+                expected: stale,
+                actual: before,
+            })
+        );
+        let skipped = SceneRevision::new(before.scene_revision().get() + 2);
+        assert_eq!(
+            instance.apply_authored_transaction(&MutationTransaction::default(), before, skipped,),
+            Err(AuthoredPublicationError::InvalidSceneRevision {
+                current: before.scene_revision(),
+                proposed: skipped,
+            })
+        );
+        assert_eq!(instance.publication_context(), before);
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn authored_compile_failure_leaves_runtime_and_publication_untouched() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let frame_before = instance.frame().clone();
+        let before = instance.publication_context();
+        let missing = ObjectId::new(999);
+        let transaction = MutationTransaction::from_mutations([
+            ScenePatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(4.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            },
+            ScenePatch::SetStyle {
+                object: missing,
+                style: Style::default(),
+            },
+        ]);
+
+        assert_eq!(
+            instance.apply_authored_transaction(
+                &transaction,
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            ),
+            Err(AuthoredPublicationError::Compile(
+                CompilePatchError::UnknownObject(missing)
+            ))
+        );
+        assert_eq!(instance.frame(), &frame_before);
+        assert_eq!(instance.publication_context(), before);
+        assert!(instance.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn authored_publication_rejects_revision_overflow_before_writes() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let base = instance.publication_context();
+        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
+            object,
+            transform: Transform2D {
+                translation: Vec2::new(1.0, 0.0),
+                ..Transform2D::IDENTITY
+            },
+        }]);
+
+        let execution_max = PublicationContext::new(
+            base.scene_revision(),
+            ExecutionRevision::new(u64::MAX),
+            base.frame_epoch(),
+        );
+        instance.publication = execution_max;
+        let frame_before = instance.frame().clone();
+        assert_eq!(
+            instance.apply_authored_transaction(
+                &transaction,
+                execution_max,
+                execution_max.scene_revision(),
+            ),
+            Err(AuthoredPublicationError::ExecutionRevisionExhausted(
+                ExecutionRevision::new(u64::MAX)
+            ))
+        );
+        assert_eq!(instance.frame(), &frame_before);
+        assert_eq!(instance.publication_context(), execution_max);
+        assert!(instance.take_frame_changes().is_empty());
+
+        let frame_max = PublicationContext::new(
+            base.scene_revision(),
+            base.execution_revision(),
+            FrameEpoch::new(u64::MAX),
+        );
+        instance.publication = frame_max;
+        assert_eq!(
+            instance.apply_authored_transaction(
+                &MutationTransaction::default(),
+                frame_max,
+                frame_max.scene_revision().checked_next().unwrap(),
+            ),
+            Err(AuthoredPublicationError::FrameEpochExhausted(
+                FrameEpoch::new(u64::MAX)
+            ))
+        );
+        assert_eq!(instance.publication_context(), frame_max);
+        assert!(instance.take_frame_changes().is_empty());
     }
 
     #[test]

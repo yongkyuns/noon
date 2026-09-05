@@ -328,32 +328,31 @@ fn lower_object_state(
     semantic_id: SemanticNodeId,
     state: &SemanticObjectState,
 ) -> Result<LoweredObjectState, SemanticLoweringError> {
-    let translation = lower_vector_xy(
-        semantic_id,
-        SemanticExecutionField::Translation,
-        state.transform.translation,
-    )?;
-    let scale = lower_vector_xy(
-        semantic_id,
-        SemanticExecutionField::Scale,
-        state.transform.scale,
-    )?;
-    let rotation = lower_scalar_f32(
-        semantic_id,
-        SemanticExecutionField::RotationZ,
-        state.transform.rotation_z,
-    )?;
-
     Ok(LoweredObjectState {
         content: state.content,
-        base_transform: Transform2D {
-            translation,
-            rotation,
-            scale,
-        },
-        base_style: lower_style(semantic_id, state)?,
+        base_transform: lower_semantic_transform(semantic_id, state)?,
+        base_style: lower_semantic_style(semantic_id, state)?,
         presentation: state.presentation(),
         signal_bindings: state.signal_bindings().to_vec(),
+    })
+}
+
+pub(super) fn lower_semantic_transform(
+    node: SemanticNodeId,
+    state: &SemanticObjectState,
+) -> Result<Transform2D, SemanticLoweringError> {
+    Ok(Transform2D {
+        translation: lower_vector_xy(
+            node,
+            SemanticExecutionField::Translation,
+            state.transform.translation,
+        )?,
+        scale: lower_vector_xy(node, SemanticExecutionField::Scale, state.transform.scale)?,
+        rotation: lower_scalar_f32(
+            node,
+            SemanticExecutionField::RotationZ,
+            state.transform.rotation_z,
+        )?,
     })
 }
 
@@ -386,7 +385,7 @@ fn lower_scalar_f32(
     Ok(value as f32)
 }
 
-fn lower_style(
+pub(super) fn lower_semantic_style(
     node: SemanticNodeId,
     state: &SemanticObjectState,
 ) -> Result<Style, SemanticLoweringError> {

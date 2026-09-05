@@ -2,6 +2,24 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+/// Opaque in-process provenance for one semantic store. This is neither a node
+/// identity nor a publication revision, and is never an interchange value.
+#[derive(Clone, Debug, Default)]
+pub struct SemanticStoreIdentity(std::sync::Arc<()>);
+
+impl PartialEq for SemanticStoreIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for SemanticStoreIdentity {}
+
+impl std::hash::Hash for SemanticStoreIdentity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&std::sync::Arc::as_ptr(&self.0), state);
+    }
+}
+
 use crate::{HostCallbackId, SemanticAnimationState, SemanticObjectState, SemanticSignalState};
 use crate::{ObjectDefinition, ObjectId, SceneDefinition};
 
@@ -387,6 +405,7 @@ pub struct SemanticMutationStats {
 
 #[derive(Debug, Default)]
 pub struct SemanticStore {
+    identity: SemanticStoreIdentity,
     geometry_resources: crate::GeometryResourceArena,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
@@ -424,6 +443,7 @@ impl Clone for SemanticStore {
             }
         }
         Self {
+            identity: SemanticStoreIdentity::default(),
             geometry_resources,
             slots,
             free_head: self.free_head,
@@ -442,6 +462,11 @@ impl Clone for SemanticStore {
 }
 
 impl SemanticStore {
+    /// A cloneable provenance token; cloning a store itself creates a new owner.
+    pub fn identity(&self) -> SemanticStoreIdentity {
+        self.identity.clone()
+    }
+
     pub fn geometry_resources(&self) -> &crate::GeometryResourceArena {
         &self.geometry_resources
     }
